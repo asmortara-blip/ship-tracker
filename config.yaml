@@ -1,0 +1,431 @@
+# ============================================================
+# Cargo Ship Container Tracker — Configuration
+# All tuneable parameters here. API secrets go in .env.
+# ============================================================
+
+# ----- Shipping Stocks & ETFs -----
+shipping_stocks:
+  - ZIM    # Zim Integrated Shipping
+  - MATX   # Matson
+  - SBLK   # Star Bulk Carriers
+  - DAC    # Danaos Corporation
+  - CMRE   # Costamare
+
+sector_etfs:
+  - XRT    # SPDR S&P Retail ETF (consumer demand proxy)
+  - XLI    # Industrial Select SPDR (trade activity proxy)
+  - XLB    # Materials Select SPDR (metals/chemicals demand)
+  - DBA    # Invesco DB Agriculture Fund (ag commodity prices)
+  - DBB    # Invesco DB Base Metals Fund (copper/zinc/aluminum)
+  - USO    # United States Oil Fund (fuel cost proxy)
+
+# Additional shipping-focused stocks (beyond main 5)
+shipping_stocks_extended:
+  - GOGL   # Golden Ocean Group (dry bulk)
+  - DSX    # Diana Shipping
+  - NMM    # Navios Maritime Partners
+  - ATCO   # Atlas Corp (container leasing)
+
+# ----- Ports of Interest -----
+ports:
+  - locode: USLAX
+    name: "Los Angeles"
+    region: "North America West"
+    country_iso3: "USA"
+    country_numeric: "842"
+    lat: 33.74
+    lon: -118.27
+  - locode: CNSHA
+    name: "Shanghai"
+    region: "Asia East"
+    country_iso3: "CHN"
+    country_numeric: "156"
+    lat: 31.23
+    lon: 121.47
+  - locode: NLRTM
+    name: "Rotterdam"
+    region: "Europe"
+    country_iso3: "NLD"
+    country_numeric: "528"
+    lat: 51.92
+    lon: 4.48
+  - locode: SGSIN
+    name: "Singapore"
+    region: "Southeast Asia"
+    country_iso3: "SGP"
+    country_numeric: "702"
+    lat: 1.29
+    lon: 103.85
+  - locode: USNYC
+    name: "New York/New Jersey"
+    region: "North America East"
+    country_iso3: "USA"
+    country_numeric: "842"
+    lat: 40.66
+    lon: -74.04
+  - locode: DEHAM
+    name: "Hamburg"
+    region: "Europe"
+    country_iso3: "DEU"
+    country_numeric: "276"
+    lat: 53.55
+    lon: 9.99
+  - locode: JPYOK
+    name: "Yokohama"
+    region: "Asia East"
+    country_iso3: "JPN"
+    country_numeric: "392"
+    lat: 35.44
+    lon: 139.64
+  - locode: KRPUS
+    name: "Busan"
+    region: "Asia East"
+    country_iso3: "KOR"
+    country_numeric: "410"
+    lat: 35.10
+    lon: 129.04
+  - locode: CNNBO
+    name: "Ningbo-Zhoushan"
+    region: "Asia East"
+    country_iso3: "CHN"
+    country_numeric: "156"
+    lat: 29.87
+    lon: 121.55
+  - locode: CNSZN
+    name: "Shenzhen"
+    region: "Asia East"
+    country_iso3: "CHN"
+    country_numeric: "156"
+    lat: 22.54
+    lon: 113.94
+  - locode: CNTAO
+    name: "Qingdao"
+    region: "Asia East"
+    country_iso3: "CHN"
+    country_numeric: "156"
+    lat: 36.07
+    lon: 120.33
+  - locode: CNTXG
+    name: "Tianjin"
+    region: "Asia East"
+    country_iso3: "CHN"
+    country_numeric: "156"
+    lat: 38.99
+    lon: 117.72
+  - locode: HKHKG
+    name: "Hong Kong"
+    region: "Asia East"
+    country_iso3: "HKG"
+    country_numeric: "344"
+    lat: 22.29
+    lon: 114.18
+  - locode: MYPKG
+    name: "Port Klang"
+    region: "Southeast Asia"
+    country_iso3: "MYS"
+    country_numeric: "458"
+    lat: 3.00
+    lon: 101.39
+  - locode: AEJEA
+    name: "Jebel Ali (Dubai)"
+    region: "Middle East"
+    country_iso3: "ARE"
+    country_numeric: "784"
+    lat: 24.99
+    lon: 55.06
+  - locode: BEANR
+    name: "Antwerp-Bruges"
+    region: "Europe"
+    country_iso3: "BEL"
+    country_numeric: "056"
+    lat: 51.26
+    lon: 4.40
+  - locode: MYTPP
+    name: "Tanjung Pelepas"
+    region: "Southeast Asia"
+    country_iso3: "MYS"
+    country_numeric: "458"
+    lat: 1.36
+    lon: 103.55
+  - locode: TWKHH
+    name: "Kaohsiung"
+    region: "Asia East"
+    country_iso3: "TWN"
+    country_numeric: "158"
+    lat: 22.61
+    lon: 120.29
+  - locode: USLGB
+    name: "Long Beach"
+    region: "North America West"
+    country_iso3: "USA"
+    country_numeric: "842"
+    lat: 33.76
+    lon: -118.19
+  - locode: MATNM
+    name: "Tanger Med"
+    region: "Africa"
+    country_iso3: "MAR"
+    country_numeric: "504"
+    lat: 35.89
+    lon: -5.50
+  - locode: LKCMB
+    name: "Colombo"
+    region: "South Asia"
+    country_iso3: "LKA"
+    country_numeric: "144"
+    lat: 6.93
+    lon: 79.84
+  - locode: GRPIR
+    name: "Piraeus"
+    region: "Europe"
+    country_iso3: "GRC"
+    country_numeric: "300"
+    lat: 37.94
+    lon: 23.64
+  - locode: USSAV
+    name: "Savannah"
+    region: "North America East"
+    country_iso3: "USA"
+    country_numeric: "842"
+    lat: 32.08
+    lon: -81.10
+  - locode: GBFXT
+    name: "Felixstowe"
+    region: "Europe"
+    country_iso3: "GBR"
+    country_numeric: "826"
+    lat: 51.96
+    lon: 1.35
+  - locode: BRSAO
+    name: "Santos"
+    region: "South America"
+    country_iso3: "BRA"
+    country_numeric: "076"
+    lat: -23.95
+    lon: -46.33
+
+# ----- HS Code Product Categories (4-digit codes) -----
+hs_categories:
+  electronics:
+    codes: ["8471", "8517", "8542", "8541", "8536", "8544"]
+    label: "Electronics"
+  machinery:
+    codes: ["8413", "8479", "8431", "8483", "8501", "8503"]
+    label: "Machinery"
+  automotive:
+    codes: ["8703", "8708", "8716", "8701", "8702"]
+    label: "Automotive"
+  apparel:
+    codes: ["6109", "6110", "6204", "6203", "6101", "6102"]
+    label: "Apparel"
+  chemicals:
+    codes: ["2902", "2903", "2905", "3901", "3902", "2907"]
+    label: "Chemicals"
+  agriculture:
+    codes: ["1001", "1201", "0901", "0902", "1005", "1507"]
+    label: "Agriculture"
+  metals:
+    codes: ["7208", "7209", "7210", "7213", "7214", "7225"]
+    label: "Metals & Steel"
+
+# ----- Shipping Routes -----
+routes:
+  - id: transpacific_eb
+    name: "Trans-Pacific Eastbound"
+    origin_region: "Asia East"
+    dest_region: "North America West"
+    origin_locode: CNSHA
+    dest_locode: USLAX
+    transit_days: 14
+    fbx_index: "FBX01"
+  - id: asia_europe
+    name: "Asia-Europe"
+    origin_region: "Asia East"
+    dest_region: "Europe"
+    origin_locode: CNSHA
+    dest_locode: NLRTM
+    transit_days: 25
+    fbx_index: "FBX03"
+  - id: transpacific_wb
+    name: "Trans-Pacific Westbound"
+    origin_region: "North America West"
+    dest_region: "Asia East"
+    origin_locode: USLAX
+    dest_locode: CNSHA
+    transit_days: 16
+    fbx_index: "FBX02"
+  - id: transatlantic
+    name: "Transatlantic"
+    origin_region: "Europe"
+    dest_region: "North America East"
+    origin_locode: NLRTM
+    dest_locode: USNYC
+    transit_days: 12
+    fbx_index: "FBX11"
+  - id: sea_transpacific_eb
+    name: "Southeast Asia Eastbound"
+    origin_region: "Southeast Asia"
+    dest_region: "North America West"
+    origin_locode: SGSIN
+    dest_locode: USLAX
+    transit_days: 14
+    fbx_index: "FBX01"
+  - id: ningbo_europe
+    name: "Asia-Europe via Suez (Ningbo)"
+    origin_region: "Asia East"
+    dest_region: "Europe"
+    origin_locode: CNNBO
+    dest_locode: BEANR
+    transit_days: 28
+    fbx_index: "FBX03"
+  - id: middle_east_to_europe
+    name: "Middle East Hub to Europe"
+    origin_region: "Middle East"
+    dest_region: "Europe"
+    origin_locode: AEJEA
+    dest_locode: NLRTM
+    transit_days: 22
+    fbx_index: "FBX03"
+  - id: middle_east_to_asia
+    name: "Middle East Hub to Asia"
+    origin_region: "Middle East"
+    dest_region: "Asia East"
+    origin_locode: AEJEA
+    dest_locode: CNSHA
+    transit_days: 10
+    fbx_index: "FBXGLO"
+  - id: south_asia_to_europe
+    name: "South Asia to Europe"
+    origin_region: "South Asia"
+    dest_region: "Europe"
+    origin_locode: LKCMB
+    dest_locode: GBFXT
+    transit_days: 20
+    fbx_index: "FBX03"
+  - id: intra_asia_china_sea
+    name: "Intra-Asia: China to SE Asia"
+    origin_region: "Asia East"
+    dest_region: "Southeast Asia"
+    origin_locode: CNSHA
+    dest_locode: SGSIN
+    transit_days: 5
+    fbx_index: "FBXGLO"
+  - id: intra_asia_china_japan
+    name: "Intra-Asia: China to Japan/Korea"
+    origin_region: "Asia East"
+    dest_region: "Asia East"
+    origin_locode: CNSHA
+    dest_locode: JPYOK
+    transit_days: 3
+    fbx_index: "FBXGLO"
+  - id: china_south_america
+    name: "China to South America"
+    origin_region: "Asia East"
+    dest_region: "South America"
+    origin_locode: CNSHA
+    dest_locode: BRSAO
+    transit_days: 35
+    fbx_index: "FBX21"
+  - id: europe_south_america
+    name: "Europe to South America"
+    origin_region: "Europe"
+    dest_region: "South America"
+    origin_locode: NLRTM
+    dest_locode: BRSAO
+    transit_days: 22
+    fbx_index: "FBX31"
+  - id: med_hub_to_asia
+    name: "Mediterranean Hub to Asia"
+    origin_region: "Europe"
+    dest_region: "Asia East"
+    origin_locode: GRPIR
+    dest_locode: CNSHA
+    transit_days: 22
+    fbx_index: "FBX04"
+  - id: north_africa_to_europe
+    name: "North Africa/Med to Europe"
+    origin_region: "Africa"
+    dest_region: "Europe"
+    origin_locode: MATNM
+    dest_locode: NLRTM
+    transit_days: 8
+    fbx_index: "FBXGLO"
+  - id: us_east_south_america
+    name: "US East Coast to South America"
+    origin_region: "North America East"
+    dest_region: "South America"
+    origin_locode: USSAV
+    dest_locode: BRSAO
+    transit_days: 12
+    fbx_index: "FBXGLO"
+  - id: longbeach_to_asia
+    name: "US West Coast (Long Beach) to Asia"
+    origin_region: "North America West"
+    dest_region: "Asia East"
+    origin_locode: USLGB
+    dest_locode: CNSHA
+    transit_days: 16
+    fbx_index: "FBX02"
+
+# ----- Data Pipeline -----
+data:
+  lookback_days: 90
+  stock_interval: "1d"
+  request_timeout_seconds: 30
+  max_retries: 3
+  retry_delay_seconds: 5
+
+# ----- Cache TTLs (hours) -----
+cache:
+  comtrade_ttl_hours: 168
+  fred_ttl_hours: 24
+  worldbank_ttl_hours: 168
+  freight_ttl_hours: 24
+  ais_ttl_hours: 6
+  stocks_ttl_hours: 1
+
+# ----- Decision Engine -----
+engine:
+  weights:
+    trade_flow_score: 0.30
+    freight_rate_score: 0.25
+    congestion_score: 0.20
+    macro_score: 0.15
+    momentum_score: 0.10
+
+  insight_min_score: 0.55
+  high_demand_threshold: 0.70
+  low_demand_threshold: 0.35
+
+  port_demand_weights:
+    trade_flow: 0.40
+    congestion: 0.35
+    throughput: 0.25
+
+  route_weights:
+    rate_momentum: 0.35
+    demand_imbalance: 0.30
+    congestion_clearance: 0.20
+    macro_tailwind: 0.15
+
+  macro_weights:
+    pmi: 0.40
+    bdi: 0.35
+    fuel_inverse: 0.25
+
+  correlation:
+    min_window_days: 60
+    min_abs_correlation: 0.40
+    lag_days_to_test: [0, 7, 14, 21, 30]
+  # Commodity signal hypotheses:
+  # DBA rises → agriculture exports surge → SBLK/GOGL demand increases
+  # DBB rises → industrial metals shipping increases → BDI leads
+  # USO rises → shipping costs increase (fuel) → margin compression → inverse ZIM
+  # XLB rises → materials demand → port throughput increases
+
+# ----- Logging -----
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  rotation: "daily"
+  retention_days: 14
