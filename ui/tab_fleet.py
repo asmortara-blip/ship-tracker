@@ -446,7 +446,8 @@ def render(freight_data=None, macro_data=None) -> None:
     macro_data:
         Same as above — available for future demand-growth overrides.
     """
-    fleet = get_fleet_data()
+    with st.spinner("Loading fleet data..."):
+        fleet = get_fleet_data()
 
     _render_hero(fleet)
     st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)

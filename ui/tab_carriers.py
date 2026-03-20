@@ -560,7 +560,7 @@ def _render_alliance_impact() -> None:
         rate_impact = _ALLIANCE_RATE_IMPACT.get(alliance_name, "N/A")
         shipper_imp = _ALLIANCE_SHIPPER_IMPLICATIONS.get(alliance_name, "N/A")
 
-        with st.expander(alliance_name + "  ·  " + str(round(alliance.combined_share_pct, 1)) + "% market share  ·  " + alliance.status, expanded=False):
+        with st.expander(alliance_name + "  ·  " + str(round(alliance.combined_share_pct, 1)) + "% market share  ·  " + alliance.status, expanded=False, key=f"carriers_alliance_{alliance_name}"):
             col_a, col_b = st.columns([1, 1])
 
             with col_a:

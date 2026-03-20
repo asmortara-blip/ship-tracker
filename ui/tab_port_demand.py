@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -74,12 +75,14 @@ def _trend_arrow(trend: str) -> tuple[str, str]:
 def render(port_results: list[PortDemandResult]) -> None:
     """Render the Port Demand tab."""
     st.header("Port Demand Analysis")
+    st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 168 hours (trade flow data)")
 
     if not port_results:
         st.info("No port data available. Check API credentials in .env and click Refresh.")
         return
 
-    sorted_results = sorted(port_results, key=lambda r: r.demand_score, reverse=True)
+    with st.spinner("Loading port demand data..."):
+        sorted_results = sorted(port_results, key=lambda r: r.demand_score, reverse=True)
 
     # ── 1. Demand tier summary badges ─────────────────────────────────────────
     high_count = sum(1 for r in port_results if r.demand_score >= 0.70)

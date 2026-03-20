@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import streamlit as st
 import yfinance as yf
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -20,6 +21,7 @@ _DEFAULT_TICKERS = [
 ]
 
 
+@st.cache_data(ttl=3600)
 def fetch_all_stocks(
     tickers: list[str] | None = None,
     lookback_days: int = 180,
@@ -57,8 +59,13 @@ def fetch_all_stocks(
 def _fetch_single(symbol: str, lookback_days: int) -> pd.DataFrame:
     """Fetch a single ticker from yfinance and normalize."""
     logger.debug(f"yfinance fetch: {symbol} ({lookback_days}d)")
-    ticker = yf.Ticker(symbol)
-    raw = ticker.history(period=f"{lookback_days}d", interval="1d", auto_adjust=True)
+    try:
+        ticker = yf.Ticker(symbol)
+        raw = ticker.history(period=f"{lookback_days}d", interval="1d", auto_adjust=True)
+    except Exception as e:
+        logger.warning(f"yfinance request failed for {symbol}: {e}")
+        # Fallback: return empty DataFrame so the caller skips this ticker
+        return pd.DataFrame()
 
     if raw is None or raw.empty:
         logger.warning(f"yfinance returned empty for {symbol}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import requests
+import streamlit as st
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -39,6 +40,7 @@ _ISO3_TO_ISO2: dict[str, str] = {
 }
 
 
+@st.cache_data(ttl=604800)
 def fetch_port_throughput(
     cache: CacheManager | None = None,
     ttl_hours: float = 168.0,

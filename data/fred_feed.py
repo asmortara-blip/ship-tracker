@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
+import streamlit as st
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -103,6 +104,7 @@ def _is_not_found_error(exc: Exception) -> bool:
     return any(code in msg for code in ("400", "404", "not found", "bad request"))
 
 
+@st.cache_data(ttl=86400)
 def fetch_macro_series(
     lookback_days: int = 365,
     cache: CacheManager | None = None,

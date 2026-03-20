@@ -958,6 +958,8 @@ def render(
     n_loaded = len(macro_data)
     logger.info("tab_macro: rendering with " + str(n_loaded) + " FRED series")
 
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 24 hours (FRED economic data)")
+
     # ── Section 1: Macro Dashboard Grid ─────────────────────────────────────
     _render_macro_grid(macro_data)
 

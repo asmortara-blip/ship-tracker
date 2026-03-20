@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -1222,6 +1223,8 @@ def render(
     if macro_data:
         _render_macro_ticker(macro_data)
 
+    st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 1 hour (market data)")
+
     st.markdown(
         f'<div style="font-size:0.72rem; font-weight:700; color:{C_TEXT3_L};'
         f' text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px">'
@@ -1322,9 +1325,10 @@ def render(
         unsafe_allow_html=True,
     )
 
-    all_stocks  = sorted({r.stock  for r in correlation_results})
-    all_signals = sorted({r.signal for r in correlation_results})
-    matrix = build_correlation_heatmap_data(correlation_results, all_stocks, all_signals)
+    with st.spinner("Loading market data..."):
+        all_stocks  = sorted({r.stock  for r in correlation_results})
+        all_signals = sorted({r.signal for r in correlation_results})
+        matrix = build_correlation_heatmap_data(correlation_results, all_stocks, all_signals)
     signal_labels = [_SIGNAL_LABELS.get(s, s) for s in matrix.index]
 
     # Build text with muted values for low |r|

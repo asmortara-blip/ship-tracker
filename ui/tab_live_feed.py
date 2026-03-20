@@ -1198,9 +1198,11 @@ def render(
 
     # ── Section 1: Live Status Bar ────────────────────────────────────────
     _render_status_bar()
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 6 hours (AIS vessel data)")
 
     # ── Section 2: Signal Stream ──────────────────────────────────────────
-    _render_signal_stream(insights, freight_data, port_results, macro_data, stock_data)
+    with st.spinner("Loading live feed..."):
+        _render_signal_stream(insights, freight_data, port_results, macro_data, stock_data)
 
     st.markdown(
         "<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>",

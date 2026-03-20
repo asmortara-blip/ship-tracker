@@ -851,7 +851,8 @@ def render(
         "Congestion History Timeline (2020 - 2026)",
         "Monthly congestion scores with annotated crisis events and periods",
     )
-    _render_timeline(selected_ports)
+    with st.spinner("Loading congestion data..."):
+        _render_timeline(selected_ports)
 
     # ── Event legend ──────────────────────────────────────────────────────────
     legend_items = [

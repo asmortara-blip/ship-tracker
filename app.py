@@ -70,10 +70,10 @@ def _age_label(age_hours: float | None) -> str:
 
 # ── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Cargo Ship Container Tracker",
+    page_title="Ship Tracker",
     page_icon="🚢",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Config ────────────────────────────────────────────────────────────────
@@ -89,6 +89,11 @@ cfg = load_config()
 # Inject global CSS design system
 from ui.styles import inject_global_css
 inject_global_css()
+
+st.markdown("""<style>
+.stTabs [data-baseweb="tab"] { font-size: 12px; padding: 6px 10px; }
+.stTabs [data-baseweb="tab-list"] { gap: 2px; }
+</style>""", unsafe_allow_html=True)
 
 
 # ── Data loading (cached) ──────────────────────────────────────────────────
@@ -561,6 +566,8 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+st.caption("43 analysis modules • Live data • Powered by free public APIs")
+
 
 # ── Ticker tape ───────────────────────────────────────────────────────────
 ticker_items = []
@@ -658,20 +665,35 @@ tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12,
 ])
 
 with tab0:
-    from ui.tab_overview import render as render_overview
-    render_overview(port_results, route_results, insights)
+    try:
+        from ui.tab_overview import render as render_overview
+        render_overview(port_results, route_results, insights)
+    except Exception as e:
+        st.error(f"Overview tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab1:
-    from ui.tab_port_demand import render as render_ports
-    render_ports(port_results)
+    try:
+        from ui.tab_port_demand import render as render_ports
+        render_ports(port_results)
+    except Exception as e:
+        st.error(f"Port Demand tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab2:
-    from ui.tab_routes import render as render_routes
-    render_routes(route_results, freight_data, forecasts)
+    try:
+        from ui.tab_routes import render as render_routes
+        render_routes(route_results, freight_data, forecasts)
+    except Exception as e:
+        st.error(f"Routes tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab3:
-    from ui.tab_results import render as render_results
     try:
+        from ui.tab_results import render as render_results
         render_results(insights)
     except Exception as e:
         st.error(f"Results tab error: {e}")
@@ -679,16 +701,31 @@ with tab3:
         st.code(traceback.format_exc())
 
 with tab4:
-    from ui.tab_markets import render as render_markets
-    render_markets(correlation_results, stock_data, lookback)
+    try:
+        from ui.tab_markets import render as render_markets
+        render_markets(correlation_results, stock_data, lookback)
+    except Exception as e:
+        st.error(f"Markets tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab5:
-    from ui.tab_supply_chain import render as render_supply_chain
-    render_supply_chain(port_results, route_results, freight_data, macro_data, insights)
+    try:
+        from ui.tab_supply_chain import render as render_supply_chain
+        render_supply_chain(port_results, route_results, freight_data, macro_data, insights)
+    except Exception as e:
+        st.error(f"Supply Chain tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab6:
-    from ui.tab_scenarios import render as render_scenarios
-    render_scenarios(port_results, route_results, macro_data)
+    try:
+        from ui.tab_scenarios import render as render_scenarios
+        render_scenarios(port_results, route_results, macro_data)
+    except Exception as e:
+        st.error(f"Scenarios tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab7:
     try:
@@ -952,3 +989,6 @@ with tab42:
         render_scorecard(port_results, route_results, insights, freight_data, macro_data, stock_data)
     except Exception as exc:
         st.error(f"Scorecard tab error: {exc}")
+
+st.divider()
+st.caption("Ship Tracker • Data: UN Comtrade, FRED, World Bank, yfinance, Freightos FBX • Built with Streamlit")

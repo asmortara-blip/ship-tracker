@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import requests
+import streamlit as st
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -59,6 +60,7 @@ _SEASONAL = {
 }
 
 
+@st.cache_data(ttl=21600)
 def fetch_vessel_counts(
     cache: CacheManager | None = None,
     ttl_hours: float = 6.0,

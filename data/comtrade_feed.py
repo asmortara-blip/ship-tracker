@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
+import streamlit as st
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -57,6 +58,7 @@ _CATEGORY_SHARES = {
 }
 
 
+@st.cache_data(ttl=604800)
 def fetch_all_ports(
     lookback_months: int = 3,
     cache: CacheManager | None = None,

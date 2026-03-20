@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
+import streamlit as st
 from bs4 import BeautifulSoup
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -34,6 +35,7 @@ _FBX_API_URL = "https://fbx.freightos.com/api/v1/indices"
 _FBX_PAGE_URL = "https://fbx.freightos.com/"
 
 
+@st.cache_data(ttl=86400)
 def fetch_fbx_rates(
     lookback_days: int = 120,
     cache: CacheManager | None = None,

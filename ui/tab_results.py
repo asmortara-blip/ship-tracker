@@ -481,7 +481,7 @@ def render(insights: list[Insight]) -> None:
                 _render_insight_card(insight, CATEGORY_COLORS, CATEGORY_ICONS, ACTION_COLORS, card_key=f"{i}_{j}")
 
             # Insight landscape at the bottom of each tab
-            with st.expander("Insight Landscape", expanded=True):
+            with st.expander("Insight Landscape", expanded=True, key=f"results_landscape_{i}"):
                 _render_insight_timeline(tab_insights, chart_key=f"insight_timeline_{i}")
 
     # ── Seasonal patterns ──────────────────────────────────────────────────────

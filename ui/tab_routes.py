@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -542,6 +543,7 @@ def _render_route_comparison(route_results: list[RouteOpportunity]) -> None:
 def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts: list | None = None) -> None:
     """Render the Routes tab."""
     st.header("Route Opportunity Analysis")
+    st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 24 hours (freight rate data)")
 
     if not route_results:
         st.info("No route data available. Check API credentials and click Refresh.")
@@ -561,11 +563,12 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
     C_TEXT2   = _C_TEXT2
     C_TEXT3   = _C_TEXT3
 
-    top_route    = route_results[0]
-    strong_count = sum(1 for r in route_results if r.opportunity_score >= 0.60)
-    avg_rate     = sum(r.current_rate_usd_feu for r in route_results if r.current_rate_usd_feu > 0)
-    n_rates      = sum(1 for r in route_results if r.current_rate_usd_feu > 0)
-    top_rate_pct = top_route.rate_pct_change_30d
+    with st.spinner("Loading route data..."):
+        top_route    = route_results[0]
+        strong_count = sum(1 for r in route_results if r.opportunity_score >= 0.60)
+        avg_rate     = sum(r.current_rate_usd_feu for r in route_results if r.current_rate_usd_feu > 0)
+        n_rates      = sum(1 for r in route_results if r.current_rate_usd_feu > 0)
+        top_rate_pct = top_route.rate_pct_change_30d
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -811,7 +814,7 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
                 fc3.metric("30d forecast", f"${fc.forecast_30d:,.0f}", f"{pct_30:+.1f}%")
                 fc4.metric("90d forecast", f"${fc.forecast_90d:,.0f}")
 
-                with st.expander("Forecast detail"):
+                with st.expander("Forecast detail", key=f"routes_expander_{fc.route_name}"):
                     days  = [0, 30, 60, 90]
                     rates = [fc.current_rate, fc.forecast_30d, fc.forecast_60d, fc.forecast_90d]
                     upper = [fc.current_rate, fc.upper_30d, fc.upper_30d + (fc.forecast_60d - fc.forecast_30d), fc.upper_30d + (fc.forecast_90d - fc.forecast_30d)]
