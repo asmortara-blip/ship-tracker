@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from loguru import logger
 
 from engine.correlator import CorrelationResult, build_correlation_heatmap_data
 from ui.styles import (
@@ -11,6 +12,12 @@ from ui.styles import (
     C_HIGH, C_LOW, C_ACCENT, C_MOD,
     _hex_to_rgba as _hex_rgba,
     section_header,
+)
+from processing.leading_indicators import (
+    build_leading_indicators,
+    build_lead_lag_matrix,
+    compute_leading_indicator_score,
+    get_recession_probability,
 )
 
 
@@ -764,6 +771,435 @@ def _render_signal_timeline(
     st.plotly_chart(fig, use_container_width=True)
 
 
+# ── leading indicators dashboard ──────────────────────────────────────────────
+
+def _render_leading_indicators_dashboard(macro_data: dict) -> None:
+    """3x5 grid of indicator cards with mini sparkline, signal badge, and lead time."""
+    section_header(
+        "Leading Indicators Dashboard",
+        "Economic signals that lead shipping demand · FRED data",
+    )
+
+    try:
+        indicators = build_leading_indicators(macro_data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_render_leading_indicators_dashboard error: {}", exc)
+        st.warning("Leading indicator data unavailable.")
+        return
+
+    if not indicators:
+        st.info("No leading indicator data loaded.")
+        return
+
+    SIGNAL_COLORS = {
+        "BULLISH": ("#10b981", "rgba(16,185,129,0.15)"),
+        "BEARISH": ("#ef4444", "rgba(239,68,68,0.15)"),
+        "NEUTRAL": ("#94a3b8", "rgba(148,163,184,0.12)"),
+    }
+
+    # Render in rows of 3 (up to 15 indicators = 5 rows)
+    for row_start in range(0, len(indicators), 3):
+        row_inds = indicators[row_start:row_start + 3]
+        cols = st.columns(3)
+        for col, ind in zip(cols, row_inds):
+            with col:
+                sig_color, sig_bg = SIGNAL_COLORS.get(
+                    ind.signal, ("#94a3b8", "rgba(148,163,184,0.12)")
+                )
+
+                # Format current value compactly
+                cv = ind.current_value
+                if abs(cv) >= 1_000_000:
+                    val_str = str(round(cv / 1_000_000, 2)) + "M"
+                elif abs(cv) >= 1_000:
+                    val_str = str(round(cv / 1_000, 1)) + "K"
+                elif abs(cv) >= 10:
+                    val_str = str(round(cv, 1))
+                else:
+                    val_str = str(round(cv, 3))
+
+                chg_sign = "+" if ind.change_pct >= 0 else ""
+                chg_str = chg_sign + str(round(ind.change_pct, 2)) + "%"
+                chg_color = "#10b981" if ind.change_pct >= 0 else "#ef4444"
+
+                lead_str = (
+                    "Coincident" if ind.lead_time_weeks == 0
+                    else "Leads " + str(ind.lead_time_weeks) + " wk"
+                )
+
+                # Mini sparkline from FRED data
+                df_spark = macro_data.get(ind.series_id)
+                sparkline_html = ""
+                if df_spark is not None and not df_spark.empty and "value" in df_spark.columns:
+                    spark_df = df_spark.copy()
+                    if "date" in spark_df.columns:
+                        spark_df = spark_df.sort_values("date")
+                    spark_vals = spark_df["value"].dropna().tail(24).tolist()
+                    if len(spark_vals) >= 3:
+                        spark_x = list(range(len(spark_vals)))
+                        spark_fig = go.Figure()
+                        spark_fig.add_trace(go.Scatter(
+                            x=spark_x,
+                            y=spark_vals,
+                            mode="lines",
+                            line=dict(color=sig_color, width=1.5),
+                            hoverinfo="skip",
+                        ))
+                        spark_fig.update_layout(
+                            height=40,
+                            margin=dict(t=0, b=0, l=0, r=0),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            showlegend=False,
+                            xaxis=dict(visible=False),
+                            yaxis=dict(visible=False),
+                        )
+                        st.plotly_chart(
+                            spark_fig,
+                            use_container_width=True,
+                            key="spark_" + ind.series_id,
+                        )
+
+                st.markdown(
+                    '<div style="background:#0d1117; border:1px solid rgba(255,255,255,0.08);'
+                    ' border-left:3px solid ' + sig_color + ';'
+                    ' border-radius:10px; padding:12px 14px; margin-bottom:10px">'
+
+                    '<div style="font-size:0.65rem; font-weight:700; color:#64748b;'
+                    ' text-transform:uppercase; letter-spacing:0.07em; margin-bottom:4px">'
+                    + ind.name[:28] +
+                    '</div>'
+
+                    '<div style="display:flex; align-items:baseline; gap:8px; margin-bottom:4px">'
+                    '<span style="font-size:1.15rem; font-weight:800; color:#f1f5f9;'
+                    ' font-variant-numeric:tabular-nums">' + val_str + '</span>'
+                    '<span style="font-size:0.78rem; font-weight:600; color:' + chg_color + '">'
+                    + chg_str +
+                    '</span>'
+                    '</div>'
+
+                    '<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">'
+                    '<span style="background:' + sig_bg + '; color:' + sig_color + ';'
+                    ' padding:1px 8px; border-radius:999px; font-size:0.62rem;'
+                    ' font-weight:700; letter-spacing:0.06em">' + ind.signal + '</span>'
+                    '<span style="font-size:0.62rem; color:#64748b">' + lead_str + '</span>'
+                    '<span style="font-size:0.60rem; color:#475569; margin-left:auto">'
+                    + ind.data_frequency +
+                    '</span>'
+                    '</div>'
+
+                    '<div style="font-size:0.68rem; color:#64748b; margin-top:6px;'
+                    ' line-height:1.45">' + ind.shipping_implication[:90] + '...</div>'
+
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# ── lead-lag correlation matrix ────────────────────────────────────────────────
+
+def _render_lead_lag_matrix(macro_data: dict) -> None:
+    """Heatmap of indicator cross-correlations with BDI at multiple lead lags."""
+    section_header(
+        "Lead-Lag Correlation Matrix",
+        "Pearson r of each leading indicator vs Baltic Dry Index at lag 0-12 weeks",
+    )
+
+    try:
+        matrix_df = build_lead_lag_matrix(macro_data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_render_lead_lag_matrix error: {}", exc)
+        st.warning("Lead-lag matrix unavailable.")
+        return
+
+    if matrix_df.empty:
+        st.info("Insufficient data to compute lead-lag correlations.")
+        return
+
+    z = matrix_df.values.tolist()
+    # Annotation text — round to 2 dp, blank for NaN
+    text_vals = []
+    for row in z:
+        text_row = []
+        for v in row:
+            try:
+                import math
+                text_row.append("" if math.isnan(float(v)) else str(round(float(v), 2)))
+            except (TypeError, ValueError):
+                text_row.append("")
+        text_vals.append(text_row)
+
+    hm_fig = go.Figure(go.Heatmap(
+        z=z,
+        x=matrix_df.columns.tolist(),
+        y=matrix_df.index.tolist(),
+        colorscale="Viridis",
+        zmin=-1, zmax=1,
+        text=text_vals,
+        texttemplate="%{text}",
+        textfont=dict(size=10, color="#f1f5f9"),
+        hovertemplate=(
+            "Indicator: %{y}<br>"
+            "Lag: %{x}<br>"
+            "r = %{z:.3f}"
+            "<extra></extra>"
+        ),
+        colorbar=dict(
+            title=dict(text="r", font=dict(size=11, color="#94a3b8")),
+            tickfont=dict(size=10, color="#94a3b8"),
+            outlinewidth=0,
+            thickness=14,
+            tickvals=[-1, -0.5, 0, 0.5, 1],
+            ticktext=["-1.0", "-0.5", "0", "0.5", "1.0"],
+        ),
+    ))
+    hm_fig.update_layout(
+        template="plotly_dark",
+        height=max(380, len(matrix_df) * 28 + 120),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0d1117",
+        margin=dict(t=20, b=80, l=10, r=80),
+        font=dict(family="Inter, sans-serif"),
+        xaxis=dict(
+            tickfont=dict(size=10, color="#94a3b8"),
+            side="top",
+        ),
+        yaxis=dict(
+            tickfont=dict(size=9, color="#94a3b8"),
+            autorange="reversed",
+        ),
+        hoverlabel=dict(
+            bgcolor="#1a2235",
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color="#f1f5f9", size=12),
+        ),
+    )
+    st.plotly_chart(hm_fig, use_container_width=True)
+
+
+# ── recession probability gauge ────────────────────────────────────────────────
+
+def _render_recession_probability_gauge(macro_data: dict) -> None:
+    """Gauge (0-100%) showing Sahm-rule + claims-slope recession probability."""
+    try:
+        prob = get_recession_probability(macro_data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_render_recession_probability_gauge error: {}", exc)
+        prob = 0.0
+
+    pct = round(prob * 100, 1)
+
+    if pct < 20:
+        zone_label = "Low Risk"
+        bar_color = "#10b981"
+        step_colors = [
+            dict(range=[0, 20],  color="rgba(16,185,129,0.20)"),
+            dict(range=[20, 40], color="rgba(245,158,11,0.15)"),
+            dict(range=[40, 100], color="rgba(239,68,68,0.15)"),
+        ]
+    elif pct < 40:
+        zone_label = "Elevated Risk"
+        bar_color = "#f59e0b"
+        step_colors = [
+            dict(range=[0, 20],  color="rgba(16,185,129,0.15)"),
+            dict(range=[20, 40], color="rgba(245,158,11,0.25)"),
+            dict(range=[40, 100], color="rgba(239,68,68,0.15)"),
+        ]
+    else:
+        zone_label = "High Risk"
+        bar_color = "#ef4444"
+        step_colors = [
+            dict(range=[0, 20],  color="rgba(16,185,129,0.12)"),
+            dict(range=[20, 40], color="rgba(245,158,11,0.15)"),
+            dict(range=[40, 100], color="rgba(239,68,68,0.22)"),
+        ]
+
+    gauge_fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=pct,
+        number=dict(
+            suffix="%",
+            font=dict(size=30, color="#f1f5f9", family="Inter, sans-serif"),
+        ),
+        title=dict(
+            text=(
+                "Recession Probability<br>"
+                '<span style="font-size:0.85rem; color:' + bar_color + '">'
+                + zone_label +
+                "</span>"
+            ),
+            font=dict(size=13, color="#94a3b8", family="Inter, sans-serif"),
+        ),
+        gauge=dict(
+            axis=dict(
+                range=[0, 100],
+                tickwidth=1,
+                tickcolor="#64748b",
+                tickfont=dict(size=10, color="#64748b"),
+                tickvals=[0, 20, 40, 60, 80, 100],
+                ticktext=["0%", "20%", "40%", "60%", "80%", "100%"],
+            ),
+            bar=dict(color=bar_color, thickness=0.22),
+            bgcolor="#111827",
+            borderwidth=0,
+            steps=step_colors,
+            threshold=dict(
+                line=dict(color=bar_color, width=3),
+                thickness=0.75,
+                value=pct,
+            ),
+        ),
+    ))
+    gauge_fig.update_layout(
+        template="plotly_dark",
+        height=260,
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0d1117",
+        margin=dict(t=40, b=10, l=20, r=20),
+        font=dict(family="Inter, sans-serif"),
+    )
+    st.plotly_chart(gauge_fig, use_container_width=True)
+
+    legend_html = (
+        '<div style="display:flex; gap:6px; justify-content:center; flex-wrap:wrap;'
+        ' margin-top:-8px; margin-bottom:8px">'
+        '<span style="font-size:0.65rem; padding:2px 8px; border-radius:999px;'
+        ' background:rgba(16,185,129,0.15); color:#10b981">Low Risk 0-20%</span>'
+        '<span style="font-size:0.65rem; padding:2px 8px; border-radius:999px;'
+        ' background:rgba(245,158,11,0.15); color:#f59e0b">Elevated 20-40%</span>'
+        '<span style="font-size:0.65rem; padding:2px 8px; border-radius:999px;'
+        ' background:rgba(239,68,68,0.15); color:#ef4444">High Risk &gt;40%</span>'
+        '</div>'
+    )
+    st.markdown(legend_html, unsafe_allow_html=True)
+
+
+# ── composite leading score ────────────────────────────────────────────────────
+
+def _render_composite_leading_score(macro_data: dict) -> None:
+    """Large indicator widget showing the composite leading score and 4-week forecast."""
+    try:
+        result = compute_leading_indicator_score(macro_data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_render_composite_leading_score error: {}", exc)
+        result = {
+            "composite_score": 0.5,
+            "bullish_count": 0,
+            "bearish_count": 0,
+            "neutral_count": 0,
+            "top_bullish_indicators": [],
+            "top_bearish_indicators": [],
+            "four_week_forecast": "STABLE",
+            "weighted_signal": 0.0,
+        }
+
+    score_pct = round(result["composite_score"] * 100, 1)
+    forecast = result["four_week_forecast"]
+    weighted_signal = result["weighted_signal"]
+
+    if forecast == "EXPANSION":
+        score_color = "#10b981"
+        arrow_label = "Expanding"
+        delta_val = abs(weighted_signal)
+    elif forecast == "CONTRACTION":
+        score_color = "#ef4444"
+        arrow_label = "Contracting"
+        delta_val = -abs(weighted_signal)
+    else:
+        score_color = "#f59e0b"
+        arrow_label = "Stable"
+        delta_val = 0.0
+
+    indicator_fig = go.Figure(go.Indicator(
+        mode="number+delta+gauge",
+        value=score_pct,
+        delta=dict(
+            reference=50.0,
+            position="top",
+            valueformat=".1f",
+            increasing=dict(color="#10b981"),
+            decreasing=dict(color="#ef4444"),
+        ),
+        number=dict(
+            suffix="/100",
+            font=dict(size=38, color=score_color, family="Inter, sans-serif"),
+        ),
+        title=dict(
+            text=(
+                "Composite Leading Score<br>"
+                '<span style="font-size:0.85rem; color:' + score_color + '">'
+                "4-Wk Forecast: " + arrow_label +
+                "</span>"
+            ),
+            font=dict(size=13, color="#94a3b8", family="Inter, sans-serif"),
+        ),
+        gauge=dict(
+            axis=dict(
+                range=[0, 100],
+                tickfont=dict(size=9, color="#64748b"),
+                tickcolor="#64748b",
+            ),
+            bar=dict(color=score_color, thickness=0.22),
+            bgcolor="#111827",
+            borderwidth=0,
+            steps=[
+                dict(range=[0, 35],  color="rgba(239,68,68,0.18)"),
+                dict(range=[35, 50], color="rgba(245,158,11,0.15)"),
+                dict(range=[50, 65], color="rgba(148,163,184,0.12)"),
+                dict(range=[65, 100], color="rgba(16,185,129,0.18)"),
+            ],
+            threshold=dict(
+                line=dict(color=score_color, width=3),
+                thickness=0.75,
+                value=score_pct,
+            ),
+        ),
+    ))
+    indicator_fig.update_layout(
+        template="plotly_dark",
+        height=300,
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0d1117",
+        margin=dict(t=50, b=10, l=20, r=20),
+        font=dict(family="Inter, sans-serif"),
+    )
+    st.plotly_chart(indicator_fig, use_container_width=True)
+
+    # Signal breakdown chips
+    bull_names = ", ".join(result["top_bullish_indicators"]) or "None"
+    bear_names = ", ".join(result["top_bearish_indicators"]) or "None"
+    breakdown_html = (
+        '<div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;'
+        ' margin-top:-4px; margin-bottom:12px">'
+
+        '<span style="font-size:0.65rem; padding:2px 10px; border-radius:999px;'
+        ' background:rgba(16,185,129,0.15); color:#10b981; white-space:nowrap">'
+        + str(result["bullish_count"]) + " Bullish" +
+        '</span>'
+
+        '<span style="font-size:0.65rem; padding:2px 10px; border-radius:999px;'
+        ' background:rgba(148,163,184,0.12); color:#94a3b8; white-space:nowrap">'
+        + str(result["neutral_count"]) + " Neutral" +
+        '</span>'
+
+        '<span style="font-size:0.65rem; padding:2px 10px; border-radius:999px;'
+        ' background:rgba(239,68,68,0.15); color:#ef4444; white-space:nowrap">'
+        + str(result["bearish_count"]) + " Bearish" +
+        '</span>'
+
+        '</div>'
+
+        '<div style="background:#0d1117; border:1px solid rgba(255,255,255,0.07);'
+        ' border-radius:8px; padding:10px 14px; font-size:0.70rem; color:#94a3b8;'
+        ' line-height:1.7">'
+        '<strong style="color:#10b981">Top Bullish:</strong> ' + bull_names +
+        '<br>'
+        '<strong style="color:#ef4444">Top Bearish:</strong> ' + bear_names +
+        '</div>'
+    )
+    st.markdown(breakdown_html, unsafe_allow_html=True)
+
+
 # ── main render ───────────────────────────────────────────────────────────────
 
 def render(
@@ -859,6 +1295,21 @@ def render(
         if macro_data and stock_data:
             st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:20px 0'>", unsafe_allow_html=True)
             _render_signal_timeline(stock_data, macro_data, lookback_days)
+
+        # Leading indicators sections also render with no correlation data
+        if macro_data:
+            st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+            _render_leading_indicators_dashboard(macro_data)
+
+            st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+            _render_lead_lag_matrix(macro_data)
+
+            st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+            col_recession, col_composite = st.columns([1, 1])
+            with col_recession:
+                _render_recession_probability_gauge(macro_data)
+            with col_composite:
+                _render_composite_leading_score(macro_data)
         return
 
     # ── 4. Enhanced Correlation Heatmap ───────────────────────────────────
@@ -1040,6 +1491,21 @@ def render(
     if macro_data and stock_data:
         st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:20px 0'>", unsafe_allow_html=True)
         _render_signal_timeline(stock_data, macro_data, lookback_days)
+
+    # ── Leading Indicators section ────────────────────────────────────────
+    if macro_data:
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+        _render_leading_indicators_dashboard(macro_data)
+
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+        _render_lead_lag_matrix(macro_data)
+
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
+        col_recession, col_composite = st.columns([1, 1])
+        with col_recession:
+            _render_recession_probability_gauge(macro_data)
+        with col_composite:
+            _render_composite_leading_score(macro_data)
 
 
 # ── sub-charts ────────────────────────────────────────────────────────────────

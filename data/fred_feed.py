@@ -20,26 +20,87 @@ except ImportError:
 
 # Series to fetch and their human-readable names
 FRED_SERIES: dict[str, str] = {
+    # ── Core shipping / freight ──────────────────────────────────────────────
     "BDIY":             "Baltic Dry Index",
-    "WPU101":           "PPI Freight Transport",
+    "WPU101":           "PPI Crude Petroleum",
     "XTIMVA01USM667S":  "US Imports Value (Monthly)",
     "XTEXVA01USM667S":  "US Exports Value (Monthly)",
-    "DCOILWTICO":       "WTI Crude Oil Spot",
     "CPIAUCSL":         "CPI All Urban Consumers",
-    "ISRATIO":              "Total Business Inventories/Sales Ratio",
-    "MRTSIR44X722USS":      "Retail Inventories/Sales Ratio",
-    "MRTSSM44000USS":       "Advance Retail Sales: Retail Trade",
-    "UMCSENT":              "U. of Michigan Consumer Sentiment",
-    "AMTMNO":               "Manufacturers New Orders: All Manufacturing",
-    "DGORDER":              "Manufacturers New Orders: Durable Goods",
+    "ISRATIO":          "Total Business Inventories/Sales Ratio",
+    "MRTSIR44X722USS":  "Retail Inventories/Sales Ratio",
+    "DGORDER":          "Manufacturers New Orders: Durable Goods",
+    "IPMAN":            "Industrial Production: Manufacturing",
+    "PPIACO":           "PPI All Commodities",
+    "PCU4841484148":    "PPI Deep Sea Freight",
+
+    # ── Supply chain indicators ──────────────────────────────────────────────
+    "AMTMNO":           "Manufacturing New Orders",
+    "AMDMNO":           "Durable Goods New Orders",
+    "AMDMUS":           "Durable Goods Unfilled Orders",
+    "AMTMTI":           "Manufacturing Inventories",
+
+    # ── Labor and employment ─────────────────────────────────────────────────
+    "MANEMP":           "Manufacturing Employment",
+    "USPHCI":           "Philly Fed Manufacturing Index",
+    "CFNAI":            "Chicago Fed National Activity Index",
+
+    # ── Consumer and retail ──────────────────────────────────────────────────
+    "MRTSSM44000USS":   "Retail Sales Total",
+    "MRTSSM448USS":     "Sporting Goods Retail",
+    "PCE":              "Personal Consumption Expenditure",
+    "UMCSENT":          "Consumer Sentiment (UMich)",
+
+    # ── Housing (leads container imports) ────────────────────────────────────
+    "HOUST":            "Housing Starts",
+    "PERMIT":           "Building Permits",
+    "HSN1F":            "New Home Sales",
+
+    # ── Trade specific ───────────────────────────────────────────────────────
+    "BOPGSTB":          "Trade Balance (Goods)",
+    "IMPGS":            "Imports of Goods and Services",
+    "EXPGS":            "Exports of Goods and Services",
+    "DNBGDQ027SAAR":    "Trade in Goods Deficit",
+
+    # ── Energy / Fuel (shipping cost proxy) ─────────────────────────────────
+    "DCOILWTICO":       "WTI Crude Oil Price",
+    "DCOILBRENTEU":     "Brent Crude Oil Price",
+    "GASDESW":          "US Diesel Fuel Price (Retail)",
+
+    # ── Monetary / Financial ─────────────────────────────────────────────────
+    "DGS1M":            "1-Month Treasury Yield",
+    "DGS3M":            "3-Month Treasury Yield",
+    "DGS6M":            "6-Month Treasury Yield",
+    "DGS1":             "1-Year Treasury Yield",
+    "DGS2":             "2-Year Treasury Yield",
+    "DGS5":             "5-Year Treasury Yield",
+    "DGS10":            "10-Year Treasury Yield",
+    "DGS30":            "30-Year Treasury Yield",
+    "T10Y2Y":           "10Y-2Y Yield Curve Spread",
+    "DEXCHUS":          "USD/CNY Exchange Rate",
+    "DEXUSEU":          "USD/EUR Exchange Rate",
+    "DEXJPUS":          "JPY/USD Exchange Rate",
+    "VIXCLS":           "VIX Volatility Index",
+
+    # ── Additional shipping-specific PPI ─────────────────────────────────────
+    "WPU0561":          "PPI: Diesel Fuel",
+
+    # ── ISM PMI (fetched opportunistically; may not be on FRED) ──────────────
+    "NAPMPI":           "ISM Manufacturing PMI",
 }
 
 # ISM PMI is available via FRED as a calculated/derived series
 # Some FRED keys for PMI-related data:
-PMI_SERIES: dict[str, str] = {
-    "MANEMP":   "Manufacturing Employment (ISM proxy)",
-    "IPMAN":    "Industrial Production Manufacturing",
-}
+PMI_SERIES: dict[str, str] = {}  # merged into FRED_SERIES above
+
+
+class _FredSeriesNotFound(Exception):
+    """Raised when FRED returns 400/404 for a series — skip without retry."""
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    """Return True if the exception looks like a 400 or 404 from FRED."""
+    msg = str(exc).lower()
+    return any(code in msg for code in ("400", "404", "not found", "bad request"))
 
 
 def fetch_macro_series(
@@ -67,14 +128,21 @@ def fetch_macro_series(
 
     for series_id, series_name in all_series.items():
         key = f"{series_id}_{lookback_days}d"
-        df = cache.get_or_fetch(
-            key=key,
-            fetch_fn=lambda sid=series_id, sname=series_name, lb=lookback_days: _fetch_series(
-                sid, sname, lb, api_key
-            ),
-            ttl_hours=ttl_hours,
-            source="fred",
-        )
+        try:
+            df = cache.get_or_fetch(
+                key=key,
+                fetch_fn=lambda sid=series_id, sname=series_name, lb=lookback_days: _fetch_series(
+                    sid, sname, lb, api_key
+                ),
+                ttl_hours=ttl_hours,
+                source="fred",
+            )
+        except _FredSeriesNotFound:
+            # Already logged inside _fetch_series — nothing more to do.
+            continue
+        except Exception as exc:
+            logger.warning(f"FRED series {series_id} skipped (unavailable): {exc}")
+            continue
         if df is not None and not df.empty:
             results[series_id] = df
 
@@ -82,9 +150,17 @@ def fetch_macro_series(
     return results
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
+)
 def _fetch_series(series_id: str, series_name: str, lookback_days: int, api_key: str) -> pd.DataFrame:
-    """Fetch a single FRED series and normalize it."""
+    """Fetch a single FRED series and normalize it.
+
+    Returns an empty DataFrame when the series exists but has no data.
+    Raises _FredSeriesNotFound (not retried upstream) for 400/404 responses.
+    """
     logger.debug(f"FRED fetch: {series_id}")
     fred = Fred(api_key=api_key)
     start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
@@ -92,6 +168,9 @@ def _fetch_series(series_id: str, series_name: str, lookback_days: int, api_key:
     try:
         series = fred.get_series(series_id, observation_start=start_date)
     except Exception as exc:
+        if _is_not_found_error(exc):
+            logger.warning(f"FRED series {series_id} not available (skipping): {exc}")
+            raise _FredSeriesNotFound(series_id) from exc
         logger.error(f"FRED series {series_id} failed: {exc}")
         return pd.DataFrame()
 
@@ -108,6 +187,44 @@ def _fetch_series(series_id: str, series_name: str, lookback_days: int, api_key:
     result = normalize_macro_df(df, series_id=series_id, series_name=series_name)
     logger.debug(f"  FRED {series_id}: {len(result)} observations")
     return result
+
+
+def get_series_value(series_id: str, macro_data: dict, periods_back: int = 1) -> float:
+    """Get a specific FRED series value.
+
+    Args:
+        series_id:    FRED series key (e.g. "DGS10").
+        macro_data:   Dict returned by fetch_macro_series.
+        periods_back: 1 = most recent observation, 2 = second-most-recent, etc.
+
+    Returns:
+        The scalar value, or 0.0 if the series is absent / too short.
+    """
+    df = macro_data.get(series_id)
+    if df is None or df.empty:
+        return 0.0
+    col = "value" if "value" in df.columns else df.columns[-1]
+    return float(df[col].iloc[-periods_back]) if len(df) >= periods_back else 0.0
+
+
+def get_series_change(series_id: str, macro_data: dict, periods: int = 4) -> float:
+    """Get the fractional change in a series over the last N periods.
+
+    Args:
+        series_id:  FRED series key.
+        macro_data: Dict returned by fetch_macro_series.
+        periods:    How many periods back to compare against (default 4).
+
+    Returns:
+        Fractional change ((recent - prior) / prior), or 0.0 if insufficient data.
+    """
+    df = macro_data.get(series_id)
+    if df is None or len(df) < periods + 1:
+        return 0.0
+    col = "value" if "value" in df.columns else df.columns[-1]
+    recent = float(df[col].iloc[-1])
+    prior = float(df[col].iloc[-(periods + 1)])
+    return (recent - prior) / prior if prior != 0 else 0.0
 
 
 def get_latest_value(series_id: str, macro_data: dict[str, pd.DataFrame]) -> float | None:

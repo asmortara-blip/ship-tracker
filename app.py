@@ -11,6 +11,63 @@ from loguru import logger
 
 load_dotenv()
 
+
+def _get_api_health() -> dict:
+    """Check health of each data source by looking at cache files."""
+    import glob
+    import time
+    health = {}
+    cache_dir = Path("cache")
+
+    sources = {
+        "yfinance":    {"pattern": "*stock*",     "ttl_hours": 1},
+        "FRED":        {"pattern": "*fred*",      "ttl_hours": 24},
+        "WorldBank":   {"pattern": "*worldbank*", "ttl_hours": 168},
+        "Trade/WITS":  {"pattern": "*wits*",      "ttl_hours": 168},
+        "Freight/FBX": {"pattern": "*fbx*",       "ttl_hours": 24},
+        "AIS/Synthetic": {"pattern": "*ais*",     "ttl_hours": 6},
+    }
+
+    for source, cfg_src in sources.items():
+        files = (
+            list(cache_dir.glob(cfg_src["pattern"] + ".parquet"))
+            if cache_dir.exists()
+            else []
+        )
+        if files:
+            newest = max(files, key=lambda f: f.stat().st_mtime)
+            age_hours = (time.time() - newest.stat().st_mtime) / 3600
+            fresh = age_hours < cfg_src["ttl_hours"]
+            health[source] = {
+                "status": "fresh" if fresh else "stale",
+                "age_hours": round(age_hours, 1),
+                "icon": "🟢" if fresh else "🟡",
+            }
+        else:
+            health[source] = {
+                "status": "no_cache",
+                "age_hours": None,
+                "icon": "🔴",
+            }
+    return health
+
+
+def _age_label(age_hours: float | None) -> str:
+    """Return a human-readable age string."""
+    if age_hours is None:
+        return "No cache"
+    if age_hours < 0.1:
+        return "Fresh"
+    if age_hours < 1.0:
+        mins = int(age_hours * 60)
+        return str(mins) + "m ago"
+    if age_hours < 24.0:
+        h = round(age_hours, 1)
+        return str(h) + "h ago"
+    days = round(age_hours / 24, 1)
+    return str(days) + "d ago"
+
+
 # ── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Cargo Ship Container Tracker",
@@ -108,17 +165,35 @@ with st.sidebar:
 
     st.divider()
 
-    # Credential status
+    # API / data-source health monitor
     st.caption("**API Status**")
-    checks = {
-        "FRED": bool(os.getenv("FRED_API_KEY")),
-        "Comtrade": bool(os.getenv("COMTRADE_API_KEY")),
-        "AISHub": bool(os.getenv("AISHUB_USERNAME")),
-        "yfinance": True,  # No key needed
-    }
-    for name, ok in checks.items():
-        icon = "🟢" if ok else "🔴"
-        st.caption(f"{icon} {name}")
+    _health = _get_api_health()
+    # Overlay credential gate for FRED
+    if not os.getenv("FRED_API_KEY"):
+        _health["FRED"] = {"status": "no_key", "age_hours": None, "icon": "🔴"}
+    for _src_name, _info in _health.items():
+        _icon = _info["icon"]
+        _age = _age_label(_info.get("age_hours"))
+        _status = _info["status"]
+        if _status == "no_key":
+            _detail = "No API key"
+        elif _status == "no_cache":
+            _detail = "Not loaded"
+        elif _status == "stale":
+            _detail = "Stale: " + _age
+        else:
+            _detail = _age
+        st.markdown(
+            '<div style="display:flex; justify-content:space-between; align-items:center;'
+            " padding:2px 0; border-bottom:1px solid rgba(255,255,255,0.04)\">"
+            '<span style="font-size:0.73rem; color:#f1f5f9">'
+            + _icon + " " + _src_name
+            + "</span>"
+            '<span style="font-size:0.68rem; color:#64748b">'
+            + _detail
+            + "</span></div>",
+            unsafe_allow_html=True,
+        )
 
     st.divider()
     st.caption("Free data sources only")
@@ -226,6 +301,35 @@ try:
     alerts = generate_alerts(port_results, route_results, freight_data, macro_data, insights)
 except Exception as exc:
     logger.warning(f"Alert engine unavailable: {exc}")
+
+try:
+    from processing.news_sentiment import fetch_all_news
+    from data.cache_manager import CacheManager as _CacheManager
+    news_articles = fetch_all_news(_CacheManager())
+except Exception as exc:
+    logger.warning(f"News sentiment unavailable: {exc}")
+    news_articles = []
+
+try:
+    from processing.leading_indicators import compute_leading_indicator_score
+    leading_score = compute_leading_indicator_score(macro_data)
+except Exception as exc:
+    logger.warning(f"Leading indicators unavailable: {exc}")
+    leading_score = {}
+
+try:
+    from processing.eta_predictor import predict_all_routes as predict_all_etas
+    etas = predict_all_etas(port_results, freight_data, macro_data)
+except Exception as exc:
+    logger.warning(f"ETA predictor unavailable: {exc}")
+    etas = []
+
+try:
+    from engine.narration_engine import NarrationEngine
+    narration = NarrationEngine().build_weekly_digest(port_results, route_results, insights, macro_data, freight_data)
+except Exception as exc:
+    logger.warning(f"Narration engine unavailable: {exc}")
+    narration = {}
 
 
 # ── Dynamic sidebar sections (filled after data + analysis) ───────────────
@@ -507,7 +611,7 @@ components.html(f"""
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────
-tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23, tab24, tab25, tab26, tab27, tab28, tab29, tab30, tab31, tab32, tab33, tab34 = st.tabs([
     "🌍  Overview",
     "🏗️  Port Demand",
     "🚢  Routes",
@@ -523,6 +627,26 @@ tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12,
     "📦  Cargo",
     "📊  Indices",
     "🔬  Deep Dive",
+    "🌐  Network",
+    "⏱️  ETA Predictor",
+    "📜  Derivatives",
+    "🌍  Geopolitical",
+    "📋  Booking",
+    "⚡  Alpha",
+    "⛽  Bunker Fuel",
+    "🏢  Carriers",
+    "📦  Equipment",
+    "📰  News",
+    "📉  Macro",
+    "🧩  Attribution",
+    "⚔️  Trade War",
+    "🩺  Data Health",
+    "🚧  Congestion",
+    "🛒  E-Commerce",
+    "💰  Trade Finance",
+    "🔄  Intermodal",
+    "👁️  Visibility",
+    "🌩️  Weather Risk",
 ])
 
 with tab0:
@@ -616,3 +740,146 @@ with tab14:
         )
     except Exception as exc:
         st.error(f"Deep Dive tab error: {exc}")
+
+with tab15:
+    try:
+        from ui.tab_network import render as render_network
+        render_network(port_results, route_results, freight_data, trade_data)
+    except Exception as exc:
+        st.error(f"Network tab error: {exc}")
+
+with tab16:
+    try:
+        from ui.tab_eta import render as render_eta
+        render_eta(port_results, route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"ETA Predictor tab error: {exc}")
+
+with tab17:
+    try:
+        from ui.tab_derivatives import render as render_derivatives
+        render_derivatives(route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Derivatives tab error: {exc}")
+
+with tab18:
+    try:
+        from ui.tab_geopolitical import render as render_geopolitical
+        render_geopolitical(route_results, port_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Geopolitical tab error: {exc}")
+
+with tab19:
+    try:
+        from ui.tab_booking import render as render_booking
+        render_booking(port_results, route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Booking tab error: {exc}")
+
+with tab20:
+    try:
+        from ui.tab_alpha import render as render_alpha
+        render_alpha(route_results, port_results, freight_data, macro_data, stock_data, insights)
+    except Exception as exc:
+        st.error(f"Alpha tab error: {exc}")
+
+with tab21:
+    try:
+        from ui.tab_bunker import render as render_bunker
+        render_bunker(freight_data, macro_data, route_results)
+    except Exception as exc:
+        st.error(f"Bunker Fuel tab error: {exc}")
+
+with tab22:
+    try:
+        from ui.tab_carriers import render as render_carriers
+        render_carriers(route_results, freight_data, stock_data)
+    except Exception as exc:
+        st.error(f"Carriers tab error: {exc}")
+
+with tab23:
+    try:
+        from ui.tab_equipment import render as render_equipment
+        render_equipment(route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Equipment tab error: {exc}")
+
+with tab24:
+    try:
+        from ui.tab_news import render as render_news
+        render_news(news_articles=news_articles, port_results=port_results, route_results=route_results, insights=insights)
+    except Exception as exc:
+        st.error(f"News tab error: {exc}")
+
+with tab25:
+    try:
+        from ui.tab_macro import render as render_macro
+        render_macro(macro_data, freight_data, stock_data)
+    except Exception as exc:
+        st.error(f"Macro tab error: {exc}")
+
+with tab26:
+    try:
+        from ui.tab_attribution import render as render_attribution
+        render_attribution(stock_data, freight_data, macro_data, route_results)
+    except Exception as exc:
+        st.error(f"Attribution tab error: {exc}")
+
+with tab27:
+    try:
+        from ui.tab_trade_war import render as render_trade_war
+        render_trade_war(route_results, port_results, freight_data, macro_data, trade_data)
+    except Exception as exc:
+        st.error(f"Trade War tab error: {exc}")
+
+with tab28:
+    try:
+        from ui.tab_data_health import render as render_data_health
+        render_data_health(
+            port_results, route_results, freight_data, macro_data,
+            stock_data, trade_data, ais_data,
+        )
+    except Exception as exc:
+        st.error(f"Data Health tab error: {exc}")
+
+with tab29:
+    try:
+        from ui.tab_congestion import render as render_congestion
+        render_congestion(port_results, ais_data, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Congestion tab error: {exc}")
+
+with tab30:
+    try:
+        from ui.tab_ecommerce import render as render_ecommerce
+        render_ecommerce(trade_data, freight_data, macro_data, route_results)
+    except Exception as exc:
+        st.error(f"E-Commerce tab error: {exc}")
+
+with tab31:
+    try:
+        from ui.tab_finance import render as render_finance
+        render_finance(freight_data, macro_data, route_results, stock_data)
+    except Exception as exc:
+        st.error(f"Trade Finance tab error: {exc}")
+
+with tab32:
+    try:
+        from ui.tab_intermodal import render as render_intermodal
+        render_intermodal(route_results, freight_data, macro_data, port_results)
+    except Exception as exc:
+        st.error(f"Intermodal tab error: {exc}")
+
+with tab33:
+    try:
+        from ui.tab_visibility import render as render_visibility
+        render_visibility(port_results, route_results, trade_data, freight_data)
+    except Exception as exc:
+        st.error(f"Visibility tab error: {exc}")
+
+with tab34:
+    try:
+        from ui.tab_weather import render as render_weather
+        render_weather(port_results, route_results, freight_data)
+    except Exception as exc:
+        st.error(f"Weather Risk tab error: {exc}")

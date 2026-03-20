@@ -598,6 +598,90 @@ def render(insights: list[Insight]) -> None:
         st.download_button("Export Text Report", report_str, file_name="ship_intelligence_report.md",
                            mime="text/markdown", use_container_width=True)
 
+    # ── Daily Digest ───────────────────────────────────────────────────────────
+    st.markdown(
+        "<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("## 📧 Daily Digest")
+
+    try:
+        from utils.digest_builder import build_digest, render_as_html, render_as_json, render_as_markdown
+
+        _digest = build_digest(
+            port_results=[],
+            route_results=[],
+            insights=insights,
+            freight_data={},
+            macro_data={},
+            stock_data=[],
+        )
+
+        _html_str  = render_as_html(_digest)
+        _md_str    = render_as_markdown(_digest)
+        _json_str  = render_as_json(_digest)
+
+        _col_dl_html, _col_md, _col_dl_json = st.columns(3)
+
+        with _col_dl_html:
+            st.download_button(
+                "Download HTML Report",
+                data=_html_str.encode("utf-8"),
+                file_name="shipping_digest_" + _digest.date + ".html",
+                mime="text/html",
+                use_container_width=True,
+            )
+
+        with _col_md:
+            st.text_area(
+                "Copy Markdown",
+                value=_md_str,
+                height=200,
+            )
+
+        with _col_dl_json:
+            st.download_button(
+                "Download JSON",
+                data=_json_str.encode("utf-8"),
+                file_name="shipping_digest_" + _digest.date + ".json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        st.info(_digest.executive_summary.split("\n\n")[0])
+
+        _sent_color = {
+            "BULLISH":  "#10b981",
+            "BEARISH":  "#ef4444",
+            "NEUTRAL":  "#94a3b8",
+            "MIXED":    "#f59e0b",
+        }.get(_digest.market_sentiment, "#94a3b8")
+
+        _sent_bg = {
+            "BULLISH":  "rgba(16,185,129,0.12)",
+            "BEARISH":  "rgba(239,68,68,0.12)",
+            "NEUTRAL":  "rgba(100,116,139,0.12)",
+            "MIXED":    "rgba(245,158,11,0.12)",
+        }.get(_digest.market_sentiment, "rgba(100,116,139,0.12)")
+
+        st.markdown(
+            "<div style='"
+            "display:inline-flex; align-items:center; gap:12px;"
+            "background:" + _sent_bg + ";"
+            "border:2px solid " + _sent_color + ";"
+            "border-radius:14px; padding:16px 28px; margin-top:10px"
+            "'>"
+            "<span style='font-size:32px; font-weight:900; color:" + _sent_color + ";"
+            " letter-spacing:0.04em'>" + _digest.market_sentiment + "</span>"
+            "<span style='font-size:14px; color:" + _sent_color + "; opacity:0.75'>"
+            "Market Sentiment &nbsp;|&nbsp; score: " + str(_digest.sentiment_score) + "</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    except Exception as _digest_err:
+        st.warning("Daily digest unavailable: " + str(_digest_err))
+
 
 # ── Supporting functions ────────────────────────────────────────────────────────
 
