@@ -611,7 +611,7 @@ components.html(f"""
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────
-tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23, tab24, tab25, tab26, tab27, tab28, tab29, tab30, tab31, tab32, tab33, tab34 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23, tab24, tab25, tab26, tab27, tab28, tab29, tab30, tab31, tab32, tab33, tab34, tab35, tab36, tab37, tab38, tab39, tab40, tab41, tab42 = st.tabs([
     "🌍  Overview",
     "🏗️  Port Demand",
     "🚢  Routes",
@@ -647,6 +647,14 @@ tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12,
     "🔄  Intermodal",
     "👁️  Visibility",
     "🌩️  Weather Risk",
+    "🤖  Assistant",
+    "🚧  Chokepoints",
+    "🛡️  Compliance",
+    "🔄  Market Cycle",
+    "🛤️  New Routes",
+    "📋  Fundamentals",
+    "🏭  Port Monitor",
+    "📊  Scorecard",
 ])
 
 with tab0:
@@ -883,3 +891,59 @@ with tab34:
         render_weather(port_results, route_results, freight_data)
     except Exception as exc:
         st.error(f"Weather Risk tab error: {exc}")
+
+with tab35:
+    try:
+        from ui.tab_assistant import render as render_assistant
+        render_assistant(port_results, route_results, insights, freight_data, macro_data, stock_data)
+    except Exception as exc:
+        st.error(f"Assistant tab error: {exc}")
+
+with tab36:
+    try:
+        from ui.tab_chokepoints import render as render_chokepoints
+        render_chokepoints(route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Chokepoints tab error: {exc}")
+
+with tab37:
+    try:
+        from ui.tab_compliance import render as render_compliance
+        render_compliance(route_results, port_results, macro_data)
+    except Exception as exc:
+        st.error(f"Compliance tab error: {exc}")
+
+with tab38:
+    try:
+        from ui.tab_cycle import render as render_cycle
+        render_cycle(freight_data, macro_data, stock_data, route_results)
+    except Exception as exc:
+        st.error(f"Market Cycle tab error: {exc}")
+
+with tab39:
+    try:
+        from ui.tab_emerging_routes import render as render_emerging_routes
+        render_emerging_routes(route_results, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Emerging Routes tab error: {exc}")
+
+with tab40:
+    try:
+        from ui.tab_fundamentals import render as render_fundamentals
+        render_fundamentals(stock_data, freight_data, macro_data)
+    except Exception as exc:
+        st.error(f"Fundamentals tab error: {exc}")
+
+with tab41:
+    try:
+        from ui.tab_port_monitor import render as render_port_monitor
+        render_port_monitor(port_results, ais_data, freight_data)
+    except Exception as exc:
+        st.error(f"Port Monitor tab error: {exc}")
+
+with tab42:
+    try:
+        from ui.tab_scorecard import render as render_scorecard
+        render_scorecard(port_results, route_results, insights, freight_data, macro_data, stock_data)
+    except Exception as exc:
+        st.error(f"Scorecard tab error: {exc}")
