@@ -238,7 +238,7 @@ def _render_platform_cards() -> None:
             st.markdown(_card(content, border_color=color + "44"), unsafe_allow_html=True)
 
     # Second row: all signals expander
-    with st.expander("View all platform signals", expanded=False):
+    with st.expander("View all platform signals", expanded=False, key="ecommerce_platform_signals_expander"):
         for platform, signals in ECOMMERCE_SIGNALS.items():
             color = _PLATFORM_COLORS.get(platform, C_ACCENT)
             label = _PLATFORM_LABELS.get(platform, platform)
@@ -390,7 +390,7 @@ def _render_retail_calendar() -> None:
 
     # Event detail table
     st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("Key event details & book-by dates", expanded=False):
+    with st.expander("Key event details & book-by dates", expanded=False, key="ecommerce_event_details_expander"):
         if not RETAIL_CALENDAR:
             st.info("No retail calendar events available.")
         for cal in sorted(RETAIL_CALENDAR or [], key=lambda c: (c.month, c.day)):

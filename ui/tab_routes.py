@@ -919,5 +919,5 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
 
     # ── Route Comparison ──────────────────────────────────────────────────────
     _divider("Route Comparison")
-    with st.expander("Route Comparison", expanded=False):
+    with st.expander("Route Comparison", expanded=False, key="routes_route_comparison_expander"):
         _render_route_comparison(route_results)

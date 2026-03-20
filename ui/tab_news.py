@@ -1016,7 +1016,7 @@ def _render_event_calendar() -> None:
         st.info("No upcoming events found for 2026-2027.")
 
     if past:
-        with st.expander("Past Events (" + str(len(past)) + ")", expanded=False):
+        with st.expander("Past Events (" + str(len(past)) + ")", expanded=False, key="news_past_events_expander"):
             for evt in past:
                 st.markdown(_evt_card(evt, is_past=True), unsafe_allow_html=True)
 

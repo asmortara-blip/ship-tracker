@@ -568,7 +568,7 @@ def render(port_results: list[PortDemandResult]) -> None:
 
     st.divider()
 
-    with st.expander("Advanced Port Comparison (up to 4 ports — radar chart)", expanded=False):
+    with st.expander("Advanced Port Comparison (up to 4 ports — radar chart)", expanded=False, key="port_demand_comparison_expander"):
         _render_port_comparison(port_results)
 
 

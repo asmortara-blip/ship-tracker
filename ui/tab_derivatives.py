@@ -471,7 +471,7 @@ def _render_options_pricer(route_id: str, freight_data: dict) -> None:
             st.info("COLLAR pricing unavailable.")
 
     # ── Greeks legend ─────────────────────────────────────────────────────────
-    with st.expander("What do Delta and Gamma mean for shipping operators?", expanded=False):
+    with st.expander("What do Delta and Gamma mean for shipping operators?", expanded=False, key="derivatives_greeks_legend_expander"):
         st.markdown(
             "**Delta** — How much the option premium changes for every $1 move in spot "
             "freight rates. A delta of 0.40 on a cap means it gains $0.40 in protection "
@@ -580,7 +580,7 @@ def _render_vol_surface(freight_data: dict) -> None:
         layout["yaxis"]["ticksuffix"] = "%"
         layout["plot_bgcolor"] = "#0a0f1a"
         fig.update_layout(**layout)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="deriv_vol_surface")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="deriv_vol_surface_fallback")
         return
 
     # ── Full heatmap surface ──────────────────────────────────────────────────

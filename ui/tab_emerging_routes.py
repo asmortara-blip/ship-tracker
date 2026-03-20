@@ -513,7 +513,7 @@ def _render_comparison_matrix() -> None:
     )
 
     # Route Opportunity Score explanation
-    with st.expander("What is the Route Opportunity Score?", expanded=False):
+    with st.expander("What is the Route Opportunity Score?", expanded=False, key="er_opportunity_score_explainer"):
         st.markdown(
             "The **Route Opportunity Score** (Economic Viability column) is a composite "
             "0-100 index that weights six factors:\n\n"

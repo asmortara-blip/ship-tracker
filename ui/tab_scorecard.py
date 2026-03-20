@@ -556,7 +556,7 @@ def _render_score_table_download(
     if not route_results and not port_results:
         return
 
-    with st.expander("Score Table & CSV Export", expanded=False):
+    with st.expander("Score Table & CSV Export", expanded=False, key="scorecard_score_table_expander"):
         rows: list[dict] = []
 
         for r in route_results:
