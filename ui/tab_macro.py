@@ -685,9 +685,18 @@ def _render_commodity_monitor(macro_data: dict[str, pd.DataFrame]) -> None:
         if rows:
             corr_table = pd.DataFrame(rows).set_index("Commodity")
             st.caption("Pearson correlation with Baltic Dry Index")
+            def _color_r(val):
+                try:
+                    v = float(val)
+                except (ValueError, TypeError):
+                    return ""
+                if v >= 0.4:
+                    return "background-color: rgba(16,185,129,0.25); color:#10b981"
+                if v <= -0.4:
+                    return "background-color: rgba(239,68,68,0.25); color:#ef4444"
+                return ""
             st.dataframe(
-                corr_table.style.format({"r vs BDI": "{:.3f}"})
-                .background_gradient(cmap="RdYlGn", subset=["r vs BDI"], vmin=-1, vmax=1),
+                corr_table.style.format({"r vs BDI": "{:.3f}"}).applymap(_color_r, subset=["r vs BDI"]),
                 use_container_width=False,
             )
 

@@ -519,8 +519,19 @@ def _render_route_comparison(route_results: list[RouteOpportunity]) -> None:
             "Transit (days)": r.transit_days,
         })
 
+    def _color_route_score(val):
+        try:
+            v = float(str(val).replace("%", "")) / 100
+        except (ValueError, TypeError):
+            return ""
+        if v >= 0.55:
+            return "background-color: rgba(16,185,129,0.25); color:#10b981"
+        if v >= 0.35:
+            return "background-color: rgba(245,158,11,0.20); color:#f59e0b"
+        return "background-color: rgba(239,68,68,0.18); color:#ef4444"
+
     st.dataframe(
-        pd.DataFrame(table_rows).style.background_gradient(subset=["Score"], cmap="RdYlGn"),
+        pd.DataFrame(table_rows).style.applymap(_color_route_score, subset=["Score"]),
         use_container_width=True,
         hide_index=True,
     )

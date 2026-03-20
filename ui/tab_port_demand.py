@@ -496,11 +496,21 @@ def render(port_results: list[PortDemandResult]) -> None:
         )
 
     df = pd.DataFrame(table_data)
-    st.dataframe(
-        df.style.background_gradient(subset=["Score"], cmap="RdYlGn"),
-        use_container_width=True,
-        hide_index=True,
-    )
+
+    def _color_score(val):
+        """Color Score column without matplotlib."""
+        try:
+            v = float(str(val).replace("%", "")) / 100
+        except (ValueError, TypeError):
+            return ""
+        if v >= 0.70:
+            return "background-color: rgba(16,185,129,0.25); color: #10b981"
+        if v >= 0.50:
+            return "background-color: rgba(245,158,11,0.20); color: #f59e0b"
+        return "background-color: rgba(239,68,68,0.18); color: #ef4444"
+
+    styled = df.style.applymap(_color_score, subset=["Score"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
     st.divider()
 
