@@ -671,7 +671,12 @@ with tab2:
 
 with tab3:
     from ui.tab_results import render as render_results
-    render_results(insights)
+    try:
+        render_results(insights)
+    except Exception as e:
+        st.error(f"Results tab error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab4:
     from ui.tab_markets import render as render_markets

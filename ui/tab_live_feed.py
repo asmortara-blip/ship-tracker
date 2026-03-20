@@ -693,7 +693,7 @@ def _render_stock_mini_table(stock_data: dict) -> None:
                 unsafe_allow_html=True,
             )
         with col_spark:
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"livefeed_spark_{ticker}")
 
 
 def _render_freight_pulse(freight_data: dict) -> None:

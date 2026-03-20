@@ -303,7 +303,7 @@ def _render_macro_grid(macro_data: dict[str, pd.DataFrame]) -> None:
                     '</div>',
                     unsafe_allow_html=True,
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"macro_grid_{sid}")
 
 
 # ---------------------------------------------------------------------------

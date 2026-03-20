@@ -605,6 +605,7 @@ def _render_sparkline_strip(
             fig,
             use_container_width=True,
             config={"displayModeBar": False, "staticPlot": True},
+            key=f"scorecard_sparkline_{title}",
         )
 
 

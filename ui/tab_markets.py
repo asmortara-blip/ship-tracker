@@ -313,7 +313,7 @@ def _render_macro_dashboard(macro_data: dict, lookback: int) -> None:
                     ],
                     font=dict(family="Inter, sans-serif"),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"markets_macro_{series_id}")
 
 
 # ── shipping sentiment gauge ───────────────────────────────────────────────────
@@ -1616,7 +1616,7 @@ def _render_dual_axis_chart(result: CorrelationResult, stock_data: dict[str, pd.
                 font=dict(color="#f1f5f9", size=12),
             ),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"markets_dual_{result.stock}_{result.signal}")
         st.caption(
             f"Lag: {result.lag_days} days"
             f" | p-value: {result.p_value:.4f}"

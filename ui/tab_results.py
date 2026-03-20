@@ -225,7 +225,7 @@ def _render_hero_card(hero: Insight) -> None:
 
 # ── 4. Stacked signal bar (replaces expander breakdown) ──────────────────────────
 
-def _render_signal_bar(signals: list[SignalComponent]) -> None:
+def _render_signal_bar(signals: list[SignalComponent], chart_key: str = "signal_bar") -> None:
     """Horizontal stacked bar showing signal contributions — one segment per signal."""
     if not signals:
         return
@@ -257,12 +257,12 @@ def _render_signal_bar(signals: list[SignalComponent]) -> None:
         xaxis=dict(visible=False, range=[0, max(sum(s.contribution for s in signals) * 1.05, 0.1)]),
         yaxis=dict(visible=False),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
 # ── 5. Insight timeline / landscape ────────────────────────────────────────────
 
-def _render_insight_timeline(insights: list[Insight]) -> None:
+def _render_insight_timeline(insights: list[Insight], chart_key: str = "insight_timeline") -> None:
     if not insights:
         return
 
@@ -333,12 +333,12 @@ def _render_insight_timeline(insights: list[Insight]) -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
 # ── Insight card (categories other than hero) ──────────────────────────────────
 
-def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, action_colors: dict) -> None:
+def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, action_colors: dict, card_key: str = "card") -> None:
     color   = cat_colors.get(insight.category, C_ACCENT)
     icon    = cat_icons.get(insight.category, "💡")
     a_color = action_colors.get(insight.action, C_ACCENT)
@@ -387,7 +387,7 @@ def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, ac
 
     # Signal stacked bar — always visible, no expander
     if insight.supporting_signals:
-        _render_signal_bar(insight.supporting_signals)
+        _render_signal_bar(insight.supporting_signals, chart_key=f"signal_bar_{card_key}")
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -464,7 +464,7 @@ def render(insights: list[Insight]) -> None:
         macro_tab: [i for i in insights if i.category == "MACRO"],
     }
 
-    for tab_obj, tab_insights in tab_map.items():
+    for i, (tab_obj, tab_insights) in enumerate(tab_map.items()):
         with tab_obj:
             if not tab_insights:
                 st.markdown(
@@ -477,12 +477,12 @@ def render(insights: list[Insight]) -> None:
             _render_hero_card(tab_insights[0])
 
             # Remaining cards
-            for insight in tab_insights[1:]:
-                _render_insight_card(insight, CATEGORY_COLORS, CATEGORY_ICONS, ACTION_COLORS)
+            for j, insight in enumerate(tab_insights[1:]):
+                _render_insight_card(insight, CATEGORY_COLORS, CATEGORY_ICONS, ACTION_COLORS, card_key=f"{i}_{j}")
 
             # Insight landscape at the bottom of each tab
             with st.expander("Insight Landscape", expanded=True):
-                _render_insight_timeline(tab_insights)
+                _render_insight_timeline(tab_insights, chart_key=f"insight_timeline_{i}")
 
     # ── Seasonal patterns ──────────────────────────────────────────────────────
     st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)

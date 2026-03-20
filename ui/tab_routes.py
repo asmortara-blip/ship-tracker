@@ -859,7 +859,7 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
                             font=dict(color=C_TEXT, size=12),
                         ),
                     )
-                    st.plotly_chart(ffig, use_container_width=True)
+                    st.plotly_chart(ffig, use_container_width=True, key=f"routes_forecast_{fc.route_name}")
                     st.caption(fc.methodology)
                     st.caption(
                         f"Confidence: **{fc.confidence}** \u00b7 "

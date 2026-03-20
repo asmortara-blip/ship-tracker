@@ -596,7 +596,7 @@ def _render_alliance_impact() -> None:
                     bar_layout["margin"] = {"l": 20, "r": 20, "t": 20, "b": 40}
                     bar_layout["yaxis"]["title"] = "TEU (M)"
                     bar_fig.update_layout(**bar_layout)
-                    st.plotly_chart(bar_fig, use_container_width=True)
+                    st.plotly_chart(bar_fig, use_container_width=True, key=f"carriers_chart_{alliance_name}")
 
             with col_b:
                 st.markdown(
