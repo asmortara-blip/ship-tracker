@@ -16,6 +16,9 @@ Wire-up instructions (do NOT add this block to app.py without review):
 """
 from __future__ import annotations
 
+import csv
+import io
+
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -261,15 +264,20 @@ def render(route_results: list[RouteEmissions] | None = None) -> None:
         apply_dark_layout(
             fig,
             title="CO2 per TEU Comparison (MT) — lower is greener",
-            height=420,
+            height=440,
+            margin={"l": 40, "r": 20, "t": 50, "b": 110},
         )
         fig.update_layout(
             barmode="group",
-            xaxis_tickangle=-30,
+            xaxis_tickangle=-35,
+            xaxis=dict(
+                tickfont=dict(size=10),
+                automargin=True,
+            ),
             yaxis_title="MT CO2 per TEU",
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="sustainability_comparison_bar")
     else:
         st.info("Select at least one route above to render the comparison chart.")
 
@@ -307,10 +315,12 @@ def render(route_results: list[RouteEmissions] | None = None) -> None:
     alts = compare_to_alternatives(selected_calc_route)
 
     total_co2_mt = selected_calc_route.co2_per_teu_mt * teu_volume
-    total_carbon_cost = total_co2_mt * 80.0  # EU ETS
+    total_carbon_cost = total_co2_mt * 80.0  # EU ETS ~$80/tonne
     cost_per_teu = total_carbon_cost / max(teu_volume, 1)
-    trees_needed = int(alts["trees_to_offset"] * teu_volume / max(selected_calc_route.teu_capacity * 0.85, 1))
-    offset_cost = alts["carbon_offset_cost_usd"] * teu_volume / max(selected_calc_route.teu_capacity * 0.85, 1)
+    # Guard: teu_capacity could theoretically be 0; use max(..., 1) throughout
+    _loaded_cap = max(selected_calc_route.teu_capacity * 0.85, 1)
+    trees_needed = int(alts["trees_to_offset"] * teu_volume / _loaded_cap)
+    offset_cost = alts["carbon_offset_cost_usd"] * teu_volume / _loaded_cap
 
     grade = selected_calc_route.sustainability_grade
     grade_color = _GRADE_COLORS.get(grade, C_TEXT2)
@@ -459,14 +469,15 @@ def render(route_results: list[RouteEmissions] | None = None) -> None:
     apply_dark_layout(
         scatter_fig,
         title="Sustainability Efficiency Frontier — all routes",
-        height=520,
+        height=540,
+        margin={"l": 50, "r": 20, "t": 50, "b": 40},
     )
     scatter_fig.update_layout(
         xaxis_title="Transit Days",
         yaxis_title="CO2 per TEU (MT)",
     )
 
-    st.plotly_chart(scatter_fig, use_container_width=True)
+    st.plotly_chart(scatter_fig, use_container_width=True, key="sustainability_scatter")
 
     # ── Footer insight ────────────────────────────────────────────────────────
     best = route_results[0]  # already sorted cleanest first
@@ -486,4 +497,55 @@ def render(route_results: list[RouteEmissions] | None = None) -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+    # ── CSV export ────────────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    section_header(
+        "Export Emissions Data",
+        "Download full route emissions dataset as CSV for offline analysis.",
+    )
+
+    def _build_emissions_csv(routes: list[RouteEmissions]) -> str:
+        """Build CSV string from route emissions list."""
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "Route Name",
+            "Route ID",
+            "Transit Days",
+            "Distance (nm)",
+            "TEU Capacity",
+            "Total Fuel (MT)",
+            "Total CO2 (MT)",
+            "CO2 per TEU (MT)",
+            "EEDI Score (0-100)",
+            "Sustainability Grade",
+            "Poseidon Compliant",
+            "Carbon Cost (USD @ $80/t)",
+        ])
+        for r in routes:
+            writer.writerow([
+                r.route_name,
+                r.route_id,
+                r.transit_days,
+                f"{r.distance_nm:.0f}",
+                r.teu_capacity,
+                f"{r.total_fuel_mt:.2f}",
+                f"{r.co2_emissions_mt:.2f}",
+                f"{r.co2_per_teu_mt:.6f}",
+                f"{r.eedi_score:.1f}",
+                r.sustainability_grade,
+                "Yes" if r.poseidon_compliant else "No",
+                f"{r.carbon_cost_usd:.2f}",
+            ])
+        return buf.getvalue()
+
+    csv_data = _build_emissions_csv(route_results)
+    st.download_button(
+        label="Download Emissions CSV",
+        data=csv_data,
+        file_name="route_emissions.csv",
+        mime="text/csv",
+        key="sustainability_download_csv",
     )

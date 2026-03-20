@@ -217,6 +217,15 @@ def _render_mode_comparison(route_results: list) -> None:
     result: IntermodalComparison = compare_modes(sel_cargo, weight_kg, sel_route, urgency)
     logger.debug("im comparison computed: recommended={}", result.recommended_mode)
 
+    # --- Empty state: check if any mode data is usable ---
+    has_rail  = result.rail_cost is not None and result.rail_days is not None
+    has_truck = result.truck_cost is not None and result.truck_days is not None
+    if not has_rail and not has_truck:
+        st.info(
+            "No rail or truck connections are available for the selected route. "
+            "Only ocean and air are shown below."
+        )
+
     # --- Recommendation card ---
     rec_color = _MODE_COLORS.get(result.recommended_mode, _C_ACCENT)
     rec_label = _MODE_LABELS.get(result.recommended_mode, result.recommended_mode)
@@ -241,15 +250,18 @@ def _render_mode_comparison(route_results: list) -> None:
     headers = ["Mode", "Total Cost", "Cost/kg", "Transit (days)", "CO2 (kg)", "Reliability"]
 
     def _row(mode_key: str, cost_usd: float, days: float) -> list[str]:
-        mode = TRANSPORT_MODES[mode_key]
+        mode = TRANSPORT_MODES.get(mode_key)
+        if mode is None:
+            return [_MODE_LABELS.get(mode_key, mode_key), "N/A", "N/A", "N/A", "N/A", "N/A"]
         is_rec = mode_key == result.recommended_mode
         co2 = mode.co2_kg_per_kg_cargo * weight_kg
         label = _MODE_LABELS.get(mode_key, mode_key)
         marker = " *" if is_rec else ""
+        cost_per_kg = (cost_usd / weight_kg) if weight_kg > 0 else 0.0
         return [
             label + marker,
             "$" + "{:,.0f}".format(cost_usd),
-            "$" + str(round(cost_usd / weight_kg, 3)) + "/kg",
+            "$" + str(round(cost_per_kg, 3)) + "/kg",
             str(round(days, 1)),
             str(round(co2, 1)) + " kg",
             str(mode.reliability_pct) + "%",
@@ -300,6 +312,27 @@ def _render_mode_comparison(route_results: list) -> None:
         "Air vs Ocean cost premium: +"
         + str(round(prem, 0)) + "% for this shipment.  "
         "* = recommended mode.  CO2 figures are per-shipment totals."
+    )
+
+    # CSV download for mode comparison
+    import io as _io_im
+    import csv as _csv_im
+
+    def _mode_comparison_csv() -> str:
+        buf = _io_im.StringIO()
+        writer = _csv_im.writer(buf)
+        writer.writerow(["Mode", "Total Cost USD", "Cost per kg USD",
+                          "Transit Days", "CO2 kg", "Reliability %"])
+        for row in rows:
+            writer.writerow(row)
+        return buf.getvalue()
+
+    st.download_button(
+        label="Download comparison (CSV)",
+        data=_mode_comparison_csv(),
+        file_name="intermodal_comparison.csv",
+        mime="text/csv",
+        key="im_comparison_download",
     )
 
 
@@ -420,7 +453,7 @@ def _render_cost_time_scatter() -> None:
         ),
         font=dict(color=_C_TEXT, family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="im_cost_time_scatter")
     st.caption(
         "Y-axis is log-scale.  Bubble size proportional to CO2 intensity (kg CO2/kg cargo). "
         "Ocean and US Rail have the smallest CO2 footprint; Air is ~120x more carbon-intensive than ocean."
@@ -536,7 +569,7 @@ def _render_air_freight_monitor() -> None:
         legend=dict(font=dict(color=_C_TEXT2, size=10), bgcolor="rgba(0,0,0,0)"),
         font=dict(color=_C_TEXT, family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig_ratio, use_container_width=True)
+    st.plotly_chart(fig_ratio, use_container_width=True, key="im_air_freight_ratio")
 
     # --- Surge events timeline ---
     st.markdown(
@@ -583,6 +616,10 @@ def _render_bri_analyzer() -> None:
 
     bri = BeltAndRoad()
 
+    if not bri.CORRIDORS:
+        st.info("No BRI corridor data is available.")
+        return
+
     # --- BRI Scattergeo map ---
     fig_map = go.Figure()
 
@@ -592,9 +629,18 @@ def _render_bri_analyzer() -> None:
         "HIGH":     _C_DANGER,
     }
 
+    def _trunc(s: str, n: int) -> str:
+        """Truncate string to n chars, appending '...' only if truncated."""
+        if not s:
+            return ""
+        return s[:n] + ("..." if len(s) > n else "")
+
     for corridor in bri.CORRIDORS:
-        lats = corridor.lat_waypoints
-        lons = corridor.lon_waypoints
+        lats = corridor.lat_waypoints or []
+        lons = corridor.lon_waypoints or []
+        if not lats or not lons:
+            logger.warning("BRI corridor '{}' has no waypoints; skipping", corridor.name)
+            continue
         color = risk_colors.get(corridor.disruption_risk, _C_TEXT3)
         hover_txt = (
             "<b>" + corridor.name + "</b><br>"
@@ -602,7 +648,7 @@ def _render_bri_analyzer() -> None:
             "Transit: " + str(corridor.transit_days) + " days<br>"
             "Cost vs Ocean: " + str(corridor.cost_vs_ocean_ratio) + "x<br>"
             "Risk: " + corridor.disruption_risk + "<br>"
-            "<i>" + corridor.disruption_note[:80] + "...</i>"
+            "<i>" + _trunc(corridor.disruption_note, 80) + "</i>"
             "<extra></extra>"
         )
 
@@ -683,7 +729,7 @@ def _render_bri_analyzer() -> None:
         align="left",
     )
 
-    st.plotly_chart(fig_map, use_container_width=True)
+    st.plotly_chart(fig_map, use_container_width=True, key="im_bri_map")
 
     # --- Corridor comparison table ---
     st.markdown(
@@ -734,7 +780,7 @@ def _render_bri_analyzer() -> None:
         )
         row_cols[4].markdown(
             '<div style="font-size:0.72rem;color:' + _C_TEXT2 + ';padding:6px 0;line-height:1.4">'
-            + corridor.disruption_note[:120] + ("..." if len(corridor.disruption_note) > 120 else "")
+            + _trunc(corridor.disruption_note, 120)
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -783,7 +829,7 @@ def _render_bri_analyzer() -> None:
         legend=dict(font=dict(color=_C_TEXT2, size=10), bgcolor="rgba(0,0,0,0)"),
         font=dict(color=_C_TEXT, family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig_growth, use_container_width=True)
+    st.plotly_chart(fig_growth, use_container_width=True, key="im_bri_growth")
 
     # Market share callout
     st.markdown(
@@ -805,6 +851,37 @@ def _render_bri_analyzer() -> None:
         "(Kazakhstan-Caspian ferry-Georgia/Turkey), adding cost and 5-7 transit days."
         + "</div></div>",
         unsafe_allow_html=True,
+    )
+
+    # CSV download — BRI corridor data
+    import io as _io_bri
+    import csv as _csv_bri
+
+    def _bri_csv() -> str:
+        buf = _io_bri.StringIO()
+        writer = _csv_bri.writer(buf)
+        writer.writerow([
+            "Corridor", "Origin", "Destination",
+            "Transit Days", "Cost vs Ocean (x)", "Disruption Risk", "Note"
+        ])
+        for corridor in bri.CORRIDORS:
+            writer.writerow([
+                corridor.name,
+                corridor.origin_city,
+                corridor.dest_city,
+                corridor.transit_days,
+                corridor.cost_vs_ocean_ratio,
+                corridor.disruption_risk,
+                corridor.disruption_note,
+            ])
+        return buf.getvalue()
+
+    st.download_button(
+        label="Download BRI corridor data (CSV)",
+        data=_bri_csv(),
+        file_name="bri_corridors.csv",
+        mime="text/csv",
+        key="im_bri_download",
     )
 
 
@@ -833,11 +910,16 @@ def _render_carbon_cost(freight_data: dict) -> None:
 
     mode_order  = ["OCEAN", "AIR", "RAIL_CHINA_EUROPE", "TRUCK_EU", "RAIL_US"]
     mode_keys   = [m for m in mode_order if m in carbon_data]
+
+    if not mode_keys:
+        st.info("Carbon cost data is not available for the selected parameters.")
+        return
+
     mode_names  = [_MODE_LABELS.get(m, m) for m in mode_keys]
-    freight_vals  = [carbon_data[m]["freight_cost_usd"] for m in mode_keys]
-    carbon_vals   = [carbon_data[m]["carbon_offset_usd"] for m in mode_keys]
-    co2_kg_vals   = [carbon_data[m]["co2_kg"] for m in mode_keys]
-    total_vals    = [carbon_data[m]["total_cost_usd"] for m in mode_keys]
+    freight_vals  = [carbon_data[m].get("freight_cost_usd", 0.0) for m in mode_keys]
+    carbon_vals   = [carbon_data[m].get("carbon_offset_usd", 0.0) for m in mode_keys]
+    co2_kg_vals   = [carbon_data[m].get("co2_kg", 0.0) for m in mode_keys]
+    total_vals    = [carbon_data[m].get("total_cost_usd", 0.0) for m in mode_keys]
     bar_colors    = [_MODE_COLORS.get(m, "#64748b") for m in mode_keys]
 
     fig = go.Figure()
@@ -904,7 +986,7 @@ def _render_carbon_cost(freight_data: dict) -> None:
         ),
         font=dict(color=_C_TEXT, family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="im_carbon_cost_chart")
 
     # Summary table
     col_w = [1.2, 1, 1, 1, 1]
@@ -953,6 +1035,29 @@ def _render_carbon_cost(freight_data: dict) -> None:
         "Y-axis is log-scale to show ocean/rail values alongside air."
     )
 
+    # CSV download — carbon cost data
+    import io as _io_cc
+    import csv as _csv_cc
+
+    def _carbon_csv() -> str:
+        buf = _io_cc.StringIO()
+        writer = _csv_cc.writer(buf)
+        writer.writerow(["Mode", "Freight Cost USD", "Carbon Offset USD",
+                          "Total Cost USD", "CO2 kg", f"Weight kg: {weight_kg}"])
+        for mk, name, fc, cc, tot, co2 in zip(
+            mode_keys, mode_names, freight_vals, carbon_vals, total_vals, co2_kg_vals
+        ):
+            writer.writerow([name, round(fc, 2), round(cc, 2), round(tot, 2), round(co2, 2)])
+        return buf.getvalue()
+
+    st.download_button(
+        label="Download carbon cost data (CSV)",
+        data=_carbon_csv(),
+        file_name="carbon_cost_comparison.csv",
+        mime="text/csv",
+        key="im_carbon_download",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -973,6 +1078,10 @@ def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
         Macro data dict (may be empty).  Reserved for elasticity adjustment.
     """
     logger.info("tab_intermodal: render() called")
+
+    if not isinstance(route_results, list):
+        logger.warning("tab_intermodal: route_results is not a list; defaulting to []")
+        route_results = []
 
     st.markdown(
         '<h2 style="font-size:1.4rem;font-weight:800;color:' + _C_TEXT

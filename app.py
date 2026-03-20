@@ -190,7 +190,11 @@ with st.sidebar:
     st.caption("**API Status**")
     _health = _get_api_health()
     # Overlay credential gate for FRED
-    if not os.getenv("FRED_API_KEY"):
+    try:
+        _fred_key = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
+    except Exception:
+        _fred_key = os.getenv("FRED_API_KEY", "")
+    if not _fred_key:
         _health["FRED"] = {"status": "no_key", "age_hours": None, "icon": "🔴"}
     for _src_name, _info in _health.items():
         _icon = _info["icon"]
@@ -354,13 +358,18 @@ except Exception as exc:
 
 
 # ── Dynamic sidebar sections (filled after data + analysis) ───────────────
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+except Exception as _plotly_err:
+    logger.error(f"plotly is not installed or failed to import: {_plotly_err}")
+    st.error(f"plotly import error: {_plotly_err}")
+    go = None
 
 with sidebar_signal_placeholder.container():
     st.divider()
     st.caption("**Signal Pulse**")
 
-    if insights:
+    if insights and go is not None:
         # Mini donut gauge for overall health score
         avg_score = sum(i.score for i in insights) / len(insights)
         gauge_color = "#10b981" if avg_score >= 0.70 else ("#f59e0b" if avg_score >= 0.55 else "#ef4444")
@@ -419,6 +428,12 @@ with sidebar_signal_placeholder.container():
                 {ins.score:.0%} · {ins.action}</div>
         </div>
         """, unsafe_allow_html=True)
+    elif insights:
+        # plotly unavailable — show text-only signal cards
+        avg_score = sum(i.score for i in insights) / len(insights)
+        st.caption(f"Health: {avg_score:.0%}")
+        for ins in insights[:3]:
+            st.caption(f"{ins.score:.0%} · {ins.title[:45]}")
     else:
         st.caption("No active signals")
 
@@ -451,13 +466,30 @@ with sidebar_bottom_placeholder.container():
     st.divider()
     cache_size = sum(f.stat().st_size for f in Path("cache").rglob("*.parquet")) if Path("cache").exists() else 0
     cache_mb = cache_size / (1024 * 1024)
-    from utils.helpers import now_iso
-    st.caption(f"📦 Cache: {cache_mb:.1f} MB")
-    st.caption(f"🕐 {now_iso()}")
+    try:
+        from utils.helpers import now_iso
+        st.caption(f"📦 Cache: {cache_mb:.1f} MB")
+        st.caption(f"🕐 {now_iso()}")
+    except Exception as _sidebar_bottom_err:
+        logger.warning(f"Sidebar bottom section error: {_sidebar_bottom_err}")
+        st.caption(f"📦 Cache: {cache_mb:.1f} MB")
 
 
 # ── Page header ───────────────────────────────────────────────────────────
-from utils.helpers import now_iso, trend_label
+try:
+    from utils.helpers import now_iso, trend_label
+except Exception as _helpers_err:
+    logger.error(f"utils.helpers import error: {_helpers_err}")
+    st.error(f"utils.helpers import error: {_helpers_err}")
+    def now_iso() -> str:
+        import datetime
+        return datetime.datetime.utcnow().isoformat()
+    def trend_label(pct: float) -> str:
+        if pct > 0.01:
+            return "Rising"
+        if pct < -0.01:
+            return "Falling"
+        return "Stable"
 
 port_count = len(port_results) if port_results else 25
 route_count = len(route_results) if route_results else 17

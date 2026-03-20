@@ -124,6 +124,8 @@ def _demand_tier(score: float) -> str:
 
 def _arc_points(lat1: float, lon1: float, lat2: float, lon2: float, n: int = 40):
     """Return (lats, lons) for a great-circle-approximating curved arc."""
+    if n < 2:
+        return [lat1, lat2], [lon1, lon2]
     # Use spherical linear interpolation (slerp) via xyz for globe curvature
     def to_xyz(lat_deg: float, lon_deg: float):
         lat_r = math.radians(lat_deg)
@@ -408,6 +410,10 @@ def _render_globe(
 def _render_heatmap(route_results: list[RouteOpportunity]) -> None:
     logger.debug("Rendering flow volume heatmap")
 
+    if not route_results:
+        st.info("No route data available to build the region heatmap.")
+        return
+
     # Collect unique regions from routes
     origin_regions = sorted({r.origin_region for r in route_results})
     dest_regions   = sorted({r.dest_region   for r in route_results})
@@ -518,6 +524,10 @@ def _render_centrality(
     route_results: list[RouteOpportunity],
 ) -> None:
     logger.debug("Rendering port centrality rankings")
+
+    if not port_results:
+        st.info("No port data available for centrality rankings.")
+        return
 
     port_lookup = _build_port_lookup(port_results)
 
@@ -742,6 +752,10 @@ def _render_corridor_analysis(
                 df = df.set_index("date")
             elif "timestamp" in df.columns:
                 df = df.set_index("timestamp")
+        # Strip timezone info to prevent mixing tz-aware and tz-naive datetimes,
+        # which causes a TypeError in pandas comparisons and Plotly rendering.
+        if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
 
         color = route_colors[idx % len(route_colors)]
         rate_col = "rate_usd_per_feu"
@@ -875,6 +889,33 @@ def _render_corridor_analysis(
     )
     st.markdown(table_html, unsafe_allow_html=True)
 
+    # ── CSV download for corridor route detail ────────────────────────────────
+    sorted_routes = sorted(corridor_routes, key=lambda x: x.opportunity_score, reverse=True)
+    csv_rows = [
+        {
+            "Route": r.route_name,
+            "Corridor": r.origin_region + " → " + r.dest_region,
+            "Origin Locode": r.origin_locode,
+            "Dest Locode": r.dest_locode,
+            "Rate USD/FEU": r.current_rate_usd_feu,
+            "30d Rate Change": round(r.rate_pct_change_30d * 100, 2),
+            "Rate Trend": r.rate_trend,
+            "Opportunity Score": round(r.opportunity_score, 4),
+            "Opportunity Label": r.opportunity_label,
+            "Transit Days": r.transit_days,
+        }
+        for r in sorted_routes
+    ]
+    df_csv = pd.DataFrame(csv_rows)
+    corridor_slug = chosen.lower().replace(" ", "_").replace("-", "_")
+    st.download_button(
+        label="Download corridor data CSV",
+        data=df_csv.to_csv(index=False).encode("utf-8"),
+        file_name=f"corridor_{corridor_slug}.csv",
+        mime="text/csv",
+        key="network_corridor_csv",
+    )
+
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -899,11 +940,20 @@ def render(
 
     st.header("Shipping Network Intelligence")
 
-    if not port_results or not route_results:
+    if not port_results and not route_results:
         st.info(
             "No network data available. Check API credentials in .env and click Refresh."
         )
         return
+
+    if not port_results:
+        st.warning("Port data unavailable — globe and centrality rankings will be skipped.")
+
+    if not route_results:
+        st.warning(
+            "Route data unavailable — heatmap, corridor analysis, and arc overlays "
+            "will be skipped. Showing port nodes only."
+        )
 
     # ── Section 1: 3D Globe ────────────────────────────────────────────────────
     _section_header("3D Trade Network — All Ports & Routes")
@@ -917,7 +967,10 @@ def render(
         unsafe_allow_html=True,
     )
 
-    _render_globe(port_results, route_results)
+    if port_results:
+        _render_globe(port_results, route_results)
+    else:
+        st.info("Globe skipped — no port data loaded.")
 
     # ── Section 2: Heatmap ────────────────────────────────────────────────────
     _section_header("Flow Volume Heatmap — Region × Region Opportunity")
@@ -935,6 +988,9 @@ def render(
 
     # ── Section 4: Corridor Analysis ──────────────────────────────────────────
     _section_header("Route Corridor Analysis")
-    _render_corridor_analysis(route_results, freight_data)
+    if route_results:
+        _render_corridor_analysis(route_results, freight_data)
+    else:
+        st.info("Corridor analysis skipped — no route data loaded.")
 
     logger.info("Network tab render complete")

@@ -7,6 +7,8 @@ timing table, and logistics cost breakdown donut chart.
 """
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -451,7 +453,46 @@ def _render_recommendation_card(
             alt_df[display_cols],
             use_container_width=True,
             hide_index=True,
+            key="bk_alt_routes_table",
         )
+        # CSV download for booking comparison
+        st.download_button(
+            label="Download Route Comparison (CSV)",
+            data=alt_df[display_cols].to_csv(index=False),
+            file_name="booking_route_comparison.csv",
+            mime="text/csv",
+            key="bk_routes_csv_download",
+        )
+
+
+def _timing_confidence(ts: dict) -> tuple[int, str]:
+    """Derive a confidence level from the timing score dict.
+
+    Returns (pct: int, color: str).  Confidence is estimated from how many
+    data signals are present and how extreme the 52-week percentile is.
+    """
+    score = 0
+    max_score = 0
+
+    vs6m_avg = ts.get("current_vs_6m_avg")
+    pct_52w = ts.get("percentile_52w")
+    dip_days = ts.get("days_until_expected_dip")
+
+    max_score += 3
+    if vs6m_avg is not None:
+        score += 1
+    if pct_52w is not None:
+        score += 1
+        # Extreme percentiles (very low or very high) are more decisive
+        if pct_52w <= 0.15 or pct_52w >= 0.85:
+            score += 1
+    if dip_days is not None:
+        score += 1
+
+    pct = int(round(score / max_score * 100)) if max_score > 0 else 50
+    pct = max(20, min(95, pct))  # clamp to [20, 95] — never claim 100 % or 0 %
+    color = _C_HIGH if pct >= 70 else (_C_MOD if pct >= 50 else _C_LOW)
+    return pct, color
 
 
 def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
@@ -466,19 +507,32 @@ def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
     )
 
     rows: list[dict] = []
+    from processing.booking_optimizer import _get_current_rate
     for route in ROUTES:
         ts = get_market_timing_score(route.id, freight_data)
-        from processing.booking_optimizer import _get_current_rate
         current = _get_current_rate(route.id, freight_data)
+        # Guard against None/missing current rate
+        current_str = ("$" + "{:,.0f}".format(current) + "/FEU") if current is not None else "N/A"
+        # Guard against missing keys in the timing score dict
+        vs6m_avg = ts.get("current_vs_6m_avg")
+        pct_52w = ts.get("percentile_52w")
+        timing_signal = ts.get("timing_signal", "NEUTRAL")
+        dip_days = ts.get("days_until_expected_dip")
+        vs6m_str = ("{:+.1%}".format(vs6m_avg)) if vs6m_avg is not None else "N/A"
+        pct_52w_str = "{:.0%}".format(pct_52w) if pct_52w is not None else "N/A"
+        dip_str = str(dip_days) + "d" if dip_days is not None else "N/A"
+        conf_pct, conf_color = _timing_confidence(ts)
         rows.append(
             {
                 "Route": route.name,
-                "Current Rate": "$" + "{:,.0f}".format(current) + "/FEU",
-                "vs 6m Avg": ("{:+.1%}".format(ts["current_vs_6m_avg"])),
-                "52w Pct": "{:.0%}".format(ts["percentile_52w"]),
-                "Signal": ts["timing_signal"],
-                "Dip in ~": str(ts["days_until_expected_dip"]) + "d",
-                "_signal": ts["timing_signal"],
+                "Current Rate": current_str,
+                "vs 6m Avg": vs6m_str,
+                "52w Pct": pct_52w_str,
+                "Signal": timing_signal,
+                "Dip in ~": dip_str,
+                "_signal": timing_signal,
+                "_conf_pct": conf_pct,
+                "_conf_color": conf_color,
             }
         )
 
@@ -486,7 +540,7 @@ def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
         "<table style='width:100%; border-collapse:collapse; font-size:0.77rem; color:#cbd5e1'>"
         "<thead><tr>"
     )
-    headers = ["Route", "Current Rate", "vs 6m Avg", "52w Pct", "Signal", "Dip in ~"]
+    headers = ["Route", "Current Rate", "vs 6m Avg", "52w Pct", "Signal", "Confidence", "Dip in ~"]
     for h in headers:
         table_html += (
             "<th style='text-align:left; padding:7px 10px; color:#64748b; font-weight:600;"
@@ -512,6 +566,12 @@ def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
             + "</span>"
         )
         vs6m_color = _C_HIGH if row["vs 6m Avg"].startswith("-") else _C_LOW
+        conf_pct = row["_conf_pct"]
+        conf_color = row["_conf_color"]
+        conf_html = (
+            "<span style='color:" + conf_color + "; font-weight:700'>"
+            + str(conf_pct) + "%</span>"
+        )
         table_html += (
             "<tr style='border-bottom:1px solid rgba(255,255,255,0.04)'>"
             "<td style='padding:8px 10px; color:#f1f5f9; font-weight:500'>"
@@ -531,6 +591,9 @@ def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
             "<td style='padding:8px 10px'>"
             + badge_html
             + "</td>"
+            "<td style='padding:8px 10px'>"
+            + conf_html
+            + "</td>"
             "<td style='padding:8px 10px; color:#64748b'>"
             + row["Dip in ~"]
             + "</td>"
@@ -539,6 +602,7 @@ def _render_market_timing(freight_data: dict[str, pd.DataFrame]) -> None:
 
     table_html += "</tbody></table>"
     st.markdown(table_html, unsafe_allow_html=True)
+    st.caption("⚠️ Booking recommendations are algorithmic signals, not financial advice")
 
 
 def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
@@ -554,6 +618,10 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
 
     breakdown = estimate_total_logistics_cost(recommendation)
 
+    if not breakdown:
+        st.info("Cost breakdown data is not available for this route.")
+        return
+
     labels_map = {
         "ocean_freight":          "Ocean Freight",
         "port_handling":          "Port Handling",
@@ -563,20 +631,34 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
         "insurance":              "Insurance",
         "carbon_offset":          "Carbon Offset",
     }
-    keys = list(labels_map.keys())
-    labels = [labels_map[k] for k in keys]
-    values = [breakdown[k] for k in keys]
-    total = breakdown["total"]
+    color_map = {
+        "ocean_freight":         "#3b82f6",  # blue
+        "port_handling":         "#8b5cf6",  # purple
+        "inland_drayage_origin": "#06b6d4",  # cyan
+        "inland_drayage_dest":   "#0891b2",  # darker cyan
+        "documentation":         "#f59e0b",  # amber
+        "insurance":             "#10b981",  # green
+        "carbon_offset":         "#6b7280",  # gray
+    }
 
-    colors = [
-        "#3b82f6",  # ocean_freight     — blue
-        "#8b5cf6",  # port_handling     — purple
-        "#06b6d4",  # drayage origin    — cyan
-        "#0891b2",  # drayage dest      — darker cyan
-        "#f59e0b",  # documentation     — amber
-        "#10b981",  # insurance         — green
-        "#6b7280",  # carbon_offset     — gray
+    # Only include components that exist in the breakdown and have a positive value
+    present_keys = [
+        k for k in labels_map
+        if k in breakdown and breakdown[k] is not None and breakdown.get(k, 0) > 0
     ]
+
+    if not present_keys:
+        st.info("No cost components found for this route.")
+        return
+
+    labels = [labels_map[k] for k in present_keys]
+    values = [breakdown[k] for k in present_keys]
+    colors = [color_map[k] for k in present_keys]
+    total = breakdown.get("total") or sum(values)
+
+    if total <= 0:
+        st.info("Total logistics cost is zero — cannot render cost breakdown.")
+        return
 
     fig = go.Figure(
         go.Pie(
@@ -593,6 +675,7 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
         )
     )
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         height=340,
@@ -618,7 +701,8 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
     with detail_col:
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         detail_html = "<table style='width:100%; font-size:0.78rem; border-collapse:collapse'>"
-        for k, label in labels_map.items():
+        for k in present_keys:
+            label = labels_map[k]
             val = breakdown[k]
             pct = val / total * 100 if total > 0 else 0
             detail_html += (
@@ -647,6 +731,23 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
         )
         detail_html += "</table>"
         st.markdown(detail_html, unsafe_allow_html=True)
+
+    # CSV download for cost breakdown
+    csv_buf = io.StringIO()
+    writer = csv.writer(csv_buf)
+    writer.writerow(["Cost Component", "Amount (USD)", "Share (%)"])
+    for k in present_keys:
+        val = breakdown[k]
+        pct = val / total * 100 if total > 0 else 0
+        writer.writerow([labels_map[k], "{:.2f}".format(val), "{:.1f}".format(pct)])
+    writer.writerow(["Total", "{:.2f}".format(total), "100.0"])
+    st.download_button(
+        label="Download Cost Breakdown (CSV)",
+        data=csv_buf.getvalue(),
+        file_name="booking_cost_breakdown.csv",
+        mime="text/csv",
+        key="bk_cost_csv_download",
+    )
 
 
 # ---------------------------------------------------------------------------

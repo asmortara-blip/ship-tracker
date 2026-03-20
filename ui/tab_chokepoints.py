@@ -204,38 +204,75 @@ def _render_world_map(risk_scores: dict[str, float]) -> None:
             showlegend=True,
         ))
 
-    fig.update_layout(
-        height=550,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        geo=dict(
-            showframe=False,
-            showcoastlines=True,
-            coastlinecolor="rgba(148,163,184,0.3)",
-            showland=True,
-            landcolor="#0f1925",
-            showocean=True,
-            oceancolor="#070d18",
-            showlakes=False,
-            showrivers=False,
-            showcountries=True,
-            countrycolor="rgba(255,255,255,0.06)",
-            projection_type="natural earth",
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=0.01,
-            xanchor="right",
-            x=0.99,
-            font=dict(color=C_TEXT2, size=11),
-            bgcolor="rgba(10,15,26,0.7)",
-        ),
-        margin=dict(l=0, r=0, t=8, b=0),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    try:
+        fig.update_layout(
+            height=550,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                coastlinecolor="rgba(148,163,184,0.3)",
+                showland=True,
+                landcolor="#0f1925",
+                showocean=True,
+                oceancolor="#070d18",
+                showlakes=False,
+                showrivers=False,
+                showcountries=True,
+                countrycolor="rgba(255,255,255,0.06)",
+                projection_type="natural earth",
+                bgcolor="rgba(0,0,0,0)",
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=0.01,
+                xanchor="right",
+                x=0.99,
+                font=dict(color=C_TEXT2, size=11),
+                bgcolor="rgba(10,15,26,0.7)",
+            ),
+            margin=dict(l=0, r=0, t=8, b=0),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chk_world_map")
+    except Exception as _geo_err:
+        logger.warning(f"World map geo rendering failed: {_geo_err}; showing table fallback")
+        st.warning(
+            "Interactive world map could not be rendered (geo data unavailable). "
+            "Showing chokepoint list instead.",
+            icon="🗺️",
+        )
+        # Fallback: compact table of chokepoints with lat/lon and risk level
+        _RISK_ORDER_MAP = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+        _sorted_cps = sorted(
+            CHOKEPOINTS.values(),
+            key=lambda c: _RISK_ORDER_MAP.get(c.current_risk_level, 99),
+        )
+        _rows = "".join(
+            "<tr>"
+            "<td style='padding:6px 10px; color:#f1f5f9; font-weight:600'>" + cp.name + "</td>"
+            "<td style='padding:6px 10px; color:#94a3b8'>" + str(round(cp.lat, 2)) + ", " + str(round(cp.lon, 2)) + "</td>"
+            "<td style='padding:6px 10px'>" + _risk_badge(cp.current_risk_level) + "</td>"
+            "<td style='padding:6px 10px; color:#94a3b8'>" + str(cp.daily_vessels) + " vessels/day</td>"
+            "<td style='padding:6px 10px; color:#f59e0b'>" + str(cp.pct_global_trade) + "% global trade</td>"
+            "</tr>"
+            for cp in _sorted_cps
+        )
+        st.markdown(
+            "<div style='background:#1a2235; border:1px solid rgba(255,255,255,0.08);"
+            " border-radius:12px; padding:16px; overflow-x:auto'>"
+            "<table style='width:100%; border-collapse:collapse'>"
+            "<thead><tr>"
+            "<th style='padding:6px 10px; color:#64748b; font-size:0.72rem; text-align:left'>Chokepoint</th>"
+            "<th style='padding:6px 10px; color:#64748b; font-size:0.72rem; text-align:left'>Location</th>"
+            "<th style='padding:6px 10px; color:#64748b; font-size:0.72rem; text-align:left'>Risk</th>"
+            "<th style='padding:6px 10px; color:#64748b; font-size:0.72rem; text-align:left'>Traffic</th>"
+            "<th style='padding:6px 10px; color:#64748b; font-size:0.72rem; text-align:left'>Trade Share</th>"
+            "</tr></thead>"
+            "<tbody>" + _rows + "</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +285,12 @@ def _render_risk_dashboard() -> None:
         "Current status of all 9 critical maritime passages",
     )
 
-    cp_list = list(CHOKEPOINTS.values())
+    # Sort CRITICAL → HIGH → MODERATE → LOW so highest-risk passages appear first
+    _RISK_ORDER = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+    cp_list = sorted(
+        CHOKEPOINTS.values(),
+        key=lambda cp: _RISK_ORDER.get(cp.current_risk_level, 99),
+    )
     rows = [cp_list[i:i + 3] for i in range(0, len(cp_list), 3)]
 
     for row in rows:
@@ -332,13 +374,17 @@ def _render_closure_simulator() -> None:
     cp_names = [cp.name for cp in CHOKEPOINTS.values()]
     cp_keys = list(CHOKEPOINTS.keys())
 
+    if not cp_names:
+        st.info("No chokepoints available for simulation.")
+        return
+
     sim_col, ctrl_col = st.columns([2, 1])
 
     with ctrl_col:
         selected_name = st.selectbox(
             "Select chokepoint",
             cp_names,
-            index=1,
+            index=min(1, len(cp_names) - 1),
             key="chk_sim_select",
         )
         duration_weeks = st.slider(
@@ -579,7 +625,7 @@ def _render_red_sea_tracker() -> None:
         yaxis=dict(visible=False, range=[0.8, 1.4]),
         margin=dict(l=0, r=0, t=20, b=40),
     )
-    st.plotly_chart(fig_tl, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_tl, use_container_width=True, config={"displayModeBar": False}, key="chk_red_sea_timeline")
 
     # ── Cape vs Suez vessel comparison ────────────────────────────────────
     st.markdown(
@@ -636,7 +682,7 @@ def _render_red_sea_tracker() -> None:
             bgcolor="rgba(10,15,26,0.6)",
         ),
     )
-    st.plotly_chart(fig_cv, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_cv, use_container_width=True, config={"displayModeBar": False}, key="chk_red_sea_vessel_comparison")
 
     # ── FBX03 rate premium ────────────────────────────────────────────────
     rr_col, ins_col = st.columns(2)
@@ -681,7 +727,7 @@ def _render_red_sea_tracker() -> None:
                 tickprefix="$",
             ),
         )
-        st.plotly_chart(fig_fbx, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_fbx, use_container_width=True, config={"displayModeBar": False}, key="chk_red_sea_fbx")
 
     with ins_col:
         # War risk insurance premium (basis points, synthetic but realistic)
@@ -728,7 +774,7 @@ def _render_red_sea_tracker() -> None:
                 ticksuffix=" bps",
             ),
         )
-        st.plotly_chart(fig_ins, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_ins, use_container_width=True, config={"displayModeBar": False}, key="chk_red_sea_insurance")
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +891,7 @@ def _render_historical_timeline() -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chk_historical_timeline")
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +943,37 @@ def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
 
     # Compute risk scores once
     risk_scores = compute_chokepoint_risk_score()
+
+    # Guard: warn if CHOKEPOINTS dict is empty (data not loaded)
+    if not CHOKEPOINTS:
+        st.warning(
+            "No chokepoint data is loaded. Check that `processing.chokepoint_analyzer` "
+            "populates the `CHOKEPOINTS` dictionary.",
+            icon="⚠️",
+        )
+        return
+
+    # Staleness check: warn if any chokepoint has a disruption_since date that is very old
+    # (indicating data may not have been refreshed).
+    from datetime import date as _cp_date, timedelta as _cp_td
+    _today_cp = _cp_date.today()
+    _stale_count = 0
+    for _cp_val in CHOKEPOINTS.values():
+        _since = getattr(_cp_val, "disruption_since", None)
+        if _since and isinstance(_since, str) and len(_since) >= 10:
+            try:
+                from datetime import datetime as _dt
+                _since_date = _dt.strptime(_since[:10], "%Y-%m-%d").date()
+                if (_today_cp - _since_date).days > 730:  # 2 years without refresh
+                    _stale_count += 1
+            except ValueError:
+                pass
+    if _stale_count > 0:
+        st.warning(
+            f"{_stale_count} chokepoint(s) have disruption records older than 2 years. "
+            "Chokepoint status data may be stale — consider refreshing.",
+            icon="⚠️",
+        )
 
     # ── Section 1 ───────────────────────────────────────────────────────────
     _render_world_map(risk_scores)

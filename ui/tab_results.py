@@ -39,6 +39,57 @@ def _hex_rgba(h: str, a: float) -> str:
     return f"rgba({r},{g},{b},{a})"
 
 
+def _score_color(score: float) -> str:
+    """Return CSS color for a [0,1] score: green >=0.7, amber 0.5-0.7, red <0.5."""
+    if score >= 0.70:
+        return C_HIGH   # #10b981 green
+    if score >= 0.50:
+        return C_MOD    # #f59e0b amber
+    return C_LOW        # #ef4444 red
+
+
+# ── 0. Data-freshness banner (shown at top when any insight has stale data) ─────
+
+def _render_stale_banner(insights: list[Insight]) -> None:
+    """Show a prominent amber banner if any insight carries a data freshness warning."""
+    stale_insights = [i for i in insights if i.data_freshness_warning]
+    if not stale_insights:
+        return
+
+    stale_titles = ", ".join(
+        i.title[:40] + ("..." if len(i.title) > 40 else "")
+        for i in stale_insights[:3]
+    )
+    more = f" (+{len(stale_insights) - 3} more)" if len(stale_insights) > 3 else ""
+    st.markdown(
+        f"""
+        <div style="
+            background:rgba(245,158,11,0.10);
+            border:1px solid rgba(245,158,11,0.4);
+            border-left:4px solid {C_MOD};
+            border-radius:10px;
+            padding:12px 18px;
+            margin-bottom:18px;
+            display:flex;
+            align-items:flex-start;
+            gap:12px;
+        ">
+            <span style="font-size:1.2rem; flex-shrink:0">⚠️</span>
+            <div>
+                <div style="font-size:0.82rem; font-weight:700; color:{C_MOD}; margin-bottom:3px">
+                    Stale data detected — {len(stale_insights)} insight(s) may reflect outdated sources
+                </div>
+                <div style="font-size:0.77rem; color:{C_TEXT2}">
+                    Affected: {stale_titles}{more}.
+                    Click <b style="color:{C_TEXT}">Refresh All Data</b> in the sidebar to update.
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ── 1. Convergence Meter ────────────────────────────────────────────────────────
 
 def _render_convergence_meter(insights: list[Insight]) -> None:
@@ -89,6 +140,7 @@ def _render_convergence_meter(insights: list[Insight]) -> None:
         },
     ))
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font={"color": C_TEXT},
@@ -98,7 +150,7 @@ def _render_convergence_meter(insights: list[Insight]) -> None:
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="results_convergence_meter")
 
     # Stat pills row
     port_n  = sum(1 for i in insights if i.category == "PORT_DEMAND")
@@ -122,10 +174,11 @@ def _render_convergence_meter(insights: list[Insight]) -> None:
 # ── 2. Dramatic hero card ───────────────────────────────────────────────────────
 
 def _render_hero_card(hero: Insight) -> None:
-    hero_color  = CATEGORY_COLORS.get(hero.category, C_ACCENT)
-    hero_icon   = CATEGORY_ICONS.get(hero.category, "💡")
+    hero_color   = CATEGORY_COLORS.get(hero.category, C_ACCENT)
+    hero_icon    = CATEGORY_ICONS.get(hero.category, "💡")
     action_color = ACTION_COLORS.get(hero.action, C_ACCENT)
-    is_conv     = hero.category == "CONVERGENCE"
+    is_conv      = hero.category == "CONVERGENCE"
+    sc           = _score_color(hero.score)   # score-based color for the badge
 
     pulsing_dot = (
         "<span style='display:inline-block; width:8px; height:8px; border-radius:50%;"
@@ -137,6 +190,11 @@ def _render_hero_card(hero: Insight) -> None:
         f" border:1px solid {_hex_rgba(C_CONV,0.4)}; padding:2px 10px;"
         f" border-radius:999px; font-size:0.7rem; font-weight:700; margin-right:6px'>"
         f"{pulsing_dot}CONVERGENCE</span>"
+        if is_conv else ""
+    )
+    # CONVERGENCE insights get a glowing outer ring to stand out from regular hero cards
+    conv_ring = (
+        f"box-shadow:0 0 0 2px {_hex_rgba(C_CONV,0.5)}, 0 0 28px {_hex_rgba(C_CONV,0.18)};"
         if is_conv else ""
     )
 
@@ -191,6 +249,7 @@ def _render_hero_card(hero: Insight) -> None:
             padding:26px 28px;
             margin-bottom:20px;
             position:relative;
+            {conv_ring}
         ">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px">
                 <div>
@@ -202,14 +261,18 @@ def _render_hero_card(hero: Insight) -> None:
                         <span style="background:{_hex_rgba(action_color,0.15)}; color:{action_color};
                             border:1px solid {_hex_rgba(action_color,0.3)}; padding:3px 12px;
                             border-radius:999px; font-size:0.75rem; font-weight:700">{hero.action}</span>
-                        <span style="background:{_hex_rgba(hero_color,0.12)}; color:{C_TEXT3};
-                            border:1px solid rgba(255,255,255,0.08); padding:3px 10px;
-                            border-radius:999px; font-size:0.7rem">{hero.score_label}</span>
+                        <span style="background:{_hex_rgba(sc,0.18)}; color:{sc};
+                            border:1px solid {_hex_rgba(sc,0.4)}; padding:3px 10px;
+                            border-radius:999px; font-size:0.7rem; font-weight:700">{hero.score_label}</span>
                     </div>
                 </div>
-                <div style="font-size:2.5rem; font-weight:900; color:{hero_color};
-                    line-height:1; text-shadow:0 0 24px {_hex_rgba(hero_color,0.5)};
-                    flex-shrink:0; padding-left:16px">{hero.score:.0%}</div>
+                <div style="background:{_hex_rgba(sc,0.15)}; border:2px solid {_hex_rgba(sc,0.5)};
+                    border-radius:10px; padding:8px 14px; text-align:center; flex-shrink:0; margin-left:16px">
+                    <div style="font-size:2.2rem; font-weight:900; color:{sc};
+                        line-height:1; text-shadow:0 0 20px {_hex_rgba(sc,0.6)}">{hero.score:.0%}</div>
+                    <div style="font-size:0.6rem; font-weight:700; color:{sc}; opacity:0.8;
+                        text-transform:uppercase; letter-spacing:0.06em; margin-top:2px">score</div>
+                </div>
             </div>
             <div style="font-size:1.4rem; font-weight:700; color:{C_TEXT}; line-height:1.4; margin-bottom:10px;
                 text-shadow:0 0 30px rgba(255,255,255,0.05)">{hero.title}</div>
@@ -232,29 +295,42 @@ def _render_signal_bar(signals: list[SignalComponent], chart_key: str = "signal_
 
     direction_color_map = {"bullish": "#10b981", "bearish": "#ef4444", "neutral": "#64748b"}
 
+    total = sum(s.contribution for s in signals)
+    x_max = max(total * 1.05, 0.1)
+
     fig = go.Figure()
     for s in signals:
         seg_color = direction_color_map.get(s.direction, "#64748b")
+        # Only show the name label when the segment is wide enough to read it
+        seg_fraction = s.contribution / x_max if x_max > 0 else 0
+        show_label = seg_fraction >= 0.12
         fig.add_trace(go.Bar(
             x=[s.contribution],
             y=["Signals"],
             orientation="h",
             marker_color=seg_color,
-            text=s.name,
+            marker_line_width=0,
+            text=s.name if show_label else "",
             textposition="inside",
             insidetextanchor="middle",
-            hovertemplate=f"<b>{s.name}</b><br>{s.value:.0%} × {s.weight:.0%} = {s.contribution:.0%}<br>Direction: {s.direction}<extra></extra>",
+            textfont=dict(color="#ffffff", size=10),
+            hovertemplate=(
+                f"<b>{s.name}</b><br>"
+                f"Value: {s.value:.0%} &times; Weight: {s.weight:.0%} = {s.contribution:.0%}<br>"
+                f"Direction: {s.direction}<extra></extra>"
+            ),
             name=s.name,
             showlegend=False,
         ))
 
     fig.update_layout(
+        template="plotly_dark",
         barmode="stack",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        height=60,
-        margin=dict(t=0, b=0, l=0, r=0),
-        xaxis=dict(visible=False, range=[0, max(sum(s.contribution for s in signals) * 1.05, 0.1)]),
+        height=48,
+        margin=dict(t=2, b=2, l=0, r=0),
+        xaxis=dict(visible=False, range=[0, x_max]),
         yaxis=dict(visible=False),
     )
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
@@ -313,6 +389,7 @@ def _render_insight_timeline(insights: list[Insight], chart_key: str = "insight_
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(26,34,53,0.6)",
         height=280,
@@ -342,6 +419,8 @@ def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, ac
     color   = cat_colors.get(insight.category, C_ACCENT)
     icon    = cat_icons.get(insight.category, "💡")
     a_color = action_colors.get(insight.action, C_ACCENT)
+    sc      = _score_color(insight.score)   # score-based color for the score badge
+    is_conv = insight.category == "CONVERGENCE"
 
     tags_html = ""
     all_tags = (insight.ports_involved + insight.routes_involved + insight.stocks_potentially_affected)[:5]
@@ -363,18 +442,36 @@ def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, ac
         if insight.data_freshness_warning else ""
     )
 
+    # CONVERGENCE non-hero cards get a purple ring + inline label so they stand out
+    conv_inline_badge = (
+        f"<span style='background:{_hex_rgba(C_CONV,0.18)}; color:{C_CONV};"
+        f" border:1px solid {_hex_rgba(C_CONV,0.4)}; padding:1px 7px;"
+        f" border-radius:999px; font-size:0.65rem; font-weight:700; margin-left:7px;"
+        f" vertical-align:middle'>CONVERGENCE</span>"
+        if is_conv else ""
+    )
+    card_border_style = (
+        f"border:1px solid {_hex_rgba(C_CONV,0.4)};"
+        f" border-left:3px solid {C_CONV};"
+        f" box-shadow:0 0 0 1px {_hex_rgba(C_CONV,0.2)}, 0 0 14px {_hex_rgba(C_CONV,0.1)};"
+        if is_conv else
+        f"border:1px solid {C_BORDER}; border-left:3px solid {color};"
+    )
+
     st.markdown(
         f"""
-        <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {color};
+        <div style="background:{C_CARD}; {card_border_style}
                     border-radius:10px; padding:15px 18px; margin-bottom:4px">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px">
                 <div style="font-size:0.88rem; font-weight:600; color:{C_TEXT}; line-height:1.3; padding-right:12px">
-                    {icon} &nbsp;{insight.title}</div>
-                <div style="display:flex; gap:5px; flex-shrink:0">
-                    <span style="background:{_hex_rgba(a_color,0.12)}; color:{a_color};
+                    {icon} &nbsp;{insight.title}{conv_inline_badge}</div>
+                <div style="display:flex; gap:5px; flex-shrink:0; align-items:center">
+                    <span style="background:{_hex_rgba(a_color,0.15)}; color:{a_color};
+                        border:1px solid {_hex_rgba(a_color,0.3)};
                         padding:2px 9px; border-radius:999px; font-size:0.7rem; font-weight:700">{insight.action}</span>
-                    <span style="background:{_hex_rgba(color,0.12)}; color:{color};
-                        padding:2px 9px; border-radius:999px; font-size:0.7rem; font-weight:700">{insight.score:.0%}</span>
+                    <span style="background:{_hex_rgba(sc,0.18)}; color:{sc};
+                        border:2px solid {_hex_rgba(sc,0.5)};
+                        padding:2px 9px; border-radius:999px; font-size:0.75rem; font-weight:800">{insight.score:.0%}</span>
                 </div>
             </div>
             <div style="font-size:0.81rem; color:{C_TEXT2}; line-height:1.5">{detail_text}</div>
@@ -414,6 +511,9 @@ def render(insights: list[Insight]) -> None:
             unsafe_allow_html=True,
         )
         return
+
+    # ── Data freshness banner (prominent, shown before KPI row) ────────────────
+    _render_stale_banner(insights)
 
     # ── KPI row ────────────────────────────────────────────────────────────────
     convergence_count = sum(1 for i in insights if i.category == "CONVERGENCE")
@@ -543,7 +643,7 @@ def render(insights: list[Insight]) -> None:
         pass
 
     # ── Data Sources & Health ──────────────────────────────────────────────────
-    with st.expander("Data Sources & Health", expanded=False):
+    with st.expander("Data Sources & Health", expanded=False, key="results_data_sources_expander"):
         _render_data_health()
 
     # ── Export ─────────────────────────────────────────────────────────────────

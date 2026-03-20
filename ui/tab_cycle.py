@@ -5,6 +5,8 @@ shipping stocks. Uses BDI, orderbook, utilization, P/B, and macro indicators.
 """
 from __future__ import annotations
 
+import csv
+import io
 import math
 
 import plotly.graph_objects as go
@@ -237,7 +239,7 @@ def _render_cycle_clock(timing: CycleTiming, position_score: float) -> None:
             y=0.98,
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cycle_clock_polar")
 
 
 # ── Section: Indicator Dashboard ───────────────────────────────────────────────
@@ -270,7 +272,14 @@ def _render_indicator_dashboard(
         _build_scrapping_indicator(macro_data),
     ]
 
+    # ── Guard: empty indicator list ──────────────────────────────────────────
+    if not indicators or all(ind is None for ind in indicators):
+        st.info("Cycle indicator data unavailable — check data feeds.")
+        return
+
     for ind in indicators:
+        if ind is None:
+            continue
         phase_color = _PHASE_COLORS.get(ind.phase_signal, C_TEXT2)
         pct = int(ind.normalized_value * 100)
         bar_fill = _hex_to_rgba(phase_color, 0.8)
@@ -334,6 +343,29 @@ def _render_indicator_dashboard(
                     unsafe_allow_html=True,
                 )
 
+    # ── CSV download for cycle indicators ────────────────────────────────────
+    valid_inds = [ind for ind in indicators if ind is not None]
+    if valid_inds:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Indicator", "Value", "Normalized %", "Phase Signal", "Weight %", "Interpretation"])
+        for ind in valid_inds:
+            writer.writerow([
+                ind.name,
+                ind.value,
+                int(ind.normalized_value * 100),
+                ind.phase_signal,
+                round(ind.weight * 100, 1),
+                ind.interpretation,
+            ])
+        st.download_button(
+            label="Export Cycle Indicators CSV",
+            data=buf.getvalue().encode(),
+            file_name="cycle_indicators.csv",
+            mime="text/csv",
+            key="cycle_indicators_csv_download",
+        )
+
 
 # ── Section: Historical Cycle Chart ────────────────────────────────────────────
 
@@ -343,6 +375,14 @@ def _render_historical_cycle_chart(
 ) -> None:
     """BDI history 2008-2026 with colored background phase bands and event annotations."""
     cycle_history = get_historical_cycle_data()
+
+    # ── Guard: insufficient historical cycle data ────────────────────────────
+    if not cycle_history or len(cycle_history) < 2:
+        st.info(
+            "Insufficient historical cycle data to render chart "
+            "(need at least 2 cycle entries). Check `get_historical_cycle_data()`."
+        )
+        return
 
     # ── Build synthetic BDI timeseries from historical data ─────────────────
     # We reconstruct approximate annual BDI path from our hardcoded reference data
@@ -496,7 +536,7 @@ def _render_historical_cycle_chart(
             x=0.01,
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cycle_bdi_historical_line")
 
 
 # ── Section: Entry/Exit Signal Panel ──────────────────────────────────────────
@@ -593,7 +633,7 @@ def _render_signal_panel(timing: CycleTiming, signals: list[dict]) -> None:
             bar_bg=bar_bg, bar_fill=bar_fill, text3=C_TEXT3, note=note,
         )
 
-    with st.expander("Historical Signal Accuracy (Backtested)", expanded=False):
+    with st.expander("Historical Signal Accuracy (Backtested)", expanded=False, key="cycle_signal_accuracy_expander"):
         st.markdown(
             """
             <div style="padding:8px 0">
@@ -754,7 +794,7 @@ def _render_orderbook_monitor(macro_data: dict) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cycle_orderbook_bar")
 
     st.markdown(
         '<div style="font-size:0.8rem; color:{t}; padding:8px 12px; '
@@ -873,7 +913,7 @@ def _render_phase_probability_matrix(timing: CycleTiming) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cycle_phase_probability_heatmap")
 
     st.markdown(
         '<div style="font-size:0.78rem; color:{t}; padding:6px 0">'.format(t=C_TEXT3)
@@ -895,6 +935,64 @@ def _render_cycle_kpis(timing: CycleTiming, position_score: float) -> None:
     """Compact row of KPI cards at the top of the tab."""
     phase_color = _PHASE_COLORS.get(timing.current_phase, C_TEXT2)
     pos_color = _POSITIONING_COLORS.get(timing.recommended_positioning, C_TEXT2)
+
+    # ── Large prominent phase badge ───────────────────────────────────────────
+    _PHASE_LABELS: dict[str, str] = {
+        CyclePhase.TROUGH:   "TROUGH",
+        CyclePhase.RECOVERY: "EXPANSION",
+        CyclePhase.PEAK:     "PEAK",
+        CyclePhase.DECLINE:  "CONTRACTION",
+    }
+    _PHASE_DESC: dict[str, str] = {
+        CyclePhase.TROUGH:   "Buy zone — freight rates near cycle lows",
+        CyclePhase.RECOVERY: "Accumulate — rates rising, orderbook tightening",
+        CyclePhase.PEAK:     "Reduce — freight rates at or near cycle highs",
+        CyclePhase.DECLINE:  "Avoid / short — rates falling, oversupply emerging",
+    }
+    badge_label = _PHASE_LABELS.get(timing.current_phase, str(timing.current_phase))
+    badge_desc  = _PHASE_DESC.get(timing.current_phase, "")
+    st.markdown(
+        """
+        <div style="display:flex; align-items:center; gap:20px; padding:18px 24px;
+                    background:linear-gradient(135deg,{phase_bg} 0%,{card} 70%);
+                    border:2px solid {phase_border}; border-radius:16px;
+                    margin-bottom:20px; box-shadow:0 0 24px {phase_glow}">
+            <div style="background:{phase_color}; color:#000; font-size:1.6rem;
+                        font-weight:900; padding:10px 28px; border-radius:12px;
+                        letter-spacing:0.06em; text-transform:uppercase;
+                        white-space:nowrap; box-shadow:0 0 16px {phase_glow}">
+                {badge}
+            </div>
+            <div>
+                <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.12em;
+                            color:{text3}; margin-bottom:4px">CURRENT SHIPPING CYCLE PHASE</div>
+                <div style="font-size:1.05rem; font-weight:600; color:{text}; margin-bottom:4px">
+                    {desc}
+                </div>
+                <div style="font-size:0.78rem; color:{text2}">
+                    Confidence: <b style="color:{text}">{conf:.0f}%</b>
+                    &nbsp;|&nbsp; ~{months_in} months in phase
+                    &nbsp;|&nbsp; ~{months_next} months to next transition
+                </div>
+            </div>
+        </div>
+        """.format(
+            phase_color=phase_color,
+            phase_bg="rgba({},{},{},0.18)".format(
+                *[int(phase_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)]
+            ),
+            phase_border=phase_color + "80",
+            phase_glow=phase_color + "40",
+            card=C_CARD,
+            badge=badge_label,
+            desc=badge_desc,
+            text3=C_TEXT3, text=C_TEXT, text2=C_TEXT2,
+            conf=timing.confidence * 100,
+            months_in=timing.months_in_current_phase,
+            months_next=timing.estimated_months_to_next_phase,
+        ),
+        unsafe_allow_html=True,
+    )
 
     metrics = [
         {

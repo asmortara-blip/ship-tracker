@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 from datetime import date, timedelta
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
@@ -180,6 +181,23 @@ def _eta_card_html(eta: ShipmentETA) -> str:
 
     conf_pct = str(round(eta.confidence * 100)) + "%"
 
+    # Confidence interval: half-width ~ (1 - confidence) × transit × 0.5
+    # Shown only when confidence < 0.90 (wide enough to be informative)
+    ci_half = (1.0 - eta.confidence) * eta.nominal_transit_days * 0.5
+    ci_html = ""
+    if eta.confidence < 0.90 and ci_half >= 0.5:
+        ci_html = (
+            '<div style="margin-top:6px; font-size:0.7rem; color:' + _C_TEXT3 + '">'
+            "ETA range: "
+            + str(round(eta.total_eta_days - ci_half, 1))
+            + "d – "
+            + str(round(eta.total_eta_days + ci_half, 1))
+            + "d&nbsp;&nbsp;("
+            + str(round(ci_half, 1))
+            + "d CI half-width)"
+            "</div>"
+        )
+
     return (
         '<div style="background:' + _C_CARD + '; border:1px solid ' + _C_BORDER + ';'
         ' border-left:4px solid ' + risk_color + '; border-radius:12px;'
@@ -227,10 +245,11 @@ def _eta_card_html(eta: ShipmentETA) -> str:
         # Optimal departure
         + savings_str
 
-        # Confidence footer
+        # Confidence footer + CI
         + '<div style="margin-top:8px; font-size:0.68rem; color:' + _C_TEXT3 + '">'
         + "Confidence: " + conf_pct
         + "</div>"
+        + ci_html
         + "</div>"
     )
 
@@ -500,6 +519,8 @@ def _render_congestion_timeline(port_results: list) -> None:
     today = date.today()
     dates: list[str] = []
     values: list[float] = []
+    ci_upper: list[float] = []
+    ci_lower: list[float] = []
     for day in range(31):
         future = today + timedelta(days=day)
         day_of_year = future.timetuple().tm_yday
@@ -508,8 +529,12 @@ def _render_congestion_timeline(port_results: list) -> None:
         alpha = 0.03 * day
         projected = baseline_cong * math.exp(-alpha * 0.05) + 0.5 * (1 - math.exp(-alpha * 0.05)) + seasonal_wave
         projected = max(0.0, min(1.0, projected))
+        # CI widens linearly with forecast horizon (±3% at day 0 → ±12% at day 30)
+        ci_half = 0.03 + 0.003 * day
         dates.append(future.isoformat())
         values.append(round(projected, 4))
+        ci_upper.append(round(min(1.0, projected + ci_half), 4))
+        ci_lower.append(round(max(0.0, projected - ci_half), 4))
 
     # Threshold bands
     fig = go.Figure()
@@ -547,6 +572,29 @@ def _render_congestion_timeline(port_results: list) -> None:
         annotation_position="right",
         annotation_font=dict(color=_C_HIGH, size=9),
     )
+
+    # Confidence interval upper band (invisible line, used for fill reference)
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=ci_upper,
+        mode="lines",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+        name="ci_upper",
+    ))
+    # CI lower band — fills to upper, creating the shaded interval
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=ci_lower,
+        mode="lines",
+        line=dict(width=0),
+        fill="tonexty",
+        fillcolor="rgba(59,130,246,0.12)",
+        showlegend=True,
+        name="95% CI",
+        hoverinfo="skip",
+    ))
 
     # Congestion line
     fig.add_trace(go.Scatter(
@@ -589,19 +637,66 @@ def _render_congestion_timeline(port_results: list) -> None:
             tickfont=dict(size=10, color=_C_TEXT3),
             zerolinecolor="rgba(255,255,255,0.1)",
         ),
-        showlegend=False,
+        showlegend=True,
+        legend=dict(
+            font=dict(color=_C_TEXT2, size=10),
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor="rgba(255,255,255,0.08)",
+            x=0.01, y=0.99,
+            xanchor="left", yanchor="top",
+        ),
         hoverlabel=dict(
             bgcolor=_C_CARD,
             bordercolor="rgba(255,255,255,0.15)",
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_congestion_timeline")
     st.caption(
         "Sinusoidal seasonal model + mean reversion from current baseline ("
         + str(round(baseline_cong, 3))
         + ") for "
         + selected_option
+    )
+
+
+# ---------------------------------------------------------------------------
+# CSV Export helper
+# ---------------------------------------------------------------------------
+
+def _export_eta_csv(etas: list[ShipmentETA]) -> None:
+    """Render a CSV download button for the ETA predictions table."""
+    if not etas:
+        return
+    rows = []
+    for e in etas:
+        route = ROUTES_BY_ID.get(e.route_id)
+        route_name = route.name if route else e.route_id
+        ci_half = (1.0 - e.confidence) * e.nominal_transit_days * 0.5
+        rows.append({
+            "Route": route_name,
+            "Origin": e.origin_port,
+            "Destination": e.dest_port,
+            "Nominal Transit (d)": e.nominal_transit_days,
+            "Predicted Delay (d)": e.predicted_delay_days,
+            "Total ETA (d)": e.total_eta_days,
+            "CI Lower (d)": round(e.total_eta_days - ci_half, 1),
+            "CI Upper (d)": round(e.total_eta_days + ci_half, 1),
+            "Confidence": round(e.confidence, 3),
+            "Congestion Risk": e.congestion_risk,
+            "Optimal Departure Week": e.optimal_departure_week,
+            "Rate at Optimal (USD/FEU)": e.rate_at_optimal,
+            "Cost Savings vs Now (USD/FEU)": e.cost_savings_vs_now,
+            "Delay Drivers": "; ".join(e.delay_drivers),
+        })
+    df_export = pd.DataFrame(rows)
+    csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download ETA predictions CSV",
+        data=csv_bytes,
+        file_name="eta_predictions.csv",
+        mime="text/csv",
+        key="eta_download_csv",
     )
 
 
@@ -642,6 +737,9 @@ def render(
     # ── Route ETA Cards ───────────────────────────────────────────────────────
     _divider("Route ETA Cards")
     _render_eta_cards(etas)
+
+    # ── CSV Download ──────────────────────────────────────────────────────────
+    _export_eta_csv(etas)
 
     # ── Departure Calendar ────────────────────────────────────────────────────
     _divider("4-Week Departure Calendar")

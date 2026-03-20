@@ -268,6 +268,10 @@ def _render_weather_globe() -> None:
     # ── Risk zone blurred circles — layered opacity rings per system ──────
     import math
     for system in _WEATHER_SYSTEM_CENTERS:
+        # Guard: skip entries missing required coordinate keys
+        if system.get("lat") is None or system.get("lon") is None:
+            logger.warning("Weather system {} missing lat/lon — skipping", system.get("name", "?"))
+            continue
         is_active = system["event_name"] in active_event_names
         base_color = _RISK_TYPE_COLOR.get(system["risk_type"], C_TEXT2)
         base_size = 55 if is_active else 35
@@ -349,12 +353,17 @@ def _render_weather_globe() -> None:
         ))
 
     # ── Affected ports — amber/red highlights ─────────────────────────────
-    port_lats = [p["lat"] for p in _AFFECTED_PORT_COORDS]
-    port_lons = [p["lon"] for p in _AFFECTED_PORT_COORDS]
-    port_colors = [C_DANGER if p["risk"] == "HIGH" else C_WARN for p in _AFFECTED_PORT_COORDS]
+    # Guard: skip any port entries missing lat/lon coordinates
+    valid_ports = [
+        p for p in _AFFECTED_PORT_COORDS
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+    port_lats = [p["lat"] for p in valid_ports]
+    port_lons = [p["lon"] for p in valid_ports]
+    port_colors = [C_DANGER if p["risk"] == "HIGH" else C_WARN for p in valid_ports]
     port_hover = [
         "<b>" + p["name"] + "</b> (" + p["locode"] + ")<br>Weather Risk: " + p["risk"]
-        for p in _AFFECTED_PORT_COORDS
+        for p in valid_ports
     ]
 
     # Port glow layer
@@ -404,6 +413,7 @@ def _render_weather_globe() -> None:
         ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         height=500,
         margin=dict(l=0, r=0, t=0, b=0),
@@ -435,7 +445,7 @@ def _render_weather_globe() -> None:
         font=dict(color=C_TEXT),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="weather_globe_chart")
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +575,7 @@ def _render_seasonal_calendar() -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         height=380,
@@ -583,7 +594,7 @@ def _render_seasonal_calendar() -> None:
         shapes=shapes,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="weather_seasonal_calendar_chart")
 
 
 # ---------------------------------------------------------------------------
@@ -698,13 +709,7 @@ def _render_current_alerts() -> None:
     alerts = get_current_season_alerts()
 
     if not alerts:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid " + C_BORDER + ";"
-            " border-radius:10px; padding:20px; text-align:center; color:" + C_TEXT2 + "\">"
-            "No active weather alerts for the current month."
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        st.success("✅ No major weather disruptions affecting tracked routes this month.")
         return
 
     month_name = _MONTH_NAMES[datetime.date.today().month - 1]
@@ -830,6 +835,7 @@ def _render_route_profile(route_id: str) -> None:
         name=display_name,
     ))
     fig_bar.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         height=220,
@@ -850,7 +856,7 @@ def _render_route_profile(route_id: str) -> None:
         showlegend=False,
         bargap=0.12,
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, use_container_width=True, key="weather_route_monthly_bar_chart")
 
     # ── Top 3 weather risks ───────────────────────────────────────────────
     if events:
@@ -925,11 +931,36 @@ def _render_route_profile(route_id: str) -> None:
     )
 
     # ── Weather-adjusted vs nominal ETA ──────────────────────────────────
+    # Derive a confidence level from the number and quality of data events
+    if events:
+        avg_confidence = sum(
+            ev.probability_pct for ev in events
+        ) / len(events)
+        if len(events) >= 5 and avg_confidence >= 60:
+            conf_label = "High"
+            conf_color = C_HIGH
+        elif len(events) >= 2 or avg_confidence >= 35:
+            conf_label = "Medium"
+            conf_color = C_WARN
+        else:
+            conf_label = "Low"
+            conf_color = C_ORANGE
+    else:
+        conf_label = "Low (no event data)"
+        conf_color = C_TEXT3
+
     st.markdown(
         "<div style=\"background:" + C_CARD + "; border:1px solid " + C_BORDER + ";"
         " border-radius:10px; padding:14px 16px; margin-top:10px\">"
-        "<div style=\"font-size:0.72rem; font-weight:700; color:" + C_TEXT + ";"
-        " margin-bottom:10px\">ETA Comparison (days transit)</div>"
+        "<div style=\"display:flex; justify-content:space-between; align-items:center;"
+        " margin-bottom:10px\">"
+        "<div style=\"font-size:0.72rem; font-weight:700; color:" + C_TEXT + "\">"
+        "ETA Comparison (days transit)</div>"
+        "<div style=\"font-size:0.68rem; color:" + C_TEXT3 + "\">"
+        "Estimate confidence: "
+        "<span style=\"font-weight:700; color:" + conf_color + "\">" + conf_label + "</span>"
+        "</div>"
+        "</div>"
         "<div style=\"display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;"
         " text-align:center\">"
         # Nominal
@@ -1164,6 +1195,43 @@ def render(route_results, port_results) -> None:
     )
     selected_route_id = route_options[selected_display]
     _render_route_profile(selected_route_id)
+
+    # CSV export for all-route weather risk summary
+    import io as _wio, csv as _wcsv
+
+    def _route_risk_csv() -> bytes:
+        buf = _wio.StringIO()
+        w = _wcsv.writer(buf)
+        w.writerow([
+            "Route ID", "Display Name", "Risk Score (%)",
+            "Ann. Delay Days", "Hist. Disruption Freq (%)",
+            "Expected ETA (days)", "Worst-Case ETA (days)",
+        ])
+        for rid in ALL_ROUTE_IDS:
+            try:
+                ridx = compute_route_weather_risk(rid)
+                nom = get_nominal_transit_days(rid)
+                exp_d, wst_d = compute_weather_adjusted_eta(rid, float(nom))
+                w.writerow([
+                    rid,
+                    ROUTE_DISPLAY_NAMES.get(rid, rid),
+                    int(ridx.current_risk_score * 100),
+                    round(ridx.annualized_delay_days, 1),
+                    ridx.historical_disruption_frequency_pct,
+                    exp_d,
+                    wst_d,
+                ])
+            except Exception:
+                pass
+        return buf.getvalue().encode()
+
+    st.download_button(
+        label="⬇ Download all-route weather risk CSV",
+        data=_route_risk_csv(),
+        file_name="weather_route_risk_summary.csv",
+        mime="text/csv",
+        key="dl_route_risk_csv",
+    )
 
     st.divider()
 

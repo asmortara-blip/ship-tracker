@@ -116,7 +116,10 @@ def fetch_macro_series(
         dict mapping series_id → normalized DataFrame with MACRO_COLS columns.
         Empty dict if FRED API key not set or fredapi not installed.
     """
-    api_key = os.getenv("FRED_API_KEY", "")
+    try:
+        api_key = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
+    except Exception:
+        api_key = os.getenv("FRED_API_KEY", "")
     if not api_key:
         logger.warning("FRED_API_KEY not set — returning empty macro data")
         return {}

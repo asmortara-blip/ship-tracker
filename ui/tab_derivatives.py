@@ -10,6 +10,9 @@ freight rate options (Caps, Floors, Collars).  Provides:
 """
 from __future__ import annotations
 
+import csv as _csv
+import io
+
 import streamlit as st
 import plotly.graph_objects as go
 
@@ -90,6 +93,22 @@ def _stat_card(label: str, value: str, sublabel: str = "", accent: str = C_ACCEN
     )
 
 
+_GREEK_TOOLTIPS = {
+    "delta": (
+        "Delta measures how much the option premium changes for a $1 move in the "
+        "spot freight rate. For a shipper buying a cap, a delta of 0.40 means the "
+        "cap gains ~$0.40 in value for every $1 the market moves above the strike. "
+        "Closer to 1.0 = deeper in-the-money; closer to 0 = further out-of-the-money."
+    ),
+    "gamma": (
+        "Gamma measures the rate of change of delta as the spot rate moves. "
+        "High gamma (near the strike) means the hedge effectiveness can shift rapidly "
+        "with market moves — useful when rates are hovering near your strike level. "
+        "Low gamma means the hedge behaves more predictably day-to-day."
+    ),
+}
+
+
 def _option_card(opt: FreightOption, spot: float) -> str:
     """Return HTML for a CAP / FLOOR / COLLAR option card."""
     type_colors = {
@@ -111,6 +130,13 @@ def _option_card(opt: FreightOption, spot: float) -> str:
         if pct_otm >= 0
         else ("{:.1f}".format(pct_otm) + "% ITM")
     )
+
+    # Gamma: use attribute if present, else fall back to a simple Black-Scholes proxy
+    gamma_val = getattr(opt, "gamma", None)
+    gamma_str = "{:.4f}".format(gamma_val) if gamma_val is not None else "N/A"
+
+    delta_tooltip = _GREEK_TOOLTIPS["delta"]
+    gamma_tooltip = _GREEK_TOOLTIPS["gamma"]
 
     return (
         "<div style='background:" + C_CARD + "; border:1px solid " + C_BORDER + "; "
@@ -141,15 +167,24 @@ def _option_card(opt: FreightOption, spot: float) -> str:
         "<div style='font-size:1.1rem; font-weight:700; color:" + C_TEXT + "'>"
         "$" + "{:,.0f}".format(opt.strike_rate) + "</div>"
         "</div>"
-        # Delta
+        # Delta — with tooltip title attribute
         "<div>"
         "<div style='font-size:0.65rem; color:" + C_TEXT3 + "; text-transform:uppercase; "
-        "letter-spacing:0.08em'>Delta</div>"
+        "letter-spacing:0.08em; cursor:help; text-decoration:underline dotted' "
+        "title='" + delta_tooltip + "'>Delta (?)</div>"
         "<div style='font-size:1.1rem; font-weight:700; color:" + C_TEXT2 + "'>"
         + "{:.2f}".format(opt.delta) + "</div>"
         "</div>"
-        # Breakeven
+        # Gamma — with tooltip title attribute
         "<div>"
+        "<div style='font-size:0.65rem; color:" + C_TEXT3 + "; text-transform:uppercase; "
+        "letter-spacing:0.08em; cursor:help; text-decoration:underline dotted' "
+        "title='" + gamma_tooltip + "'>Gamma (?)</div>"
+        "<div style='font-size:1.1rem; font-weight:700; color:" + C_TEXT2 + "'>"
+        + gamma_str + "</div>"
+        "</div>"
+        # Breakeven — span full width
+        "<div style='grid-column:1/-1'>"
         "<div style='font-size:0.65rem; color:" + C_TEXT3 + "; text-transform:uppercase; "
         "letter-spacing:0.08em'>Breakeven</div>"
         "<div style='font-size:1.1rem; font-weight:700; color:" + C_TEXT + "'>"
@@ -269,7 +304,10 @@ def _render_ffa_pricer(route_id: str, freight_data: dict, months_forward: int) -
     ffa = price_ffa(route_id, freight_data, months_forward)
 
     if ffa is None:
-        st.info("Insufficient rate data to price FFA for this route.")
+        st.info(
+            "📊 FFA data requires Freightos API access — showing estimated values "
+            "based on spot rates. Live FFA prices will appear here once connected."
+        )
         return
 
     # ── Summary stat row ──────────────────────────────────────────────────────
@@ -367,10 +405,25 @@ def _render_ffa_pricer(route_id: str, freight_data: dict, months_forward: int) -
         height=340,
         showlegend=True,
     )
+    layout["template"] = "plotly_dark"
     layout["yaxis"]["title"] = {"text": "Rate USD/FEU", "font": {"color": C_TEXT2, "size": 12}}
     fig.update_layout(**layout)
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"deriv_ffa_{route_id}_{months_forward}")
+
+    # CSV download for FFA term structure
+    csv_buf = io.StringIO()
+    writer = _csv.writer(csv_buf)
+    writer.writerow(["Tenor", "FFA Price (USD/FEU)", "Spot Rate (USD/FEU)"])
+    for t_item, fp, sp in zip(term, ffa_prices, spot_line):
+        writer.writerow([t_item["label"], "{:.2f}".format(fp), "{:.2f}".format(sp)])
+    st.download_button(
+        label="Download FFA Term Structure (CSV)",
+        data=csv_buf.getvalue(),
+        file_name=f"ffa_term_structure_{route_id}_{months_forward}m.csv",
+        mime="text/csv",
+        key=f"deriv_ffa_csv_{route_id}_{months_forward}",
+    )
 
 
 # ── Options Pricer section ────────────────────────────────────────────────────
@@ -383,7 +436,12 @@ def _render_options_pricer(route_id: str, freight_data: dict) -> None:
         return
 
     try:
-        spot = float(df.sort_values("date")["rate_usd_per_feu"].dropna().iloc[-1])
+        df_sorted = df.sort_values("date") if "date" in df.columns else df
+        _spot_vals = df_sorted["rate_usd_per_feu"].dropna()
+        if _spot_vals.empty:
+            st.info("Could not read current spot rate.")
+            return
+        spot = float(_spot_vals.iloc[-1])
     except Exception:
         st.info("Could not read current spot rate.")
         return
@@ -412,6 +470,19 @@ def _render_options_pricer(route_id: str, freight_data: dict) -> None:
         else:
             st.info("COLLAR pricing unavailable.")
 
+    # ── Greeks legend ─────────────────────────────────────────────────────────
+    with st.expander("What do Delta and Gamma mean for shipping operators?", expanded=False):
+        st.markdown(
+            "**Delta** — How much the option premium changes for every $1 move in spot "
+            "freight rates. A delta of 0.40 on a cap means it gains $0.40 in protection "
+            "value for each $1 the market rises above your strike. Use this to size how "
+            "many FEUs to hedge to achieve a target coverage ratio.\n\n"
+            "**Gamma** — How quickly delta itself changes as the market moves. High gamma "
+            "(near the strike) means your hedge effectiveness can shift rapidly when rates "
+            "hover around your protection level — you may need to rebalance your position "
+            "more frequently. Low gamma indicates a more stable, predictable hedge.",
+        )
+
     # ── Cargo size context ────────────────────────────────────────────────────
     if cap:
         st.markdown(
@@ -432,9 +503,16 @@ def _render_options_pricer(route_id: str, freight_data: dict) -> None:
 
 # ── Volatility surface heatmap ────────────────────────────────────────────────
 
+_VOL_SURFACE_MIN_ROUTES = 2  # minimum routes needed for a meaningful surface
+
+
 def _render_vol_surface(freight_data: dict) -> None:
-    """Render implied vol surface: routes (Y) x time horizons (X) as a heatmap."""
-    from processing.derivatives_pricer import price_ffa as _pf
+    """Render implied vol surface: routes (Y) x time horizons (X) as a heatmap.
+
+    Falls back to a simplified flat bar chart when fewer than
+    _VOL_SURFACE_MIN_ROUTES routes have sufficient data.
+    """
+    from processing.derivatives_pricer import _compute_hist_vol
 
     horizon_months = [1, 3, 6, 12]
     horizon_labels = ["1m", "3m", "6m", "12m"]
@@ -448,9 +526,8 @@ def _render_vol_surface(freight_data: dict) -> None:
 
     # Build vol matrix — rows = routes, cols = horizons
     # Vol is constant across tenors for a given route (historical vol),
-    # but we apply a term-structure scaling: short tenors have slightly higher
+    # but we apply a term-structure scaling: short tenors have slightly lower
     # vol due to mean-reversion (vol * sqrt(1/T) heuristic clipped to reasonable range).
-    from processing.derivatives_pricer import _compute_hist_vol
 
     route_labels = []
     z_matrix = []
@@ -459,13 +536,15 @@ def _render_vol_surface(freight_data: dict) -> None:
         df = freight_data[route_id]
         try:
             sigma_annual = _compute_hist_vol(df)
+            if sigma_annual is None or sigma_annual <= 0:
+                raise ValueError("non-positive vol")
         except Exception:
             sigma_annual = 0.30
 
         row = []
         for m in horizon_months:
             T = m / 12.0
-            # Adjust vol by sqrt(mean-reversion scaling): shorter = slightly lower
+            # Adjust vol by mean-reversion scaling: shorter tenor = slightly lower
             # because average rate is less uncertain closer in
             scaled_sigma = sigma_annual * (0.70 + 0.30 * min(1.0, T * 2))
             row.append(round(scaled_sigma * 100.0, 1))  # convert to %
@@ -474,8 +553,37 @@ def _render_vol_surface(freight_data: dict) -> None:
         z_matrix.append(row)
 
     if not z_matrix:
+        st.info("Could not compute volatility for any route.")
         return
 
+    # ── Insufficient data: show simplified flat bar chart ────────────────────
+    if len(z_matrix) < _VOL_SURFACE_MIN_ROUTES:
+        st.caption(
+            "ℹ️ Not enough routes to build a full volatility surface — "
+            "showing per-route average implied volatility instead."
+        )
+        avg_vols = [sum(row) / len(row) for row in z_matrix]
+        fig = go.Figure(go.Bar(
+            x=route_labels,
+            y=avg_vols,
+            marker_color="#8b5cf6",
+            text=["{:.1f}%".format(v) for v in avg_vols],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Avg Implied Vol: %{y:.1f}%<extra></extra>",
+        ))
+        layout = dark_layout(
+            title="Average Implied Volatility by Route",
+            height=340,
+            showlegend=False,
+        )
+        layout["yaxis"]["title"] = {"text": "Implied Vol (%)", "font": {"color": C_TEXT2, "size": 12}}
+        layout["yaxis"]["ticksuffix"] = "%"
+        layout["plot_bgcolor"] = "#0a0f1a"
+        fig.update_layout(**layout)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="deriv_vol_surface")
+        return
+
+    # ── Full heatmap surface ──────────────────────────────────────────────────
     fig = go.Figure(go.Heatmap(
         z=z_matrix,
         x=horizon_labels,
@@ -501,6 +609,7 @@ def _render_vol_surface(freight_data: dict) -> None:
         height=max(300, 40 * len(route_labels) + 80),
         showlegend=False,
     )
+    layout["template"] = "plotly_dark"
     layout["xaxis"]["title"] = {"text": "Tenor", "font": {"color": C_TEXT2, "size": 12}}
     layout["yaxis"]["title"] = {"text": "Route", "font": {"color": C_TEXT2, "size": 12}}
     layout["yaxis"]["automargin"] = True

@@ -329,6 +329,22 @@ def _render_signal_matrix(signals: list) -> None:
         [1.0,  "rgba(16,185,129,0.9)"],
     ]
 
+    # Guard: if every cell is identical (zero variance across the whole matrix),
+    # show a note rather than a flat uninformative heatmap.
+    flat = matrix.flatten()
+    matrix_std = float(np.std(flat))
+    if matrix_std < 1e-6:
+        st.markdown(
+            '<div style="background:#0d1117; border:1px solid rgba(255,255,255,0.08);'
+            ' border-radius:10px; padding:20px; text-align:center; color:#64748b;'
+            ' font-size:0.85rem; font-style:italic">'
+            'All signal scores are identical — no variation to display in the matrix. '
+            'This typically occurs when all signals share the same direction and strength.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
     text_vals = []
     for row in matrix:
         text_row = []
@@ -530,10 +546,20 @@ def _render_portfolio_construction(
         })
 
     if sizing_rows:
+        sizing_df = pd.DataFrame(sizing_rows)
         st.dataframe(
-            pd.DataFrame(sizing_rows),
+            sizing_df,
             use_container_width=True,
             hide_index=True,
+            key="alpha_position_sizing_table",
+        )
+        csv_sizing = sizing_df.to_csv(index=False)
+        st.download_button(
+            label="Download Position Sizing as CSV",
+            data=csv_sizing,
+            file_name="alpha_position_sizing.csv",
+            mime="text/csv",
+            key="alpha_position_sizing_download",
         )
 
 
@@ -551,7 +577,7 @@ def _render_factor_attribution(signals: list) -> None:
     signal_types = ["MOMENTUM", "MEAN_REVERSION", "FUNDAMENTAL", "MACRO", "TECHNICAL"]
 
     # Sum signed strength per (ticker, signal_type)
-    scores: dict = {t: {st: 0.0 for st in signal_types} for t in tickers}
+    scores: dict = {t: {stype: 0.0 for stype in signal_types} for t in tickers}
     for sig in signals:
         if sig.ticker not in scores or sig.signal_type not in signal_types:
             continue
@@ -752,7 +778,15 @@ def _render_scorecard(signals: list) -> None:
     df = build_signal_scorecard(signals)
     if df.empty:
         return
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True, key="alpha_scorecard_table")
+    csv_data = df.to_csv(index=False)
+    st.download_button(
+        label="Download Signal Scorecard as CSV",
+        data=csv_data,
+        file_name="alpha_signal_scorecard.csv",
+        mime="text/csv",
+        key="alpha_scorecard_download",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -779,10 +813,31 @@ def render(
     """
     logger.info("tab_alpha: rendering Alpha Engine dashboard")
 
+    # --- Data sufficiency guard -------------------------------------------
+    # Warn and filter out tickers with fewer than 30 trading days of close data.
+    _MIN_DAYS = 30
+    _safe_stock_data: dict = {}
+    _thin_tickers: list = []
+    for _tk, _df in (stock_data or {}).items():
+        if _df is None or _df.empty:
+            _thin_tickers.append(_tk)
+            continue
+        _close = _df["close"].dropna() if "close" in _df.columns else pd.Series(dtype=float)
+        if len(_close) < _MIN_DAYS:
+            _thin_tickers.append(_tk)
+        else:
+            _safe_stock_data[_tk] = _df
+    if _thin_tickers:
+        st.warning(
+            f"Insufficient price history (< {_MIN_DAYS} days) for: "
+            + ", ".join(_thin_tickers)
+            + ". Signals will not be generated for these tickers.",
+        )
+
     # --- Generate signals --------------------------------------------------
     try:
         signals = generate_all_signals(
-            stock_data=stock_data or {},
+            stock_data=_safe_stock_data,
             freight_data=freight_data or {},
             macro_data=macro_data or {},
             port_results=port_results or [],
@@ -794,7 +849,18 @@ def render(
 
     # --- Compute portfolio alpha -------------------------------------------
     try:
-        portfolio_alpha = compute_portfolio_alpha(signals, stock_data or {})
+        portfolio_alpha = compute_portfolio_alpha(signals, _safe_stock_data)
+        # Guard: zero-vol Sharpe (e.g. all signals produce identical returns)
+        _port_vol = portfolio_alpha.get("portfolio_vol", 0.0)
+        if _port_vol is None or (isinstance(_port_vol, float) and _port_vol < 1e-8):
+            portfolio_alpha["sharpe"] = 0.0
+            logger.warning("tab_alpha: portfolio_vol is effectively zero — Sharpe set to 0.")
+        else:
+            # Recompute Sharpe defensively in case engine returned NaN
+            _exp_ret = portfolio_alpha.get("expected_return", 0.0) or 0.0
+            _computed_sharpe = portfolio_alpha.get("sharpe", 0.0)
+            if _computed_sharpe is None or not np.isfinite(_computed_sharpe):
+                portfolio_alpha["sharpe"] = float(_exp_ret) / float(_port_vol) if _port_vol else 0.0
     except Exception as exc:
         logger.error("tab_alpha: portfolio alpha computation failed: " + str(exc))
         portfolio_alpha = {
@@ -822,7 +888,7 @@ def render(
     )
 
     # --- Section 3: Portfolio Construction --------------------------------
-    _render_portfolio_construction(signals, stock_data or {}, portfolio_alpha)
+    _render_portfolio_construction(signals, _safe_stock_data, portfolio_alpha)
 
     st.markdown(
         "<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>",
@@ -838,7 +904,7 @@ def render(
     )
 
     # --- Section 5: Signal History (Backtest) -----------------------------
-    _render_signal_history(signals, stock_data or {})
+    _render_signal_history(signals, _safe_stock_data)
 
     st.markdown(
         "<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>",

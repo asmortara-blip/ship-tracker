@@ -19,8 +19,10 @@ Integration
 from __future__ import annotations
 
 import datetime
+import math
 from typing import Any
 
+import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -91,6 +93,18 @@ ZONE_COLORS: dict[str, str] = {
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
+def _fmt_or_na(value: Any, fmt: str) -> str:
+    """Format *value* with *fmt*, or return 'N/A' if value is None or NaN."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, float) and math.isnan(value):
+        return "N/A"
+    try:
+        return fmt.format(value)
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -112,6 +126,7 @@ def _divider(label: str) -> None:
 def _dark_layout(height: int = 400, title: str = "") -> dict:
     t = {"text": title, "font": {"size": 13, "color": C_TEXT2}, "x": 0.01} if title else {}
     return dict(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_SURFACE,
         font=dict(color=C_TEXT, family="Inter, sans-serif", size=11),
@@ -246,7 +261,7 @@ def _render_shipping_cycle() -> None:
         )
 
     # ── Supporting indicators list ────────────────────────────────────────────
-    with st.expander("Supporting Data Points", expanded=False):
+    with st.expander("Supporting Data Points", expanded=False, key="fundamentals_cycle_supporting_data"):
         for indicator in cycle.supporting_indicators:
             st.markdown(
                 '<div style="display:flex;align-items:flex-start;gap:8px;'
@@ -453,9 +468,12 @@ def _render_comparison_matrix() -> None:
     tickers = [r["Ticker"] for r in rows]
     ticker_colors_list = [TICKER_COLORS.get(t, C_ACCENT) for t in tickers]
 
-    # Colour scaling: find min/max per metric
-    def _gradient(val: float, vals: list, higher_better: bool) -> str:
-        mn, mx = min(vals), max(vals)
+    # Colour scaling: find min/max per metric — skip None values
+    def _gradient(val: Any, vals: list, higher_better: bool) -> str:
+        numeric = [v for v in vals if v is not None]
+        if val is None or not numeric:
+            return C_TEXT3
+        mn, mx = min(numeric), max(numeric)
         if mx == mn:
             return C_TEXT2
         norm = (val - mn) / (mx - mn)
@@ -488,7 +506,7 @@ def _render_comparison_matrix() -> None:
                 '<td style="padding:9px 14px;text-align:center;'
                 'font-size:0.82rem;font-weight:700;color:{};'
                 'border-bottom:1px solid {}">{}</td>'.format(
-                    col, C_BORDER, fmt.format(v),
+                    col, C_BORDER, _fmt_or_na(v, fmt),
                 )
             )
         rows_html_parts.append(
@@ -561,6 +579,16 @@ def _render_comparison_matrix() -> None:
         'Valuation Zone based on EV/EBITDA vs 10-year historical range.'
         '</div>'.format(C_TEXT3),
         unsafe_allow_html=True,
+    )
+
+    # CSV export
+    matrix_df = pd.DataFrame(rows)
+    st.download_button(
+        label="Download Comparison Matrix CSV",
+        data=matrix_df.to_csv(index=False).encode("utf-8"),
+        file_name="shipping_comparison_matrix.csv",
+        mime="text/csv",
+        key="fundamentals_matrix_download",
     )
 
 
@@ -798,29 +826,41 @@ def _render_valuation_dashboard() -> None:
                     accent=tc,
                 )
 
-            # Summary strip
-            nd_ebitda = fund.net_debt_b / fund.ebitda_b if fund.ebitda_b > 0 else 0.0
+            # Summary strip — guard zero/None EBITDA and None P/B / debt values
+            nd_ebitda = (
+                fund.net_debt_b / fund.ebitda_b
+                if (fund.ebitda_b is not None and fund.ebitda_b > 0)
+                else 0.0
+            )
+            _pt_str = _fmt_or_na(fund.price_target_usd, "${:.2f}")
+            _upside_str = _fmt_or_na(fund.upside_pct, "{:.1f}%")
+            _nd_str = "{:.1f}x".format(nd_ebitda)
             rating_color = RATING_COLORS.get(fund.analyst_rating, C_TEXT3)
+            _upside_color = (
+                C_HIGH if (fund.upside_pct is not None and fund.upside_pct > 15)
+                else C_TEXT2
+            )
+            _ni_str = _fmt_or_na(norm_ni, "${:.3f}B")
             st.markdown(
                 '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;'
                 'padding-top:12px;border-top:1px solid {}">'
                 '<span style="font-size:0.75rem;color:{}">'
                 'Analyst: <b style="color:{}">{}</b></span>'
                 '<span style="font-size:0.75rem;color:{}">'
-                'PT: <b style="color:{}">${:.2f}</b></span>'
+                'PT: <b style="color:{}">{}</b></span>'
                 '<span style="font-size:0.75rem;color:{}">'
-                'Upside: <b style="color:{}">{:.1f}%</b></span>'
+                'Upside: <b style="color:{}">{}</b></span>'
                 '<span style="font-size:0.75rem;color:{}">'
-                'Net Debt/EBITDA: <b style="color:{}">{:.1f}x</b></span>'
+                'Net Debt/EBITDA: <b style="color:{}">{}</b></span>'
                 '<span style="font-size:0.75rem;color:{}">'
-                'Normalised NI: <b style="color:{}">${:.3f}B</b></span>'
+                'Normalised NI: <b style="color:{}">{}</b></span>'
                 '</div>'.format(
                     C_BORDER,
                     C_TEXT3, rating_color, fund.analyst_rating,
-                    C_TEXT3, tc, fund.price_target_usd,
-                    C_TEXT3, C_HIGH if fund.upside_pct > 15 else C_TEXT2, fund.upside_pct,
-                    C_TEXT3, C_MOD if nd_ebitda > 3 else C_TEXT2, nd_ebitda,
-                    C_TEXT3, tc, norm_ni,
+                    C_TEXT3, tc, _pt_str,
+                    C_TEXT3, _upside_color, _upside_str,
+                    C_TEXT3, C_MOD if nd_ebitda > 3 else C_TEXT2, _nd_str,
+                    C_TEXT3, tc, _ni_str,
                 ),
                 unsafe_allow_html=True,
             )
@@ -828,7 +868,7 @@ def _render_valuation_dashboard() -> None:
 
 def _render_gauge(
     label: str,
-    value: float,
+    value: float | None,
     cheap: float,
     fair_lo: float,
     fair_hi: float,
@@ -839,6 +879,18 @@ def _render_gauge(
     accent: str,
 ) -> None:
     """Render a Plotly bullet/indicator gauge with cheap/fair/expensive zones."""
+    if value is None:
+        st.markdown(
+            '<div style="background:{};border:1px solid {};border-radius:10px;'
+            'padding:20px;text-align:center;color:{};font-size:0.82rem">'
+            '<div style="font-size:0.68rem;font-weight:700;color:{};'
+            'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">{}</div>'
+            'N/A — data unavailable'
+            '</div>'.format(C_CARD, C_BORDER, C_TEXT3, C_TEXT3, label),
+            unsafe_allow_html=True,
+        )
+        return
+
     # Determine zone color for needle
     if higher_expensive:
         needle_color = (
@@ -892,6 +944,7 @@ def _render_gauge(
         ),
     ))
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color=C_TEXT, family="Inter"),
         height=200,
@@ -1184,7 +1237,18 @@ def render(
         Dict series_id -> DataFrame from FRED / WorldBank.
         Used for macro overlay data if available.
     """
-    logger.info("Rendering Fundamentals tab")
+    logger.info(
+        "Rendering Fundamentals tab — stock_data tickers={tickers}",
+        tickers=list((stock_data or {}).keys()),
+    )
+
+    # Warn if yfinance price data is absent; sections fall back to static fundamentals
+    if not stock_data:
+        st.info(
+            "Live price data from yfinance is unavailable. "
+            "All sections will display using static fundamental estimates. "
+            "Refresh the app to retry fetching live data."
+        )
 
     # ── Tab header ─────────────────────────────────────────────────────────────
     st.markdown(

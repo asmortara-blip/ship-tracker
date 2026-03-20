@@ -330,6 +330,28 @@ def _render_status_bar() -> None:
         unsafe_allow_html=True,
     )
 
+    # Stale data warning — shown when any source is past its TTL
+    stale_sources = []
+    for bucket, mtime in mtimes.items():
+        ttl_s = _TTL_HOURS[bucket] * 3600
+        if mtime is None or (time.time() - mtime) > ttl_s:
+            stale_sources.append(bucket.upper())
+
+    if stale_sources:
+        stale_list = ", ".join(stale_sources)
+        st.markdown(
+            '<div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25);'
+            ' border-radius:8px; padding:8px 16px; margin-bottom:10px;'
+            ' display:flex; align-items:center; gap:10px">'
+            '<span style="font-size:1rem">&#9888;</span>'
+            '<span style="font-size:0.75rem; color:#f59e0b; font-weight:600">'
+            'Stale data detected: <strong>' + stale_list + '</strong>'
+            ' \u2014 click <em>Refresh Now</em> below or re-run data pipeline to update.'
+            '</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
 
 # ── Section 2: Signal Stream ───────────────────────────────────────────────────
 
@@ -564,8 +586,16 @@ def _render_signal_stream(
     if not items:
         st.markdown(
             '<div style="background:' + C_CARD + '; border:1px solid ' + C_BORDER + ';'
-            ' border-radius:12px; padding:32px; text-align:center">'
-            '<div style="font-size:0.9rem; color:' + C_TEXT2 + '">No signals yet \u2014 data loading or all within normal ranges.</div>'
+            ' border-radius:12px; padding:40px 32px; text-align:center">'
+            '<div style="font-size:2rem; margin-bottom:12px">&#128225;</div>'
+            '<div style="font-size:0.95rem; font-weight:700; color:' + C_TEXT + '; margin-bottom:6px">'
+            'No signals in feed yet'
+            '</div>'
+            '<div style="font-size:0.82rem; color:' + C_TEXT2 + '; line-height:1.5">'
+            'Waiting for data \u2014 all sources within normal ranges, or data is still loading.<br>'
+            'Signals appear here when freight rates move &gt;10%, stocks move &gt;2%, '
+            'or port demand exceeds 65%.'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1032,10 +1062,10 @@ def _render_port_heatmap(port_results: list) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="livefeed_port_heatmap")
 
     # Optional: port detail selector
-    with st.expander("Inspect a port"):
+    with st.expander("Inspect a port", key="livefeed_inspect_port_expander"):
         port_display_names = [getattr(p, "port_name", "?") for p in sorted_ports]
         selected_name = st.selectbox(
             "Select port",
@@ -1067,19 +1097,26 @@ def _render_port_heatmap(port_results: list) -> None:
                     unsafe_allow_html=True,
                 )
             with col_b:
-                vessels = getattr(match, "vessel_count", 0)
+                vessels = getattr(match, "vessel_count", None)
+                has_ais = getattr(match, "has_real_data", False) and vessels is not None
+                if has_ais:
+                    vessels_display = str(vessels)
+                    ais_sub = getattr(match, "region", "—")
+                else:
+                    vessels_display = "—"
+                    ais_sub = "&#128674; AIS data temporarily unavailable"
                 st.markdown(
                     '<div style="background:#0d1117; border:1px solid rgba(255,255,255,0.08);'
                     ' border-radius:10px; padding:12px 14px">'
                     '<div style="font-size:0.65rem; color:' + C_TEXT3 + '; text-transform:uppercase;'
                     ' letter-spacing:0.07em; margin-bottom:4px">Vessels (AIS)</div>'
                     '<div style="font-size:1.6rem; font-weight:800; color:' + C_TEXT + '">'
-                    + str(vessels) +
+                    + vessels_display +
                     '</div>'
                     '<div style="font-size:0.72rem; color:' + C_TEXT2 + '; margin-top:2px">'
-                    + getattr(match, "region", "—")
+                    + ais_sub
                     + '</div>'
-                    + '</div>',
+                    '</div>',
                     unsafe_allow_html=True,
                 )
             with col_c:
@@ -1198,7 +1235,7 @@ def render(
 
     # ── Section 1: Live Status Bar ────────────────────────────────────────
     _render_status_bar()
-    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 6 hours (AIS vessel data)")
+    st.caption(f"Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} \u2022 Refreshes every 6 hours (AIS vessel data)")
 
     # ── Section 2: Signal Stream ──────────────────────────────────────────
     with st.spinner("Loading live feed..."):

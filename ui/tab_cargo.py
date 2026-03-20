@@ -51,6 +51,7 @@ _ICONS: dict[str, str] = {
     "chemicals":   "🧪",
     "agriculture": "🌾",
     "metals":      "🔩",
+    "other":       "📦",
 }
 
 # Sankey node colors per category
@@ -62,6 +63,7 @@ _CAT_COLORS: dict[str, str] = {
     "chemicals":   "#14b8a6",
     "agriculture": "#84cc16",
     "metals":      "#94a3b8",
+    "other":       "#64748b",
 }
 
 # Signal-to-color map
@@ -186,6 +188,10 @@ def _card_html(analysis: CargoFlowAnalysis) -> str:
 def _render_category_grid(flows: list[CargoFlowAnalysis]) -> None:
     _divider("CARGO CATEGORY OVERVIEW")
 
+    if not flows:
+        st.info("No cargo flow data available. Category overview will appear once data is loaded.")
+        return
+
     ordered_keys = ["electronics", "machinery", "automotive", "apparel", "chemicals", "agriculture", "metals"]
     flow_map = {f.hs_category: f for f in flows}
 
@@ -224,6 +230,10 @@ def _render_category_grid(flows: list[CargoFlowAnalysis]) -> None:
 
 def _render_sankey(flows: list[CargoFlowAnalysis]) -> None:
     _divider("CARGO FLOW SANKEY — CATEGORY → REGION → DESTINATION")
+
+    if not flows:
+        st.info("Sankey diagram unavailable — no cargo flow data to display.")
+        return
 
     # Node layout: categories → origin regions → dest regions
     categories   = list(HS_CATEGORIES.keys())
@@ -273,10 +283,17 @@ def _render_sankey(flows: list[CargoFlowAnalysis]) -> None:
         ("metals",       "Middle East",        "Europe",             0.20),
     ]
 
+    def _hex_to_rgba(hex_color: str, alpha: float = 0.35) -> str:
+        h = hex_color.lstrip("#")
+        if len(h) == 6:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return "rgba(" + str(r) + "," + str(g) + "," + str(b) + "," + str(alpha) + ")"
+        return "rgba(100,116,139," + str(alpha) + ")"
+
     sources: list[int] = []
     targets: list[int] = []
     values_:  list[float] = []
-    link_colors: list[str] = []
+    link_colors_clean: list[str] = []
 
     for cat, orig, dest, weight in _CAT_REGION_FLOWS:
         cat_node  = cat
@@ -294,27 +311,17 @@ def _render_sankey(flows: list[CargoFlowAnalysis]) -> None:
         sources.append(node_idx[cat_node])
         targets.append(node_idx[orig_node])
         values_.append(flow_val)
-        link_colors.append(_CAT_COLORS.get(cat, "#64748b").replace(")", ",0.35)").replace("rgb", "rgba").replace("#", "rgba(") if "#" in _CAT_COLORS.get(cat, "") else "rgba(100,116,139,0.35)")
+        link_colors_clean.append(_hex_to_rgba(_CAT_COLORS.get(cat, "#64748b"), 0.40))
 
         # orig -> dest
         sources.append(node_idx[orig_node])
         targets.append(node_idx[dest_node])
         values_.append(flow_val)
-        link_colors.append("rgba(148,163,184,0.25)")
-
-    # Build proper hex -> rgba conversion for link colors
-    def _hex_to_rgba(hex_color: str, alpha: float = 0.35) -> str:
-        h = hex_color.lstrip("#")
-        if len(h) == 6:
-            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-            return "rgba(" + str(r) + "," + str(g) + "," + str(b) + "," + str(alpha) + ")"
-        return "rgba(100,116,139," + str(alpha) + ")"
-
-    link_colors_clean: list[str] = []
-    for cat, orig, dest, weight in _CAT_REGION_FLOWS:
-        hex_c = _CAT_COLORS.get(cat, "#64748b")
-        link_colors_clean.append(_hex_to_rgba(hex_c, 0.40))
         link_colors_clean.append("rgba(148,163,184,0.20)")
+
+    if not sources:
+        st.info("Sankey diagram unavailable — no valid flow links could be constructed.")
+        return
 
     fig = go.Figure(
         go.Sankey(
@@ -337,13 +344,14 @@ def _render_sankey(flows: list[CargoFlowAnalysis]) -> None:
         )
     )
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=_C_BG,
         plot_bgcolor=_C_SURFACE,
         height=400,
-        margin=dict(t=20, b=20, l=20, r=20),
+        margin=dict(l=40, r=20, t=40, b=40),
         font=dict(color=_C_TEXT, family="Inter, sans-serif", size=11),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cargo_sankey")
     st.caption("Flow weights are illustrative when live Comtrade data is unavailable. Thickness proportional to estimated trade value.")
 
 
@@ -358,6 +366,10 @@ def _render_seasonal_calendar() -> None:
     current_month = datetime.date.today().month
 
     cal = get_seasonal_cargo_calendar()
+
+    if not cal:
+        st.info("Seasonal calendar data unavailable.")
+        return
 
     months_ordered = list(range(1, 13))
     rows = [months_ordered[0:4], months_ordered[4:8], months_ordered[8:12]]
@@ -435,9 +447,29 @@ def _render_route_cargo_mix(trade_data: dict, route_results: list) -> None:
 
     mix = get_route_cargo_mix(selected_route, trade_data)
 
-    # Sort by share descending
-    sorted_mix = sorted(mix.items(), key=lambda x: x[1], reverse=True)
-    labels = [HS_CATEGORIES.get(k, {}).get("label", k.title()) for k, _ in sorted_mix]
+    if not mix:
+        st.info(f"No cargo mix data available for route: {selected_label}.")
+        return
+
+    # Separate known categories from "other" catch-all
+    known_items = {k: v for k, v in mix.items() if k != "other"}
+    other_share = mix.get("other", 0.0)
+
+    total_known = sum(known_items.values())
+    if total_known == 0 and other_share == 0:
+        st.warning(f"All cargo shares are zero for route: {selected_label}. Data may be incomplete.")
+        return
+
+    # Build display items — put "Other" last, only if it has a meaningful share
+    display_items = sorted(known_items.items(), key=lambda x: x[1], reverse=True)
+    if other_share > 0.001:
+        display_items.append(("other", other_share))
+
+    sorted_mix = display_items
+    labels = [
+        HS_CATEGORIES.get(k, {}).get("label", k.title()) if k != "other" else "Other"
+        for k, _ in sorted_mix
+    ]
     values = [v * 100 for _, v in sorted_mix]
     colors = [_CAT_COLORS.get(k, "#64748b") for k, _ in sorted_mix]
     icons  = [_ICONS.get(k, "📦") for k, _ in sorted_mix]
@@ -458,10 +490,11 @@ def _render_route_cargo_mix(trade_data: dict, route_results: list) -> None:
             )
         )
         fig.update_layout(
+            template="plotly_dark",
             paper_bgcolor=_C_BG,
             plot_bgcolor=_C_BG,
             height=320,
-            margin=dict(t=20, b=20, l=20, r=20),
+            margin=dict(l=40, r=20, t=40, b=40),
             legend=dict(
                 font=dict(color=_C_TEXT2, size=10),
                 bgcolor="rgba(0,0,0,0)",
@@ -475,7 +508,7 @@ def _render_route_cargo_mix(trade_data: dict, route_results: list) -> None:
                 )
             ],
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="cargo_route_mix_donut")
 
     with col_table:
         st.markdown(
@@ -490,12 +523,19 @@ def _render_route_cargo_mix(trade_data: dict, route_results: list) -> None:
             unsafe_allow_html=True,
         )
         for cat_key, share in sorted_mix:
-            chars = CARGO_CHARACTERISTICS.get(cat_key, {})
-            shipping = chars.get("shipping", "standard container")
-            sensitivity = chars.get("sensitivity", "—")
-            icon = _ICONS.get(cat_key, "📦")
-            label = HS_CATEGORIES.get(cat_key, {}).get("label", cat_key.title())
-            color = _CAT_COLORS.get(cat_key, "#64748b")
+            if cat_key == "other":
+                icon = "📦"
+                label = "Other"
+                color = _CAT_COLORS.get("other", "#64748b")
+                shipping = "mixed"
+                sensitivity = "—"
+            else:
+                chars = CARGO_CHARACTERISTICS.get(cat_key, {})
+                shipping = chars.get("shipping", "standard container")
+                sensitivity = chars.get("sensitivity", "—")
+                icon = _ICONS.get(cat_key, "📦")
+                label = HS_CATEGORIES.get(cat_key, {}).get("label", cat_key.title())
+                color = _CAT_COLORS.get(cat_key, "#64748b")
             pct_str = str(round(share * 100, 1)) + "%"
 
             st.markdown(
@@ -515,6 +555,32 @@ def _render_route_cargo_mix(trade_data: dict, route_results: list) -> None:
                 unsafe_allow_html=True,
             )
         st.markdown("</div>", unsafe_allow_html=True)
+
+    # CSV export for route cargo mix
+    try:
+        import pandas as pd
+        csv_rows = [
+            {
+                "category_key": k,
+                "category_label": (
+                    HS_CATEGORIES.get(k, {}).get("label", k.title()) if k != "other" else "Other"
+                ),
+                "share_pct": round(v * 100, 2),
+            }
+            for k, v in sorted_mix
+        ]
+        if csv_rows:
+            df_export = pd.DataFrame(csv_rows)
+            csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download cargo mix as CSV",
+                data=csv_bytes,
+                file_name=f"cargo_mix_{selected_route}.csv",
+                mime="text/csv",
+                key="cargo_mix_download_btn",
+            )
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +630,10 @@ def _render_value_trend(trade_data: dict, flows: list[CargoFlowAnalysis]) -> Non
                             cat_series.get(cat_key, {}).get(period, 0) + val
                         )
 
+            if not cat_series:
+                st.info("No time-series cargo value data found in the loaded dataset.")
+                return
+
             fig = go.Figure()
             for cat_key, ts in cat_series.items():
                 if not ts:
@@ -586,15 +656,19 @@ def _render_value_trend(trade_data: dict, flows: list[CargoFlowAnalysis]) -> Non
                 paper_bgcolor=_C_BG,
                 plot_bgcolor=_C_SURFACE,
                 height=380,
-                margin=dict(t=24, b=40, l=60, r=24),
+                margin=dict(l=40, r=20, t=40, b=40),
                 xaxis=dict(title="Period", color=_C_TEXT2, gridcolor="rgba(255,255,255,0.05)"),
                 yaxis=dict(title="Trade Value (USD Billion)", color=_C_TEXT2, gridcolor="rgba(255,255,255,0.05)"),
                 legend=dict(font=dict(size=10, color=_C_TEXT2), bgcolor="rgba(0,0,0,0)"),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="cargo_value_trend_line")
             return
 
     # Fallback: bar chart using benchmark/computed totals from flows
+    if not flows:
+        st.info("No cargo flow data available to render the value trend chart.")
+        return
+
     flow_map = {f.hs_category: f for f in flows}
     labels: list[str] = []
     values_b: list[float] = []
@@ -616,6 +690,10 @@ def _render_value_trend(trade_data: dict, flows: list[CargoFlowAnalysis]) -> Non
             + "<br>Signal: " + f.demand_signal
         )
 
+    if not labels:
+        st.info("No cargo value data available to display.")
+        return
+
     fig = go.Figure(
         go.Bar(
             x=labels,
@@ -633,13 +711,36 @@ def _render_value_trend(trade_data: dict, flows: list[CargoFlowAnalysis]) -> Non
         paper_bgcolor=_C_BG,
         plot_bgcolor=_C_SURFACE,
         height=380,
-        margin=dict(t=30, b=40, l=60, r=24),
+        margin=dict(l=40, r=20, t=40, b=40),
         xaxis=dict(color=_C_TEXT2, gridcolor="rgba(255,255,255,0.0)"),
         yaxis=dict(title="Estimated Trade Value (USD Billion)", color=_C_TEXT2, gridcolor="rgba(255,255,255,0.05)"),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cargo_value_trend_bar")
     st.caption("Values are benchmark estimates when live Comtrade data is unavailable. Colours indicate demand signal.")
+
+    # CSV export for the value trend table
+    try:
+        import pandas as pd
+        csv_rows = [
+            {
+                "category": lbl,
+                "estimated_value_usd_billion": round(val, 3),
+            }
+            for lbl, val in zip(labels, values_b)
+        ]
+        if csv_rows:
+            df_export = pd.DataFrame(csv_rows)
+            csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download value data as CSV",
+                data=csv_bytes,
+                file_name="cargo_value_trend.csv",
+                mime="text/csv",
+                key="cargo_value_download_btn",
+            )
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -168,17 +168,23 @@ def _render_price_map(
     lats, lons, names, vlsfo_prices, texts = [], [], [], [], []
 
     for locode, meta in HUB_META.items():
+        # Guard against ports missing lat/lon metadata
+        if "lat" not in meta or "lon" not in meta:
+            logger.debug("Skipping hub %s — missing lat/lon metadata", locode)
+            continue
         bp_vlsfo = bunker_prices.get((locode, "VLSFO"))
         if bp_vlsfo is None:
             continue
         price = bp_vlsfo.price_per_mt
+        if price is None or price <= 0:
+            continue
         lats.append(meta["lat"])
         lons.append(meta["lon"])
-        names.append(meta["name"])
+        names.append(meta.get("name", locode))
         vlsfo_prices.append(price)
 
         # Build hover text for all fuel types without backslashes in f-string
-        parts = ["<b>" + meta["name"] + "</b> (" + locode + ")<br>"]
+        parts = ["<b>" + meta.get("name", locode) + "</b> (" + locode + ")<br>"]
         for ft in ("VLSFO", "HFO", "MDO", "LNG"):
             bp = bunker_prices.get((locode, ft))
             if bp:
@@ -186,9 +192,16 @@ def _render_price_map(
                 parts.append(ft + ": $" + str(int(bp.price_per_mt)) + "/mt  " + chg + "<br>")
         texts.append("".join(parts) + "<extra></extra>")
 
+    if not lats:
+        st.info(
+            "Bunker price map unavailable — no hub price data with valid coordinates. "
+            "Prices will still appear in the dashboard below."
+        )
+        return
+
     # Normalise marker sizes
-    min_p = min(vlsfo_prices) if vlsfo_prices else 600
-    max_p = max(vlsfo_prices) if vlsfo_prices else 650
+    min_p = min(vlsfo_prices)
+    max_p = max(vlsfo_prices)
     spread = max(max_p - min_p, 1.0)
     marker_sizes = [18 + 22 * ((p - min_p) / spread) for p in vlsfo_prices]
 
@@ -226,9 +239,10 @@ def _render_price_map(
     )
 
     fig.update_layout(
+        template="plotly_dark",
         height=450,
         paper_bgcolor="#0a0f1a",
-        margin=dict(l=0, r=0, t=0, b=0),
+        margin=dict(l=20, r=20, t=40, b=20),
         geo=dict(
             projection_type="natural earth",
             bgcolor="#0a0f1a",
@@ -325,8 +339,26 @@ def _render_fuel_dashboard(
     )
 
     positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+    any_history = False
     for (row, col_idx), ft in zip(positions, fuel_types):
-        history = price_history_synthetic(ft, weeks=52)
+        try:
+            history = price_history_synthetic(ft, weeks=52)
+        except Exception as exc:
+            logger.warning("Price history unavailable for %s: %s", ft, exc)
+            history = []
+
+        if not history:
+            fig.add_annotation(
+                text=f"{ft} data unavailable",
+                xref="paper", yref="paper",
+                x=0.25 if col_idx == 1 else 0.75,
+                y=0.75 if row == 1 else 0.25,
+                showarrow=False,
+                font=dict(color=C_TEXT3, size=11),
+            )
+            continue
+
+        any_history = True
         dates = [h[0].isoformat() for h in history]
         prices = [h[1] for h in history]
         color = _FUEL_COLORS[ft]
@@ -346,13 +378,18 @@ def _render_fuel_dashboard(
             col=col_idx,
         )
 
+    if not any_history:
+        st.info("52-week price history is unavailable at this time.")
+        return
+
     fig.update_layout(
+        template="plotly_dark",
         height=380,
         paper_bgcolor="#0a0f1a",
         plot_bgcolor="#111827",
         font=dict(color=C_TEXT2, size=11),
         showlegend=False,
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=40, r=20, t=40, b=40),
         hoverlabel=dict(bgcolor="#1a2235", bordercolor="rgba(255,255,255,0.15)", font=dict(color=C_TEXT)),
     )
     for ax in fig.layout:
@@ -365,6 +402,28 @@ def _render_fuel_dashboard(
     fig.update_annotations(font=dict(color=C_TEXT2, size=12))
 
     st.plotly_chart(fig, use_container_width=True, key="bunker_price_history")
+
+    # ── Bunker prices CSV export ───────────────────────────────────────────────
+    export_rows = []
+    for (locode, ft), bp in bunker_prices.items():
+        hub_name = HUB_META.get(locode, {}).get("name", locode)
+        export_rows.append({
+            "Port (LOCODE)": locode,
+            "Port Name": hub_name,
+            "Fuel Type": ft,
+            "Price ($/mt)": bp.price_per_mt,
+            "7d Change (%)": bp.change_7d_pct,
+            "30d Change (%)": bp.change_30d_pct,
+        })
+    if export_rows:
+        bunker_csv = pd.DataFrame(export_rows).to_csv(index=False)
+        st.download_button(
+            label="📥 Download bunker prices CSV",
+            data=bunker_csv,
+            file_name="bunker_prices.csv",
+            mime="text/csv",
+            key="download_bunker_prices_csv",
+        )
 
 
 # ── Section 3: Voyage Cost Calculator ────────────────────────────────────────
@@ -410,10 +469,11 @@ def _render_cost_calculator(
     analysis = compute_voyage_fuel_cost(route_id, fuel_type, bunker_prices)
 
     # Scale fuel cost to user's FEU count
-    total_feu_capacity = (8000 * 0.85) / 2.0  # ~3400 FEU
-    feu_share = min(feu_count / total_feu_capacity, 1.0)
-    user_fuel_cost = analysis.optimal_fuel_cost * feu_share
-    user_cost_per_feu = analysis.cost_per_feu   # per-FEU doesn't scale with count
+    total_feu_capacity = (8000 * 0.85) / 2.0  # ~3400 FEU — constant, cannot be zero
+    feu_share = min(feu_count / total_feu_capacity, 1.0) if feu_count > 0 else 0.0
+    optimal_cost = analysis.optimal_fuel_cost or 0.0
+    user_fuel_cost = optimal_cost * feu_share
+    user_cost_per_feu = analysis.cost_per_feu or 0.0  # per-FEU doesn't scale with count
 
     # % of typical freight rate
     typical_freight_total = feu_count * 2_400.0   # $2,400/FEU avg
@@ -489,18 +549,25 @@ def _render_cost_calculator(
                 "vs VLSFO": "—",
             })
             continue
-        voyage_cost = a.vlsfo_cost if ft == "VLSFO" else (a.hfo_cost if ft == "HFO" else a.lng_cost)
-        vlsfo_ref = compute_voyage_fuel_cost(route_id, "VLSFO", bunker_prices).vlsfo_cost
+        voyage_cost = (
+            a.vlsfo_cost if ft == "VLSFO"
+            else (a.hfo_cost if ft == "HFO" else a.lng_cost)
+        ) or 0.0
+        vlsfo_ref = compute_voyage_fuel_cost(route_id, "VLSFO", bunker_prices).vlsfo_cost or 0.0
         vs_vlsfo = ((voyage_cost - vlsfo_ref) / vlsfo_ref * 100.0
                     if vlsfo_ref > 0 and ft != "VLSFO" else 0.0)
         vs_str = ("—" if ft == "VLSFO"
                   else (("+" if vs_vlsfo >= 0 else "") + str(round(vs_vlsfo, 1)) + "%"))
+        cost_per_feu_display = (
+            "{:,.0f}".format(voyage_cost / total_feu_capacity)
+            if total_feu_capacity > 0 and voyage_cost > 0 else "N/A"
+        )
         rows.append({
             "Fuel": ft,
-            "Voyage Consumption (MT)": round(a.fuel_consumption_mt, 0),
+            "Voyage Consumption (MT)": round(a.fuel_consumption_mt or 0, 0),
             "Total Voyage Cost ($)": "{:,.0f}".format(voyage_cost),
-            "Cost per FEU ($)": "{:,.0f}".format(voyage_cost / ((8000 * 0.85) / 2.0)),
-            "Optimal Port": HUB_META.get(a.bunkering_port, {}).get("name", a.bunkering_port),
+            "Cost per FEU ($)": cost_per_feu_display,
+            "Optimal Port": HUB_META.get(a.bunkering_port, {}).get("name", a.bunkering_port or "—"),
             "vs VLSFO": vs_str,
         })
 
@@ -554,7 +621,7 @@ def _render_correlation(macro_data: dict, freight_data: dict) -> None:
                 break
 
     # Build synthetic data if live data is insufficient
-    import random as _rand
+    import random as _rand  # noqa: PLC0415 — local import kept intentional
     rng = _rand.Random(42)
 
     if len(wti_series) < 10 or len(freight_series) < 10:
@@ -582,8 +649,13 @@ def _render_correlation(macro_data: dict, freight_data: dict) -> None:
             freight_arr = freight_vals
             data_label = "Synthetic fallback"
 
-    # Pearson correlation
+    # Guard: both arrays must be non-empty and same length
     n_pts = len(wti_arr)
+    if n_pts == 0 or len(freight_arr) != n_pts:
+        st.info("Insufficient data to render WTI vs freight correlation scatter.")
+        return
+
+    # Pearson correlation
     mean_w = sum(wti_arr) / n_pts
     mean_f = sum(freight_arr) / n_pts
     cov = sum((w - mean_w) * (f - mean_f) for w, f in zip(wti_arr, freight_arr)) / n_pts
@@ -597,6 +669,12 @@ def _render_correlation(macro_data: dict, freight_data: dict) -> None:
     x_min, x_max = min(wti_arr), max(wti_arr)
     reg_x = [x_min, x_max]
     reg_y = [slope * x + intercept for x in reg_x]
+
+    # ── 95% prediction interval band (±1.96 * residual std) ──────────────
+    residuals = [f - (slope * w + intercept) for w, f in zip(wti_arr, freight_arr)]
+    resid_std = (sum(r ** 2 for r in residuals) / max(n_pts - 2, 1)) ** 0.5
+    ci_upper = [y + 1.96 * resid_std for y in reg_y]
+    ci_lower = [y - 1.96 * resid_std for y in reg_y]
 
     fig = go.Figure()
 
@@ -627,14 +705,49 @@ def _render_correlation(macro_data: dict, freight_data: dict) -> None:
         )
     )
 
+    # 95% confidence interval shading — upper bound (invisible line, fills to lower)
+    fig.add_trace(
+        go.Scatter(
+            x=reg_x,
+            y=ci_upper,
+            mode="lines",
+            line=dict(width=0),
+            name="95% CI upper",
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=reg_x,
+            y=ci_lower,
+            mode="lines",
+            line=dict(width=0),
+            fill="tonexty",
+            fillcolor=_hex_to_rgba(_GREEN, 0.10),
+            name="95% Confidence Interval",
+            hovertemplate="95% CI: $%{y:,.0f}/FEU<extra></extra>",
+        )
+    )
+
     apply_dark_layout(
         fig,
         title="WTI Crude vs Trans-Pacific Freight Rate — correlation",
-        height=380,
+        height=400,
     )
     fig.update_layout(
         xaxis_title="WTI Crude Oil ($/bbl)",
         yaxis_title="Freight Rate ($/FEU)",
+        margin=dict(l=40, r=20, t=40, b=40),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1.0,
+            font=dict(size=11),
+            bgcolor="rgba(0,0,0,0)",
+        ),
     )
 
     st.plotly_chart(fig, use_container_width=True, key="bunker_wti_correlation")
@@ -761,6 +874,9 @@ def render(
     avg_hfo = global_average_price("HFO", bunker_prices)
     n_hubs = len(HUB_META)
 
+    vlsfo_str = ("$" + str(int(avg_vlsfo)) + " / mt") if avg_vlsfo > 0 else "N/A"
+    hfo_str = ("HFO $" + str(int(avg_hfo)) + "/mt") if avg_hfo > 0 else "HFO N/A"
+
     st.markdown(
         '<div style="background:linear-gradient(135deg,rgba(59,130,246,0.10),'
         'rgba(26,34,53,0.95)); border:1px solid rgba(59,130,246,0.22); '
@@ -772,10 +888,10 @@ def render(
         + "</div>"
         + '<div style="font-size:2.4rem; font-weight:800; color:' + C_TEXT
         + '; line-height:1.1; margin-bottom:4px;">'
-        + "VLSFO $" + str(int(avg_vlsfo)) + " / mt"
+        + "VLSFO " + vlsfo_str
         + "</div>"
         + '<div style="color:' + C_TEXT2 + '; font-size:0.88rem;">'
-        + "Global average &nbsp;|&nbsp; HFO $" + str(int(avg_hfo)) + "/mt"
+        + "Global average &nbsp;|&nbsp; " + hfo_str
         + " &nbsp;|&nbsp; <b style='color:" + _BLUE + ";'>"
         + str(n_hubs) + " hubs tracked</b>"
         + " &nbsp;|&nbsp; 40-60% of voyage operating cost"

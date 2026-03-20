@@ -9,6 +9,9 @@ Extends processing/tariff_analyzer.py with a full interactive UI covering:
 """
 from __future__ import annotations
 
+import csv
+import io
+
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
@@ -281,6 +284,7 @@ def _render_scenario_builder(route_results: list) -> None:
             value=25,
             step=1,
             help="Total US tariff rate applied to Chinese goods imports",
+            key="tw_slider_us_china_pct",
         )
         us_eu_pct = st.slider(
             "US-EU tariff rate %",
@@ -289,6 +293,7 @@ def _render_scenario_builder(route_results: list) -> None:
             value=0,
             step=1,
             help="US tariff rate applied to EU goods imports",
+            key="tw_slider_us_eu_pct",
         )
         china_retaliation_pct = st.slider(
             "China retaliation %",
@@ -297,6 +302,7 @@ def _render_scenario_builder(route_results: list) -> None:
             value=15,
             step=1,
             help="Chinese retaliatory tariff rate on US exports",
+            key="tw_slider_china_retaliation_pct",
         )
         pmi_impact_pp = st.slider(
             "Global PMI impact (pp)",
@@ -305,11 +311,13 @@ def _render_scenario_builder(route_results: list) -> None:
             value=-2,
             step=1,
             help="Estimated drag on global PMI from trade war uncertainty (percentage points)",
+            key="tw_slider_pmi_impact_pp",
         )
         trade_diversion = st.checkbox(
             "Trade diversion to Vietnam/Mexico",
             value=True,
             help="Model trade flow diversion through alternative manufacturing hubs",
+            key="tw_checkbox_trade_diversion",
         )
 
     impacts = _compute_scenario_impacts(
@@ -447,6 +455,27 @@ def _render_scenario_builder(route_results: list) -> None:
             )
             st.markdown(table_html, unsafe_allow_html=True)
 
+            # ── CSV export for route tariff impacts ──────────────────────────
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["Route", "Volume Change %", "Rate Change %", "Net Opportunity Delta %"])
+            for ti in tariff_impacts:
+                writer.writerow([
+                    ti.route_name,
+                    round(ti.volume_impact_pct * 100, 1),
+                    round(ti.rate_impact_pct * 100, 1),
+                    round(ti.net_opportunity_delta * 100, 1),
+                ])
+            st.download_button(
+                label="Export Tariff Impact CSV",
+                data=buf.getvalue().encode(),
+                file_name="tariff_route_impacts.csv",
+                mime="text/csv",
+                key="tw_tariff_impacts_csv_download",
+            )
+
+    st.caption("Tariff impacts estimated based on 2018-2024 trade data and announced rates")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Section 3 — Trade Diversion Sankey
@@ -454,6 +483,24 @@ def _render_scenario_builder(route_results: list) -> None:
 
 def _render_trade_diversion_sankey() -> None:
     logger.debug("Rendering trade diversion Sankey diagram")
+
+    # ── Guard: show informative message if tariff level implies no significant diversion ──
+    # Read scenario slider values from session_state (keys set in scenario builder).
+    # Diversion is only meaningful when US-China tariff meaningfully exceeds baseline (~14.5%).
+    _tw_us_china = st.session_state.get("tw_slider_us_china_pct", 25)
+    _tw_diversion = st.session_state.get("tw_checkbox_trade_diversion", True)
+    _DIVERSION_THRESHOLD = 20  # % — below this, no significant diversion modelled
+
+    if not _tw_diversion or int(_tw_us_china) < _DIVERSION_THRESHOLD:
+        st.info(
+            "No significant trade diversion detected under current scenario settings "
+            "(US-China tariff below {thr}% or diversion not enabled). "
+            "Increase the US-China tariff rate above {thr}% and enable "
+            "\"Trade diversion to Vietnam/Mexico\" in the Scenario Builder to see diversion flows.".format(
+                thr=_DIVERSION_THRESHOLD
+            )
+        )
+        return
 
     # Nodes
     # 0: China (origin)

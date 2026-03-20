@@ -179,6 +179,13 @@ def _render_platform_cards() -> None:
     )
 
     primary_platforms = ["AMAZON", "ALIBABA", "SHEIN", "SHOPIFY"]
+
+    # Guard: check whether any signals are available at all
+    available_platforms = [p for p in primary_platforms if ECOMMERCE_SIGNALS.get(p)]
+    if not available_platforms:
+        st.info("E-commerce demand signal data is currently unavailable. Check back later.")
+        return
+
     cols = st.columns(4)
 
     for i, platform in enumerate(primary_platforms):
@@ -284,6 +291,10 @@ def _render_retail_calendar() -> None:
 
     today = date.today()
 
+    if not RETAIL_CALENDAR:
+        st.info("Retail calendar data is currently unavailable.")
+        return
+
     # Build event lookup: month -> list of event names
     event_by_month: dict[int, list[str]] = {}
     for cal in RETAIL_CALENDAR:
@@ -380,7 +391,9 @@ def _render_retail_calendar() -> None:
     # Event detail table
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("Key event details & book-by dates", expanded=False):
-        for cal in sorted(RETAIL_CALENDAR, key=lambda c: (c.month, c.day)):
+        if not RETAIL_CALENDAR:
+            st.info("No retail calendar events available.")
+        for cal in sorted(RETAIL_CALENDAR or [], key=lambda c: (c.month, c.day)):
             bw_month_raw = cal.month - int(math.ceil(cal.typical_order_window_weeks_before / 4.33))
             bw_month = ((bw_month_raw - 1) % 12) + 1
             bw_label = _MONTH_NAMES[bw_month]
@@ -526,6 +539,7 @@ def _render_mode_split_chart() -> None:
 
     fig.update_layout(
         barmode="stack",
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         font=dict(color=C_TEXT, family="monospace"),
@@ -552,7 +566,7 @@ def _render_mode_split_chart() -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="ecommerce_mode_split_chart")
 
     # Trend note below chart
     st.markdown(
@@ -699,11 +713,11 @@ def _render_90day_forecast() -> None:
     demand_vals: list[float] = []
     for d in dates:
         m     = d.month
-        base  = _TP_MONTHLY[m]
+        base  = _TP_MONTHLY.get(m, 1.0)
 
         # Overlay retail calendar events — boost demand in booking windows
         boost = 0.0
-        for cal in RETAIL_CALENDAR:
+        for cal in (RETAIL_CALENDAR or []):
             for yr_off in (0, 1):
                 try:
                     ev_date = date(d.year + yr_off, cal.month, cal.day)
@@ -716,6 +730,30 @@ def _render_90day_forecast() -> None:
                     break
 
         demand_vals.append(round(base + boost, 3))
+
+    # Peak-season warnings — surface visually prominent alerts
+    peak_weeks = [
+        (labels[i], demand_vals[i])
+        for i in range(len(demand_vals))
+        if demand_vals[i] >= 1.35
+    ]
+    high_weeks = [
+        (labels[i], demand_vals[i])
+        for i in range(len(demand_vals))
+        if 1.15 <= demand_vals[i] < 1.35
+    ]
+    if peak_weeks:
+        peak_list = ", ".join(lbl for lbl, _ in peak_weeks)
+        st.warning(
+            f"⚡ **PEAK DEMAND** weeks in the next 90 days — book containers immediately: "
+            f"{peak_list}. Demand index ≥ 1.35x baseline; space is constrained.",
+        )
+    elif high_weeks:
+        high_list = ", ".join(lbl for lbl, _ in high_weeks)
+        st.warning(
+            f"🔴 **HIGH DEMAND** weeks approaching — book within 2 weeks: "
+            f"{high_list}. Demand index 1.15–1.35x baseline.",
+        )
 
     # Urgency color per week
     fill_colors: list[str] = []
@@ -778,7 +816,7 @@ def _render_90day_forecast() -> None:
     ))
 
     # Mark retail events within window
-    for cal in RETAIL_CALENDAR:
+    for cal in (RETAIL_CALENDAR or []):
         for yr_off in (0, 1):
             try:
                 ev_date = date(today.year + yr_off, cal.month, cal.day)
@@ -813,6 +851,7 @@ def _render_90day_forecast() -> None:
     )
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         font=dict(color=C_TEXT, family="monospace"),
@@ -832,7 +871,33 @@ def _render_90day_forecast() -> None:
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="ecommerce_90day_forecast_chart")
+
+    # CSV export for 90-day demand forecast
+    import io as _io, csv as _csv2
+    def _forecast_csv() -> bytes:
+        buf = _io.StringIO()
+        w = _csv2.writer(buf)
+        w.writerow(["Week Starting", "Demand Index", "Zone"])
+        for lbl, val in zip(labels, demand_vals):
+            if val >= 1.35:
+                zone = "PEAK"
+            elif val >= 1.15:
+                zone = "HIGH"
+            elif val >= 1.00:
+                zone = "MODERATE"
+            else:
+                zone = "LOW"
+            w.writerow([lbl, val, zone])
+        return buf.getvalue().encode()
+
+    st.download_button(
+        label="⬇ Download 90-day forecast CSV",
+        data=_forecast_csv(),
+        file_name="ecommerce_90day_demand_forecast.csv",
+        mime="text/csv",
+        key="dl_90day_forecast",
+    )
 
     # Booking urgency legend below
     st.markdown(
@@ -905,6 +970,39 @@ def render(
 
     # ── Section 1 ──────────────────────────────────────────────────────────────
     _render_platform_cards()
+    st.caption(
+        "📦 E-commerce shipping demand indicators derived from retail sales data "
+        "and carrier booking patterns"
+    )
+
+    # CSV export for platform signals
+    import io, csv as _csv
+    def _platform_signals_csv() -> bytes:
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(["Platform", "Metric", "YoY Growth %", "Lead Time (wks)",
+                    "Confidence", "Affected Routes", "Shipping Implication"])
+        for platform, signals in ECOMMERCE_SIGNALS.items():
+            label = _PLATFORM_LABELS.get(platform, platform)
+            for sig in signals:
+                w.writerow([
+                    label,
+                    sig.metric_name,
+                    round(sig.yoy_growth_pct, 1),
+                    sig.lead_time_weeks,
+                    round(sig.confidence, 2),
+                    "; ".join(sig.affected_routes),
+                    sig.shipping_implication,
+                ])
+        return buf.getvalue().encode()
+
+    st.download_button(
+        label="⬇ Download platform signals CSV",
+        data=_platform_signals_csv(),
+        file_name="ecommerce_platform_signals.csv",
+        mime="text/csv",
+        key="dl_platform_signals",
+    )
 
     st.markdown("---")
 

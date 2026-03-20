@@ -543,18 +543,26 @@ def _compute_rolling_attribution(
         X_raw = window_data[factor_cols].values
         date_idx = idx_values[end_pos - 1]
 
+        # Guard: drop constant factor columns (zero variance causes NaN betas in OLS).
+        col_stds = X_raw.std(axis=0)
+        valid_mask = col_stds > 1e-10
+        if not valid_mask.any():
+            continue
+        active_factor_cols = [c for c, keep in zip(factor_cols, valid_mask) if keep]
+        X_filtered = X_raw[:, valid_mask]
+
         try:
-            coeffs, _, residuals = _ols_lstsq(y, X_raw)
+            coeffs, _, residuals = _ols_lstsq(y, X_filtered)
         except Exception:
             continue
 
         alpha = coeffs[0]
         betas = coeffs[1:]
         n = len(y)
-        factor_means = X_raw.mean(axis=0)
+        factor_means = X_filtered.mean(axis=0)
 
         contrib: Dict[str, float] = {}
-        for i, col in enumerate(factor_cols):
+        for i, col in enumerate(active_factor_cols):
             contrib[col] = float(betas[i]) * float(factor_means[i]) * n * 100.0
 
         records.append({
@@ -749,7 +757,7 @@ def render(
     """
 
     # ── Controls ──────────────────────────────────────────────────────────
-    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 2, 3])
+    ctrl_col1, ctrl_col2, _ = st.columns([2, 2, 3])
 
     with ctrl_col1:
         available_tickers = [
@@ -782,23 +790,26 @@ def render(
     _render_header(period_label)
 
     # ── Run attribution for selected ticker ───────────────────────────────
-    selected_attr = AttributePerformance(
-        ticker=selected_ticker,
-        stock_data=stock_data,
-        freight_data=freight_data,
-        macro_data=macro_data,
-        period_days=period_days,
-    )
-
-    if selected_attr is None:
+    selected_attr = None
+    try:
+        selected_attr = AttributePerformance(
+            ticker=selected_ticker,
+            stock_data=stock_data,
+            freight_data=freight_data,
+            macro_data=macro_data,
+            period_days=period_days,
+        )
+    except Exception as _attr_exc:
         st.warning(
             "Insufficient data to run attribution for "
             + selected_ticker
             + ". Need at least "
             + str(_MIN_OBS)
             + " overlapping observations across factors."
+            + "  (" + str(_attr_exc) + ")"
         )
-    else:
+
+    if selected_attr is not None:
         # KPI strip
         _render_kpi_strip(selected_attr)
 
@@ -827,6 +838,31 @@ def render(
     # Factor exposure table
     _render_factor_exposure_table(all_attrs)
 
+    # CSV download for attribution breakdown
+    _attr_rows = []
+    for _a in all_attrs:
+        _attr_rows.append({
+            "Ticker":              _a.ticker,
+            "Total Return (%)":   round(_a.total_return_pct, 4),
+            "Freight Beta (%)":   round(_a.freight_beta_contribution, 4),
+            "BDI Macro (%)":      round(_a.macro_contribution, 4),
+            "Sector Beta (%)":    round(_a.sector_contribution, 4),
+            "Idiosyncratic (%)":  round(_a.idiosyncratic_return, 4),
+            "R²":                 round(_a.r_squared, 4),
+            "Info Ratio":         round(_a.information_ratio, 4),
+            "Tracking Error (%)": round(_a.tracking_error, 4),
+        })
+    if _attr_rows:
+        _attr_df = pd.DataFrame(_attr_rows)
+        _csv_attr = _attr_df.to_csv(index=False)
+        st.download_button(
+            label="Download Attribution Breakdown as CSV",
+            data=_csv_attr,
+            file_name=f"attribution_breakdown_{period_label.replace(' ', '_')}.csv",
+            mime="text/csv",
+            key="attr_breakdown_download",
+        )
+
     _divider()
 
     # R-squared heatmap
@@ -848,7 +884,23 @@ def render(
     )
 
     # ── Factor return series (diagnostic section) ─────────────────────────
-    with st.expander("Factor Return Series (Diagnostic)", expanded=False):
+    with st.expander("Factor Return Series (Diagnostic)", expanded=False, key="attr_factor_return_series_expander"):
+        st.markdown(
+            '<div style="background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.25);'
+            ' border-radius:8px; padding:12px 16px; margin-bottom:14px;'
+            ' font-size:0.78rem; color:#94a3b8; line-height:1.6">'
+            '<strong style="color:#60a5fa">Model Assumptions &amp; Disclaimer</strong><br>'
+            'Factor returns are derived from an OLS regression of shipping equity daily returns '
+            'against freight rate momentum, BDI trend, macro composite, and sector beta (XLI). '
+            'The model assumes linear factor relationships and stationary return series. '
+            'Contributions may not sum exactly to total return due to OLS intercept and rounding. '
+            'R\u00b2 reflects in-sample explanatory power only and is not predictive. '
+            'Rolling attribution uses 30-day windows; short windows may produce unstable betas. '
+            '<strong style="color:#f59e0b">For informational purposes only — not investment advice.</strong>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
         factor_returns = compute_factor_returns(
             stock_data=stock_data,
             freight_data=freight_data,

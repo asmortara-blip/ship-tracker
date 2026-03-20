@@ -59,6 +59,7 @@ def dark_layout(
     if margin is None:
         margin = {"l": 20, "r": 20, "t": 40 if title else 20, "b": 20}
     return {
+        "template": "plotly_dark",
         "paper_bgcolor": "#0a0f1a",
         "plot_bgcolor": "#111827",
         "font": {"color": "#f1f5f9", "family": "Inter, sans-serif", "size": 12},

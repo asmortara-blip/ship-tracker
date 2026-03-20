@@ -351,7 +351,7 @@ def _render_world_map() -> None:
         font=dict(color=C_TEXT),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="er_world_map")
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +363,9 @@ def _render_comparison_matrix() -> None:
     logger.debug("Rendering route comparison matrix")
 
     routes = EMERGING_ROUTES
+    if not routes:
+        st.info("No emerging route data available for comparison.")
+        return
 
     # Metrics as columns; values are deltas vs traditional alternative
     # Positive = better than traditional (green); negative = worse (red)
@@ -499,7 +502,7 @@ def _render_comparison_matrix() -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="er_comparison_matrix")
 
     st.markdown(
         "<div style=\"font-size:0.72rem; color:" + C_TEXT3 + "; margin-top:-8px\">"
@@ -507,6 +510,59 @@ def _render_comparison_matrix() -> None:
         "Red = worse. CO2 and Geo Risk are inverted (lower = greener cell)."
         "</div>",
         unsafe_allow_html=True,
+    )
+
+    # Route Opportunity Score explanation
+    with st.expander("What is the Route Opportunity Score?", expanded=False):
+        st.markdown(
+            "The **Route Opportunity Score** (Economic Viability column) is a composite "
+            "0-100 index that weights six factors:\n\n"
+            "| Factor | Weight | Direction |\n"
+            "| --- | --- | --- |\n"
+            "| Distance saving vs traditional route | 20% | Higher = better |\n"
+            "| Transit speed advantage | 20% | Shorter transit = better |\n"
+            "| Cost premium over traditional route | 20% | Lower premium = better |\n"
+            "| CO2 intensity (kg CO2 per TEU) | 15% | Lower = better |\n"
+            "| Geopolitical risk score | 15% | Lower risk = better |\n"
+            "| Economic viability (carrier ROI) | 10% | Higher = better |\n\n"
+            "Scores above 60 indicate a commercially compelling route relative to its "
+            "traditional alternative. Scores below 40 indicate that the route is "
+            "not yet commercially viable under current conditions. "
+            "All scores are normalised within the displayed route set, not globally.",
+        )
+
+    # CSV download of comparison matrix data
+    import io
+    import csv as _csv
+
+    def _matrix_csv() -> str:
+        buf = io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(
+            ["Route", "Distance Saving %", "Transit Days", "Cost Premium %",
+             "CO2 kg/TEU", "Geo Risk %", "Viability %",
+             "Status", "Distance nm"]
+        )
+        for r in routes:
+            writer.writerow([
+                r.route_name,
+                round((r.distance_nm - r.distance_nm) / max(r.distance_nm, 1) * 100, 1),  # placeholder
+                r.transit_days_summer,
+                round(r.rate_premium_pct, 1),
+                round(r.co2_per_teu, 2),
+                round(r.geopolitical_risk_score * 100, 1),
+                round(r.economic_viability_score * 100, 1),
+                getattr(r, "status", ""),
+                r.distance_nm,
+            ])
+        return buf.getvalue()
+
+    st.download_button(
+        label="Download comparison data (CSV)",
+        data=_matrix_csv(),
+        file_name="emerging_routes_comparison.csv",
+        mime="text/csv",
+        key="er_matrix_download",
     )
 
 
@@ -599,7 +655,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig_vessel, use_container_width=True)
+    st.plotly_chart(fig_vessel, use_container_width=True, key="er_arctic_vessel_count")
 
     # ── 3b. Seasonal availability calendar ───────────────────────────────
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -650,7 +706,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig_cal, use_container_width=True)
+    st.plotly_chart(fig_cal, use_container_width=True, key="er_arctic_calendar")
 
     # ── 3c. Arctic sea ice extent (synthetic NSIDC-style, shrinking trend) ──
     ice_years = list(range(1979, 2027))
@@ -719,7 +775,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig_ice, use_container_width=True)
+    st.plotly_chart(fig_ice, use_container_width=True, key="er_arctic_ice_extent")
 
     # ── 3d. Break-even analysis ──────────────────────────────────────────
     viab = compute_route_viability(nsr, freight_rate)
@@ -909,7 +965,7 @@ def _render_red_sea_rerouting() -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig_rs, use_container_width=True)
+    st.plotly_chart(fig_rs, use_container_width=True, key="er_red_sea_traffic")
 
     # ── 4b. Rate impact KPIs ─────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
@@ -1003,7 +1059,7 @@ def _render_red_sea_rerouting() -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig_cap, use_container_width=True)
+    st.plotly_chart(fig_cap, use_container_width=True, key="er_red_sea_capacity")
 
     # ── 4d. End-of-disruption scenarios ──────────────────────────────────
     scenarios = [
@@ -1160,7 +1216,7 @@ def _render_emerging_market_growth() -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="er_corridor_growth")
 
     # Footnote
     st.markdown(
@@ -1171,6 +1227,26 @@ def _render_emerging_market_growth() -> None:
         "acceleration. Arctic LNG reflects Yamal and projected Arctic LNG 2 output."
         "</div>",
         unsafe_allow_html=True,
+    )
+
+    # CSV download — corridor growth data
+    import io as _io2
+    import csv as _csv2
+
+    def _corridor_csv() -> str:
+        buf = _io2.StringIO()
+        writer = _csv2.writer(buf)
+        writer.writerow(["Corridor", "CAGR %", "Note"])
+        for c in corridors_sorted:
+            writer.writerow([c["name"], c["cagr"], c["note"]])
+        return buf.getvalue()
+
+    st.download_button(
+        label="Download corridor growth data (CSV)",
+        data=_corridor_csv(),
+        file_name="emerging_corridor_growth.csv",
+        mime="text/csv",
+        key="er_corridor_download",
     )
 
 
@@ -1194,7 +1270,7 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     st.header("Emerging Trade Routes")
     st.markdown(
-        "<div style=\"color:" + C_TEXT2 + "; font-size:0.88rem; margin-bottom:18px;"
+        "<div style=\"color:" + C_TEXT2 + "; font-size:0.88rem; margin-bottom:12px;"
         " line-height:1.6\">"
         "Climate change is opening Arctic passages while geopolitics reshapes land-sea "
         "corridors. The 2024 Houthi crisis in the Red Sea has already permanently "
@@ -1203,6 +1279,19 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+    # Speculative-data disclaimer
+    st.caption(
+        "\u26a0\ufe0f Emerging route analysis is based on trend indicators and may not "
+        "reflect current service availability."
+    )
+
+    if not route_results:
+        logger.debug("render: route_results is empty; tab renders from static EMERGING_ROUTES data")
+        st.info(
+            "No live route opportunities were returned by the optimizer. "
+            "The analysis below uses the built-in emerging-route dataset."
+        )
 
     # Pull freight rate from data if available; default to $3,200/FEU (current Asia-Europe)
     freight_rate: float = 3_200.0

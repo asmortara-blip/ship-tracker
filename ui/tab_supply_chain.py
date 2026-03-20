@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import io
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -95,6 +96,7 @@ def _render_schi_gauge(schi_value: float, label: str) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         font={"color": C_TEXT},
@@ -102,7 +104,7 @@ def _render_schi_gauge(schi_value: float, label: str) -> None:
         margin={"l": 40, "r": 40, "t": 40, "b": 10},
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sc_schi_gauge")
 
 
 def _render_zone_card(schi_value: float) -> None:
@@ -169,6 +171,7 @@ def _render_radar(dimension_scores: dict[str, float]) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         polar={
             "bgcolor": "#111827",
             "radialaxis": {
@@ -193,7 +196,7 @@ def _render_radar(dimension_scores: dict[str, float]) -> None:
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sc_radar")
 
 
 # ── Section 3: Key Risks & Tailwinds ─────────────────────────────────────
@@ -285,6 +288,7 @@ def _render_insight_category_chart(insights: list) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         font={"color": C_TEXT},
@@ -299,7 +303,7 @@ def _render_insight_category_chart(insights: list) -> None:
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sc_insight_category_chart")
 
 
 # ── NEW: Port Network Graph ───────────────────────────────────────────────
@@ -435,6 +439,7 @@ def _render_port_network(port_results: list, route_results: list) -> None:
 
     fig = go.Figure(data=traces)
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="#0a0f1a",
         plot_bgcolor="#0a0f1a",
         height=450,
@@ -444,7 +449,7 @@ def _render_port_network(port_results: list, route_results: list) -> None:
         hovermode="closest",
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sc_port_network")
 
 
 # ── NEW: Supply Chain Disruption Timeline ─────────────────────────────────
@@ -564,6 +569,7 @@ def _render_disruption_timeline(port_results: list, route_results: list, macro_d
             ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor="#0a0f1a",
         plot_bgcolor="#111827",
         height=250,
@@ -602,7 +608,7 @@ def _render_disruption_timeline(port_results: list, route_results: list, macro_d
             font=dict(size=13, color=C_TEXT3),
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sc_disruption_timeline")
 
 
 # ── NEW: Risk Score Breakdown Table ──────────────────────────────────────
@@ -697,6 +703,28 @@ def render(
     """Render the Supply Chain Health tab."""
 
     st.header("Supply Chain Health")
+
+    # ── Empty-state guard ─────────────────────────────────────────────────
+    if not port_results and not route_results:
+        st.warning(
+            "No supply chain data is available yet. "
+            "Run the analysis with valid API credentials to populate port demand, "
+            "route health, and macro signals. The dashboard will render automatically "
+            "once data is received.",
+            icon="📭",
+        )
+        return
+
+    # ── SCHI methodology caption ──────────────────────────────────────────
+    st.info(
+        "**Supply Chain Health Index (SCHI)** is a composite score from 0 – 100% "
+        "aggregated across six weighted dimensions: Port Capacity, Freight Cost, "
+        "Macro Environment, Chokepoint Risk, Inventory Cycle, and Seasonal Factors. "
+        "Each dimension is normalized to [0, 1] where **1 = healthy / abundant capacity** "
+        "and **0 = stressed / disrupted**. The final SCHI is a weighted mean of all six. "
+        "Scores above 70% indicate healthy conditions; below 35% signals critical stress.",
+        icon="ℹ️",
+    )
 
     # ── Attempt to compute SCHI via engine module ─────────────────────────
     schi_report = None
@@ -872,6 +900,25 @@ def render(
         "All 6 SCHI dimensions ranked by severity — worst conditions first",
     )
     _render_risk_breakdown_table(dimension_scores)
+
+    # ── CSV download for dimension scores ─────────────────────────────────
+    _buf = io.StringIO()
+    _buf.write("Dimension,Score (%),Status\n")
+    for _dim, _score in sorted(dimension_scores.items(), key=lambda kv: kv[1]):
+        _status = (
+            "Healthy" if _score >= 0.70
+            else "Moderate" if _score >= 0.50
+            else "Stressed" if _score >= 0.35
+            else "Critical"
+        )
+        _buf.write(f"{_dim},{_score * 100:.1f},{_status}\n")
+    st.download_button(
+        label="Download Dimension Scores (CSV)",
+        data=_buf.getvalue(),
+        file_name=f"schi_dimension_scores_{datetime.date.today()}.csv",
+        mime="text/csv",
+        key="sc_download_dimension_scores",
+    )
 
     st.divider()
 

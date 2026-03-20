@@ -66,8 +66,10 @@ _LINE_COLORS = [
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _fmt_value(value: float, index_id: str) -> str:
+def _fmt_value(value: float | None, index_id: str) -> str:
     """Format a value for display based on index type."""
+    if value is None or not np.isfinite(float(value if value is not None else 0)):
+        return "N/A"
     if value == 0.0:
         return "N/A"
     if index_id in ("BDI",):
@@ -78,12 +80,16 @@ def _fmt_value(value: float, index_id: str) -> str:
     return f"${value:,.0f}"
 
 
-def _fmt_pct(pct: float) -> str:
+def _fmt_pct(pct: float | None) -> str:
+    if pct is None or not np.isfinite(float(pct if pct is not None else 0)):
+        return "N/A"
     sign = "+" if pct >= 0 else ""
     return f"{sign}{pct:.1f}%"
 
 
-def _pct_color(pct: float) -> str:
+def _pct_color(pct: float | None) -> str:
+    if pct is None or not np.isfinite(float(pct if pct is not None else 0)):
+        return _C_SIDE
     if pct > 0.5:
         return _C_BULL
     if pct < -0.5:
@@ -143,8 +149,9 @@ def _render_index_cards(indices: list[ShippingIndex]) -> None:
                 d30_color   = _pct_color(idx.change_30d)
 
                 # 30-day change bar (clamped to +/-30%)
-                bar_pct  = min(abs(idx.change_30d), 30.0) / 30.0 * 100.0
-                bar_color = _C_BULL if idx.change_30d >= 0 else _C_BEAR
+                _c30 = idx.change_30d if (idx.change_30d is not None and np.isfinite(idx.change_30d)) else 0.0
+                bar_pct  = min(abs(_c30), 30.0) / 30.0 * 100.0
+                bar_color = _C_BULL if _c30 >= 0 else _C_BEAR
 
                 badge_bg  = (
                     "rgba(16,185,129,0.15)" if idx.trend == "BULL"
@@ -232,11 +239,16 @@ def _render_performance_heatmap(indices: list[ShippingIndex]) -> None:
     text_vals: list[list[str]] = []
 
     for idx in indices:
-        period_vals = [idx.change_1d, idx.change_7d, idx.change_30d, idx.change_ytd]
+        raw_vals = [idx.change_1d, idx.change_7d, idx.change_30d, idx.change_ytd]
+        # Replace None / NaN / inf with 0.0 so Plotly heatmap doesn't crash
+        period_vals = [
+            float(v) if (v is not None and np.isfinite(float(v))) else 0.0
+            for v in raw_vals
+        ]
         z_vals.append(period_vals)
-        text_vals.append([_fmt_pct(v) for v in period_vals])
+        text_vals.append([_fmt_pct(v) for v in raw_vals])
 
-    z_arr = np.array(z_vals)
+    z_arr = np.array(z_vals, dtype=float)
 
     # RdGn colorscale centered at 0
     rdgn_colorscale = [
@@ -249,7 +261,10 @@ def _render_performance_heatmap(indices: list[ShippingIndex]) -> None:
         [1.0,  "#059669"],
     ]
 
-    z_extreme = max(abs(z_arr.min()), abs(z_arr.max()), 5.0)
+    finite_vals = z_arr[np.isfinite(z_arr)]
+    z_extreme = max(abs(finite_vals.min()) if len(finite_vals) else 0,
+                    abs(finite_vals.max()) if len(finite_vals) else 0,
+                    5.0)
 
     fig = go.Figure(go.Heatmap(
         z=z_arr,
@@ -275,7 +290,7 @@ def _render_performance_heatmap(indices: list[ShippingIndex]) -> None:
         height=max(280, len(indices) * 48 + 80),
         paper_bgcolor=_C_CARD,
         plot_bgcolor=_C_CARD,
-        margin=dict(t=16, b=20, l=10, r=80),
+        margin=dict(l=40, r=80, t=40, b=40),
         font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             tickfont=dict(size=12, color=_C_TEXT2),
@@ -291,7 +306,7 @@ def _render_performance_heatmap(indices: list[ShippingIndex]) -> None:
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="indices_performance_heatmap")
 
 
 # ── Section 3: Normalized Comparison Chart ────────────────────────────────────
@@ -322,26 +337,45 @@ def _render_comparison_chart(
 
     fig = go.Figure()
     has_data = False
+    unavailable: list[str] = []
+    # Accumulate normalized series for CSV export
+    ts_export: dict[str, pd.Series] = {}
 
     for i, index_id in enumerate(selected):
-        series = _get_index_time_series(index_id, macro_data, freight_data)
+        try:
+            series = _get_index_time_series(index_id, macro_data, freight_data)
+        except Exception as exc:
+            logger.warning("Index %s fetch error: %s", index_id, exc)
+            series = None
+
+        label = INDEX_METADATA.get(index_id, {}).get("name", index_id)
+
         if series is None or series.empty:
+            unavailable.append(label)
             continue
 
         series = series.sort_index().dropna()
+        if series.empty:
+            unavailable.append(label)
+            continue
+
         # Slice to lookback window
         cutoff = series.index.max() - pd.Timedelta(days=lookback_days)
         sliced = series[series.index >= cutoff]
         if sliced.empty or len(sliced) < 2:
+            unavailable.append(label)
             continue
 
         base = float(sliced.iloc[0])
-        if base == 0:
+        if base == 0 or not np.isfinite(base):
+            unavailable.append(label)
             continue
 
         normalized = sliced / base * 100.0
+        # Replace any inf/nan that may arise from division edge cases
+        normalized = normalized.replace([np.inf, -np.inf], np.nan)
+
         color = _LINE_COLORS[i % len(_LINE_COLORS)]
-        label = INDEX_METADATA.get(index_id, {}).get("name", index_id)
 
         fig.add_trace(go.Scatter(
             x=normalized.index,
@@ -349,9 +383,17 @@ def _render_comparison_chart(
             name=label,
             mode="lines",
             line=dict(color=color, width=2),
+            connectgaps=False,  # gaps in data stay as gaps — don't bridge missing points
             hovertemplate=f"<b>{label}</b>: %{{y:.1f}}<extra></extra>",
         ))
         has_data = True
+        ts_export[label] = normalized.rename(label)
+
+    if unavailable:
+        st.info(
+            "Unavailable (no data in selected window): "
+            + ", ".join(f"**{n}**" for n in unavailable)
+        )
 
     fig.add_hline(
         y=100,
@@ -369,7 +411,7 @@ def _render_comparison_chart(
         height=400,
         paper_bgcolor=_C_CARD,
         plot_bgcolor=_C_CARD,
-        margin=dict(t=20, b=20, l=10, r=10),
+        margin=dict(l=40, r=20, t=40, b=40),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -392,7 +434,20 @@ def _render_comparison_chart(
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="indices_comparison_chart")
+
+    # ── Time-series CSV export ─────────────────────────────────────────────
+    if ts_export:
+        ts_df = pd.concat(ts_export.values(), axis=1).sort_index()
+        ts_df.index.name = "Date"
+        ts_csv = ts_df.reset_index().to_csv(index=False)
+        st.download_button(
+            label="📥 Download time-series CSV (normalized)",
+            data=ts_csv,
+            file_name="shipping_indices_timeseries.csv",
+            mime="text/csv",
+            key="download_indices_timeseries_csv",
+        )
 
 
 # ── Section 4: Cross-Correlation Heatmap ─────────────────────────────────────
@@ -450,7 +505,7 @@ def _render_correlation_heatmap(
         height=max(350, len(corr_df) * 55 + 80),
         paper_bgcolor=_C_CARD,
         plot_bgcolor=_C_CARD,
-        margin=dict(t=20, b=80, l=10, r=80),
+        margin=dict(l=40, r=80, t=40, b=80),
         font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             tickfont=dict(size=10, color=_C_TEXT2),
@@ -467,7 +522,7 @@ def _render_correlation_heatmap(
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="indices_correlation_heatmap")
 
 
 # ── Section 5: Signal Summary Feed ───────────────────────────────────────────
@@ -626,6 +681,29 @@ def render(
         st.warning("No shipping index data is available.")
         return
 
+    # ── KPI metric row ────────────────────────────────────────────────────
+    # Top 4 indices shown as st.metric() with 30d delta for at-a-glance scanning
+    kpi_indices = indices[:4]
+    kpi_cols = st.columns(len(kpi_indices))
+    for col, idx in zip(kpi_cols, kpi_indices):
+        with col:
+            _delta_str = (
+                f"{idx.change_30d:+.1f}% vs 30d ago"
+                if (idx.change_30d is not None and np.isfinite(idx.change_30d))
+                else "N/A"
+            )
+            st.metric(
+                label=idx.name,
+                value=_fmt_value(idx.current_value, idx.index_id),
+                delta=_delta_str,
+                delta_color="normal",
+            )
+
+    st.markdown(
+        "<hr style='border-color:rgba(255,255,255,0.07); margin:16px 0'>",
+        unsafe_allow_html=True,
+    )
+
     # ── Section 1: Card grid ──────────────────────────────────────────────
     _render_index_cards(indices)
 
@@ -636,6 +714,41 @@ def render(
 
     # ── Section 2: Performance heatmap ───────────────────────────────────
     _render_performance_heatmap(indices)
+
+    def _safe_round(v: float | None, n: int = 2) -> float | None:
+        """Round v to n decimal places; return None if v is None or non-finite."""
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return round(f, n) if np.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    _indices_df = pd.DataFrame([
+        {
+            "Index": idx.name,
+            "Index ID": idx.index_id,
+            "Current Value": idx.current_value,
+            "Trend": idx.trend,
+            "1d Change (%)": _safe_round(idx.change_1d),
+            "7d Change (%)": _safe_round(idx.change_7d),
+            "30d Change (%)": _safe_round(idx.change_30d),
+            "YTD Change (%)": _safe_round(idx.change_ytd),
+            "52w High": idx.yoy_52w_high,
+            "52w Low": idx.yoy_52w_low,
+            "% From 52w High": _safe_round(idx.pct_from_52w_high),
+        }
+        for idx in indices
+    ])
+    csv = _indices_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="shipping_indices.csv",
+        mime="text/csv",
+        key="download_shipping_indices_csv",
+    )
 
     st.markdown(
         "<hr style='border-color:rgba(255,255,255,0.07); margin:20px 0'>",

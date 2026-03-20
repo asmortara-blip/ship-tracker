@@ -197,12 +197,13 @@ def predict_all_ports(
     forecasts: dict[str, CongestionForecast] = {}
     for result in port_results:
         if isinstance(result, dict):
-            locode = result["port_locode"]
+            locode = result.get("port_locode") or result.get("locode", "")
             congestion = result.get("current_congestion", 0.5)
         else:
             locode = result.port_locode
             congestion = getattr(result, "current_congestion", 0.5)
 
-        forecasts[locode] = predict_congestion(locode, congestion, macro_data=macro_data)
+        if locode:
+            forecasts[locode] = predict_congestion(locode, congestion, macro_data=macro_data)
 
     return forecasts

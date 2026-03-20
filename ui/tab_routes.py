@@ -111,7 +111,7 @@ def _render_transit_gantt(route_results: list[RouteOpportunity]) -> None:
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="routes_transit_gantt")
 
 
 # ── Section 2 – Freight Rate Heatmap Calendar ─────────────────────────────────
@@ -217,7 +217,7 @@ def _render_rate_calendar(freight_data: dict, route_id: str) -> None:
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"routes_rate_calendar_{route_id}")
     st.caption(
         f"Green = below average (cheap), Red = above average (expensive). "
         f"Period average: ${period_avg:,.0f}/FEU"
@@ -498,7 +498,7 @@ def _render_route_comparison(route_results: list[RouteOpportunity]) -> None:
             font=dict(color=_C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(comp_fig, use_container_width=True)
+    st.plotly_chart(comp_fig, use_container_width=True, key="routes_comparison_chart")
 
     st.markdown(
         f'<div style="font-size:0.72rem; font-weight:700; color:{_C_TEXT3}; '
@@ -546,7 +546,7 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
     st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 24 hours (freight rate data)")
 
     if not route_results:
-        st.info("No route data available. Check API credentials and click Refresh.")
+        st.info("🚢 Route opportunity data is loading or unavailable — freight rate data refreshes every 24 hours. Verify your FBX/freight API credentials in .env and click Refresh All Data in the sidebar.")
         return
 
     # ── Local color aliases (kept for inline f-string use below) ─────────────
@@ -572,29 +572,41 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
 
     c1, c2, c3, c4 = st.columns(4)
 
-    def kpi(label, value, sub="", color=C_ACCENT):
-        sub_html = "" if not sub else f'<div style="font-size:0.78rem; color:{C_TEXT2}">{sub}</div>'
-        return (
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {color};'
-            f' border-radius:10px; padding:16px 18px; text-align:center">'
-            f'<div style="font-size:0.68rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;'
-            f' letter-spacing:0.07em">{label}</div>'
-            f'<div style="font-size:1.7rem; font-weight:800; color:{C_TEXT}; line-height:1.1;'
-            f' margin:5px 0">{value}</div>'
-            f'{sub_html}'
-            f'</div>'
-        )
-
     top_name_short = top_route.route_name.split(" ")[0] + "..."
     top_score_pct  = f"{top_route.opportunity_score:.0%} opportunity"
-    top_kpi_color  = C_HIGH if top_route.opportunity_score >= 0.65 else C_MOD
 
-    c1.markdown(kpi("Top Route", top_name_short, top_score_pct, top_kpi_color), unsafe_allow_html=True)
-    c2.markdown(kpi("Strong Opportunities", str(strong_count), f"of {len(route_results)} routes", C_HIGH), unsafe_allow_html=True)
+    with c1:
+        st.metric(
+            label="Top Route",
+            value=top_name_short,
+            delta=top_score_pct,
+            delta_color="normal",
+        )
+    with c2:
+        st.metric(
+            label="Strong Opportunities",
+            value=str(strong_count),
+            delta=f"{strong_count} of {len(route_results)} routes",
+            delta_color="off",
+        )
     if n_rates > 0:
-        c3.markdown(kpi("Avg Freight Rate", f"${avg_rate / n_rates:,.0f}", "USD per FEU", C_ACCENT), unsafe_allow_html=True)
-    top_rate_color = C_HIGH if top_rate_pct > 0 else C_LOW
-    c4.markdown(kpi("Top Route Rate", f"{top_rate_pct * 100:+.1f}%", "30-day change", top_rate_color), unsafe_allow_html=True)
+        with c3:
+            avg_rate_val = avg_rate / n_rates
+            # compute avg rate delta vs top-route 30d change as context
+            avg_rate_delta = f"{top_rate_pct * 100:+.1f}% top-route 30d"
+            st.metric(
+                label="Avg Freight Rate",
+                value=f"${avg_rate_val:,.0f}",
+                delta=avg_rate_delta,
+                delta_color="normal",
+            )
+    with c4:
+        st.metric(
+            label="Top Route 30d Change",
+            value=f"{top_rate_pct * 100:+.1f}%",
+            delta="vs prior period",
+            delta_color="off",
+        )
 
     # ── Transit Gantt ─────────────────────────────────────────────────────────
     _divider("Route Transit Times")
@@ -664,7 +676,7 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="routes_opportunity_scatter")
 
     # ── Route detail ──────────────────────────────────────────────────────────
     _divider("Route Detail")
@@ -790,7 +802,7 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
                         font=dict(color=C_TEXT, size=12),
                     ),
                 )
-                st.plotly_chart(rate_fig, use_container_width=True)
+                st.plotly_chart(rate_fig, use_container_width=True, key=f"routes_rate_history_{selected.route_id}")
 
             # Rate Calendar Heatmap
             _divider("Rate Calendar — 12-Week View")
@@ -811,8 +823,11 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
                 fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1])
                 fc1.markdown(f"**{fc.route_name}** {arrow}")
                 fc2.metric("Current", f"${fc.current_rate:,.0f}")
-                fc3.metric("30d forecast", f"${fc.forecast_30d:,.0f}", f"{pct_30:+.1f}%")
-                fc4.metric("90d forecast", f"${fc.forecast_90d:,.0f}")
+                fc3.metric("30d forecast", f"${fc.forecast_30d:,.0f}", f"{pct_30:+.1f}%",
+                           delta_color="normal")
+                pct_90 = (fc.forecast_90d - fc.current_rate) / fc.current_rate * 100 if fc.current_rate > 0 else 0
+                fc4.metric("90d forecast", f"${fc.forecast_90d:,.0f}", f"{pct_90:+.1f}% vs current",
+                           delta_color="normal")
 
                 with st.expander("Forecast detail", key=f"routes_expander_{fc.route_name}"):
                     days  = [0, 30, 60, 90]
@@ -872,6 +887,34 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
     # ── Opportunity Score Leaderboard ─────────────────────────────────────────
     _divider("Opportunity Leaderboard")
     st.subheader("All Routes \u2014 Ranked")
+
+    _routes_df = pd.DataFrame([
+        {
+            "Route": r.route_name,
+            "Origin": r.origin_locode,
+            "Destination": r.dest_locode,
+            "Opportunity Score": round(r.opportunity_score, 3),
+            "Label": r.opportunity_label,
+            "Rate (USD/FEU)": r.current_rate_usd_feu if r.current_rate_usd_feu > 0 else None,
+            "30d Rate Change": round(r.rate_pct_change_30d * 100, 2),
+            "Rate Trend": r.rate_trend,
+            "Transit (days)": r.transit_days,
+            "Rate Momentum": round(r.rate_momentum_component, 3),
+            "Demand Imbalance": round(r.demand_imbalance_component, 3),
+            "Congestion Clearance": round(r.congestion_clearance_component, 3),
+            "Macro Tailwind": round(r.macro_tailwind_component, 3),
+        }
+        for r in route_results
+    ])
+    csv = _routes_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="route_opportunities.csv",
+        mime="text/csv",
+        key="download_route_opportunities_csv",
+    )
+
     _render_leaderboard(route_results)
 
     # ── Route Comparison ──────────────────────────────────────────────────────

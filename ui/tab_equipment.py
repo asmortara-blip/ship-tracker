@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
@@ -235,8 +236,31 @@ def _render_heatmap() -> None:
         "Red = tight/shortage risk, green = surplus.",
     )
 
+    if not REGIONAL_EQUIPMENT_STATUS:
+        st.warning(
+            "No regional equipment data available. "
+            "Check equipment_tracker data source and refresh."
+        )
+        return
+
     z_util, z_text, z_risk = _build_equip_matrix()
     x_labels = [_TYPE_LABELS.get(ct, ct) for ct in CONTAINER_TYPES]
+
+    # Surface CRITICAL shortages prominently above the chart
+    critical_cells = [
+        e for e in REGIONAL_EQUIPMENT_STATUS if e.shortage_risk == "CRITICAL"
+    ]
+    if critical_cells:
+        critical_desc = ", ".join(
+            f"{e.region} / {_TYPE_LABELS.get(e.container_type, e.container_type)} "
+            f"({int(e.utilization_pct)}%)"
+            for e in critical_cells
+        )
+        st.error(
+            f"CRITICAL equipment shortage detected in: {critical_desc}. "
+            "Expect significant rate premiums and booking delays.",
+            icon="🚨",
+        )
 
     fig = go.Figure(go.Heatmap(
         z=z_util,
@@ -274,7 +298,7 @@ def _render_heatmap() -> None:
     layout["margin"] = {"l": 110, "r": 20, "t": 30, "b": 40}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="equip_heatmap")
 
     # Risk badge legend row
     legend_parts = []
@@ -287,6 +311,25 @@ def _render_heatmap() -> None:
         unsafe_allow_html=True,
     )
 
+    # CSV export for heatmap data
+    heatmap_rows = []
+    for e in REGIONAL_EQUIPMENT_STATUS:
+        heatmap_rows.append({
+            "Region": e.region,
+            "Container Type": _TYPE_LABELS.get(e.container_type, e.container_type),
+            "Utilization %": e.utilization_pct,
+            "Shortage Risk": e.shortage_risk,
+        })
+    if heatmap_rows:
+        heatmap_df = pd.DataFrame(heatmap_rows)
+        st.download_button(
+            label="Download Equipment Utilization CSV",
+            data=heatmap_df.to_csv(index=False),
+            file_name="equipment_utilization.csv",
+            mime="text/csv",
+            key="equip_heatmap_csv",
+        )
+
 
 # ── Section 2: Trade Imbalance Sankey ────────────────────────────────────
 
@@ -296,6 +339,13 @@ def _render_sankey() -> None:
         "Sankey diagram: loaded eastbound flows (bright) vs. westbound empty "
         "repositioning flows (dim). Width = relative TEU volume.",
     )
+
+    if not TRADE_IMBALANCE_DATA:
+        st.warning(
+            "No trade imbalance data available. "
+            "Check equipment_tracker data source and refresh."
+        )
+        return
 
     # Select routes with significant imbalance for readability
     # Full 17-route Sankey would be unreadable; show key corridors
@@ -378,6 +428,10 @@ def _render_sankey() -> None:
         link_colors.append(color)
         link_labels.append(cost_label)
 
+    if not sources:
+        st.info("No matching trade routes found in imbalance data for Sankey diagram.")
+        return
+
     fig = go.Figure(go.Sankey(
         arrangement="snap",
         node={
@@ -404,7 +458,7 @@ def _render_sankey() -> None:
     layout["margin"] = {"l": 20, "r": 20, "t": 30, "b": 20}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="equip_sankey")
 
     # Legend note
     st.markdown(
@@ -416,6 +470,27 @@ def _render_sankey() -> None:
         "Width = relative TEU volume</div>",
         unsafe_allow_html=True,
     )
+
+    # CSV export for trade imbalance data
+    imb_rows = [
+        {
+            "Route ID": m.route_id,
+            "Origin Region": m.origin_region,
+            "Dest Region": m.dest_region,
+            "Imbalance Ratio": m.imbalance_ratio,
+            "Repositioning Cost (USD/FEU)": m.empty_container_repositioning_cost_per_feu,
+            "Repositioning Days": m.repositioning_days,
+        }
+        for m in TRADE_IMBALANCE_DATA
+    ]
+    if imb_rows:
+        st.download_button(
+            label="Download Trade Imbalance CSV",
+            data=pd.DataFrame(imb_rows).to_csv(index=False),
+            file_name="trade_imbalance_data.csv",
+            mime="text/csv",
+            key="equip_imbalance_csv",
+        )
 
 
 # ── Section 3: Reefer Spotlight ───────────────────────────────────────────
@@ -430,15 +505,22 @@ def _render_reefer_spotlight() -> None:
     reefer_data = get_reefer_summary()
     logger.debug("Reefer summary: {}", reefer_data)
 
+    if not reefer_data:
+        st.warning(
+            "Reefer summary data unavailable. "
+            "Check equipment_tracker data source and refresh."
+        )
+        return
+
     # ── KPI row ──────────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
 
-    avg_util = reefer_data.get("avg_utilization_pct", 0.0)
-    avg_rate = reefer_data.get("avg_lease_rate_usd", 0.0)
-    total_k = reefer_data.get("total_units_k", 0.0)
+    avg_util = reefer_data.get("avg_utilization_pct") or 0.0
+    avg_rate = reefer_data.get("avg_lease_rate_usd") or 0.0
+    total_k  = reefer_data.get("total_units_k") or 0.0
     # Reefer premium over 40FT_DRY (approx): $3.50 avg vs $0.88 avg
     dry_avg_rate = 0.88
-    premium_x = round(avg_rate / dry_avg_rate, 1) if dry_avg_rate > 0 else 0.0
+    premium_x = round(avg_rate / dry_avg_rate, 1) if dry_avg_rate > 0 and avg_rate > 0 else 0.0
 
     for col, label, value, unit, color in [
         (col1, "Avg Reefer Utilization", str(avg_util) + "%",        "",        _C_RED),
@@ -519,7 +601,7 @@ def _render_reefer_spotlight() -> None:
         layout["legend"]["orientation"] = "h"
         layout["legend"]["y"] = -0.25
         fig.update_layout(**layout)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="equip_reefer_chart")
 
     with col_comm:
         st.markdown(
@@ -614,16 +696,23 @@ def _render_cost_calculator(route_results: Any) -> None:
     metrics = get_trade_imbalance(selected_route_id)
 
     if metrics is None:
-        st.warning("No trade imbalance data available for the selected route.")
+        st.error(
+            "No trade imbalance data available for the selected route. "
+            "Cannot compute equipment-adjusted freight rate."
+        )
         return
 
-    feu_count = teu_count / 2.0
-    reposition_cost_per_feu = metrics.empty_container_repositioning_cost_per_feu
-    adjusted_rate = compute_equipment_adjusted_rate(selected_route_id, base_rate_per_feu)
+    feu_count = max(teu_count / 2.0, 0.5)  # guard against zero FEU
+    reposition_cost_per_feu = metrics.empty_container_repositioning_cost_per_feu or 0.0
+    adjusted_rate = compute_equipment_adjusted_rate(selected_route_id, base_rate_per_feu) or 0.0
     total_base = base_rate_per_feu * feu_count
     total_reposition = reposition_cost_per_feu * feu_count
     total_adjusted = adjusted_rate * feu_count
-    cost_increase_pct = (reposition_cost_per_feu / base_rate_per_feu) * 100
+    cost_increase_pct = (
+        (reposition_cost_per_feu / base_rate_per_feu) * 100
+        if base_rate_per_feu > 0
+        else 0.0
+    )
 
     # Imbalance direction label
     if metrics.imbalance_ratio > 1.3:
@@ -706,6 +795,38 @@ def _render_cost_calculator(route_results: Any) -> None:
         unsafe_allow_html=True,
     )
 
+    # TEU capacity note: if throughput data unavailable, show World Bank estimate note
+    if not hasattr(metrics, "throughput_teu_m") or not getattr(metrics, "throughput_teu_m", None):
+        st.caption(
+            "TEU capacity data for this route is unavailable from port records. "
+            "Repositioning costs are estimated from trade imbalance ratios and "
+            "World Bank container port throughput indices where direct capacity "
+            "data is absent."
+        )
+
+    # CSV export for this calculation
+    calc_csv = pd.DataFrame([{
+        "Route": selected_route_id,
+        "Base Rate (USD/FEU)": base_rate_per_feu,
+        "TEU Count": teu_count,
+        "FEU Count": feu_count,
+        "Repositioning Cost (USD/FEU)": reposition_cost_per_feu,
+        "Equipment-Adjusted Rate (USD/FEU)": adjusted_rate,
+        "Total Base Cost (USD)": total_base,
+        "Total Repositioning Cost (USD)": total_reposition,
+        "Total Adjusted Cost (USD)": total_adjusted,
+        "Rate Uplift (%)": round(cost_increase_pct, 2),
+        "Imbalance Ratio": metrics.imbalance_ratio,
+        "Repositioning Days": metrics.repositioning_days,
+    }]).to_csv(index=False)
+    st.download_button(
+        label="Download Calculation CSV",
+        data=calc_csv,
+        file_name="equipment_cost_calc.csv",
+        mime="text/csv",
+        key="equip_calc_csv",
+    )
+
 
 # ── Section 5: Regional Surplus/Deficit Timeline ─────────────────────────
 
@@ -716,7 +837,10 @@ def _render_surplus_deficit_timeline() -> None:
         "2021 = COVID demand surge drove historic shortage; regional imbalances persist.",
     )
 
-    years = _BALANCE_TIMELINE["years"]
+    years = _BALANCE_TIMELINE.get("years", [])
+    if not years:
+        st.warning("Equipment balance timeline data is unavailable.")
+        return
 
     region_colors = {
         "Asia Pacific":  _C_BLUE,
@@ -809,7 +933,7 @@ def _render_surplus_deficit_timeline() -> None:
     layout["legend"]["y"] = -0.22
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="equip_surplus_deficit")
 
     # Narrative callout
     global_idx = get_global_equipment_index()
@@ -848,6 +972,21 @@ def _render_surplus_deficit_timeline() -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+    # CSV export for balance timeline
+    timeline_rows = []
+    for region in region_colors:
+        vals = _BALANCE_TIMELINE.get(region, [])
+        for year, val in zip(years, vals):
+            timeline_rows.append({"Region": region, "Year": year, "Balance Index": val})
+    if timeline_rows:
+        st.download_button(
+            label="Download Balance Timeline CSV",
+            data=pd.DataFrame(timeline_rows).to_csv(index=False),
+            file_name="equipment_balance_timeline.csv",
+            mime="text/csv",
+            key="equip_timeline_csv",
+        )
 
 
 # ── Main render entry point ───────────────────────────────────────────────

@@ -174,24 +174,43 @@ def _render_bubble(role: str, text: str, ts: str) -> None:
     row_cls    = "assistant" if role == "assistant" else "user"
     ts_cls     = "left" if role == "assistant" else ""
 
-    # escape < > & in text to avoid HTML injection
-    safe_text = (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-    html = (
-        '<div class="chat-row ' + row_cls + '">'
-        '<div class="chat-avatar">' + avatar + '</div>'
-        '<div>'
-        '<div class="chat-bubble ' + bubble_cls + '">' + safe_text + '</div>'
-        '<div class="chat-ts ' + ts_cls + '">' + ts + '</div>'
-        '</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
+    if role == "assistant":
+        # Render the assistant bubble wrapper first, then the message body as
+        # proper Streamlit markdown so that bullet lists, bold, code blocks, etc.
+        # are all parsed correctly — rather than HTML-escaped raw text.
+        st.markdown(
+            '<div class="chat-row ' + row_cls + '">'
+            '<div class="chat-avatar">' + avatar + '</div>'
+            '<div style="max-width:72%">'
+            '<div class="chat-bubble ' + bubble_cls + '">',
+            unsafe_allow_html=True,
+        )
+        st.markdown(text)
+        st.markdown(
+            '</div>'
+            '<div class="chat-ts ' + ts_cls + '">' + ts + '</div>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        # User bubble: HTML-escape text to prevent injection
+        safe_text = (
+            text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        html = (
+            '<div class="chat-row ' + row_cls + '">'
+            '<div class="chat-avatar">' + avatar + '</div>'
+            '<div>'
+            '<div class="chat-bubble ' + bubble_cls + '">' + safe_text + '</div>'
+            '<div class="chat-ts ' + ts_cls + '">' + ts + '</div>'
+            '</div>'
+            '</div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_thinking() -> None:
@@ -956,6 +975,16 @@ def render(
             "Ask questions about the data loaded in this session — rule-based, no external API calls.",
         )
 
+        # Show warning if the answer engine itself is broken (e.g. missing dependencies)
+        _engine_ok = True
+        try:
+            answer_question("help", context)
+        except Exception as _engine_exc:
+            _engine_ok = False
+            logger.warning("Answer engine unavailable: {}", _engine_exc)
+        if not _engine_ok:
+            st.warning("AI assistant unavailable — pre-set questions still work")
+
         # ── Chat history display ─────────────────────────────────────────
         chat_container = st.container()
         with chat_container:
@@ -977,7 +1006,7 @@ def render(
         # st.chat_input must be called at tab scope, not inside a column
         user_input = st.chat_input(
             "Ask about routes, rates, ports, stocks, BDI, Suez...",
-            key="assistant_chat_input",
+            key="assistant_question_input",
         )
 
         if user_input and user_input.strip():

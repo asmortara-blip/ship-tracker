@@ -206,6 +206,30 @@ def _render_timeline(selected_ports: list) -> None:
         )
         return
 
+    # Guard: fall back to default ports if nothing selected
+    ports_to_render = selected_ports or _DEFAULT_PORTS
+
+    # Staleness check: warn if the most recent record across selected ports is > 45 days old
+    from datetime import date as _date, timedelta
+    _today = _date.today()
+    _latest: _date | None = None
+    for _lc in ports_to_render:
+        for _r in CONGESTION_HISTORY.get(_lc, []):
+            if _r.date is not None and (_latest is None or _r.date > _latest):
+                _latest = _r.date
+    if _latest is None:
+        st.warning(
+            "No congestion history data found. The chart will be empty. "
+            "Check that `processing/congestion_history.py` is populated.",
+            icon="⚠️",
+        )
+    elif (_today - _latest) > timedelta(days=45):
+        st.warning(
+            f"Congestion history data may be stale — most recent record is "
+            f"{_latest.isoformat()} ({(_today - _latest).days} days ago).",
+            icon="⚠️",
+        )
+
     fig = go.Figure()
 
     # ── Crisis / normal background bands ──────────────────────────────────────
@@ -224,7 +248,7 @@ def _render_timeline(selected_ports: list) -> None:
         )
 
     # ── Port traces ───────────────────────────────────────────────────────────
-    for idx, locode in enumerate(selected_ports[:5]):
+    for idx, locode in enumerate(ports_to_render[:5]):
         records = CONGESTION_HISTORY.get(locode, [])
         if not records:
             continue
@@ -308,7 +332,7 @@ def _render_timeline(selected_ports: list) -> None:
     layout["yaxis"]["tickformat"] = ".0%"
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cong_timeline_chart")
 
 
 # ── Section 2: Heatmap Calendar ───────────────────────────────────────────────
@@ -333,11 +357,20 @@ def _render_heatmap_calendar(port_locode: str) -> None:
         return
 
     # Build lookup: (year, month) -> congestion_score
+    # Guard against records with None date
     score_map: dict = {}
     for r in records:
+        if r.date is None:
+            continue
         score_map[(r.date.year, r.date.month)] = r.congestion_score
 
-    years = sorted({r.date.year for r in records})
+    years = sorted({r.date.year for r in records if r.date is not None})
+    if not years:
+        _card(
+            '<div style="color:' + C_TEXT2 + '; text-align:center; padding:12px">'
+            "No valid dated records for " + port_locode + ".</div>"
+        )
+        return
     months = list(range(1, 13))
     month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -416,7 +449,7 @@ def _render_heatmap_calendar(port_locode: str) -> None:
     layout["yaxis"]["showgrid"] = False
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cong_heatmap_calendar")
 
 
 # ── Section 3: Congestion Forecast Bars ──────────────────────────────────────
@@ -532,7 +565,7 @@ def _render_forecast_chart(port_results: list, macro_data: dict) -> None:
                   line_color="rgba(245,158,11,0.5)")
 
     fig.update_layout(**layout)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cong_forecast_bars")
 
     # Traffic-light legend
     st.markdown(
@@ -634,7 +667,7 @@ def _render_correlation_matrix(selected_ports: list) -> None:
     layout["xaxis"]["side"] = "bottom"
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="cong_correlation_matrix")
 
     # Cluster interpretation note
     _card(
@@ -722,7 +755,8 @@ def _render_incident_monitor(port_results: list, macro_data: dict) -> None:
 
         # Primary risk factors from last few records
         records = CONGESTION_HISTORY.get(locode, [])
-        recent = sorted(records, key=lambda r: r.date)[-6:]
+        dated_records = [r for r in records if r.date is not None]
+        recent = sorted(dated_records, key=lambda r: r.date)[-6:]
         driver_counts: dict = {}
         for rr in recent:
             driver_counts[rr.driver] = driver_counts.get(rr.driver, 0) + 1
@@ -800,7 +834,19 @@ def render(
     try:
         from processing.congestion_history import CONGESTION_HISTORY
         all_locodes = sorted(CONGESTION_HISTORY.keys())
+        if not all_locodes:
+            st.warning(
+                "Congestion history data is empty. "
+                "Populate `processing/congestion_history.py` to enable all charts.",
+                icon="⚠️",
+            )
+            all_locodes = _DEFAULT_PORTS
     except ImportError:
+        st.warning(
+            "The `processing.congestion_history` module could not be imported. "
+            "History charts will be unavailable.",
+            icon="⚠️",
+        )
         all_locodes = _DEFAULT_PORTS
 
     # Also include any locodes from port_results
@@ -820,14 +866,20 @@ def render(
     ctrl_col1, ctrl_col2 = st.columns([3, 2])
 
     with ctrl_col1:
+        # Build default list from known default ports that are actually in the
+        # available options; always guarantee at least the first available option
+        # is selected so the chart is never rendered with zero traces.
+        _preferred_defaults = [
+            _PORT_DISPLAY.get(lc, lc)
+            for lc in _DEFAULT_PORTS
+            if _PORT_DISPLAY.get(lc, lc) in display_options
+        ][:5]
+        _multiselect_default = _preferred_defaults if _preferred_defaults else display_options[:1]
+
         selected_displays = st.multiselect(
             "Ports for timeline (max 5)",
             options=display_options,
-            default=[
-                _PORT_DISPLAY.get(lc, lc)
-                for lc in _DEFAULT_PORTS
-                if _PORT_DISPLAY.get(lc, lc) in display_options
-            ][:5],
+            default=_multiselect_default,
             max_selections=5,
             key="congestion_port_select",
         )
@@ -851,6 +903,9 @@ def render(
         "Congestion History Timeline (2020 - 2026)",
         "Monthly congestion scores with annotated crisis events and periods",
     )
+    # Spinner wraps _render_timeline specifically because it imports and reads
+    # CONGESTION_HISTORY (potentially lazy-loaded / large); other sections share
+    # the same import and are fast enough not to need their own spinner.
     with st.spinner("Loading congestion data..."):
         _render_timeline(selected_ports)
 
@@ -933,3 +988,48 @@ def render(
         _render_incident_monitor(fallback_results, macro_data)
     else:
         _render_incident_monitor(port_results, macro_data)
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CSV Export — Congestion History
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "Download Congestion History Data",
+        "Export raw monthly congestion records for all available ports as CSV",
+    )
+    try:
+        from processing.congestion_history import CONGESTION_HISTORY as _CH_EXPORT
+        import io as _io, csv as _csv
+
+        _buf = _io.StringIO()
+        _writer = _csv.writer(_buf)
+        _writer.writerow([
+            "port_locode", "date", "congestion_score", "incident_type",
+            "driver", "vessel_count", "avg_wait_days", "notes",
+        ])
+        for _lc, _recs in sorted(_CH_EXPORT.items()):
+            for _r in sorted(_recs, key=lambda r: r.date if r.date else ""):
+                _writer.writerow([
+                    _lc,
+                    str(_r.date) if _r.date else "",
+                    round(_r.congestion_score, 4) if _r.congestion_score is not None else "",
+                    getattr(_r, "incident_type", ""),
+                    getattr(_r, "driver", ""),
+                    getattr(_r, "vessel_count", ""),
+                    getattr(_r, "avg_wait_days", ""),
+                    getattr(_r, "notes", "") or "",
+                ])
+        _csv_bytes = _buf.getvalue().encode("utf-8")
+        st.download_button(
+            label="Download congestion_history.csv",
+            data=_csv_bytes,
+            file_name="congestion_history.csv",
+            mime="text/csv",
+            key="cong_csv_download",
+        )
+    except ImportError:
+        _card(
+            '<div style="color:' + C_TEXT2 + '; text-align:center; padding:10px">'
+            "CSV export unavailable — congestion history module not loaded.</div>"
+        )

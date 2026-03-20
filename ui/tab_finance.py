@@ -87,6 +87,13 @@ def _render_finance_health(indicators: List[TradeFinanceIndicator]) -> None:
         " signal leads shipping demand by weeks shown",
     )
 
+    if not indicators:
+        st.info(
+            "Trade finance indicator data is currently unavailable. "
+            "This section will populate automatically once the data feed refreshes."
+        )
+        return
+
     composite = compute_trade_finance_composite(indicators)
     cs = composite["composite_score"]
     dom = composite["dominant_signal"]
@@ -197,7 +204,7 @@ def _render_finance_health(indicators: List[TradeFinanceIndicator]) -> None:
                 )
 
     # ── data source expander ─────────────────────────────────────────────────
-    with st.expander("Indicator Details & Sources"):
+    with st.expander("Indicator Details & Sources", expanded=False, key="finance_health_indicator_details"):
         rows_data = []
         for ind in indicators:
             rows_data.append({
@@ -210,6 +217,13 @@ def _render_finance_health(indicators: List[TradeFinanceIndicator]) -> None:
             })
         detail_df = pd.DataFrame(rows_data)
         st.dataframe(detail_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            label="Download CSV",
+            data=detail_df.to_csv(index=False).encode("utf-8"),
+            file_name="trade_finance_indicators.csv",
+            mime="text/csv",
+            key="finance_health_download",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +333,8 @@ def _render_rate_impact(macro_data: dict) -> None:
         help="Drag to model how a rate change would affect estimated container demand",
         key="finance_rate_slider",
     )
+    # Clamp defensively: slider min is 0.5 but guard any edge-case zero
+    scenario_rate = max(scenario_rate, 0.25)
 
     if abs(scenario_rate - current_rate) > 0.05:
         scenario_impact = compute_interest_rate_impact_on_shipping(scenario_rate)
@@ -405,7 +421,7 @@ def _render_rate_impact(macro_data: dict) -> None:
             font=dict(family="Inter, sans-serif"),
             showlegend=False,
         )
-        st.plotly_chart(fig_rate, use_container_width=True)
+        st.plotly_chart(fig_rate, use_container_width=True, key="finance_rate_sensitivity_chart")
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +434,13 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
         "Green = easy credit access · Red = tight / restricted · "
         "Bubble size proportional to risk score",
     )
+
+    if not risk_scores:
+        st.info(
+            "Regional credit risk data is currently unavailable. "
+            "The map and risk table will populate once the data feed refreshes."
+        )
+        return
 
     # Country-level mapping for choropleth
     # (score 0=easy/green  1=tight/red; mapped from regional risk scores)
@@ -515,7 +538,7 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
         geo_bgcolor="#0a0f1a",
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig_map, use_container_width=True)
+    st.plotly_chart(fig_map, use_container_width=True, key="finance_credit_map")
 
     # ── Regional risk table ──────────────────────────────────────────────────
     st.markdown(
@@ -541,6 +564,13 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
 
     risk_df = pd.DataFrame(risk_rows)
     st.dataframe(risk_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        label="Download CSV",
+        data=risk_df.to_csv(index=False).encode("utf-8"),
+        file_name="regional_credit_risk.csv",
+        mime="text/csv",
+        key="finance_credit_risk_download",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +687,7 @@ def _render_lc_oa_trend() -> None:
         ),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="finance_lc_oa_trend")
 
     st.caption(
         "Sources: ICC Banking Commission · BIS Payment Statistics · McKinsey Global"
@@ -794,7 +824,7 @@ def _render_dedollarization() -> None:
         row=1, col=1,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="finance_dedollarization")
 
     # Insight callout
     usd_drop = round(_DEDOLLAR_DATA["usd_pct"][0] - _DEDOLLAR_DATA["usd_pct"][-1], 1)
@@ -1030,8 +1060,17 @@ def render(
     )
 
     # ── Load processing layer ────────────────────────────────────────────────
-    indicators = build_trade_finance_indicators()
-    risk_scores = compute_regional_finance_risk()
+    try:
+        indicators = build_trade_finance_indicators()
+    except Exception as exc:
+        logger.warning("tab_finance: build_trade_finance_indicators failed: {}", exc)
+        indicators = []
+
+    try:
+        risk_scores = compute_regional_finance_risk()
+    except Exception as exc:
+        logger.warning("tab_finance: compute_regional_finance_risk failed: {}", exc)
+        risk_scores = []
 
     # ── Section 1: Trade Finance Health Dashboard ────────────────────────────
     _render_finance_health(indicators)

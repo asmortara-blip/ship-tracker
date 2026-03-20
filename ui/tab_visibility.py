@@ -275,7 +275,7 @@ def _render_supply_chain_map(path: SupplyChainPath) -> None:
     )
 
     fig = go.Figure(data=traces, layout=layout)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="vis_supply_chain_map")
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +370,7 @@ def _render_journey_timeline(path: SupplyChainPath) -> None:
     )
 
     fig.update_layout(
+        template="plotly_dark",
         **_dark_layout(height=140),
         barmode="stack",
         xaxis=dict(
@@ -382,7 +383,7 @@ def _render_journey_timeline(path: SupplyChainPath) -> None:
         yaxis=dict(showticklabels=False, showgrid=False),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="vis_journey_timeline")
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +433,7 @@ def _render_bottleneck_analyser(paths: list[SupplyChainPath]) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         **_dark_layout(height=350),
         barmode="group",
         xaxis=dict(showgrid=False, tickfont=dict(size=9, color=C_TEXT2)),
@@ -460,7 +462,7 @@ def _render_bottleneck_analyser(paths: list[SupplyChainPath]) -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="vis_bottleneck_analyser")
 
     # Impact callout cards
     cols = st.columns(min(3, len(details)))
@@ -627,6 +629,7 @@ def _render_disruption_simulator(paths: list[SupplyChainPath]) -> None:
     )
 
     fig.update_layout(
+        template="plotly_dark",
         **_dark_layout(height=220),
         xaxis=dict(
             showticklabels=False, showgrid=False, zeroline=False,
@@ -640,7 +643,7 @@ def _render_disruption_simulator(paths: list[SupplyChainPath]) -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="vis_disruption_simulator")
 
     # ── Alternative routes and recommendation ────────────────────────────────
     c_left, c_right = st.columns([1, 1])
@@ -924,4 +927,21 @@ def render(port_results, route_results, freight_data) -> None:
         "Per-path resilience overview: score, alternative route count, SPOF warnings, "
         "and recommended buffer stock days.",
     )
+    st.caption(
+        "Visibility score measures the percentage of shipments with real-time "
+        "tracking data available. A higher score indicates greater AIS/GPS coverage "
+        "across the supply chain path."
+    )
+
+    # Calibration warning: if all resilience scores are zero, no live AIS/tracking
+    # data has been loaded — scores are placeholder defaults.
+    _all_zero_resilience = all(p.resilience_score == 0.0 for p in paths)
+    if _all_zero_resilience:
+        st.warning(
+            "⚠️ All visibility scores are zero — no AIS or real-time tracking data "
+            "has been received. Resilience scores shown are uncalibrated defaults. "
+            "Connect a live AIS feed to enable accurate path tracking.",
+            icon="📡",
+        )
+
     _render_resilience_cards(paths)

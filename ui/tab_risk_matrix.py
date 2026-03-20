@@ -87,6 +87,10 @@ def _render_risk_matrix(vulnerabilities: list[SupplyChainVulnerability], route_r
             if rid:
                 opp_by_id[rid] = float(opp)
 
+    if not vulnerabilities:
+        st.info("No vulnerability data available to build the risk matrix.")
+        return
+
     # Axes:
     #   X = Probability  = (geopolitical_risk + chokepoint_dependency) / 2
     #   Y = Impact       = (concentration_risk + weather_risk) / 2
@@ -195,6 +199,7 @@ def _render_risk_matrix(vulnerabilities: list[SupplyChainVulnerability], route_r
         ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor="#111827",
         height=500,
@@ -232,7 +237,7 @@ def _render_risk_matrix(vulnerabilities: list[SupplyChainVulnerability], route_r
         margin=dict(l=60, r=20, t=60, b=60),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="risk_matrix_scatter")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +295,7 @@ def _render_route_radar(vulnerabilities: list[SupplyChainVulnerability]) -> None
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         polar=dict(
             bgcolor="#111827",
             radialaxis=dict(
@@ -323,7 +329,7 @@ def _render_route_radar(vulnerabilities: list[SupplyChainVulnerability]) -> None
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="risk_matrix_radar")
 
     # Show risk factors and mitigations below radar
     col_rf, col_mit = st.columns(2)
@@ -334,9 +340,10 @@ def _render_route_radar(vulnerabilities: list[SupplyChainVulnerability]) -> None
             f'Top Risk Factors</div>',
             unsafe_allow_html=True,
         )
+        risk_factors = v.risk_factors or ["No risk factors recorded."]
         items_html = "".join(
             f'<li style="color:{C_TEXT}; font-size:0.84rem; margin-bottom:5px">{rf}</li>'
-            for rf in v.risk_factors
+            for rf in risk_factors
         )
         st.markdown(
             _card_wrap(
@@ -353,9 +360,10 @@ def _render_route_radar(vulnerabilities: list[SupplyChainVulnerability]) -> None
             f'Mitigation Options</div>',
             unsafe_allow_html=True,
         )
+        mitigation_options = v.mitigation_options or ["No mitigations recorded."]
         mit_html = "".join(
             f'<li style="color:{C_TEXT}; font-size:0.84rem; margin-bottom:5px">{m}</li>'
-            for m in v.mitigation_options
+            for m in mitigation_options
         )
         st.markdown(
             _card_wrap(
@@ -372,6 +380,10 @@ def _render_route_radar(vulnerabilities: list[SupplyChainVulnerability]) -> None
 
 def _render_leaderboard(vulnerabilities: list[SupplyChainVulnerability]) -> None:
     """Ranked HTML table sorted by overall vulnerability descending."""
+
+    if not vulnerabilities:
+        st.info("No vulnerability data available for the leaderboard.")
+        return
 
     LABEL_ROW_BG: dict[str, str] = {
         "CRITICAL": "rgba(239,68,68,0.08)",
@@ -562,6 +574,7 @@ def _render_port_heatmap(port_results) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         height=500,
         margin=dict(l=0, r=0, t=0, b=0),
@@ -583,7 +596,7 @@ def _render_port_heatmap(port_results) -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="risk_matrix_port_heatmap")
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +616,12 @@ def render(route_results, port_results, macro_data) -> None:
         Global macro indicators dict (passed through; may be used by future sections).
     """
     st.header("Supply Chain Risk Matrix")
+    st.caption(
+        "Composite vulnerability assessment across all monitored trade lanes. "
+        "Scores are derived from six sub-indices — geopolitical risk, chokepoint dependency, "
+        "concentration risk, weather risk, infrastructure risk, and route redundancy — "
+        "each normalised to a 0–100% scale. Data is refreshed on each app rerun."
+    )
 
     # Compute vulnerability scores for all routes
     vulnerabilities = score_all_routes(route_results)
@@ -618,6 +637,12 @@ def render(route_results, port_results, macro_data) -> None:
             "Quadrant lines at 50%."
         ),
     )
+    st.caption(
+        "X-axis (Probability) = average of geopolitical risk and chokepoint dependency scores. "
+        "Y-axis (Impact) = average of concentration risk and weather risk scores. "
+        "Bubble size scales with the route's opportunity score — larger bubbles mean more commercial "
+        "exposure if a disruption occurs. Use this matrix to prioritise hedging and contingency planning."
+    )
     _render_risk_matrix(vulnerabilities, route_results)
 
     st.divider()
@@ -628,6 +653,12 @@ def render(route_results, port_results, macro_data) -> None:
     _section_title(
         "Route Risk Radar",
         "Six-dimension vulnerability profile for a selected trade lane",
+    )
+    st.caption(
+        "Each axis represents one vulnerability dimension scored 0–100%. "
+        "'Low Redundancy' is the inverse of the redundancy score — a high value means few "
+        "alternative routings exist. The filled area and colour reflect the route's overall "
+        "vulnerability label (CRITICAL / HIGH / MODERATE / LOW)."
     )
     _render_route_radar(vulnerabilities)
 
@@ -640,6 +671,12 @@ def render(route_results, port_results, macro_data) -> None:
         "Vulnerability Leaderboard",
         "All routes ranked by overall vulnerability score — highest risk first",
     )
+    st.caption(
+        "Overall vulnerability is the probability-weighted mean of all six sub-indices. "
+        "The progress bar shows the absolute score; the label (CRITICAL / HIGH / MODERATE / LOW) "
+        "is assigned by fixed thresholds: CRITICAL ≥ 70%, HIGH ≥ 50%, MODERATE ≥ 30%, LOW < 30%. "
+        "Top risk factor and first mitigation option are drawn from the route's risk profile."
+    )
     _render_leaderboard(vulnerabilities)
 
     st.divider()
@@ -650,6 +687,12 @@ def render(route_results, port_results, macro_data) -> None:
     _section_title(
         "Port Risk Heatmap",
         "Globe view — marker color = combined demand + congestion risk; size = TEU throughput",
+    )
+    st.caption(
+        "Combined port risk = (demand score × 0.55) + (congestion index × 0.45), clamped to 0–100%. "
+        "Demand score reflects capacity utilisation relative to forecast; congestion index is derived "
+        "from vessel waiting times and berth occupancy rates. Marker size scales with annual "
+        "throughput (TEU/yr). Drag the globe to reorient the view."
     )
     _render_port_heatmap(port_results)
 

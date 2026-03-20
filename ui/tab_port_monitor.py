@@ -268,6 +268,7 @@ def _hourly_throughput_bars(port: PortOperationalStatus) -> go.Figure:
         annotation_position="right",
     )
     layout = dark_layout(title="24-Hour Throughput (TEU/hour)", height=220)
+    layout["template"] = "plotly_dark"
     layout["xaxis"]["title"] = ""
     layout["yaxis"]["title"] = "TEU / hr"
     layout["margin"] = {"l": 30, "r": 50, "t": 35, "b": 30}
@@ -314,6 +315,7 @@ def _crane_productivity_chart(port: PortOperationalStatus, perf: Optional[PortPe
         annotation_position="top",
     )
     layout = dark_layout(title="Crane Productivity — Moves/Hour (Top 10)", height=260)
+    layout["template"] = "plotly_dark"
     layout["xaxis"]["title"] = "Moves per crane-hour"
     layout["yaxis"]["autorange"] = "reversed"
     layout["margin"] = {"l": 60, "r": 70, "t": 35, "b": 25}
@@ -332,8 +334,10 @@ def _render_detail_panel(locode: str, live_all: dict) -> None:
         st.warning("No data for locode: " + locode)
         return
 
-    live = live_all.get(locode) or simulate_live_throughput(locode)
-    perf = PERF_BY_LOCODE.get(locode)
+    live_real = live_all.get(locode)
+    ais_live  = live_real is not None and bool(live_real)
+    live      = live_real or simulate_live_throughput(locode)
+    perf      = PERF_BY_LOCODE.get(locode)
 
     color = _STATUS_COLOR.get(port.operational_status, _C_GRAY)
 
@@ -341,6 +345,7 @@ def _render_detail_panel(locode: str, live_all: dict) -> None:
         port.country_flag + "  " + port.port_name + "  —  " + port.port_locode
         + "  " + _status_badge_html(port.operational_status),
         expanded=True,
+        key="pm_detail_expander_" + locode,
     ):
         # ── Row 1: Gauge + KPI strip ──────────────────────────────────────
         col_gauge, col_kpi = st.columns([1, 2])
@@ -374,10 +379,11 @@ def _render_detail_panel(locode: str, live_all: dict) -> None:
                 },
             ))
             layout_g = dark_layout(height=220, showlegend=False)
+            layout_g["template"]      = "plotly_dark"
             layout_g["paper_bgcolor"] = C_BG
-            layout_g["margin"] = {"l": 15, "r": 15, "t": 30, "b": 10}
+            layout_g["margin"]        = {"l": 15, "r": 15, "t": 30, "b": 10}
             fig_gauge.update_layout(**layout_g)
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            st.plotly_chart(fig_gauge, use_container_width=True, key="pm_gauge_" + locode)
 
         with col_kpi:
             teu_val   = live.get("throughput_teu", port.throughput_today_teu)
@@ -437,6 +443,18 @@ def _render_detail_panel(locode: str, live_all: dict) -> None:
                 unsafe_allow_html=True,
             )
 
+        # AIS unavailability notice
+        if not ais_live:
+            st.markdown(
+                "<div style='background:rgba(71,85,105,0.12);border:1px solid rgba(71,85,105,0.30);"
+                + "border-radius:8px;padding:8px 14px;margin-top:4px;"
+                + "font-size:0.78rem;color:" + C_TEXT2 + ";display:flex;align-items:center;gap:8px'>"
+                + "<span style='font-size:1.05rem'>&#128674;</span>"
+                + "<span>AIS data temporarily unavailable \u2014 operational metrics are simulated from baseline.</span>"
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
         # Incident banner
         if port.incident_description:
             inc_color = _STATUS_COLOR.get(port.operational_status, _C_GRAY)
@@ -457,9 +475,44 @@ def _render_detail_panel(locode: str, live_all: dict) -> None:
         # ── Row 2: Hourly bars | Crane productivity ────────────────────────
         col_hourly, col_crane = st.columns([3, 2])
         with col_hourly:
-            st.plotly_chart(_hourly_throughput_bars(port), use_container_width=True)
+            st.plotly_chart(_hourly_throughput_bars(port), use_container_width=True, key="pm_hourly_" + locode)
         with col_crane:
-            st.plotly_chart(_crane_productivity_chart(port, perf), use_container_width=True)
+            st.plotly_chart(_crane_productivity_chart(port, perf), use_container_width=True, key="pm_crane_" + locode)
+
+        # ── Export port report ─────────────────────────────────────────────
+        st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+        _col_exp, _col_pad = st.columns([1, 4])
+        with _col_exp:
+            _report_rows = {
+                "port_name":               port.port_name,
+                "port_locode":             port.port_locode,
+                "operational_status":      port.operational_status,
+                "throughput_teu_today":    live.get("throughput_teu", port.throughput_today_teu),
+                "berth_occupancy_pct":     live.get("berth_occupancy_pct", 75.0),
+                "crane_utilization_pct":   live.get("crane_utilization_pct", 80.0),
+                "vessel_queue":            live.get("vessel_queue", 0),
+                "avg_dwell_time_days":     live.get("avg_dwell_time_days", port.avg_dwell_time_days),
+                "gate_wait_minutes":       live.get("gate_wait_minutes", 45.0),
+                "ship_turn_hours":         perf.ship_turn_hours if perf else "",
+                "crane_productivity_mph":  perf.crane_productivity_moves_per_hour if perf else "",
+                "annual_teu_volume_m":     perf.annual_teu_volume_m if perf else "",
+                "rail_connection":         port.rail_connection,
+                "deepwater_berths":        port.deepwater_berths_count,
+                "max_vessel_teu":          port.max_vessel_teu,
+                "ais_data_live":           ais_live,
+                "report_generated_utc":    datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            }
+            _report_df  = pd.DataFrame([_report_rows])
+            _csv_bytes   = _report_df.to_csv(index=False).encode("utf-8")
+            _fname        = "port_report_" + locode + "_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M") + ".csv"
+            st.download_button(
+                label="&#128229; Export port report",
+                data=_csv_bytes,
+                file_name=_fname,
+                mime="text/csv",
+                key="pm_export_" + locode,
+                use_container_width=True,
+            )
 
 
 # ── Section 3: World Port Benchmark Table ─────────────────────────────────────
@@ -726,6 +779,7 @@ def _render_capacity_chart() -> None:
     )
 
     layout = dark_layout(title="Global Container Port Capacity (M TEU) — 2020-2040 Projection", height=380)
+    layout["template"] = "plotly_dark"
     layout["xaxis"]["title"] = "Year"
     layout["yaxis"]["title"] = "Capacity (M TEU)"
     layout["legend"]["orientation"] = "h"
@@ -733,7 +787,7 @@ def _render_capacity_chart() -> None:
     layout["legend"]["x"] = 0
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="pm_capacity_chart")
 
     # Current utilisation table
     util_rows = []
@@ -859,19 +913,19 @@ def render(port_results: Any = None, ais_data: Any = None) -> None:
 
     # ── 1. Port Status Grid ────────────────────────────────────────────────────
     selected_locode = _render_port_grid(live_all)
-    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07);margin:22px 0'>", unsafe_allow_html=True)
 
     # ── 2. Live Port Detail Panel ──────────────────────────────────────────────
     _render_detail_panel(selected_locode, live_all)
-    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07);margin:22px 0'>", unsafe_allow_html=True)
 
     # ── 3. World Port Benchmark Table ─────────────────────────────────────────
     _render_benchmark_table(live_all)
-    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07);margin:22px 0'>", unsafe_allow_html=True)
 
     # ── 4. Port Capacity by Region ────────────────────────────────────────────
     _render_capacity_chart()
-    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07);margin:22px 0'>", unsafe_allow_html=True)
 
     # ── 5. Anomaly Feed ───────────────────────────────────────────────────────
     _render_anomaly_feed(live_all)

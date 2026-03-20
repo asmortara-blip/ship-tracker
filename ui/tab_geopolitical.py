@@ -333,6 +333,7 @@ def _render_world_map() -> None:
         ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         height=500,
         margin=dict(l=0, r=0, t=0, b=0),
@@ -505,13 +506,17 @@ _PULSE_CSS = """
 
 
 def _render_risk_event_cards() -> None:
-    """Render all 10 geopolitical event cards in a 2-column layout."""
+    """Render all geopolitical event cards in a 2-column layout."""
     logger.debug("Rendering geopolitical risk event cards")
+
+    if not CURRENT_RISK_EVENTS:
+        st.info("No active geopolitical risk events are currently loaded.")
+        return
 
     # Inject pulse keyframe CSS once
     st.markdown(_PULSE_CSS, unsafe_allow_html=True)
 
-    # Sort: CRITICAL first, then HIGH, MODERATE, LOW
+    # Sort: CRITICAL first, then HIGH, MODERATE, LOW — dict mapping avoids string sort pitfalls
     order = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
     sorted_events = sorted(
         CURRENT_RISK_EVENTS,
@@ -560,6 +565,10 @@ def _render_route_matrix(route_results) -> None:
                 opp_by_id[rid] = float(opp)
 
     all_scores = get_all_route_scores()
+
+    if not all_scores:
+        st.info("No route geopolitical scores are available.")
+        return
 
     # Sort by geo score descending
     all_scores_sorted = sorted(all_scores, key=lambda x: x[2], reverse=True)
@@ -824,6 +833,12 @@ def render(route_results, port_results, freight_data, macro_data) -> None:
     logger.info("Rendering Geopolitical Risk Monitor tab")
 
     st.header("Geopolitical Risk Monitor")
+    st.caption(
+        "Real-time geopolitical risk intelligence for global shipping. "
+        "Risk levels (CRITICAL / HIGH / MODERATE / LOW) are assigned using a probability-weighted "
+        "composite of active conflict, sanctions, chokepoint status, and historical disruption frequency. "
+        "Scores are updated each app rerun against the curated event database."
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Section 1 — World Risk Map
@@ -835,6 +850,13 @@ def render(route_results, port_results, freight_data, macro_data) -> None:
             "by risk severity. Rotate globe to explore."
         ),
     )
+    st.caption(
+        "Chokepoints are scored individually based on current conflict exposure, vessel traffic "
+        "concentration, and historical closure frequency. Shipping lane colours reflect the highest "
+        "risk event affecting that corridor. Marker size scales with chokepoint criticality "
+        "(CRITICAL = largest). Source: curated geopolitical event database in "
+        "processing/geopolitical_monitor.py."
+    )
     _render_world_map()
 
     st.divider()
@@ -845,11 +867,18 @@ def render(route_results, port_results, freight_data, macro_data) -> None:
     _section_title(
         "Current Geopolitical Risk Events (2025-2026)",
         (
-            "10 active risk events — sorted by severity and probability. "
+            "Active risk events — sorted by severity then probability. "
             "CRITICAL events pulse. Expected rate impact = rate impact % "
             + "\xd7"
             + " probability."
         ),
+    )
+    st.caption(
+        "Each card shows: (1) Rate Impact — estimated freight rate change if the event escalates "
+        "to full disruption; (2) Volume Impact — estimated trade volume reduction; "
+        "(3) Probability — analyst-assessed likelihood of material escalation within 90 days; "
+        "(4) Expected Rate Impact — probability-weighted rate impact, the key figure for "
+        "commercial decision-making. Resolution timeline indicates the analyst's expected duration."
     )
     _render_risk_event_cards()
 
@@ -865,6 +894,14 @@ def render(route_results, port_results, freight_data, macro_data) -> None:
             "Score = probability-weighted mean of event risk levels affecting that route."
         ),
     )
+    st.caption(
+        "Composite geopolitical score = mean of (event_probability × event_severity_weight) "
+        "across all active events affecting that route's chokepoints and corridors. "
+        "Severity weights: CRITICAL = 1.0, HIGH = 0.75, MODERATE = 0.50, LOW = 0.25. "
+        "Expected rate impact is the probability-weighted rate change estimate aggregated "
+        "from all affecting events. Recommendations are rule-based thresholds applied to "
+        "the composite score and rate impact."
+    )
     _render_route_matrix(route_results)
 
     st.divider()
@@ -875,8 +912,15 @@ def render(route_results, port_results, freight_data, macro_data) -> None:
     _section_title(
         "Scenario Analysis: What if the Suez Canal Closes?",
         (
-            "Hardcoded rerouting analysis — impact on affected routes, transit times, "
+            "Rerouting analysis — impact on affected routes, transit times, "
             "fuel costs, and freight rate estimates under a full Suez closure event."
         ),
+    )
+    st.caption(
+        "This scenario models a complete Suez Canal closure forcing all affected carriers onto "
+        "the Cape of Good Hope routing. Fuel cost estimates use VLSFO at $500–600/tonne. "
+        "Rate spike estimates are based on the 2021 Ever Given precedent and 2024 Red Sea "
+        "diversion data. Extra days and fuel figures are route-specific and reflect "
+        "laden voyage distance increases only (ballast legs not included)."
     )
     _render_suez_scenario()

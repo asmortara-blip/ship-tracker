@@ -789,7 +789,7 @@ def _render_leading_indicators_dashboard(macro_data: dict) -> None:
         return
 
     if not indicators:
-        st.info("No leading indicator data loaded.")
+        st.info("📈 Market leading indicator data is loading or unavailable — FRED data refreshes every 24 hours. Ensure FRED_API_KEY is set in .env and click Refresh All Data.")
         return
 
     SIGNAL_COLORS = {
@@ -914,7 +914,7 @@ def _render_lead_lag_matrix(macro_data: dict) -> None:
         return
 
     if matrix_df.empty:
-        st.info("Insufficient data to compute lead-lag correlations.")
+        st.info("📈 Insufficient market data to compute lead-lag correlations — FRED data refreshes every 24 hours. Ensure FRED_API_KEY is set in .env and click Refresh All Data.")
         return
 
     z = matrix_df.values.tolist()
@@ -1225,6 +1225,67 @@ def render(
 
     st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 1 hour (market data)")
 
+    # ── KPI metric row — BDI, Freight PPI, and top stock 30d change ──────
+    _MARKET_KPI_SERIES = [
+        ("BSXRLM", "Baltic Dry Index (BDI)"),
+        ("WPU101", "Freight PPI"),
+        ("MANEMP", "Mfg Employment"),
+        ("ISRATIO", "Inventory Ratio"),
+    ]
+    kpi_data = {}
+    if macro_data:
+        for sid, lbl in _MARKET_KPI_SERIES:
+            df_m = macro_data.get(sid)
+            pct = _pct_change_30d(df_m)
+            vals = df_m["value"].dropna() if df_m is not None and not df_m.empty and "value" in df_m.columns else None
+            current = float(vals.iloc[-1]) if vals is not None and not vals.empty else None
+            kpi_data[sid] = (lbl, current, pct)
+
+    # Also show top-performing stock 30d return if stock_data available
+    top_stock_name, top_stock_pct = None, None
+    if stock_data:
+        for ticker, df_s in stock_data.items():
+            if df_s is None or df_s.empty or "close" not in df_s.columns:
+                continue
+            closes = df_s["close"].dropna()
+            if len(closes) < 30:
+                continue
+            pct_s = (float(closes.iloc[-1]) - float(closes.iloc[-30])) / abs(float(closes.iloc[-30])) * 100
+            if top_stock_pct is None or abs(pct_s) > abs(top_stock_pct):
+                top_stock_name, top_stock_pct = ticker, pct_s
+
+    if kpi_data or top_stock_name:
+        kpi_series_to_show = [v for v in kpi_data.values() if v[1] is not None]
+        n_cols = min(4, len(kpi_series_to_show) + (1 if top_stock_name else 0))
+        if n_cols > 0:
+            kpi_cols_m = st.columns(n_cols)
+            col_idx = 0
+            for lbl, current, pct in kpi_series_to_show[:3]:
+                if col_idx >= n_cols:
+                    break
+                with kpi_cols_m[col_idx]:
+                    val_str = f"{current:,.1f}" if current is not None else "N/A"
+                    delta_str = f"{pct:+.1f}% vs 30d ago" if pct is not None else "vs 30d ago"
+                    st.metric(
+                        label=lbl,
+                        value=val_str,
+                        delta=delta_str,
+                        delta_color="normal",
+                    )
+                col_idx += 1
+            if top_stock_name and col_idx < n_cols:
+                with kpi_cols_m[col_idx]:
+                    st.metric(
+                        label=f"Top Mover: {top_stock_name}",
+                        value=f"{top_stock_pct:+.1f}%",
+                        delta="30-day return",
+                        delta_color="normal",
+                    )
+        st.markdown(
+            "<hr style='border-color:rgba(255,255,255,0.07); margin:12px 0'>",
+            unsafe_allow_html=True,
+        )
+
     st.markdown(
         f'<div style="font-size:0.72rem; font-weight:700; color:{C_TEXT3_L};'
         f' text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px">'
@@ -1274,25 +1335,19 @@ def render(
         st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:20px 0'>", unsafe_allow_html=True)
 
     # ── Guard clause ──────────────────────────────────────────────────────
-    if not correlation_results:
-        st.markdown(
-            f'<div style="background:{C_CARD_L}; border:1px solid {C_BORDER_L};'
-            f' border-radius:12px; padding:28px 32px">'
-            f'<div style="display:flex; align-items:flex-start; gap:16px">'
-            f'<div style="font-size:2rem; flex-shrink:0">\U0001f4ca</div>'
-            f'<div>'
-            f'<div style="font-size:0.95rem; font-weight:700; color:{C_TEXT_L}; margin-bottom:8px">'
-            f'No statistically significant correlations detected</div>'
-            f'<div style="font-size:0.85rem; color:{C_TEXT2_L}; line-height:1.6">'
-            f'All tested (shipping signal, stock) pairs are below |r| = 0.40 or p \u2265 0.05. '
-            f'This is expected \u2014 shipping data and equity prices don\u2019t always move together. '
-            f'As more historical data accumulates (60+ days), correlations may emerge.<br><br>'
-            f'<strong style="color:{C_TEXT_L}">Signals tested:</strong> Baltic Dry Index, US Import Value,'
-            f' Freight PPI, Industrial Production, Trans-Pacific Freight Rate,'
-            f' commodity ETFs (DBA, DBB, USO, XLB).<br>'
-            f'<strong style="color:{C_TEXT_L}">Stocks tested:</strong> ZIM, MATX, SBLK, DAC, CMRE, XRT, XLI.'
-            f'</div></div></div></div>',
-            unsafe_allow_html=True,
+    # Filter to only correlations that clear the significance threshold
+    # (|r| >= 0.40 and p < 0.05).  The correlator should already do this,
+    # but we re-apply here as a belt-and-suspenders safety net so the tab
+    # never crashes or renders empty charts for insignificant pairs.
+    significant_results = [
+        r for r in (correlation_results or [])
+        if abs(r.pearson_r) >= 0.40 and r.p_value < 0.05
+    ]
+
+    if not significant_results:
+        st.info(
+            "No significant correlations detected above threshold — "
+            "check back as more data accumulates"
         )
         # Still render signal timeline even with no correlations
         if macro_data and stock_data:
@@ -1315,6 +1370,9 @@ def render(
                 _render_composite_leading_score(macro_data)
         return
 
+    # Alias: remainder of the function uses significant_results exclusively
+    correlation_results = significant_results
+
     # ── 4. Enhanced Correlation Heatmap ───────────────────────────────────
     st.markdown(
         f'<div style="font-size:0.75rem; font-weight:700; color:{C_TEXT3_L};'
@@ -1330,6 +1388,9 @@ def render(
         all_signals = sorted({r.signal for r in correlation_results})
         matrix = build_correlation_heatmap_data(correlation_results, all_stocks, all_signals)
     signal_labels = [_SIGNAL_LABELS.get(s, s) for s in matrix.index]
+
+    # Fill NaN cells with 0 so the colorscale has no artifacts for missing pairs
+    matrix = matrix.fillna(0)
 
     # Build text with muted values for low |r|
     z_vals = matrix.values
@@ -1526,15 +1587,22 @@ def _render_stock_chart(stock_data: dict[str, pd.DataFrame], lookback_days: int)
 
     fig = go.Figure()
     for i, (symbol, df) in enumerate(stock_data.items()):
-        if df.empty:
+        if df is None or df.empty:
             continue
-        recent = df.tail(lookback_days).copy()
-        if recent.empty or len(recent) < 2:
+        if "close" not in df.columns or "date" not in df.columns:
+            logger.warning("_render_stock_chart: missing columns for {}", symbol)
             continue
-        base = recent["close"].iloc[0]
-        if base == 0:
+        try:
+            recent = df.tail(lookback_days).copy()
+            if recent.empty or len(recent) < 2:
+                continue
+            base = recent["close"].dropna().iloc[0]
+            if base == 0:
+                continue
+            pct_return = (recent["close"] / base - 1) * 100
+        except (KeyError, IndexError) as exc:
+            logger.warning("_render_stock_chart: could not compute return for {}: {}", symbol, exc)
             continue
-        pct_return = (recent["close"] / base - 1) * 100
         color = COLORS[i % len(COLORS)]
 
         fig.add_trace(go.Scatter(
@@ -1580,6 +1648,11 @@ def _render_dual_axis_chart(result: CorrelationResult, stock_data: dict[str, pd.
     if stock_df is None or stock_df.empty:
         return
 
+    # Guard: required columns must be present
+    if "date" not in stock_df.columns or "close" not in stock_df.columns:
+        logger.warning("_render_dual_axis_chart: missing columns for {}", result.stock)
+        return
+
     with st.expander(
         f"{result.stock} vs {_SIGNAL_LABELS.get(result.signal, result.signal)}"
         f" (r={result.pearson_r:.2f})",
@@ -1587,7 +1660,17 @@ def _render_dual_axis_chart(result: CorrelationResult, stock_data: dict[str, pd.
     ):
         st.caption(result.interpretation)
 
-        stock_series = stock_df.set_index("date")["close"]
+        try:
+            stock_series = stock_df.set_index("date")["close"].dropna()
+        except (KeyError, Exception) as exc:
+            logger.warning("_render_dual_axis_chart: failed to build series for {}: {}", result.stock, exc)
+            st.warning(f"Chart data unavailable for {result.stock}.")
+            return
+
+        # Guard: need at least one data point to build the chart
+        if stock_series.empty:
+            st.warning(f"No price data available for {result.stock}.")
+            return
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(

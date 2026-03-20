@@ -71,8 +71,12 @@ def _series_from_freight(freight_data: dict, route_key: str, tail: int = 30) -> 
     df2 = df.copy()
     if "date" in df2.columns:
         df2 = df2.sort_values("date")
-    col = "rate_usd_feu" if "rate_usd_feu" in df2.columns else (
-        "value" if "value" in df2.columns else None
+    col = (
+        "rate_usd_per_feu" if "rate_usd_per_feu" in df2.columns else (
+            "rate_usd_feu" if "rate_usd_feu" in df2.columns else (
+                "value" if "value" in df2.columns else None
+            )
+        )
     )
     if col is None:
         return []
@@ -373,15 +377,36 @@ def _render_routes_column(route_results: list[RouteOpportunity]) -> None:
 
 # ── Section 2 CENTER: Port heat map ──────────────────────────────────────────
 
-def _demand_to_green(score: float) -> str:
-    """Map demand score [0,1] to a green color with variable opacity."""
-    # Low demand → dim gray-green; High demand → vivid green
-    # Use green channel dominance, alpha via background-color opacity trick with solid colors
-    base_r = 10
-    base_g = int(50 + score * 185)   # 50 → 235
-    base_b = int(20 + score * 50)    # 20 → 70
-    alpha  = 0.18 + score * 0.62     # 0.18 → 0.80
-    return "rgba({},{},{},{:.2f})".format(base_r, base_g, base_b, alpha)
+def _demand_to_color(score: float) -> str:
+    """Map demand score [0,1] to a red→amber→green background rgba visible on dark backgrounds.
+
+    Low  (0.00–0.39): red family,   alpha 0.25–0.35
+    Mid  (0.40–0.64): amber family, alpha 0.22–0.32
+    High (0.65–1.00): green family, alpha 0.28–0.70
+    """
+    score = max(0.0, min(1.0, score))
+    if score >= 0.65:
+        # green: rgb(16, 185, 129) = _GREEN
+        t = (score - 0.65) / 0.35          # 0 → 1
+        r = int(10 + t * 6)                # 10 → 16
+        g = int(120 + t * 65)              # 120 → 185
+        b = int(60 + t * 69)               # 60 → 129
+        alpha = 0.28 + t * 0.42            # 0.28 → 0.70
+    elif score >= 0.40:
+        # amber: rgb(245, 158, 11) = _AMBER
+        t = (score - 0.40) / 0.25          # 0 → 1
+        r = int(180 + t * 65)              # 180 → 245
+        g = int(100 + t * 58)              # 100 → 158
+        b = int(8 + t * 3)                 # 8 → 11
+        alpha = 0.22 + t * 0.10            # 0.22 → 0.32
+    else:
+        # red: rgb(239, 68, 68) = _RED
+        t = score / 0.40                   # 0 → 1
+        r = int(180 + t * 59)              # 180 → 239
+        g = int(30 + t * 38)               # 30 → 68
+        b = int(30 + t * 38)               # 30 → 68
+        alpha = 0.25 + t * 0.10            # 0.25 → 0.35
+    return "rgba({},{},{},{:.2f})".format(r, g, b, alpha)
 
 
 def _render_heatmap_column(port_results: list[PortDemandResult]) -> None:
@@ -408,8 +433,10 @@ def _render_heatmap_column(port_results: list[PortDemandResult]) -> None:
             continue
 
         score  = item.demand_score if item.has_real_data else 0.0
-        bg     = _demand_to_green(score)
-        border = _rgba(_GREEN, 0.15 + score * 0.35)
+        bg     = _demand_to_color(score)
+        # Border and text colour follow the same green/amber/red tier as the background
+        tier_color = _GREEN if score >= 0.65 else (_AMBER if score >= 0.40 else _RED)
+        border = _rgba(tier_color, 0.30 + score * 0.25)
         label  = item.demand_label if item.has_real_data else "—"
 
         # Abbreviate port name to fit cell
@@ -417,7 +444,7 @@ def _render_heatmap_column(port_results: list[PortDemandResult]) -> None:
         name_short = name[:10] + "…" if len(name) > 10 else name
 
         score_txt = "{:.0f}".format(score * 100) if item.has_real_data else "?"
-        txt_color = _GREEN if score >= 0.65 else (_AMBER if score >= 0.40 else _TEXT3)
+        txt_color = tier_color
 
         cells_html += (
             "<div style='background:{}; border:1px solid {}; border-radius:6px; "
@@ -517,6 +544,89 @@ def _render_signals_column(insights: list[Insight]) -> None:
         "</div>".format(glass=_GLASS, border=_BORDER, cards=cards_html),
         unsafe_allow_html=True,
     )
+
+
+# ── Score table + CSV download ───────────────────────────────────────────────
+
+def _render_score_table_download(
+    route_results: list[RouteOpportunity],
+    port_results: list[PortDemandResult],
+) -> None:
+    """Collapsible section with the full route/port score table and a CSV download button."""
+    if not route_results and not port_results:
+        return
+
+    with st.expander("Score Table & CSV Export", expanded=False):
+        rows: list[dict] = []
+
+        for r in route_results:
+            action_label, _ = _action_badge(r.opportunity_score)
+            rows.append({
+                "Type": "Route",
+                "Name": r.route_name,
+                "ID": r.route_id,
+                "Origin": r.origin_locode,
+                "Destination": r.dest_locode,
+                "Opportunity Score": round(r.opportunity_score, 4),
+                "Score %": f"{r.opportunity_score * 100:.0f}%",
+                "Action": action_label,
+                "Rate (USD/FEU)": r.current_rate_usd_feu if r.current_rate_usd_feu > 0 else None,
+                "Rate Trend": r.rate_trend,
+                "30d Change %": f"{r.rate_pct_change_30d * 100:+.1f}%" if r.current_rate_usd_feu > 0 else "—",
+                "Transit Days": r.transit_days,
+                "FBX Index": r.fbx_index,
+                "Generated At": r.generated_at,
+            })
+
+        for p in port_results:
+            demand_score = p.demand_score if p.has_real_data else None
+            rows.append({
+                "Type": "Port",
+                "Name": p.port_name,
+                "ID": p.locode,
+                "Origin": p.locode,
+                "Destination": "",
+                "Opportunity Score": demand_score,
+                "Score %": f"{demand_score * 100:.0f}%" if demand_score is not None else "N/A",
+                "Action": p.demand_label if p.has_real_data else "—",
+                "Rate (USD/FEU)": None,
+                "Rate Trend": getattr(p, "demand_trend", ""),
+                "30d Change %": "—",
+                "Transit Days": None,
+                "FBX Index": "",
+                "Generated At": "",
+            })
+
+        df_table = pd.DataFrame(rows)
+
+        # Display styled table
+        st.dataframe(
+            df_table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Opportunity Score": st.column_config.ProgressColumn(
+                    "Score",
+                    min_value=0.0,
+                    max_value=1.0,
+                    format="%.0f%%",
+                ),
+                "Rate (USD/FEU)": st.column_config.NumberColumn(
+                    "Rate USD/FEU",
+                    format="$%,.0f",
+                ),
+            },
+        )
+
+        # CSV download
+        csv_bytes = df_table.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download CSV",
+            data=csv_bytes,
+            file_name="scorecard_scores.csv",
+            mime="text/csv",
+            key="scorecard_csv_download",
+        )
 
 
 # ── Section 3: Mini sparkline charts ─────────────────────────────────────────
@@ -692,6 +802,13 @@ def render(
     macro_data   = macro_data   or {}
     stock_data   = stock_data   or {}
 
+    if not port_results and not route_results and not insights:
+        st.info(
+            "No scorecard data available yet. "
+            "Check API credentials and click Refresh to load routes and port data."
+        )
+        return
+
     logger.debug(
         "Rendering scorecard: {} ports, {} routes, {} insights",
         len(port_results), len(route_results), len(insights),
@@ -713,6 +830,9 @@ def render(
 
     with col_right:
         _render_signals_column(insights)
+
+    # ── Score table download ──────────────────────────────────────────────
+    _render_score_table_download(route_results, port_results)
 
     # ── Section 3: Sparkline strip ────────────────────────────────────────
     st.markdown(

@@ -1,14 +1,24 @@
 """tab_compliance.py — Sanctions Compliance Monitor tab.
 
-Six sections:
+Seven sections:
   1. Sanctions World Map        — Plotly choropleth (red/orange/yellow/green by risk)
   2. Active Sanctions Dashboard — Card grid per SanctionsRegime, pulsing CRITICAL badges
   3. Dark Fleet Tracker         — Pie chart, shadow premium, detection stats
   4. Compliance Cost Calculator — Per-route due diligence cost and requirements
   5. Regulatory Timeline        — Upcoming 2026-2028 compliance deadlines
-  6. Route Compliance Scoring   — All 17 routes with risk score, exposure, diligence level
+  6. IMO CII Rating Reference   — Color-coded A-E rating bands with thresholds
+  7. Route Compliance Scoring   — All 17 routes with risk score, exposure, diligence level
+
+Data currency note:
+  IMO Carbon Intensity Indicator (CII) reduction factors and rating thresholds are reviewed
+  annually at MEPC sessions. EU ETS shipping scope and EUA prices change quarterly.
+  OFAC/EU sanctions designations are updated continuously. Always verify against the
+  latest MEPC circulars, EUR-Lex OJ publications, and OFAC SDN list before operational use.
 """
 from __future__ import annotations
+
+import csv
+import io
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -341,7 +351,7 @@ def _render_sanctions_map() -> None:
         font=dict(color=C_TEXT),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="compliance_sanctions_map")
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +455,10 @@ def _render_sanctions_dashboard() -> None:
     """Render 2-column card grid for all active sanctions regimes."""
     logger.debug("Rendering active sanctions dashboard cards")
 
+    if not ACTIVE_SANCTIONS:
+        st.info("No active sanctions regimes loaded.")
+        return
+
     st.markdown(_PULSE_CSS, unsafe_allow_html=True)
 
     # Sort: CRITICAL first, then by enforcement cases desc
@@ -527,7 +541,7 @@ def _render_dark_fleet() -> None:
     with chart_col:
         # Pie chart: dark fleet vs clean fleet
         dark_count = df.estimated_vessels
-        clean_count = 4700 - dark_count
+        clean_count = max(0, 4700 - dark_count)  # guard: estimated_vessels should not exceed total
 
         fig_pie = go.Figure(go.Pie(
             labels=["Dark Fleet (Unregulated)", "Clean / Western Fleet"],
@@ -571,7 +585,7 @@ def _render_dark_fleet() -> None:
                 showarrow=False,
             )],
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, use_container_width=True, key="compliance_dark_fleet_pie")
 
     with info_col:
         # Flag states
@@ -1026,6 +1040,10 @@ def _render_route_scoring_table() -> None:
 
     all_scores = get_all_route_compliance_scores()
 
+    if not all_scores:
+        st.info("No route compliance data available.")
+        return
+
     rows_html = ""
     for rank, (rid, score, risk_level) in enumerate(all_scores, 1):
         score_pct = int(score * 100)
@@ -1113,6 +1131,235 @@ def _render_route_scoring_table() -> None:
         + "</div>",
         unsafe_allow_html=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Section 6: IMO CII Rating Reference (A–E color-coded)
+# ---------------------------------------------------------------------------
+
+# CII rating colour mapping — IMO standard (MEPC.339(76) and subsequent circulars)
+_CII_COLORS: dict[str, str] = {
+    "A": "#10b981",   # green      — superior efficiency
+    "B": "#34d399",   # light green — minor superior efficiency
+    "C": "#f59e0b",   # amber      — moderate (compliant baseline)
+    "D": "#f97316",   # orange     — minor inferior efficiency (corrective action if 3 consecutive)
+    "E": "#ef4444",   # red        — inferior efficiency (mandatory corrective action plan)
+}
+
+# Descriptive band metadata
+_CII_BANDS: list[dict] = [
+    {
+        "rating": "A",
+        "label": "Superior",
+        "description": (
+            "Vessel significantly exceeds the required annual CII. "
+            "Demonstrates best-in-class carbon efficiency. "
+            "No regulatory action required."
+        ),
+        "action": "None — recognised as industry leader",
+        "threshold": "≥ 15% above required CII",
+    },
+    {
+        "rating": "B",
+        "label": "Minor Superior",
+        "description": (
+            "Vessel moderately exceeds the required annual CII. "
+            "Good efficiency performance relative to IMO trajectory."
+        ),
+        "action": "None — compliant with margin",
+        "threshold": "5–15% above required CII",
+    },
+    {
+        "rating": "C",
+        "label": "Moderate (Baseline)",
+        "description": (
+            "Vessel meets the required annual CII. "
+            "Compliant baseline — the minimum acceptable performance level. "
+            "~30–35% of the global fleet currently rated C."
+        ),
+        "action": "None — meets minimum IMO requirement",
+        "threshold": "Within ±5% of required CII",
+    },
+    {
+        "rating": "D",
+        "label": "Minor Inferior",
+        "description": (
+            "Vessel falls below the required annual CII. "
+            "If rated D for 3 consecutive years, a mandatory Corrective Action Plan "
+            "must be submitted to flag state and approved."
+        ),
+        "action": "Corrective Action Plan required after 3 consecutive D ratings",
+        "threshold": "5–15% below required CII",
+    },
+    {
+        "rating": "E",
+        "label": "Inferior",
+        "description": (
+            "Vessel significantly exceeds required carbon intensity. "
+            "Mandatory Corrective Action Plan required immediately — "
+            "a single E rating triggers compliance action. "
+            "Port State Control may scrutinise vessels rated E."
+        ),
+        "action": "Immediate Corrective Action Plan required",
+        "threshold": "≥ 15% below required CII",
+    },
+]
+
+
+def _render_cii_rating_reference() -> None:
+    """Render IMO CII A–E rating reference with color-coded bands and descriptions."""
+    logger.debug("Rendering IMO CII rating reference section")
+
+    # Data currency warning
+    st.markdown(
+        "<div style=\"background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.30);"
+        " border-radius:10px; padding:12px 16px; margin-bottom:16px;"
+        " font-size:0.78rem; color:" + C_TEXT2 + "; line-height:1.5\">"
+        "<b style=\"color:" + C_WARN + "\">&#9888; Data Currency Notice:</b> "
+        "IMO CII reduction factors and rating boundary vectors (d&#x2081;–d&#x2084;) are "
+        "reviewed and tightened annually at MEPC sessions. The bands shown here reflect "
+        "MEPC.339(76) guidance and subsequent circulars. Verify against the latest "
+        "MEPC circular (MEPC.1/Circ.896 series) before operational or chartering decisions. "
+        "Next scheduled MEPC review: MEPC 84 (2025)."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Rating band cards (one per rating, horizontal row)
+    cols = st.columns(5)
+    for col, band in zip(cols, _CII_BANDS):
+        rating = band["rating"]
+        color = _CII_COLORS[rating]
+        bg = color + "18"
+        border = color + "55"
+        with col:
+            st.markdown(
+                "<div style=\"background:" + bg + "; border:1px solid " + border + ";"
+                " border-top:4px solid " + color + ";"
+                " border-radius:10px; padding:14px 12px; text-align:center;"
+                " min-height:220px\">"
+                "<div style=\"font-size:2.2rem; font-weight:900; color:" + color + ";"
+                " line-height:1\">" + rating + "</div>"
+                "<div style=\"font-size:0.68rem; font-weight:700; color:" + color + ";"
+                " text-transform:uppercase; letter-spacing:0.06em; margin-top:4px;"
+                " margin-bottom:10px\">" + band["label"] + "</div>"
+                "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; line-height:1.45;"
+                " margin-bottom:8px; text-align:left\">" + band["description"] + "</div>"
+                "<div style=\"background:rgba(0,0,0,0.25); border-radius:6px;"
+                " padding:6px 8px; margin-top:8px; text-align:left\">"
+                "<div style=\"font-size:0.60rem; text-transform:uppercase; letter-spacing:0.06em;"
+                " color:" + C_TEXT3 + "; margin-bottom:3px\">Threshold</div>"
+                "<div style=\"font-size:0.68rem; color:" + color + "; font-weight:600\">"
+                + band["threshold"] + "</div>"
+                "</div>"
+                "<div style=\"background:rgba(0,0,0,0.20); border-radius:6px;"
+                " padding:6px 8px; margin-top:6px; text-align:left\">"
+                "<div style=\"font-size:0.60rem; text-transform:uppercase; letter-spacing:0.06em;"
+                " color:" + C_TEXT3 + "; margin-bottom:3px\">Required Action</div>"
+                "<div style=\"font-size:0.65rem; color:" + C_TEXT2 + "; line-height:1.35\">"
+                + band["action"] + "</div>"
+                "</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+    # CII bar chart — visual rating spectrum
+    st.markdown("<div style=\"height:12px\"></div>", unsafe_allow_html=True)
+    fig_cii = go.Figure()
+
+    cii_labels = [b["rating"] + " — " + b["label"] for b in _CII_BANDS]
+    cii_colors = [_CII_COLORS[b["rating"]] for b in _CII_BANDS]
+    # Arbitrary equal-width bars to show the color spectrum
+    cii_values = [1, 1, 1, 1, 1]
+
+    fig_cii.add_trace(go.Bar(
+        x=cii_labels,
+        y=cii_values,
+        marker_color=cii_colors,
+        marker_line_width=0,
+        text=[b["threshold"] for b in _CII_BANDS],
+        textposition="inside",
+        textfont=dict(color="#0a0f1a", size=10, family="Inter, sans-serif"),
+        hovertemplate=(
+            "<b>CII Rating %{x}</b><br>"
+            "Threshold: %{text}<br>"
+            "<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    fig_cii.update_layout(
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        height=100,
+        margin=dict(l=10, r=10, t=8, b=8),
+        xaxis=dict(
+            tickfont=dict(color=C_TEXT2, size=11),
+            showgrid=False,
+            zeroline=False,
+            linecolor="rgba(255,255,255,0.07)",
+        ),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        bargap=0.04,
+        font=dict(color=C_TEXT),
+        hoverlabel=dict(
+            bgcolor=C_CARD,
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color=C_TEXT, size=12),
+        ),
+    )
+
+    st.plotly_chart(fig_cii, use_container_width=True, key="compliance_cii_spectrum_bar")
+
+    # Fleet context note
+    st.markdown(
+        "<div style=\"background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.20);"
+        " border-radius:8px; padding:10px 14px; font-size:0.76rem; color:" + C_TEXT2 + ";"
+        " line-height:1.55\">"
+        "<b style=\"color:" + C_TEXT + "\">2025 Fleet Distribution (estimated):</b> "
+        "~14% rated A &nbsp;|&nbsp; ~21% rated B &nbsp;|&nbsp; ~34% rated C &nbsp;|&nbsp; "
+        "~18% rated D &nbsp;|&nbsp; ~13% rated E. "
+        "IMO targets a 40% reduction in carbon intensity across the fleet by 2030 vs 2008 baseline."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# CSV export helper
+# ---------------------------------------------------------------------------
+
+def _build_compliance_csv() -> str:
+    """Build CSV string of all route compliance scores."""
+    all_scores = get_all_route_compliance_scores()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Rank",
+        "Route ID",
+        "Route Name",
+        "Risk Score (0-100)",
+        "Risk Level",
+        "Primary Exposure Countries",
+        "Due Diligence Cost (USD)",
+        "Diligence Level",
+    ])
+    for rank, (rid, score, risk_level) in enumerate(all_scores, 1):
+        result = compute_route_compliance_risk(rid)
+        primary_countries = ", ".join(
+            e["country"] for e in result["primary_exposures"][:3]
+        ) or "None"
+        writer.writerow([
+            rank,
+            rid,
+            _ROUTE_NAMES.get(rid, rid.replace("_", " ").title()),
+            int(score * 100),
+            risk_level,
+            primary_countries,
+            result["compliance_cost_usd"],
+            _DILIGENCE_LABELS.get(risk_level, "Standard"),
+        ])
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -1260,7 +1507,22 @@ def render(route_results, port_results, macro_data) -> None:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 6 — Route Compliance Scoring
+    # Section 6 — IMO CII Rating Reference
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "IMO CII Rating Reference (A–E)",
+        (
+            "Carbon Intensity Indicator ratings — color-coded by severity. "
+            "Mandatory under MARPOL Annex VI since 2023. "
+            "Thresholds tighten annually. Verify against latest MEPC circular."
+        ),
+    )
+    _render_cii_rating_reference()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Section 7 — Route Compliance Scoring
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
         "All 17 Routes — Sanctions Compliance Scoring",
@@ -1271,3 +1533,18 @@ def render(route_results, port_results, macro_data) -> None:
         ),
     )
     _render_route_scoring_table()
+
+    # ── CSV export ─────────────────────────────────────────────────────────
+    st.markdown("<div style=\"height:14px\"></div>", unsafe_allow_html=True)
+    _section_title(
+        "Export Compliance Data",
+        "Download all-route compliance scores, risk levels, and due diligence costs as CSV.",
+    )
+    csv_data = _build_compliance_csv()
+    st.download_button(
+        label="Download Compliance CSV",
+        data=csv_data,
+        file_name="route_compliance_scores.csv",
+        mime="text/csv",
+        key="compliance_download_csv",
+    )

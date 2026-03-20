@@ -209,7 +209,7 @@ def _build_globe(
 
     # ── Port markers — glow layer (larger, transparent) ───────────────────
     glow_lats, glow_lons, glow_sizes, glow_colors, glow_texts = [], [], [], [], []
-    main_lats, main_lons, main_sizes, main_colors, main_texts = [], [], [], [], []
+    main_lats, main_lons, main_sizes, main_texts = [], [], [], []
 
     for port in PORTS:
         result = port_scores.get(port.locode)
@@ -238,7 +238,7 @@ def _build_globe(
         glow_texts.append(hover)
 
         main_lats.append(port.lat);  main_lons.append(port.lon)
-        main_sizes.append(size_main); main_colors.append(color)
+        main_sizes.append(size_main)
         main_texts.append(hover)
 
     # Glow layer
@@ -1032,6 +1032,69 @@ def render(
 
     # Build lookup for port results
     port_scores: dict[str, PortDemandResult] = {r.locode: r for r in port_results}
+
+    # ── Cold-start / no-data fallback ────────────────────────────────────────
+    all_empty = not port_results and not route_results and not insights
+    if all_empty:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, {C_CARD} 0%, #0f1d35 100%);
+            border: 1px solid rgba(59,130,246,0.35);
+            border-left: 4px solid {C_ACCENT};
+            border-radius: 14px;
+            padding: 28px 32px;
+            margin-bottom: 24px;
+            text-align: center">
+            <div style="font-size:2rem; margin-bottom:12px">&#128674;</div>
+            <div style="font-size:1.2rem; font-weight:800; color:{C_TEXT}; margin-bottom:8px">
+                Welcome to Global Cargo Intelligence
+            </div>
+            <div style="font-size:0.9rem; color:{C_TEXT2};
+                        max-width:520px; margin:0 auto 20px auto; line-height:1.6">
+                No data has loaded yet — this is normal on first run or when API keys
+                are not configured. The dashboard populates automatically once data is available.
+            </div>
+            <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap">
+                <div style="background:rgba(59,130,246,0.10); border:1px solid rgba(59,130,246,0.3);
+                            border-radius:8px; padding:10px 18px;
+                            font-size:0.82rem; color:{C_TEXT2}">
+                    <b style="color:{C_ACCENT}">Step 1</b>&nbsp; Add API keys to <code>.env</code>
+                </div>
+                <div style="background:rgba(16,185,129,0.10); border:1px solid rgba(16,185,129,0.3);
+                            border-radius:8px; padding:10px 18px;
+                            font-size:0.82rem; color:{C_TEXT2}">
+                    <b style="color:{C_HIGH}">Step 2</b>&nbsp; Click <b>Refresh Data</b> in the sidebar
+                </div>
+                <div style="background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.3);
+                            border-radius:8px; padding:10px 18px;
+                            font-size:0.82rem; color:{C_TEXT2}">
+                    <b style="color:{C_WARN}">Step 3</b>&nbsp; Data loads in ~30–60 s
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        # Still render the globe (port locations with placeholder demand) and
+        # the sections that work without API data.
+        col_globe, col_panel = st.columns([3, 1])
+        with col_globe:
+            st.markdown(
+                f'<div style="font-size:1rem; font-weight:700; color:{C_TEXT}; margin-bottom:8px">'
+                '&#127760; Port Locations (demand data loading...)'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(
+                _build_globe(port_scores, route_results),
+                use_container_width=True,
+                key="globe_chart",
+            )
+        with col_panel:
+            _render_summary_panel(port_scores, route_results, insights)
+        st.divider()
+        _render_chokepoint_section()
+        st.divider()
+        _render_news_sentiment()
+        return
 
     # ── 1. Hero banner ───────────────────────────────────────────────────────
     _render_hero_banner(port_scores, route_results, insights)

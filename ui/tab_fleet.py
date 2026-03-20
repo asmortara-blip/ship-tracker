@@ -5,6 +5,7 @@ market tightness gauge, and trader implications.
 """
 from __future__ import annotations
 
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
@@ -39,77 +40,39 @@ def _render_hero(fleet) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
 
-    balance_color = _C_RED if fleet.supply_demand_balance < 0 else _C_GREEN
-    balance_sign  = "" if fleet.supply_demand_balance < 0 else "+"
+    balance_sign = "+" if fleet.supply_demand_balance >= 0 else ""
 
     with c1:
-        st.markdown(
-            f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
-                        padding:20px 18px;text-align:center;">
-              <div style="font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;
-                          letter-spacing:0.07em;margin-bottom:6px;">Total Fleet</div>
-              <div style="font-size:2rem;font-weight:700;color:{C_TEXT};">
-                {fleet.total_teu_capacity_m:.1f}M
-              </div>
-              <div style="font-size:0.78rem;color:{C_TEXT2};margin-top:4px;">TEU deployed</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.metric(
+            label="Total Fleet",
+            value=f"{fleet.total_teu_capacity_m:.1f}M TEU",
+            delta=f"+{fleet.deliveries_next_12m_teu_m:.1f}M TEU deliveries next 12m",
+            delta_color="inverse",  # more supply = bearish for rates
         )
 
     with c2:
-        st.markdown(
-            f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
-                        padding:20px 18px;text-align:center;">
-              <div style="font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;
-                          letter-spacing:0.07em;margin-bottom:6px;">Orderbook</div>
-              <div style="font-size:2rem;font-weight:700;color:{_C_AMBER};">
-                {fleet.orderbook_teu_m:.1f}M
-              </div>
-              <div style="font-size:0.78rem;color:{C_TEXT2};margin-top:4px;">
-                TEU on order ({fleet.orderbook_pct:.1f}% of fleet)
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.metric(
+            label="Orderbook",
+            value=f"{fleet.orderbook_teu_m:.1f}M TEU",
+            delta=f"{fleet.orderbook_pct:.1f}% of current fleet on order",
+            delta_color="inverse",  # high orderbook = bearish for rates
         )
 
     with c3:
-        st.markdown(
-            f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
-                        padding:20px 18px;text-align:center;">
-              <div style="font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;
-                          letter-spacing:0.07em;margin-bottom:6px;">Net Supply Growth</div>
-              <div style="font-size:2rem;font-weight:700;color:{_C_RED};">
-                +{fleet.net_supply_growth_pct:.1f}%
-              </div>
-              <div style="font-size:0.78rem;color:{C_TEXT2};margin-top:4px;">
-                deliveries minus scrapping
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.metric(
+            label="Net Supply Growth",
+            value=f"+{fleet.net_supply_growth_pct:.1f}%",
+            delta=f"vs ~{fleet.demand_growth_estimate_pct:.1f}% demand growth est.",
+            delta_color="inverse" if fleet.net_supply_growth_pct > fleet.demand_growth_estimate_pct else "normal",
         )
 
     with c4:
-        st.markdown(
-            f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
-                        padding:20px 18px;text-align:center;">
-              <div style="font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;
-                          letter-spacing:0.07em;margin-bottom:6px;">Supply-Demand Balance</div>
-              <div style="font-size:2rem;font-weight:700;color:{balance_color};">
-                {balance_sign}{fleet.supply_demand_balance:.1f}pp
-              </div>
-              <div style="font-size:0.78rem;color:{_C_RED};margin-top:4px;">
-                OVERSUPPLIED
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        balance_label = "OVERSUPPLIED" if fleet.supply_demand_balance < 0 else "BALANCED"
+        st.metric(
+            label="Supply-Demand Balance",
+            value=f"{balance_sign}{fleet.supply_demand_balance:.1f}pp",
+            delta=balance_label,
+            delta_color="inverse" if fleet.supply_demand_balance < 0 else "normal",
         )
 
 
@@ -158,12 +121,14 @@ def _render_waterfall(fleet) -> None:
     ))
 
     layout = dark_layout(title="Container Fleet TEU Capacity (Millions)", height=320)
+    layout["template"] = "plotly_dark"
+    layout["margin"] = dict(l=40, r=20, t=40, b=40)
     layout["xaxis"]["showgrid"] = False
     layout["yaxis"]["title"] = "TEU Capacity (Millions)"
     layout["yaxis"]["range"] = [0, net_fleet * 1.15]
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="fleet_waterfall")
 
 
 # ── Section 3: Vessel Category Donuts ────────────────────────────────────────
@@ -174,9 +139,17 @@ def _render_category_donuts() -> None:
         "Fleet vs orderbook composition — ultra-large vessels dominate new orders",
     )
 
+    if not VESSEL_CATEGORIES:
+        st.info("No vessel category data available.")
+        return
+
     names          = [c["name"] for c in VESSEL_CATEGORIES]
     fleet_shares   = [c["fleet_share"] for c in VESSEL_CATEGORIES]
     orderbook_shares = [c["orderbook_share"] for c in VESSEL_CATEGORIES]
+
+    if sum(fleet_shares) == 0 and sum(orderbook_shares) == 0:
+        st.info("Vessel utilisation and capacity data are all zero — charts will appear once fleet data is loaded.")
+        return
 
     donut_colors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4"]
 
@@ -215,7 +188,9 @@ def _render_category_donuts() -> None:
     )
 
     layout = dark_layout(height=360, showlegend=False)
+    layout["template"] = "plotly_dark"
     layout["paper_bgcolor"] = _C_BG
+    layout["margin"] = dict(l=40, r=20, t=40, b=40)
     layout["annotations"] = [
         {"text": "Fleet", "x": 0.18, "y": 0.5, "showarrow": False,
          "font": {"size": 13, "color": C_TEXT2}, "xref": "paper", "yref": "paper"},
@@ -228,7 +203,7 @@ def _render_category_donuts() -> None:
         ann["font"]["color"] = C_TEXT2
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="fleet_category_donuts")
 
 
 # ── Section 4: Age Profile Horizontal Bars ───────────────────────────────────
@@ -247,8 +222,17 @@ def _render_age_profile() -> None:
         "Average age by category — older vessels are scrapping candidates",
     )
 
+    if not VESSEL_CATEGORIES:
+        st.info("No vessel age profile data available.")
+        return
+
     names  = [c["name"] for c in VESSEL_CATEGORIES]
     ages   = [c["avg_age"] for c in VESSEL_CATEGORIES]
+
+    if not ages or max(ages) == 0:
+        st.info("Vessel age data is unavailable or all zero.")
+        return
+
     colors = [_age_color(a) for a in ages]
 
     fig = go.Figure()
@@ -274,6 +258,8 @@ def _render_age_profile() -> None:
         )
 
     layout = dark_layout(title="Average Vessel Age by Category (Years)", height=280)
+    layout["template"] = "plotly_dark"
+    layout["margin"] = dict(l=40, r=20, t=40, b=40)
     layout["xaxis"]["title"] = "Average Age (Years)"
     layout["xaxis"]["range"] = [0, max(ages) * 1.25]
     layout["yaxis"]["autorange"] = "reversed"
@@ -289,7 +275,7 @@ def _render_age_profile() -> None:
         f"<div style='font-size:0.78rem;color:{C_TEXT2};margin-bottom:4px;'>{legend_html}</div>",
         unsafe_allow_html=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="fleet_age_profile")
 
 
 # ── Section 5: Market Tightness Gauge ────────────────────────────────────────
@@ -357,12 +343,14 @@ def _render_tightness_gauge(fleet) -> None:
     ))
 
     layout = dark_layout(height=300, showlegend=False)
+    layout["template"] = "plotly_dark"
     layout["paper_bgcolor"] = _C_BG
+    layout["margin"] = dict(l=40, r=20, t=40, b=40)
     fig.update_layout(**layout)
 
     col_g, col_l = st.columns([2, 1])
     with col_g:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="fleet_tightness_gauge")
     with col_l:
         zones = [
             (80, 100, "VERY TIGHT",  "#22c55e"),
@@ -404,6 +392,10 @@ def _render_implications(fleet) -> None:
         "Implications for Traders",
         "Key takeaways from current supply-demand dynamics",
     )
+
+    if not fleet.implications:
+        st.info("No trader implications available for the current fleet data.")
+        return
 
     icons = ["", "", ""]
     card_colors = [_C_RED, _C_AMBER, _C_BLUE]
@@ -459,6 +451,25 @@ def render(freight_data=None, macro_data=None) -> None:
     st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
 
     _render_age_profile()
+
+    _fleet_df = pd.DataFrame([
+        {
+            "Vessel Category": c["name"],
+            "Fleet Share (%)": c["fleet_share"],
+            "Orderbook Share (%)": c["orderbook_share"],
+            "Average Age (yrs)": c["avg_age"],
+        }
+        for c in VESSEL_CATEGORIES
+    ])
+    csv = _fleet_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="fleet_data.csv",
+        mime="text/csv",
+        key="download_fleet_data_csv",
+    )
+
     st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
 
     _render_tightness_gauge(fleet)

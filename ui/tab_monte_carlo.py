@@ -160,6 +160,7 @@ def _build_fan_chart(result: MonteCarloResult) -> go.Figure:
     layout["xaxis"]["title"] = {"text": "Days from today", "font": {"color": C_TEXT2, "size": 12}}
     layout["yaxis"]["title"] = {"text": "Rate USD/FEU",    "font": {"color": C_TEXT2, "size": 12}}
     layout["xaxis"]["range"] = [1, result.forecast_days]
+    layout["template"] = "plotly_dark"
     fig.update_layout(**layout)
 
     return fig
@@ -292,7 +293,7 @@ def _render_comparison_table(route_results: dict[str, MonteCarloResult]) -> None
         })
 
     if not rows:
-        st.info("No simulation results available.")
+        st.warning("Simulation returned no results — try adjusting parameters")
         return
 
     df = (
@@ -310,6 +311,16 @@ def _render_comparison_table(route_results: dict[str, MonteCarloResult]) -> None
         display_df,
         use_container_width=True,
         hide_index=True,
+    )
+
+    # ── Download button ───────────────────────────────────────────────────────
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download results as CSV",
+        data=csv_bytes,
+        file_name="monte_carlo_results.csv",
+        mime="text/csv",
+        key="mc_download_csv",
     )
 
 
@@ -371,8 +382,9 @@ def render(freight_data: dict, route_results: dict[str, MonteCarloResult]) -> No
         f"  |  current: **{_fmt_rate(result.current_rate)}**"
     )
 
-    fig = _build_fan_chart(result)
-    st.plotly_chart(fig, use_container_width=True)
+    with st.spinner("Running Monte Carlo simulation..."):
+        fig = _build_fan_chart(result)
+    st.plotly_chart(fig, use_container_width=True, key="mc_fan_chart")
 
     # ── Section 3: Key stats ──────────────────────────────────────────────────
     _divider("Key Statistics")

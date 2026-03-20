@@ -138,14 +138,22 @@ def _render_route_selector(
         f'Select Route for Deep Dive</div>',
         unsafe_allow_html=True,
     )
+    # Clamp the default index so it always points to a valid entry (handles
+    # session-state drift when the route list changes between reruns).
+    default_index = 0
+    saved = st.session_state.get("deep_dive_route_select")
+    if saved in option_labels:
+        default_index = option_labels.index(saved)
+
     selected_label = st.selectbox(
         "Route",
         options=option_labels,
-        index=0,
+        index=default_index,
         label_visibility="collapsed",
         key="deep_dive_route_select",
     )
-    return label_to_route[selected_label]
+    # Fall back to the first route if the selected label is somehow missing
+    return label_to_route.get(selected_label, label_to_route[option_labels[0]])
 
 
 # ── Section 1: Route Identity Card ────────────────────────────────────────────
@@ -400,6 +408,7 @@ def _render_rate_chart(route_id: str, freight_data: dict, current_rate: float) -
     )
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_SURFACE,
         font=dict(color=C_TEXT, family="Inter, sans-serif", size=11),
@@ -427,7 +436,7 @@ def _render_rate_chart(route_id: str, freight_data: dict, current_rate: float) -
         yaxis2_title="Std Dev",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"deep_dive_rate_chart_{route_id}")
 
 
 # ── Section 3: Statistical Summary ───────────────────────────────────────────
@@ -505,14 +514,15 @@ def _render_stats_panel(route_id: str, freight_data: dict) -> None:
 
 def _port_card(locode: str, side: str, port_results: list) -> None:
     """Render one port detail card (origin or destination)."""
-    result = next((p for p in port_results if p.locode == locode), None)
+    result = next((p for p in (port_results or []) if p.locode == locode), None)
 
+    no_data = result is None
     demand_score   = result.demand_score   if result else 0.5
     vessel_count   = result.vessel_count   if result else 0
     congestion_idx = result.congestion_index if result else 0.5
     port_name      = result.port_name      if result else locode
     region         = result.region         if result else "Unknown"
-    products       = result.top_products[:3] if result else []
+    products       = (result.top_products or [])[:3] if result else []
     demand_trend   = result.demand_trend   if result else "Unknown"
 
     demand_color = C_HIGH if demand_score >= 0.65 else (C_LOW if demand_score < 0.40 else C_MOD)
@@ -601,6 +611,16 @@ def _port_card(locode: str, side: str, port_results: list) -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    if no_data:
+        st.markdown(
+            f'<div style="font-size:0.7rem;color:{C_TEXT3};margin-top:6px;'
+            f'padding:6px 10px;background:rgba(255,255,255,0.03);'
+            f'border-radius:6px;border:1px solid {C_BORDER}">'
+            f'No deep-dive data available for {locode}. '
+            f'Values shown are defaults only.</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def _render_port_deep_dive(r: RouteOpportunity, port_results: list) -> None:
@@ -725,6 +745,7 @@ def _render_forecasts(route_id: str, forecasts: list, freight_data: dict) -> Non
                 ))
 
             fan_fig.update_layout(
+                template="plotly_dark",
                 paper_bgcolor=C_BG,
                 plot_bgcolor=C_SURFACE,
                 font=dict(color=C_TEXT, family="Inter, sans-serif", size=11),
@@ -757,7 +778,7 @@ def _render_forecasts(route_id: str, forecasts: list, freight_data: dict) -> Non
                                 font=dict(color=C_TEXT, size=12)),
             )
 
-            st.plotly_chart(fan_fig, use_container_width=True)
+            st.plotly_chart(fan_fig, use_container_width=True, key=f"deep_dive_mc_fan_{route_id}")
 
             # Probability stats below chart
             prob_up = mc.prob_rate_increase * 100
@@ -867,8 +888,14 @@ def _render_correlated_assets(
         # Align on date and normalise to % change from first observation
         combined = pd.DataFrame({"stock": sdf, "rate": rdf}).dropna()
         if len(combined) >= 5:
-            combined["stock_pct"] = (combined["stock"] / combined["stock"].iloc[0] - 1) * 100
-            combined["rate_pct"]  = (combined["rate"]  / combined["rate"].iloc[0]  - 1) * 100
+            stock_base = combined["stock"].iloc[0]
+            rate_base  = combined["rate"].iloc[0]
+            combined["stock_pct"] = (
+                (combined["stock"] / stock_base - 1) * 100 if stock_base != 0 else 0.0
+            )
+            combined["rate_pct"]  = (
+                (combined["rate"]  / rate_base  - 1) * 100 if rate_base  != 0 else 0.0
+            )
 
             dual_fig = go.Figure()
             dual_fig.add_trace(go.Scatter(
@@ -884,6 +911,7 @@ def _render_correlated_assets(
                 hovertemplate="%{x|%Y-%m-%d}: %{y:+.1f}%<extra>" + best_cr.stock + "</extra>",
             ))
             dual_fig.update_layout(
+                template="plotly_dark",
                 paper_bgcolor=C_BG,
                 plot_bgcolor=C_SURFACE,
                 font=dict(color=C_TEXT, family="Inter, sans-serif", size=11),
@@ -912,7 +940,7 @@ def _render_correlated_assets(
                 hoverlabel=dict(bgcolor=C_CARD, bordercolor="rgba(255,255,255,0.15)",
                                 font=dict(color=C_TEXT, size=12)),
             )
-            st.plotly_chart(dual_fig, use_container_width=True)
+            st.plotly_chart(dual_fig, use_container_width=True, key=f"deep_dive_dual_corr_{r.route_id}_{best_cr.stock}")
 
 
 # ── Section 7: News & Sentiment ───────────────────────────────────────────────

@@ -677,7 +677,7 @@ def _render_blank_sailing_tracker() -> None:
             })
 
     if not rows:
-        st.info("No blank sailing data available.")
+        st.info("🚢 No blank sailing data available — carrier capacity data uses baseline 2025 figures. Verify carrier configuration and click Refresh All Data.")
         return
 
     df = pd.DataFrame(rows).sort_values("Blank Sailing Rate", ascending=False)
@@ -723,6 +723,17 @@ def _render_blank_sailing_tracker() -> None:
     )
 
     st.markdown(table_html, unsafe_allow_html=True)
+
+    csv_df = df[["Carrier", "Route", "Alliance", "Blank Sailing Rate", "Capacity Pulled (M TEU)", "_rate_impact"]].rename(columns={"_rate_impact": "Rate Impact"})
+    csv = csv_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="carrier_data.csv",
+        mime="text/csv",
+        key="download_carrier_data_csv",
+    )
+
     st.markdown(
         "<div style='font-size:0.72rem;color:" + C_TEXT3 + ";margin-top:8px;'>"
         "Blank sailing rates are synthetic estimates based on carrier financial health, "
@@ -853,31 +864,40 @@ def _render_hero_kpis() -> None:
         / len(CARRIER_PROFILES),
         1,
     )
-    n_alliances     = sum(1 for a in ALLIANCES.values() if a.status == "ACTIVE")
-
-    kpis = [
-        ("Largest Carrier",     top_name + " " + str(top_share) + "%",  "by TEU capacity",          _C_BLUE),
-        ("Avg Reliability",     str(avg_reliability) + "%",              "10 carriers (2024)",       _C_AMBER),
-        ("Active Alliances",    str(n_alliances),                        "Gemini, Ocean, Premier + MSC", _C_GREEN),
-        ("HHI Index",           str(round(hhi)),                         "Highly Concentrated > 2500",   _C_RED),
-    ]
+    n_alliances = sum(1 for a in ALLIANCES.values() if a.status == "ACTIVE")
+    industry_avg_reliability = 68.0
+    reliability_delta = round(avg_reliability - industry_avg_reliability, 1)
 
     cols = st.columns(4)
-    for col, (label, value, sub, color) in zip(cols, kpis):
-        with col:
-            st.markdown(
-                "<div style='background:" + C_CARD + ";border:1px solid " + C_BORDER + ";"
-                "border-top:3px solid " + color + ";border-radius:10px;"
-                "padding:18px 16px;text-align:center;'>"
-                "<div style='font-size:0.7rem;color:" + C_TEXT2 + ";text-transform:uppercase;"
-                "letter-spacing:0.07em;margin-bottom:6px;'>" + label + "</div>"
-                "<div style='font-size:1.65rem;font-weight:700;color:" + C_TEXT + ";'>"
-                + value + "</div>"
-                "<div style='font-size:0.75rem;color:" + C_TEXT3 + ";margin-top:4px;'>"
-                + sub + "</div>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+    with cols[0]:
+        st.metric(
+            label="Largest Carrier",
+            value=top_name,
+            delta=f"{top_share}% market share by TEU",
+            delta_color="off",
+        )
+    with cols[1]:
+        st.metric(
+            label="Avg On-Time Reliability",
+            value=f"{avg_reliability}%",
+            delta=f"{reliability_delta:+.1f}pp vs {industry_avg_reliability}% industry avg",
+            delta_color="normal",
+        )
+    with cols[2]:
+        st.metric(
+            label="Active Alliances",
+            value=str(n_alliances),
+            delta="Gemini · Ocean · Premier + MSC",
+            delta_color="off",
+        )
+    with cols[3]:
+        hhi_zone = "Highly Concentrated" if hhi >= 2500 else ("Moderate" if hhi >= 1500 else "Competitive")
+        st.metric(
+            label="HHI Index",
+            value=f"{round(hhi):,}",
+            delta=f"{hhi_zone} (threshold: 2,500)",
+            delta_color="inverse" if hhi >= 2500 else "off",
+        )
 
 
 # ── Main render entry point ───────────────────────────────────────────────────

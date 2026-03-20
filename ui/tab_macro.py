@@ -327,7 +327,7 @@ def _render_yield_curve(macro_data: dict[str, pd.DataFrame]) -> None:
     # only keep maturities where current curve has data
     valid_idx = [i for i, v in enumerate(vals_now) if v is not None]
     if not valid_idx:
-        st.info("Treasury yield data not available. Ensure DGS* series are fetched.")
+        st.info("📊 Treasury yield data is unavailable — FRED data refreshes every 24 hours. Ensure DGS* series are configured and FRED_API_KEY is set in .env.")
         return
 
     x_labels = [labels_now[i] for i in valid_idx]
@@ -437,7 +437,7 @@ def _render_yield_curve(macro_data: dict[str, pd.DataFrame]) -> None:
         font=dict(family="Inter, sans-serif"),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="macro_yield_curve")
 
     if inverted:
         st.markdown(
@@ -465,7 +465,7 @@ def _render_trade_balance(macro_data: dict[str, pd.DataFrame]) -> None:
     cny_df   = macro_data.get("DEXCHUS")
 
     if (trade_df is None or trade_df.empty) and (cny_df is None or cny_df.empty):
-        st.info("Trade balance (BOPGSTB) and USD/CNY (DEXCHUS) data not available.")
+        st.info("📊 Trade balance (BOPGSTB) and USD/CNY (DEXCHUS) data is unavailable — FRED data refreshes every 24 hours. Ensure FRED_API_KEY is set in .env and click Refresh All Data.")
         return
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -577,7 +577,7 @@ def _render_trade_balance(macro_data: dict[str, pd.DataFrame]) -> None:
         ] if corr_text else [],
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="macro_trade_balance")
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +629,7 @@ def _render_commodity_monitor(macro_data: dict[str, pd.DataFrame]) -> None:
         ))
 
     if not has_data:
-        st.info("No commodity price data available (DCOILWTICO / DCOILBRENTEU / GASDESW).")
+        st.info("📊 No commodity price data available (DCOILWTICO / DCOILBRENTEU / GASDESW) — FRED data refreshes every 24 hours. Ensure FRED_API_KEY is set in .env and click Refresh All Data.")
         return
 
     y_title = "Price (Indexed, base=100)" if normalized else "Price (USD)"
@@ -661,7 +661,7 @@ def _render_commodity_monitor(macro_data: dict[str, pd.DataFrame]) -> None:
         ),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="macro_commodity_monitor")
 
     # ── correlation table with shipping rates ────────────────────────────────
     bdi_df = macro_data.get("BDIY")
@@ -698,6 +698,14 @@ def _render_commodity_monitor(macro_data: dict[str, pd.DataFrame]) -> None:
             st.dataframe(
                 corr_table.style.format({"r vs BDI": "{:.3f}"}).map(_color_r, subset=["r vs BDI"]),
                 use_container_width=False,
+            )
+            csv = corr_table.reset_index().to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="macro_indicators.csv",
+                mime="text/csv",
+                key="download_macro_indicators_csv",
             )
 
 
@@ -742,8 +750,8 @@ def _render_pmi_vs_freight(
 
     if pmi_df is None or bdi_df is None or bdi_df.empty:
         st.info(
-            "PMI or BDI data not available. "
-            "Ensure USPHCI (or MANEMP/CFNAI) and BDIY are fetched."
+            "📊 PMI or BDI data is unavailable — FRED data refreshes every 24 hours. "
+            "Ensure USPHCI (or MANEMP/CFNAI) and BDIY are configured and FRED_API_KEY is set in .env."
         )
         return
 
@@ -768,7 +776,7 @@ def _render_pmi_vs_freight(
     ).dropna()
 
     if len(merged) < 6:
-        st.info("Insufficient overlapping PMI and BDI data for scatter analysis.")
+        st.info("📊 Insufficient overlapping PMI and BDI data for scatter analysis — more FRED data needed. Ensure FRED_API_KEY is set in .env and click Refresh All Data.")
         return
 
     merged = merged.reset_index()
@@ -914,7 +922,7 @@ def _render_pmi_vs_freight(
         ),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="macro_pmi_vs_freight")
 
     # caption below
     size_note = " · Point size ∝ Import Volume (IMPGS)" if size_col else ""
@@ -950,8 +958,8 @@ def render(
 
     if not macro_data:
         st.warning(
-            "No macro data loaded. "
-            "Set FRED_API_KEY and ensure fredapi is installed."
+            "📊 No macro data loaded — FRED data refreshes every 24 hours. "
+            "Set FRED_API_KEY in .env, ensure fredapi is installed, and click Refresh All Data in the sidebar."
         )
         return
 
@@ -959,6 +967,39 @@ def render(
     logger.info("tab_macro: rendering with " + str(n_loaded) + " FRED series")
 
     st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 24 hours (FRED economic data)")
+
+    # ── KPI metric row — key macro headline numbers with 30d deltas ──────────
+    _KPI_SERIES = [
+        ("DCOILWTICO",   "WTI Crude ($/bbl)",      "${:.1f}"),
+        ("DCOILBRENTEU", "Brent Crude ($/bbl)",     "${:.1f}"),
+        ("VIXCLS",       "VIX",                     "{:.2f}"),
+        ("UMCSENT",      "Consumer Sentiment",       "{:.1f}"),
+    ]
+    kpi_cols = st.columns(len(_KPI_SERIES))
+    for col, (sid, label, fmt) in zip(kpi_cols, _KPI_SERIES):
+        df_kpi = macro_data.get(sid)
+        current_kpi = _latest_value(df_kpi)
+        ago_kpi = _value_n_days_ago(df_kpi, 30) if df_kpi is not None else None
+        pct_kpi = _pct_change(current_kpi, ago_kpi)
+        with col:
+            if current_kpi is not None:
+                val_display = fmt.format(current_kpi)
+                delta_str = f"{pct_kpi:+.1f}% vs 30d avg" if pct_kpi is not None else "vs 30d avg"
+                # VIX: rising is bearish (inverse), others normal
+                d_color = "inverse" if sid == "VIXCLS" else "normal"
+                st.metric(
+                    label=label,
+                    value=val_display,
+                    delta=delta_str,
+                    delta_color=d_color,
+                )
+            else:
+                st.metric(label=label, value="N/A")
+
+    st.markdown(
+        "<hr style='border-color:rgba(255,255,255,0.07); margin:16px 0'>",
+        unsafe_allow_html=True,
+    )
 
     # ── Section 1: Macro Dashboard Grid ─────────────────────────────────────
     _render_macro_grid(macro_data)

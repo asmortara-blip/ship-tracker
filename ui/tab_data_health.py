@@ -219,7 +219,7 @@ def _render_status_grid(
         # Determine status
         if age_h is None and rec_count == 0:
             badge = "NO DATA"
-            age_str = "Not loaded"
+            age_str = "Not yet fetched"
         elif age_h is not None and age_h < meta["ttl_hours"]:
             badge = "LIVE"
             age_str = _age_label(age_h)
@@ -341,7 +341,7 @@ def _render_coverage_matrix(trade_data: Any, ais_data: Any, macro_data: Any, fre
         xaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
         yaxis={"tickfont": {"color": C_TEXT2, "size": 10}, "autorange": "reversed"},
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_coverage_matrix")
 
 
 # ── Section 3: Freshness Timeline ─────────────────────────────────────────────
@@ -419,7 +419,7 @@ def _render_freshness_timeline() -> None:
         },
         yaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_freshness_timeline")
 
 
 # ── Section 4: Quality Score Gauge ────────────────────────────────────────────
@@ -513,7 +513,7 @@ def _render_quality_gauge(score: float) -> None:
         height=260,
         margin={"l": 20, "r": 20, "t": 20, "b": 20},
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_quality_gauge")
 
 
 # ── Section 5: Fallback Usage Summary ────────────────────────────────────────
@@ -653,7 +653,7 @@ def _render_cache_management() -> None:
 
     # Expandable file listing
     if parquet_files:
-        with st.expander("Cache file listing (" + str(len(parquet_files)) + " files)", expanded=False):
+        with st.expander("Cache file listing (" + str(len(parquet_files)) + " files)", expanded=False, key="dh_cache_file_listing_expander"):
             now_ts = time.time()
             rows_html = ""
             for f in sorted(parquet_files, key=lambda x: x.stat().st_mtime, reverse=True):
@@ -702,14 +702,27 @@ def render(
     """Render the Data Quality & Health Monitoring dashboard."""
     logger.debug("Rendering tab_data_health")
 
-    st.markdown(
-        '<div style="font-size:1.5rem; font-weight:800; color:' + C_TEXT
-        + '; margin-bottom:4px">Data Quality & Health Monitor</div>'
-        '<div style="font-size:0.85rem; color:' + C_TEXT2
-        + '; margin-bottom:20px">Real-time view of data pipeline health,'
-        " cache status, coverage gaps, and fallback usage</div>",
-        unsafe_allow_html=True,
-    )
+    _hdr_col, _btn_col = st.columns([5, 1])
+    with _hdr_col:
+        st.markdown(
+            '<div style="font-size:1.5rem; font-weight:800; color:' + C_TEXT
+            + '; margin-bottom:4px">Data Quality & Health Monitor</div>'
+            '<div style="font-size:0.85rem; color:' + C_TEXT2
+            + '; margin-bottom:20px">Real-time view of data pipeline health,'
+            " cache status, coverage gaps, and fallback usage</div>",
+            unsafe_allow_html=True,
+        )
+    with _btn_col:
+        st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+        if st.button(
+            "🔄 Refresh All",
+            use_container_width=True,
+            key="btn_refresh_all",
+            help="Clear all Streamlit cache and reload the page to fetch fresh data",
+        ):
+            st.cache_data.clear()
+            st.success("Cache cleared — reloading…")
+            st.rerun()
 
     # ── 1. Status grid
     try:

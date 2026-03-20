@@ -182,12 +182,9 @@ def render(port_results: list, route_results: list, macro_data: dict) -> None:
         sl1, sl2, sl3 = st.columns(3)
         with sl1:
             bdi_shock = st.slider("BDI Shock", -0.50, 2.00, 0.0, 0.05, format="%.0f%%",
-                                  key="cust_bdi") / 100 * 100
-            # slider returns raw value; convert pct display to fraction
-            bdi_shock = st.session_state.get("cust_bdi", 0.0)
+                                  key="cust_bdi")
             fuel_shock = st.slider("Fuel Change", -0.30, 1.00, 0.0, 0.05, format="%.0f%%",
                                    key="cust_fuel")
-            fuel_shock = st.session_state.get("cust_fuel", 0.0)
         with sl2:
             pmi_shock = st.slider("PMI Change", -15.0, 15.0, 0.0, 0.5, format="%.1f pts",
                                   key="cust_pmi")
@@ -221,6 +218,11 @@ def render(port_results: list, route_results: list, macro_data: dict) -> None:
         return
 
     result = run_scenario(active_scenario, port_results, route_results)
+
+    if not result.route_impacts and not result.port_impacts:
+        st.warning("Simulation returned no results — try adjusting parameters")
+        return
+
     delta = result.opportunity_delta
     risk = result.risk_level
     risk_color = _RISK_COLORS.get(risk, "#94a3b8")
@@ -409,6 +411,10 @@ def render(port_results: list, route_results: list, macro_data: dict) -> None:
 
     all_results = run_all_scenarios(port_results, route_results)
 
+    if not all_results:
+        st.warning("Simulation returned no results — try adjusting parameters")
+        return
+
     names = [r.scenario.name for r in all_results]
     deltas = [r.opportunity_delta for r in all_results]
     bar_colors = ["#10b981" if d >= 0 else "#ef4444" for d in deltas]
@@ -429,11 +435,12 @@ def render(port_results: list, route_results: list, macro_data: dict) -> None:
     fig.add_vline(x=0, line_color="rgba(255,255,255,0.15)", line_width=1)
 
     fig.update_layout(
+        template="plotly_dark",
         height=400,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#94a3b8", size=12),
-        margin=dict(l=0, r=60, t=10, b=30),
+        margin=dict(l=10, r=80, t=20, b=40),
         xaxis=dict(
             range=[-0.5, 0.5],
             tickformat=".0%",
@@ -447,4 +454,5 @@ def render(port_results: list, route_results: list, macro_data: dict) -> None:
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+                    key="scenarios_all_bar_chart")

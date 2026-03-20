@@ -395,29 +395,36 @@ def _render_ticker(articles: list[Any]) -> None:
 def _news_card_html(article: Any) -> str:
     """Build a news card HTML string from a NewsArticle object or dict."""
     if hasattr(article, "title"):
-        title          = article.title
-        url            = article.url
-        source         = article.source
-        pub_dt         = article.published_dt
-        summary        = getattr(article, "summary", "")
-        sentiment_score = article.sentiment_score
-        sentiment_label = article.sentiment_label
-        entities       = list(article.entities or [])
-        relevance_score = getattr(article, "relevance_score", 0.5)
+        title           = article.title or ""
+        url             = article.url or ""
+        source          = article.source or ""
+        pub_dt          = article.published_dt
+        summary         = getattr(article, "summary", "") or ""
+        sentiment_score = article.sentiment_score if article.sentiment_score is not None else 0.0
+        sentiment_label = article.sentiment_label or "NEUTRAL"
+        entities        = list(article.entities or [])
+        relevance_score = getattr(article, "relevance_score", 0.5) or 0.5
     else:
-        title          = article.get("title", "")
-        url            = article.get("url", "#")
-        source         = article.get("source", "")
-        pub_dt         = article.get("published_dt", datetime.now(tz=timezone.utc))
-        summary        = article.get("summary", "")
-        sentiment_score = article.get("sentiment_score", 0.0)
-        sentiment_label = article.get("sentiment_label", "NEUTRAL")
-        entities       = list(article.get("entities", []))
-        relevance_score = article.get("relevance_score", 0.5)
+        title           = article.get("title", "") or ""
+        url             = article.get("url", "") or ""
+        source          = article.get("source", "") or ""
+        pub_dt          = article.get("published_dt", datetime.now(tz=timezone.utc))
+        summary         = article.get("summary", "") or ""
+        sentiment_score = article.get("sentiment_score") or 0.0
+        sentiment_label = article.get("sentiment_label", "NEUTRAL") or "NEUTRAL"
+        entities        = list(article.get("entities") or [])
+        relevance_score = article.get("relevance_score", 0.5) or 0.5
+
+    # Guard: pub_dt must be a datetime; fall back to now if missing/wrong type
+    if not isinstance(pub_dt, datetime):
+        try:
+            pub_dt = datetime.fromisoformat(str(pub_dt))
+        except Exception:
+            pub_dt = datetime.now(tz=timezone.utc)
 
     border_color = _sentiment_color(sentiment_label)
-    initials     = _source_initials(source)
-    avatar_color = _source_color(source)
+    initials     = _source_initials(source) if source else "??"
+    avatar_color = _source_color(source) if source else "#64748b"
     age          = _age_str(pub_dt)
 
     # Truncate title to ~90 chars for 2-line display
@@ -459,6 +466,28 @@ def _news_card_html(article: Any) -> str:
         + '</div>'
     ) if entity_tags else ""
 
+    # Headline: render as link only when URL is a real non-empty, non-placeholder URL
+    _url_clean = url.strip()
+    _has_url = bool(_url_clean) and _url_clean not in ("#", "javascript:void(0)")
+    if _has_url:
+        headline_el = (
+            '<a href="' + _url_clean + '" target="_blank" style="'
+            'font-size:0.84rem; font-weight:700; color:' + C_TEXT + ';'
+            ' text-decoration:none; line-height:1.35; display:block;'
+            ' margin-bottom:6px; overflow:hidden;'
+            ' display:-webkit-box; -webkit-line-clamp:2;'
+            ' -webkit-box-orient:vertical;">'
+            + title_safe + '</a>'
+        )
+    else:
+        headline_el = (
+            '<div style="font-size:0.84rem; font-weight:700; color:' + C_TEXT + ';'
+            ' line-height:1.35; margin-bottom:6px; overflow:hidden;'
+            ' display:-webkit-box; -webkit-line-clamp:2;'
+            ' -webkit-box-orient:vertical;">'
+            + title_safe + '</div>'
+        )
+
     return (
         '<div style="background:' + C_CARD + ';'
         ' border:1px solid ' + C_BORDER + ';'
@@ -476,16 +505,10 @@ def _news_card_html(article: Any) -> str:
         '<span style="font-size:0.62rem; color:' + C_TEXT3 + ';'
         ' white-space:nowrap;">' + age + '</span>'
         '</div>'
-        # ── Headline ──────────────────────────────────────────────────────
-        '<a href="' + url + '" target="_blank" style="'
-        'font-size:0.84rem; font-weight:700; color:' + C_TEXT + ';'
-        ' text-decoration:none; line-height:1.35; display:block;'
-        ' margin-bottom:6px; overflow:hidden;'
-        ' display:-webkit-box; -webkit-line-clamp:2;'
-        ' -webkit-box-orient:vertical;">'
-        + title_safe + '</a>'
+        # ── Headline (link or plain text) ─────────────────────────────────
+        + headline_el
         # ── Summary ───────────────────────────────────────────────────────
-        '<div style="font-size:0.74rem; color:' + C_TEXT2 + '; line-height:1.5;'
+        + '<div style="font-size:0.74rem; color:' + C_TEXT2 + '; line-height:1.5;'
         ' overflow:hidden; display:-webkit-box; -webkit-line-clamp:3;'
         ' -webkit-box-orient:vertical; margin-bottom:8px;">'
         + summary_safe + '</div>'
@@ -498,15 +521,29 @@ def _news_card_html(article: Any) -> str:
     )
 
 
-def _render_news_feed(articles: list[Any]) -> None:
-    """Render the 4-column news card grid."""
-    display_articles = articles if articles else _FALLBACK_ARTICLES
+def _render_news_feed(articles: list[Any], rss_failed: bool = False) -> None:
+    """Render the 4-column news card grid.
+
+    Parameters
+    ----------
+    articles:   Live article list (may be empty if feed returned nothing).
+    rss_failed: True when the RSS/HTTP fetch itself raised an exception — shows
+                a warning banner instead of silently falling back to samples.
+    """
+    if rss_failed:
+        st.warning("📡 News feed temporarily unavailable — showing cached headlines")
+        display_articles = list(_FALLBACK_ARTICLES)
+    elif not articles:
+        st.info("📰 No recent shipping news available — feed refreshes every 6 hours")
+        display_articles = list(_FALLBACK_ARTICLES)
+    else:
+        display_articles = list(articles)
 
     # Sort by relevance descending
     def _rel(a: Any) -> float:
         if hasattr(a, "relevance_score"):
-            return a.relevance_score
-        return a.get("relevance_score", 0.0)
+            return a.relevance_score or 0.0
+        return a.get("relevance_score", 0.0) or 0.0
 
     display_articles = sorted(display_articles, key=_rel, reverse=True)[:8]
 
@@ -520,6 +557,36 @@ def _render_news_feed(articles: list[Any]) -> None:
             with col:
                 st.markdown(_news_card_html(article), unsafe_allow_html=True)
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+
+# ── CSV Export ───────────────────────────────────────────────────────────────
+
+
+def _build_news_csv(articles: list[Any]) -> str:
+    """Return a CSV string of news items: headline, sentiment, source, date."""
+    import io, csv
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Headline", "Sentiment", "Score", "Source", "Published"])
+    for a in articles:
+        if hasattr(a, "title"):
+            title   = a.title or ""
+            label   = a.sentiment_label or "NEUTRAL"
+            score   = a.sentiment_score if a.sentiment_score is not None else 0.0
+            source  = a.source or ""
+            pub_dt  = a.published_dt
+        else:
+            title   = a.get("title", "") or ""
+            label   = a.get("sentiment_label", "NEUTRAL") or "NEUTRAL"
+            score   = a.get("sentiment_score", 0.0) or 0.0
+            source  = a.get("source", "") or ""
+            pub_dt  = a.get("published_dt", "")
+        if isinstance(pub_dt, datetime):
+            pub_str = pub_dt.strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            pub_str = str(pub_dt) if pub_dt else ""
+        writer.writerow([title, label, round(score, 4), source, pub_str])
+    return buf.getvalue()
 
 
 # ── Section 3: Sentiment Overview ────────────────────────────────────────────
@@ -537,13 +604,13 @@ def _compute_sentiment_stats(articles: list[Any]) -> dict:
 
     for a in articles:
         if hasattr(a, "sentiment_score"):
-            scores.append(a.sentiment_score)
-            labels.append(a.sentiment_label)
+            scores.append(a.sentiment_score if a.sentiment_score is not None else 0.0)
+            labels.append(a.sentiment_label or "NEUTRAL")
             entity_counts.update(a.entities or [])
         else:
-            scores.append(a.get("sentiment_score", 0.0))
-            labels.append(a.get("sentiment_label", "NEUTRAL"))
-            entity_counts.update(a.get("entities", []))
+            scores.append(a.get("sentiment_score") or 0.0)
+            labels.append(a.get("sentiment_label") or "NEUTRAL")
+            entity_counts.update(a.get("entities") or [])
 
     overall = sum(scores) / len(scores) if scores else 0.0
     bullish_n = sum(1 for l in labels if l == "BULLISH")
@@ -599,6 +666,7 @@ def _render_sentiment_gauge(overall: float) -> None:
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         height=240,
@@ -637,10 +705,11 @@ def _render_sentiment_distribution(bullish: int, bearish: int, neutral: int) -> 
     ))
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor="#111827",
         height=240,
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        margin={"l": 10, "r": 10, "t": 40, "b": 20},
         font={"color": C_TEXT, "family": "Inter, sans-serif"},
         title={"text": "Sentiment Distribution", "font": {"size": 13, "color": C_TEXT2}, "x": 0.01},
         showlegend=False,
@@ -749,15 +818,21 @@ def _build_entity_table(articles: list[Any]) -> list[dict]:
 
     for a in display_articles:
         if hasattr(a, "entities"):
-            ents = a.entities or []
-            score = a.sentiment_score
-            title = a.title
+            ents   = a.entities or []
+            score  = a.sentiment_score if a.sentiment_score is not None else 0.0
+            title  = a.title or ""
             pub_dt = a.published_dt
         else:
-            ents = a.get("entities", [])
-            score = a.get("sentiment_score", 0.0)
-            title = a.get("title", "")
+            ents   = a.get("entities") or []
+            score  = a.get("sentiment_score") or 0.0
+            title  = a.get("title", "") or ""
             pub_dt = a.get("published_dt", datetime.now(tz=timezone.utc))
+
+        if not isinstance(pub_dt, datetime):
+            try:
+                pub_dt = datetime.fromisoformat(str(pub_dt))
+            except Exception:
+                pub_dt = datetime.now(tz=timezone.utc)
 
         for ent in ents:
             entity_mentions.setdefault(ent, []).append(score)
@@ -972,6 +1047,7 @@ def render(
     port_results: Any = None,
     route_results: Any = None,
     insights: Any = None,
+    rss_failed: bool = False,
 ) -> None:
     """
     Render the Shipping News Intelligence Center tab.
@@ -984,6 +1060,8 @@ def render(
         port_results:  Optional port analysis results (unused here, reserved).
         route_results: Optional route analysis results (unused here, reserved).
         insights:      Optional pre-computed insights (unused here, reserved).
+        rss_failed:    True when the RSS fetch raised an exception; shows a
+                       warning banner instead of silently falling back.
     """
     logger.debug("tab_news.render() called — articles: {}", len(news_articles or []))
 
@@ -995,11 +1073,25 @@ def render(
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
     # ── Section 2: News Feed ──────────────────────────────────────────────────
-    _section_header(
-        "Shipping News Feed",
-        "Latest headlines ranked by relevance — click to read full article",
-    )
-    _render_news_feed(articles)
+    feed_col, dl_col = st.columns([9, 1])
+    with feed_col:
+        _section_header(
+            "Shipping News Feed",
+            "Latest headlines ranked by relevance — click to read full article",
+        )
+    with dl_col:
+        # CSV download — always export (fallback articles if live feed empty)
+        _export_articles = articles if articles else list(_FALLBACK_ARTICLES)
+        csv_data = _build_news_csv(_export_articles)
+        st.download_button(
+            label="⬇ CSV",
+            data=csv_data,
+            file_name="shipping_news.csv",
+            mime="text/csv",
+            key="news_download_csv",
+            help="Download news items as CSV (headline, sentiment, source, date)",
+        )
+    _render_news_feed(articles, rss_failed=rss_failed)
 
     st.divider()
 

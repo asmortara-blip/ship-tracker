@@ -78,7 +78,7 @@ def render(port_results: list[PortDemandResult]) -> None:
     st.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')} • Refreshes every 168 hours (trade flow data)")
 
     if not port_results:
-        st.info("No port data available. Check API credentials in .env and click Refresh.")
+        st.info("📡 Port demand data is loading or unavailable — data refreshes every 168 hours. Check API credentials in .env and click Refresh, or verify your Comtrade/World Bank keys are set.")
         return
 
     with st.spinner("Loading port demand data..."):
@@ -111,36 +111,38 @@ def render(port_results: list[PortDemandResult]) -> None:
     )
 
     # ── 2. KPI row ────────────────────────────────────────────────────────────
-    def kpi(label, value, sub="", color=C_ACCENT):
-        sub_html = (
-            f'<div style="font-size:0.78rem; color:{C_TEXT2}">{sub}</div>' if sub else ""
-        )
-        return (
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {color}; '
-            f'border-radius:10px; padding:16px 18px; text-align:center">'
-            f'<div style="font-size:0.68rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase; '
-            f'letter-spacing:0.07em">{label}</div>'
-            f'<div style="font-size:1.9rem; font-weight:800; color:{C_TEXT}; line-height:1.1; margin:5px 0">{value}</div>'
-            f'{sub_html}</div>'
-        )
+    falling_count = sum(1 for r in port_results if r.demand_trend == "Falling")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(
-        kpi("Highest Demand", top.port_name[:12], f"{top.demand_score:.0%} score", C_HIGH),
-        unsafe_allow_html=True,
-    )
-    c2.markdown(
-        kpi("High Demand", str(high_count), f"of {len(port_results)} ports", C_HIGH),
-        unsafe_allow_html=True,
-    )
-    c3.markdown(
-        kpi("Weak Demand", str(weak_count), f"of {len(port_results)} ports", C_WEAK),
-        unsafe_allow_html=True,
-    )
-    c4.markdown(
-        kpi("Rising Trend", str(rising_count), "ports trending up", C_ACCENT),
-        unsafe_allow_html=True,
-    )
+    with c1:
+        st.metric(
+            label="Highest Demand Port",
+            value=top.port_name[:12],
+            delta=f"{top.demand_score:.0%} demand score",
+            delta_color="normal",
+        )
+    with c2:
+        st.metric(
+            label="High Demand Ports",
+            value=str(high_count),
+            delta=f"{high_count} of {len(port_results)} ports ≥70%",
+            delta_color="off",
+        )
+    with c3:
+        st.metric(
+            label="Weak Demand Ports",
+            value=str(weak_count),
+            delta=f"{weak_count} of {len(port_results)} ports <35%",
+            delta_color="inverse",
+        )
+    with c4:
+        net_momentum = rising_count - falling_count
+        st.metric(
+            label="Rising Trend",
+            value=str(rising_count),
+            delta=f"+{net_momentum} net vs falling" if net_momentum >= 0 else f"{net_momentum} net vs falling",
+            delta_color="normal",
+        )
 
     st.divider()
 
@@ -188,8 +190,10 @@ def render(port_results: list[PortDemandResult]) -> None:
                 showarrow=False,
             )
             fig.update_layout(
+                template="plotly_dark",
                 height=200,
                 paper_bgcolor=C_BG,
+                plot_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=5, r=5, t=5, b=5),
                 showlegend=False,
             )
@@ -474,9 +478,13 @@ def render(port_results: list[PortDemandResult]) -> None:
                         font=dict(color=C_TEXT, size=12),
                     ),
                 )
-                st.plotly_chart(prod_fig, use_container_width=True)
+                st.plotly_chart(
+                    prod_fig,
+                    use_container_width=True,
+                    key=f"prod_chart_{selected.locode}",
+                )
             else:
-                st.info("No product breakdown available — Comtrade data needed.")
+                st.info("📡 No product breakdown available — Comtrade trade data is required. Verify your Comtrade API key in .env and click Refresh All Data.")
 
     st.divider()
 
@@ -515,17 +523,173 @@ def render(port_results: list[PortDemandResult]) -> None:
     styled = df.style.map(_color_score, subset=["Score"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
+    csv = df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="port_demand_data.csv",
+        mime="text/csv",
+        key="download_port_demand_csv",
+    )
+
     st.divider()
 
-    with st.expander("Port Comparison Tool", expanded=False):
+    # ── 7. Quick 2-port side-by-side comparison ────────────────────────────────
+    st.markdown(
+        f'<div style="font-size:1.15rem; font-weight:800; color:{C_TEXT}; '
+        f'letter-spacing:0.02em; margin-bottom:16px">Quick Port Comparison</div>',
+        unsafe_allow_html=True,
+    )
+    all_port_names = [r.port_name for r in sorted_results]
+    qc_col_a, qc_col_b = st.columns(2)
+    with qc_col_a:
+        qc_port_a = st.selectbox(
+            "Port A",
+            options=all_port_names,
+            index=0,
+            key="qc_port_a",
+        )
+    with qc_col_b:
+        qc_port_b = st.selectbox(
+            "Port B",
+            options=all_port_names,
+            index=min(1, len(all_port_names) - 1),
+            key="qc_port_b",
+        )
+
+    if qc_port_a and qc_port_b and qc_port_a != qc_port_b:
+        _render_quick_comparison(
+            sorted_results,
+            qc_port_a,
+            qc_port_b,
+        )
+    elif qc_port_a == qc_port_b:
+        st.info("Select two different ports for comparison.")
+
+    st.divider()
+
+    with st.expander("Advanced Port Comparison (up to 4 ports — radar chart)", expanded=False):
         _render_port_comparison(port_results)
+
+
+def _render_quick_comparison(
+    sorted_results: list,
+    name_a: str,
+    name_b: str,
+) -> None:
+    """Render a focused side-by-side card comparison for exactly two ports."""
+    port_a = next((r for r in sorted_results if r.port_name == name_a), None)
+    port_b = next((r for r in sorted_results if r.port_name == name_b), None)
+
+    if port_a is None or port_b is None:
+        st.warning("Could not locate one or both selected ports.")
+        return
+
+    def _side_card(r) -> str:
+        color = _demand_color(r.demand_score)
+        label = _demand_label(r.demand_score)
+        arrow, arrow_color = _trend_arrow(r.demand_trend)
+        tpu = (
+            f"{r.throughput_teu_m:.1f}M TEU/yr"
+            if r.throughput_teu_m and r.throughput_teu_m > 0
+            else "N/A"
+        )
+        top_prod = r.top_products[0]["category"] if r.top_products else "N/A"
+        imports = (
+            f"${r.import_value_usd / 1e9:.2f}B"
+            if r.import_value_usd and r.import_value_usd > 0
+            else "N/A"
+        )
+        rows = [
+            ("Demand Score",  f"{r.demand_score:.0%}",               color),
+            ("Trade Flow",    f"{r.trade_flow_component:.0%}",        C_MOD),
+            ("Congestion",    f"{r.congestion_component:.0%}",        C_LOW),
+            ("Throughput",    tpu,                                     C_CONV),
+            ("Trend",         f"{arrow} {r.demand_trend}",            arrow_color),
+            ("Imports (ann.)", imports,                                C_TEXT2),
+            ("Top Product",   top_prod,                               C_TEXT2),
+            ("Vessels",       str(r.vessel_count),                    C_TEXT2),
+        ]
+        cells = "".join(
+            f'<tr>'
+            f'<td style="padding:7px 12px; font-size:0.75rem; color:{C_TEXT3}; '
+            f'border-bottom:1px solid rgba(255,255,255,0.04)">{name}</td>'
+            f'<td style="padding:7px 12px; font-size:0.80rem; font-weight:700; '
+            f'color:{val_color}; border-bottom:1px solid rgba(255,255,255,0.04); '
+            f'text-align:right">{val}</td>'
+            f'</tr>'
+            for name, val, val_color in rows
+        )
+        return (
+            f'<div style="background:linear-gradient(135deg,{color}14 0%,{C_CARD} 55%); '
+            f'border:1px solid {color}44; border-top:4px solid {color}; '
+            f'border-radius:14px; padding:20px 18px; height:100%">'
+            f'<div style="font-size:0.65rem; font-weight:700; color:{color}; '
+            f'text-transform:uppercase; letter-spacing:0.1em; margin-bottom:4px">'
+            f'{label}</div>'
+            f'<div style="font-size:1.55rem; font-weight:900; color:{C_TEXT}; '
+            f'margin-bottom:2px">{r.port_name}</div>'
+            f'<div style="font-size:0.72rem; color:{C_TEXT3}; margin-bottom:12px">'
+            f'{r.region} &bull; {r.locode}</div>'
+            f'<table style="width:100%; border-collapse:collapse">{cells}</table>'
+            f'</div>'
+        )
+
+    col_a, col_sep, col_b = st.columns([10, 1, 10])
+    with col_a:
+        st.markdown(_side_card(port_a), unsafe_allow_html=True)
+    with col_sep:
+        st.markdown(
+            f'<div style="text-align:center; font-size:1.4rem; color:{C_TEXT3}; '
+            f'padding-top:80px">vs</div>',
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        st.markdown(_side_card(port_b), unsafe_allow_html=True)
+
+    # Delta summary row
+    score_delta = port_a.demand_score - port_b.demand_score
+    delta_color = C_HIGH if score_delta > 0 else (C_WEAK if score_delta < 0 else C_TEXT3)
+    delta_leader = port_a.port_name if score_delta > 0 else (port_b.port_name if score_delta < 0 else "Tied")
+    st.markdown(
+        f'<div style="text-align:center; margin-top:10px; font-size:0.80rem; color:{C_TEXT3}">'
+        f'Demand score gap: '
+        f'<span style="color:{delta_color}; font-weight:700">'
+        f'{abs(score_delta):.0%} &nbsp;({delta_leader} leads)'
+        f'</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    # Quick-compare CSV export
+    qc_rows = []
+    for r in (port_a, port_b):
+        qc_rows.append({
+            "Port":         r.port_name,
+            "LOCODE":       r.locode,
+            "Region":       r.region,
+            "Demand Score": round(r.demand_score, 4),
+            "Trade Flow":   round(r.trade_flow_component, 4),
+            "Congestion":   round(r.congestion_component, 4),
+            "Throughput":   round(r.throughput_component, 4),
+            "Trend":        r.demand_trend,
+            "Vessels":      r.vessel_count,
+            "Imports (USD)": r.import_value_usd if r.import_value_usd and r.import_value_usd > 0 else 0,
+        })
+    qc_df = pd.DataFrame(qc_rows)
+    st.download_button(
+        label="Download Comparison CSV",
+        data=qc_df.to_csv(index=False),
+        file_name=f"compare_{port_a.locode}_vs_{port_b.locode}.csv",
+        mime="text/csv",
+        key=f"qc_csv_{port_a.locode}_{port_b.locode}",
+    )
 
 
 def _render_port_comparison(port_results: list) -> None:
     """Render a side-by-side radar chart and table for up to 4 selected ports."""
 
     if not port_results:
-        st.info("No port data available for comparison")
+        st.info("📡 No port data available for comparison — data refreshes every 168 hours. Check API credentials in .env and click Refresh All Data.")
         return
 
     PORT_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
@@ -613,6 +777,7 @@ def _render_port_comparison(port_results: list) -> None:
         )
 
     fig.update_layout(
+        template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
         polar=dict(
@@ -645,7 +810,8 @@ def _render_port_comparison(port_results: list) -> None:
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    port_key_slug = "_vs_".join(r.locode for r in selected_results)
+    st.plotly_chart(fig, use_container_width=True, key=f"radar_{port_key_slug}")
 
     st.markdown("**Score Breakdown**")
 
@@ -666,3 +832,10 @@ def _render_port_comparison(port_results: list) -> None:
 
     cmp_df = pd.DataFrame(table_rows)
     st.dataframe(cmp_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        label="Download Comparison CSV",
+        data=cmp_df.to_csv(index=False),
+        file_name="port_comparison.csv",
+        mime="text/csv",
+        key=f"cmp_csv_{port_key_slug}",
+    )
