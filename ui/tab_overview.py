@@ -479,7 +479,7 @@ def _render_region_chart(port_scores: dict[str, PortDemandResult]) -> None:
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="region_demand_chart")
 
 
 # ── Top routes (enhanced gradient cards) ─────────────────────────────────────
@@ -668,7 +668,7 @@ def _render_trade_flow_sankey(
             font=dict(color=C_TEXT, size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="trade_flow_sankey")
 
 
 # ── Chokepoint section ────────────────────────────────────────────────────────
@@ -760,7 +760,7 @@ def _render_chokepoint_section() -> None:
                 font=dict(color=C_TEXT, size=12),
             ),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="chokepoint_map")
 
     with col_table:
         table_rows = [{
@@ -770,7 +770,7 @@ def _render_chokepoint_section() -> None:
             "Reroute":    f"+{cp.reroute_impact_days}d" if cp.reroute_impact_days > 0 else "N/A",
         } for cp in sorted(
             CHOKEPOINTS,
-            key=lambda c: list(RISK_LEVELS.keys()).index(c.risk_level),
+            key=lambda c: _risk_level_sort_key(c.risk_level, list(RISK_LEVELS.keys())),
             reverse=True,
         )]
 
@@ -780,6 +780,14 @@ def _render_chokepoint_section() -> None:
             hide_index=True,
             height=300,
         )
+
+
+def _risk_level_sort_key(risk_level: str, risk_levels_keys: list) -> int:
+    """Return sort index for a risk level, defaulting to -1 if not found."""
+    try:
+        return risk_levels_keys.index(risk_level)
+    except ValueError:
+        return -1
 
 
 # ── News sentiment ────────────────────────────────────────────────────────────
@@ -903,7 +911,7 @@ def _render_news_sentiment() -> None:
                                 padding:1px 8px; border-radius:999px;
                                 font-size:0.7rem; font-weight:600">{item.source}</span>
                             <span style="color:{C_TEXT3_L}; font-size:0.75rem">
-                                {item.published_dt.strftime("%b %d")}
+                                {item.published_dt.strftime("%b %d") if item.published_dt else "—"}
                             </span>
                             <span style="color:{dot_color}; font-size:0.75rem; font-weight:600">
                                 {score:+.1f}
@@ -1039,7 +1047,7 @@ def render(
             unsafe_allow_html=True,
         )
         fig_globe = _build_globe(port_scores, route_results)
-        st.plotly_chart(fig_globe, use_container_width=True)
+        st.plotly_chart(fig_globe, use_container_width=True, key="globe_chart")
 
     with col_panel:
         _render_summary_panel(port_scores, route_results, insights)

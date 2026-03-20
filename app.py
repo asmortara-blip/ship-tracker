@@ -80,15 +80,31 @@ st.set_page_config(
 @st.cache_resource
 def load_config() -> dict:
     config_path = Path(__file__).parent / "config.yaml"
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            logger.warning("config.yaml parsed to a non-dict; using empty config.")
+            return {}
+        return data
+    except FileNotFoundError:
+        logger.error(f"config.yaml not found at {config_path}; using empty config.")
+        st.warning("config.yaml not found — running with default empty configuration.")
+        return {}
+    except yaml.YAMLError as exc:
+        logger.error(f"config.yaml is malformed: {exc}; using empty config.")
+        st.warning(f"config.yaml parse error: {exc} — running with default empty configuration.")
+        return {}
 
 
 cfg = load_config()
 
 # Inject global CSS design system
-from ui.styles import inject_global_css
-inject_global_css()
+try:
+    from ui.styles import inject_global_css
+    inject_global_css()
+except Exception as _css_err:
+    logger.warning(f"Could not load global CSS (ui.styles): {_css_err}")
 
 st.markdown("""<style>
 .stTabs [data-baseweb="tab"] { font-size: 12px; padding: 6px 10px; }

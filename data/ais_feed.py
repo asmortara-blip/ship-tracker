@@ -60,7 +60,7 @@ _SEASONAL = {
 }
 
 
-@st.cache_data(ttl=21600)
+@st.cache_data(ttl=21600, hash_funcs={CacheManager: lambda _: None})
 def fetch_vessel_counts(
     cache: CacheManager | None = None,
     ttl_hours: float = 6.0,

@@ -277,7 +277,7 @@ def _render_indicator_dashboard(
         bar_bg = _hex_to_rgba(phase_color, 0.15)
 
         header_label = "{} — signals {}".format(ind.name, ind.phase_signal)
-        with st.expander(header_label, expanded=False):
+        with st.expander(header_label, expanded=False, key="cycle_ind_{}".format(ind.name.replace(" ", "_"))):
             st.markdown(
                 """
                 <div style="display:flex; align-items:center; gap:16px; padding:6px 0">

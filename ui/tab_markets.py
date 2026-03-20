@@ -458,7 +458,7 @@ def _render_shipping_sentiment_gauge(
         margin=dict(t=40, b=10, l=20, r=20),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(gauge_fig, use_container_width=True)
+    st.plotly_chart(gauge_fig, use_container_width=True, key="markets_sentiment_gauge")
 
     # Zone legend strip
     legend_html = (
@@ -769,7 +769,7 @@ def _render_signal_timeline(
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="markets_signal_timeline")
 
 
 # ── leading indicators dashboard ──────────────────────────────────────────────
@@ -975,7 +975,7 @@ def _render_lead_lag_matrix(macro_data: dict) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(hm_fig, use_container_width=True)
+    st.plotly_chart(hm_fig, use_container_width=True, key="markets_lead_lag_matrix")
 
 
 # ── recession probability gauge ────────────────────────────────────────────────
@@ -1059,7 +1059,7 @@ def _render_recession_probability_gauge(macro_data: dict) -> None:
         margin=dict(t=40, b=10, l=20, r=20),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(gauge_fig, use_container_width=True)
+    st.plotly_chart(gauge_fig, use_container_width=True, key="markets_recession_gauge")
 
     legend_html = (
         '<div style="display:flex; gap:6px; justify-content:center; flex-wrap:wrap;'
@@ -1164,7 +1164,7 @@ def _render_composite_leading_score(macro_data: dict) -> None:
         margin=dict(t=50, b=10, l=20, r=20),
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(indicator_fig, use_container_width=True)
+    st.plotly_chart(indicator_fig, use_container_width=True, key="markets_composite_score")
 
     # Signal breakdown chips
     bull_names = ", ".join(result["top_bullish_indicators"]) or "None"
@@ -1396,7 +1396,7 @@ def render(
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(heatmap_fig, use_container_width=True)
+    st.plotly_chart(heatmap_fig, use_container_width=True, key="markets_correlation_heatmap")
 
     # ── 5. Top Correlations — Bloomberg-style cards ────────────────────────
     st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:16px 0'>", unsafe_allow_html=True)
@@ -1571,7 +1571,7 @@ def _render_stock_chart(stock_data: dict[str, pd.DataFrame], lookback_days: int)
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="markets_stock_chart")
 
 
 def _render_dual_axis_chart(result: CorrelationResult, stock_data: dict[str, pd.DataFrame]) -> None:
@@ -1582,7 +1582,8 @@ def _render_dual_axis_chart(result: CorrelationResult, stock_data: dict[str, pd.
 
     with st.expander(
         f"{result.stock} vs {_SIGNAL_LABELS.get(result.signal, result.signal)}"
-        f" (r={result.pearson_r:.2f})"
+        f" (r={result.pearson_r:.2f})",
+        key=f"markets_expander_{result.stock}_{result.signal}",
     ):
         st.caption(result.interpretation)
 

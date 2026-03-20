@@ -219,7 +219,7 @@ def _render_waterfall(attr: PerformanceAttribution) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"attr_waterfall_{attr.ticker}")
 
 
 # ── Section: Factor Exposure Table ────────────────────────────────────────────
@@ -401,7 +401,7 @@ def _render_r_squared_heatmap(attributions: List[PerformanceAttribution]) -> Non
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="attr_r_squared_heatmap")
 
 
 # ── Section: Alpha Generation bar chart ───────────────────────────────────────
@@ -462,7 +462,7 @@ def _render_alpha_generation(attributions: List[PerformanceAttribution]) -> None
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="attr_alpha_generation")
 
 
 # ── Section: Rolling Attribution ──────────────────────────────────────────────
@@ -677,7 +677,7 @@ def _render_rolling_attribution(
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"attr_rolling_{ticker}")
 
 
 # ── Section: KPI summary strip ────────────────────────────────────────────────
@@ -919,4 +919,4 @@ def render(
                     font=dict(color="#f1f5f9", size=12),
                 ),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="attr_factor_return_series")

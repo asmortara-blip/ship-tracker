@@ -606,7 +606,7 @@ def _render_sentiment_gauge(overall: float) -> None:
         font={"color": C_TEXT, "family": "Inter, sans-serif"},
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="news_sentiment_gauge")
 
     # Label below gauge
     lbl_color = needle_color
@@ -657,7 +657,7 @@ def _render_sentiment_distribution(bullish: int, bearish: int, neutral: int) -> 
         },
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="news_sentiment_distribution")
 
 
 def _render_entity_word_cloud(entity_counts: Counter) -> None:

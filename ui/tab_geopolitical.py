@@ -364,7 +364,7 @@ def _render_world_map() -> None:
         font=dict(color=C_TEXT),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="geo_world_risk_globe")
 
 
 # ---------------------------------------------------------------------------

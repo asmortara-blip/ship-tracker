@@ -95,6 +95,10 @@ def render(route_results: list[RouteEmissions] | None = None) -> None:
     if route_results is None:
         route_results = calculate_all_routes()
 
+    if not route_results:
+        st.info("No route emissions data available.")
+        return
+
     # ── Hero section ─────────────────────────────────────────────────────────
     avg_co2_per_teu = sum(r.co2_per_teu_mt for r in route_results) / len(route_results)
     total_routes = len(route_results)

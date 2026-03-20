@@ -375,7 +375,7 @@ def _render_signal_matrix(signals: list) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="alpha_signal_matrix")
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +453,7 @@ def _render_portfolio_construction(
                     showarrow=False,
                 )],
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, use_container_width=True, key="alpha_portfolio_pie")
 
     with col_metrics:
         ret_color  = _C_LONG  if exp_ret  >= 0  else _C_SHORT
@@ -601,7 +601,7 @@ def _render_factor_attribution(signals: list) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="alpha_factor_attribution")
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +729,7 @@ def _render_signal_history(signals: list, stock_data: dict) -> None:
             font=dict(color="#f1f5f9", size=12),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="alpha_signal_history")
 
     st.markdown(
         '<div style="font-size:0.72rem; color:#475569; margin-top:-8px; margin-bottom:4px;'

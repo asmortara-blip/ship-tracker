@@ -250,7 +250,7 @@ def _render_price_map(
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="bunker_price_map")
 
 
 # ── Section 2: Fuel Price Dashboard ──────────────────────────────────────────
@@ -364,7 +364,7 @@ def _render_fuel_dashboard(
             )
     fig.update_annotations(font=dict(color=C_TEXT2, size=12))
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="bunker_price_history")
 
 
 # ── Section 3: Voyage Cost Calculator ────────────────────────────────────────
@@ -637,7 +637,7 @@ def _render_correlation(macro_data: dict, freight_data: dict) -> None:
         yaxis_title="Freight Rate ($/FEU)",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="bunker_wti_correlation")
 
     corr_pct = round(abs(corr) * 100, 1)
     direction = "positively" if corr >= 0 else "negatively"

@@ -104,7 +104,7 @@ def _is_not_found_error(exc: Exception) -> bool:
     return any(code in msg for code in ("400", "404", "not found", "bad request"))
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, hash_funcs={CacheManager: lambda _: None})
 def fetch_macro_series(
     lookback_days: int = 365,
     cache: CacheManager | None = None,

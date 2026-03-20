@@ -58,7 +58,7 @@ _CATEGORY_SHARES = {
 }
 
 
-@st.cache_data(ttl=604800)
+@st.cache_data(ttl=604800, hash_funcs={CacheManager: lambda _: None})
 def fetch_all_ports(
     lookback_months: int = 3,
     cache: CacheManager | None = None,

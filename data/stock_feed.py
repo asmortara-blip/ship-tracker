@@ -21,7 +21,7 @@ _DEFAULT_TICKERS = [
 ]
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, hash_funcs={CacheManager: lambda _: None})
 def fetch_all_stocks(
     tickers: list[str] | None = None,
     lookback_days: int = 180,

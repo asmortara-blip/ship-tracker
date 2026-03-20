@@ -52,7 +52,11 @@ def normalize_trade_df(df: pd.DataFrame) -> pd.DataFrame:
         out["port_locode"] = df.get("port_locode", "UNKNOWN")
         out["country_iso3"] = df.get("reporterISO", df.get("reporterCode", "UNK"))
         out["hs_code"] = df.get("cmdCode", df.get("cmdDesc", "")).astype(str).str[:4]
-        out["flow"] = df.get("flowCode", df.get("flowDesc", "")).str.upper().str[:1]  # "X" or "M"
+        _flow_raw = df.get("flowCode", df.get("flowDesc", ""))
+        if isinstance(_flow_raw, pd.Series):
+            out["flow"] = _flow_raw.astype(str).str.upper().str[:1]
+        else:
+            out["flow"] = str(_flow_raw).upper()[:1]
         out["value_usd"] = pd.to_numeric(df.get("primaryValue", 0), errors="coerce").fillna(0)
         out["net_weight_kg"] = pd.to_numeric(df.get("netWgt", 0), errors="coerce").fillna(0)
         out["source"] = "comtrade"

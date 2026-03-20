@@ -522,7 +522,7 @@ def render(insights: list[Insight]) -> None:
             )
 
         if upcoming:
-            with st.expander(f"Upcoming within 60 days ({len(upcoming)} events)"):
+            with st.expander(f"Upcoming within 60 days ({len(upcoming)} events)", key="results_upcoming_seasonal"):
                 for sig in upcoming:
                     u_color = C_ACCENT if sig.direction == "bullish" else C_MOD if sig.direction == "bearish" else C_TEXT2
                     desc_preview = sig.description[:110] + ("..." if len(sig.description) > 110 else "")

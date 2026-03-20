@@ -512,7 +512,7 @@ def render(port_results: list[PortDemandResult]) -> None:
             return "background-color: rgba(245,158,11,0.20); color: #f59e0b"
         return "background-color: rgba(239,68,68,0.18); color: #ef4444"
 
-    styled = df.style.applymap(_color_score, subset=["Score"])
+    styled = df.style.map(_color_score, subset=["Score"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     st.divider()

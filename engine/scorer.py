@@ -97,7 +97,8 @@ class InsightScorer:
         deduped.sort(key=lambda x: x.score, reverse=True)
         result = deduped[:20]  # Cap at 20 insights
 
-        logger.info(f"Decision engine: {len(result)} insights generated (top score: {result[0].score:.3f} if any)")
+        top_score_str = f"{result[0].score:.3f}" if result else "none"
+        logger.info(f"Decision engine: {len(result)} insights generated (top score: {top_score_str})")
         return result
 
     # ------------------------------------------------------------------

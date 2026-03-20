@@ -696,7 +696,7 @@ def _render_commodity_monitor(macro_data: dict[str, pd.DataFrame]) -> None:
                     return "background-color: rgba(239,68,68,0.25); color:#ef4444"
                 return ""
             st.dataframe(
-                corr_table.style.format({"r vs BDI": "{:.3f}"}).applymap(_color_r, subset=["r vs BDI"]),
+                corr_table.style.format({"r vs BDI": "{:.3f}"}).map(_color_r, subset=["r vs BDI"]),
                 use_container_width=False,
             )
 

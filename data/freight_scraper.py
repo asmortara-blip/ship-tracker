@@ -35,7 +35,7 @@ _FBX_API_URL = "https://fbx.freightos.com/api/v1/indices"
 _FBX_PAGE_URL = "https://fbx.freightos.com/"
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, hash_funcs={CacheManager: lambda _: None})
 def fetch_fbx_rates(
     lookback_days: int = 120,
     cache: CacheManager | None = None,

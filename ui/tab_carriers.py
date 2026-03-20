@@ -245,7 +245,7 @@ def _render_alliance_globe() -> None:
         font={"color": C_TEXT, "family": "Inter, sans-serif"},
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="carriers_globe_map")
 
 
 # ── Section 2: Market Share Treemap ──────────────────────────────────────────
@@ -313,7 +313,7 @@ def _render_market_share_treemap() -> None:
     layout["margin"] = {"l": 8, "r": 8, "t": 30, "b": 8}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="carriers_market_share_treemap")
 
 
 # ── Section 3: Schedule Reliability Chart ────────────────────────────────────
@@ -372,7 +372,7 @@ def _render_reliability_chart() -> None:
     layout["margin"] = {"l": 100, "r": 40, "t": 40, "b": 30}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="carriers_reliability_bar")
 
 
 # ── Section 4: Carrier vs Stock Performance ───────────────────────────────────
@@ -468,7 +468,7 @@ def _render_stock_vs_reliability() -> None:
         ann["font"] = {"color": C_TEXT2, "size": 11}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="carriers_stock_reliability")
 
     st.markdown(
         "<div style='font-size:0.72rem;color:" + C_TEXT3 + ";margin-top:-6px;'>"
@@ -798,7 +798,7 @@ def _render_hhi_gauge() -> None:
     col_gauge, col_legend = st.columns([2, 1])
 
     with col_gauge:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="carriers_hhi_gauge")
 
     with col_legend:
         st.markdown("<div style='margin-top:32px;'></div>", unsafe_allow_html=True)

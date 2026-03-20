@@ -173,7 +173,7 @@ def _render_tariff_heatmap() -> None:
         margin=dict(l=0, r=0, t=10, b=0),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="trade_war_tariff_choropleth")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -544,7 +544,7 @@ def _render_trade_diversion_sankey() -> None:
         margin=dict(l=20, r=20, t=20, b=20),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="trade_war_diversion_sankey")
 
     # Legend note
     st.markdown(
@@ -711,7 +711,7 @@ def _render_historical_timeline() -> None:
         hovermode="x unified",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="trade_war_tariff_timeline")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

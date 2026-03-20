@@ -370,7 +370,7 @@ def _render_ffa_pricer(route_id: str, freight_data: dict, months_forward: int) -
     layout["yaxis"]["title"] = {"text": "Rate USD/FEU", "font": {"color": C_TEXT2, "size": 12}}
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"deriv_ffa_{route_id}_{months_forward}")
 
 
 # ── Options Pricer section ────────────────────────────────────────────────────
@@ -507,7 +507,7 @@ def _render_vol_surface(freight_data: dict) -> None:
     layout["plot_bgcolor"] = "#0a0f1a"
     fig.update_layout(**layout)
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="deriv_vol_surface")
 
 
 # ── Hedging dashboard ─────────────────────────────────────────────────────────

@@ -754,6 +754,7 @@ def _render_valuation_dashboard() -> None:
         with st.expander(
             "{} — {}   |   {}".format(ticker, fund.company_name, zone),
             expanded=(ticker == sorted_tickers[0]),
+            key="valuation_expander_" + ticker,
         ):
             c1, c2, c3 = st.columns(3)
 

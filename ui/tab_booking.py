@@ -613,7 +613,7 @@ def _render_cost_breakdown(recommendation: BookingRecommendation) -> None:
     chart_col, detail_col = st.columns([1.3, 1])
 
     with chart_col:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="booking_cost_donut")
 
     with detail_col:
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)

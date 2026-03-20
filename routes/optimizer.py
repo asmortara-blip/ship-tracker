@@ -88,7 +88,11 @@ def _score_route(
     pct_30d = compute_rate_pct_change(route.id, freight_data, 30)
 
     df = freight_data.get(route.id)
-    current_rate = float(df["rate_usd_per_feu"].iloc[-1]) if (df is not None and not df.empty) else 0.0
+    if df is not None and not df.empty and "rate_usd_per_feu" in df.columns:
+        _rates = df["rate_usd_per_feu"].dropna()
+        current_rate = float(_rates.iloc[-1]) if not _rates.empty else 0.0
+    else:
+        current_rate = 0.0
 
     from utils.helpers import trend_label
     rate_trend = trend_label(pct_30d)

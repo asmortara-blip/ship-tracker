@@ -167,7 +167,8 @@ def analyze_pair(
             logger.debug(f"Pair {stock_a}/{stock_b}: pearsonr failed — {exc}")
             correlation_90d = 0.0
     else:
-        correlation_90d = float(ret_window[stock_a].corr(ret_window[stock_b])) if len(ret_window) >= 5 else 0.0
+        _corr = ret_window[stock_a].corr(ret_window[stock_b]) if len(ret_window) >= 5 else float("nan")
+        correlation_90d = float(np.clip(_corr, -1.0, 1.0)) if not np.isnan(_corr) else 0.0
 
     # Half-life via AR(1) on the spread series
     half_life_days = _estimate_half_life(spread)
