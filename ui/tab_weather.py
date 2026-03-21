@@ -3,7 +3,15 @@ Weather Risk Tab
 
 Displays seasonal and real-time weather risk analysis across global shipping routes.
 
-Sections:
+Sections (NEW — rendered at top):
+  0. Active Alerts Banner     — colored severity banner with live alert count
+  NEW Weather Risk World Map  — Scattergeo with storm/cyclone markers (flat projection)
+  NEW Seasonal Patterns Chart — bar chart of historical weather risk by month per region
+  NEW Route Risk Table        — route, risk level, expected delay, alternative route
+  NEW Season Tracker          — typhoon/hurricane active season status cards
+  NEW Port Weather Windows    — best months calendar heatmap for major ports
+
+Sections (ORIGINAL — preserved below):
   1. Weather Risk Globe       — orthographic Plotly Scattergeo with active weather
                                 systems, risk zones, and affected port highlights
   2. Seasonal Risk Calendar   — 12-month x N-route heatmap (go.Heatmap)
@@ -249,12 +257,736 @@ _PULSE_CSS = """
     50%  { opacity: 0.40; }
     100% { opacity: 1; }
 }
+@keyframes alert-slide-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes season-glow {
+    0%, 100% { box-shadow: 0 0 8px rgba(239,68,68,0.3); }
+    50%       { box-shadow: 0 0 20px rgba(239,68,68,0.6); }
+}
 </style>
 """
 
-# ---------------------------------------------------------------------------
-# Section 1: Weather Risk Globe
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# NEW SECTION 0 — Active Weather Alerts Banner
+# ===========================================================================
+
+def _render_alerts_banner() -> None:
+    """Colored severity banner at the top showing active alert summary."""
+    alerts = get_current_season_alerts()
+    month_name = _MONTH_NAMES[datetime.date.today().month - 1]
+
+    active_count    = sum(1 for a in alerts if a.current_risk_level == "ACTIVE")
+    elevated_count  = sum(1 for a in alerts if a.current_risk_level == "ELEVATED")
+    seasonal_count  = sum(1 for a in alerts if a.current_risk_level == "SEASONAL")
+
+    if active_count > 0:
+        banner_bg     = "linear-gradient(135deg, rgba(239,68,68,0.18) 0%, rgba(239,68,68,0.06) 100%)"
+        banner_border = "#ef4444"
+        banner_icon   = "🔴"
+        severity_text = "CRITICAL — Active Disruptions"
+        severity_color = C_DANGER
+    elif elevated_count > 0:
+        banner_bg     = "linear-gradient(135deg, rgba(249,115,22,0.18) 0%, rgba(249,115,22,0.06) 100%)"
+        banner_border = "#f97316"
+        banner_icon   = "🟠"
+        severity_text = "ELEVATED RISK — Monitor Closely"
+        severity_color = C_ORANGE
+    elif seasonal_count > 0:
+        banner_bg     = "linear-gradient(135deg, rgba(245,158,11,0.18) 0%, rgba(245,158,11,0.06) 100%)"
+        banner_border = "#f59e0b"
+        banner_icon   = "🟡"
+        severity_text = "SEASONAL RISK — Normal Operations"
+        severity_color = C_WARN
+    else:
+        banner_bg     = "linear-gradient(135deg, rgba(16,185,129,0.12) 0%, rgba(16,185,129,0.04) 100%)"
+        banner_border = "#10b981"
+        banner_icon   = "🟢"
+        severity_text = "ALL CLEAR — No Significant Risks"
+        severity_color = C_HIGH
+
+    # Build alert type pills
+    affected_types = list({a.risk_type for a in alerts})
+    type_pills_html = " ".join(
+        '<span style="background:rgba(0,0,0,0.3); color:' + _RISK_TYPE_COLOR.get(t, C_TEXT2) + '; '
+        'border:1px solid ' + _RISK_TYPE_COLOR.get(t, C_TEXT2) + '55; padding:2px 10px; '
+        'border-radius:999px; font-size:0.70rem; font-weight:700;">' + t + '</span>'
+        for t in affected_types[:5]
+    )
+
+    # Stat chips
+    stats_html = ""
+    if active_count:
+        stats_html += (
+            '<span style="color:' + C_DANGER + '; font-weight:800; font-size:1.1rem;">' + str(active_count) + '</span>'
+            ' <span style="color:' + C_TEXT3 + '; font-size:0.78rem;">Active</span>&nbsp;&nbsp;'
+        )
+    if elevated_count:
+        stats_html += (
+            '<span style="color:' + C_ORANGE + '; font-weight:800; font-size:1.1rem;">' + str(elevated_count) + '</span>'
+            ' <span style="color:' + C_TEXT3 + '; font-size:0.78rem;">Elevated</span>&nbsp;&nbsp;'
+        )
+    if seasonal_count:
+        stats_html += (
+            '<span style="color:' + C_WARN + '; font-weight:800; font-size:1.1rem;">' + str(seasonal_count) + '</span>'
+            ' <span style="color:' + C_TEXT3 + '; font-size:0.78rem;">Seasonal</span>&nbsp;&nbsp;'
+        )
+    if not alerts:
+        stats_html = '<span style="color:' + C_HIGH + '; font-weight:700; font-size:0.85rem;">No alerts for ' + month_name + '</span>'
+
+    total_routes_affected = len({r for a in alerts for r in a.affected_routes})
+    total_ports_affected  = len({p for a in alerts for p in a.affected_ports})
+
+    st.markdown(
+        '<div style="background:' + banner_bg + '; border:1px solid ' + banner_border + '44; '
+        'border-left:4px solid ' + banner_border + '; border-radius:12px; '
+        'padding:16px 20px; margin-bottom:18px; animation:alert-slide-in 0.35s ease-out both;">'
+
+        '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">'
+
+        '<div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">'
+        '<span style="font-size:1.6rem; line-height:1;">' + banner_icon + '</span>'
+        '<div>'
+        '<div style="font-size:0.70rem; font-weight:800; color:' + severity_color + '; '
+        'text-transform:uppercase; letter-spacing:0.10em; margin-bottom:4px;">' + severity_text + '</div>'
+        '<div style="display:flex; align-items:baseline; gap:4px; flex-wrap:wrap;">' + stats_html + '</div>'
+        '</div>'
+        '</div>'
+
+        '<div style="text-align:right; flex-shrink:0;">'
+        '<div style="margin-bottom:6px;">' + type_pills_html + '</div>'
+        '<div style="font-size:0.72rem; color:' + C_TEXT3 + ';">'
+        '<span style="color:' + C_TEXT2 + '; font-weight:600;">' + str(total_routes_affected) + '</span> routes &nbsp;|&nbsp; '
+        '<span style="color:' + C_TEXT2 + '; font-weight:600;">' + str(total_ports_affected) + '</span> ports &nbsp;|&nbsp; '
+        '<span style="color:' + C_TEXT2 + '; font-weight:600;">' + month_name + ' ' + str(datetime.date.today().year) + '</span>'
+        '</div>'
+        '</div>'
+
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ===========================================================================
+# NEW SECTION — Weather Risk World Map (flat Scattergeo)
+# ===========================================================================
+
+def _render_world_risk_map() -> None:
+    """Flat natural-earth projection world map with storm/cyclone markers and risk zones."""
+    logger.debug("Rendering flat world weather risk map")
+
+    month = datetime.date.today().month
+    active_event_names = {ev.event_name for ev in WEATHER_RISK_EVENTS if month in ev.season_months}
+
+    fig = go.Figure()
+
+    # ── Risk zone blobs ───────────────────────────────────────────────────────
+    for system in _WEATHER_SYSTEM_CENTERS:
+        if system.get("lat") is None or system.get("lon") is None:
+            continue
+        is_active = system["event_name"] in active_event_names
+        base_color = _RISK_TYPE_COLOR.get(system["risk_type"], C_TEXT2)
+        base_size = 48 if is_active else 28
+
+        # Outer glow
+        fig.add_trace(go.Scattergeo(
+            lat=[system["lat"]], lon=[system["lon"]],
+            mode="markers",
+            marker=dict(size=base_size * 2.8, color=base_color, opacity=0.06, line=dict(width=0)),
+            hoverinfo="skip", showlegend=False, name=system["name"] + "_glow3",
+        ))
+        # Mid ring
+        fig.add_trace(go.Scattergeo(
+            lat=[system["lat"]], lon=[system["lon"]],
+            mode="markers",
+            marker=dict(size=base_size * 1.7, color=base_color, opacity=0.11, line=dict(width=0)),
+            hoverinfo="skip", showlegend=False, name=system["name"] + "_glow2",
+        ))
+        # Core marker
+        hover_text = (
+            "<b>" + system["name"] + "</b><br>"
+            + "Type: " + system["risk_type"] + "<br>"
+            + ("IN SEASON" if is_active else "Out of season")
+        )
+        fig.add_trace(go.Scattergeo(
+            lat=[system["lat"]], lon=[system["lon"]],
+            mode="markers+text" if is_active else "markers",
+            text=[system["risk_type"][0]] if is_active else [],
+            textfont=dict(size=9, color="white"),
+            textposition="middle center",
+            marker=dict(
+                size=base_size,
+                color=base_color,
+                opacity=0.30 if is_active else 0.12,
+                line=dict(color=base_color, width=2.0 if is_active else 0.5),
+            ),
+            hovertemplate=hover_text + "<extra></extra>",
+            showlegend=False,
+            name=system["name"],
+        ))
+
+    # ── Affected port diamonds ────────────────────────────────────────────────
+    valid_ports = [p for p in _AFFECTED_PORT_COORDS if p.get("lat") is not None]
+    if valid_ports:
+        port_colors = [C_DANGER if p["risk"] == "HIGH" else C_WARN for p in valid_ports]
+        port_hover  = [
+            "<b>" + p["name"] + "</b> (" + p["locode"] + ")<br>Weather Risk: " + p["risk"]
+            for p in valid_ports
+        ]
+        fig.add_trace(go.Scattergeo(
+            lat=[p["lat"] for p in valid_ports],
+            lon=[p["lon"] for p in valid_ports],
+            mode="markers",
+            marker=dict(size=16, color=port_colors, opacity=0.10, line=dict(width=0)),
+            hoverinfo="skip", showlegend=False, name="port_glow",
+        ))
+        fig.add_trace(go.Scattergeo(
+            lat=[p["lat"] for p in valid_ports],
+            lon=[p["lon"] for p in valid_ports],
+            mode="markers",
+            marker=dict(
+                size=7, color=port_colors, opacity=0.88,
+                symbol="diamond",
+                line=dict(color="rgba(255,255,255,0.4)", width=1),
+            ),
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=port_hover,
+            showlegend=False,
+            name="affected_ports",
+        ))
+
+    # ── Legend traces ─────────────────────────────────────────────────────────
+    for rtype, rcolor in [
+        ("TYPHOON",   "#8b5cf6"),
+        ("HURRICANE", "#ef4444"),
+        ("STORM",     "#f97316"),
+        ("MONSOON",   "#06b6d4"),
+        ("FOG",       "#94a3b8"),
+    ]:
+        fig.add_trace(go.Scattergeo(
+            lat=[None], lon=[None],
+            mode="markers",
+            marker=dict(size=10, color=rcolor),
+            name=rtype,
+            showlegend=True,
+        ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=C_BG,
+        height=440,
+        margin=dict(l=0, r=0, t=0, b=0),
+        geo=dict(
+            projection_type="natural earth",
+            showland=True,        landcolor="#1e293b",
+            showocean=True,       oceancolor="#0a0f1a",
+            showcoastlines=True,  coastlinecolor="rgba(255,255,255,0.18)",
+            showframe=False,
+            bgcolor=C_BG,
+            showcountries=True,   countrycolor="rgba(255,255,255,0.07)",
+            showlakes=False,
+            showrivers=False,
+            lataxis=dict(range=[-65, 75]),
+            lonaxis=dict(range=[-180, 180]),
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.01,
+            xanchor="right",  x=1,
+            font=dict(size=10, color=C_TEXT2),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        hoverlabel=dict(
+            bgcolor=C_CARD,
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color=C_TEXT, size=12),
+        ),
+        font=dict(color=C_TEXT),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="weather_world_risk_map")
+
+
+# ===========================================================================
+# NEW SECTION — Seasonal Patterns Bar Chart (risk by month per major region)
+# ===========================================================================
+
+_REGION_RISK_DATA: dict[str, dict] = {
+    "Western Pacific": {
+        "color": "#8b5cf6",
+        "monthly": [0.1, 0.1, 0.1, 0.15, 0.25, 0.40, 0.70, 0.90, 0.95, 0.75, 0.35, 0.15],
+    },
+    "Atlantic Basin": {
+        "color": "#ef4444",
+        "monthly": [0.1, 0.1, 0.1, 0.12, 0.20, 0.40, 0.65, 0.80, 0.90, 0.75, 0.35, 0.15],
+    },
+    "N. Indian Ocean": {
+        "color": "#06b6d4",
+        "monthly": [0.15, 0.10, 0.15, 0.25, 0.55, 0.65, 0.45, 0.40, 0.45, 0.60, 0.50, 0.20],
+    },
+    "North Sea / NW Europe": {
+        "color": "#f97316",
+        "monthly": [0.80, 0.70, 0.55, 0.30, 0.15, 0.10, 0.10, 0.15, 0.25, 0.45, 0.65, 0.80],
+    },
+    "Trans-Pacific": {
+        "color": "#3b82f6",
+        "monthly": [0.55, 0.45, 0.30, 0.15, 0.10, 0.12, 0.35, 0.55, 0.60, 0.50, 0.45, 0.60],
+    },
+    "S. Indian Ocean": {
+        "color": "#10b981",
+        "monthly": [0.65, 0.70, 0.55, 0.30, 0.15, 0.10, 0.08, 0.08, 0.10, 0.20, 0.40, 0.55],
+    },
+}
+
+
+def _render_seasonal_patterns_chart() -> None:
+    """Grouped bar chart of historical weather risk by month for major regions."""
+    logger.debug("Rendering seasonal patterns bar chart")
+
+    current_month = datetime.date.today().month - 1  # 0-based
+
+    fig = go.Figure()
+
+    for region_name, region_info in _REGION_RISK_DATA.items():
+        fig.add_trace(go.Bar(
+            name=region_name,
+            x=_MONTH_NAMES,
+            y=region_info["monthly"],
+            marker_color=region_info["color"],
+            opacity=0.82,
+            hovertemplate=(
+                "<b>" + region_name + "</b><br>"
+                "Month: %{x}<br>"
+                "Risk Index: %{y:.2f}<extra></extra>"
+            ),
+        ))
+
+    # Current month vertical highlight shape
+    fig.add_shape(
+        type="rect",
+        xref="x", yref="paper",
+        x0=current_month - 0.5, x1=current_month + 0.5,
+        y0=0, y1=1,
+        fillcolor="rgba(255,255,255,0.05)",
+        line=dict(color="rgba(255,255,255,0.40)", width=1.5),
+        layer="below",
+    )
+
+    # "NOW" annotation
+    fig.add_annotation(
+        x=current_month, y=1.02,
+        xref="x", yref="paper",
+        text="NOW",
+        showarrow=False,
+        font=dict(size=9, color=C_TEAL, family="monospace"),
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        height=320,
+        barmode="group",
+        bargap=0.18,
+        bargroupgap=0.04,
+        margin=dict(l=0, r=0, t=24, b=0),
+        font=dict(color=C_TEXT2, size=11),
+        xaxis=dict(
+            tickfont=dict(size=10, color=C_TEXT2),
+            gridcolor="rgba(255,255,255,0.04)",
+            linecolor="rgba(255,255,255,0.08)",
+        ),
+        yaxis=dict(
+            range=[0, 1.08],
+            tickfont=dict(size=10, color=C_TEXT2),
+            gridcolor="rgba(255,255,255,0.06)",
+            tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+            ticktext=["None", "Low", "Mod", "High", "Max"],
+            title=dict(text="Risk Index", font=dict(size=10, color=C_TEXT3)),
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.01,
+            xanchor="right",  x=1,
+            font=dict(size=9, color=C_TEXT2),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="weather_seasonal_patterns_chart")
+
+
+# ===========================================================================
+# NEW SECTION — Route-Specific Weather Risk Table
+# ===========================================================================
+
+_ROUTE_ALT_MAP: dict[str, str] = {
+    "transpacific_eb":          "Northern Great Circle via Aleutians (winter dodge)",
+    "asia_europe":              "Cape of Good Hope bypass (Red Sea avoidance)",
+    "ningbo_europe":            "Cape of Good Hope bypass (Red Sea avoidance)",
+    "transatlantic":            "Southern routing via Azores (hurricane dodge Aug-Oct)",
+    "south_asia_to_europe":     "Cape of Good Hope (monsoon season diversion)",
+    "sea_transpacific_eb":      "Direct Singapore-Long Beach (avoid NW Pacific storms)",
+    "middle_east_to_europe":    "Cape of Good Hope (Red Sea risk bypass)",
+    "intra_asia_china_sea":     "Eastern Philippine Sea routing (typhoon avoidance)",
+    "china_south_america":      "Southern Pacific corridor (avoid typhoon zone)",
+    "med_hub_to_asia":          "Northern Europe via Suez/Cape based on conditions",
+    "transpacific_wb":          "Southern routing via Hawaii (winter storm avoidance)",
+    "aus_nz_to_asia":           "Coral Sea corridor (cyclone season bypass Dec-Mar)",
+    "africa_west_coast":        "Offshore routing avoiding Gulf of Guinea squalls",
+    "south_america_eb":         "Mid-Atlantic routing avoiding southern storm tracks",
+}
+
+
+def _render_route_risk_table() -> None:
+    """Table of route, current risk level, expected delay, and alternative route."""
+    logger.debug("Rendering route weather risk table")
+
+    rows = []
+
+    for route_id in ALL_ROUTE_IDS[:14]:  # cap at 14 for display
+        try:
+            idx = compute_route_weather_risk(route_id)
+            nom = get_nominal_transit_days(route_id)
+            exp_d, wst_d = compute_weather_adjusted_eta(route_id, float(nom))
+            delay_d = exp_d - nom
+
+            # Derive a simple risk label from score
+            score = idx.current_risk_score
+            if score >= 0.70:
+                risk_level = "HIGH"
+                risk_color = C_DANGER
+            elif score >= 0.45:
+                risk_level = "ELEVATED"
+                risk_color = C_ORANGE
+            elif score >= 0.25:
+                risk_level = "MODERATE"
+                risk_color = C_WARN
+            else:
+                risk_level = "LOW"
+                risk_color = C_HIGH
+
+            delay_str = "+" + str(delay_d) + "d" if delay_d > 0 else "Nominal"
+            delay_color = C_WARN if delay_d > 2 else (C_DANGER if delay_d > 5 else C_HIGH)
+
+            alt_route = _ROUTE_ALT_MAP.get(route_id, "Standard routing")
+            display   = ROUTE_DISPLAY_NAMES.get(route_id, route_id)
+
+            rows.append({
+                "display":     display,
+                "risk_level":  risk_level,
+                "risk_color":  risk_color,
+                "score":       score,
+                "delay_str":   delay_str,
+                "delay_color": delay_color,
+                "delay_d":     delay_d,
+                "nom":         nom,
+                "exp_d":       exp_d,
+                "alt_route":   alt_route,
+            })
+        except Exception:
+            pass
+
+    # Sort: highest risk first
+    rows.sort(key=lambda r: r["score"], reverse=True)
+
+    # Render as HTML table
+    header_html = (
+        '<div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); '
+        'border-radius:12px; overflow:hidden; margin-bottom:8px;">'
+        '<table style="width:100%; border-collapse:collapse; font-size:0.80rem;">'
+        '<thead>'
+        '<tr style="background:rgba(255,255,255,0.04); color:' + C_TEXT3 + '; '
+        'font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em;">'
+        '<th style="padding:10px 14px; text-align:left; font-weight:700;">Route</th>'
+        '<th style="padding:10px 14px; text-align:center; font-weight:700;">Risk Level</th>'
+        '<th style="padding:10px 14px; text-align:center; font-weight:700;">Risk Score</th>'
+        '<th style="padding:10px 14px; text-align:center; font-weight:700;">Expected Delay</th>'
+        '<th style="padding:10px 14px; text-align:center; font-weight:700;">Transit</th>'
+        '<th style="padding:10px 14px; text-align:left; font-weight:700;">Alternative Route</th>'
+        '</tr>'
+        '</thead>'
+        '<tbody>'
+    )
+
+    rows_html = ""
+    for i, row in enumerate(rows):
+        bg = "rgba(255,255,255,0.015)" if i % 2 == 0 else "rgba(0,0,0,0)"
+        # Score bar
+        bar_w = int(row["score"] * 80)
+        score_bar = (
+            '<div style="display:flex; align-items:center; gap:6px;">'
+            '<div style="flex:1; background:rgba(255,255,255,0.07); border-radius:3px; height:6px;">'
+            '<div style="width:' + str(bar_w) + '%; background:' + row["risk_color"] + '; border-radius:3px; height:6px;"></div>'
+            '</div>'
+            '<span style="color:' + row["risk_color"] + '; font-weight:700; font-size:0.72rem; white-space:nowrap;">'
+            + str(int(row["score"] * 100)) + '%</span>'
+            '</div>'
+        )
+        rows_html += (
+            '<tr style="background:' + bg + '; border-top:1px solid rgba(255,255,255,0.04);">'
+            '<td style="padding:9px 14px; color:' + C_TEXT + '; font-weight:600;">' + row["display"] + '</td>'
+            '<td style="padding:9px 14px; text-align:center;">'
+            '<span style="background:rgba(0,0,0,0.3); color:' + row["risk_color"] + '; '
+            'border:1px solid ' + row["risk_color"] + '55; padding:2px 9px; border-radius:999px; '
+            'font-size:0.67rem; font-weight:800;">' + row["risk_level"] + '</span>'
+            '</td>'
+            '<td style="padding:9px 14px;">' + score_bar + '</td>'
+            '<td style="padding:9px 14px; text-align:center; color:' + row["delay_color"] + '; font-weight:700;">'
+            + row["delay_str"] + '</td>'
+            '<td style="padding:9px 14px; text-align:center; color:' + C_TEXT2 + ';">'
+            + str(row["nom"]) + 'd &rarr; ' + str(row["exp_d"]) + 'd</td>'
+            '<td style="padding:9px 14px; color:' + C_TEXT3 + '; font-size:0.74rem;">' + row["alt_route"] + '</td>'
+            '</tr>'
+        )
+
+    footer_html = "</tbody></table></div>"
+    st.markdown(header_html + rows_html + footer_html, unsafe_allow_html=True)
+
+
+# ===========================================================================
+# NEW SECTION — Typhoon/Hurricane Season Tracker
+# ===========================================================================
+
+_SEASON_DATA: list[dict] = [
+    {
+        "name": "Western Pacific Typhoon",
+        "icon": "🌀",
+        "active_months": [5, 6, 7, 8, 9, 10, 11],
+        "peak_months": [8, 9, 10],
+        "color": "#8b5cf6",
+        "region": "W. Pacific / SE Asia",
+        "avg_storms": "26 named storms",
+        "impact": "Trans-Pacific, intra-Asia, Australia routes",
+        "status_active": "Above-average intensity expected",
+        "status_inactive": "Off-season — monitoring begins May",
+    },
+    {
+        "name": "Atlantic Hurricane",
+        "icon": "🌪",
+        "active_months": [6, 7, 8, 9, 10, 11],
+        "peak_months": [8, 9, 10],
+        "color": "#ef4444",
+        "region": "Atlantic / Gulf of Mexico / Caribbean",
+        "avg_storms": "14-18 named storms",
+        "impact": "US East Coast, Gulf ports, transatlantic routes",
+        "status_active": "NOAA forecasts above-normal season",
+        "status_inactive": "Off-season — re-activates June 1",
+    },
+    {
+        "name": "SW Indian Ocean Cyclone",
+        "icon": "🌊",
+        "active_months": [11, 12, 1, 2, 3, 4],
+        "peak_months": [1, 2, 3],
+        "color": "#06b6d4",
+        "region": "South Indian Ocean / Mozambique Channel",
+        "avg_storms": "9-12 named cyclones",
+        "impact": "Cape of Good Hope routing, Durban, Madagascar",
+        "status_active": "Southern hemisphere season — Mozambique channel at risk",
+        "status_inactive": "Off-season — activates November",
+    },
+    {
+        "name": "Bay of Bengal Cyclone",
+        "icon": "🌧",
+        "active_months": [4, 5, 10, 11],
+        "peak_months": [5, 11],
+        "color": "#f59e0b",
+        "region": "Bay of Bengal / N. Indian Ocean",
+        "avg_storms": "4-6 cyclones biannually",
+        "impact": "Chittagong, Kolkata, Chennai, Colombo",
+        "status_active": "Pre/post-monsoon cyclone window active",
+        "status_inactive": "Monsoon suppresses cyclone formation",
+    },
+]
+
+
+def _render_season_tracker() -> None:
+    """Active season status cards for typhoon/hurricane seasons."""
+    logger.debug("Rendering typhoon/hurricane season tracker")
+
+    current_month = datetime.date.today().month
+    cols = st.columns(4)
+
+    for i, season in enumerate(_SEASON_DATA):
+        is_active = current_month in season["active_months"]
+        is_peak   = current_month in season["peak_months"]
+
+        if is_peak:
+            card_border = season["color"]
+            status_text = "PEAK SEASON"
+            status_color = C_DANGER
+            pulse_style = " animation:season-glow 2s ease-in-out infinite;"
+        elif is_active:
+            card_border = season["color"] + "88"
+            status_text = "IN SEASON"
+            status_color = C_ORANGE
+            pulse_style = ""
+        else:
+            card_border = "rgba(255,255,255,0.08)"
+            status_text = "OFF SEASON"
+            status_color = C_TEXT3
+            pulse_style = ""
+
+        detail_text = season["status_active"] if is_active else season["status_inactive"]
+
+        # Month strip: 12 segments colored if in season
+        month_strip_html = '<div style="display:flex; gap:2px; margin-bottom:10px;">'
+        for m in range(12):
+            in_season = (m + 1) in season["active_months"]
+            in_peak   = (m + 1) in season["peak_months"]
+            seg_color = season["color"] if in_season else "rgba(255,255,255,0.08)"
+            seg_opacity = "1" if in_peak else ("0.55" if in_season else "1")
+            month_strip_html += (
+                '<div style="flex:1; height:5px; border-radius:2px; '
+                'background:' + seg_color + '; opacity:' + seg_opacity + ';"></div>'
+            )
+        month_strip_html += '</div>'
+
+        with cols[i % 4]:
+            st.markdown(
+                '<div style="background:' + C_CARD + '; border:1px solid ' + card_border + '; '
+                'border-radius:12px; padding:16px; height:100%;' + pulse_style + '">'
+
+                '<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">'
+                '<span style="font-size:1.8rem;">' + season["icon"] + '</span>'
+                '<span style="background:rgba(0,0,0,0.35); color:' + status_color + '; '
+                'border:1px solid ' + status_color + '55; padding:2px 8px; border-radius:999px; '
+                'font-size:0.62rem; font-weight:800; letter-spacing:0.06em;">' + status_text + '</span>'
+                '</div>'
+
+                '<div style="font-size:0.88rem; font-weight:700; color:' + C_TEXT + '; margin-bottom:4px;">'
+                + season["name"] + '</div>'
+                '<div style="font-size:0.70rem; color:' + season["color"] + '; font-weight:600; margin-bottom:8px;">'
+                + season["region"] + '</div>'
+
+                '<div style="font-size:0.72rem; color:' + C_TEXT3 + '; margin-bottom:6px;">'
+                'Avg: ' + season["avg_storms"] + '</div>'
+
+                + month_strip_html
+
+                + '<div style="font-size:0.70rem; color:' + C_TEXT3 + '; line-height:1.45; margin-bottom:8px;">'
+                '<b style="color:' + C_TEXT2 + ';">Impact:</b> ' + season["impact"] + '</div>'
+
+                '<div style="font-size:0.72rem; color:' + status_color + '; line-height:1.4; '
+                'font-style:italic;">' + detail_text + '</div>'
+
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ===========================================================================
+# NEW SECTION — Port Weather Windows Calendar Heatmap
+# ===========================================================================
+
+_PORT_WEATHER_WINDOWS: dict[str, list[float]] = {
+    # Risk index per month (0 = ideal, 1 = worst): lower is better for operations
+    "Shanghai":    [0.30, 0.25, 0.25, 0.20, 0.25, 0.35, 0.55, 0.65, 0.65, 0.50, 0.35, 0.30],
+    "Singapore":   [0.20, 0.20, 0.25, 0.30, 0.35, 0.40, 0.40, 0.35, 0.35, 0.35, 0.30, 0.20],
+    "Rotterdam":   [0.70, 0.65, 0.50, 0.30, 0.20, 0.15, 0.15, 0.18, 0.25, 0.40, 0.55, 0.70],
+    "Los Angeles": [0.35, 0.30, 0.25, 0.20, 0.15, 0.15, 0.20, 0.25, 0.30, 0.30, 0.30, 0.35],
+    "Busan":       [0.40, 0.35, 0.30, 0.25, 0.20, 0.25, 0.50, 0.65, 0.70, 0.50, 0.35, 0.40],
+    "Hong Kong":   [0.25, 0.25, 0.30, 0.35, 0.40, 0.50, 0.75, 0.80, 0.75, 0.55, 0.35, 0.25],
+    "Colombo":     [0.30, 0.25, 0.25, 0.35, 0.60, 0.75, 0.70, 0.65, 0.55, 0.50, 0.45, 0.30],
+    "Hamburg":     [0.75, 0.70, 0.55, 0.30, 0.20, 0.15, 0.15, 0.18, 0.28, 0.42, 0.58, 0.72],
+    "New York":    [0.50, 0.45, 0.40, 0.30, 0.20, 0.20, 0.25, 0.35, 0.50, 0.45, 0.40, 0.50],
+    "Chittagong":  [0.25, 0.20, 0.25, 0.40, 0.65, 0.80, 0.75, 0.70, 0.65, 0.55, 0.35, 0.25],
+    "Port Said":   [0.30, 0.30, 0.35, 0.30, 0.25, 0.30, 0.40, 0.45, 0.40, 0.30, 0.30, 0.30],
+    "Yokohama":    [0.35, 0.30, 0.30, 0.25, 0.20, 0.22, 0.45, 0.60, 0.65, 0.50, 0.35, 0.35],
+}
+
+
+def _render_port_weather_windows() -> None:
+    """Calendar heatmap showing best/worst months for major ports."""
+    logger.debug("Rendering port weather windows heatmap")
+
+    port_names = list(_PORT_WEATHER_WINDOWS.keys())
+    z_data = [_PORT_WEATHER_WINDOWS[p] for p in port_names]
+
+    current_month_idx = datetime.date.today().month - 1
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=_MONTH_NAMES,
+        y=port_names,
+        colorscale=[
+            [0.0,  "#10b981"],
+            [0.25, "#34d399"],
+            [0.40, "#fbbf24"],
+            [0.60, "#f97316"],
+            [0.80, "#ef4444"],
+            [1.0,  "#7f1d1d"],
+        ],
+        zmin=0.0,
+        zmax=1.0,
+        showscale=True,
+        colorbar=dict(
+            title=dict(text="Risk (0=Best, 1=Worst)", font=dict(size=10, color=C_TEXT3)),
+            tickfont=dict(size=9, color=C_TEXT2),
+            tickvals=[0.0, 0.25, 0.50, 0.75, 1.0],
+            ticktext=["Best", "Good", "Caution", "Poor", "Avoid"],
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor="rgba(255,255,255,0.10)",
+            thickness=12,
+            len=0.8,
+        ),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Month: %{x}<br>"
+            "Operational Risk: %{z:.2f}<extra></extra>"
+        ),
+        xgap=3,
+        ygap=2,
+    ))
+
+    # Current month highlight
+    fig.add_shape(
+        type="rect", xref="x", yref="paper",
+        x0=current_month_idx - 0.5, x1=current_month_idx + 0.5,
+        y0=0, y1=1,
+        fillcolor="rgba(255,255,255,0.05)",
+        line=dict(color="rgba(255,255,255,0.40)", width=1.5),
+        layer="above",
+    )
+    fig.add_annotation(
+        x=current_month_idx, y=1.03,
+        xref="x", yref="paper",
+        text="NOW",
+        showarrow=False,
+        font=dict(size=9, color=C_TEAL, family="monospace"),
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        height=400,
+        margin=dict(l=0, r=80, t=24, b=0),
+        font=dict(color=C_TEXT),
+        xaxis=dict(
+            tickfont=dict(size=10, color=C_TEXT2),
+            side="top",
+            gridcolor="rgba(255,255,255,0.03)",
+        ),
+        yaxis=dict(
+            tickfont=dict(size=10, color=C_TEXT2),
+            autorange="reversed",
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="weather_port_windows_heatmap")
+
+    # Legend note
+    st.markdown(
+        '<div style="font-size:0.72rem; color:' + C_TEXT3 + '; margin-top:2px;">'
+        'Green = ideal operating window &nbsp;|&nbsp; Red = avoid if possible &nbsp;|&nbsp; '
+        'Highlighted column = current month</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ===========================================================================
+# ORIGINAL Section 1 — Weather Risk Globe
+# ===========================================================================
 
 def _render_weather_globe() -> None:
     """Orthographic dark globe with weather risk zones and affected ports."""
@@ -709,7 +1441,7 @@ def _render_current_alerts() -> None:
     alerts = get_current_season_alerts()
 
     if not alerts:
-        st.success("✅ No major weather disruptions affecting tracked routes this month.")
+        st.success("No major weather disruptions affecting tracked routes this month.")
         return
 
     month_name = _MONTH_NAMES[datetime.date.today().month - 1]
@@ -1115,29 +1847,109 @@ def _render_enso_monitor() -> None:
 # Main render function
 # ---------------------------------------------------------------------------
 
-def render(route_results, port_results) -> None:
+def render(port_results, route_results, freight_data=None) -> None:
     """Render the Weather Risk tab.
 
     Parameters
     ----------
-    route_results : list[RouteOpportunity]
-        Current route opportunity objects from the optimizer.
     port_results : list[PortDemandResult]
         Current port demand results.
+    route_results : list[RouteOpportunity]
+        Current route opportunity objects from the optimizer.
+    freight_data : dict, optional
+        Freight index data (reserved for future use in new sections).
     """
     logger.info("Rendering Weather Risk tab")
 
+    st.markdown(_PULSE_CSS, unsafe_allow_html=True)
     st.header("Weather Risk Intelligence")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 1 — Weather Risk Globe
+    # NEW — Active Alerts Banner
+    # ══════════════════════════════════════════════════════════════════════════
+    _render_alerts_banner()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # NEW — Weather Risk World Map
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
-        "Global Weather Risk Globe",
+        "Global Weather Risk Map",
         (
-            "Active weather systems (large glow circles) and affected ports (diamond markers). "
-            "Circle size indicates severity. Current-month in-season systems are brighter. "
-            "Rotate to explore. T=Typhoon, H=Hurricane, S=Storm, M=Monsoon, F=Fog, I=Ice."
+            "Natural-earth projection with active storm systems, cyclone zones, and "
+            "affected port markers (diamonds). Larger glows = higher severity. "
+            "In-season systems are brighter. Hover for details."
+        ),
+    )
+    _render_world_risk_map()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # NEW — Seasonal Patterns Chart
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "Seasonal Weather Risk Patterns by Region",
+        (
+            "Historical risk index by month for six major shipping regions. "
+            "Highlighted column = current month. Higher bars = more weather-related disruption risk."
+        ),
+    )
+    _render_seasonal_patterns_chart()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # NEW — Route-Specific Weather Risk Table
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "Route Weather Risk Summary",
+        (
+            "Current weather risk score, expected delay, and recommended alternative routing "
+            "for all tracked trade lanes. Sorted highest-risk first."
+        ),
+    )
+    _render_route_risk_table()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # NEW — Typhoon/Hurricane Season Tracker
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "Active Season Tracker — Cyclone & Hurricane Basins",
+        (
+            "Real-time season status across the four major tropical storm basins. "
+            "Month strip shows the season window (bright = peak months)."
+        ),
+    )
+    _render_season_tracker()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # NEW — Port Weather Windows Heatmap
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "Port Weather Windows — Best Operating Months",
+        (
+            "Operational risk calendar for 12 major ports. "
+            "Green = ideal window, red = highest weather risk. "
+            "Use this to plan booking windows and vessel scheduling."
+        ),
+    )
+    _render_port_weather_windows()
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ORIGINAL Section 1 — Weather Risk Globe
+    # ══════════════════════════════════════════════════════════════════════════
+    _section_title(
+        "3D Weather Risk Globe",
+        (
+            "Orthographic globe with active weather systems, risk zones, and affected ports. "
+            "Circle size indicates severity. Rotate to explore. "
+            "T=Typhoon, H=Hurricane, S=Storm, M=Monsoon, F=Fog, I=Ice."
         ),
     )
     _render_weather_globe()
@@ -1145,7 +1957,7 @@ def render(route_results, port_results) -> None:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 2 — Seasonal Risk Calendar
+    # ORIGINAL Section 2 — Seasonal Risk Calendar
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
         "Seasonal Risk Calendar (12-Month x Route Heatmap)",
@@ -1161,7 +1973,7 @@ def render(route_results, port_results) -> None:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 3 — Current Weather Alerts
+    # ORIGINAL Section 3 — Current Weather Alerts
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
         "Current Weather Alerts",
@@ -1175,7 +1987,7 @@ def render(route_results, port_results) -> None:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 4 — Route Weather Profile
+    # ORIGINAL Section 4 — Route Weather Profile
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
         "Route Weather Profile",
@@ -1226,7 +2038,7 @@ def render(route_results, port_results) -> None:
         return buf.getvalue().encode()
 
     st.download_button(
-        label="⬇ Download all-route weather risk CSV",
+        label="Download all-route weather risk CSV",
         data=_route_risk_csv(),
         file_name="weather_route_risk_summary.csv",
         mime="text/csv",
@@ -1236,7 +2048,7 @@ def render(route_results, port_results) -> None:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 5 — El Nino / La Nina Monitor
+    # ORIGINAL Section 5 — El Nino / La Nina Monitor
     # ══════════════════════════════════════════════════════════════════════════
     _section_title(
         "El Nino / La Nina ENSO Monitor",

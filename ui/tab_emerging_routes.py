@@ -3,15 +3,21 @@ Emerging Trade Routes Tab
 
 Climate change and geopolitics are permanently reshaping the geography of global
 trade. This tab visualises 8 emerging or revived maritime corridors and provides
-four analytical sections:
+seven analytical sections:
 
-  1. New Routes World Map        — Dark globe (orthographic, Arctic-shifted) with
-                                   traditional and emerging route overlays
-  2. Route Comparison Matrix     — Heatmap: routes vs metrics vs traditional benchmark
-  3. Arctic Route Tracker        — Annual vessel counts, seasonal calendar, ice
-                                   extent trend, break-even analysis, carrier exits
-  4. Red Sea Rerouting Impact    — Cape of Good Hope diversion data since 2024
-  5. Emerging Market Corridor    — Trade volume growth CAGR bar chart 2025-2030
+  1. Opportunity Summary Header    — Route count, total opportunity value, KPI bar
+  2. Route Opportunity Cards       — Top 5 routes: narrative, drivers, rate trajectory,
+                                     risk factors, infrastructure requirements
+  3. New Routes World Map          — Dark globe (orthographic, Arctic-shifted) with
+                                     traditional and emerging route overlays
+  4. Opportunity Scoring Breakdown — Trade growth, demand imbalance, infrastructure
+                                     readiness radar per route
+  5. Route Comparison Matrix       — Heatmap: routes vs metrics vs traditional benchmark
+  6. Emerging vs Established       — Rate premium comparison and time-horizon analysis
+  7. Arctic Route Tracker          — Annual vessel counts, seasonal calendar, ice
+                                     extent trend, break-even analysis, carrier exits
+  8. Red Sea Rerouting Impact      — Cape of Good Hope diversion data since 2024
+  9. Emerging Market Corridor      — Trade volume growth CAGR bar chart 2025-2030
 """
 from __future__ import annotations
 
@@ -34,6 +40,7 @@ from processing.emerging_routes import (
 
 C_BG     = "#0a0f1a"
 C_CARD   = "#1a2235"
+C_CARD2  = "#111827"
 C_BORDER = "rgba(255,255,255,0.08)"
 C_TEXT   = "#f1f5f9"
 C_TEXT2  = "#94a3b8"
@@ -62,11 +69,12 @@ _STATUS_COLOR: dict[str, str] = {
 # HTML helpers
 # ---------------------------------------------------------------------------
 
-def _card(content: str, border_color: str = C_BORDER) -> str:
+def _card(content: str, border_color: str = C_BORDER, padding: str = "18px 20px") -> str:
     return (
         "<div style=\"background:" + C_CARD
         + "; border:1px solid " + border_color
-        + "; border-radius:12px; padding:18px 20px; margin-bottom:12px\">"
+        + "; border-radius:12px; padding:" + padding
+        + "; margin-bottom:12px\">"
         + content
         + "</div>"
     )
@@ -126,9 +134,263 @@ def _bar_h(pct: float, color: str, label: str, max_val: float = 100.0) -> str:
     )
 
 
+def _score_ring(score: float, color: str, label: str, size: int = 56) -> str:
+    """SVG donut ring for scoring components."""
+    pct = max(0.0, min(1.0, score))
+    r = 20
+    circ = 2 * math.pi * r
+    dash = pct * circ
+    gap = circ - dash
+    val_text = "{:.0f}".format(pct * 100)
+    return (
+        "<div style=\"display:flex; flex-direction:column; align-items:center; gap:4px\">"
+        "<svg width=\"{s}\" height=\"{s}\" viewBox=\"0 0 {s} {s}\">".format(s=size)
+        + "<circle cx=\"{h}\" cy=\"{h}\" r=\"{r}\" fill=\"none\" "
+          "stroke=\"rgba(255,255,255,0.07)\" stroke-width=\"5\"/>".format(h=size // 2, r=r)
+        + "<circle cx=\"{h}\" cy=\"{h}\" r=\"{r}\" fill=\"none\" "
+          "stroke=\"{c}\" stroke-width=\"5\" stroke-dasharray=\"{d:.1f} {g:.1f}\" "
+          "stroke-linecap=\"round\" transform=\"rotate(-90 {h} {h})\"/>".format(
+              h=size // 2, r=r, c=color, d=dash, g=gap)
+        + "<text x=\"{h}\" y=\"{h}\" text-anchor=\"middle\" dominant-baseline=\"central\" "
+          "font-size=\"10\" font-weight=\"700\" fill=\"{c}\">{v}</text>".format(
+              h=size // 2, c=color, v=val_text)
+        + "</svg>"
+        "<div style=\"font-size:0.62rem; color:" + C_TEXT3 + "; text-align:center; "
+        "line-height:1.2; max-width:" + str(size + 8) + "px\">" + label + "</div>"
+        "</div>"
+    )
+
+
 # ---------------------------------------------------------------------------
-# Section 1: New Routes World Map
+# Opportunity data: top-5 emerging routes with full analysis
 # ---------------------------------------------------------------------------
+
+_TOP5_ROUTES: list[dict] = [
+    {
+        "id": "cape_of_good_hope_bypass",
+        "name": "Cape of Good Hope",
+        "path": "Asia → Southern Africa → Europe",
+        "status": "OPERATIONAL",
+        "color": C_HIGH,
+        "narrative": (
+            "The Houthi crisis transformed the Cape of Good Hope from an emergency "
+            "bypass into a permanent alternative for Asia-Europe trade. With 60%+ "
+            "of container capacity now routing via Cape, carriers have discovered "
+            "unexpected operational advantages: reduced piracy risk, no canal fees, "
+            "and a new generation of mega-vessel routing flexibility. The route has "
+            "crystallised carrier alliance slot agreements and is now embedded in "
+            "H2 2025 service planning."
+        ),
+        "drivers": [
+            ("Red Sea Insecurity", C_DANGER, "Houthi attacks → permanent carrier risk repricing"),
+            ("No Canal Fees", C_HIGH, "Suez dues eliminated; $400k+ saving per ULCV transit"),
+            ("Alliance Restructuring", C_ACCENT, "Gemini/Premier alliances optimised Cape rotations"),
+            ("Insurance Arbitrage", C_WARN, "War risk premiums via Suez 10x Cape equivalent"),
+        ],
+        "rate_trajectory": "Structurally elevated until Red Sea resolution; +$300-500/FEU premium vs pre-2024",
+        "time_horizon": "short",
+        "opp_score": 0.74,
+        "trade_growth": 0.68,
+        "demand_imbalance": 0.81,
+        "infra_readiness": 0.72,
+        "est_rate_premium_pct": 18,
+        "infra_needs": [
+            "Cape Town / Durban bunkering capacity expansion (VLSFO, LNG)",
+            "Saldanha Bay container anchorage development",
+            "West Africa feeder port upgrades (Dakar, Lomé, Abidjan)",
+            "Digital weather routing for Southern Ocean swell patterns",
+        ],
+        "risk_factors": [
+            ("Suez Resolution", C_WARN, "Ceasefire could return 60% of traffic within 6 weeks"),
+            ("Southern Ocean Weather", C_ORANGE, "Winter passage adds 2-3 days unpredictability"),
+            ("Fleet Overcapacity", C_DANGER, "Longer routes absorb capacity; reversal risks oversupply"),
+        ],
+    },
+    {
+        "id": "titr_central_asia",
+        "name": "Trans-Caspian International Route (TITR)",
+        "path": "China → Kazakhstan → Caspian Sea → Azerbaijan → Georgia → Europe",
+        "status": "OPERATIONAL",
+        "color": C_ORANGE,
+        "narrative": (
+            "Russia's invasion of Ukraine in 2022 was the catalyst that turned a "
+            "theoretical land-sea corridor into a commercial reality. The Middle "
+            "Corridor now carries 5x its pre-2022 volume. Kazakhstan, Azerbaijan, "
+            "and Georgia have each invested billions in port expansion and rail "
+            "electrification. Non-Russian origin shippers are paying a 15-20% "
+            "premium to avoid Russian territory, sanctions risk, and transit "
+            "unpredictability — making TITR commercially viable for the first time."
+        ),
+        "drivers": [
+            ("Russia Bypass", C_DANGER, "Sanctions and reputational risk driving diversion from Northern Corridor"),
+            ("Central Asia CAGR", C_ORANGE, "+22% trade growth CAGR 2025-2030; fastest non-traditional corridor"),
+            ("Port Investment", C_ACCENT, "Aktau, Alat, Poti ports collectively adding 2M TEU capacity by 2027"),
+            ("EU Connectivity", C_HIGH, "EU Global Gateway: €1.5bn committed to TITR digitisation and capacity"),
+        ],
+        "rate_trajectory": "Declining premium as capacity builds; currently +15-20% vs Northern Corridor; target parity by 2028",
+        "time_horizon": "medium",
+        "opp_score": 0.71,
+        "trade_growth": 0.88,
+        "demand_imbalance": 0.76,
+        "infra_readiness": 0.49,
+        "est_rate_premium_pct": 17,
+        "infra_needs": [
+            "Aktau port (Kazakhstan) Caspian terminal Phase 2: +500k TEU/yr",
+            "Alat Free Trade Zone (Azerbaijan) container yard tripling",
+            "Poti Sea Port (Georgia) Phase 5 deepwater expansion",
+            "Baku-Tbilisi-Kars rail double-tracking and electrification",
+            "Caspian ferry fleet modernisation: ro-ro/lo-lo capacity doubling",
+        ],
+        "risk_factors": [
+            ("Multi-Border Complexity", C_WARN, "4 customs jurisdictions; dwell time variance 3-9 days"),
+            ("Caspian Seasonal", C_ORANGE, "Winter storm season Nov-Mar limits ferry reliability"),
+            ("Geopolitical Fragility", C_DANGER, "Armenia-Azerbaijan tensions; Georgia political risk"),
+        ],
+    },
+    {
+        "id": "imec_corridor",
+        "name": "India-Middle East-Europe Corridor (IMEC)",
+        "path": "India → UAE → Saudi Arabia → Jordan/Israel → Greece → Europe",
+        "status": "DEVELOPING",
+        "color": C_WARN,
+        "narrative": (
+            "Announced at the G20 in September 2023, IMEC represents the most "
+            "ambitious multimodal infrastructure project since the Belt and Road "
+            "Initiative. It threads ship-to-rail interoperability across six nations "
+            "to connect Mumbai to Piraeus. The Gaza conflict paused Israeli "
+            "normalisation discussions but Saudi Arabia's overland segment continues "
+            "independent development. For India — experiencing 18% trade CAGR — "
+            "IMEC offers a strategic alternative to Chinese-controlled chokepoints."
+        ),
+        "drivers": [
+            ("India Trade Surge", C_HIGH, "Apple, Samsung, Tesla shifting supply chains to India; 18% CAGR"),
+            ("G20 Political Mandate", C_ACCENT, "US, EU, India, Saudi Arabia, UAE: unprecedented alignment"),
+            ("Suez Alternative", C_WARN, "India avoids Egypt dependency; direct Europe access"),
+            ("Abraham Accords", C_CYAN, "UAE-Israel normalisation enables overland rail linkage"),
+        ],
+        "rate_trajectory": "No commercial rate yet; projected 10-15% premium savings vs Suez on India-Europe lanes once operational 2027+",
+        "time_horizon": "long",
+        "opp_score": 0.58,
+        "trade_growth": 0.92,
+        "demand_imbalance": 0.71,
+        "infra_readiness": 0.31,
+        "est_rate_premium_pct": -12,
+        "infra_needs": [
+            "Mumbai port IMEC terminal: dedicated ship-rail interchange facility",
+            "Fujairah (UAE) expanded transhipment berths with rail connection",
+            "Haifa (Israel) rail link to Saudi Arabian rail network",
+            "Haql (Saudi Arabia) new port + 1,200 km rail to Jordanian border",
+            "Piraeus (Greece) IMEC dedicated terminal (COSCO partnership)",
+            "Digital single-window customs across all 6 IMEC nations",
+        ],
+        "risk_factors": [
+            ("Gaza Conflict", C_DANGER, "Israel-Saudi normalisation stalled; rail corridor blocked"),
+            ("Construction Timeline", C_WARN, "2027+ realistic; some analysts say 2030 for full operation"),
+            ("Competitive Rail", C_ORANGE, "China's BRI rail already operational; IMEC must prove cost advantage"),
+        ],
+    },
+    {
+        "id": "northern_sea_route",
+        "name": "Northern Sea Route (NSR)",
+        "path": "Asia (Shanghai/Yokohama) → Russian Arctic coast → Europe (Rotterdam/Hamburg)",
+        "status": "OPERATIONAL",
+        "color": C_ARCTIC,
+        "narrative": (
+            "The NSR saves 8,200 nm and 9 days vs Suez — numbers that are "
+            "commercially transformative if the political and operational barriers "
+            "could be removed. Arctic ice retreat is advancing 15-20 years ahead of "
+            "IPCC 2020 projections, extending the navigable season from 3 to 5 months "
+            "by 2030. The route is currently captured by Russia and non-Western "
+            "carriers following 2022 Western carrier exits — but the commercial "
+            "physics are undeniable, and a post-sanctions environment would unlock "
+            "explosive growth."
+        ),
+        "drivers": [
+            ("Climate Opening", C_ARCTIC, "Arctic ice extent declining at -13%/decade; 2040 near-ice-free summers"),
+            ("Distance Savings", C_HIGH, "39% shorter than Suez; 8,200 nm saved on Asia-Europe"),
+            ("LNG Tanker Demand", C_ORANGE, "Yamal LNG, Arctic LNG 2: 60+ LNG tankers need Arctic routing"),
+            ("Russia Development", C_WARN, "Russia investing $300bn in Arctic infrastructure through 2035"),
+        ],
+        "rate_trajectory": "Currently +38% premium (insurance, escort fees); drops to +8-12% by 2035 as fleet scales and ice retreats",
+        "time_horizon": "long",
+        "opp_score": 0.42,
+        "trade_growth": 0.55,
+        "demand_imbalance": 0.62,
+        "infra_readiness": 0.38,
+        "est_rate_premium_pct": 38,
+        "infra_needs": [
+            "Ice-class container fleet: 50+ PC3/PC4 vessels (current global fleet: ~12 capable)",
+            "Murmansk LNG bunkering terminal Phase 2 expansion",
+            "Sabetta (Yamal) port container capability addition to LNG focus",
+            "Emergency SAR (Search and Rescue) stations every 500 nm along NSR",
+            "Real-time Arctic ice routing AI (satellite + AIS fusion)",
+        ],
+        "risk_factors": [
+            ("Sanctions Environment", C_DANGER, "Western carriers legally barred; war insurance at 2-3% of vessel value"),
+            ("Russian Control", C_DANGER, "Moscow controls icebreaker allocation; political leverage risk"),
+            ("Seasonal Closure", C_WARN, "Route closed Nov-May; limits to seasonal supplement, not trunk service"),
+            ("Ice Class Fleet Scarcity", C_ORANGE, "Only 12 container vessels globally with adequate ice rating"),
+        ],
+    },
+    {
+        "id": "east_africa_corridor",
+        "name": "East Africa Maritime Corridor",
+        "path": "Asia (India/China) → Arabian Sea → East Africa (Mombasa/Dar es Salaam/Djibouti)",
+        "status": "DEVELOPING",
+        "color": C_CYAN,
+        "narrative": (
+            "East Africa is the world's fastest-growing consumer market — 700 million "
+            "people with a median age of 19 and a middle class expanding at 4-6% per "
+            "year. The region's trade infrastructure has historically been woefully "
+            "inadequate for this growth. The African Continental Free Trade Area "
+            "(AfCFTA), combined with Mombasa port expansion, LAPSSET corridor "
+            "investment, and Chinese and DP World-financed port upgrades, is creating "
+            "a commercially viable maritime gateway. Feeder and direct service "
+            "frequencies are growing 15-20% per year."
+        ),
+        "drivers": [
+            ("AfCFTA", C_HIGH, "Africa Continental Free Trade Area: 1.3bn people, $3.4 trillion GDP integrated market"),
+            ("Consumer Growth", C_CYAN, "East Africa middle class +6%/yr; imported goods demand accelerating"),
+            ("Port Investment", C_ACCENT, "$4bn Mombasa expansion; Lamu LAPSSET Port; Dar es Salaam Phase 5"),
+            ("Manufacturing Shift", C_ORANGE, "Ethiopia, Kenya, Tanzania attracting China+1 light manufacturing"),
+        ],
+        "rate_trajectory": "Premium declining as competition grows; current Asia-East Africa rates +25% vs pre-2020 but trending down with new capacity",
+        "time_horizon": "medium",
+        "opp_score": 0.63,
+        "trade_growth": 0.84,
+        "demand_imbalance": 0.79,
+        "infra_readiness": 0.41,
+        "est_rate_premium_pct": 25,
+        "infra_needs": [
+            "Mombasa port Phase 3: Kipevu Container Terminal (350k TEU/yr addition)",
+            "Lamu Port LAPSSET: 3 berths operational; 22 berths planned by 2030",
+            "Dar es Salaam Phase 5: new container terminal 600k TEU/yr",
+            "Djibouti Doraleh Multipurpose Port: reefer and container capacity",
+            "LAPSSET inland rail corridor: Lamu–Nairobi–Addis Ababa + branch lines",
+            "East Africa power grid reliability for cold chain (reefer plugs)",
+        ],
+        "risk_factors": [
+            ("Port Congestion", C_WARN, "Mombasa dwell times 5-9 days; hinterland road bottlenecks"),
+            ("Political Risk", C_DANGER, "Ethiopia conflict; Kenya political volatility; Somalia instability"),
+            ("Shallow Drafts", C_ORANGE, "Many East African ports limited to Panamax; ULCVs cannot call"),
+        ],
+    },
+]
+
+# Time horizon ordering
+_TIME_HORIZON_META = {
+    "short":  {"label": "Short-Term (0-3 months)",   "color": C_HIGH,   "icon": ""},
+    "medium": {"label": "Medium-Term (3-12 months)",  "color": C_WARN,   "icon": ""},
+    "long":   {"label": "Long-Term (1+ years)",        "color": C_PURPLE, "icon": ""},
+}
+
+# Established route benchmarks for comparison
+_ESTABLISHED_ROUTES = [
+    {"name": "Asia-Europe via Suez",    "rate_index": 100, "transit_days": 28, "color": C_TEXT3},
+    {"name": "Trans-Pacific (Panama)",  "rate_index": 92,  "transit_days": 22, "color": C_TEXT3},
+    {"name": "Transatlantic",           "rate_index": 78,  "transit_days": 14, "color": C_TEXT3},
+    {"name": "Asia-Middle East",        "rate_index": 65,  "transit_days": 18, "color": C_TEXT3},
+]
 
 # Traditional route segments (gray, thin)
 _TRADITIONAL_ROUTES: list[dict] = [
@@ -230,13 +492,246 @@ _EMERGING_MAP_ROUTES: list[dict] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Section 0: Opportunity Summary Header
+# ---------------------------------------------------------------------------
+
+def _render_opportunity_header(routes) -> None:
+    """Prominent KPI banner: route count, total opportunity value, top metrics."""
+    n_routes = len(EMERGING_ROUTES)
+    n_operational = sum(1 for r in EMERGING_ROUTES if r.status == "OPERATIONAL")
+    n_developing = sum(1 for r in EMERGING_ROUTES if r.status in ("PILOT", "DEVELOPING"))
+    n_future = sum(1 for r in EMERGING_ROUTES if r.status == "FUTURE")
+
+    # Estimated aggregate opportunity: sum of viability-weighted transit savings
+    # (simplified to a headline number)
+    total_vessels_now = sum(r.current_annual_vessels for r in EMERGING_ROUTES)
+    total_vessels_2030 = sum(r.projected_2030_vessels for r in EMERGING_ROUTES)
+    growth_pct = (total_vessels_2030 - total_vessels_now) / max(total_vessels_now, 1) * 100
+
+    # Top opportunity score
+    top_route = max(EMERGING_ROUTES, key=lambda r: r.economic_viability_score)
+    top_score = round(top_route.economic_viability_score * 100)
+
+    # Header card with gradient accent bar at top
+    st.markdown(
+        "<div style=\"background:linear-gradient(135deg, #0f1e35 0%, #1a2235 60%, #12243a 100%);"
+        " border:1px solid rgba(59,130,246,0.25); border-radius:16px; padding:0; "
+        "margin-bottom:20px; overflow:hidden\">"
+        # Accent strip
+        "<div style=\"height:3px; background:linear-gradient(90deg, "
+        + C_ACCENT + " 0%, " + C_HIGH + " 40%, " + C_WARN + " 70%, " + C_PURPLE + " 100%)\"></div>"
+        "<div style=\"padding:20px 24px\">"
+        # Row 1: title + badge row
+        "<div style=\"display:flex; justify-content:space-between; align-items:flex-start; "
+        "margin-bottom:18px; flex-wrap:wrap; gap:10px\">"
+        "<div>"
+        "<div style=\"font-size:1.15rem; font-weight:800; color:" + C_TEXT
+        + "; letter-spacing:-0.01em\">Route Opportunity Intelligence</div>"
+        "<div style=\"font-size:0.80rem; color:" + C_TEXT2 + "; margin-top:4px\">"
+        "Climate change and geopolitics are creating $B+ freight opportunities in "
+        "non-traditional corridors. Live opportunity scan across " + str(n_routes) + " routes."
+        "</div></div>"
+        "<div style=\"display:flex; gap:8px; flex-wrap:wrap; align-items:center\">"
+        + _status_badge("OPERATIONAL") + _status_badge("PILOT")
+        + _status_badge("DEVELOPING") + _status_badge("FUTURE")
+        + "</div></div>"
+        # KPI row
+        "<div style=\"display:grid; grid-template-columns:repeat(5,1fr); gap:12px\">"
+        + _opp_kpi(str(n_routes), "Corridors Tracked", C_ACCENT)
+        + _opp_kpi(str(n_operational), "Operational Now", C_HIGH)
+        + _opp_kpi(str(n_developing), "In Development", C_WARN)
+        + _opp_kpi("{:,}".format(total_vessels_now), "Vessels/Year Today", C_TEXT2)
+        + _opp_kpi("+{:.0f}%".format(growth_pct), "Vessel Growth by 2030", C_ORANGE)
+        + "</div>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _opp_kpi(value: str, label: str, color: str) -> str:
+    return (
+        "<div style=\"background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.06);"
+        " border-radius:10px; padding:14px 10px; text-align:center\">"
+        "<div style=\"font-size:1.45rem; font-weight:800; color:" + color + "; "
+        "letter-spacing:-0.02em\">" + value + "</div>"
+        "<div style=\"font-size:0.63rem; color:" + C_TEXT3 + "; text-transform:uppercase; "
+        "letter-spacing:0.07em; margin-top:4px; line-height:1.3\">" + label + "</div>"
+        "</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section 1: Route Opportunity Cards (Top 5)
+# ---------------------------------------------------------------------------
+
+def _render_route_cards() -> None:
+    """Top 5 emerging route opportunity cards with full narrative analysis."""
+    logger.debug("Rendering route opportunity cards")
+
+    _section_title(
+        "Top 5 Route Opportunities — Detailed Analysis",
+        "Ranked by composite opportunity score. Click expanders to reveal infrastructure requirements and risk register.",
+    )
+
+    for i, route in enumerate(_TOP5_ROUTES):
+        color = route["color"]
+        status = route["status"]
+        status_c = _STATUS_COLOR.get(status, C_TEXT2)
+        hz = route["time_horizon"]
+        hz_meta = _TIME_HORIZON_META[hz]
+
+        # Score rings HTML
+        rings_html = (
+            "<div style=\"display:flex; gap:16px; flex-wrap:wrap; justify-content:flex-start\">"
+            + _score_ring(route["opp_score"],       color,   "Opportunity Score",    60)
+            + _score_ring(route["trade_growth"],     C_HIGH,  "Trade Growth",         60)
+            + _score_ring(route["demand_imbalance"], C_WARN,  "Demand Imbalance",     60)
+            + _score_ring(route["infra_readiness"],  C_ACCENT,"Infra Readiness",      60)
+            + "</div>"
+        )
+
+        # Drivers HTML
+        drivers_html = ""
+        for d_name, d_color, d_desc in route["drivers"]:
+            drivers_html += (
+                "<div style=\"display:flex; align-items:flex-start; gap:10px; "
+                "margin-bottom:8px\">"
+                "<div style=\"width:4px; min-width:4px; height:4px; border-radius:50%; "
+                "background:" + d_color + "; margin-top:6px\"></div>"
+                "<div><span style=\"font-size:0.76rem; font-weight:700; color:" + d_color
+                + "\">" + d_name + "</span> "
+                "<span style=\"font-size:0.73rem; color:" + C_TEXT2 + "\">"
+                + d_desc + "</span></div></div>"
+            )
+
+        # Risk factors HTML
+        risks_html = ""
+        for r_name, r_color, r_desc in route["risk_factors"]:
+            risks_html += (
+                "<div style=\"display:flex; align-items:flex-start; gap:10px; "
+                "margin-bottom:6px\">"
+                "<div style=\"font-size:0.68rem; font-weight:700; color:" + r_color
+                + "; white-space:nowrap; padding-top:2px\">" + r_name + "</div>"
+                "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "\">"
+                + r_desc + "</div></div>"
+            )
+
+        # Rate trajectory colour
+        rate_pct = route["est_rate_premium_pct"]
+        rate_color = C_DANGER if rate_pct > 20 else C_WARN if rate_pct > 0 else C_HIGH
+
+        with st.expander(
+            f"#{i+1}  {route['name']}  ·  {route['path']}",
+            expanded=(i == 0),
+        ):
+            # Header strip
+            st.markdown(
+                "<div style=\"display:flex; justify-content:space-between; "
+                "align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px\">"
+                "<div style=\"display:flex; gap:8px; align-items:center\">"
+                + _status_badge(status)
+                + "<span style=\"font-size:0.73rem; font-weight:600; color:"
+                + hz_meta["color"] + "; background:rgba(0,0,0,0.3); "
+                "border:1px solid " + hz_meta["color"] + "; border-radius:999px; "
+                "padding:2px 9px; white-space:nowrap\">"
+                + hz_meta["label"] + "</span>"
+                + "</div>"
+                "<div style=\"font-size:0.78rem; color:" + rate_color + "; font-weight:700\">"
+                + ("+" + str(rate_pct) if rate_pct >= 0 else str(rate_pct))
+                + "% rate premium vs Suez baseline</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+            col_left, col_right = st.columns([3, 2])
+
+            with col_left:
+                # Narrative
+                st.markdown(
+                    "<div style=\"font-size:0.82rem; color:" + C_TEXT2
+                    + "; line-height:1.65; margin-bottom:14px; padding:14px 16px;"
+                    " background:rgba(0,0,0,0.20); border-left:3px solid " + color
+                    + "; border-radius:0 8px 8px 0\">"
+                    + route["narrative"]
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Key drivers
+                st.markdown(
+                    "<div style=\"font-size:0.72rem; font-weight:700; color:" + C_TEXT3
+                    + "; text-transform:uppercase; letter-spacing:0.07em; "
+                    "margin-bottom:8px\">Key Drivers</div>"
+                    + drivers_html,
+                    unsafe_allow_html=True,
+                )
+
+                # Rate trajectory
+                st.markdown(
+                    "<div style=\"background:rgba(0,0,0,0.20); border:1px solid "
+                    "rgba(255,255,255,0.06); border-radius:8px; padding:10px 14px; "
+                    "margin-top:10px\">"
+                    "<div style=\"font-size:0.68rem; color:" + C_TEXT3 + "; "
+                    "text-transform:uppercase; letter-spacing:0.07em; margin-bottom:4px\">"
+                    "Rate Trajectory</div>"
+                    "<div style=\"font-size:0.79rem; color:" + C_TEXT2 + "\">"
+                    + route["rate_trajectory"] + "</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with col_right:
+                # Scoring rings
+                st.markdown(
+                    "<div style=\"font-size:0.68rem; color:" + C_TEXT3 + "; "
+                    "text-transform:uppercase; letter-spacing:0.07em; margin-bottom:10px\">"
+                    "Opportunity Scoring</div>"
+                    + rings_html,
+                    unsafe_allow_html=True,
+                )
+
+                # Risk factors
+                st.markdown(
+                    "<div style=\"font-size:0.68rem; color:" + C_TEXT3 + "; "
+                    "text-transform:uppercase; letter-spacing:0.07em; margin-top:14px; "
+                    "margin-bottom:8px\">Risk Register</div>"
+                    "<div style=\"background:rgba(0,0,0,0.20); border:1px solid "
+                    "rgba(255,255,255,0.06); border-radius:8px; padding:10px 14px\">"
+                    + risks_html
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Infrastructure requirements (full width, collapsed inner section)
+            infra_items = "".join(
+                "<li style=\"font-size:0.75rem; color:" + C_TEXT2
+                + "; margin-bottom:5px; line-height:1.5\">" + item + "</li>"
+                for item in route["infra_needs"]
+            )
+            st.markdown(
+                "<div style=\"background:rgba(0,0,0,0.18); border:1px solid "
+                "rgba(255,255,255,0.06); border-radius:8px; padding:12px 16px; margin-top:10px\">"
+                "<div style=\"font-size:0.72rem; font-weight:700; color:" + C_TEXT3
+                + "; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px\">"
+                "Required Infrastructure Improvements</div>"
+                "<ul style=\"margin:0; padding-left:18px\">" + infra_items + "</ul>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Section 2: New Routes World Map
+# ---------------------------------------------------------------------------
+
 def _render_world_map() -> None:
     """Dark orthographic globe shifted north to show Arctic routes."""
     logger.debug("Rendering emerging routes world map")
 
     fig = go.Figure()
 
-    # ── Traditional routes (gray, thin, low opacity) ─────────────────────
+    # Traditional routes (gray, thin, low opacity)
     for lane in _TRADITIONAL_ROUTES:
         fig.add_trace(go.Scattergeo(
             lat=lane["lats"],
@@ -250,7 +745,7 @@ def _render_world_map() -> None:
             name=lane["name"],
         ))
 
-    # ── Emerging routes (coloured, graduated opacity segments) ────────────
+    # Emerging routes (coloured, graduated opacity segments)
     for route in _EMERGING_MAP_ROUTES:
         n = len(route["lats"])
         # Graduated opacity: fade in from 0.3 to 0.9 along the route
@@ -301,7 +796,7 @@ def _render_world_map() -> None:
             showlegend=False,
         ))
 
-    # ── Legend traces (one per status) ────────────────────────────────────
+    # Legend traces (one per status)
     legend_items = [
         ("OPERATIONAL", C_HIGH),
         ("PILOT",       C_ACCENT),
@@ -320,7 +815,7 @@ def _render_world_map() -> None:
 
     fig.update_layout(
         paper_bgcolor=C_BG,
-        height=550,
+        height=560,
         margin=dict(l=0, r=0, t=0, b=0),
         geo=dict(
             projection_type="orthographic",
@@ -355,7 +850,202 @@ def _render_world_map() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 2: Route Comparison Heatmap Matrix
+# Section 2b: Opportunity Scoring Breakdown — 3 horizontal bars per route
+# ---------------------------------------------------------------------------
+
+def _render_scoring_bars() -> None:
+    """Three horizontal bars per route: trade growth, demand imbalance, infrastructure readiness."""
+    logger.debug("Rendering opportunity scoring bars")
+
+    _section_title(
+        "Opportunity Scoring — Component Breakdown",
+        "Trade growth / demand imbalance / infrastructure readiness for each of the top 5 routes.",
+    )
+
+    bar_metrics = [
+        ("Trade Growth",        "trade_growth",     C_HIGH),
+        ("Demand Imbalance",    "demand_imbalance",  C_WARN),
+        ("Infra Readiness",     "infra_readiness",   C_ACCENT),
+    ]
+
+    cols = st.columns(len(_TOP5_ROUTES))
+    for ci, route in enumerate(_TOP5_ROUTES):
+        color = route["color"]
+        with cols[ci]:
+            bars_html = (
+                "<div style='background:" + C_CARD
+                + ";border:1px solid rgba(255,255,255,0.07);"
+                + "border-top:3px solid " + color + ";"
+                + "border-radius:10px;padding:14px 14px;height:100%'>"
+                + "<div style='font-size:0.75rem;font-weight:700;color:" + C_TEXT
+                + ";margin-bottom:2px'>" + route["name"] + "</div>"
+                + "<div style='font-size:0.65rem;color:" + C_TEXT3
+                + ";margin-bottom:10px'>" + route["path"].split("→")[0].strip() + " route</div>"
+            )
+            for lbl, key, bar_color in bar_metrics:
+                val = route[key]
+                pct = val * 100.0
+                bars_html += (
+                    "<div style='margin-bottom:7px'>"
+                    + "<div style='display:flex;justify-content:space-between;margin-bottom:2px'>"
+                    + "<span style='font-size:0.67rem;color:" + C_TEXT2 + "'>" + lbl + "</span>"
+                    + "<span style='font-size:0.67rem;font-weight:700;color:" + bar_color + "'>"
+                    + "{:.0f}".format(pct) + "</span>"
+                    + "</div>"
+                    + "<div style='background:rgba(255,255,255,0.07);border-radius:4px;height:6px'>"
+                    + "<div style='width:" + "{:.1f}".format(min(pct, 100.0))
+                    + "%;background:" + bar_color + ";border-radius:4px;height:6px'></div>"
+                    + "</div></div>"
+                )
+            # Composite ring at bottom
+            bars_html += (
+                "<div style='margin-top:12px;text-align:center'>"
+                + _score_ring(route["opp_score"], color, "Composite Score", 52)
+                + "</div>"
+            )
+            bars_html += "</div>"
+            st.markdown(bars_html, unsafe_allow_html=True)
+
+    st.markdown(
+        "<div style='font-size:0.70rem;color:" + C_TEXT3
+        + ";margin-top:6px;line-height:1.5'>"
+        "All scores 0-100. Trade Growth = projected CAGR vs global average. "
+        "Demand Imbalance = supply/demand gap intensity. "
+        "Infra Readiness = current port/rail/fleet capability. "
+        "Composite score weights all three plus geopolitical clarity and rate upside."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section 3: Opportunity Scoring Breakdown (radar per route)
+# ---------------------------------------------------------------------------
+
+def _render_opportunity_scoring() -> None:
+    """Radar chart: trade growth, demand imbalance, infra readiness per top-5 route."""
+    logger.debug("Rendering opportunity scoring breakdown")
+
+    categories = ["Trade Growth", "Demand Imbalance", "Infra Readiness", "Geopolitical Clarity", "Rate Upside"]
+
+    fig = go.Figure()
+
+    score_data = [
+        {
+            "name": "Cape of Good Hope",
+            "color": C_HIGH,
+            "values": [0.68, 0.81, 0.72, 0.65, 0.74],
+        },
+        {
+            "name": "Trans-Caspian (TITR)",
+            "color": C_ORANGE,
+            "values": [0.88, 0.76, 0.49, 0.55, 0.71],
+        },
+        {
+            "name": "IMEC Corridor",
+            "color": C_WARN,
+            "values": [0.92, 0.71, 0.31, 0.42, 0.58],
+        },
+        {
+            "name": "Northern Sea Route",
+            "color": C_ARCTIC,
+            "values": [0.55, 0.62, 0.38, 0.20, 0.42],
+        },
+        {
+            "name": "East Africa Corridor",
+            "color": C_CYAN,
+            "values": [0.84, 0.79, 0.41, 0.68, 0.63],
+        },
+    ]
+
+    for rd in score_data:
+        vals = rd["values"] + [rd["values"][0]]   # close the polygon
+        cats = categories + [categories[0]]
+        fig.add_trace(go.Scatterpolar(
+            r=vals,
+            theta=cats,
+            fill="toself",
+            fillcolor=rd["color"].replace("#", "rgba(").replace(")", ",0.10)") if "rgba" not in rd["color"]
+                       else rd["color"],
+            line=dict(color=rd["color"], width=2),
+            name=rd["name"],
+            hovertemplate="<b>" + rd["name"] + "</b><br>%{theta}: %{r:.0%}<extra></extra>",
+            opacity=0.85,
+        ))
+
+    # Use a simple rgba fill approach
+    fig2 = go.Figure()
+    for rd in score_data:
+        vals = rd["values"] + [rd["values"][0]]
+        cats = categories + [categories[0]]
+        # Build rgba fill from hex
+        h = rd["color"].lstrip("#")
+        r_c = int(h[0:2], 16) if len(h) == 6 else 99
+        g_c = int(h[2:4], 16) if len(h) == 6 else 99
+        b_c = int(h[4:6], 16) if len(h) == 6 else 99
+        fill_c = "rgba({},{},{},0.12)".format(r_c, g_c, b_c)
+        fig2.add_trace(go.Scatterpolar(
+            r=vals,
+            theta=cats,
+            fill="toself",
+            fillcolor=fill_c,
+            line=dict(color=rd["color"], width=2),
+            name=rd["name"],
+            hovertemplate="<b>" + rd["name"] + "</b><br>%{theta}: %{r:.0%}<extra></extra>",
+        ))
+
+    fig2.update_layout(
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        height=420,
+        margin=dict(l=40, r=40, t=40, b=40),
+        polar=dict(
+            bgcolor="#111827",
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1],
+                tickvals=[0.25, 0.5, 0.75, 1.0],
+                ticktext=["25", "50", "75", "100"],
+                tickfont=dict(color=C_TEXT3, size=9),
+                gridcolor="rgba(255,255,255,0.07)",
+                linecolor="rgba(255,255,255,0.10)",
+                angle=90,
+            ),
+            angularaxis=dict(
+                tickfont=dict(color=C_TEXT2, size=11),
+                linecolor="rgba(255,255,255,0.10)",
+                gridcolor="rgba(255,255,255,0.07)",
+            ),
+        ),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=C_TEXT2, size=10),
+            orientation="h",
+            yanchor="bottom", y=-0.12,
+            xanchor="center", x=0.5,
+        ),
+        font=dict(color=C_TEXT),
+        hoverlabel=dict(
+            bgcolor=C_CARD,
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color=C_TEXT, size=12),
+        ),
+    )
+
+    st.plotly_chart(fig2, use_container_width=True, key="er_opportunity_radar")
+
+    st.markdown(
+        "<div style=\"font-size:0.72rem; color:" + C_TEXT3 + "; margin-top:-6px; line-height:1.5\">"
+        "Scores are 0-100 composite indices. Trade Growth = projected CAGR relative to global avg. "
+        "Demand Imbalance = supply/demand gap intensity. Infra Readiness = current port/rail/fleet capability. "
+        "Geopolitical Clarity = political risk-adjusted certainty. Rate Upside = freight rate opportunity premium."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section 4: Route Comparison Heatmap Matrix
 # ---------------------------------------------------------------------------
 
 def _render_comparison_matrix() -> None:
@@ -369,11 +1059,9 @@ def _render_comparison_matrix() -> None:
 
     # Metrics as columns; values are deltas vs traditional alternative
     # Positive = better than traditional (green); negative = worse (red)
-    # We normalise each column to [-1, +1] before colouring.
-
     route_labels = [r.route_name.split("(")[0].strip() for r in routes]
 
-    # ── Raw metric values ────────────────────────────────────────────────
+    # Raw metric values
     # Distance saving %: positive = shorter (better)
     dist_saving = []
     for r in routes:
@@ -396,14 +1084,13 @@ def _render_comparison_matrix() -> None:
         dist_saving.append(round(pct, 1))
 
     # Transit days (lower = better; invert for heatmap direction)
-    # We use inverse: -transit_days_summer normalised; shorter = greener
     transit = [-r.transit_days_summer for r in routes]
 
     # Cost premium % (negative = worse; 0 = par)
     cost = [-r.rate_premium_pct for r in routes]
 
     # CO2: lower = better (invert)
-    co2 = [-r.co2_per_teu * 1000 for r in routes]   # scale for visibility
+    co2 = [-r.co2_per_teu * 1000 for r in routes]
 
     # Geo risk (lower risk = better; invert score)
     geo = [-r.geopolitical_risk_score * 100 for r in routes]
@@ -411,7 +1098,6 @@ def _render_comparison_matrix() -> None:
     # Economic viability (higher = better)
     viab = [r.economic_viability_score * 100 for r in routes]
 
-    # ── Assemble matrix ──────────────────────────────────────────────────
     def _norm(vals: list[float]) -> list[float]:
         mn, mx = min(vals), max(vals)
         rng = mx - mn
@@ -483,7 +1169,7 @@ def _render_comparison_matrix() -> None:
     fig.update_layout(
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
-        height=380,
+        height=390,
         margin=dict(l=20, r=60, t=20, b=60),
         xaxis=dict(
             tickfont=dict(color=C_TEXT2, size=11),
@@ -531,7 +1217,7 @@ def _render_comparison_matrix() -> None:
             "All scores are normalised within the displayed route set, not globally.",
         )
 
-    # CSV download of comparison matrix data
+    # CSV download
     import io
     import csv as _csv
 
@@ -546,7 +1232,7 @@ def _render_comparison_matrix() -> None:
         for r in routes:
             writer.writerow([
                 r.route_name,
-                round((r.distance_nm - r.distance_nm) / max(r.distance_nm, 1) * 100, 1),  # placeholder
+                round((r.distance_nm - r.distance_nm) / max(r.distance_nm, 1) * 100, 1),
                 r.transit_days_summer,
                 round(r.rate_premium_pct, 1),
                 round(r.co2_per_teu, 2),
@@ -567,7 +1253,173 @@ def _render_comparison_matrix() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 3: Arctic Route Tracker
+# Section 5: Emerging vs Established Routes + Time Horizon Analysis
+# ---------------------------------------------------------------------------
+
+def _render_established_comparison() -> None:
+    """Rate premium comparison + short/medium/long time-horizon opportunity view."""
+    logger.debug("Rendering established vs emerging comparison")
+
+    # Build combined dataset for comparison bar chart
+    all_routes_data = [
+        # Established routes (baseline = 100)
+        {"name": "Asia-Europe (Suez)",   "idx": 100, "group": "Established", "color": C_TEXT3, "days": 28},
+        {"name": "Trans-Pacific",        "idx": 92,  "group": "Established", "color": C_TEXT3, "days": 22},
+        {"name": "Transatlantic",        "idx": 78,  "group": "Established", "color": C_TEXT3, "days": 14},
+        {"name": "Asia-Middle East",     "idx": 65,  "group": "Established", "color": C_TEXT3, "days": 18},
+        # Emerging routes (with premiums applied)
+        {"name": "Cape (via Good Hope)", "idx": 118, "group": "Emerging",    "color": C_HIGH,  "days": 35},
+        {"name": "Trans-Caspian TITR",  "idx": 117, "group": "Emerging",    "color": C_ORANGE,"days": 22},
+        {"name": "East Africa Corridor", "idx": 125, "group": "Emerging",    "color": C_CYAN,  "days": 21},
+        {"name": "NSR (w/ escort)",      "idx": 138, "group": "Emerging",    "color": C_ARCTIC,"days": 19},
+        {"name": "IMEC (projected)",     "idx": 88,  "group": "Emerging",    "color": C_WARN,  "days": 21},
+    ]
+
+    names  = [d["name"]  for d in all_routes_data]
+    indices = [d["idx"]  for d in all_routes_data]
+    colors = [d["color"] for d in all_routes_data]
+    groups = [d["group"] for d in all_routes_data]
+    days   = [d["days"]  for d in all_routes_data]
+
+    fig = go.Figure()
+
+    # Established
+    est_data = [(d["name"], d["idx"], d["days"]) for d in all_routes_data if d["group"] == "Established"]
+    emg_data = [(d["name"], d["idx"], d["color"], d["days"]) for d in all_routes_data if d["group"] == "Emerging"]
+
+    fig.add_trace(go.Bar(
+        x=[d[0] for d in est_data],
+        y=[d[1] for d in est_data],
+        name="Established Routes",
+        marker=dict(color=C_TEXT3, opacity=0.60,
+                    line=dict(color="rgba(255,255,255,0.10)", width=1)),
+        customdata=[[d[2]] for d in est_data],
+        hovertemplate="<b>%{x}</b><br>Rate Index: %{y}<br>Transit: %{customdata[0]} days<extra></extra>",
+    ))
+
+    for name, idx, col, td in emg_data:
+        h = col.lstrip("#")
+        r_c = int(h[0:2], 16) if len(h) == 6 else 99
+        g_c = int(h[2:4], 16) if len(h) == 6 else 99
+        b_c = int(h[4:6], 16) if len(h) == 6 else 99
+        fig.add_trace(go.Bar(
+            x=[name],
+            y=[idx],
+            name=name,
+            marker=dict(
+                color="rgba({},{},{},0.80)".format(r_c, g_c, b_c),
+                line=dict(color=col, width=1.5),
+            ),
+            customdata=[[td, idx - 100]],
+            hovertemplate=(
+                "<b>%{x}</b><br>Rate Index: %{y} "
+                "(%{customdata[1]:+d} vs baseline)<br>"
+                "Transit: %{customdata[0]} days<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
+    # Baseline reference line at 100
+    fig.add_hline(
+        y=100,
+        line=dict(color=C_TEXT3, width=1.5, dash="dot"),
+        annotation_text="Suez baseline (100)",
+        annotation_font=dict(color=C_TEXT3, size=10),
+        annotation_position="top left",
+    )
+
+    fig.update_layout(
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_CARD2,
+        height=340,
+        barmode="group",
+        margin=dict(l=20, r=20, t=30, b=80),
+        xaxis=dict(
+            tickfont=dict(color=C_TEXT2, size=10),
+            tickangle=-30,
+            gridcolor="rgba(0,0,0,0)",
+        ),
+        yaxis=dict(
+            title="Freight Rate Index (Suez = 100)",
+            titlefont=dict(color=C_TEXT3, size=11),
+            tickfont=dict(color=C_TEXT3, size=11),
+            gridcolor="rgba(255,255,255,0.04)",
+        ),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=C_TEXT2, size=10),
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="right", x=1,
+        ),
+        font=dict(color=C_TEXT),
+        hoverlabel=dict(
+            bgcolor=C_CARD,
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color=C_TEXT, size=12),
+        ),
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key="er_established_comparison")
+
+    st.markdown("<div style=\"height:8px\"></div>", unsafe_allow_html=True)
+
+    # Time horizon grid
+    st.markdown(
+        "<div style=\"font-size:0.72rem; color:" + C_TEXT3 + "; text-transform:uppercase; "
+        "letter-spacing:0.07em; margin-bottom:10px\">Time Horizon Opportunity Map</div>",
+        unsafe_allow_html=True,
+    )
+
+    col_s, col_m, col_l = st.columns(3)
+
+    horizon_routes = {
+        "short": [
+            ("Cape of Good Hope", C_HIGH, "Structural rate premium; 60%+ traffic locked in"),
+            ("Red Sea Hedging", C_DANGER, "Insurance & surcharge arbitrage while crisis persists"),
+        ],
+        "medium": [
+            ("Trans-Caspian TITR", C_ORANGE, "Capacity building; rate premium narrowing toward parity"),
+            ("East Africa Corridor", C_CYAN, "Port expansion unlocking; new direct service launches"),
+            ("NSR Seasonal", C_ARCTIC, "Summer slot opportunities for non-sanctioned cargo"),
+        ],
+        "long": [
+            ("IMEC Corridor", C_WARN, "Post-construction rate savings; India-EU direct lane"),
+            ("Transpolar Route", C_PURPLE, "Ice-free Arctic by 2040s; direct pole crossing feasible"),
+            ("NWP Commercial", C_ACCENT, "Draft improvements + fleet investment needed first"),
+        ],
+    }
+
+    for col_widget, hz_key in [(col_s, "short"), (col_m, "medium"), (col_l, "long")]:
+        meta = _TIME_HORIZON_META[hz_key]
+        items_html = ""
+        for r_name, r_color, r_note in horizon_routes[hz_key]:
+            items_html += (
+                "<div style=\"display:flex; align-items:flex-start; gap:8px; margin-bottom:9px\">"
+                "<div style=\"width:3px; min-width:3px; border-radius:2px; "
+                "background:" + r_color + "; margin-top:3px; align-self:stretch\"></div>"
+                "<div>"
+                "<div style=\"font-size:0.76rem; font-weight:700; color:" + C_TEXT + "\">"
+                + r_name + "</div>"
+                "<div style=\"font-size:0.71rem; color:" + C_TEXT2 + "; line-height:1.4; margin-top:2px\">"
+                + r_note + "</div>"
+                "</div></div>"
+            )
+        with col_widget:
+            st.markdown(
+                "<div style=\"background:" + C_CARD + "; border:1px solid "
+                + meta["color"] + "44; border-top:3px solid " + meta["color"]
+                + "; border-radius:10px; padding:14px 16px; height:100%\">"
+                "<div style=\"font-size:0.80rem; font-weight:700; color:" + meta["color"]
+                + "; margin-bottom:12px\">" + meta["label"] + "</div>"
+                + items_html
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Section 6: Arctic Route Tracker
 # ---------------------------------------------------------------------------
 
 def _render_arctic_tracker(freight_rate: float) -> None:
@@ -579,12 +1431,9 @@ def _render_arctic_tracker(freight_rate: float) -> None:
         st.warning("NSR route data not available.")
         return
 
-    # ── 3a. Annual vessel count 2015-2026 ────────────────────────────────
+    # 6a. Annual vessel count 2015-2026
     years = list(range(2015, 2027))
-    # Synthetic but plausible NSR transit counts (mostly LNG tankers + bulk; rising trend)
     vessel_counts = [18, 19, 27, 27, 37, 62, 62, 67, 73, 40, 43, 47]
-    # Note: dip in 2022-2024 reflects Western carrier exits after Ukraine invasion.
-    # Continued growth driven by Russian LNG and non-Western carriers.
 
     fig_vessel = go.Figure()
     fig_vessel.add_trace(go.Scatter(
@@ -598,7 +1447,6 @@ def _render_arctic_tracker(freight_rate: float) -> None:
         name="Annual Vessel Count",
         hovertemplate="%{x}: <b>%{y} vessels</b><extra></extra>",
     ))
-    # Annotation: Ukraine invasion
     fig_vessel.add_vline(
         x=2022, line=dict(color=C_DANGER, width=1, dash="dot")
     )
@@ -613,7 +1461,6 @@ def _render_arctic_tracker(freight_rate: float) -> None:
         borderwidth=1,
         borderpad=4,
     )
-    # 2030 projection marker
     fig_vessel.add_trace(go.Scatter(
         x=[2030],
         y=[210],
@@ -627,7 +1474,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     ))
     fig_vessel.update_layout(
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
+        plot_bgcolor=C_CARD2,
         height=260,
         margin=dict(l=20, r=20, t=20, b=40),
         xaxis=dict(
@@ -657,10 +1504,9 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     )
     st.plotly_chart(fig_vessel, use_container_width=True, key="er_arctic_vessel_count")
 
-    # ── 3b. Seasonal availability calendar ───────────────────────────────
+    # 6b. Seasonal availability calendar
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    # Navigability score: 0=closed, 0.5=icebreaker only, 1=open
     navigability = [0.0, 0.0, 0.0, 0.1, 0.3, 0.65, 1.0, 1.0, 1.0, 0.7, 0.2, 0.0]
     season_colors = [
         C_DANGER if v == 0 else C_WARN if v < 0.5 else C_ARCTIC if v < 1.0 else C_HIGH
@@ -687,7 +1533,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     ))
     fig_cal.update_layout(
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
+        plot_bgcolor=C_CARD2,
         height=200,
         margin=dict(l=20, r=20, t=10, b=30),
         xaxis=dict(tickfont=dict(color=C_TEXT3, size=11), gridcolor="rgba(0,0,0,0)"),
@@ -708,15 +1554,13 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     )
     st.plotly_chart(fig_cal, use_container_width=True, key="er_arctic_calendar")
 
-    # ── 3c. Arctic sea ice extent (synthetic NSIDC-style, shrinking trend) ──
+    # 6c. Arctic sea ice extent (synthetic NSIDC-style)
     ice_years = list(range(1979, 2027))
-    # Synthetic September minimum extent (million km2); declining ~13%/decade
     base = 7.5
     ice_extent = [
         round(base - 0.08 * (y - 1979) + 0.6 * math.sin((y - 1979) * 0.8), 2)
         for y in ice_years
     ]
-    # Clamp to realistic floor
     ice_extent = [max(2.8, v) for v in ice_extent]
 
     fig_ice = go.Figure()
@@ -730,7 +1574,6 @@ def _render_arctic_tracker(freight_rate: float) -> None:
         name="September Min. Extent",
         hovertemplate="%{x}: <b>%{y:.2f} M km\u00b2</b><extra></extra>",
     ))
-    # Trend line (simple linear)
     n = len(ice_years)
     x_mean = sum(ice_years) / n
     y_mean = sum(ice_extent) / n
@@ -748,7 +1591,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     ))
     fig_ice.update_layout(
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
+        plot_bgcolor=C_CARD2,
         height=240,
         margin=dict(l=20, r=20, t=10, b=40),
         xaxis=dict(
@@ -777,7 +1620,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
     )
     st.plotly_chart(fig_ice, use_container_width=True, key="er_arctic_ice_extent")
 
-    # ── 3d. Break-even analysis ──────────────────────────────────────────
+    # 6d. Break-even analysis
     viab = compute_route_viability(nsr, freight_rate)
 
     be_rate = viab["break_even_rate_usd"]
@@ -819,7 +1662,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
             unsafe_allow_html=True,
         )
 
-    # ── 3e. Western carrier exits ────────────────────────────────────────
+    # 6e. Western carrier exits
     exited_carriers = [
         ("Maersk",           "Exited NSR 2022 post-Ukraine; sanctions compliance"),
         ("MSC",              "Suspended Arctic transits indefinitely"),
@@ -868,8 +1711,7 @@ def _render_arctic_tracker(freight_rate: float) -> None:
         unsafe_allow_html=True,
     )
 
-    # Recommendation
-    rec_color = C_HIGH if viab["is_competitive_now"] else C_WARN
+    # Recommendation callout
     st.markdown(
         "<div style=\"background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.20);"
         " border-radius:10px; padding:12px 16px; font-size:0.82rem; color:"
@@ -882,15 +1724,14 @@ def _render_arctic_tracker(freight_rate: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 4: Red Sea Rerouting Impact
+# Section 7: Red Sea Rerouting Impact
 # ---------------------------------------------------------------------------
 
 def _render_red_sea_rerouting() -> None:
     """Timeline, rate premium, capacity split, and end-date scenarios."""
     logger.debug("Rendering Red Sea rerouting impact")
 
-    # ── 4a. % of Asia-Europe traffic via Cape of Good Hope ───────────────
-    # Monthly data from Dec 2023 (Houthi attacks began) through early 2026
+    # 7a. % of Asia-Europe traffic via Cape of Good Hope
     months_rs = [
         "Dec-23", "Jan-24", "Feb-24", "Mar-24", "Apr-24", "May-24",
         "Jun-24", "Jul-24", "Aug-24", "Sep-24", "Oct-24", "Nov-24",
@@ -920,7 +1761,6 @@ def _render_red_sea_rerouting() -> None:
         marker=dict(size=4, color=C_DANGER),
         hovertemplate="%{x}: <b>%{y}%</b> via Suez<extra></extra>",
     ))
-    # Houthi attack marker
     fig_rs.add_annotation(
         x="Dec-23", y=90,
         text="Houthi attacks begin",
@@ -936,8 +1776,8 @@ def _render_red_sea_rerouting() -> None:
     )
     fig_rs.update_layout(
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
-        height=260,
+        plot_bgcolor=C_CARD2,
+        height=270,
         margin=dict(l=20, r=20, t=20, b=50),
         xaxis=dict(
             tickfont=dict(color=C_TEXT3, size=10),
@@ -967,7 +1807,7 @@ def _render_red_sea_rerouting() -> None:
     )
     st.plotly_chart(fig_rs, use_container_width=True, key="er_red_sea_traffic")
 
-    # ── 4b. Rate impact KPIs ─────────────────────────────────────────────
+    # 7b. Rate impact KPIs
     c1, c2, c3, c4 = st.columns(4)
     kpi_s = (
         "background:" + C_CARD + "; border:1px solid rgba(16,185,129,0.20);"
@@ -1004,13 +1844,13 @@ def _render_red_sea_rerouting() -> None:
 
     st.markdown("<div style=\"height:14px\"></div>", unsafe_allow_html=True)
 
-    # ── 4c. Weekly capacity via Cape vs Suez (bar chart) ─────────────────
+    # 7c. Weekly capacity via Cape vs Suez
     weeks = [
         "W1-Jan", "W2-Jan", "W3-Jan", "W4-Jan",
         "W1-Feb", "W2-Feb", "W3-Feb", "W4-Feb",
         "W1-Mar",
     ]
-    cap_cape = [310, 315, 318, 312, 320, 325, 322, 316, 318]   # 000 TEU/week
+    cap_cape = [310, 315, 318, 312, 320, 325, 322, 316, 318]
     cap_suez = [205, 208, 200, 210, 200, 195, 198, 206, 200]
 
     fig_cap = go.Figure()
@@ -1031,7 +1871,7 @@ def _render_red_sea_rerouting() -> None:
     fig_cap.update_layout(
         barmode="group",
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
+        plot_bgcolor=C_CARD2,
         height=260,
         margin=dict(l=20, r=20, t=20, b=50),
         xaxis=dict(
@@ -1061,7 +1901,7 @@ def _render_red_sea_rerouting() -> None:
     )
     st.plotly_chart(fig_cap, use_container_width=True, key="er_red_sea_capacity")
 
-    # ── 4d. End-of-disruption scenarios ──────────────────────────────────
+    # 7d. End-of-disruption scenarios
     scenarios = [
         {
             "scenario": "Base Case",
@@ -1140,7 +1980,7 @@ def _render_red_sea_rerouting() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 5: Emerging Market Trade Corridor Growth
+# Section 8: Emerging Market Trade Corridor Growth
 # ---------------------------------------------------------------------------
 
 def _render_emerging_market_growth() -> None:
@@ -1158,13 +1998,12 @@ def _render_emerging_market_growth() -> None:
         {"name": "East Europe (BRI)",  "cagr": 8.0,  "color": C_TEXT2,   "note": "Belt and Road rail; Hungary, Poland, Czech Republic logistics hubs"},
     ]
 
-    # Sort by CAGR descending
     corridors_sorted = sorted(corridors, key=lambda c: c["cagr"], reverse=True)
 
-    names = [c["name"] for c in corridors_sorted]
-    cagrs = [c["cagr"] for c in corridors_sorted]
+    names  = [c["name"] for c in corridors_sorted]
+    cagrs  = [c["cagr"] for c in corridors_sorted]
     colors = [c["color"] for c in corridors_sorted]
-    notes = [c["note"] for c in corridors_sorted]
+    notes  = [c["note"] for c in corridors_sorted]
 
     fig = go.Figure(go.Bar(
         x=cagrs,
@@ -1182,7 +2021,7 @@ def _render_emerging_market_growth() -> None:
         hovertemplate="<b>%{y}</b><br>CAGR: %{x:.0f}%<br><i>%{customdata}</i><extra></extra>",
     ))
 
-    # Reference line: global average container growth ~3.5%/yr
+    # Reference line: global average
     fig.add_vline(
         x=3.5,
         line=dict(color=C_TEXT3, width=1.5, dash="dot"),
@@ -1193,7 +2032,7 @@ def _render_emerging_market_growth() -> None:
 
     fig.update_layout(
         paper_bgcolor=C_BG,
-        plot_bgcolor="#111827",
+        plot_bgcolor=C_CARD2,
         height=380,
         margin=dict(l=10, r=80, t=20, b=40),
         xaxis=dict(
@@ -1218,7 +2057,6 @@ def _render_emerging_market_growth() -> None:
 
     st.plotly_chart(fig, use_container_width=True, key="er_corridor_growth")
 
-    # Footnote
     st.markdown(
         "<div style=\"font-size:0.71rem; color:" + C_TEXT3
         + "; margin-top:-8px; line-height:1.5\">"
@@ -1229,7 +2067,6 @@ def _render_emerging_market_growth() -> None:
         unsafe_allow_html=True,
     )
 
-    # CSV download — corridor growth data
     import io as _io2
     import csv as _csv2
 
@@ -1268,19 +2105,20 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
     """
     logger.info("Rendering Emerging Trade Routes tab")
 
-    st.header("Emerging Trade Routes")
+    # Page header
     st.markdown(
-        "<div style=\"color:" + C_TEXT2 + "; font-size:0.88rem; margin-bottom:12px;"
-        " line-height:1.6\">"
+        "<div style=\"margin-bottom:6px\">"
+        "<div style=\"font-size:1.55rem; font-weight:900; color:" + C_TEXT
+        + "; letter-spacing:-0.02em; line-height:1.2\">Emerging Trade Routes</div>"
+        "<div style=\"font-size:0.83rem; color:" + C_TEXT2 + "; margin-top:6px; line-height:1.6\">"
         "Climate change is opening Arctic passages while geopolitics reshapes land-sea "
         "corridors. The 2024 Houthi crisis in the Red Sea has already permanently "
         "accelerated awareness of route alternatives. This tab tracks 8 emerging or "
         "revived trade corridors and their commercial viability."
-        "</div>",
+        "</div></div>",
         unsafe_allow_html=True,
     )
 
-    # Speculative-data disclaimer
     st.caption(
         "\u26a0\ufe0f Emerging route analysis is based on trend indicators and may not "
         "reflect current service availability."
@@ -1293,10 +2131,9 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
             "The analysis below uses the built-in emerging-route dataset."
         )
 
-    # Pull freight rate from data if available; default to $3,200/FEU (current Asia-Europe)
+    # Pull freight rate from data if available; default to $3,200/FEU
     freight_rate: float = 3_200.0
     if isinstance(freight_data, dict):
-        # Try common keys used elsewhere in this codebase
         for k in ("asia_europe_spot", "scfi_asia_europe", "asia_europe", "freight_rate"):
             val = freight_data.get(k)
             if val is not None:
@@ -1308,9 +2145,21 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     logger.debug("Emerging routes tab using freight_rate={:.0f}", freight_rate)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 1 — World Map
-    # ══════════════════════════════════════════════════════════════════════════
+    # =========================================================================
+    # Section 0 — Opportunity Summary Header
+    # =========================================================================
+    _render_opportunity_header(route_results)
+
+    # =========================================================================
+    # Section 1 — Route Opportunity Cards (Top 5)
+    # =========================================================================
+    _render_route_cards()
+
+    st.divider()
+
+    # =========================================================================
+    # Section 2 — World Map
+    # =========================================================================
     _section_title(
         "Emerging Routes World Map",
         (
@@ -1327,9 +2176,31 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     st.divider()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 2 — Route Comparison Matrix
-    # ══════════════════════════════════════════════════════════════════════════
+    # =========================================================================
+    # Section 2b — Opportunity Scoring Bars (3 bars per route)
+    # =========================================================================
+    _render_scoring_bars()
+
+    st.divider()
+
+    # =========================================================================
+    # Section 3 — Opportunity Scoring Breakdown (Radar)
+    # =========================================================================
+    _section_title(
+        "Opportunity Scoring Breakdown",
+        (
+            "Five-axis radar scoring each top route on trade growth, demand imbalance, "
+            "infrastructure readiness, geopolitical clarity, and rate upside potential. "
+            "Larger polygon = stronger opportunity."
+        ),
+    )
+    _render_opportunity_scoring()
+
+    st.divider()
+
+    # =========================================================================
+    # Section 4 — Route Performance Comparison Matrix
+    # =========================================================================
     _section_title(
         "Route Performance Comparison Matrix",
         (
@@ -1342,9 +2213,23 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     st.divider()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 3 — Arctic Route Tracker
-    # ══════════════════════════════════════════════════════════════════════════
+    # =========================================================================
+    # Section 5 — Emerging vs Established + Time Horizon
+    # =========================================================================
+    _section_title(
+        "Emerging vs Established Routes — Rate Premium & Time Horizon",
+        (
+            "Freight rate index (Suez baseline = 100) for established and emerging routes. "
+            "Below: short / medium / long-term opportunity classification."
+        ),
+    )
+    _render_established_comparison()
+
+    st.divider()
+
+    # =========================================================================
+    # Section 6 — Arctic Route Tracker
+    # =========================================================================
     _section_title(
         "Arctic Route Tracker — Northern Sea Route (NSR)",
         (
@@ -1383,9 +2268,9 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     st.divider()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 4 — Red Sea Rerouting Impact
-    # ══════════════════════════════════════════════════════════════════════════
+    # =========================================================================
+    # Section 7 — Red Sea Rerouting Impact
+    # =========================================================================
     _section_title(
         "Red Sea Crisis — Cape of Good Hope Rerouting Impact",
         (
@@ -1398,9 +2283,9 @@ def render(route_results, freight_data: dict, macro_data: dict) -> None:
 
     st.divider()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 5 — Emerging Market Corridor Growth
-    # ══════════════════════════════════════════════════════════════════════════
+    # =========================================================================
+    # Section 8 — Emerging Market Corridor Growth
+    # =========================================================================
     _section_title(
         "Emerging Market Trade Corridor Growth (2025-2030 CAGR)",
         (

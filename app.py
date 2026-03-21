@@ -14,18 +14,17 @@ load_dotenv()
 
 def _get_api_health() -> dict:
     """Check health of each data source by looking at cache files."""
-    import glob
     import time
     health = {}
     cache_dir = Path("cache")
 
     sources = {
-        "yfinance":    {"pattern": "*stock*",     "ttl_hours": 1},
-        "FRED":        {"pattern": "*fred*",      "ttl_hours": 24},
-        "WorldBank":   {"pattern": "*worldbank*", "ttl_hours": 168},
-        "Trade/WITS":  {"pattern": "*wits*",      "ttl_hours": 168},
-        "Freight/FBX": {"pattern": "*fbx*",       "ttl_hours": 24},
-        "AIS/Synthetic": {"pattern": "*ais*",     "ttl_hours": 6},
+        "yfinance":      {"pattern": "*stock*",     "ttl_hours": 1},
+        "FRED":          {"pattern": "*fred*",      "ttl_hours": 24},
+        "WorldBank":     {"pattern": "*worldbank*", "ttl_hours": 168},
+        "Trade/WITS":    {"pattern": "*wits*",      "ttl_hours": 168},
+        "Freight/FBX":   {"pattern": "*fbx*",       "ttl_hours": 24},
+        "AIS/Synthetic": {"pattern": "*ais*",       "ttl_hours": 6},
     }
 
     for source, cfg_src in sources.items():
@@ -44,36 +43,28 @@ def _get_api_health() -> dict:
                 "icon": "🟢" if fresh else "🟡",
             }
         else:
-            health[source] = {
-                "status": "no_cache",
-                "age_hours": None,
-                "icon": "🔴",
-            }
+            health[source] = {"status": "no_cache", "age_hours": None, "icon": "🔴"}
     return health
 
 
 def _age_label(age_hours: float | None) -> str:
-    """Return a human-readable age string."""
     if age_hours is None:
         return "No cache"
     if age_hours < 0.1:
         return "Fresh"
     if age_hours < 1.0:
-        mins = int(age_hours * 60)
-        return str(mins) + "m ago"
+        return f"{int(age_hours * 60)}m ago"
     if age_hours < 24.0:
-        h = round(age_hours, 1)
-        return str(h) + "h ago"
-    days = round(age_hours / 24, 1)
-    return str(days) + "d ago"
+        return f"{round(age_hours, 1)}h ago"
+    return f"{round(age_hours / 24, 1)}d ago"
 
 
 # ── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Ship Tracker",
+    page_title="Ship Tracker — Global Shipping Intelligence",
     page_icon="🚢",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ── Config ────────────────────────────────────────────────────────────────
@@ -83,36 +74,26 @@ def load_config() -> dict:
     try:
         with open(config_path) as f:
             data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            logger.warning("config.yaml parsed to a non-dict; using empty config.")
-            return {}
-        return data
+        return data if isinstance(data, dict) else {}
     except FileNotFoundError:
-        logger.error(f"config.yaml not found at {config_path}; using empty config.")
-        st.warning("config.yaml not found — running with default empty configuration.")
+        logger.error(f"config.yaml not found at {config_path}")
         return {}
     except yaml.YAMLError as exc:
-        logger.error(f"config.yaml is malformed: {exc}; using empty config.")
-        st.warning(f"config.yaml parse error: {exc} — running with default empty configuration.")
+        logger.error(f"config.yaml malformed: {exc}")
         return {}
 
 
 cfg = load_config()
 
-# Inject global CSS design system
+# ── Inject CSS ────────────────────────────────────────────────────────────
 try:
     from ui.styles import inject_global_css
     inject_global_css()
 except Exception as _css_err:
-    logger.warning(f"Could not load global CSS (ui.styles): {_css_err}")
-
-st.markdown("""<style>
-.stTabs [data-baseweb="tab"] { font-size: 12px; padding: 6px 10px; }
-.stTabs [data-baseweb="tab-list"] { gap: 2px; }
-</style>""", unsafe_allow_html=True)
+    logger.warning(f"CSS load error: {_css_err}")
 
 
-# ── Data loading (cached) ──────────────────────────────────────────────────
+# ── Data loading (cached) ─────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner="Loading stock data...")
 def get_stock_data(lookback_days: int):
     from data.cache_manager import CacheManager
@@ -162,23 +143,21 @@ def get_freight_data(lookback_days: int):
     return fetch_fbx_rates(lookback_days, cache, ttl_hours=cfg["cache"]["freight_ttl_hours"])
 
 
-# ── Sidebar top controls (before data load) ────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
+    # Brand header
     st.markdown("""
-    <div style="padding: 4px 0 12px 0">
-        <div style="font-size:1.3rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.02em">
+    <div style="padding:12px 0 16px 0; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:12px">
+        <div style="font-size:1.45rem; font-weight:900; color:#f1f5f9; letter-spacing:-0.03em; line-height:1">
             🚢 Ship Tracker
         </div>
-        <div style="font-size:0.75rem; color:#64748b; margin-top:2px; text-transform:uppercase; letter-spacing:0.06em">
-            Cargo Container Intelligence
+        <div style="font-size:0.7rem; color:#475569; margin-top:4px; text-transform:uppercase; letter-spacing:0.1em">
+            Global Shipping Intelligence
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.divider()
 
     lookback = st.slider("Lookback period (days)", 30, 180, 90, step=15)
-
-    st.divider()
 
     if st.button("🔄 Refresh All Data", use_container_width=True):
         st.cache_data.clear()
@@ -186,10 +165,9 @@ with st.sidebar:
 
     st.divider()
 
-    # API / data-source health monitor
-    st.caption("**API Status**")
+    # API health
+    st.caption("**Data Sources**")
     _health = _get_api_health()
-    # Overlay credential gate for FRED
     try:
         _fred_key = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
     except Exception:
@@ -197,40 +175,30 @@ with st.sidebar:
     if not _fred_key:
         _health["FRED"] = {"status": "no_key", "age_hours": None, "icon": "🔴"}
     for _src_name, _info in _health.items():
-        _icon = _info["icon"]
-        _age = _age_label(_info.get("age_hours"))
-        _status = _info["status"]
-        if _status == "no_key":
-            _detail = "No API key"
-        elif _status == "no_cache":
-            _detail = "Not loaded"
-        elif _status == "stale":
-            _detail = "Stale: " + _age
-        else:
-            _detail = _age
+        _detail = (
+            "No API key" if _info["status"] == "no_key"
+            else "Not loaded" if _info["status"] == "no_cache"
+            else ("Stale: " + _age_label(_info.get("age_hours"))) if _info["status"] == "stale"
+            else _age_label(_info.get("age_hours"))
+        )
         st.markdown(
-            '<div style="display:flex; justify-content:space-between; align-items:center;'
-            " padding:2px 0; border-bottom:1px solid rgba(255,255,255,0.04)\">"
-            '<span style="font-size:0.73rem; color:#f1f5f9">'
-            + _icon + " " + _src_name
-            + "</span>"
-            '<span style="font-size:0.68rem; color:#64748b">'
-            + _detail
-            + "</span></div>",
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04)">'
+            f'<span style="font-size:0.73rem;color:#f1f5f9">{_info["icon"]} {_src_name}</span>'
+            f'<span style="font-size:0.68rem;color:#64748b">{_detail}</span></div>',
             unsafe_allow_html=True,
         )
 
     st.divider()
-    st.caption("Free data sources only")
-    st.caption("All times UTC")
+    st.caption("Free data sources only · All times UTC")
 
-    # Placeholders for dynamic sidebar sections (filled after data loads)
+    # Placeholders filled after analysis
     sidebar_signal_placeholder = st.empty()
     sidebar_watchlist_placeholder = st.empty()
     sidebar_bottom_placeholder = st.empty()
 
 
-# ── Default values for new variables ──────────────────────────────────────
+# ── Default values ────────────────────────────────────────────────────────
 momentum_ranks = []
 convergence_events = []
 volatility_reports = {}
@@ -241,23 +209,18 @@ fleet_data = None
 # ── Load all data ─────────────────────────────────────────────────────────
 with st.spinner("Loading data..."):
     try:
-        stock_data = get_stock_data(lookback)
-        macro_data = get_macro_data(lookback + 90)  # Extra history for correlation
-        wb_data = get_wb_data()
-        ais_data = get_ais_data()
-        trade_data = get_trade_data()
+        stock_data  = get_stock_data(lookback)
+        macro_data  = get_macro_data(lookback + 90)
+        wb_data     = get_wb_data()
+        ais_data    = get_ais_data()
+        trade_data  = get_trade_data()
         freight_data = get_freight_data(lookback + 30)
     except Exception as exc:
         st.error(f"Data loading error: {exc}")
-        stock_data = {}
-        macro_data = {}
-        wb_data = {}
-        ais_data = {}
-        trade_data = {}
-        freight_data = {}
+        stock_data = macro_data = wb_data = ais_data = trade_data = freight_data = {}
 
     try:
-        from data.currency_feed import fetch_fx_rates, fetch_fx_history
+        from data.currency_feed import fetch_fx_rates
         fx_rates = fetch_fx_rates()
     except Exception as exc:
         logger.warning(f"FX rates unavailable: {exc}")
@@ -273,7 +236,7 @@ try:
     with st.spinner("Running analysis..."):
         from ports.demand_analyzer import analyze_all_ports
         from routes.optimizer import optimize_all_routes
-        port_results = analyze_all_ports(trade_data, ais_data, wb_data)
+        port_results  = analyze_all_ports(trade_data, ais_data, wb_data)
         route_results = optimize_all_routes(port_results, freight_data, macro_data)
 
     with st.spinner("Generating insights..."):
@@ -290,7 +253,7 @@ try:
         ).analyze(stock_data, macro_data, freight_data)
 except Exception as exc:
     logger.error(f"Analysis pipeline error: {exc}")
-    port_results, route_results, insights, correlation_results = [], [], [], []
+    port_results = route_results = insights = correlation_results = []
     st.error(f"Analysis error: {exc}")
 
 try:
@@ -357,90 +320,66 @@ except Exception as exc:
     narration = {}
 
 
-# ── Dynamic sidebar sections (filled after data + analysis) ───────────────
+# ── Dynamic sidebar (signal pulse + watchlist) ────────────────────────────
 try:
     import plotly.graph_objects as go
-except Exception as _plotly_err:
-    logger.error(f"plotly is not installed or failed to import: {_plotly_err}")
-    st.error(f"plotly import error: {_plotly_err}")
+except Exception:
     go = None
 
 with sidebar_signal_placeholder.container():
     st.divider()
     st.caption("**Signal Pulse**")
-
     if insights and go is not None:
-        # Mini donut gauge for overall health score
         avg_score = sum(i.score for i in insights) / len(insights)
         gauge_color = "#10b981" if avg_score >= 0.70 else ("#f59e0b" if avg_score >= 0.55 else "#ef4444")
         fig_gauge = go.Figure(go.Pie(
-            values=[avg_score, 1 - avg_score],
-            hole=0.7,
+            values=[avg_score, 1 - avg_score], hole=0.7,
             marker_colors=[gauge_color, "rgba(255,255,255,0.05)"],
-            textinfo="none",
-            hoverinfo="skip",
+            textinfo="none", hoverinfo="skip",
         ))
         fig_gauge.update_layout(
-            showlegend=False,
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=120,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=110,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             annotations=[dict(
                 text=f"<b>{avg_score:.0%}</b><br><span style='font-size:9px'>Health</span>",
-                x=0.5, y=0.5,
-                font=dict(size=16, color=gauge_color),
-                showarrow=False,
+                x=0.5, y=0.5, font=dict(size=15, color=gauge_color), showarrow=False,
             )],
         )
         st.plotly_chart(fig_gauge, use_container_width=True, config={"displayModeBar": False})
-
-        # Sparkline of insight score distribution
         scores_sorted = sorted([i.score for i in insights], reverse=True)
         fig_spark = go.Figure(go.Scatter(
-            y=scores_sorted,
-            mode="lines",
+            y=scores_sorted, mode="lines",
             line=dict(color="#3b82f6", width=2),
-            fill="tozeroy",
-            fillcolor="rgba(59,130,246,0.12)",
+            fill="tozeroy", fillcolor="rgba(59,130,246,0.12)",
         ))
         fig_spark.update_layout(
-            height=80,
-            margin=dict(l=0, r=0, t=4, b=0),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False, range=[0, 1]),
+            height=70, margin=dict(l=0, r=0, t=4, b=0),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(visible=False), yaxis=dict(visible=False, range=[0, 1]),
             showlegend=False,
         )
         st.plotly_chart(fig_spark, use_container_width=True, config={"displayModeBar": False})
-
-        # Top 3 insight cards
         for ins in insights[:3]:
-            score_color = "#10b981" if ins.score >= 0.70 else ("#f59e0b" if ins.score >= 0.55 else "#94a3b8")
-            title_short = ins.title[:45] + ("..." if len(ins.title) > 45 else "")
+            sc = "#10b981" if ins.score >= 0.70 else ("#f59e0b" if ins.score >= 0.55 else "#94a3b8")
+            title_short = ins.title[:44] + ("…" if len(ins.title) > 44 else "")
             st.markdown(f"""
-        <div style="background:#1a2235; border-left:3px solid {score_color};
-                    border-radius:6px; padding:7px 10px; margin-bottom:6px">
-            <div style="font-size:0.75rem; font-weight:600; color:#f1f5f9; line-height:1.3">
-                {title_short}</div>
-            <div style="font-size:0.68rem; color:{score_color}; margin-top:2px; font-weight:700">
-                {ins.score:.0%} · {ins.action}</div>
-        </div>
-        """, unsafe_allow_html=True)
+            <div style="background:#1a2235;border-left:3px solid {sc};
+                        border-radius:6px;padding:7px 10px;margin-bottom:6px">
+                <div style="font-size:0.74rem;font-weight:600;color:#f1f5f9;line-height:1.3">{title_short}</div>
+                <div style="font-size:0.67rem;color:{sc};margin-top:2px;font-weight:700">{ins.score:.0%} · {ins.action}</div>
+            </div>""", unsafe_allow_html=True)
     elif insights:
-        # plotly unavailable — show text-only signal cards
         avg_score = sum(i.score for i in insights) / len(insights)
         st.caption(f"Health: {avg_score:.0%}")
         for ins in insights[:3]:
-            st.caption(f"{ins.score:.0%} · {ins.title[:45]}")
+            st.caption(f"{ins.score:.0%} · {ins.title[:44]}")
     else:
         st.caption("No active signals")
 
 with sidebar_watchlist_placeholder.container():
     st.divider()
     st.caption("**Watchlist**")
-    shipping_tickers = cfg.get("shipping_stocks", [])[:5]  # ZIM, MATX, SBLK, DAC, CMRE
+    shipping_tickers = cfg.get("shipping_stocks", [])[:5]
     if stock_data:
         for ticker in shipping_tickers:
             df = stock_data.get(ticker)
@@ -452,12 +391,11 @@ with sidebar_watchlist_placeholder.container():
                 arrow = "▲" if chg_pct > 0 else ("▼" if chg_pct < 0 else "—")
                 color = "#10b981" if chg_pct > 0 else ("#ef4444" if chg_pct < 0 else "#94a3b8")
                 st.markdown(f"""
-            <div style="display:flex; justify-content:space-between; align-items:center;
-                        padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.04)">
-                <span style="font-size:0.75rem; font-weight:600; color:#f1f5f9; font-family:monospace">{ticker}</span>
-                <span style="font-size:0.75rem; color:{color}; font-weight:700">{arrow} {chg_pct:+.1%}</span>
-            </div>
-            """, unsafe_allow_html=True)
+                <div style="display:flex;justify-content:space-between;align-items:center;
+                            padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+                    <span style="font-size:0.75rem;font-weight:600;color:#f1f5f9;font-family:monospace">{ticker}</span>
+                    <span style="font-size:0.75rem;color:{color};font-weight:700">{arrow} {chg_pct:+.1%}</span>
+                </div>""", unsafe_allow_html=True)
     else:
         for ticker in shipping_tickers:
             st.caption(f"— {ticker}")
@@ -470,40 +408,29 @@ with sidebar_bottom_placeholder.container():
         from utils.helpers import now_iso
         st.caption(f"📦 Cache: {cache_mb:.1f} MB")
         st.caption(f"🕐 {now_iso()}")
-    except Exception as _sidebar_bottom_err:
-        logger.warning(f"Sidebar bottom section error: {_sidebar_bottom_err}")
+    except Exception:
         st.caption(f"📦 Cache: {cache_mb:.1f} MB")
 
 
-# ── Page header ───────────────────────────────────────────────────────────
+# ── Quick-stat helpers ────────────────────────────────────────────────────
 try:
     from utils.helpers import now_iso, trend_label
-except Exception as _helpers_err:
-    logger.error(f"utils.helpers import error: {_helpers_err}")
-    st.error(f"utils.helpers import error: {_helpers_err}")
+except Exception:
+    import datetime
     def now_iso() -> str:
-        import datetime
         return datetime.datetime.utcnow().isoformat()
     def trend_label(pct: float) -> str:
-        if pct > 0.01:
-            return "Rising"
-        if pct < -0.01:
-            return "Falling"
-        return "Stable"
+        return "Rising" if pct > 0.01 else ("Falling" if pct < -0.01 else "Stable")
 
-port_count = len(port_results) if port_results else 25
-route_count = len(route_results) if route_results else 17
-insight_count = len(insights) if insights else 0
-high_count = sum(1 for i in insights if i.score >= 0.70) if insights else 0
+port_count   = len(port_results)  if port_results  else 25
+route_count  = len(route_results) if route_results else 17
+insight_count = len(insights)     if insights      else 0
+high_count   = sum(1 for i in insights if i.score >= 0.70) if insights else 0
 
-# Compute quick-stat values
-top_score = max((i.score for i in insights), default=0.0) if insights else 0.0
-avg_demand = (
-    sum(getattr(p, "demand_score", 0.5) for p in port_results) / len(port_results)
-    if port_results else 0.5
-)
+top_score  = max((i.score for i in insights), default=0.0)
+avg_demand = (sum(getattr(p, "demand_score", 0.5) for p in port_results) / len(port_results)
+              if port_results else 0.5)
 
-# Freight trend
 freight_trend = "Stable"
 if freight_data:
     try:
@@ -511,532 +438,560 @@ if freight_data:
         all_vals = []
         for v in freight_data.values():
             if isinstance(v, pd.DataFrame) and not v.empty:
-                col = v.columns[0]
-                all_vals.extend(v[col].dropna().tolist())
+                all_vals.extend(v[v.columns[0]].dropna().tolist())
         if len(all_vals) >= 10:
             half = len(all_vals) // 2
-            first_half_avg = sum(all_vals[:half]) / half
-            second_half_avg = sum(all_vals[half:]) / (len(all_vals) - half)
-            pct_chg = (second_half_avg - first_half_avg) / first_half_avg if first_half_avg != 0 else 0
-            freight_trend = trend_label(pct_chg)
+            fha = sum(all_vals[:half]) / half
+            sha = sum(all_vals[half:]) / (len(all_vals) - half)
+            freight_trend = trend_label((sha - fha) / fha if fha != 0 else 0)
     except Exception:
-        freight_trend = "Stable"
+        pass
 
-# SC health
 sc_health = "Healthy" if insight_count > 0 and high_count >= (insight_count // 3) else "Stressed"
 if insight_count == 0:
     sc_health = "Stressed"
 
-# Color helpers
-def score_pill_color(score: float) -> str:
-    if score >= 0.70:
-        return "#10b981"
-    if score >= 0.55:
-        return "#f59e0b"
-    return "#ef4444"
+def _pill_rgb(val, high_thr, low_thr=None):
+    if low_thr and val < low_thr:
+        return "239,68,68"
+    return "16,185,129" if val >= high_thr else "245,158,11"
 
-def demand_pill_color(d: float) -> str:
-    if d >= 0.65:
-        return "#10b981"
-    if d >= 0.45:
-        return "#f59e0b"
-    return "#ef4444"
-
-freight_pill_color = "#10b981" if freight_trend == "Rising" else ("#f59e0b" if freight_trend == "Stable" else "#ef4444")
-sc_pill_color = "#10b981" if sc_health == "Healthy" else "#ef4444"
-top_color = score_pill_color(top_score)
-avg_color = demand_pill_color(avg_demand)
-
-live_color = "#10b981" if stock_data else "#ef4444"
-live_label = "● LIVE" if stock_data else "● OFFLINE"
+top_rgb   = _pill_rgb(top_score, 0.70, 0.55)
+dem_rgb   = _pill_rgb(avg_demand, 0.65, 0.45)
+frt_rgb   = "16,185,129" if freight_trend == "Rising" else ("245,158,11" if freight_trend == "Stable" else "239,68,68")
+sc_rgb    = "16,185,129" if sc_health == "Healthy" else "239,68,68"
+live_rgb  = "16,185,129" if stock_data else "239,68,68"
+live_lbl  = "● LIVE" if stock_data else "● OFFLINE"
+alert_cnt = len(alerts) if alerts else 0
 refresh_ts = now_iso()[:19].replace("T", " ") + " UTC"
 
+
+# ── Hero header ───────────────────────────────────────────────────────────
 st.markdown(f"""
 <style>
-@keyframes pulse-live {{
-    0%   {{ opacity: 1; }}
-    50%  {{ opacity: 0.4; }}
-    100% {{ opacity: 1; }}
-}}
-.live-badge {{
-    animation: pulse-live 2s ease-in-out infinite;
-}}
+@keyframes pulse-live {{ 0%,100%{{opacity:1}} 50%{{opacity:.4}} }}
+@keyframes hero-line {{ 0%{{background-position:0% 50%}} 50%{{background-position:100% 50%}} 100%{{background-position:0% 50%}} }}
+.live-badge {{ animation: pulse-live 2s ease-in-out infinite; }}
+.hero-rule {{ height:2px; border-radius:2px;
+    background: linear-gradient(90deg,#3b82f6,#10b981,#8b5cf6,#3b82f6);
+    background-size:300% 300%;
+    animation: hero-line 5s ease infinite; }}
 </style>
-<div style="padding: 20px 0 24px 0; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 24px">
-    <!-- Top row: title + live status + refresh timestamp -->
-    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px">
+
+<div style="padding:20px 0 20px 0; margin-bottom:4px">
+    <!-- Title row -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div>
-            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.15em; color:#475569; margin-bottom:6px">
+            <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.18em;
+                        color:#475569;margin-bottom:6px">
                 🚢 GLOBAL SHIPPING INTELLIGENCE PLATFORM
             </div>
-            <div style="font-size:1.8rem; font-weight:900; color:#f1f5f9; letter-spacing:-0.04em; line-height:1">
-                Container Market Intelligence
+            <div style="font-size:2.1rem;font-weight:900;color:#f1f5f9;
+                        letter-spacing:-0.045em;line-height:1.05">
+                Container Market<br>
+                <span style="background:linear-gradient(135deg,#3b82f6,#10b981);
+                             -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                             background-clip:text;">Intelligence</span>
             </div>
-            <div style="font-size:0.82rem; color:#64748b; margin-top:5px">
-                {port_count} ports · {route_count} routes · {insight_count} active signals · {high_count} high-conviction
+            <div style="font-size:0.8rem;color:#64748b;margin-top:6px">
+                {port_count} ports &nbsp;·&nbsp; {route_count} routes &nbsp;·&nbsp;
+                {insight_count} active signals &nbsp;·&nbsp; {high_count} high-conviction
             </div>
         </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px">
-            <span class="live-badge" style="background:rgba({('16,185,129' if stock_data else '239,68,68')},0.15);
-                         color:{live_color}; border:1px solid rgba({('16,185,129' if stock_data else '239,68,68')},0.3);
-                         padding:4px 14px; border-radius:999px; font-size:0.75rem; font-weight:700;
-                         letter-spacing:0.05em">
-                {live_label}
-            </span>
-            <span style="font-size:0.68rem; color:#475569; font-family:monospace">
-                {refresh_ts}
-            </span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+            <span class="live-badge" style="
+                background:rgba({live_rgb},0.14);color:rgb({live_rgb});
+                border:1px solid rgba({live_rgb},0.35);
+                padding:4px 14px;border-radius:999px;font-size:0.73rem;font-weight:700;
+                letter-spacing:0.06em">{live_lbl}</span>
+            <span style="font-size:0.66rem;color:#475569;font-family:monospace">{refresh_ts}</span>
         </div>
     </div>
-    <!-- Second row: quick metric pills -->
-    <div style="display:flex; gap:10px; flex-wrap:wrap">
-        <span style="background:rgba({('16,185,129' if top_score >= 0.70 else ('245,158,11' if top_score >= 0.55 else '239,68,68'))},0.1);
-                     color:{top_color}; border:1px solid rgba({('16,185,129' if top_score >= 0.70 else ('245,158,11' if top_score >= 0.55 else '239,68,68'))},0.2);
-                     padding:4px 12px; border-radius:999px; font-size:0.72rem; font-weight:600">
+    <!-- Animated rule -->
+    <div class="hero-rule" style="margin-bottom:12px"></div>
+    <!-- Stat pills -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <span style="background:rgba({top_rgb},0.1);color:rgb({top_rgb});
+                     border:1px solid rgba({top_rgb},0.25);
+                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
             Top Signal: {top_score:.0%}
         </span>
-        <span style="background:rgba({('16,185,129' if avg_demand >= 0.65 else ('245,158,11' if avg_demand >= 0.45 else '239,68,68'))},0.1);
-                     color:{avg_color}; border:1px solid rgba({('16,185,129' if avg_demand >= 0.65 else ('245,158,11' if avg_demand >= 0.45 else '239,68,68'))},0.2);
-                     padding:4px 12px; border-radius:999px; font-size:0.72rem; font-weight:600">
+        <span style="background:rgba({dem_rgb},0.1);color:rgb({dem_rgb});
+                     border:1px solid rgba({dem_rgb},0.25);
+                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
             Avg Port Demand: {avg_demand:.0%}
         </span>
-        <span style="background:rgba({('16,185,129' if freight_trend == 'Rising' else ('245,158,11' if freight_trend == 'Stable' else '239,68,68'))},0.1);
-                     color:{freight_pill_color}; border:1px solid rgba({('16,185,129' if freight_trend == 'Rising' else ('245,158,11' if freight_trend == 'Stable' else '239,68,68'))},0.2);
-                     padding:4px 12px; border-radius:999px; font-size:0.72rem; font-weight:600">
+        <span style="background:rgba({frt_rgb},0.1);color:rgb({frt_rgb});
+                     border:1px solid rgba({frt_rgb},0.25);
+                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
             Freight Trend: {freight_trend}
         </span>
-        <span style="background:rgba({('16,185,129' if sc_health == 'Healthy' else '239,68,68')},0.1);
-                     color:{sc_pill_color}; border:1px solid rgba({('16,185,129' if sc_health == 'Healthy' else '239,68,68')},0.2);
-                     padding:4px 12px; border-radius:999px; font-size:0.72rem; font-weight:600">
+        <span style="background:rgba({sc_rgb},0.1);color:rgb({sc_rgb});
+                     border:1px solid rgba({sc_rgb},0.25);
+                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
             SC Health: {sc_health}
         </span>
+        {'<span style="background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.3);padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:700">⚠ ' + str(alert_cnt) + ' Alerts</span>' if alert_cnt else ''}
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.caption("43 analysis modules • Live data • Powered by free public APIs")
 
-
-# ── Ticker tape ───────────────────────────────────────────────────────────
+# ── Market ticker tape ────────────────────────────────────────────────────
 ticker_items = []
-
 if stock_data:
     for ticker, df in stock_data.items():
         if df is not None and not df.empty and "close" in df.columns:
             close = df["close"]
-            current = float(close.iloc[-1])
-            prev = float(close.iloc[-2]) if len(close) > 1 else current
-            chg = (current - prev) / prev if prev != 0 else 0
+            cur = float(close.iloc[-1])
+            prv = float(close.iloc[-2]) if len(close) > 1 else cur
+            chg = (cur - prv) / prv if prv != 0 else 0
             arrow = "▲" if chg > 0 else "▼"
-            color = "#10b981" if chg > 0 else "#ef4444"
-            ticker_items.append(
-                f'<span style="color:{color}; margin:0 6px">{ticker} {arrow} {chg:+.1%}</span>'
-            )
-
+            clr = "#10b981" if chg > 0 else "#ef4444"
+            ticker_items.append(f'<span style="color:{clr};margin:0 8px">{ticker} {arrow} {chg:+.1%}</span>')
 if freight_data:
     try:
         import pandas as pd
         for route_name, df in freight_data.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
-                col = df.columns[0]
-                vals = df[col].dropna()
+                vals = df[df.columns[0]].dropna()
                 if len(vals) >= 2:
-                    cur_val = float(vals.iloc[-1])
-                    prv_val = float(vals.iloc[-2])
-                    chg = (cur_val - prv_val) / prv_val if prv_val != 0 else 0
+                    chg = (float(vals.iloc[-1]) - float(vals.iloc[-2])) / float(vals.iloc[-2]) if float(vals.iloc[-2]) != 0 else 0
                     arrow = "▲" if chg > 0 else "▼"
-                    color = "#10b981" if chg > 0 else "#ef4444"
-                    label = str(route_name)[:12]
-                    ticker_items.append(
-                        f'<span style="color:{color}; margin:0 6px">{label} {arrow} {chg:+.1%}</span>'
-                    )
+                    clr = "#10b981" if chg > 0 else "#ef4444"
+                    ticker_items.append(f'<span style="color:{clr};margin:0 8px">{str(route_name)[:12]} {arrow} {chg:+.1%}</span>')
     except Exception:
         pass
 
 ticker_html = "  ·  ".join(ticker_items) if ticker_items else "Loading market data..."
-
 components.html(f"""
-<div style="background:#0d1117; border:1px solid rgba(255,255,255,0.06);
-            border-radius:8px; padding:8px 16px; overflow:hidden; white-space:nowrap;
-            font-family: 'SF Mono', monospace; font-size:12px; margin-bottom:16px">
-    <span style="color:#475569; margin-right:12px; font-weight:700">MARKET</span>
+<div style="background:#0d1117;border:1px solid rgba(255,255,255,0.07);
+            border-radius:8px;padding:8px 16px;overflow:hidden;white-space:nowrap;
+            font-family:'SF Mono',monospace;font-size:11.5px;margin-bottom:2px">
+    <span style="color:#334155;margin-right:12px;font-weight:700;font-size:10px;
+                 text-transform:uppercase;letter-spacing:0.1em">MARKET</span>
     {ticker_html}
 </div>
-""", height=38)
+""", height=36)
 
 
-# ── Tabs ──────────────────────────────────────────────────────────────────
-tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23, tab24, tab25, tab26, tab27, tab28, tab29, tab30, tab31, tab32, tab33, tab34, tab35, tab36, tab37, tab38, tab39, tab40, tab41, tab42 = st.tabs([
-    "🌍  Overview",
-    "🏗️  Port Demand",
-    "🚢  Routes",
-    "🔥  Results",
-    "📈  Markets",
-    "🏥  Supply Chain",
-    "🎭  Scenarios",
-    "🔮  Monte Carlo",
-    "🌿  Sustainability",
-    "📡  Live Feed",
-    "⚠️  Risk Matrix",
-    "⚓  Fleet",
-    "📦  Cargo",
-    "📊  Indices",
-    "🔬  Deep Dive",
-    "🌐  Network",
-    "⏱️  ETA Predictor",
-    "📜  Derivatives",
-    "🌍  Geopolitical",
-    "📋  Booking",
-    "⚡  Alpha",
-    "⛽  Bunker Fuel",
-    "🏢  Carriers",
-    "📦  Equipment",
-    "📰  News",
-    "📉  Macro",
-    "🧩  Attribution",
-    "⚔️  Trade War",
-    "🩺  Data Health",
-    "🚧  Congestion",
-    "🛒  E-Commerce",
-    "💰  Trade Finance",
-    "🔄  Intermodal",
-    "👁️  Visibility",
-    "🌩️  Weather Risk",
-    "🤖  Assistant",
-    "🚧  Chokepoints",
-    "🛡️  Compliance",
-    "🔄  Market Cycle",
-    "🛤️  New Routes",
-    "📋  Fundamentals",
-    "🏭  Port Monitor",
-    "📊  Scorecard",
-])
+# ── Section navigation helpers ────────────────────────────────────────────
+SECTIONS = [
+    ("dashboard",    "🏠", "Dashboard",          "Overview, scorecard & live data"),
+    ("markets",      "📈", "Markets & Signals",   "Alpha, correlations & derivatives"),
+    ("ports_routes", "🚢", "Ports & Routes",      "Demand, congestion & ETA"),
+    ("carriers",     "🏢", "Carriers & Ops",      "Fleet, cargo & booking"),
+    ("trade_macro",  "🌍", "Trade & Macro",       "Geopolitics, tariffs & macro"),
+    ("supply_chain", "🔗", "Supply Chain",        "Visibility, network & intermodal"),
+    ("risk",         "⚠️", "Risk & Compliance",   "Weather, regulatory & market cycle"),
+    ("intelligence", "🤖", "Intelligence",        "News, AI assistant & sustainability"),
+]
 
-with tab0:
-    try:
-        from ui.tab_overview import render as render_overview
-        render_overview(port_results, route_results, insights)
-    except Exception as e:
-        st.error(f"Overview tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+SECTION_COLORS = {
+    "dashboard":    "#3b82f6",
+    "markets":      "#10b981",
+    "ports_routes": "#06b6d4",
+    "carriers":     "#8b5cf6",
+    "trade_macro":  "#f59e0b",
+    "supply_chain": "#ec4899",
+    "risk":         "#ef4444",
+    "intelligence": "#a78bfa",
+}
 
-with tab1:
-    try:
-        from ui.tab_port_demand import render as render_ports
-        render_ports(port_results)
-    except Exception as e:
-        st.error(f"Port Demand tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+if "nav_section" not in st.session_state:
+    st.session_state["nav_section"] = "dashboard"
 
-with tab2:
-    try:
-        from ui.tab_routes import render as render_routes
-        render_routes(route_results, freight_data, forecasts)
-    except Exception as e:
-        st.error(f"Routes tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+# Inject section nav CSS
+st.markdown("""<style>
+.sec-nav-btn > div > button {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 8px !important;
+    color: #94a3b8 !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    text-align: left !important;
+    transition: all 0.15s ease !important;
+    padding: 8px 12px !important;
+    margin-bottom: 3px !important;
+}
+.sec-nav-btn > div > button:hover {
+    background: rgba(255,255,255,0.07) !important;
+    color: #f1f5f9 !important;
+    border-color: rgba(255,255,255,0.14) !important;
+}
+.sec-nav-active > div > button {
+    background: rgba(59,130,246,0.15) !important;
+    border-color: rgba(59,130,246,0.4) !important;
+    border-left: 3px solid #3b82f6 !important;
+    color: #f1f5f9 !important;
+    font-weight: 600 !important;
+}
+</style>""", unsafe_allow_html=True)
 
-with tab3:
-    try:
-        from ui.tab_results import render as render_results
-        render_results(insights)
-    except Exception as e:
-        st.error(f"Results tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+# Render nav in sidebar
+with st.sidebar:
+    st.divider()
+    st.caption("**Navigation**")
+    for sec_key, sec_icon, sec_label, sec_desc in SECTIONS:
+        active = st.session_state["nav_section"] == sec_key
+        css_class = "sec-nav-active" if active else "sec-nav-btn"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        btn_label = f"{sec_icon}  {sec_label}"
+        if alerts and sec_key == "risk":
+            btn_label += f"  ({len(alerts)})"
+        if st.button(btn_label, key=f"nav_{sec_key}", use_container_width=True):
+            st.session_state["nav_section"] = sec_key
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-with tab4:
-    try:
-        from ui.tab_markets import render as render_markets
-        render_markets(correlation_results, stock_data, lookback)
-    except Exception as e:
-        st.error(f"Markets tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+active_section = st.session_state.get("nav_section", "dashboard")
 
-with tab5:
-    try:
-        from ui.tab_supply_chain import render as render_supply_chain
-        render_supply_chain(port_results, route_results, freight_data, macro_data, insights)
-    except Exception as e:
-        st.error(f"Supply Chain tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+# Section breadcrumb
+sec_info = next((s for s in SECTIONS if s[0] == active_section), SECTIONS[0])
+sec_color = SECTION_COLORS.get(active_section, "#3b82f6")
+st.markdown(f"""
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;
+            padding:10px 16px;background:rgba(26,34,53,0.6);
+            border:1px solid rgba(255,255,255,0.07);border-radius:10px;
+            border-left:3px solid {sec_color}">
+    <span style="font-size:1.3rem">{sec_info[1]}</span>
+    <div>
+        <div style="font-size:0.88rem;font-weight:700;color:#f1f5f9">{sec_info[2]}</div>
+        <div style="font-size:0.72rem;color:#64748b">{sec_info[3]}</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-with tab6:
-    try:
-        from ui.tab_scenarios import render as render_scenarios
-        render_scenarios(port_results, route_results, macro_data)
-    except Exception as e:
-        st.error(f"Scenarios tab error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
 
-with tab7:
-    try:
-        from ui.tab_monte_carlo import render as render_monte_carlo
-        render_monte_carlo(freight_data, route_results)
-    except Exception as exc:
-        st.error(f"Monte Carlo tab error: {exc}")
+# ── Section routing ───────────────────────────────────────────────────────
 
-with tab8:
-    try:
-        from ui.tab_sustainability import render as render_sustainability
-        render_sustainability()
-    except Exception as exc:
-        st.error(f"Sustainability tab error: {exc}")
+# ── 1. Dashboard ──────────────────────────────────────────────────────────
+if active_section == "dashboard":
+    t0, t1, t2, t3 = st.tabs(["🌍 Overview", "📊 Scorecard", "📡 Live Feed", "🩺 Data Health"])
+    with t0:
+        try:
+            from ui.tab_overview import render as _r
+            _r(port_results, route_results, insights)
+        except Exception as e:
+            st.error(f"Overview error: {e}")
+    with t1:
+        try:
+            from ui.tab_scorecard import render as _r
+            _r(port_results, route_results, insights, freight_data, macro_data, stock_data)
+        except Exception as e:
+            st.error(f"Scorecard error: {e}")
+    with t2:
+        try:
+            from ui.tab_live_feed import render as _r
+            _r(port_results, route_results, insights, freight_data, stock_data, macro_data)
+        except Exception as e:
+            st.error(f"Live Feed error: {e}")
+    with t3:
+        try:
+            from ui.tab_data_health import render as _r
+            _r(port_results, route_results, freight_data, macro_data, stock_data, trade_data, ais_data)
+        except Exception as e:
+            st.error(f"Data Health error: {e}")
 
-with tab9:
-    try:
-        from ui.tab_live_feed import render as render_live_feed
-        render_live_feed(port_results, route_results, insights, freight_data, stock_data, macro_data)
-    except Exception as exc:
-        st.error(f"Live Feed tab error: {exc}")
+# ── 2. Markets & Signals ──────────────────────────────────────────────────
+elif active_section == "markets":
+    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
+        "📈 Markets", "⚡ Alpha", "🔥 Results",
+        "📊 Indices", "📜 Derivatives", "🎭 Scenarios", "🔮 Monte Carlo",
+    ])
+    with t0:
+        try:
+            from ui.tab_markets import render as _r
+            _r(correlation_results, stock_data, lookback)
+        except Exception as e:
+            st.error(f"Markets error: {e}")
+    with t1:
+        try:
+            from ui.tab_alpha import render as _r
+            _r(route_results, port_results, freight_data, macro_data, stock_data, insights)
+        except Exception as e:
+            st.error(f"Alpha error: {e}")
+    with t2:
+        try:
+            from ui.tab_results import render as _r
+            _r(insights)
+        except Exception as e:
+            st.error(f"Results error: {e}")
+    with t3:
+        try:
+            from ui.tab_indices import render as _r
+            _r(macro_data=macro_data, freight_data=freight_data, stock_data=stock_data, lookback_days=lookback)
+        except Exception as e:
+            st.error(f"Indices error: {e}")
+    with t4:
+        try:
+            from ui.tab_derivatives import render as _r
+            _r(route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Derivatives error: {e}")
+    with t5:
+        try:
+            from ui.tab_scenarios import render as _r
+            _r(port_results, route_results, macro_data)
+        except Exception as e:
+            st.error(f"Scenarios error: {e}")
+    with t6:
+        try:
+            from ui.tab_monte_carlo import render as _r
+            _r(freight_data, route_results)
+        except Exception as e:
+            st.error(f"Monte Carlo error: {e}")
 
-with tab10:
-    try:
-        from ui.tab_risk_matrix import render as render_risk_matrix
-        render_risk_matrix(route_results, port_results, macro_data)
-    except Exception as exc:
-        st.error(f"Risk Matrix tab error: {exc}")
+# ── 3. Ports & Routes ─────────────────────────────────────────────────────
+elif active_section == "ports_routes":
+    t0, t1, t2, t3, t4, t5 = st.tabs([
+        "🏗️ Port Demand", "🏭 Port Monitor", "🚢 Routes",
+        "⏱️ ETA Predictor", "🚧 Congestion", "🛤️ Emerging Routes",
+    ])
+    with t0:
+        try:
+            from ui.tab_port_demand import render as _r
+            _r(port_results)
+        except Exception as e:
+            st.error(f"Port Demand error: {e}")
+    with t1:
+        try:
+            from ui.tab_port_monitor import render as _r
+            _r(port_results, ais_data, freight_data)
+        except Exception as e:
+            st.error(f"Port Monitor error: {e}")
+    with t2:
+        try:
+            from ui.tab_routes import render as _r
+            _r(route_results, freight_data, forecasts)
+        except Exception as e:
+            st.error(f"Routes error: {e}")
+    with t3:
+        try:
+            from ui.tab_eta import render as _r
+            _r(port_results, route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"ETA Predictor error: {e}")
+    with t4:
+        try:
+            from ui.tab_congestion import render as _r
+            _r(port_results, ais_data, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Congestion error: {e}")
+    with t5:
+        try:
+            from ui.tab_emerging_routes import render as _r
+            _r(route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Emerging Routes error: {e}")
 
-with tab11:
-    try:
-        from ui.tab_fleet import render as render_fleet
-        render_fleet(freight_data=freight_data, macro_data=macro_data)
-    except Exception as exc:
-        st.error(f"Fleet tab error: {exc}")
+# ── 4. Carriers & Ops ────────────────────────────────────────────────────
+elif active_section == "carriers":
+    t0, t1, t2, t3, t4, t5 = st.tabs([
+        "🏢 Carriers", "⚓ Fleet", "📦 Equipment",
+        "📦 Cargo", "📋 Booking", "⛽ Bunker Fuel",
+    ])
+    with t0:
+        try:
+            from ui.tab_carriers import render as _r
+            _r(route_results, freight_data, stock_data)
+        except Exception as e:
+            st.error(f"Carriers error: {e}")
+    with t1:
+        try:
+            from ui.tab_fleet import render as _r
+            _r(freight_data=freight_data, macro_data=macro_data)
+        except Exception as e:
+            st.error(f"Fleet error: {e}")
+    with t2:
+        try:
+            from ui.tab_equipment import render as _r
+            _r(route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Equipment error: {e}")
+    with t3:
+        try:
+            from ui.tab_cargo import render as _r
+            _r(trade_data=trade_data, wb_data=wb_data, route_results=route_results)
+        except Exception as e:
+            st.error(f"Cargo error: {e}")
+    with t4:
+        try:
+            from ui.tab_booking import render as _r
+            _r(port_results, route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Booking error: {e}")
+    with t5:
+        try:
+            from ui.tab_bunker import render as _r
+            _r(freight_data, macro_data, route_results)
+        except Exception as e:
+            st.error(f"Bunker Fuel error: {e}")
 
-with tab12:
-    try:
-        from ui.tab_cargo import render as render_cargo
-        render_cargo(trade_data=trade_data, wb_data=wb_data, route_results=route_results)
-    except Exception as exc:
-        st.error(f"Cargo tab error: {exc}")
+# ── 5. Trade & Macro ─────────────────────────────────────────────────────
+elif active_section == "trade_macro":
+    t0, t1, t2, t3, t4, t5 = st.tabs([
+        "📉 Macro", "⚔️ Trade War", "🌍 Geopolitical",
+        "🚧 Chokepoints", "💰 Trade Finance", "🛒 E-Commerce",
+    ])
+    with t0:
+        try:
+            from ui.tab_macro import render as _r
+            _r(macro_data, freight_data, stock_data)
+        except Exception as e:
+            st.error(f"Macro error: {e}")
+    with t1:
+        try:
+            from ui.tab_trade_war import render as _r
+            _r(route_results, port_results, freight_data, macro_data, trade_data)
+        except Exception as e:
+            st.error(f"Trade War error: {e}")
+    with t2:
+        try:
+            from ui.tab_geopolitical import render as _r
+            _r(route_results, port_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Geopolitical error: {e}")
+    with t3:
+        try:
+            from ui.tab_chokepoints import render as _r
+            _r(route_results, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Chokepoints error: {e}")
+    with t4:
+        try:
+            from ui.tab_finance import render as _r
+            _r(freight_data, macro_data, route_results, stock_data)
+        except Exception as e:
+            st.error(f"Trade Finance error: {e}")
+    with t5:
+        try:
+            from ui.tab_ecommerce import render as _r
+            _r(trade_data, freight_data, macro_data, route_results)
+        except Exception as e:
+            st.error(f"E-Commerce error: {e}")
 
-with tab13:
-    try:
-        from ui.tab_indices import render as render_indices
-        render_indices(macro_data=macro_data, freight_data=freight_data, stock_data=stock_data, lookback_days=lookback)
-    except Exception as exc:
-        st.error(f"Indices tab error: {exc}")
+# ── 6. Supply Chain ───────────────────────────────────────────────────────
+elif active_section == "supply_chain":
+    t0, t1, t2, t3, t4 = st.tabs([
+        "🏥 Supply Chain", "👁️ Visibility", "🔄 Intermodal",
+        "🌐 Network", "🧩 Attribution",
+    ])
+    with t0:
+        try:
+            from ui.tab_supply_chain import render as _r
+            _r(port_results, route_results, freight_data, macro_data, insights)
+        except Exception as e:
+            st.error(f"Supply Chain error: {e}")
+    with t1:
+        try:
+            from ui.tab_visibility import render as _r
+            _r(port_results, route_results, trade_data, freight_data)
+        except Exception as e:
+            st.error(f"Visibility error: {e}")
+    with t2:
+        try:
+            from ui.tab_intermodal import render as _r
+            _r(route_results, freight_data, macro_data, port_results)
+        except Exception as e:
+            st.error(f"Intermodal error: {e}")
+    with t3:
+        try:
+            from ui.tab_network import render as _r
+            _r(port_results, route_results, freight_data, trade_data)
+        except Exception as e:
+            st.error(f"Network error: {e}")
+    with t4:
+        try:
+            from ui.tab_attribution import render as _r
+            _r(stock_data, freight_data, macro_data, route_results)
+        except Exception as e:
+            st.error(f"Attribution error: {e}")
 
-with tab14:
-    try:
-        from ui.tab_deep_dive import render as render_deep_dive
-        render_deep_dive(
-            route_results=route_results,
-            freight_data=freight_data,
-            port_results=port_results,
-            macro_data=macro_data,
-            stock_data=stock_data,
-            forecasts=forecasts,
-            insights=insights,
-        )
-    except Exception as exc:
-        st.error(f"Deep Dive tab error: {exc}")
+# ── 7. Risk & Compliance ──────────────────────────────────────────────────
+elif active_section == "risk":
+    t0, t1, t2, t3, t4 = st.tabs([
+        "⚠️ Risk Matrix", "🌩️ Weather", "🛡️ Compliance",
+        "🔄 Market Cycle", "📋 Fundamentals",
+    ])
+    with t0:
+        try:
+            from ui.tab_risk_matrix import render as _r
+            _r(route_results, port_results, macro_data)
+        except Exception as e:
+            st.error(f"Risk Matrix error: {e}")
+    with t1:
+        try:
+            from ui.tab_weather import render as _r
+            _r(port_results, route_results, freight_data)
+        except Exception as e:
+            st.error(f"Weather error: {e}")
+    with t2:
+        try:
+            from ui.tab_compliance import render as _r
+            _r(route_results, port_results, macro_data)
+        except Exception as e:
+            st.error(f"Compliance error: {e}")
+    with t3:
+        try:
+            from ui.tab_cycle import render as _r
+            _r(freight_data, macro_data, stock_data, route_results)
+        except Exception as e:
+            st.error(f"Market Cycle error: {e}")
+    with t4:
+        try:
+            from ui.tab_fundamentals import render as _r
+            _r(stock_data, freight_data, macro_data)
+        except Exception as e:
+            st.error(f"Fundamentals error: {e}")
 
-with tab15:
-    try:
-        from ui.tab_network import render as render_network
-        render_network(port_results, route_results, freight_data, trade_data)
-    except Exception as exc:
-        st.error(f"Network tab error: {exc}")
+# ── 8. Intelligence ───────────────────────────────────────────────────────
+elif active_section == "intelligence":
+    t0, t1, t2, t3 = st.tabs([
+        "📰 News & Sentiment", "🔬 Deep Dive",
+        "🤖 AI Assistant", "🌿 Sustainability",
+    ])
+    with t0:
+        try:
+            from ui.tab_news import render as _r
+            _r(news_articles=news_articles, port_results=port_results,
+               route_results=route_results, insights=insights)
+        except Exception as e:
+            st.error(f"News error: {e}")
+    with t1:
+        try:
+            from ui.tab_deep_dive import render as _r
+            _r(route_results=route_results, freight_data=freight_data,
+               port_results=port_results, macro_data=macro_data,
+               stock_data=stock_data, forecasts=forecasts, insights=insights)
+        except Exception as e:
+            st.error(f"Deep Dive error: {e}")
+    with t2:
+        try:
+            from ui.tab_assistant import render as _r
+            _r(port_results, route_results, insights, freight_data, macro_data, stock_data)
+        except Exception as e:
+            st.error(f"AI Assistant error: {e}")
+    with t3:
+        try:
+            from ui.tab_sustainability import render as _r
+            _r()
+        except Exception as e:
+            st.error(f"Sustainability error: {e}")
 
-with tab16:
-    try:
-        from ui.tab_eta import render as render_eta
-        render_eta(port_results, route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"ETA Predictor tab error: {exc}")
 
-with tab17:
-    try:
-        from ui.tab_derivatives import render as render_derivatives
-        render_derivatives(route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Derivatives tab error: {exc}")
-
-with tab18:
-    try:
-        from ui.tab_geopolitical import render as render_geopolitical
-        render_geopolitical(route_results, port_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Geopolitical tab error: {exc}")
-
-with tab19:
-    try:
-        from ui.tab_booking import render as render_booking
-        render_booking(port_results, route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Booking tab error: {exc}")
-
-with tab20:
-    try:
-        from ui.tab_alpha import render as render_alpha
-        render_alpha(route_results, port_results, freight_data, macro_data, stock_data, insights)
-    except Exception as exc:
-        st.error(f"Alpha tab error: {exc}")
-
-with tab21:
-    try:
-        from ui.tab_bunker import render as render_bunker
-        render_bunker(freight_data, macro_data, route_results)
-    except Exception as exc:
-        st.error(f"Bunker Fuel tab error: {exc}")
-
-with tab22:
-    try:
-        from ui.tab_carriers import render as render_carriers
-        render_carriers(route_results, freight_data, stock_data)
-    except Exception as exc:
-        st.error(f"Carriers tab error: {exc}")
-
-with tab23:
-    try:
-        from ui.tab_equipment import render as render_equipment
-        render_equipment(route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Equipment tab error: {exc}")
-
-with tab24:
-    try:
-        from ui.tab_news import render as render_news
-        render_news(news_articles=news_articles, port_results=port_results, route_results=route_results, insights=insights)
-    except Exception as exc:
-        st.error(f"News tab error: {exc}")
-
-with tab25:
-    try:
-        from ui.tab_macro import render as render_macro
-        render_macro(macro_data, freight_data, stock_data)
-    except Exception as exc:
-        st.error(f"Macro tab error: {exc}")
-
-with tab26:
-    try:
-        from ui.tab_attribution import render as render_attribution
-        render_attribution(stock_data, freight_data, macro_data, route_results)
-    except Exception as exc:
-        st.error(f"Attribution tab error: {exc}")
-
-with tab27:
-    try:
-        from ui.tab_trade_war import render as render_trade_war
-        render_trade_war(route_results, port_results, freight_data, macro_data, trade_data)
-    except Exception as exc:
-        st.error(f"Trade War tab error: {exc}")
-
-with tab28:
-    try:
-        from ui.tab_data_health import render as render_data_health
-        render_data_health(
-            port_results, route_results, freight_data, macro_data,
-            stock_data, trade_data, ais_data,
-        )
-    except Exception as exc:
-        st.error(f"Data Health tab error: {exc}")
-
-with tab29:
-    try:
-        from ui.tab_congestion import render as render_congestion
-        render_congestion(port_results, ais_data, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Congestion tab error: {exc}")
-
-with tab30:
-    try:
-        from ui.tab_ecommerce import render as render_ecommerce
-        render_ecommerce(trade_data, freight_data, macro_data, route_results)
-    except Exception as exc:
-        st.error(f"E-Commerce tab error: {exc}")
-
-with tab31:
-    try:
-        from ui.tab_finance import render as render_finance
-        render_finance(freight_data, macro_data, route_results, stock_data)
-    except Exception as exc:
-        st.error(f"Trade Finance tab error: {exc}")
-
-with tab32:
-    try:
-        from ui.tab_intermodal import render as render_intermodal
-        render_intermodal(route_results, freight_data, macro_data, port_results)
-    except Exception as exc:
-        st.error(f"Intermodal tab error: {exc}")
-
-with tab33:
-    try:
-        from ui.tab_visibility import render as render_visibility
-        render_visibility(port_results, route_results, trade_data, freight_data)
-    except Exception as exc:
-        st.error(f"Visibility tab error: {exc}")
-
-with tab34:
-    try:
-        from ui.tab_weather import render as render_weather
-        render_weather(port_results, route_results, freight_data)
-    except Exception as exc:
-        st.error(f"Weather Risk tab error: {exc}")
-
-with tab35:
-    try:
-        from ui.tab_assistant import render as render_assistant
-        render_assistant(port_results, route_results, insights, freight_data, macro_data, stock_data)
-    except Exception as exc:
-        st.error(f"Assistant tab error: {exc}")
-
-with tab36:
-    try:
-        from ui.tab_chokepoints import render as render_chokepoints
-        render_chokepoints(route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Chokepoints tab error: {exc}")
-
-with tab37:
-    try:
-        from ui.tab_compliance import render as render_compliance
-        render_compliance(route_results, port_results, macro_data)
-    except Exception as exc:
-        st.error(f"Compliance tab error: {exc}")
-
-with tab38:
-    try:
-        from ui.tab_cycle import render as render_cycle
-        render_cycle(freight_data, macro_data, stock_data, route_results)
-    except Exception as exc:
-        st.error(f"Market Cycle tab error: {exc}")
-
-with tab39:
-    try:
-        from ui.tab_emerging_routes import render as render_emerging_routes
-        render_emerging_routes(route_results, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Emerging Routes tab error: {exc}")
-
-with tab40:
-    try:
-        from ui.tab_fundamentals import render as render_fundamentals
-        render_fundamentals(stock_data, freight_data, macro_data)
-    except Exception as exc:
-        st.error(f"Fundamentals tab error: {exc}")
-
-with tab41:
-    try:
-        from ui.tab_port_monitor import render as render_port_monitor
-        render_port_monitor(port_results, ais_data, freight_data)
-    except Exception as exc:
-        st.error(f"Port Monitor tab error: {exc}")
-
-with tab42:
-    try:
-        from ui.tab_scorecard import render as render_scorecard
-        render_scorecard(port_results, route_results, insights, freight_data, macro_data, stock_data)
-    except Exception as exc:
-        st.error(f"Scorecard tab error: {exc}")
-
-st.divider()
-st.caption("Ship Tracker • Data: UN Comtrade, FRED, World Bank, yfinance, Freightos FBX • Built with Streamlit")
+# ── Footer ────────────────────────────────────────────────────────────────
+st.markdown("""
+<div style="margin-top:40px;padding:20px 0 8px 0;
+            border-top:1px solid rgba(255,255,255,0.06);
+            display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div style="font-size:0.68rem;color:#334155">
+        <span style="font-weight:700;color:#475569">🚢 Ship Tracker</span>
+        &nbsp;·&nbsp; Data: UN Comtrade · FRED · World Bank · yfinance · Freightos FBX
+    </div>
+    <div style="font-size:0.66rem;color:#334155">
+        Built with Streamlit &nbsp;·&nbsp; Free public APIs only &nbsp;·&nbsp; Not financial advice
+    </div>
+</div>
+""", unsafe_allow_html=True)

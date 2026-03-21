@@ -1,13 +1,16 @@
-"""tab_compliance.py — Sanctions Compliance Monitor tab.
+"""tab_compliance.py — Maritime Compliance Command Center.
 
-Seven sections:
-  1. Sanctions World Map        — Plotly choropleth (red/orange/yellow/green by risk)
-  2. Active Sanctions Dashboard — Card grid per SanctionsRegime, pulsing CRITICAL badges
-  3. Dark Fleet Tracker         — Pie chart, shadow premium, detection stats
-  4. Compliance Cost Calculator — Per-route due diligence cost and requirements
-  5. Regulatory Timeline        — Upcoming 2026-2028 compliance deadlines
-  6. IMO CII Rating Reference   — Color-coded A-E rating bands with thresholds
-  7. Route Compliance Scoring   — All 17 routes with risk score, exposure, diligence level
+Ten sections:
+  1. Compliance Status Hero Dashboard  — Overall score gauge, KPI tiles, violation counts, deadlines
+  2. IMO Regulation Tracker            — IMO 2020/2023/2025 progress bars, status badges per regulation
+  3. CII Rating Cards                  — Carbon Intensity Indicator per vessel type with trend sparklines
+  4. EU ETS Dashboard                  — Carbon allowance cost tracker, exposure cards, compliance position
+  5. Sanctions Screening Monitor       — Jurisdiction coverage, flagged entities, risk heatmap
+  6. Port State Control Risk Cards     — Detention risk per port, historical detention rates
+  7. Compliance Deadline Calendar      — Visual calendar of upcoming regulatory deadlines
+  8. Flag State Compliance Ranking     — Compliance scores by flag state registry
+  9. Documentation Status Tracker      — Certificate expiry alerts, renewal countdown
+ 10. Regulatory Change Feed            — Upcoming regulations with impact assessment
 
 Data currency note:
   IMO Carbon Intensity Indicator (CII) reduction factors and rating thresholds are reviewed
@@ -17,8 +20,8 @@ Data currency note:
 """
 from __future__ import annotations
 
-import csv
-import io
+import datetime
+import math
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -36,113 +39,966 @@ from processing.sanctions_tracker import (
 # Colour palette — matches app-wide dark theme
 # ---------------------------------------------------------------------------
 
-C_BG     = "#0a0f1a"
-C_CARD   = "#1a2235"
-C_BORDER = "rgba(255,255,255,0.08)"
-C_TEXT   = "#f1f5f9"
-C_TEXT2  = "#94a3b8"
-C_TEXT3  = "#64748b"
-C_HIGH   = "#10b981"   # green — safe/low
-C_ACCENT = "#3b82f6"   # blue  — accent
-C_WARN   = "#f59e0b"   # amber — moderate/restricted
-C_DANGER = "#ef4444"   # red   — critical/prohibited
-C_ORANGE = "#f97316"   # orange — high/restricted
+C_BG      = "#0a0f1a"
+C_CARD    = "#1a2235"
+C_CARD2   = "#141d30"
+C_BORDER  = "rgba(255,255,255,0.08)"
+C_TEXT    = "#f1f5f9"
+C_TEXT2   = "#94a3b8"
+C_TEXT3   = "#64748b"
+C_HIGH    = "#10b981"   # green  — safe / compliant
+C_ACCENT  = "#3b82f6"   # blue   — accent / info
+C_WARN    = "#f59e0b"   # amber  — moderate / restricted
+C_DANGER  = "#ef4444"   # red    — critical / prohibited
+C_ORANGE  = "#f97316"   # orange — high / restricted
+C_PURPLE  = "#7c3aed"   # purple — OFAC / authority
+C_TEAL    = "#0d9488"   # teal   — EU ETS
 
-# Sanctions impact -> colour
-_IMPACT_COLOR: dict[str, str] = {
-    "PROHIBITED": C_DANGER,
-    "RESTRICTED": C_ORANGE,
-    "MONITORED":  C_WARN,
-}
-
-# Risk level -> colour
-_RISK_COLOR: dict[str, str] = {
-    "CRITICAL": C_DANGER,
-    "HIGH":     C_ORANGE,
-    "MODERATE": C_WARN,
-    "LOW":      C_HIGH,
-}
-
-# Authority -> colour accent
-_AUTH_COLOR: dict[str, str] = {
-    "OFAC": "#7c3aed",   # purple
-    "EU":   "#1d4ed8",   # deep blue
-    "UN":   "#0369a1",   # teal-blue
-    "UK":   "#0f766e",   # teal
-}
-
-# Route human-readable names
-_ROUTE_NAMES: dict[str, str] = {
-    "transpacific_eb":       "Trans-Pacific Eastbound",
-    "transpacific_wb":       "Trans-Pacific Westbound",
-    "asia_europe":           "Asia-Europe",
-    "transatlantic":         "Transatlantic",
-    "sea_transpacific_eb":   "Southeast Asia Eastbound",
-    "ningbo_europe":         "Asia-Europe via Suez (Ningbo)",
-    "middle_east_to_europe": "Middle East Hub to Europe",
-    "middle_east_to_asia":   "Middle East Hub to Asia",
-    "south_asia_to_europe":  "South Asia to Europe",
-    "intra_asia_china_sea":  "Intra-Asia: China to SE Asia",
-    "intra_asia_china_japan":"Intra-Asia: China to Japan/Korea",
-    "china_south_america":   "China to South America",
-    "europe_south_america":  "Europe to South America",
-    "med_hub_to_asia":       "Mediterranean Hub to Asia",
-    "north_africa_to_europe":"North Africa/Med to Europe",
-    "us_east_south_america": "US East Coast to South America",
-    "longbeach_to_asia":     "US West Coast (Long Beach) to Asia",
+# IMO CII rating colours
+_CII_COLORS: dict[str, str] = {
+    "A": "#10b981",
+    "B": "#22d3ee",
+    "C": "#f59e0b",
+    "D": "#f97316",
+    "E": "#ef4444",
 }
 
 # ---------------------------------------------------------------------------
-# Choropleth data — sanctions status by ISO-3 country code
+# Static compliance data — IMO regulations
 # ---------------------------------------------------------------------------
 
-# (iso3, country_name, status, note)
+_IMO_REGULATIONS = [
+    {
+        "id": "imo_2020_sulphur",
+        "name": "IMO 2020 — Global Sulphur Cap",
+        "authority": "IMO / MARPOL Annex VI",
+        "effective": datetime.date(2020, 1, 1),
+        "requirement": "≤0.50% sulphur in fuel oil (ECA: ≤0.10%)",
+        "status": "ACTIVE",
+        "fleet_compliance_pct": 97.4,
+        "description": "Global cap on sulphur content of fuel oil used by ships. Scrubbers (EGCS) provide an equivalent compliance pathway.",
+        "penalty_usd": 250_000,
+        "category": "Emissions",
+        "badge_color": C_HIGH,
+    },
+    {
+        "id": "imo_2023_cii",
+        "name": "IMO 2023 — CII & EEXI Mandatory",
+        "authority": "IMO / MARPOL Annex VI",
+        "effective": datetime.date(2023, 1, 1),
+        "requirement": "Annual CII rating (A–E) + EEXI attainment certificate",
+        "status": "ACTIVE",
+        "fleet_compliance_pct": 84.1,
+        "description": "Carbon Intensity Indicator (CII) mandatory rating from 2023. Ships rated D/E for 3 consecutive years must submit a SEEMP corrective plan.",
+        "penalty_usd": 0,
+        "category": "Carbon",
+        "badge_color": C_WARN,
+    },
+    {
+        "id": "imo_2023_mepc80",
+        "name": "MEPC 80 — GHG Strategy Revision",
+        "authority": "IMO MEPC 80",
+        "effective": datetime.date(2023, 7, 7),
+        "requirement": "Net-zero GHG by 2050; 20% reduction by 2030 vs 2008",
+        "status": "ACTIVE",
+        "fleet_compliance_pct": 61.3,
+        "description": "Revised IMO GHG Strategy adopted at MEPC 80. Binding milestone targets replacing the initial 2018 strategy. Mid-term measures under development.",
+        "penalty_usd": 0,
+        "category": "GHG Strategy",
+        "badge_color": C_WARN,
+    },
+    {
+        "id": "imo_2024_biofouling",
+        "name": "IMO 2024 — Biofouling Guidelines",
+        "authority": "IMO MEPC 81",
+        "effective": datetime.date(2024, 6, 1),
+        "requirement": "Biofouling management plans mandatory for MARPOL ships",
+        "status": "ACTIVE",
+        "fleet_compliance_pct": 71.8,
+        "description": "Revised biofouling management guidelines adopted at MEPC 81. Mandatory for ships >400 GT trading internationally.",
+        "penalty_usd": 100_000,
+        "category": "Environmental",
+        "badge_color": C_WARN,
+    },
+    {
+        "id": "imo_2025_fuel_eu",
+        "name": "FuelEU Maritime — Jan 2025",
+        "authority": "EU Regulation 2023/1805",
+        "effective": datetime.date(2025, 1, 1),
+        "requirement": "GHG intensity of energy used ≤2% reduction vs 2020 baseline",
+        "status": "ACTIVE",
+        "fleet_compliance_pct": 78.5,
+        "description": "FuelEU Maritime Regulation applies to ships ≥5,000 GT calling EU/EEA ports. GHG intensity target tightens progressively through 2050.",
+        "penalty_usd": 2_400_000,
+        "category": "Fuel",
+        "badge_color": C_ACCENT,
+    },
+    {
+        "id": "imo_2026_ballast",
+        "name": "BWM Convention — D-2 Standard",
+        "authority": "IMO BWM Convention",
+        "effective": datetime.date(2024, 9, 8),
+        "requirement": "All vessels must meet D-2 biological treatment standard",
+        "status": "TRANSITION",
+        "fleet_compliance_pct": 88.2,
+        "description": "Ballast Water Management Convention D-2 standard now mandatory for all ships. D-1 (exchange) no longer accepted by most PSC authorities.",
+        "penalty_usd": 150_000,
+        "category": "Environmental",
+        "badge_color": C_HIGH,
+    },
+    {
+        "id": "imo_2027_cii_tighten",
+        "name": "CII 2027 — Tightened Reduction Factor",
+        "authority": "IMO / MARPOL Annex VI",
+        "effective": datetime.date(2027, 1, 1),
+        "requirement": "CII reduction factor increases — estimated +5% stringency",
+        "status": "UPCOMING",
+        "fleet_compliance_pct": 0.0,
+        "description": "Annual CII reduction factors are reviewed at MEPC. 2027 factors expected to increase required efficiency improvements, pushing more vessels into D/E rating.",
+        "penalty_usd": 0,
+        "category": "Carbon",
+        "badge_color": C_ORANGE,
+    },
+    {
+        "id": "imo_2030_ghg",
+        "name": "IMO 2030 — GHG Milestone",
+        "authority": "IMO GHG Strategy",
+        "effective": datetime.date(2030, 1, 1),
+        "requirement": "≥20% GHG reduction vs 2008 baseline (striving for 30%)",
+        "status": "UPCOMING",
+        "fleet_compliance_pct": 0.0,
+        "description": "First binding IMO GHG milestone under revised 2023 strategy. Alternative fuels adoption (ammonia, methanol, LNG) critical for compliance pathway.",
+        "penalty_usd": 0,
+        "category": "GHG Strategy",
+        "badge_color": C_DANGER,
+    },
+]
+
+# ---------------------------------------------------------------------------
+# CII vessel type reference data
+# ---------------------------------------------------------------------------
+
+_CII_VESSEL_TYPES = [
+    {
+        "type": "Containership",
+        "dwt_range": "8,000–240,000 DWT",
+        "current_rating": "B",
+        "trend": [72, 69, 65, 61, 58, 54],
+        "attained_cii": 8.2,
+        "required_cii": 9.1,
+        "ref_year": 2023,
+        "note": "Slow steaming + fuel optimisation driving improvement",
+        "yoy_change": -4.8,
+        "icon": "🚢",
+    },
+    {
+        "type": "Bulk Carrier",
+        "dwt_range": "10,000–400,000 DWT",
+        "current_rating": "C",
+        "trend": [81, 79, 76, 74, 73, 71],
+        "attained_cii": 6.4,
+        "required_cii": 5.9,
+        "ref_year": 2023,
+        "note": "Age profile elevating emissions; newbuild programme needed",
+        "yoy_change": -2.1,
+        "icon": "⚓",
+    },
+    {
+        "type": "Tanker (VLCC)",
+        "dwt_range": "200,000–320,000 DWT",
+        "current_rating": "A",
+        "trend": [55, 52, 49, 46, 43, 41],
+        "attained_cii": 4.1,
+        "required_cii": 5.2,
+        "ref_year": 2023,
+        "note": "Eco-efficient fleet renewal driving strong performance",
+        "yoy_change": -6.2,
+        "icon": "🛢",
+    },
+    {
+        "type": "LNG Carrier",
+        "dwt_range": "70,000–267,000 m³",
+        "current_rating": "D",
+        "trend": [62, 65, 68, 71, 69, 74],
+        "attained_cii": 12.3,
+        "required_cii": 9.8,
+        "ref_year": 2023,
+        "note": "Methane slip inflating carbon intensity scores",
+        "yoy_change": 3.1,
+        "icon": "🔵",
+    },
+    {
+        "type": "General Cargo",
+        "dwt_range": "3,000–40,000 DWT",
+        "current_rating": "E",
+        "trend": [95, 93, 91, 90, 88, 87],
+        "attained_cii": 22.7,
+        "required_cii": 15.1,
+        "ref_year": 2023,
+        "note": "Older fleet — SEEMP corrective action plan mandatory",
+        "yoy_change": -1.4,
+        "icon": "📦",
+    },
+    {
+        "type": "Ro-Ro / Car Carrier",
+        "dwt_range": "5,000–80,000 DWT",
+        "current_rating": "C",
+        "trend": [68, 66, 65, 64, 63, 62],
+        "attained_cii": 11.4,
+        "required_cii": 10.8,
+        "ref_year": 2023,
+        "note": "Wind-assisted propulsion retrofits showing moderate gains",
+        "yoy_change": -1.8,
+        "icon": "🚗",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# EU ETS data
+# ---------------------------------------------------------------------------
+
+_EU_ETS = {
+    "eua_price_eur": 68.40,
+    "eua_price_change_pct": -3.2,
+    "phase_in_2024_pct": 40,
+    "phase_in_2025_pct": 70,
+    "phase_in_2026_pct": 100,
+    "current_phase_in_pct": 70,
+    "fleet_allowances_allocated": 0,
+    "estimated_annual_cost_usd_m": 14.7,
+    "verified_emissions_mt": 842_000,
+    "allowances_purchased": 589_400,
+    "shortfall_allowances": 0,
+    "routes_in_scope": 11,
+    "routes_total": 17,
+}
+
+_EU_ETS_ROUTES = [
+    {"route": "Asia-Europe", "scope": "50% voyages EU", "annual_mt_co2": 182_000, "cost_usd_m": 3.2, "status": "IN_SCOPE"},
+    {"route": "Transatlantic", "scope": "100% voyages EU-EU", "annual_mt_co2": 98_000, "cost_usd_m": 1.7, "status": "IN_SCOPE"},
+    {"route": "Mediterranean Hub to Asia", "scope": "50% voyages EU", "annual_mt_co2": 74_000, "cost_usd_m": 1.3, "status": "IN_SCOPE"},
+    {"route": "North Africa/Med to Europe", "scope": "50% voyages EU", "annual_mt_co2": 61_000, "cost_usd_m": 1.1, "status": "IN_SCOPE"},
+    {"route": "Europe to South America", "scope": "50% voyages EU", "annual_mt_co2": 55_000, "cost_usd_m": 0.96, "status": "IN_SCOPE"},
+    {"route": "Trans-Pacific Eastbound", "scope": "Out of scope", "annual_mt_co2": 0, "cost_usd_m": 0.0, "status": "OUT_SCOPE"},
+    {"route": "Middle East Hub to Asia", "scope": "Out of scope", "annual_mt_co2": 0, "cost_usd_m": 0.0, "status": "OUT_SCOPE"},
+]
+
+# ---------------------------------------------------------------------------
+# Port State Control detention risk data
+# ---------------------------------------------------------------------------
+
+_PSC_PORTS = [
+    {
+        "port": "Shanghai (CNSHA)",
+        "country": "China",
+        "psc_regime": "Tokyo MOU",
+        "detention_rate_pct": 2.1,
+        "inspections_2024": 4_820,
+        "deficiencies_avg": 1.8,
+        "risk_level": "LOW",
+        "top_deficiency": "Fire-fighting equipment",
+        "flag_risk_factor": 1.0,
+        "note": "Stringent but well-documented inspection criteria",
+    },
+    {
+        "port": "Rotterdam (NLRTM)",
+        "country": "Netherlands",
+        "psc_regime": "Paris MOU",
+        "detention_rate_pct": 3.7,
+        "inspections_2024": 2_941,
+        "deficiencies_avg": 2.3,
+        "risk_level": "MODERATE",
+        "top_deficiency": "ISM / SMS documentation",
+        "flag_risk_factor": 1.1,
+        "note": "EU port — increased environmental scrutiny post-2025",
+    },
+    {
+        "port": "Singapore (SGSIN)",
+        "country": "Singapore",
+        "psc_regime": "Tokyo MOU",
+        "detention_rate_pct": 1.4,
+        "inspections_2024": 3_680,
+        "deficiencies_avg": 1.2,
+        "risk_level": "LOW",
+        "top_deficiency": "Life-saving appliances",
+        "flag_risk_factor": 1.0,
+        "note": "World's most efficient PSC regime. Low detention, high throughput",
+    },
+    {
+        "port": "Houston (USHOU)",
+        "country": "United States",
+        "psc_regime": "US Coast Guard",
+        "detention_rate_pct": 5.9,
+        "inspections_2024": 1_870,
+        "deficiencies_avg": 3.1,
+        "risk_level": "HIGH",
+        "top_deficiency": "MARPOL / pollution prevention",
+        "flag_risk_factor": 1.4,
+        "note": "USCG maintains zero-tolerance on MARPOL violations. Criminal prosecution risk",
+    },
+    {
+        "port": "Piraeus (GRPIR)",
+        "country": "Greece",
+        "psc_regime": "Paris MOU",
+        "detention_rate_pct": 4.2,
+        "inspections_2024": 1_340,
+        "deficiencies_avg": 2.7,
+        "risk_level": "MODERATE",
+        "top_deficiency": "Manning / crew certification",
+        "flag_risk_factor": 1.1,
+        "note": "Paris MOU concentrated inspection campaigns targeting bulk carriers",
+    },
+    {
+        "port": "Santos (BRSSZ)",
+        "country": "Brazil",
+        "psc_regime": "Viña del Mar MOU",
+        "detention_rate_pct": 7.3,
+        "inspections_2024": 892,
+        "deficiencies_avg": 3.8,
+        "risk_level": "HIGH",
+        "top_deficiency": "Structural / watertight integrity",
+        "flag_risk_factor": 1.3,
+        "note": "Elevated detention rate — pre-call documentation review strongly advised",
+    },
+    {
+        "port": "Durban (ZADUR)",
+        "country": "South Africa",
+        "psc_regime": "Indian Ocean MOU",
+        "detention_rate_pct": 9.1,
+        "inspections_2024": 614,
+        "deficiencies_avg": 4.6,
+        "risk_level": "CRITICAL",
+        "top_deficiency": "Fire detection / suppression systems",
+        "flag_risk_factor": 1.6,
+        "note": "Highest regional detention rate. Allow extra port time for older vessels",
+    },
+    {
+        "port": "Dubai (AEDXB)",
+        "country": "UAE",
+        "psc_regime": "Riyadh MOU",
+        "detention_rate_pct": 3.1,
+        "inspections_2024": 1_280,
+        "deficiencies_avg": 2.0,
+        "risk_level": "MODERATE",
+        "top_deficiency": "Navigation / bridge equipment",
+        "flag_risk_factor": 1.0,
+        "note": "Busy hub — inspection queue management important",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Flag state compliance rankings
+# ---------------------------------------------------------------------------
+
+_FLAG_STATES = [
+    {"flag": "Marshall Islands", "iso": "MHL", "registry_type": "Open",   "fleet_gt": 240_000_000, "psc_detention_rate": 1.2, "white_list": True,  "imo_audit": "Passed 2023", "compliance_score": 96},
+    {"flag": "Liberia",          "iso": "LBR", "registry_type": "Open",   "fleet_gt": 230_000_000, "psc_detention_rate": 1.5, "white_list": True,  "imo_audit": "Passed 2022", "compliance_score": 94},
+    {"flag": "Panama",           "iso": "PAN", "registry_type": "Open",   "fleet_gt": 380_000_000, "psc_detention_rate": 2.1, "white_list": True,  "imo_audit": "Passed 2023", "compliance_score": 91},
+    {"flag": "Bahamas",          "iso": "BHS", "registry_type": "Open",   "fleet_gt": 80_000_000,  "psc_detention_rate": 1.8, "white_list": True,  "imo_audit": "Passed 2022", "compliance_score": 92},
+    {"flag": "Singapore",        "iso": "SGP", "registry_type": "National","fleet_gt": 95_000_000, "psc_detention_rate": 0.8, "white_list": True,  "imo_audit": "Passed 2024", "compliance_score": 98},
+    {"flag": "Norway",           "iso": "NOR", "registry_type": "NIS",    "fleet_gt": 40_000_000,  "psc_detention_rate": 0.6, "white_list": True,  "imo_audit": "Passed 2023", "compliance_score": 99},
+    {"flag": "Greece",           "iso": "GRC", "registry_type": "National","fleet_gt": 52_000_000, "psc_detention_rate": 1.1, "white_list": True,  "imo_audit": "Passed 2022", "compliance_score": 95},
+    {"flag": "Malta",            "iso": "MLT", "registry_type": "Open",   "fleet_gt": 90_000_000,  "psc_detention_rate": 2.4, "white_list": True,  "imo_audit": "Passed 2023", "compliance_score": 89},
+    {"flag": "Cyprus",           "iso": "CYP", "registry_type": "Open",   "fleet_gt": 22_000_000,  "psc_detention_rate": 3.1, "white_list": False, "imo_audit": "Due 2025",    "compliance_score": 82},
+    {"flag": "China",            "iso": "CHN", "registry_type": "National","fleet_gt": 70_000_000, "psc_detention_rate": 2.8, "white_list": True,  "imo_audit": "Passed 2022", "compliance_score": 86},
+    {"flag": "Palau",            "iso": "PLW", "registry_type": "Open",   "fleet_gt": 3_200_000,   "psc_detention_rate": 8.4, "white_list": False, "imo_audit": "Overdue",     "compliance_score": 58},
+    {"flag": "Togo",             "iso": "TGO", "registry_type": "Open",   "fleet_gt": 2_800_000,   "psc_detention_rate": 9.2, "white_list": False, "imo_audit": "Overdue",     "compliance_score": 52},
+    {"flag": "Cameroon",         "iso": "CMR", "registry_type": "Open",   "fleet_gt": 1_400_000,   "psc_detention_rate": 11.8,"white_list": False, "imo_audit": "Overdue",     "compliance_score": 41},
+]
+
+# ---------------------------------------------------------------------------
+# Documentation tracker
+# ---------------------------------------------------------------------------
+
+_TODAY = datetime.date(2026, 3, 20)
+
+_DOCUMENTS = [
+    {"doc": "Safety Management Certificate (SMC)",    "vessel": "MV Pacific Star",   "issued": datetime.date(2021, 8, 15), "expires": datetime.date(2026, 8, 15),  "category": "Safety",        "authority": "Flag State",   "renewal_lead_days": 90},
+    {"doc": "Document of Compliance (DOC)",           "vessel": "Fleet-wide",        "issued": datetime.date(2023, 11, 1), "expires": datetime.date(2026, 11, 1),  "category": "ISM",           "authority": "Class Society", "renewal_lead_days": 60},
+    {"doc": "MARPOL Annex VI — IAPP Certificate",     "vessel": "MV Atlantic Rose",  "issued": datetime.date(2021, 3, 10), "expires": datetime.date(2026, 3, 10),  "category": "Emissions",     "authority": "Flag State",   "renewal_lead_days": 90},
+    {"doc": "International Load Line Certificate",    "vessel": "MV Northern Dawn",  "issued": datetime.date(2024, 9, 22), "expires": datetime.date(2029, 9, 22),  "category": "Structural",    "authority": "Class Society", "renewal_lead_days": 60},
+    {"doc": "Ballast Water Management Certificate",   "vessel": "MV Pacific Star",   "issued": datetime.date(2023, 6, 1),  "expires": datetime.date(2026, 5, 31),  "category": "Environmental", "authority": "Flag State",   "renewal_lead_days": 120},
+    {"doc": "ISPS Ship Security Certificate (ISSC)",  "vessel": "MV Atlantic Rose",  "issued": datetime.date(2021, 7, 4),  "expires": datetime.date(2026, 7, 4),   "category": "Security",      "authority": "Flag State",   "renewal_lead_days": 90},
+    {"doc": "Oil Pollution Prevention Certificate",   "vessel": "MV Southern Cross", "issued": datetime.date(2020, 12, 1), "expires": datetime.date(2026, 4, 15),  "category": "Environmental", "authority": "Flag State",   "renewal_lead_days": 90},
+    {"doc": "Seafarers' Employment Agreement (SEA)",  "vessel": "Fleet-wide",        "issued": datetime.date(2025, 6, 1),  "expires": datetime.date(2026, 6, 1),   "category": "Manning",       "authority": "Flag State",   "renewal_lead_days": 60},
+    {"doc": "CII Annual Rating Declaration",          "vessel": "Fleet-wide",        "issued": datetime.date(2025, 4, 30), "expires": datetime.date(2026, 4, 30),  "category": "Carbon",        "authority": "IMO / Flag",   "renewal_lead_days": 30},
+    {"doc": "EU ETS Monitoring Plan Approval",        "vessel": "Fleet-wide",        "issued": datetime.date(2023, 12, 15),"expires": datetime.date(2026, 12, 15), "category": "Carbon",        "authority": "MRV Verifier", "renewal_lead_days": 60},
+    {"doc": "P&I Club Insurance Certificate",         "vessel": "Fleet-wide",        "issued": datetime.date(2025, 2, 20), "expires": datetime.date(2026, 2, 20),  "category": "Insurance",     "authority": "P&I Club",     "renewal_lead_days": 90},
+    {"doc": "Class Renewal Survey",                   "vessel": "MV Northern Dawn",  "issued": datetime.date(2021, 5, 5),  "expires": datetime.date(2026, 5, 5),   "category": "Structural",    "authority": "Class Society", "renewal_lead_days": 180},
+]
+
+# ---------------------------------------------------------------------------
+# Regulatory change feed
+# ---------------------------------------------------------------------------
+
+_REG_CHANGES = [
+    {
+        "regulation": "FuelEU Maritime — 2025 Phase In",
+        "authority": "European Commission",
+        "effective": datetime.date(2025, 1, 1),
+        "status": "IN_FORCE",
+        "impact": "HIGH",
+        "vessels_affected": "All >5,000 GT calling EU ports",
+        "description": "70% phase-in of EU ETS obligations for shipping. Verified emissions reporting mandatory. Non-compliance penalty: €100/tonne excess CO₂.",
+        "action_required": "Submit verified MRV report; purchase EUAs for covered emissions",
+        "cost_impact_usd_m": 14.7,
+    },
+    {
+        "regulation": "IMO Biofouling Management — Mandatory",
+        "authority": "IMO MEPC 81",
+        "effective": datetime.date(2024, 6, 1),
+        "status": "IN_FORCE",
+        "impact": "MODERATE",
+        "vessels_affected": "All MARPOL ships >400 GT",
+        "description": "Revised biofouling management guidelines adopted. Anti-fouling system performance reporting now mandatory under Paris/Tokyo MOU inspections.",
+        "action_required": "Update biofouling management plans; log hull cleaning dates",
+        "cost_impact_usd_m": 0.8,
+    },
+    {
+        "regulation": "CII Annual Reduction Factor 2026",
+        "authority": "IMO / MARPOL Annex VI",
+        "effective": datetime.date(2026, 1, 1),
+        "status": "IN_FORCE",
+        "impact": "HIGH",
+        "vessels_affected": "All vessels >5,000 GT",
+        "description": "2026 CII reduction factors applied. Required CII values tighten by ~2% versus 2025 baseline. Vessels currently rated C face increased D/E risk.",
+        "action_required": "Review vessel SEEMP; consider speed/trim optimisation or fuel switching",
+        "cost_impact_usd_m": 3.2,
+    },
+    {
+        "regulation": "EU ETS — 100% Phase In",
+        "authority": "European Commission",
+        "effective": datetime.date(2026, 1, 1),
+        "status": "IN_FORCE",
+        "impact": "CRITICAL",
+        "vessels_affected": "All >5,000 GT with EU port calls",
+        "description": "Full 100% phase-in of EU ETS for shipping from 2026. Both intra-EU voyages (100%) and extra-EU voyages (50%) fully covered. EUA costs will double vs 2024.",
+        "action_required": "Secure EUA forward purchasing strategy; update voyage pricing to include ETS cost",
+        "cost_impact_usd_m": 21.0,
+    },
+    {
+        "regulation": "BWTS D-2 — All Ships Deadline",
+        "authority": "IMO BWM Convention",
+        "effective": datetime.date(2024, 9, 8),
+        "status": "IN_FORCE",
+        "impact": "MODERATE",
+        "vessels_affected": "All vessels with ballast tanks",
+        "description": "Final deadline for D-2 compliance. D-1 (exchange) no longer accepted. BWTS installation required or vessel barred from international trade.",
+        "action_required": "Confirm BWTS type-approval certificate onboard; update BWM plan",
+        "cost_impact_usd_m": 1.2,
+    },
+    {
+        "regulation": "IMO Mid-Term GHG Measures",
+        "authority": "IMO MEPC 83",
+        "effective": datetime.date(2027, 1, 1),
+        "status": "UPCOMING",
+        "impact": "CRITICAL",
+        "vessels_affected": "All international shipping",
+        "description": "IMO mid-term GHG measures under final development at MEPC 83/84. Expected to include a global carbon levy (~$18-150/tonne CO₂) and fuel standard.",
+        "action_required": "Monitor MEPC 83 outcome (Oct 2025); scenario-plan for carbon levy $18-150/t",
+        "cost_impact_usd_m": 45.0,
+    },
+    {
+        "regulation": "CII 2027 Tightened Factor",
+        "authority": "IMO / MARPOL Annex VI",
+        "effective": datetime.date(2027, 1, 1),
+        "status": "UPCOMING",
+        "impact": "HIGH",
+        "vessels_affected": "All vessels >5,000 GT",
+        "description": "CII reduction factors for 2027 expected to increase stringency by ~5%. Vessels currently borderline C/D will likely slip to D or E.",
+        "action_required": "Initiate fleet efficiency investment planning; evaluate alternative fuel options",
+        "cost_impact_usd_m": 6.8,
+    },
+    {
+        "regulation": "Poseidon Principles — Alignment Review",
+        "authority": "Poseidon Principles (24 banks)",
+        "effective": datetime.date(2026, 6, 1),
+        "status": "UPCOMING",
+        "impact": "HIGH",
+        "vessels_affected": "All financed vessels",
+        "description": "Annual Poseidon Principles portfolio alignment disclosure. Vessels with poor CII alignment risk finance cost premium or covenant breach.",
+        "action_required": "Submit verified CII data to lenders; ensure IMO DCS data is complete",
+        "cost_impact_usd_m": 2.1,
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Compliance deadline calendar events
+# ---------------------------------------------------------------------------
+
+_DEADLINE_EVENTS = [
+    {"date": datetime.date(2026, 3, 31), "title": "Q1 EU ETS Monitoring Report Due", "category": "EU ETS",    "urgency": "CRITICAL", "description": "Q1 2026 verified emissions report submission to EU administering authority"},
+    {"date": datetime.date(2026, 4, 15), "title": "Oil Pollution Cert Renewal",       "category": "Document", "urgency": "CRITICAL", "description": "MV Southern Cross MARPOL oil pollution certificate expires — renewal required"},
+    {"date": datetime.date(2026, 4, 30), "title": "CII Annual Declaration",           "category": "CII",      "urgency": "HIGH",     "description": "Fleet-wide CII annual rating declaration due to flag state"},
+    {"date": datetime.date(2026, 5, 5),  "title": "Class Renewal Survey — N. Dawn",  "category": "Class",    "urgency": "HIGH",     "description": "MV Northern Dawn 5-year class renewal survey window opens"},
+    {"date": datetime.date(2026, 5, 31), "title": "Ballast Water Cert Expiry",        "category": "Document", "urgency": "HIGH",     "description": "MV Pacific Star ballast water management certificate expires"},
+    {"date": datetime.date(2026, 6, 1),  "title": "SEA Fleet Renewal",               "category": "Manning",  "urgency": "MODERATE", "description": "Seafarers Employment Agreements fleet-wide renewal due"},
+    {"date": datetime.date(2026, 6, 30), "title": "EU ETS Annual Reconciliation",     "category": "EU ETS",   "urgency": "CRITICAL", "description": "Annual surrender of EUAs equal to verified 2025 emissions — hard deadline"},
+    {"date": datetime.date(2026, 7, 4),  "title": "ISSC Renewal — Atlantic Rose",    "category": "Document", "urgency": "HIGH",     "description": "MV Atlantic Rose ISPS Ship Security Certificate expires"},
+    {"date": datetime.date(2026, 8, 15), "title": "SMC Renewal — Pacific Star",      "category": "Document", "urgency": "HIGH",     "description": "MV Pacific Star Safety Management Certificate expires"},
+    {"date": datetime.date(2026, 9, 30), "title": "Q2/Q3 ETS Interim Review",        "category": "EU ETS",   "urgency": "MODERATE", "description": "Internal review of ETS position ahead of Q4 reconciliation"},
+    {"date": datetime.date(2026, 11, 1), "title": "DOC Fleet Renewal",               "category": "ISM",      "urgency": "HIGH",     "description": "Document of Compliance fleet-wide renewal due to class society"},
+    {"date": datetime.date(2026, 12, 15),"title": "EU ETS Monitoring Plan Review",   "category": "EU ETS",   "urgency": "MODERATE", "description": "Fleet EU ETS monitoring plan annual review and reapproval"},
+]
+
+# ---------------------------------------------------------------------------
+# Helper renderers
+# ---------------------------------------------------------------------------
+
+def _section_title(text: str, subtitle: str = "") -> None:
+    try:
+        st.markdown(
+            f"<div style='margin:28px 0 6px'>"
+            f"<span style='font-size:1.1rem; font-weight:700; color:{C_TEXT}; letter-spacing:0.02em'>{text}</span>"
+            + (
+                f"<div style='font-size:0.78rem; color:{C_TEXT3}; margin-top:4px; line-height:1.5'>{subtitle}</div>"
+                if subtitle
+                else ""
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        st.subheader(text)
+
+
+def _kpi_card(label: str, value: str, delta: str = "", color: str = C_TEXT, border_color: str = C_BORDER, icon: str = "") -> None:
+    try:
+        delta_html = ""
+        if delta:
+            d_color = C_HIGH if delta.startswith("+") or delta.startswith("▲") else C_DANGER if delta.startswith("-") or delta.startswith("▼") else C_TEXT2
+            delta_html = f"<div style='font-size:0.72rem; color:{d_color}; margin-top:4px'>{delta}</div>"
+        st.markdown(
+            f"<div style='background:{C_CARD}; border:1px solid {border_color}; border-radius:12px;"
+            f" padding:16px 18px; text-align:center; height:100%'>"
+            f"<div style='font-size:1.1rem; margin-bottom:4px'>{icon}</div>"
+            f"<div style='font-size:1.65rem; font-weight:800; color:{color}; line-height:1.1'>{value}</div>"
+            f"<div style='font-size:0.70rem; color:{C_TEXT2}; margin-top:5px; text-transform:uppercase; letter-spacing:0.05em'>{label}</div>"
+            f"{delta_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        st.metric(label=label, value=value)
+
+
+def _badge(text: str, color: str = C_ACCENT, bg_alpha: str = "22") -> str:
+    try:
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        bg = f"rgba({r},{g},{b},0.15)"
+        return (
+            f"<span style='background:{bg}; border:1px solid {color}; color:{color};"
+            f" border-radius:4px; padding:2px 8px; font-size:0.68rem; font-weight:700;"
+            f" letter-spacing:0.06em; white-space:nowrap'>{text}</span>"
+        )
+    except Exception:
+        return f"[{text}]"
+
+
+def _progress_bar(pct: float, color: str = C_HIGH, height: int = 8, label: str = "") -> str:
+    try:
+        pct = max(0.0, min(100.0, pct))
+        bar = (
+            f"<div style='background:rgba(255,255,255,0.08); border-radius:99px; height:{height}px; overflow:hidden; position:relative'>"
+            f"<div style='width:{pct:.1f}%; background:{color}; height:100%; border-radius:99px; transition:width 0.4s'></div>"
+            f"</div>"
+        )
+        if label:
+            bar = f"<div style='display:flex; justify-content:space-between; margin-bottom:4px'><span style='font-size:0.72rem; color:{C_TEXT2}'>{label}</span><span style='font-size:0.72rem; color:{color}; font-weight:700'>{pct:.1f}%</span></div>" + bar
+        return bar
+    except Exception:
+        return ""
+
+
+def _days_until(d: datetime.date) -> int:
+    return (d - _TODAY).days
+
+
+def _urgency_color(days: int) -> str:
+    if days < 0:
+        return C_DANGER
+    if days <= 30:
+        return C_DANGER
+    if days <= 90:
+        return C_ORANGE
+    if days <= 180:
+        return C_WARN
+    return C_HIGH
+
+
+# ---------------------------------------------------------------------------
+# Section 1 — Compliance Status Hero Dashboard
+# ---------------------------------------------------------------------------
+
+def _render_hero_dashboard() -> None:
+    try:
+        # --- compute overall compliance score ---
+        regs_active      = [r for r in _IMO_REGULATIONS if r["status"] == "ACTIVE"]
+        avg_fleet_pct    = sum(r["fleet_compliance_pct"] for r in regs_active) / max(len(regs_active), 1)
+        docs_expiring_90 = sum(1 for d in _DOCUMENTS if 0 <= _days_until(d["expires"]) <= 90)
+        docs_expired     = sum(1 for d in _DOCUMENTS if _days_until(d["expires"]) < 0)
+        critical_regimes = sum(1 for s in ACTIVE_SANCTIONS if s.risk_level == "CRITICAL")
+        violations_24    = sum(s.enforcement_cases_2024 for s in ACTIVE_SANCTIONS)
+        deadlines_30d    = sum(1 for e in _DEADLINE_EVENTS if 0 <= _days_until(e["date"]) <= 30)
+
+        # Composite score: weight fleet compliance 50%, penalise for expired docs & critical sanctions
+        score = avg_fleet_pct * 0.50
+        score -= docs_expired * 5
+        score -= docs_expiring_90 * 1.5
+        score -= critical_regimes * 2
+        score = max(0.0, min(100.0, score))
+
+        score_color = C_HIGH if score >= 85 else C_WARN if score >= 65 else C_DANGER
+        score_label = "COMPLIANT" if score >= 85 else "NEEDS ATTENTION" if score >= 65 else "AT RISK"
+
+        # --- gauge chart ---
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=score,
+            number={"suffix": "%", "font": {"size": 36, "color": score_color, "family": "monospace"}},
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": C_TEXT3,
+                         "tickfont": {"color": C_TEXT3, "size": 11}},
+                "bar": {"color": score_color, "thickness": 0.30},
+                "bgcolor": C_CARD,
+                "borderwidth": 0,
+                "steps": [
+                    {"range": [0,  50], "color": "rgba(239,68,68,0.15)"},
+                    {"range": [50, 75], "color": "rgba(245,158,11,0.12)"},
+                    {"range": [75,100], "color": "rgba(16,185,129,0.12)"},
+                ],
+                "threshold": {
+                    "line": {"color": C_TEXT2, "width": 2},
+                    "thickness": 0.75,
+                    "value": 85,
+                },
+            },
+            title={"text": f"<b>Overall Compliance Score</b><br><span style='font-size:14px;color:{score_color}'>{score_label}</span>",
+                   "font": {"color": C_TEXT, "size": 14}},
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=260,
+            margin=dict(l=20, r=20, t=40, b=10),
+        )
+
+        col_gauge, col_kpis = st.columns([1, 2], gap="large")
+        with col_gauge:
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        with col_kpis:
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+            k1, k2, k3 = st.columns(3)
+            with k1:
+                _kpi_card("Active Regulations", str(len(regs_active)), color=C_ACCENT, icon="📋",
+                          border_color=f"rgba(59,130,246,0.3)")
+            with k2:
+                _kpi_card("Critical Sanctions", str(critical_regimes), color=C_DANGER, icon="🚨",
+                          border_color=f"rgba(239,68,68,0.3)", delta="OFAC/EU/UN")
+            with k3:
+                _kpi_card("Enforcement Actions '24", f"{violations_24:,}", color=C_ORANGE, icon="⚖️",
+                          border_color=f"rgba(249,115,22,0.3)")
+
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            k4, k5, k6 = st.columns(3)
+            with k4:
+                _kpi_card("Docs Expiring ≤90d", str(docs_expiring_90),
+                          color=C_WARN if docs_expiring_90 > 0 else C_HIGH, icon="📄",
+                          border_color=f"rgba(245,158,11,0.3)" if docs_expiring_90 > 0 else C_BORDER)
+            with k5:
+                _kpi_card("Deadlines Next 30d", str(deadlines_30d),
+                          color=C_DANGER if deadlines_30d > 0 else C_HIGH, icon="🗓",
+                          border_color=f"rgba(239,68,68,0.3)" if deadlines_30d > 0 else C_BORDER)
+            with k6:
+                _kpi_card("Dark Fleet Vessels", f"~{DARK_FLEET_2025.estimated_vessels}", color=C_ORANGE, icon="🕶",
+                          border_color=f"rgba(249,115,22,0.3)", delta="Non-compliant tonnage")
+
+    except Exception as exc:
+        logger.error(f"Hero dashboard error: {exc}")
+        st.warning("Compliance hero dashboard temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 2 — IMO Regulation Tracker
+# ---------------------------------------------------------------------------
+
+def _render_imo_tracker() -> None:
+    try:
+        status_filter = st.radio(
+            "Show regulations:",
+            ["All", "Active", "Upcoming"],
+            horizontal=True,
+            key="imo_status_filter",
+        )
+
+        for reg in _IMO_REGULATIONS:
+            if status_filter == "Active"   and reg["status"] not in ("ACTIVE", "TRANSITION"):
+                continue
+            if status_filter == "Upcoming" and reg["status"] != "UPCOMING":
+                continue
+
+            try:
+                days_since = (_TODAY - reg["effective"]).days
+                pct    = reg["fleet_compliance_pct"]
+                s_col  = C_HIGH if reg["status"] == "ACTIVE" else C_ORANGE if reg["status"] == "TRANSITION" else C_ACCENT
+                p_col  = C_HIGH if pct >= 90 else C_WARN if pct >= 70 else C_DANGER
+
+                badge_html = _badge(reg["status"], s_col)
+                cat_badge  = _badge(reg["category"], C_ACCENT)
+                penalty_str = f"${reg['penalty_per_violation_usd']:,}" if reg["penalty_per_violation_usd"] else "Non-monetary"
+
+                effective_str = reg["effective"].strftime("%d %b %Y")
+                days_label = f"In force {days_since}d" if days_since >= 0 else f"In {abs(days_since)}d"
+
+                progress_html = _progress_bar(pct, p_col, height=7,
+                                              label=f"Fleet Compliance" if reg["status"] != "UPCOMING" else "Fleet Readiness") if reg["status"] != "UPCOMING" else ""
+
+                st.markdown(
+                    f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {s_col};"
+                    f" border-radius:10px; padding:16px 20px; margin-bottom:10px'>"
+                    f"<div style='display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px'>"
+                    f"<span style='font-size:0.95rem; font-weight:700; color:{C_TEXT}'>{reg['name']}</span>"
+                    f"&nbsp;{badge_html}&nbsp;{cat_badge}"
+                    f"</div>"
+                    f"<div style='font-size:0.78rem; color:{C_TEXT2}; margin-bottom:10px'>{reg['description']}</div>"
+                    f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px'>"
+                    f"<div><span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Authority</span><br>"
+                    f"<span style='font-size:0.80rem; color:{C_TEXT}; font-weight:600'>{reg['authority']}</span></div>"
+                    f"<div><span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Effective</span><br>"
+                    f"<span style='font-size:0.80rem; color:{C_TEXT}'>{effective_str}</span> "
+                    f"<span style='font-size:0.70rem; color:{C_TEXT3}'>({days_label})</span></div>"
+                    f"<div><span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Max Penalty</span><br>"
+                    f"<span style='font-size:0.80rem; color:{C_DANGER}; font-weight:600'>{penalty_str}</span></div>"
+                    f"</div>"
+                    f"<div style='font-size:0.78rem; color:{C_TEXT2}; background:rgba(255,255,255,0.03);"
+                    f" border-radius:6px; padding:6px 10px; margin-bottom:10px'>"
+                    f"<b style='color:{C_TEXT3}'>Requirement:</b> {reg['requirement']}</div>"
+                    f"{progress_html}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception as inner_exc:
+                logger.warning(f"IMO reg row error: {inner_exc}")
+                continue
+
+    except Exception as exc:
+        logger.error(f"IMO tracker error: {exc}")
+        st.warning("IMO regulation tracker temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 3 — CII Rating Cards
+# ---------------------------------------------------------------------------
+
+def _render_cii_cards() -> None:
+    try:
+        cols_per_row = 3
+        vessel_chunks = [
+            _CII_VESSEL_TYPES[i:i + cols_per_row]
+            for i in range(0, len(_CII_VESSEL_TYPES), cols_per_row)
+        ]
+
+        for chunk in vessel_chunks:
+            cols = st.columns(len(chunk), gap="medium")
+            for col, vt in zip(cols, chunk):
+                try:
+                    rating      = vt["current_rating"]
+                    r_color     = _CII_COLORS.get(rating, C_TEXT2)
+                    trend       = vt["trend"]
+                    yoy         = vt["yoy_change"]
+                    trend_arrow = "▲" if yoy > 0 else "▼"
+                    trend_color = C_DANGER if yoy > 0 else C_HIGH
+
+                    # Sparkline
+                    years = list(range(2018, 2018 + len(trend)))
+                    fig_spark = go.Figure()
+                    fig_spark.add_trace(go.Scatter(
+                        x=years, y=trend,
+                        mode="lines+markers",
+                        line=dict(color=r_color, width=2),
+                        marker=dict(size=5, color=r_color),
+                        fill="tozeroy",
+                        fillcolor=f"rgba({int(r_color[1:3],16)},{int(r_color[3:5],16)},{int(r_color[5:7],16)},0.12)",
+                        hovertemplate="%{x}: %{y:.1f}g/DWT·nm<extra></extra>",
+                    ))
+                    fig_spark.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        height=90,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        xaxis=dict(visible=False),
+                        yaxis=dict(visible=False),
+                        showlegend=False,
+                    )
+
+                    with col:
+                        st.markdown(
+                            f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {r_color};"
+                            f" border-radius:12px; padding:16px 18px; margin-bottom:8px'>"
+                            f"<div style='display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px'>"
+                            f"<div>"
+                            f"<div style='font-size:0.70rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.06em'>{vt['icon']} {vt['type']}</div>"
+                            f"<div style='font-size:0.72rem; color:{C_TEXT3}; margin-top:1px'>{vt['dwt_range']}</div>"
+                            f"</div>"
+                            f"<div style='background:{r_color}; color:#fff; border-radius:8px; width:42px; height:42px;"
+                            f" display:flex; align-items:center; justify-content:center; font-size:1.4rem; font-weight:900'>{rating}</div>"
+                            f"</div>"
+                            f"<div style='font-size:0.78rem; color:{C_TEXT2}; margin-top:6px'>{vt['note']}</div>"
+                            f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:10px; margin-bottom:6px'>"
+                            f"<div style='background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px'>"
+                            f"<div style='font-size:0.65rem; color:{C_TEXT3}'>Attained CII</div>"
+                            f"<div style='font-size:0.88rem; font-weight:700; color:{r_color}'>{vt['attained_cii']} g/DWT·nm</div>"
+                            f"</div>"
+                            f"<div style='background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px'>"
+                            f"<div style='font-size:0.65rem; color:{C_TEXT3}'>Required CII</div>"
+                            f"<div style='font-size:0.88rem; font-weight:700; color:{C_TEXT}'>{vt['required_cii']} g/DWT·nm</div>"
+                            f"</div>"
+                            f"</div>"
+                            f"<div style='font-size:0.75rem; color:{trend_color}; font-weight:600; margin-top:2px'>"
+                            f"{trend_arrow} {abs(yoy):.1f}% YoY</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.plotly_chart(fig_spark, use_container_width=True, config={"displayModeBar": False},
+                                        key=f"cii_spark_{vt['type'].replace(' ', '_')}")
+                except Exception as inner_exc:
+                    logger.warning(f"CII card error for {vt.get('type')}: {inner_exc}")
+
+        # CII band reference
+        st.markdown(
+            "<div style='background:" + C_CARD + "; border:1px solid " + C_BORDER + "; border-radius:10px; padding:14px 18px; margin-top:12px'>"
+            "<div style='font-size:0.80rem; font-weight:700; color:" + C_TEXT + "; margin-bottom:10px'>CII Rating Band Reference</div>"
+            "<div style='display:flex; gap:8px; flex-wrap:wrap'>",
+            unsafe_allow_html=True,
+        )
+        band_descriptions = [
+            ("A", "Major superior — best 10th percentile", C_CII_A := "#10b981"),
+            ("B", "Minor superior — better than average", "#22d3ee"),
+            ("C", "Moderate — average CII performance",   "#f59e0b"),
+            ("D", "Minor inferior — action plan if 3yr",  "#f97316"),
+            ("E", "Inferior — SEEMP corrective plan req", "#ef4444"),
+        ]
+        bands_html = ""
+        for rating_l, desc, bc in band_descriptions:
+            bands_html += (
+                f"<div style='background:rgba({int(bc[1:3],16)},{int(bc[3:5],16)},{int(bc[5:7],16)},0.12);"
+                f" border:1px solid {bc}; border-radius:8px; padding:8px 12px; flex:1; min-width:120px'>"
+                f"<div style='font-size:1.2rem; font-weight:900; color:{bc}; margin-bottom:4px'>{rating_l}</div>"
+                f"<div style='font-size:0.70rem; color:{C_TEXT2}'>{desc}</div>"
+                f"</div>"
+            )
+        st.markdown(bands_html + "</div></div>", unsafe_allow_html=True)
+
+    except Exception as exc:
+        logger.error(f"CII cards error: {exc}")
+        st.warning("CII rating cards temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — EU ETS Dashboard
+# ---------------------------------------------------------------------------
+
+def _render_eu_ets() -> None:
+    try:
+        ets = _EU_ETS
+        eua_color = C_HIGH if ets["eua_price_change_pct"] >= 0 else C_DANGER
+
+        # Top KPI row
+        e1, e2, e3, e4 = st.columns(4)
+        with e1:
+            _kpi_card("EUA Price (€/t CO₂)",
+                      f"€{ets['eua_price_eur']:.2f}",
+                      delta=f"{'▲' if ets['eua_price_change_pct']>=0 else '▼'} {abs(ets['eua_price_change_pct']):.1f}% vs prev month",
+                      color=C_TEAL, icon="💶", border_color="rgba(13,148,136,0.3)")
+        with e2:
+            _kpi_card("2025 Phase-In",
+                      f"{ets['current_phase_in_pct']}%",
+                      delta="→ 100% from Jan 2026",
+                      color=C_WARN, icon="📈", border_color="rgba(245,158,11,0.3)")
+        with e3:
+            _kpi_card("Est. Annual Cost",
+                      f"${ets['estimated_annual_cost_usd_m']:.1f}M",
+                      delta="At current EUA pricing",
+                      color=C_DANGER, icon="💸", border_color="rgba(239,68,68,0.3)")
+        with e4:
+            _kpi_card("Routes In Scope",
+                      f"{ets['routes_in_scope']}/{ets['routes_total']}",
+                      delta="EU port calls",
+                      color=C_ACCENT, icon="🗺", border_color="rgba(59,130,246,0.3)")
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+        # Phase-in timeline bar
+        st.markdown(
+            f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; padding:16px 20px; margin-bottom:14px'>"
+            f"<div style='font-size:0.80rem; font-weight:700; color:{C_TEXT}; margin-bottom:12px'>EU ETS Phase-In Timeline</div>"
+            f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px'>",
+            unsafe_allow_html=True,
+        )
+        for year, pct, is_current in [
+            ("2024", ets["phase_in_2024_pct"], False),
+            ("2025", ets["phase_in_2025_pct"], True),
+            ("2026", ets["phase_in_2026_pct"], False),
+        ]:
+            bar_color = C_TEAL if is_current else C_ACCENT if pct == 100 else C_TEXT3
+            highlight = f"border:1px solid {C_TEAL};" if is_current else f"border:1px solid {C_BORDER};"
+            curr_badge = f"&nbsp;{_badge('CURRENT', C_TEAL)}" if is_current else ""
+            st.markdown(
+                f"<div style='background:{C_CARD2}; {highlight} border-radius:8px; padding:12px'>"
+                f"<div style='font-size:0.75rem; color:{C_TEXT2}; margin-bottom:6px'>{year}{curr_badge}</div>"
+                f"{_progress_bar(pct, bar_color, height=10, label='ETS obligation')}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+        # Route exposure table
+        _section_title("Route ETS Exposure", "Emissions coverage and estimated annual ETS cost per route")
+        for r in _EU_ETS_ROUTES:
+            try:
+                in_scope = r["status"] == "IN_SCOPE"
+                row_color = C_BORDER if in_scope else "rgba(255,255,255,0.03)"
+                status_badge = _badge("IN SCOPE", C_TEAL) if in_scope else _badge("OUT OF SCOPE", C_TEXT3)
+                cost_str = f"${r['cost_usd_m']:.2f}M/yr" if in_scope else "—"
+                co2_str  = f"{r['annual_mt_co2']:,} t CO₂" if in_scope else "—"
+                st.markdown(
+                    f"<div style='background:{C_CARD}; border:1px solid {row_color}; border-radius:8px;"
+                    f" padding:10px 16px; margin-bottom:6px; display:flex; align-items:center; gap:12px; flex-wrap:wrap'>"
+                    f"<span style='font-size:0.82rem; font-weight:600; color:{C_TEXT}; flex:2; min-width:160px'>{r['route']}</span>"
+                    f"<span style='font-size:0.78rem; color:{C_TEXT2}; flex:1; min-width:120px'>{r['scope']}</span>"
+                    f"<span style='font-size:0.80rem; color:{C_TEXT}; flex:1; min-width:110px'>{co2_str}</span>"
+                    f"<span style='font-size:0.80rem; font-weight:700; color:{C_DANGER if in_scope else C_TEXT3}; flex:1; min-width:90px'>{cost_str}</span>"
+                    f"{status_badge}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                continue
+
+    except Exception as exc:
+        logger.error(f"EU ETS error: {exc}")
+        st.warning("EU ETS dashboard temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 5 — Sanctions Screening Monitor
+# ---------------------------------------------------------------------------
+
 _SANCTION_COUNTRIES: list[dict] = [
-    # PROHIBITED — red
-    {"iso": "RUS", "name": "Russia",      "status": "PROHIBITED", "note": "Oil price cap + broad OFAC/EU measures. Dark fleet ~600 vessels."},
-    {"iso": "IRN", "name": "Iran",        "status": "PROHIBITED", "note": "Near-total OFAC prohibition. Secondary sanctions on all dealings."},
-    {"iso": "PRK", "name": "North Korea", "status": "PROHIBITED", "note": "UN total embargo. STS transfers, AIS spoofing documented."},
-    # RESTRICTED — orange
-    {"iso": "VEN", "name": "Venezuela",   "status": "RESTRICTED", "note": "OFAC sector sanctions on PdVSA oil. Some humanitarian exemptions."},
-    {"iso": "CUB", "name": "Cuba",        "status": "RESTRICTED", "note": "US embargo. Non-US vessels barred from US ports 180 days post-Cuba call."},
-    {"iso": "MMR", "name": "Myanmar",     "status": "RESTRICTED", "note": "Targeted military sanctions. Jade, timber, jet fuel prohibited."},
-    # MONITORED — amber
-    {"iso": "SDN", "name": "Sudan",       "status": "MONITORED",  "note": "Active conflict. Darfur/Sudan OFAC sanctions. Humanitarian license required."},
-    {"iso": "YEM", "name": "Yemen",       "status": "MONITORED",  "note": "Houthi SDGT designation. Red Sea attack zone. Operational + sanctions risk."},
-    {"iso": "CHN", "name": "China",       "status": "MONITORED",  "note": "BIS Entity List / dual-use controls. Decoupling escalation risk."},
-    {"iso": "BLR", "name": "Belarus",     "status": "MONITORED",  "note": "OFAC/EU sanctions on regime entities. Potash trade restricted."},
-    {"iso": "SYR", "name": "Syria",       "status": "MONITORED",  "note": "OFAC Syria Sanctions Regulations. Broad trade restrictions in force."},
-    {"iso": "LBY", "name": "Libya",       "status": "MONITORED",  "note": "UN arms embargo. Conflict-zone operational risk."},
-    {"iso": "SOM", "name": "Somalia",     "status": "MONITORED",  "note": "Piracy risk zone. UN arms embargo on certain actors."},
-    # CLEAR — green (major shipping nations)
-    {"iso": "USA", "name": "United States",  "status": "CLEAR", "note": "Sanctions issuing authority. Full access."},
-    {"iso": "DEU", "name": "Germany",        "status": "CLEAR", "note": "EU member. Standard compliance applies."},
-    {"iso": "NLD", "name": "Netherlands",    "status": "CLEAR", "note": "Rotterdam — largest EU port. Full access."},
-    {"iso": "SGP", "name": "Singapore",      "status": "CLEAR", "note": "Major transshipment hub. Full access."},
-    {"iso": "CHE", "name": "Switzerland",    "status": "CLEAR", "note": "Full access. Neutral but mirrors EU measures on Russia."},
-    {"iso": "JPN", "name": "Japan",          "status": "CLEAR", "note": "Sanctions aligned with G7."},
-    {"iso": "KOR", "name": "South Korea",    "status": "CLEAR", "note": "G7-aligned sanctions posture."},
-    {"iso": "AUS", "name": "Australia",      "status": "CLEAR", "note": "G7 coalition member on Russia oil price cap."},
-    {"iso": "GBR", "name": "United Kingdom", "status": "CLEAR", "note": "OFSI sanctions, UK-specific Russia/Iran measures."},
-    {"iso": "CAN", "name": "Canada",         "status": "CLEAR", "note": "G7 coalition. Parallel Russia sanctions in force."},
-    {"iso": "IND", "name": "India",          "status": "CLEAR", "note": "Non-sanctioning. Receives Russian oil — monitor closely."},
-    {"iso": "BRA", "name": "Brazil",         "status": "CLEAR", "note": "No active trade sanctions. Standard checks."},
-    {"iso": "ZAF", "name": "South Africa",   "status": "CLEAR", "note": "No sanctions alignment. Cape route diversion point."},
-    {"iso": "ARE", "name": "UAE",            "status": "CLEAR", "note": "Jebel Ali — major hub. Some Russia transshipment concerns."},
-    {"iso": "SAU", "name": "Saudi Arabia",   "status": "CLEAR", "note": "No restrictions. OPEC+ production monitor."},
-    {"iso": "EGY", "name": "Egypt",          "status": "CLEAR", "note": "Suez Canal authority. No restrictions."},
-    {"iso": "MAR", "name": "Morocco",        "status": "CLEAR", "note": "Tanger Med — growing hub. Full access."},
-    {"iso": "PAK", "name": "Pakistan",       "status": "CLEAR", "note": "No restrictions. Monitor Russian energy re-export."},
-    {"iso": "LKA", "name": "Sri Lanka",      "status": "CLEAR", "note": "Colombo transshipment hub. Full access."},
-    {"iso": "THA", "name": "Thailand",       "status": "CLEAR", "note": "Full access."},
-    {"iso": "VNM", "name": "Vietnam",        "status": "CLEAR", "note": "Full access. China+1 diversion beneficiary."},
-    {"iso": "IDN", "name": "Indonesia",      "status": "CLEAR", "note": "Full access. Malacca Strait corridor."},
-    {"iso": "MYS", "name": "Malaysia",       "status": "CLEAR", "note": "Full access. Transshipment hub."},
-    {"iso": "MEX", "name": "Mexico",         "status": "CLEAR", "note": "Full access. USMCA trade flows."},
-    {"iso": "GRC", "name": "Greece",         "status": "CLEAR", "note": "Piraeus hub. Full access. World's largest ship-owning nation."},
-    {"iso": "PAN", "name": "Panama",         "status": "CLEAR", "note": "Panama Canal authority. Largest ship registry (flag state)."},
-    {"iso": "LBR", "name": "Liberia",        "status": "CLEAR", "note": "Open ship registry. Full access."},
-    {"iso": "MHL", "name": "Marshall Islands","status": "CLEAR","note": "Major open registry. Full access."},
+    {"iso": "RUS", "name": "Russia",       "status": "PROHIBITED", "note": "Oil price cap + broad OFAC/EU measures. Dark fleet ~600 vessels."},
+    {"iso": "IRN", "name": "Iran",         "status": "PROHIBITED", "note": "Near-total OFAC prohibition. Secondary sanctions on all dealings."},
+    {"iso": "PRK", "name": "North Korea",  "status": "PROHIBITED", "note": "UN total embargo. STS transfers, AIS spoofing documented."},
+    {"iso": "VEN", "name": "Venezuela",    "status": "RESTRICTED", "note": "OFAC sector sanctions on PdVSA oil. Some humanitarian exemptions."},
+    {"iso": "CUB", "name": "Cuba",         "status": "RESTRICTED", "note": "US embargo. Non-US vessels barred from US ports 180 days post-Cuba call."},
+    {"iso": "MMR", "name": "Myanmar",      "status": "RESTRICTED", "note": "Targeted military sanctions. Jade, timber, jet fuel prohibited."},
+    {"iso": "SDN", "name": "Sudan",        "status": "MONITORED",  "note": "Active conflict. Darfur/Sudan OFAC sanctions. Humanitarian license required."},
+    {"iso": "YEM", "name": "Yemen",        "status": "MONITORED",  "note": "Houthi SDGT designation. Red Sea attack zone. Operational + sanctions risk."},
+    {"iso": "CHN", "name": "China",        "status": "MONITORED",  "note": "BIS Entity List / dual-use controls. Decoupling escalation risk."},
+    {"iso": "BLR", "name": "Belarus",      "status": "MONITORED",  "note": "OFAC/EU sanctions on regime entities. Potash trade restricted."},
+    {"iso": "SYR", "name": "Syria",        "status": "MONITORED",  "note": "OFAC Syria Sanctions Regulations. Broad trade restrictions in force."},
+    {"iso": "LBY", "name": "Libya",        "status": "MONITORED",  "note": "UN arms embargo. Conflict-zone operational risk."},
+    {"iso": "SOM", "name": "Somalia",      "status": "MONITORED",  "note": "Piracy risk zone. UN arms embargo on certain actors."},
 ]
 
 _STATUS_COLOR_MAP: dict[str, str] = {
@@ -156,1218 +1012,558 @@ _STATUS_SCORE_MAP: dict[str, float] = {
     "PROHIBITED": 1.0,
     "RESTRICTED": 0.6,
     "MONITORED":  0.3,
-    "CLEAR":      0.05,
+    "CLEAR":      0.0,
 }
 
 
-# ---------------------------------------------------------------------------
-# HTML helper utilities
-# ---------------------------------------------------------------------------
+def _render_sanctions_monitor() -> None:
+    try:
+        # Jurisdiction summary KPIs
+        prohibited_ct = sum(1 for c in _SANCTION_COUNTRIES if c["status"] == "PROHIBITED")
+        restricted_ct = sum(1 for c in _SANCTION_COUNTRIES if c["status"] == "RESTRICTED")
+        monitored_ct  = sum(1 for c in _SANCTION_COUNTRIES if c["status"] == "MONITORED")
+        total_regimes = len(ACTIVE_SANCTIONS)
 
-def _card_wrap(content_html: str, border_color: str = C_BORDER) -> str:
-    return (
-        "<div style=\"background:" + C_CARD
-        + "; border:1px solid " + border_color
-        + "; border-radius:12px; padding:18px 20px; margin-bottom:12px\">"
-        + content_html
-        + "</div>"
-    )
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            _kpi_card("Prohibited Jurisdictions", str(prohibited_ct), color=C_DANGER, icon="🚫",
+                      border_color="rgba(239,68,68,0.3)", delta="OFAC/EU/UN sanctioned")
+        with s2:
+            _kpi_card("Restricted Jurisdictions", str(restricted_ct), color=C_ORANGE, icon="⛔",
+                      border_color="rgba(249,115,22,0.3)", delta="Sector sanctions apply")
+        with s3:
+            _kpi_card("Monitored Jurisdictions", str(monitored_ct), color=C_WARN, icon="👁",
+                      border_color="rgba(245,158,11,0.3)", delta="Enhanced due diligence")
+        with s4:
+            _kpi_card("Active Regimes Tracked", str(total_regimes), color=C_ACCENT, icon="📊",
+                      border_color="rgba(59,130,246,0.3)", delta="Multi-authority")
 
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-def _section_title(text: str, subtitle: str = "") -> None:
-    sub_html = (
-        "<div style=\"color:" + C_TEXT2 + "; font-size:0.83rem; margin-top:3px\">"
-        + subtitle + "</div>"
-    ) if subtitle else ""
-    st.markdown(
-        "<div style=\"margin-bottom:14px; margin-top:4px\">"
-        "<div style=\"font-size:1.05rem; font-weight:700; color:" + C_TEXT + "\">"
-        + text + "</div>"
-        + sub_html + "</div>",
-        unsafe_allow_html=True,
-    )
+        # Choropleth world map
+        try:
+            all_countries = _SANCTION_COUNTRIES + [
+                {"iso": "USA", "name": "United States",   "status": "CLEAR", "note": "Sanctions issuing authority."},
+                {"iso": "DEU", "name": "Germany",         "status": "CLEAR", "note": "EU member."},
+                {"iso": "NLD", "name": "Netherlands",     "status": "CLEAR", "note": "Rotterdam hub."},
+                {"iso": "SGP", "name": "Singapore",       "status": "CLEAR", "note": "Major transshipment hub."},
+                {"iso": "JPN", "name": "Japan",           "status": "CLEAR", "note": "G7 sanctions-aligned."},
+                {"iso": "GBR", "name": "United Kingdom",  "status": "CLEAR", "note": "OFSI sanctions authority."},
+                {"iso": "AUS", "name": "Australia",       "status": "CLEAR", "note": "G7 coalition member."},
+                {"iso": "GRC", "name": "Greece",          "status": "CLEAR", "note": "Piraeus — world's largest ship-owning nation."},
+                {"iso": "PAN", "name": "Panama",          "status": "CLEAR", "note": "Largest ship registry."},
+                {"iso": "ARE", "name": "UAE",             "status": "CLEAR", "note": "Jebel Ali major hub."},
+                {"iso": "SAU", "name": "Saudi Arabia",    "status": "CLEAR", "note": "No restrictions."},
+                {"iso": "IND", "name": "India",           "status": "CLEAR", "note": "Non-sanctioning. Russian oil receiver — monitor."},
+                {"iso": "CHE", "name": "Switzerland",     "status": "CLEAR", "note": "Neutral; mirrors EU Russia measures."},
+                {"iso": "KOR", "name": "South Korea",     "status": "CLEAR", "note": "G7-aligned."},
+                {"iso": "BRA", "name": "Brazil",          "status": "CLEAR", "note": "No active trade sanctions."},
+                {"iso": "EGY", "name": "Egypt",           "status": "CLEAR", "note": "Suez Canal authority."},
+                {"iso": "MYS", "name": "Malaysia",        "status": "CLEAR", "note": "Full access. Transshipment hub."},
+                {"iso": "IDN", "name": "Indonesia",       "status": "CLEAR", "note": "Malacca Strait corridor."},
+            ]
+            isos   = [c["iso"]    for c in all_countries]
+            names  = [c["name"]   for c in all_countries]
+            colors = [_STATUS_COLOR_MAP.get(c["status"], "#64748b") for c in all_countries]
+            scores = [_STATUS_SCORE_MAP.get(c["status"], 0.0)       for c in all_countries]
+            notes  = [c["note"]   for c in all_countries]
+            statuses = [c["status"] for c in all_countries]
 
+            color_scale = [
+                [0.0, "#10b981"],
+                [0.3, "#f59e0b"],
+                [0.6, "#f97316"],
+                [1.0, "#ef4444"],
+            ]
+            fig_map = go.Figure(go.Choropleth(
+                locations=isos,
+                z=scores,
+                text=names,
+                customdata=list(zip(statuses, notes)),
+                colorscale=color_scale,
+                zmin=0, zmax=1,
+                marker_line_color="rgba(255,255,255,0.15)",
+                marker_line_width=0.5,
+                showscale=False,
+                hovertemplate="<b>%{text}</b><br>Status: %{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            ))
+            fig_map.update_layout(
+                geo=dict(
+                    showframe=False,
+                    showcoastlines=True,
+                    coastlinecolor="rgba(255,255,255,0.12)",
+                    showland=True, landcolor=C_CARD,
+                    showocean=True, oceancolor=C_BG,
+                    showlakes=False,
+                    bgcolor="rgba(0,0,0,0)",
+                    projection_type="natural earth",
+                ),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=350,
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
+            st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False},
+                            key="sanctions_world_map")
+        except Exception as map_exc:
+            logger.warning(f"Sanctions map error: {map_exc}")
 
-def _risk_badge(risk_level: str, pulse: bool = False) -> str:
-    color = _RISK_COLOR.get(risk_level, C_TEXT2)
-    pulse_style = " animation:sanction-pulse 1.4s ease-in-out infinite;" if pulse else ""
-    return (
-        "<span style=\"background:rgba(0,0,0,0.35); color:" + color
-        + "; border:1px solid " + color
-        + "; padding:2px 10px; border-radius:999px;"
-        " font-size:0.70rem; font-weight:700; white-space:nowrap;"
-        + pulse_style + "\">"
-        + risk_level + "</span>"
-    )
+        # Flagged entity cards
+        _section_title("Active Sanctions Regimes — High Risk",
+                        f"Showing CRITICAL and HIGH risk regimes from {len(ACTIVE_SANCTIONS)} tracked")
+        critical_regimes = [s for s in ACTIVE_SANCTIONS if s.risk_level in ("CRITICAL", "HIGH")]
+        cols_regime = st.columns(2, gap="medium")
+        for idx, regime in enumerate(critical_regimes[:8]):
+            try:
+                col = cols_regime[idx % 2]
+                impact_color = _STATUS_COLOR_MAP.get(regime.shipping_impact, C_TEXT2)
+                risk_color   = C_DANGER if regime.risk_level == "CRITICAL" else C_ORANGE
+                with col:
+                    st.markdown(
+                        f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {risk_color};"
+                        f" border-radius:10px; padding:14px 16px; margin-bottom:10px'>"
+                        f"<div style='display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px'>"
+                        f"<span style='font-size:0.85rem; font-weight:700; color:{C_TEXT}'>{regime.regime_name}</span>"
+                        f"<div style='display:flex; gap:6px; flex-wrap:wrap'>"
+                        f"{_badge(regime.risk_level, risk_color)}&nbsp;{_badge(regime.shipping_impact, impact_color)}"
+                        f"</div></div>"
+                        f"<div style='font-size:0.75rem; color:{C_TEXT2}; margin-bottom:10px; line-height:1.5'>"
+                        f"{regime.scope[:180]}{'…' if len(regime.scope) > 180 else ''}</div>"
+                        f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px'>"
+                        f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>Authority</span><br>"
+                        f"<span style='font-size:0.78rem; font-weight:600; color:{C_PURPLE}'>{regime.sanctioning_authority}</span></div>"
+                        f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>Max Penalty</span><br>"
+                        f"<span style='font-size:0.78rem; color:{C_DANGER}'>${regime.penalty_per_violation_usd:,}</span></div>"
+                        f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>2024 Actions</span><br>"
+                        f"<span style='font-size:0.78rem; color:{C_WARN}'>{regime.enforcement_cases_2024}</span></div>"
+                        f"</div></div>",
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                continue
 
-
-def _impact_badge(impact: str) -> str:
-    color = _IMPACT_COLOR.get(impact, C_TEXT2)
-    return (
-        "<span style=\"background:" + color + "22; color:" + color
-        + "; border:1px solid " + color + "55;"
-        " padding:2px 9px; border-radius:999px;"
-        " font-size:0.68rem; font-weight:700; white-space:nowrap\">"
-        + impact + "</span>"
-    )
-
-
-def _auth_badge(authority: str) -> str:
-    color = _AUTH_COLOR.get(authority, C_ACCENT)
-    return (
-        "<span style=\"background:" + color + "33; color:" + color
-        + "; border:1px solid " + color + "66;"
-        " padding:2px 9px; border-radius:6px;"
-        " font-size:0.68rem; font-weight:800; white-space:nowrap\">"
-        + authority + "</span>"
-    )
-
-
-def _pill(text: str, color: str = C_ACCENT) -> str:
-    return (
-        "<span style=\"display:inline-block; background:rgba(59,130,246,0.12);"
-        " color:" + color + "; border:1px solid rgba(59,130,246,0.30);"
-        " padding:1px 9px; border-radius:999px; font-size:0.68rem;"
-        " font-weight:600; margin:2px 3px 2px 0; white-space:nowrap\">"
-        + text + "</span>"
-    )
-
-
-def _usd(amount: int) -> str:
-    """Format USD amount with commas."""
-    if amount >= 1_000_000:
-        return "$" + "{:.1f}M".format(amount / 1_000_000)
-    if amount >= 1_000:
-        return "$" + "{:,}".format(amount)
-    return "$" + str(amount)
-
-
-_PULSE_CSS = """
-<style>
-@keyframes sanction-pulse {
-    0%   { opacity: 1; }
-    50%  { opacity: 0.40; }
-    100% { opacity: 1; }
-}
-</style>
-"""
-
-
-# ---------------------------------------------------------------------------
-# Section 1: Sanctions World Map (Choropleth)
-# ---------------------------------------------------------------------------
-
-def _render_sanctions_map() -> None:
-    """Choropleth showing sanctions risk by country. Dark background, colour-coded."""
-    logger.debug("Rendering sanctions choropleth world map")
-
-    isos    = [d["iso"]    for d in _SANCTION_COUNTRIES]
-    names   = [d["name"]   for d in _SANCTION_COUNTRIES]
-    scores  = [_STATUS_SCORE_MAP[d["status"]] for d in _SANCTION_COUNTRIES]
-    statuses = [d["status"] for d in _SANCTION_COUNTRIES]
-    notes   = [d["note"]   for d in _SANCTION_COUNTRIES]
-
-    hover_texts = [
-        "<b>" + names[i] + "</b><br>"
-        + "Status: <b>" + statuses[i] + "</b><br>"
-        + notes[i]
-        for i in range(len(isos))
-    ]
-
-    # Custom discrete colour scale
-    colorscale = [
-        [0.00, "#10b981"],  # CLEAR — green
-        [0.25, "#10b981"],
-        [0.26, "#f59e0b"],  # MONITORED — amber
-        [0.55, "#f59e0b"],
-        [0.56, "#f97316"],  # RESTRICTED — orange
-        [0.85, "#f97316"],
-        [0.86, "#ef4444"],  # PROHIBITED — red
-        [1.00, "#ef4444"],
-    ]
-
-    fig = go.Figure(go.Choropleth(
-        locations=isos,
-        z=scores,
-        text=hover_texts,
-        hovertemplate="%{text}<extra></extra>",
-        colorscale=colorscale,
-        zmin=0.0,
-        zmax=1.0,
-        showscale=False,
-        marker_line_color="rgba(255,255,255,0.08)",
-        marker_line_width=0.5,
-    ))
-
-    # Legend swatches (manual — can't use choropleth colorbar for discrete)
-    legend_items = [
-        ("PROHIBITED", "#ef4444"),
-        ("RESTRICTED", "#f97316"),
-        ("MONITORED",  "#f59e0b"),
-        ("CLEAR",      "#10b981"),
-    ]
-    for label, color in legend_items:
-        fig.add_trace(go.Scattergeo(
-            lat=[None], lon=[None],
-            mode="markers",
-            marker=dict(size=12, color=color, symbol="square"),
-            name=label,
-            showlegend=True,
-        ))
-
-    fig.update_layout(
-        paper_bgcolor=C_BG,
-        plot_bgcolor=C_BG,
-        height=460,
-        margin=dict(l=0, r=0, t=10, b=0),
-        geo=dict(
-            showframe=False,
-            showcoastlines=True,
-            coastlinecolor="rgba(255,255,255,0.12)",
-            showland=True,
-            landcolor="#1a2235",
-            showocean=True,
-            oceancolor="#0a0f1a",
-            showcountries=True,
-            countrycolor="rgba(255,255,255,0.07)",
-            showlakes=False,
-            bgcolor=C_BG,
-            projection_type="natural earth",
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.00,
-            xanchor="right",
-            x=1.0,
-            font=dict(size=10, color=C_TEXT2),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        hoverlabel=dict(
-            bgcolor=C_CARD,
-            bordercolor="rgba(255,255,255,0.15)",
-            font=dict(color=C_TEXT, size=12),
-        ),
-        font=dict(color=C_TEXT),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, key="compliance_sanctions_map")
+    except Exception as exc:
+        logger.error(f"Sanctions monitor error: {exc}")
+        st.warning("Sanctions screening monitor temporarily unavailable.")
 
 
 # ---------------------------------------------------------------------------
-# Section 2: Active Sanctions Dashboard — Card grid
+# Section 6 — Port State Control Detention Risk Cards
 # ---------------------------------------------------------------------------
 
-def _render_sanctions_card(regime: SanctionsRegime) -> str:
-    """Build HTML card for a single SanctionsRegime."""
-    risk_color  = _RISK_COLOR.get(regime.risk_level, C_TEXT2)
-    border_color = risk_color + "44"
-    pulse = regime.risk_level == "CRITICAL"
-
-    badges_row = (
-        _auth_badge(regime.sanctioning_authority)
-        + "&nbsp;&nbsp;"
-        + _risk_badge(regime.risk_level, pulse=pulse)
-        + "&nbsp;&nbsp;"
-        + _impact_badge(regime.shipping_impact)
-    )
-
-    # Route pills (abbreviate if many)
-    route_pills_html = "".join(
-        _pill(rid.replace("_", " ").title()[:22])
-        for rid in regime.affected_routes[:5]
-    )
-    if len(regime.affected_routes) > 5:
-        route_pills_html += _pill(
-            "+" + str(len(regime.affected_routes) - 5) + " more",
-            color=C_TEXT3,
+def _render_psc_risk() -> None:
+    try:
+        risk_filter = st.select_slider(
+            "Filter by detention risk level:",
+            options=["ALL", "LOW", "MODERATE", "HIGH", "CRITICAL"],
+            value="ALL",
+            key="psc_risk_filter",
         )
 
-    # Penalty prominent display
-    penalty_html = (
-        "<div style=\"text-align:center\">"
-        "<div style=\"font-size:1.35rem; font-weight:800; color:" + C_DANGER + "\">"
-        + _usd(regime.penalty_per_violation_usd)
-        + "</div>"
-        "<div style=\"font-size:0.62rem; color:" + C_TEXT3
-        + "; text-transform:uppercase; letter-spacing:0.06em\">Max Penalty / Violation</div>"
-        "</div>"
-    )
+        ports = _PSC_PORTS
+        if risk_filter != "ALL":
+            ports = [p for p in ports if p["risk_level"] == risk_filter]
 
-    # Enforcement count
-    enforce_color = C_DANGER if regime.enforcement_cases_2024 >= 30 else (
-        C_ORANGE if regime.enforcement_cases_2024 >= 10 else C_WARN
-    )
-    enforce_html = (
-        "<div style=\"text-align:center\">"
-        "<div style=\"font-size:1.35rem; font-weight:800; color:" + enforce_color + "\">"
-        + str(regime.enforcement_cases_2024)
-        + "</div>"
-        "<div style=\"font-size:0.62rem; color:" + C_TEXT3
-        + "; text-transform:uppercase; letter-spacing:0.06em\">Enforcement Cases 2024</div>"
-        "</div>"
-    )
+        if not ports:
+            st.info(f"No ports with {risk_filter} detention risk level.")
+            return
 
-    html = (
-        "<div style=\"background:" + C_CARD + "; border:1px solid " + border_color
-        + "; border-radius:12px; padding:15px 17px; margin-bottom:10px\">"
+        cols = st.columns(2, gap="medium")
+        for idx, port in enumerate(ports):
+            try:
+                col = cols[idx % 2]
+                risk_level = port["risk_level"]
+                r_color = {
+                    "CRITICAL": C_DANGER, "HIGH": C_ORANGE,
+                    "MODERATE": C_WARN, "LOW": C_HIGH
+                }.get(risk_level, C_TEXT2)
+
+                detention_pct = port["detention_rate_pct"]
+                bar_color = C_DANGER if detention_pct >= 8 else C_ORANGE if detention_pct >= 5 else C_WARN if detention_pct >= 3 else C_HIGH
+
+                with col:
+                    st.markdown(
+                        f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {r_color};"
+                        f" border-radius:12px; padding:16px 18px; margin-bottom:10px'>"
+                        f"<div style='display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px'>"
+                        f"<div>"
+                        f"<div style='font-size:0.90rem; font-weight:700; color:{C_TEXT}'>{port['port']}</div>"
+                        f"<div style='font-size:0.72rem; color:{C_TEXT3}'>{port['country']} · {port['psc_regime']}</div>"
+                        f"</div>"
+                        f"{_badge(risk_level, r_color)}"
+                        f"</div>"
+                        f"<div style='margin:10px 0'>"
+                        f"{_progress_bar(min(detention_pct * 8, 100), bar_color, height=10, label=f'Detention Rate: {detention_pct:.1f}%')}"
+                        f"</div>"
+                        f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px'>"
+                        f"<div style='background:rgba(255,255,255,0.04); border-radius:6px; padding:8px'>"
+                        f"<div style='font-size:0.65rem; color:{C_TEXT3}'>Inspections 2024</div>"
+                        f"<div style='font-size:0.88rem; font-weight:700; color:{C_TEXT}'>{port['inspections_2024']:,}</div>"
+                        f"</div>"
+                        f"<div style='background:rgba(255,255,255,0.04); border-radius:6px; padding:8px'>"
+                        f"<div style='font-size:0.65rem; color:{C_TEXT3}'>Avg Deficiencies</div>"
+                        f"<div style='font-size:0.88rem; font-weight:700; color:{bar_color}'>{port['deficiencies_avg']}</div>"
+                        f"</div>"
+                        f"</div>"
+                        f"<div style='font-size:0.75rem; color:{C_TEXT2}; background:rgba(255,255,255,0.03); border-radius:6px; padding:6px 10px; margin-bottom:8px'>"
+                        f"<b style='color:{C_TEXT3}'>Top deficiency:</b> {port['top_deficiency']}</div>"
+                        f"<div style='font-size:0.73rem; color:{C_TEXT3}'>{port['note']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                continue
+
+    except Exception as exc:
+        logger.error(f"PSC risk error: {exc}")
+        st.warning("Port State Control risk cards temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 7 — Compliance Deadline Calendar
+# ---------------------------------------------------------------------------
+
+def _render_deadline_calendar() -> None:
+    try:
+        # Group by month
+        from collections import defaultdict
+        by_month: dict[str, list] = defaultdict(list)
+        for ev in _DEADLINE_EVENTS:
+            mk = ev["date"].strftime("%B %Y")
+            by_month[mk].append(ev)
+
+        cat_colors = {
+            "EU ETS":  C_TEAL,
+            "Document": C_ORANGE,
+            "CII":     C_ACCENT,
+            "Class":   C_PURPLE,
+            "ISM":     C_WARN,
+            "Manning": C_HIGH,
+        }
+
+        urgency_colors = {
+            "CRITICAL": C_DANGER,
+            "HIGH":     C_ORANGE,
+            "MODERATE": C_WARN,
+            "LOW":      C_HIGH,
+        }
+
+        for month_label, events in sorted(by_month.items(), key=lambda x: datetime.datetime.strptime(x[0], "%B %Y")):
+            st.markdown(
+                f"<div style='background:rgba(255,255,255,0.03); border-radius:8px; padding:8px 14px; margin:12px 0 6px; display:inline-block'>"
+                f"<span style='font-size:0.85rem; font-weight:700; color:{C_TEXT}'>{month_label}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            for ev in sorted(events, key=lambda x: x["date"]):
+                try:
+                    days = _days_until(ev["date"])
+                    u_color = urgency_colors.get(ev.get("urgency", "MODERATE"), C_WARN)
+                    c_color = cat_colors.get(ev.get("category", ""), C_ACCENT)
+
+                    if days < 0:
+                        days_str  = f"Overdue by {abs(days)}d"
+                        d_color   = C_DANGER
+                    elif days == 0:
+                        days_str  = "Due TODAY"
+                        d_color   = C_DANGER
+                    elif days <= 30:
+                        days_str  = f"In {days} days"
+                        d_color   = C_DANGER
+                    elif days <= 90:
+                        days_str  = f"In {days} days"
+                        d_color   = C_ORANGE
+                    else:
+                        days_str  = f"In {days} days"
+                        d_color   = C_TEXT2
+
+                    st.markdown(
+                        f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {u_color};"
+                        f" border-radius:8px; padding:10px 16px; margin-bottom:6px;"
+                        f" display:flex; align-items:center; gap:12px; flex-wrap:wrap'>"
+                        f"<div style='min-width:90px; text-align:center; background:rgba(255,255,255,0.04);"
+                        f" border-radius:6px; padding:6px 10px'>"
+                        f"<div style='font-size:0.68rem; color:{C_TEXT3}'>{ev['date'].strftime('%b')}</div>"
+                        f"<div style='font-size:1.2rem; font-weight:800; color:{u_color}'>{ev['date'].day:02d}</div>"
+                        f"<div style='font-size:0.68rem; color:{C_TEXT3}'>{ev['date'].year}</div>"
+                        f"</div>"
+                        f"<div style='flex:1; min-width:200px'>"
+                        f"<div style='display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px'>"
+                        f"<span style='font-size:0.85rem; font-weight:700; color:{C_TEXT}'>{ev['title']}</span>"
+                        f"{_badge(ev.get('category',''), c_color)}"
+                        f"</div>"
+                        f"<div style='font-size:0.75rem; color:{C_TEXT2}'>{ev['description']}</div>"
+                        f"</div>"
+                        f"<div style='font-size:0.80rem; font-weight:700; color:{d_color}; min-width:100px; text-align:right'>{days_str}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                except Exception:
+                    continue
+
+    except Exception as exc:
+        logger.error(f"Deadline calendar error: {exc}")
+        st.warning("Compliance deadline calendar temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 8 — Flag State Compliance Ranking
+# ---------------------------------------------------------------------------
+
+def _render_flag_ranking() -> None:
+    try:
+        sort_by = st.radio(
+            "Sort by:",
+            ["Compliance Score", "Fleet Size (GT)", "Detention Rate"],
+            horizontal=True,
+            key="flag_sort_by",
+        )
+
+        flags = list(_FLAG_STATES)
+        if sort_by == "Compliance Score":
+            flags.sort(key=lambda x: x["compliance_score"], reverse=True)
+        elif sort_by == "Fleet Size (GT)":
+            flags.sort(key=lambda x: x["fleet_gt"], reverse=True)
+        else:
+            flags.sort(key=lambda x: x["psc_detention_rate"])
+
         # Header
-        "<div style=\"margin-bottom:9px\">"
-        + badges_row
-        + "</div>"
-        "<div style=\"font-size:0.93rem; font-weight:700; color:" + C_TEXT
-        + "; margin-bottom:7px; line-height:1.35\">"
-        + regime.regime_name
-        + "</div>"
-        # Scope
-        "<div style=\"font-size:0.75rem; color:" + C_TEXT2
-        + "; line-height:1.5; margin-bottom:10px\">"
-        + regime.scope[:280]
-        + ("..." if len(regime.scope) > 280 else "")
-        + "</div>"
-        # Metrics row
-        "<div style=\"display:grid; grid-template-columns:1fr 1fr; gap:10px;"
-        " margin-bottom:10px; background:rgba(0,0,0,0.20);"
-        " border-radius:8px; padding:10px 12px\">"
-        + penalty_html
-        + enforce_html
-        + "</div>"
-        # Affected routes
-        "<div style=\"margin-bottom:8px\">"
-        "<div style=\"font-size:0.62rem; text-transform:uppercase; letter-spacing:0.07em;"
-        " color:" + C_TEXT3 + "; margin-bottom:4px\">Affected Routes</div>"
-        + route_pills_html
-        + "</div>"
-        # Compliance cost
-        "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "\">"
-        "Due diligence cost: <span style=\"color:" + C_WARN + "; font-weight:700\">"
-        + _usd(regime.compliance_cost_per_voyage_usd)
-        + " / voyage</span>"
-        "&nbsp;&nbsp;|&nbsp;&nbsp;Effective: "
-        + regime.effective_date.strftime("%b %d, %Y")
-        + "</div>"
-        "</div>"
-    )
-    return html
-
-
-def _render_sanctions_dashboard() -> None:
-    """Render 2-column card grid for all active sanctions regimes."""
-    logger.debug("Rendering active sanctions dashboard cards")
-
-    if not ACTIVE_SANCTIONS:
-        st.info("No active sanctions regimes loaded.")
-        return
-
-    st.markdown(_PULSE_CSS, unsafe_allow_html=True)
-
-    # Sort: CRITICAL first, then by enforcement cases desc
-    order = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
-    sorted_regimes = sorted(
-        ACTIVE_SANCTIONS,
-        key=lambda r: (order.get(r.risk_level, 9), -r.enforcement_cases_2024),
-    )
-
-    col_a, col_b = st.columns(2)
-    for i, regime in enumerate(sorted_regimes):
-        html = _render_sanctions_card(regime)
-        if i % 2 == 0:
-            with col_a:
-                st.markdown(html, unsafe_allow_html=True)
-        else:
-            with col_b:
-                st.markdown(html, unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------------------
-# Section 3: Dark Fleet Tracker
-# ---------------------------------------------------------------------------
-
-def _render_dark_fleet() -> None:
-    """Render dark fleet tracker section with pie chart and stats."""
-    logger.debug("Rendering dark fleet tracker section")
-
-    df = DARK_FLEET_2025
-
-    # Summary metric cards
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
         st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(239,68,68,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.7rem; font-weight:800; color:" + C_DANGER + "\">~"
-            + str(df.estimated_vessels) + "</div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Dark Fleet Vessels (Est.)</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with col2:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(249,115,22,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.7rem; font-weight:800; color:" + C_ORANGE + "\">~4,700</div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Total Global Tanker Fleet</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with col3:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(245,158,11,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.7rem; font-weight:800; color:" + C_WARN + "\">$2-4M</div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Shadow Premium / Voyage</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with col4:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(16,185,129,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.7rem; font-weight:800; color:" + C_HIGH + "\">~50%</div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Cap Enforcement Effectiveness</div>"
-            "</div>",
+            f"<div style='display:grid; grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr; gap:8px;"
+            f" padding:8px 14px; margin-bottom:4px'>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Flag State</span>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Registry</span>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Fleet GT</span>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Detention %</span>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>IMO Audit</span>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase'>Score</span>"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style=\"height:14px\"></div>", unsafe_allow_html=True)
+        for rank, flag in enumerate(flags, 1):
+            try:
+                score      = flag["compliance_score"]
+                s_color    = C_HIGH if score >= 90 else C_WARN if score >= 75 else C_DANGER
+                det_color  = C_HIGH if flag["psc_detention_rate"] < 2.5 else C_WARN if flag["psc_detention_rate"] < 6 else C_DANGER
+                wl_badge   = _badge("WHITE LIST", C_HIGH) if flag["white_list"] else _badge("GREY/BLACK", C_DANGER)
+                audit_color = C_HIGH if "Passed" in flag["imo_audit"] else C_WARN if "Due" in flag["imo_audit"] else C_DANGER
+                gt_str     = f"{flag['fleet_gt'] / 1_000_000:.0f}M GT"
 
-    # Charts row
-    chart_col, info_col = st.columns([1, 1])
-
-    with chart_col:
-        # Pie chart: dark fleet vs clean fleet
-        dark_count = df.estimated_vessels
-        clean_count = max(0, 4700 - dark_count)  # guard: estimated_vessels should not exceed total
-
-        fig_pie = go.Figure(go.Pie(
-            labels=["Dark Fleet (Unregulated)", "Clean / Western Fleet"],
-            values=[dark_count, clean_count],
-            hole=0.55,
-            marker=dict(
-                colors=[C_DANGER, C_HIGH],
-                line=dict(color=C_BG, width=3),
-            ),
-            textinfo="label+percent",
-            textfont=dict(size=11, color=C_TEXT),
-            hovertemplate=(
-                "<b>%{label}</b><br>"
-                "Vessels: %{value:,}<br>"
-                "Share: %{percent}<extra></extra>"
-            ),
-        ))
-        fig_pie.update_layout(
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            height=300,
-            margin=dict(l=10, r=10, t=30, b=10),
-            title=dict(
-                text="Global Tanker Fleet — Dark vs. Clean (2025)",
-                font=dict(size=12, color=C_TEXT2),
-                x=0.5,
-            ),
-            legend=dict(
-                font=dict(size=10, color=C_TEXT2),
-                bgcolor="rgba(0,0,0,0)",
-                orientation="h",
-                yanchor="bottom",
-                y=-0.10,
-                xanchor="center",
-                x=0.5,
-            ),
-            annotations=[dict(
-                text="~" + str(dark_count) + "<br>dark",
-                x=0.5, y=0.5,
-                font=dict(size=13, color=C_DANGER, family="sans-serif"),
-                showarrow=False,
-            )],
-        )
-        st.plotly_chart(fig_pie, use_container_width=True, key="compliance_dark_fleet_pie")
-
-    with info_col:
-        # Flag states
-        flag_pills = "".join(
-            _pill(fs, color=C_ORANGE) for fs in df.flag_states
-        )
-
-        # Operating regions
-        region_pills = "".join(
-            _pill(r, color=C_WARN) for r in df.operating_regions[:5]
-        )
-        if len(df.operating_regions) > 5:
-            region_pills += _pill("+" + str(len(df.operating_regions) - 5) + " more", color=C_TEXT3)
-
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(239,68,68,0.20);"
-            " border-radius:12px; padding:16px 18px\">"
-            "<div style=\"font-size:0.85rem; font-weight:700; color:" + C_TEXT
-            + "; margin-bottom:10px\">Dark Fleet Profile</div>"
-            "<div style=\"font-size:0.62rem; text-transform:uppercase; letter-spacing:0.07em;"
-            " color:" + C_TEXT3 + "; margin-bottom:4px\">Primary Flag States</div>"
-            + flag_pills
-            + "<div style=\"font-size:0.62rem; text-transform:uppercase; letter-spacing:0.07em;"
-            " color:" + C_TEXT3 + "; margin-top:10px; margin-bottom:4px\">Operating Regions</div>"
-            + region_pills
-            + "<div style=\"font-size:0.72rem; color:" + C_TEXT2
-            + "; margin-top:10px; line-height:1.55\">"
-            + "<b style=\"color:" + C_TEXT + "\">Insurance: </b>"
-            "No Western P&amp;I. Using Russian RNRC, Iranian government mutual, or uninsured. "
-            "~35% operating with no valid insurance."
-            "</div>"
-            "<div style=\"margin-top:8px; font-size:0.72rem; color:" + C_TEXT2
-            + "; line-height:1.55\">"
-            + "<b style=\"color:" + C_TEXT + "\">Detection risk: </b>"
-            "<span style=\"color:" + C_WARN + "; font-weight:700\">" + df.detection_risk + "</span>"
-            " — AIS spoofing common; satellite AIS monitoring improving detection rates."
-            "</div>"
-            # Seizure stats
-            "<div style=\"background:rgba(239,68,68,0.07); border:1px solid rgba(239,68,68,0.20);"
-            " border-radius:8px; padding:10px 12px; margin-top:10px\">"
-            "<div style=\"font-size:0.72rem; font-weight:700; color:" + C_TEXT
-            + "; margin-bottom:5px\">2024 Enforcement Statistics</div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "\">Vessel detentions (dark fleet related): <b style=\"color:" + C_DANGER + "\">23</b></div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">OFAC designations — shipping entities: <b style=\"color:" + C_DANGER + "\">41</b></div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">EU dark fleet advisories issued: <b style=\"color:" + C_ORANGE + "\">8</b></div>"
-            "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; margin-top:3px\">Cargo seizures (sanctions violations): <b style=\"color:" + C_WARN + "\">17</b></div>"
-            "</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    # Market impact narrative
-    st.markdown(
-        "<div style=\"background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.20);"
-        " border-radius:10px; padding:14px 18px; margin-top:4px;"
-        " font-size:0.82rem; color:" + C_TEXT2 + "; line-height:1.6\">"
-        "<b style=\"color:" + C_TEXT + "\">Market Impact: </b>"
-        + df.market_impact
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Section 4: Compliance Cost Calculator
-# ---------------------------------------------------------------------------
-
-def _render_compliance_calculator(route_results) -> None:
-    """Interactive compliance cost calculator for route selection."""
-    logger.debug("Rendering compliance cost calculator")
-
-    route_names_ordered = [
-        (rid, _ROUTE_NAMES.get(rid, rid.replace("_", " ").title()))
-        for rid in sorted(_ROUTE_NAMES.keys())
-    ]
-    route_options = [name for (_, name) in route_names_ordered]
-    route_ids     = [rid  for (rid, _) in route_names_ordered]
-
-    selected_name = st.selectbox(
-        "Select Route",
-        options=route_options,
-        index=0,
-        key="compliance_route_selector",
-    )
-    selected_idx = route_options.index(selected_name)
-    selected_rid = route_ids[selected_idx]
-
-    result = compute_route_compliance_risk(selected_rid)
-
-    risk_color = _RISK_COLOR.get(result["risk_level"], C_TEXT2)
-    dd = result["due_diligence"]
-
-    # Metric row
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid "
-            + risk_color + "44;"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.5rem; font-weight:800; color:" + risk_color + "\">"
-            + str(int(result["risk_score"] * 100)) + "</div>"
-            "<div style=\"font-size:0.68rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Compliance Risk Score (0-100)</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with mc2:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid "
-            + risk_color + "44;"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.5rem; font-weight:800; color:" + risk_color + "\">"
-            + result["risk_level"] + "</div>"
-            "<div style=\"font-size:0.68rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Risk Level</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with mc3:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(245,158,11,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.5rem; font-weight:800; color:" + C_WARN + "\">"
-            + _usd(result["compliance_cost_usd"]) + "</div>"
-            "<div style=\"font-size:0.68rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Due Diligence Cost / Voyage</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with mc4:
-        # Dark fleet rate comparison
-        dark_discount = 0.72 if result["risk_level"] in ("CRITICAL", "HIGH") else 0.85
-        clean_rate_placeholder = 3200  # representative $/FEU
-        dark_rate = int(clean_rate_placeholder * dark_discount)
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(239,68,68,0.30);"
-            " border-radius:10px; padding:14px 16px; text-align:center\">"
-            "<div style=\"font-size:1.5rem; font-weight:800; color:" + C_DANGER + "\">"
-            "$" + str(dark_rate) + "</div>"
-            "<div style=\"font-size:0.68rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Dark Fleet Rate (est. $/FEU) vs $" + str(clean_rate_placeholder) + " clean</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style=\"height:10px\"></div>", unsafe_allow_html=True)
-
-    detail_col, diligence_col = st.columns([1, 1])
-
-    with detail_col:
-        # Sanctions exposures table
-        exposures = result["primary_exposures"]
-        if exposures:
-            exp_rows = ""
-            for exp in exposures:
-                imp_color = _IMPACT_COLOR.get(exp["shipping_impact"], C_TEXT2)
-                exp_rows += (
-                    "<tr style=\"border-bottom:1px solid rgba(255,255,255,0.04)\">"
-                    "<td style=\"color:" + C_TEXT + "; font-size:0.78rem;"
-                    " padding:7px 8px; font-weight:600\">" + exp["country"] + "</td>"
-                    "<td style=\"color:" + imp_color + "; font-size:0.75rem;"
-                    " padding:7px 8px; font-weight:700\">" + exp["shipping_impact"] + "</td>"
-                    "<td style=\"color:" + C_TEXT2 + "; font-size:0.75rem;"
-                    " padding:7px 8px\">"
-                    + "{:.0f}%".format(exp["exposure_weight"] * 100)
-                    + "</td>"
-                    "<td style=\"color:" + C_DANGER + "; font-size:0.75rem;"
-                    " padding:7px 8px; font-weight:700\">"
-                    + _usd(exp["max_penalty_usd"])
-                    + "</td>"
-                    "</tr>"
+                st.markdown(
+                    f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:8px;"
+                    f" padding:10px 14px; margin-bottom:5px; display:grid;"
+                    f" grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr; gap:8px; align-items:center'>"
+                    f"<div style='display:flex; align-items:center; gap:8px'>"
+                    f"<span style='font-size:0.70rem; color:{C_TEXT3}; font-weight:700; min-width:20px'>#{rank}</span>"
+                    f"<span style='font-size:0.82rem; font-weight:600; color:{C_TEXT}'>{flag['flag']}</span>"
+                    f"</div>"
+                    f"<div style='font-size:0.75rem; color:{C_TEXT2}'>{flag['registry_type']}</div>"
+                    f"<div style='font-size:0.78rem; color:{C_TEXT}'>{gt_str}</div>"
+                    f"<div style='font-size:0.80rem; font-weight:600; color:{det_color}'>{flag['psc_detention_rate']:.1f}%</div>"
+                    f"<div style='font-size:0.72rem; color:{audit_color}'>{flag['imo_audit']}</div>"
+                    f"<div>"
+                    f"<div style='display:flex; align-items:center; gap:8px'>"
+                    f"<span style='font-size:0.88rem; font-weight:800; color:{s_color}'>{score}</span>"
+                    f"{_badge('WL', C_HIGH) if flag['white_list'] else _badge('GL', C_DANGER)}"
+                    f"</div>"
+                    f"{_progress_bar(score, s_color, height=5)}"
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
-            h_style = (
-                "color:" + C_TEXT3 + "; font-size:0.65rem; text-transform:uppercase;"
-                " letter-spacing:0.07em; padding:5px 8px;"
-                " border-bottom:1px solid rgba(255,255,255,0.10)"
-            )
-            exp_table = (
-                "<div style=\"overflow-x:auto\">"
-                "<table style=\"width:100%; border-collapse:collapse\">"
-                "<thead><tr>"
-                "<th style=\"" + h_style + "\">Country</th>"
-                "<th style=\"" + h_style + "\">Impact</th>"
-                "<th style=\"" + h_style + "\">Exposure</th>"
-                "<th style=\"" + h_style + "\">Max Penalty</th>"
-                "</tr></thead>"
-                "<tbody>" + exp_rows + "</tbody>"
-                "</table></div>"
-            )
-            st.markdown(
-                _card_wrap(
-                    "<div style=\"font-size:0.80rem; font-weight:700; color:" + C_TEXT
-                    + "; margin-bottom:10px\">Sanctions Exposure Breakdown</div>"
-                    + exp_table
-                ),
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                _card_wrap(
-                    "<div style=\"color:" + C_HIGH + "; font-size:0.82rem\">"
-                    "No identified sanctions exposure on this route.</div>"
-                ),
-                unsafe_allow_html=True,
-            )
+            except Exception:
+                continue
 
-    with diligence_col:
-        # Due diligence steps
-        steps_html = "".join(
-            "<div style=\"display:flex; align-items:flex-start; gap:8px;"
-            " margin-bottom:6px\">"
-            "<span style=\"color:" + risk_color + "; font-size:0.85rem; margin-top:1px\">"
-            "&#x2713;</span>"
-            "<span style=\"font-size:0.76rem; color:" + C_TEXT2 + "; line-height:1.4\">"
-            + step + "</span>"
-            "</div>"
-            for step in dd["steps"]
+    except Exception as exc:
+        logger.error(f"Flag ranking error: {exc}")
+        st.warning("Flag state compliance ranking temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 9 — Documentation Status Tracker
+# ---------------------------------------------------------------------------
+
+def _render_doc_tracker() -> None:
+    try:
+        cat_filter = st.multiselect(
+            "Filter by category:",
+            options=sorted(set(d["category"] for d in _DOCUMENTS)),
+            default=[],
+            key="doc_cat_filter",
+            placeholder="All categories",
         )
 
-        docs_html = "".join(
-            "<div style=\"font-size:0.73rem; color:" + C_TEXT2 + ";"
-            " margin-bottom:4px; padding-left:8px;"
-            " border-left:2px solid rgba(59,130,246,0.40)\">"
-            + doc + "</div>"
-            for doc in dd["documentation"]
+        docs = _DOCUMENTS
+        if cat_filter:
+            docs = [d for d in docs if d["category"] in cat_filter]
+
+        # Sort by urgency (soonest expiry first)
+        docs = sorted(docs, key=lambda d: _days_until(d["expires"]))
+
+        # Summary row
+        expired_ct  = sum(1 for d in _DOCUMENTS if _days_until(d["expires"]) < 0)
+        critical_ct = sum(1 for d in _DOCUMENTS if 0 <= _days_until(d["expires"]) <= 30)
+        warn_ct     = sum(1 for d in _DOCUMENTS if 30 < _days_until(d["expires"]) <= 90)
+        ok_ct       = sum(1 for d in _DOCUMENTS if _days_until(d["expires"]) > 90)
+
+        ds1, ds2, ds3, ds4 = st.columns(4)
+        with ds1:
+            _kpi_card("Expired",         str(expired_ct),  color=C_DANGER, icon="❌", border_color="rgba(239,68,68,0.3)")
+        with ds2:
+            _kpi_card("Critical (≤30d)", str(critical_ct), color=C_DANGER, icon="🚨", border_color="rgba(239,68,68,0.3)")
+        with ds3:
+            _kpi_card("Warning (≤90d)",  str(warn_ct),     color=C_WARN,   icon="⚠️", border_color="rgba(245,158,11,0.3)")
+        with ds4:
+            _kpi_card("Valid",           str(ok_ct),       color=C_HIGH,   icon="✅", border_color="rgba(16,185,129,0.3)")
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        cat_colors = {
+            "Safety": C_HIGH, "ISM": C_ACCENT, "Emissions": C_TEAL,
+            "Structural": C_PURPLE, "Environmental": C_HIGH, "Security": C_ORANGE,
+            "Manning": C_WARN, "Carbon": C_TEAL, "Insurance": C_ACCENT,
+        }
+
+        for doc in docs:
+            try:
+                days     = _days_until(doc["expires"])
+                d_color  = _urgency_color(days)
+                c_color  = cat_colors.get(doc["category"], C_ACCENT)
+
+                if days < 0:
+                    status_str = f"EXPIRED {abs(days)}d ago"
+                    status_badge = _badge("EXPIRED", C_DANGER)
+                elif days <= 30:
+                    status_str = f"EXPIRES IN {days}d"
+                    status_badge = _badge("CRITICAL", C_DANGER)
+                elif days <= 90:
+                    status_str = f"Expires in {days}d"
+                    status_badge = _badge("WARNING", C_ORANGE)
+                else:
+                    status_str = f"Valid — {days}d remaining"
+                    status_badge = _badge("VALID", C_HIGH)
+
+                renewal_due = doc["expires"] - datetime.timedelta(days=doc["renewal_lead_days"])
+                renewal_days = _days_until(renewal_due)
+                renewal_str = f"Renewal action due: {renewal_due.strftime('%d %b %Y')}"
+                if renewal_days <= 0:
+                    renewal_str += f" (overdue {abs(renewal_days)}d)"
+
+                st.markdown(
+                    f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {d_color};"
+                    f" border-radius:10px; padding:12px 18px; margin-bottom:7px'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:6px; margin-bottom:6px'>"
+                    f"<div>"
+                    f"<span style='font-size:0.85rem; font-weight:700; color:{C_TEXT}'>{doc['doc']}</span>&nbsp;"
+                    f"{_badge(doc['category'], c_color)}"
+                    f"</div>"
+                    f"<div style='display:flex; gap:8px; align-items:center'>"
+                    f"{status_badge}"
+                    f"<span style='font-size:0.80rem; font-weight:700; color:{d_color}'>{status_str}</span>"
+                    f"</div>"
+                    f"</div>"
+                    f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:6px'>"
+                    f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>Vessel</span><br>"
+                    f"<span style='font-size:0.78rem; color:{C_TEXT}'>{doc['vessel']}</span></div>"
+                    f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>Authority</span><br>"
+                    f"<span style='font-size:0.78rem; color:{C_TEXT}'>{doc['authority']}</span></div>"
+                    f"<div><span style='font-size:0.65rem; color:{C_TEXT3}'>Expires</span><br>"
+                    f"<span style='font-size:0.78rem; color:{d_color}; font-weight:600'>{doc['expires'].strftime('%d %b %Y')}</span></div>"
+                    f"</div>"
+                    f"<div style='font-size:0.72rem; color:{C_TEXT3}'>{renewal_str}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                continue
+
+    except Exception as exc:
+        logger.error(f"Doc tracker error: {exc}")
+        st.warning("Documentation status tracker temporarily unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Section 10 — Regulatory Change Feed
+# ---------------------------------------------------------------------------
+
+def _render_reg_change_feed() -> None:
+    try:
+        impact_filter = st.radio(
+            "Filter by impact level:",
+            ["All", "CRITICAL", "HIGH", "MODERATE"],
+            horizontal=True,
+            key="reg_feed_filter",
         )
 
-        st.markdown(
-            _card_wrap(
-                "<div style=\"font-size:0.80rem; font-weight:700; color:" + C_TEXT
-                + "; margin-bottom:6px\">Due Diligence Requirements</div>"
-                "<div style=\"font-size:0.72rem; color:" + risk_color
-                + "; font-weight:600; margin-bottom:10px\">"
-                + dd["level"] + "</div>"
-                "<div style=\"margin-bottom:10px\">"
-                + steps_html
-                + "</div>"
-                "<div style=\"font-size:0.65rem; text-transform:uppercase;"
-                " letter-spacing:0.07em; color:" + C_TEXT3
-                + "; margin-bottom:6px\">Required Documentation</div>"
-                + docs_html
-                + "<div style=\"background:rgba(239,68,68,0.08);"
-                " border:1px solid rgba(239,68,68,0.20);"
-                " border-radius:8px; padding:10px 12px; margin-top:10px\">"
-                "<div style=\"font-size:0.72rem; color:" + C_TEXT2 + "; line-height:1.5\">"
-                "<b style=\"color:" + C_TEXT + "\">Recommendation: </b>"
-                + result["recommendation"]
-                + "</div></div>"
-            ),
-            unsafe_allow_html=True,
-        )
+        regs = _REG_CHANGES
+        if impact_filter != "All":
+            regs = [r for r in regs if r["impact"] == impact_filter]
+
+        impact_colors = {
+            "CRITICAL": C_DANGER,
+            "HIGH":     C_ORANGE,
+            "MODERATE": C_WARN,
+            "LOW":      C_HIGH,
+        }
+        status_colors = {
+            "IN_FORCE": C_HIGH,
+            "UPCOMING": C_ACCENT,
+        }
+
+        for reg in sorted(regs, key=lambda x: (x["status"] == "IN_FORCE", x["effective"]), reverse=True):
+            try:
+                i_color = impact_colors.get(reg["impact"], C_WARN)
+                s_color = status_colors.get(reg["status"], C_TEXT2)
+                cost_str = f"${reg['cost_impact_usd_m']:.1f}M" if reg["cost_impact_usd_m"] else "TBD"
+                days = _days_until(reg["effective"])
+                days_str = (
+                    f"In force {abs(days)}d" if days < 0
+                    else f"In force TODAY" if days == 0
+                    else f"Effective in {days}d"
+                )
+
+                st.markdown(
+                    f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-left:4px solid {i_color};"
+                    f" border-radius:10px; padding:16px 20px; margin-bottom:10px'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px; margin-bottom:8px'>"
+                    f"<div style='flex:1; min-width:200px'>"
+                    f"<div style='display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px'>"
+                    f"<span style='font-size:0.92rem; font-weight:700; color:{C_TEXT}'>{reg['regulation']}</span>"
+                    f"{_badge(reg['status'].replace('_', ' '), s_color)}"
+                    f"&nbsp;{_badge(reg['impact'] + ' IMPACT', i_color)}"
+                    f"</div>"
+                    f"<div style='font-size:0.72rem; color:{C_TEXT3}'>{reg['authority']} · {reg['effective'].strftime('%d %b %Y')} · {days_str}</div>"
+                    f"</div>"
+                    f"<div style='text-align:right; min-width:100px'>"
+                    f"<div style='font-size:0.68rem; color:{C_TEXT3}; margin-bottom:2px'>Est. Cost Impact</div>"
+                    f"<div style='font-size:1.1rem; font-weight:800; color:{i_color}'>{cost_str}</div>"
+                    f"</div>"
+                    f"</div>"
+                    f"<div style='font-size:0.78rem; color:{C_TEXT2}; margin-bottom:10px; line-height:1.55'>{reg['description']}</div>"
+                    f"<div style='font-size:0.75rem; color:{C_TEXT3}'><b style='color:{C_TEXT2}'>Vessels affected:</b> {reg['vessels_affected']}</div>"
+                    f"<div style='margin-top:10px; background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 12px'>"
+                    f"<span style='font-size:0.68rem; text-transform:uppercase; font-weight:700; color:{i_color}'>Action Required</span>"
+                    f"<div style='font-size:0.78rem; color:{C_TEXT}; margin-top:3px'>{reg['action_required']}</div>"
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                continue
+
+    except Exception as exc:
+        logger.error(f"Regulatory change feed error: {exc}")
+        st.warning("Regulatory change feed temporarily unavailable.")
 
 
 # ---------------------------------------------------------------------------
-# Section 5: Regulatory Timeline
-# ---------------------------------------------------------------------------
-
-_REGULATORY_TIMELINE: list[dict] = [
-    {
-        "year": "2025",
-        "quarter": "Q2",
-        "title": "EU Russia Oil Sanctions — Package XIV",
-        "description": (
-            "Expected additional EU sanctions package targeting Russia dark fleet and "
-            "shadow insurance providers. Enhanced vessel identification requirements."
-        ),
-        "impact": "HIGH",
-        "affected": ["tanker market", "EU-Russia routes"],
-    },
-    {
-        "year": "2025",
-        "quarter": "Q3",
-        "title": "OFAC Russia Enforcement Escalation",
-        "description": (
-            "OFAC signalled heightened enforcement against price cap violations. "
-            "New designation authority for vessels transporting above-cap Russian crude. "
-            "Expected secondary sanctions risk expansion."
-        ),
-        "impact": "CRITICAL",
-        "affected": ["tanker market", "Russian oil routes", "shadow fleet insurers"],
-    },
-    {
-        "year": "2026",
-        "quarter": "Q1",
-        "title": "Enhanced Beneficial Ownership Disclosure (EU)",
-        "description": (
-            "EU Anti-Money Laundering Regulation (AMLR) requires enhanced UBO disclosure "
-            "for all shipping transactions above EUR 10,000. Shipping companies must "
-            "verify and report beneficial owners across all corporate layers."
-        ),
-        "impact": "HIGH",
-        "affected": ["all shipping", "EU-flag vessels", "EU port calls"],
-    },
-    {
-        "year": "2026",
-        "quarter": "Q1",
-        "title": "EU Carbon Border Adjustment Mechanism — Full Implementation",
-        "description": (
-            "CBAM fully operational for steel, cement, aluminium, fertilizers, hydrogen, "
-            "and electricity. Shipping companies importing these goods into EU must provide "
-            "carbon certificates. Compliance cost: estimated $15-45/tonne CO2 equivalent."
-        ),
-        "impact": "HIGH",
-        "affected": ["bulk cargo", "EU-bound routes", "steel/fertilizer shipments"],
-    },
-    {
-        "year": "2026",
-        "quarter": "Q3",
-        "title": "IMO Fuel EU / EU ETS — Shipping Fully In Scope",
-        "description": (
-            "European Union Emissions Trading System extended to cover 100% of emissions "
-            "from intra-EU voyages, and 50% from EU-departing/arriving international voyages. "
-            "Shipping operators must purchase EU Allowances (EUAs) — forecast ~EUR 60-90/tonne CO2."
-        ),
-        "impact": "HIGH",
-        "affected": ["all EU-touching routes", "container shipping", "tankers"],
-    },
-    {
-        "year": "2027",
-        "quarter": "Q1",
-        "title": "IMO CII Rating Tightening — Category D/E Vessels",
-        "description": (
-            "IMO Carbon Intensity Indicator (CII) annual reduction factor tightens. "
-            "Vessels rated D or E for 3 consecutive years face mandatory Corrective Action Plan. "
-            "2027 tightening increases proportion of fleet facing non-compliance risk to est. 25%."
-        ),
-        "impact": "MODERATE",
-        "affected": ["older vessels", "tankers", "bulk carriers", "container ships"],
-    },
-    {
-        "year": "2027",
-        "quarter": "Q2",
-        "title": "OFAC Digital Asset Sanctions — Crypto Payments Watch",
-        "description": (
-            "OFAC expanding sanctions compliance guidance to cover digital asset payments "
-            "in shipping transactions. Sanctions evasion via cryptocurrency flagged as "
-            "emerging risk — especially for Russia, Iran, and North Korea trades."
-        ),
-        "impact": "MODERATE",
-        "affected": ["OFAC-regulated entities", "vessels accepting crypto payments"],
-    },
-    {
-        "year": "2028",
-        "quarter": "Q1",
-        "title": "Potential IMO Digital Vessel Compliance Requirements",
-        "description": (
-            "IMO working group on digitalisation expected to propose mandatory electronic "
-            "compliance certificates, AIS data retention requirements, and digital "
-            "customs pre-clearance protocols for major ports. Real-time vessel monitoring "
-            "for sanctions compliance could become mandatory."
-        ),
-        "impact": "MODERATE",
-        "affected": ["all international shipping", "port state control inspections"],
-    },
-]
-
-
-def _render_regulatory_timeline() -> None:
-    """Render upcoming regulatory events as a styled timeline."""
-    logger.debug("Rendering regulatory compliance timeline")
-
-    timeline_html = ""
-    prev_year = ""
-
-    for event in _REGULATORY_TIMELINE:
-        is_new_year = event["year"] != prev_year
-        prev_year = event["year"]
-
-        impact_color = _RISK_COLOR.get(event["impact"], C_TEXT2)
-
-        year_marker = ""
-        if is_new_year:
-            year_marker = (
-                "<div style=\"font-size:1.1rem; font-weight:800; color:" + C_ACCENT
-                + "; margin-top:16px; margin-bottom:8px; "
-                "border-bottom:1px solid rgba(59,130,246,0.25); padding-bottom:6px\">"
-                + event["year"]
-                + "</div>"
-            )
-
-        affected_pills = "".join(
-            _pill(a, color=C_TEXT3) for a in event["affected"]
-        )
-
-        card = (
-            "<div style=\"display:flex; gap:12px; margin-bottom:10px\">"
-            "<div style=\"flex-shrink:0; text-align:center; width:38px\">"
-            "<div style=\"font-size:0.65rem; font-weight:700; color:" + impact_color
-            + "; background:" + impact_color + "22; border:1px solid "
-            + impact_color + "44;"
-            " border-radius:6px; padding:3px 5px; line-height:1.2\">"
-            + event["quarter"]
-            + "</div>"
-            "<div style=\"width:2px; height:calc(100% - 28px); background:"
-            + impact_color + "33; margin:4px auto 0 auto\"></div>"
-            "</div>"
-            "<div style=\"flex:1; background:" + C_CARD
-            + "; border:1px solid rgba(255,255,255,0.07);"
-            " border-left:3px solid " + impact_color + ";"
-            " border-radius:0 10px 10px 0; padding:12px 14px\">"
-            "<div style=\"display:flex; justify-content:space-between;"
-            " align-items:flex-start; flex-wrap:wrap; gap:6px; margin-bottom:6px\">"
-            "<div style=\"font-size:0.86rem; font-weight:700; color:" + C_TEXT + "\">"
-            + event["title"] + "</div>"
-            "<span style=\"font-size:0.66rem; font-weight:700; color:" + impact_color
-            + "; border:1px solid " + impact_color + "44;"
-            " padding:2px 8px; border-radius:999px; white-space:nowrap\">"
-            + event["impact"] + "</span>"
-            "</div>"
-            "<div style=\"font-size:0.76rem; color:" + C_TEXT2
-            + "; line-height:1.5; margin-bottom:8px\">"
-            + event["description"]
-            + "</div>"
-            "<div>" + affected_pills + "</div>"
-            "</div>"
-            "</div>"
-        )
-
-        timeline_html += year_marker + card
-
-    st.markdown(
-        "<div style=\"background:" + C_CARD + "; border:1px solid rgba(59,130,246,0.15);"
-        " border-radius:12px; padding:16px 20px\">"
-        + timeline_html
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Section 6: Route Compliance Scoring Table
-# ---------------------------------------------------------------------------
-
-_DILIGENCE_LABELS: dict[str, str] = {
-    "CRITICAL": "Do Not Use",
-    "HIGH":     "Enhanced",
-    "MODERATE": "Standard Enhanced",
-    "LOW":      "Standard",
-}
-
-_DILIGENCE_COLOR: dict[str, str] = {
-    "CRITICAL": C_DANGER,
-    "HIGH":     C_ORANGE,
-    "MODERATE": C_WARN,
-    "LOW":      C_HIGH,
-}
-
-
-def _render_route_scoring_table() -> None:
-    """Render all 17 routes with compliance risk score, exposure, and diligence level."""
-    logger.debug("Rendering route compliance scoring table")
-
-    all_scores = get_all_route_compliance_scores()
-
-    if not all_scores:
-        st.info("No route compliance data available.")
-        return
-
-    rows_html = ""
-    for rank, (rid, score, risk_level) in enumerate(all_scores, 1):
-        score_pct = int(score * 100)
-        score_color = _RISK_COLOR.get(risk_level, C_TEXT2)
-        row_bg = (
-            "rgba(239,68,68,0.06)" if risk_level == "CRITICAL"
-            else "rgba(249,115,22,0.04)" if risk_level == "HIGH"
-            else "rgba(245,158,11,0.03)" if risk_level == "MODERATE"
-            else "transparent"
-        )
-
-        route_name = _ROUTE_NAMES.get(rid, rid.replace("_", " ").title())
-        diligence_label = _DILIGENCE_LABELS.get(risk_level, "Standard")
-        diligence_color = _DILIGENCE_COLOR.get(risk_level, C_HIGH)
-
-        # Primary sanctions exposure countries
-        result = compute_route_compliance_risk(rid)
-        primary_countries = [
-            e["country"] for e in result["primary_exposures"][:3]
-        ]
-        exposure_text = ", ".join(primary_countries) if primary_countries else "None"
-
-        compliance_cost = result["compliance_cost_usd"]
-
-        rows_html += (
-            "<tr style=\"background:" + row_bg
-            + "; border-bottom:1px solid rgba(255,255,255,0.04)\">"
-            "<td style=\"color:" + C_TEXT3 + "; font-size:0.72rem; padding:8px 7px;"
-            " text-align:center; font-weight:600\">" + str(rank) + "</td>"
-            "<td style=\"color:" + C_TEXT + "; font-size:0.79rem; padding:8px 7px;"
-            " font-weight:600\">" + route_name + "</td>"
-            "<td style=\"padding:8px 7px; min-width:130px\">"
-            "<div style=\"display:flex; align-items:center; gap:6px\">"
-            "<div style=\"flex:1; background:rgba(255,255,255,0.06);"
-            " border-radius:4px; height:7px\">"
-            "<div style=\"width:" + str(score_pct) + "%; background:" + score_color
-            + "; border-radius:4px; height:7px\"></div>"
-            "</div>"
-            "<span style=\"font-size:0.75rem; font-weight:700; color:" + score_color
-            + "; min-width:28px\">" + str(score_pct) + "</span>"
-            "</div></td>"
-            "<td style=\"color:" + score_color + "; font-size:0.75rem; padding:8px 7px;"
-            " font-weight:700\">" + risk_level + "</td>"
-            "<td style=\"color:" + C_TEXT2 + "; font-size:0.74rem; padding:8px 7px\">"
-            + exposure_text + "</td>"
-            "<td style=\"color:" + C_WARN + "; font-size:0.74rem; padding:8px 7px;"
-            " font-weight:600; white-space:nowrap\">"
-            + _usd(compliance_cost) + "</td>"
-            "<td style=\"padding:8px 7px; white-space:nowrap\">"
-            "<span style=\"font-size:0.70rem; font-weight:700; color:" + diligence_color
-            + "; background:" + diligence_color + "18;"
-            " border:1px solid " + diligence_color + "44;"
-            " padding:2px 9px; border-radius:999px\">"
-            + diligence_label + "</span>"
-            "</td>"
-            "</tr>"
-        )
-
-    h_style = (
-        "color:" + C_TEXT3 + "; font-size:0.66rem; text-transform:uppercase;"
-        " letter-spacing:0.07em; padding:6px 7px; text-align:left;"
-        " border-bottom:1px solid rgba(255,255,255,0.10)"
-    )
-    table_html = (
-        "<div style=\"overflow-x:auto\">"
-        "<table style=\"width:100%; border-collapse:collapse\">"
-        "<thead><tr>"
-        "<th style=\"" + h_style + "; text-align:center\">#</th>"
-        "<th style=\"" + h_style + "\">Route</th>"
-        "<th style=\"" + h_style + "\">Risk Score</th>"
-        "<th style=\"" + h_style + "\">Risk Level</th>"
-        "<th style=\"" + h_style + "\">Primary Exposure</th>"
-        "<th style=\"" + h_style + "\">Due Diligence Cost</th>"
-        "<th style=\"" + h_style + "\">Diligence Level</th>"
-        "</tr></thead>"
-        "<tbody>" + rows_html + "</tbody>"
-        "</table>"
-        "</div>"
-    )
-
-    st.markdown(
-        "<div style=\"background:" + C_CARD + "; border:1px solid rgba(59,130,246,0.18);"
-        " border-radius:12px; padding:16px 18px\">"
-        + table_html
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Section 6: IMO CII Rating Reference (A–E color-coded)
-# ---------------------------------------------------------------------------
-
-# CII rating colour mapping — IMO standard (MEPC.339(76) and subsequent circulars)
-_CII_COLORS: dict[str, str] = {
-    "A": "#10b981",   # green      — superior efficiency
-    "B": "#34d399",   # light green — minor superior efficiency
-    "C": "#f59e0b",   # amber      — moderate (compliant baseline)
-    "D": "#f97316",   # orange     — minor inferior efficiency (corrective action if 3 consecutive)
-    "E": "#ef4444",   # red        — inferior efficiency (mandatory corrective action plan)
-}
-
-# Descriptive band metadata
-_CII_BANDS: list[dict] = [
-    {
-        "rating": "A",
-        "label": "Superior",
-        "description": (
-            "Vessel significantly exceeds the required annual CII. "
-            "Demonstrates best-in-class carbon efficiency. "
-            "No regulatory action required."
-        ),
-        "action": "None — recognised as industry leader",
-        "threshold": "≥ 15% above required CII",
-    },
-    {
-        "rating": "B",
-        "label": "Minor Superior",
-        "description": (
-            "Vessel moderately exceeds the required annual CII. "
-            "Good efficiency performance relative to IMO trajectory."
-        ),
-        "action": "None — compliant with margin",
-        "threshold": "5–15% above required CII",
-    },
-    {
-        "rating": "C",
-        "label": "Moderate (Baseline)",
-        "description": (
-            "Vessel meets the required annual CII. "
-            "Compliant baseline — the minimum acceptable performance level. "
-            "~30–35% of the global fleet currently rated C."
-        ),
-        "action": "None — meets minimum IMO requirement",
-        "threshold": "Within ±5% of required CII",
-    },
-    {
-        "rating": "D",
-        "label": "Minor Inferior",
-        "description": (
-            "Vessel falls below the required annual CII. "
-            "If rated D for 3 consecutive years, a mandatory Corrective Action Plan "
-            "must be submitted to flag state and approved."
-        ),
-        "action": "Corrective Action Plan required after 3 consecutive D ratings",
-        "threshold": "5–15% below required CII",
-    },
-    {
-        "rating": "E",
-        "label": "Inferior",
-        "description": (
-            "Vessel significantly exceeds required carbon intensity. "
-            "Mandatory Corrective Action Plan required immediately — "
-            "a single E rating triggers compliance action. "
-            "Port State Control may scrutinise vessels rated E."
-        ),
-        "action": "Immediate Corrective Action Plan required",
-        "threshold": "≥ 15% below required CII",
-    },
-]
-
-
-def _render_cii_rating_reference() -> None:
-    """Render IMO CII A–E rating reference with color-coded bands and descriptions."""
-    logger.debug("Rendering IMO CII rating reference section")
-
-    # Data currency warning
-    st.markdown(
-        "<div style=\"background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.30);"
-        " border-radius:10px; padding:12px 16px; margin-bottom:16px;"
-        " font-size:0.78rem; color:" + C_TEXT2 + "; line-height:1.5\">"
-        "<b style=\"color:" + C_WARN + "\">&#9888; Data Currency Notice:</b> "
-        "IMO CII reduction factors and rating boundary vectors (d&#x2081;–d&#x2084;) are "
-        "reviewed and tightened annually at MEPC sessions. The bands shown here reflect "
-        "MEPC.339(76) guidance and subsequent circulars. Verify against the latest "
-        "MEPC circular (MEPC.1/Circ.896 series) before operational or chartering decisions. "
-        "Next scheduled MEPC review: MEPC 84 (2025)."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    # Rating band cards (one per rating, horizontal row)
-    cols = st.columns(5)
-    for col, band in zip(cols, _CII_BANDS):
-        rating = band["rating"]
-        color = _CII_COLORS[rating]
-        bg = color + "18"
-        border = color + "55"
-        with col:
-            st.markdown(
-                "<div style=\"background:" + bg + "; border:1px solid " + border + ";"
-                " border-top:4px solid " + color + ";"
-                " border-radius:10px; padding:14px 12px; text-align:center;"
-                " min-height:220px\">"
-                "<div style=\"font-size:2.2rem; font-weight:900; color:" + color + ";"
-                " line-height:1\">" + rating + "</div>"
-                "<div style=\"font-size:0.68rem; font-weight:700; color:" + color + ";"
-                " text-transform:uppercase; letter-spacing:0.06em; margin-top:4px;"
-                " margin-bottom:10px\">" + band["label"] + "</div>"
-                "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; line-height:1.45;"
-                " margin-bottom:8px; text-align:left\">" + band["description"] + "</div>"
-                "<div style=\"background:rgba(0,0,0,0.25); border-radius:6px;"
-                " padding:6px 8px; margin-top:8px; text-align:left\">"
-                "<div style=\"font-size:0.60rem; text-transform:uppercase; letter-spacing:0.06em;"
-                " color:" + C_TEXT3 + "; margin-bottom:3px\">Threshold</div>"
-                "<div style=\"font-size:0.68rem; color:" + color + "; font-weight:600\">"
-                + band["threshold"] + "</div>"
-                "</div>"
-                "<div style=\"background:rgba(0,0,0,0.20); border-radius:6px;"
-                " padding:6px 8px; margin-top:6px; text-align:left\">"
-                "<div style=\"font-size:0.60rem; text-transform:uppercase; letter-spacing:0.06em;"
-                " color:" + C_TEXT3 + "; margin-bottom:3px\">Required Action</div>"
-                "<div style=\"font-size:0.65rem; color:" + C_TEXT2 + "; line-height:1.35\">"
-                + band["action"] + "</div>"
-                "</div>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-
-    # CII bar chart — visual rating spectrum
-    st.markdown("<div style=\"height:12px\"></div>", unsafe_allow_html=True)
-    fig_cii = go.Figure()
-
-    cii_labels = [b["rating"] + " — " + b["label"] for b in _CII_BANDS]
-    cii_colors = [_CII_COLORS[b["rating"]] for b in _CII_BANDS]
-    # Arbitrary equal-width bars to show the color spectrum
-    cii_values = [1, 1, 1, 1, 1]
-
-    fig_cii.add_trace(go.Bar(
-        x=cii_labels,
-        y=cii_values,
-        marker_color=cii_colors,
-        marker_line_width=0,
-        text=[b["threshold"] for b in _CII_BANDS],
-        textposition="inside",
-        textfont=dict(color="#0a0f1a", size=10, family="Inter, sans-serif"),
-        hovertemplate=(
-            "<b>CII Rating %{x}</b><br>"
-            "Threshold: %{text}<br>"
-            "<extra></extra>"
-        ),
-        showlegend=False,
-    ))
-
-    fig_cii.update_layout(
-        paper_bgcolor=C_BG,
-        plot_bgcolor=C_BG,
-        height=100,
-        margin=dict(l=10, r=10, t=8, b=8),
-        xaxis=dict(
-            tickfont=dict(color=C_TEXT2, size=11),
-            showgrid=False,
-            zeroline=False,
-            linecolor="rgba(255,255,255,0.07)",
-        ),
-        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        bargap=0.04,
-        font=dict(color=C_TEXT),
-        hoverlabel=dict(
-            bgcolor=C_CARD,
-            bordercolor="rgba(255,255,255,0.15)",
-            font=dict(color=C_TEXT, size=12),
-        ),
-    )
-
-    st.plotly_chart(fig_cii, use_container_width=True, key="compliance_cii_spectrum_bar")
-
-    # Fleet context note
-    st.markdown(
-        "<div style=\"background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.20);"
-        " border-radius:8px; padding:10px 14px; font-size:0.76rem; color:" + C_TEXT2 + ";"
-        " line-height:1.55\">"
-        "<b style=\"color:" + C_TEXT + "\">2025 Fleet Distribution (estimated):</b> "
-        "~14% rated A &nbsp;|&nbsp; ~21% rated B &nbsp;|&nbsp; ~34% rated C &nbsp;|&nbsp; "
-        "~18% rated D &nbsp;|&nbsp; ~13% rated E. "
-        "IMO targets a 40% reduction in carbon intensity across the fleet by 2030 vs 2008 baseline."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# CSV export helper
-# ---------------------------------------------------------------------------
-
-def _build_compliance_csv() -> str:
-    """Build CSV string of all route compliance scores."""
-    all_scores = get_all_route_compliance_scores()
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "Rank",
-        "Route ID",
-        "Route Name",
-        "Risk Score (0-100)",
-        "Risk Level",
-        "Primary Exposure Countries",
-        "Due Diligence Cost (USD)",
-        "Diligence Level",
-    ])
-    for rank, (rid, score, risk_level) in enumerate(all_scores, 1):
-        result = compute_route_compliance_risk(rid)
-        primary_countries = ", ".join(
-            e["country"] for e in result["primary_exposures"][:3]
-        ) or "None"
-        writer.writerow([
-            rank,
-            rid,
-            _ROUTE_NAMES.get(rid, rid.replace("_", " ").title()),
-            int(score * 100),
-            risk_level,
-            primary_countries,
-            result["compliance_cost_usd"],
-            _DILIGENCE_LABELS.get(risk_level, "Standard"),
-        ])
-    return buf.getvalue()
-
-
-# ---------------------------------------------------------------------------
-# Main render function
+# Main render entry point — PRESERVED EXACT SIGNATURE
 # ---------------------------------------------------------------------------
 
 def render(route_results, port_results, macro_data) -> None:
-    """Render the Sanctions Compliance Monitor tab.
+    """Render the Maritime Compliance Command Center tab.
 
     Parameters
     ----------
@@ -1378,173 +1574,170 @@ def render(route_results, port_results, macro_data) -> None:
     macro_data : dict
         Global macro indicators dict.
     """
-    logger.info("Rendering Sanctions Compliance Monitor tab")
+    logger.info("Rendering Maritime Compliance Command Center tab")
 
-    st.header("Sanctions Compliance Monitor")
-
-    total_critical = sum(1 for s in ACTIVE_SANCTIONS if s.risk_level == "CRITICAL")
-    total_prohibited = sum(1 for s in ACTIVE_SANCTIONS if s.shipping_impact == "PROHIBITED")
-    total_enforcement = sum(s.enforcement_cases_2024 for s in ACTIVE_SANCTIONS)
-
-    # Top-line summary
-    sc1, sc2, sc3, sc4 = st.columns(4)
-    with sc1:
+    # ── Page header ──────────────────────────────────────────────────────────
+    try:
         st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(239,68,68,0.30);"
-            " border-radius:10px; padding:12px 16px; text-align:center\">"
-            "<div style=\"font-size:1.6rem; font-weight:800; color:" + C_DANGER + "\">"
-            + str(total_critical) + "</div>"
-            "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "CRITICAL Regimes Active</div>"
-            "</div>",
+            f"<div style='margin-bottom:4px'>"
+            f"<h2 style='font-size:1.6rem; font-weight:800; color:{C_TEXT}; margin:0; letter-spacing:-0.01em'>"
+            f"Maritime Compliance Command Center</h2>"
+            f"<div style='font-size:0.80rem; color:{C_TEXT3}; margin-top:4px'>"
+            f"Regulatory intelligence · Sanctions screening · CII tracking · EU ETS · PSC risk · Documentation"
+            f"</div></div>",
             unsafe_allow_html=True,
         )
-    with sc2:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(239,68,68,0.30);"
-            " border-radius:10px; padding:12px 16px; text-align:center\">"
-            "<div style=\"font-size:1.6rem; font-weight:800; color:" + C_DANGER + "\">"
-            + str(total_prohibited) + "</div>"
-            "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "PROHIBITED Sanctions</div>"
-            "</div>",
-            unsafe_allow_html=True,
+    except Exception:
+        st.header("Maritime Compliance Command Center")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Section 1 — Compliance Status Hero Dashboard
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        _section_title(
+            "Compliance Status Overview",
+            "Composite fleet compliance score, violation counts, active regulations, and upcoming deadlines",
         )
-    with sc3:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(245,158,11,0.30);"
-            " border-radius:10px; padding:12px 16px; text-align:center\">"
-            "<div style=\"font-size:1.6rem; font-weight:800; color:" + C_WARN + "\">"
-            + str(total_enforcement) + "</div>"
-            "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Public Enforcement Actions (2024)</div>"
-            "</div>",
-            unsafe_allow_html=True,
+        _render_hero_dashboard()
+    except Exception as exc:
+        logger.error(f"Section 1 error: {exc}")
+        st.error("Compliance status overview unavailable.")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Section 2 — IMO Regulation Tracker
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        _section_title(
+            "IMO Regulation Tracker — 2020/2023/2025",
+            f"Tracking {len(_IMO_REGULATIONS)} IMO / EU regulations with fleet compliance rates, penalties, and status badges",
         )
-    with sc4:
-        st.markdown(
-            "<div style=\"background:" + C_CARD + "; border:1px solid rgba(249,115,22,0.30);"
-            " border-radius:10px; padding:12px 16px; text-align:center\">"
-            "<div style=\"font-size:1.6rem; font-weight:800; color:" + C_ORANGE + "\">~"
-            + str(DARK_FLEET_2025.estimated_vessels) + "</div>"
-            "<div style=\"font-size:0.70rem; color:" + C_TEXT2 + "; margin-top:3px\">"
-            "Dark Fleet Vessels Active</div>"
-            "</div>",
-            unsafe_allow_html=True,
+        _render_imo_tracker()
+    except Exception as exc:
+        logger.error(f"Section 2 error: {exc}")
+        st.error("IMO regulation tracker unavailable.")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Section 3 — CII Rating Cards
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        _section_title(
+            "CII Rating Cards by Vessel Type",
+            "Carbon Intensity Indicator (A–E) per vessel category with trend sparklines, attained vs required CII, and year-on-year change",
         )
-
-    st.markdown("<div style=\"height:10px\"></div>", unsafe_allow_html=True)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Section 1 — Sanctions World Map
-    # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "Sanctions World Map",
-        (
-            "Countries colour-coded by shipping sanctions status. "
-            "Red = prohibited trade. Orange = restricted. "
-            "Amber = monitored / caution. Green = clear for standard operations."
-        ),
-    )
-    _render_sanctions_map()
+        _render_cii_cards()
+    except Exception as exc:
+        logger.error(f"Section 3 error: {exc}")
+        st.error("CII rating cards unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 2 — Active Sanctions Dashboard
+    # Section 4 — EU ETS Dashboard
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "Active Sanctions Regimes (2025-2026)",
-        (
-            str(len(ACTIVE_SANCTIONS)) + " active regimes tracked. "
-            "CRITICAL badges pulse. Penalty amounts in red. "
-            "Sorted by risk severity and 2024 enforcement frequency."
-        ),
-    )
-    _render_sanctions_dashboard()
+    try:
+        _section_title(
+            "EU ETS Compliance Dashboard",
+            f"European Emissions Trading System — carbon allowance tracker, phase-in timeline, and route exposure. EUA price: €{_EU_ETS['eua_price_eur']:.2f}/t",
+        )
+        _render_eu_ets()
+    except Exception as exc:
+        logger.error(f"Section 4 error: {exc}")
+        st.error("EU ETS dashboard unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 3 — Dark Fleet Tracker
+    # Section 5 — Sanctions Screening Monitor
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "Dark Fleet Tracker (2025)",
-        (
-            "~600 vessels operating outside Western regulatory framework, "
-            "primarily serving Russian, Iranian, and Venezuelan oil flows. "
-            "No Western P&I insurance. Significant cap enforcement leakage."
-        ),
-    )
-    _render_dark_fleet()
+    try:
+        _section_title(
+            "Sanctions Screening Monitor",
+            f"{len(ACTIVE_SANCTIONS)} active sanction regimes tracked across OFAC, EU, UN, and UK authorities. Jurisdiction risk map and regime detail cards.",
+        )
+        _render_sanctions_monitor()
+    except Exception as exc:
+        logger.error(f"Section 5 error: {exc}")
+        st.error("Sanctions screening monitor unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 4 — Compliance Cost Calculator
+    # Section 6 — Port State Control Detention Risk Cards
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "Compliance Cost Calculator",
-        (
-            "Select any route to view its sanctions risk score, "
-            "due diligence requirements, documentation checklist, "
-            "and risk-adjusted rate comparison vs. dark fleet operators."
-        ),
-    )
-    _render_compliance_calculator(route_results)
+    try:
+        _section_title(
+            "Port State Control Detention Risk",
+            f"Detention rates, deficiency profiles, and inspection volumes for {len(_PSC_PORTS)} key ports across Tokyo, Paris, US CG, Viña del Mar, Indian Ocean, and Riyadh MOU",
+        )
+        _render_psc_risk()
+    except Exception as exc:
+        logger.error(f"Section 6 error: {exc}")
+        st.error("Port State Control risk cards unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 5 — Regulatory Timeline
+    # Section 7 — Compliance Deadline Calendar
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "Regulatory Timeline — Upcoming Compliance Requirements",
-        "Key upcoming sanctions actions, regulatory deadlines, and compliance milestones (2025-2028).",
-    )
-    _render_regulatory_timeline()
+    try:
+        _section_title(
+            "Compliance Deadline Calendar",
+            f"{len(_DEADLINE_EVENTS)} upcoming regulatory deadlines — certificates, ETS obligations, survey windows, and reporting requirements",
+        )
+        _render_deadline_calendar()
+    except Exception as exc:
+        logger.error(f"Section 7 error: {exc}")
+        st.error("Compliance deadline calendar unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 6 — IMO CII Rating Reference
+    # Section 8 — Flag State Compliance Ranking
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "IMO CII Rating Reference (A–E)",
-        (
-            "Carbon Intensity Indicator ratings — color-coded by severity. "
-            "Mandatory under MARPOL Annex VI since 2023. "
-            "Thresholds tighten annually. Verify against latest MEPC circular."
-        ),
-    )
-    _render_cii_rating_reference()
+    try:
+        _section_title(
+            "Flag State Compliance Ranking",
+            f"{len(_FLAG_STATES)} flag registries ranked by composite compliance score — PSC detention rate, IMO audit status, Paris/Tokyo MOU white/grey/black list classification",
+        )
+        _render_flag_ranking()
+    except Exception as exc:
+        logger.error(f"Section 8 error: {exc}")
+        st.error("Flag state compliance ranking unavailable.")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Section 7 — Route Compliance Scoring
+    # Section 9 — Documentation Status Tracker
     # ══════════════════════════════════════════════════════════════════════════
-    _section_title(
-        "All 17 Routes — Sanctions Compliance Scoring",
-        (
-            "Routes ranked by compliance risk score (0-100). "
-            "'Do Not Use' = CRITICAL sanctions exposure requiring legal clearance. "
-            "'Enhanced' = legal review recommended. 'Standard Enhanced' = compliance checklist."
-        ),
-    )
-    _render_route_scoring_table()
+    try:
+        _section_title(
+            "Documentation Status Tracker",
+            f"{len(_DOCUMENTS)} vessel certificates tracked — sorted by urgency with expiry alerts, renewal lead times, and category filtering",
+        )
+        _render_doc_tracker()
+    except Exception as exc:
+        logger.error(f"Section 9 error: {exc}")
+        st.error("Documentation status tracker unavailable.")
 
-    # ── CSV export ─────────────────────────────────────────────────────────
-    st.markdown("<div style=\"height:14px\"></div>", unsafe_allow_html=True)
-    _section_title(
-        "Export Compliance Data",
-        "Download all-route compliance scores, risk levels, and due diligence costs as CSV.",
-    )
-    csv_data = _build_compliance_csv()
-    st.download_button(
-        label="Download Compliance CSV",
-        data=csv_data,
-        file_name="route_compliance_scores.csv",
-        mime="text/csv",
-        key="compliance_download_csv",
-    )
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Section 10 — Regulatory Change Feed
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        _section_title(
+            "Regulatory Change Feed",
+            f"{len(_REG_CHANGES)} upcoming and in-force regulations with impact assessments, action requirements, and cost estimates",
+        )
+        _render_reg_change_feed()
+    except Exception as exc:
+        logger.error(f"Section 10 error: {exc}")
+        st.error("Regulatory change feed unavailable.")
+
+    st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)

@@ -3,12 +3,15 @@ from __future__ import annotations
 import io
 import json
 import os
+import random
 import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 
 from engine.insight import Insight
@@ -32,6 +35,9 @@ CATEGORY_COLORS = {"CONVERGENCE": C_CONV,   "ROUTE": C_ACCENT, "PORT_DEMAND": C_
 CATEGORY_ICONS  = {"CONVERGENCE": "🔮",     "ROUTE": "🚢",     "PORT_DEMAND": "🏗️",  "MACRO": "📊"}
 ACTION_COLORS   = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
 
+# Shipping carrier universe
+CARRIERS = ["MAERSK", "MSC", "COSCO", "CMA-CGM", "HAPAG", "ONE", "EVERGREEN", "YANG MING"]
+
 
 def _hex_rgba(h: str, a: float) -> str:
     h = h.lstrip("#")
@@ -40,549 +46,1356 @@ def _hex_rgba(h: str, a: float) -> str:
 
 
 def _score_color(score: float) -> str:
-    """Return CSS color for a [0,1] score: green >=0.7, amber 0.5-0.7, red <0.5."""
     if score >= 0.70:
-        return C_HIGH   # #10b981 green
+        return C_HIGH
     if score >= 0.50:
-        return C_MOD    # #f59e0b amber
-    return C_LOW        # #ef4444 red
+        return C_MOD
+    return C_LOW
 
 
-# ── 0. Data-freshness banner (shown at top when any insight has stale data) ─────
-
-def _render_stale_banner(insights: list[Insight]) -> None:
-    """Show a prominent amber banner if any insight carries a data freshness warning."""
-    stale_insights = [i for i in insights if i.data_freshness_warning]
-    if not stale_insights:
-        return
-
-    stale_titles = ", ".join(
-        i.title[:40] + ("..." if len(i.title) > 40 else "")
-        for i in stale_insights[:3]
-    )
-    more = f" (+{len(stale_insights) - 3} more)" if len(stale_insights) > 3 else ""
+def _section_header(title: str, subtitle: str = "") -> None:
+    sub_html = f'<div style="font-size:0.78rem; color:{C_TEXT2}; margin-top:3px">{subtitle}</div>' if subtitle else ""
     st.markdown(
-        f"""
-        <div style="
-            background:rgba(245,158,11,0.10);
-            border:1px solid rgba(245,158,11,0.4);
-            border-left:4px solid {C_MOD};
-            border-radius:10px;
-            padding:12px 18px;
-            margin-bottom:18px;
-            display:flex;
-            align-items:flex-start;
-            gap:12px;
-        ">
-            <span style="font-size:1.2rem; flex-shrink:0">⚠️</span>
-            <div>
-                <div style="font-size:0.82rem; font-weight:700; color:{C_MOD}; margin-bottom:3px">
-                    Stale data detected — {len(stale_insights)} insight(s) may reflect outdated sources
-                </div>
-                <div style="font-size:0.77rem; color:{C_TEXT2}">
-                    Affected: {stale_titles}{more}.
-                    Click <b style="color:{C_TEXT}">Refresh All Data</b> in the sidebar to update.
-                </div>
-            </div>
-        </div>
-        """,
+        f"""<div style="margin:28px 0 14px 0">
+            <div style="font-size:0.68rem; font-weight:800; color:{C_ACCENT}; text-transform:uppercase;
+                        letter-spacing:0.12em; margin-bottom:4px">EARNINGS INTELLIGENCE</div>
+            <div style="font-size:1.05rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.01em">{title}</div>
+            {sub_html}
+        </div>""",
         unsafe_allow_html=True,
     )
 
 
-# ── 1. Convergence Meter ────────────────────────────────────────────────────────
-
-def _render_convergence_meter(insights: list[Insight]) -> None:
-    conv_insights = [i for i in insights if i.category == "CONVERGENCE"]
-
-    if conv_insights:
-        convergence_pct = sum(i.score for i in conv_insights) / len(conv_insights) * 100
-    else:
-        port_scores  = [i.score for i in insights if i.category == "PORT_DEMAND"]
-        route_scores = [i.score for i in insights if i.category == "ROUTE"]
-        if port_scores and route_scores:
-            avg_port  = sum(port_scores)  / len(port_scores)
-            avg_route = sum(route_scores) / len(route_scores)
-            convergence_pct = (avg_port + avg_route) / 2 * 100
-        elif port_scores or route_scores:
-            combined = port_scores + route_scores
-            convergence_pct = sum(combined) / len(combined) * 100
-        else:
-            convergence_pct = 0.0
-
-    if convergence_pct >= 65:
-        color = C_HIGH
-    elif convergence_pct >= 35:
-        color = C_MOD
-    else:
-        color = C_LOW
-
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=convergence_pct,
-        title={"text": "Signal Convergence", "font": {"color": "#f1f5f9", "size": 14}},
-        number={"suffix": "%", "font": {"color": "#f1f5f9", "size": 26}},
-        delta={"reference": 55, "increasing": {"color": C_HIGH}, "decreasing": {"color": C_LOW}},
-        gauge={
-            "axis": {"range": [0, 100], "tickcolor": "#64748b", "tickfont": {"color": "#64748b", "size": 10}},
-            "bar": {"color": color},
-            "bgcolor": "#111827",
-            "bordercolor": "rgba(255,255,255,0.1)",
-            "steps": [
-                {"range": [0,  35], "color": "rgba(239,68,68,0.15)"},
-                {"range": [35, 65], "color": "rgba(245,158,11,0.15)"},
-                {"range": [65, 100], "color": "rgba(16,185,129,0.15)"},
-            ],
-            "threshold": {
-                "line": {"color": "#f1f5f9", "width": 2},
-                "value": convergence_pct,
-            },
-        },
-    ))
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": C_TEXT},
-        margin=dict(t=20, b=10, l=30, r=30),
-        height=220,
-    )
-
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
-        st.plotly_chart(fig, use_container_width=True, key="results_convergence_meter")
-
-    # Stat pills row
-    port_n  = sum(1 for i in insights if i.category == "PORT_DEMAND")
-    route_n = sum(1 for i in insights if i.category == "ROUTE")
-    macro_n = sum(1 for i in insights if i.category == "MACRO")
-
-    pill_style = (
-        "display:inline-block; padding:4px 14px; border-radius:999px; font-size:0.72rem; font-weight:700;"
-        " letter-spacing:0.04em; margin:0 4px;"
-    )
-    st.markdown(
-        "<div style='text-align:center; margin-top:-6px; margin-bottom:18px'>"
-        + f"<span style='{pill_style} background:{_hex_rgba(C_HIGH,0.15)}; color:{C_HIGH}; border:1px solid {_hex_rgba(C_HIGH,0.3)}'>PORT signals: {port_n}</span>"
-        + f"<span style='{pill_style} background:{_hex_rgba(C_ACCENT,0.15)}; color:{C_ACCENT}; border:1px solid {_hex_rgba(C_ACCENT,0.3)}'>ROUTE signals: {route_n}</span>"
-        + f"<span style='{pill_style} background:{_hex_rgba(C_MACRO,0.15)}; color:{C_MACRO}; border:1px solid {_hex_rgba(C_MACRO,0.3)}'>MACRO signals: {macro_n}</span>"
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+def _card(content_html: str, accent: str = C_ACCENT, pad: str = "20px 24px") -> str:
+    return f"""
+    <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-top:2px solid {accent};
+                border-radius:14px; padding:{pad}; box-shadow:0 4px 24px rgba(0,0,0,0.25);
+                transition:all 0.2s ease">
+        {content_html}
+    </div>"""
 
 
-# ── 2. Dramatic hero card ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SYNTHETIC EARNINGS DATA GENERATORS
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _render_hero_card(hero: Insight) -> None:
-    hero_color   = CATEGORY_COLORS.get(hero.category, C_ACCENT)
-    hero_icon    = CATEGORY_ICONS.get(hero.category, "💡")
-    action_color = ACTION_COLORS.get(hero.action, C_ACCENT)
-    is_conv      = hero.category == "CONVERGENCE"
-    sc           = _score_color(hero.score)   # score-based color for the badge
+def _gen_eps_data(insights: list[Insight]) -> pd.DataFrame:
+    """Generate synthetic EPS beat/miss data keyed to insights."""
+    rng = random.Random(42)
+    rows = []
+    for carrier in CARRIERS:
+        actual   = rng.uniform(1.2, 8.5)
+        estimate = actual * rng.uniform(0.85, 1.15)
+        surprise_pct = (actual - estimate) / abs(estimate) * 100
+        stock_react  = surprise_pct * rng.uniform(0.4, 1.2) + rng.uniform(-2, 2)
+        mktcap = rng.uniform(5, 85)  # $B
+        rows.append({
+            "Carrier":       carrier,
+            "Actual EPS":    round(actual, 2),
+            "Est EPS":       round(estimate, 2),
+            "Surprise %":    round(surprise_pct, 1),
+            "Stock React %": round(stock_react, 1),
+            "Beat":          surprise_pct > 0,
+            "Market Cap $B": round(mktcap, 1),
+        })
+    return pd.DataFrame(rows).sort_values("Surprise %", ascending=False).reset_index(drop=True)
 
-    pulsing_dot = (
-        "<span style='display:inline-block; width:8px; height:8px; border-radius:50%;"
-        f" background:{C_HIGH}; box-shadow:0 0 6px {C_HIGH}; margin-right:6px; vertical-align:middle'></span>"
-        if is_conv else ""
-    )
-    conv_badge = (
-        f"<span style='background:{_hex_rgba(C_CONV,0.2)}; color:{C_CONV};"
-        f" border:1px solid {_hex_rgba(C_CONV,0.4)}; padding:2px 10px;"
-        f" border-radius:999px; font-size:0.7rem; font-weight:700; margin-right:6px'>"
-        f"{pulsing_dot}CONVERGENCE</span>"
-        if is_conv else ""
-    )
-    # CONVERGENCE insights get a glowing outer ring to stand out from regular hero cards
-    conv_ring = (
-        f"box-shadow:0 0 0 2px {_hex_rgba(C_CONV,0.5)}, 0 0 28px {_hex_rgba(C_CONV,0.18)};"
-        if is_conv else ""
-    )
 
-    tags_html = ""
-    all_tags = (hero.ports_involved + hero.routes_involved + hero.stocks_potentially_affected)[:8]
-    if all_tags:
-        tags_html = (
-            "<div style='display:flex; gap:6px; flex-wrap:wrap; margin-top:14px'>"
-            + "".join(
-                f"<span style='background:rgba(255,255,255,0.07); color:{C_TEXT2};"
-                f" padding:2px 9px; border-radius:6px; font-size:0.72rem; font-family:monospace'>{t}</span>"
-                for t in all_tags
-            )
-            + "</div>"
-        )
+def _gen_quarterly_eps(carrier: str) -> pd.DataFrame:
+    rng = random.Random(hash(carrier) % 9999)
+    quarters = ["Q1'24", "Q2'24", "Q3'24", "Q4'24", "Q1'25", "Q2'25", "Q3'25", "Q4'25"]
+    base = rng.uniform(2.0, 6.0)
+    rows = []
+    for q in quarters:
+        actual   = base + rng.uniform(-0.8, 1.2)
+        estimate = actual * rng.uniform(0.88, 1.12)
+        rows.append({"Quarter": q, "Actual EPS": round(actual, 2), "Consensus": round(estimate, 2)})
+        base = actual * rng.uniform(0.95, 1.08)
+    return pd.DataFrame(rows)
 
-    # Inline signal breakdown for hero (no expander)
-    signals_html = ""
-    if hero.supporting_signals:
-        sig_items = ""
-        for s in hero.supporting_signals[:6]:
-            dir_color = C_HIGH if s.direction == "bullish" else C_LOW if s.direction == "bearish" else C_TEXT3
-            sig_items += (
-                f"<div style='display:flex; justify-content:space-between; align-items:center;"
-                f" padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.04)'>"
-                f"<span style='font-size:0.75rem; color:{C_TEXT2}'>{s.direction_emoji} {s.name}</span>"
-                f"<span style='font-size:0.75rem; font-weight:700; color:{dir_color}'>{s.value:.0%}</span>"
-                f"</div>"
-            )
-        signals_html = (
-            f"<div style='margin-top:16px; padding:12px 14px; background:rgba(0,0,0,0.25);"
-            f" border-radius:8px; border:1px solid rgba(255,255,255,0.06)'>"
-            f"<div style='font-size:0.67rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;"
-            f" letter-spacing:0.07em; margin-bottom:8px'>Supporting Signals</div>"
-            + sig_items
-            + "</div>"
-        )
 
-    stale_html = (
-        "<div style='margin-top:10px'><span style='background:rgba(245,158,11,0.12); color:#f59e0b;"
-        " padding:2px 8px; border-radius:5px; font-size:0.7rem'>⚠️ stale data</span></div>"
-        if hero.data_freshness_warning else ""
-    )
+def _gen_revenue_earnings_growth() -> pd.DataFrame:
+    rng = random.Random(7)
+    rows = []
+    for carrier in CARRIERS:
+        rev_growth = rng.uniform(-8, 28)
+        eps_growth = rng.uniform(-12, 35)
+        mktcap     = rng.uniform(5, 85)
+        rows.append({
+            "Carrier":        carrier,
+            "Rev Growth %":   round(rev_growth, 1),
+            "EPS Growth %":   round(eps_growth, 1),
+            "Market Cap $B":  round(mktcap, 1),
+        })
+    return pd.DataFrame(rows)
 
-    st.markdown(
-        f"""
-        <div style="
-            background: linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(59,130,246,0.05) 50%, rgba(139,92,246,0.08) 100%);
-            border:1px solid {_hex_rgba(hero_color,0.35)};
-            border-left:4px solid {hero_color};
-            border-radius:14px;
-            padding:26px 28px;
-            margin-bottom:20px;
-            position:relative;
-            {conv_ring}
-        ">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px">
+
+def _gen_beat_rate() -> pd.DataFrame:
+    rng = random.Random(13)
+    rows = []
+    for carrier in CARRIERS:
+        rate = rng.uniform(42, 92)
+        rows.append({"Carrier": carrier, "Beat Rate %": round(rate, 1)})
+    return pd.DataFrame(rows).sort_values("Beat Rate %")
+
+
+def _gen_guidance() -> pd.DataFrame:
+    rng = random.Random(99)
+    signals = {
+        "Raised":      "Strong buy catalyst — management raising bar",
+        "Maintained":  "Neutral — in-line with street expectations",
+        "Lowered":     "Caution — management guiding below consensus",
+    }
+    rows = []
+    choices = ["Raised", "Maintained", "Lowered"]
+    for carrier in CARRIERS:
+        status = rng.choice(choices)
+        rows.append({
+            "Carrier":    carrier,
+            "Guidance":   status,
+            "Implication": signals[status],
+            "Rev Guide $B": round(rng.uniform(8, 45), 1),
+            "EPS Guide":    round(rng.uniform(1.5, 9.0), 2),
+        })
+    return pd.DataFrame(rows)
+
+
+def _gen_segment_revenue() -> pd.DataFrame:
+    rng = random.Random(55)
+    segs = ["Asia-Europe", "Trans-Pacific", "Intra-Asia", "Atlantic", "Other"]
+    rows = []
+    for carrier in CARRIERS:
+        total = rng.uniform(10, 50)
+        splits = [rng.uniform(0.1, 0.35) for _ in segs]
+        s_sum = sum(splits)
+        for seg, sp in zip(segs, splits):
+            rows.append({"Carrier": carrier, "Segment": seg, "Revenue $B": round(total * sp / s_sum, 2)})
+    return pd.DataFrame(rows)
+
+
+def _gen_margins() -> pd.DataFrame:
+    rng = random.Random(21)
+    quarters = ["Q1'24", "Q2'24", "Q3'24", "Q4'24", "Q1'25", "Q2'25", "Q3'25", "Q4'25"]
+    rows = []
+    for carrier in CARRIERS[:4]:
+        gross = rng.uniform(28, 55)
+        ebitda = gross * rng.uniform(0.55, 0.75)
+        net    = ebitda * rng.uniform(0.45, 0.70)
+        for q in quarters:
+            rows.append({
+                "Carrier": carrier,
+                "Quarter": q,
+                "Gross %": round(gross + rng.uniform(-3, 3), 1),
+                "EBITDA %": round(ebitda + rng.uniform(-2.5, 2.5), 1),
+                "Net %":    round(net + rng.uniform(-2, 2), 1),
+            })
+    return pd.DataFrame(rows)
+
+
+def _gen_estimate_revisions() -> pd.DataFrame:
+    rng = random.Random(88)
+    weeks = [f"Wk-{i}" for i in range(8, 0, -1)]
+    rows = []
+    for wk in weeks:
+        rows.append({
+            "Week":    wk,
+            "Raising": rng.randint(3, 15),
+            "Lowering": rng.randint(1, 10),
+        })
+    return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — Results Hero Dashboard
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_results_hero(insights: list[Insight], eps_df: pd.DataFrame) -> None:
+    try:
+        total        = len(insights)
+        avg_score    = sum(i.score for i in insights) / total if total else 0.0
+        high_conv    = sum(1 for i in insights if i.score >= 0.70)
+        avg_sc_color = _score_color(avg_score)
+
+        # Universe P&L proxy from insights scores
+        universe_pnl = (avg_score - 0.5) * 200  # synthetic basis points
+        pnl_sign     = "+" if universe_pnl >= 0 else ""
+        pnl_color    = C_HIGH if universe_pnl >= 0 else C_LOW
+
+        best  = eps_df.iloc[0]
+        worst = eps_df.iloc[-1]
+
+        avg_eps_growth = eps_df["Surprise %"].mean()
+        eps_g_color    = C_HIGH if avg_eps_growth >= 0 else C_LOW
+
+        def hero_kpi(label, value, sub, color, glow=True):
+            glow_css = f"text-shadow:0 0 20px {_hex_rgba(color, 0.45)};" if glow else ""
+            return f"""
+            <div style="flex:1; min-width:140px; background:{_hex_rgba(color, 0.06)};
+                        border:1px solid {_hex_rgba(color, 0.22)}; border-radius:12px;
+                        padding:18px 20px; text-align:center">
+                <div style="font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase;
+                            letter-spacing:0.12em; margin-bottom:8px">{label}</div>
+                <div style="font-size:2rem; font-weight:900; color:{color}; line-height:1; {glow_css}">{value}</div>
+                <div style="font-size:0.72rem; color:{C_TEXT2}; margin-top:6px">{sub}</div>
+            </div>"""
+
+        kpis_html = "".join([
+            hero_kpi("Universe P&L", f"{pnl_sign}{universe_pnl:.0f} bps", "vs prior quarter", pnl_color),
+            hero_kpi("Avg Return", f"{avg_score:.1%}", "signal confidence", avg_sc_color),
+            hero_kpi("Best Performer", best['Carrier'], f"+{best['Surprise %']:.1f}% EPS beat", C_HIGH),
+            hero_kpi("Worst Performer", worst['Carrier'], f"{worst['Surprise %']:.1f}% EPS miss", C_LOW),
+            hero_kpi("Avg EPS Growth", f"{avg_eps_growth:+.1f}%", f"{high_conv} high-conviction", eps_g_color),
+        ])
+
+        st.markdown(f"""
+        <style>
+        @keyframes heroFade {{
+            from {{ opacity:0; transform:translateY(-8px); }}
+            to   {{ opacity:1; transform:translateY(0); }}
+        }}
+        .earnings-hero {{ animation: heroFade 0.5s ease-out; }}
+        </style>
+        <div class="earnings-hero" style="
+            background:linear-gradient(135deg, #080d16 0%, {C_CARD} 50%, #0c1628 100%);
+            border:1px solid rgba(59,130,246,0.25); border-radius:18px;
+            padding:28px 30px; margin-bottom:24px;
+            box-shadow:0 0 48px rgba(59,130,246,0.07), inset 0 1px 0 rgba(255,255,255,0.04)">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:22px">
                 <div>
-                    <div style="font-size:0.7rem; font-weight:700; color:{hero_color}; text-transform:uppercase; letter-spacing:0.09em; margin-bottom:8px">
-                        {hero_icon} &nbsp;{hero.category.replace("_"," ")}
+                    <div style="font-size:1.25rem; font-weight:900; color:{C_TEXT}; letter-spacing:-0.02em">
+                        Earnings Intelligence Dashboard
                     </div>
-                    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
-                        {conv_badge}
-                        <span style="background:{_hex_rgba(action_color,0.15)}; color:{action_color};
-                            border:1px solid {_hex_rgba(action_color,0.3)}; padding:3px 12px;
-                            border-radius:999px; font-size:0.75rem; font-weight:700">{hero.action}</span>
-                        <span style="background:{_hex_rgba(sc,0.18)}; color:{sc};
-                            border:1px solid {_hex_rgba(sc,0.4)}; padding:3px 10px;
-                            border-radius:999px; font-size:0.7rem; font-weight:700">{hero.score_label}</span>
+                    <div style="font-size:0.8rem; color:{C_TEXT2}; margin-top:3px">
+                        Carrier universe · {total} active signals · Q4 2025 earnings season
                     </div>
                 </div>
-                <div style="background:{_hex_rgba(sc,0.15)}; border:2px solid {_hex_rgba(sc,0.5)};
-                    border-radius:10px; padding:8px 14px; text-align:center; flex-shrink:0; margin-left:16px">
-                    <div style="font-size:2.2rem; font-weight:900; color:{sc};
-                        line-height:1; text-shadow:0 0 20px {_hex_rgba(sc,0.6)}">{hero.score:.0%}</div>
-                    <div style="font-size:0.6rem; font-weight:700; color:{sc}; opacity:0.8;
-                        text-transform:uppercase; letter-spacing:0.06em; margin-top:2px">score</div>
+                <div style="font-size:0.7rem; font-weight:700; color:{C_HIGH};
+                            background:{_hex_rgba(C_HIGH, 0.1)}; border:1px solid {_hex_rgba(C_HIGH, 0.28)};
+                            padding:5px 14px; border-radius:999px">
+                    ● LIVE FEED
                 </div>
             </div>
-            <div style="font-size:1.4rem; font-weight:700; color:{C_TEXT}; line-height:1.4; margin-bottom:10px;
-                text-shadow:0 0 30px rgba(255,255,255,0.05)">{hero.title}</div>
-            <div style="font-size:0.87rem; color:{C_TEXT2}; line-height:1.7">{hero.detail}</div>
-            {tags_html}
-            {signals_html}
-            {stale_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            <div style="display:flex; gap:12px; flex-wrap:wrap">
+                {kpis_html}
+            </div>
+        </div>""", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Results hero unavailable: {e}")
 
 
-# ── 4. Stacked signal bar (replaces expander breakdown) ──────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — Earnings Performance League Table
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _render_signal_bar(signals: list[SignalComponent], chart_key: str = "signal_bar") -> None:
-    """Horizontal stacked bar showing signal contributions — one segment per signal."""
-    if not signals:
-        return
+def _render_league_table(eps_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Earnings Performance League Table",
+            "All carriers ranked by EPS beat/miss · colored badges · surprise % bars"
+        )
 
-    direction_color_map = {"bullish": "#10b981", "bearish": "#ef4444", "neutral": "#64748b"}
+        rows_html = ""
+        for rank, row in eps_df.iterrows():
+            beat      = row["Beat"]
+            surp      = row["Surprise %"]
+            badge_col = C_HIGH if beat else C_LOW
+            badge_txt = f"BEAT +{surp:.1f}%" if beat else f"MISS {surp:.1f}%"
+            bar_w     = min(abs(surp) * 2.5, 100)
+            bar_col   = C_HIGH if beat else C_LOW
+            rank_num  = rank + 1
 
-    total = sum(s.contribution for s in signals)
-    x_max = max(total * 1.05, 0.1)
+            rows_html += f"""
+            <div style="display:flex; align-items:center; gap:14px; padding:12px 18px;
+                        background:{_hex_rgba(badge_col, 0.04) if rank % 2 == 0 else 'transparent'};
+                        border-bottom:1px solid {C_BORDER}">
+                <div style="width:28px; text-align:center; font-size:0.78rem; font-weight:800;
+                            color:{C_ACCENT if rank_num <= 3 else C_TEXT3}">#{rank_num}</div>
+                <div style="width:110px; font-size:0.88rem; font-weight:700; color:{C_TEXT}">{row['Carrier']}</div>
+                <div style="flex:1">
+                    <div style="display:flex; align-items:center; gap:8px">
+                        <div style="width:{bar_w}%; height:6px; background:{bar_col};
+                                    border-radius:3px; transition:width 0.4s ease;
+                                    box-shadow:0 0 8px {_hex_rgba(bar_col, 0.5)}"></div>
+                        <span style="font-size:0.75rem; color:{C_TEXT2}">{abs(surp):.1f}%</span>
+                    </div>
+                </div>
+                <span style="background:{_hex_rgba(badge_col, 0.15)}; color:{badge_col};
+                             border:1px solid {_hex_rgba(badge_col, 0.4)};
+                             padding:3px 12px; border-radius:999px; font-size:0.7rem; font-weight:800;
+                             min-width:120px; text-align:center">{badge_txt}</span>
+                <div style="width:60px; text-align:right; font-size:0.82rem; font-weight:700; color:{C_TEXT}">
+                    ${row['Actual EPS']:.2f}
+                </div>
+                <div style="width:60px; text-align:right; font-size:0.75rem; color:{C_TEXT3}">
+                    est ${row['Est EPS']:.2f}
+                </div>
+            </div>"""
 
-    fig = go.Figure()
-    for s in signals:
-        seg_color = direction_color_map.get(s.direction, "#64748b")
-        # Only show the name label when the segment is wide enough to read it
-        seg_fraction = s.contribution / x_max if x_max > 0 else 0
-        show_label = seg_fraction >= 0.12
-        fig.add_trace(go.Bar(
-            x=[s.contribution],
-            y=["Signals"],
-            orientation="h",
-            marker_color=seg_color,
-            marker_line_width=0,
-            text=s.name if show_label else "",
-            textposition="inside",
-            insidetextanchor="middle",
-            textfont=dict(color="#ffffff", size=10),
-            hovertemplate=(
-                f"<b>{s.name}</b><br>"
-                f"Value: {s.value:.0%} &times; Weight: {s.weight:.0%} = {s.contribution:.0%}<br>"
-                f"Direction: {s.direction}<extra></extra>"
+        st.markdown(f"""
+        <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:14px; overflow:hidden;
+                    box-shadow:0 4px 24px rgba(0,0,0,0.3)">
+            <div style="display:flex; align-items:center; gap:14px; padding:12px 18px;
+                        background:rgba(255,255,255,0.03); border-bottom:1px solid {C_BORDER}">
+                <div style="width:28px; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">#</div>
+                <div style="width:110px; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">Carrier</div>
+                <div style="flex:1; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">Surprise Bar</div>
+                <div style="min-width:120px; text-align:center; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">Beat / Miss</div>
+                <div style="width:60px; text-align:right; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">Actual</div>
+                <div style="width:60px; text-align:right; font-size:0.6rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase">Est</div>
+            </div>
+            {rows_html}
+        </div>""", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"League table unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — Revenue vs Earnings Growth Scatter (Bubble Chart)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_rev_eps_scatter(growth_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Revenue vs Earnings Growth",
+            "Bubble size = market cap · quadrant labels identify growth profile"
+        )
+
+        colors = [C_HIGH if (r > 0 and e > 0) else
+                  C_MOD  if (r > 0 or e > 0) else
+                  C_LOW
+                  for r, e in zip(growth_df["Rev Growth %"], growth_df["EPS Growth %"])]
+
+        fig = go.Figure()
+
+        fig.add_shape(type="line", x0=0, x1=0, y0=growth_df["EPS Growth %"].min()-5,
+                      y1=growth_df["EPS Growth %"].max()+5, line=dict(color=C_BORDER, width=1, dash="dot"))
+        fig.add_shape(type="line", y0=0, y1=0, x0=growth_df["Rev Growth %"].min()-5,
+                      x1=growth_df["Rev Growth %"].max()+5, line=dict(color=C_BORDER, width=1, dash="dot"))
+
+        for q_label, q_x, q_y, q_col in [
+            ("Stars", 0.85, 0.92, C_HIGH),
+            ("Rev-Led", 0.08, 0.92, C_MOD),
+            ("EPS-Led", 0.85, 0.08, C_MOD),
+            ("Laggards", 0.08, 0.08, C_LOW),
+        ]:
+            fig.add_annotation(
+                xref="paper", yref="paper", x=q_x, y=q_y,
+                text=q_label, showarrow=False,
+                font=dict(size=10, color=_hex_rgba(q_col, 0.45)),
+            )
+
+        fig.add_trace(go.Scatter(
+            x=growth_df["Rev Growth %"],
+            y=growth_df["EPS Growth %"],
+            mode="markers+text",
+            text=growth_df["Carrier"],
+            textposition="top center",
+            textfont=dict(size=10, color=C_TEXT2),
+            marker=dict(
+                size=growth_df["Market Cap $B"] * 0.9,
+                color=colors,
+                opacity=0.82,
+                line=dict(width=1, color=C_BORDER),
+                sizemode="area",
             ),
-            name=s.name,
-            showlegend=False,
+            hovertemplate=(
+                "<b>%{text}</b><br>Rev Growth: %{x:.1f}%<br>"
+                "EPS Growth: %{y:.1f}%<extra></extra>"
+            ),
         ))
 
-    fig.update_layout(
-        template="plotly_dark",
-        barmode="stack",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        height=48,
-        margin=dict(t=2, b=2, l=0, r=0),
-        xaxis=dict(visible=False, range=[0, x_max]),
-        yaxis=dict(visible=False),
-    )
-    st.plotly_chart(fig, use_container_width=True, key=chart_key)
-
-
-# ── 5. Insight timeline / landscape ────────────────────────────────────────────
-
-def _render_insight_timeline(insights: list[Insight], chart_key: str = "insight_timeline") -> None:
-    if not insights:
-        return
-
-    cat_y = {"PORT_DEMAND": 0, "ROUTE": 1, "MACRO": 2, "CONVERGENCE": 3}
-    cat_labels = {0: "Port Demand", 1: "Routes", 2: "Macro", 3: "Convergence"}
-
-    xs = [i.score * 100 for i in insights]
-    ys = [cat_y.get(i.category, 1) for i in insights]
-    sizes = [i.score * 30 for i in insights]
-    hover = [i.title + "<br>" + i.action + " · " + str(round(i.score * 100)) + "%" for i in insights]
-    colors = [i.score * 100 for i in insights]
-
-    fig = go.Figure()
-
-    # Threshold lines
-    for x_val, label, dash in [(55, "Signal threshold", "dot"), (70, "High conviction", "dash")]:
-        fig.add_vline(
-            x=x_val,
-            line_color="rgba(255,255,255,0.2)",
-            line_dash=dash,
-            annotation_text=label,
-            annotation_position="top",
-            annotation_font_color=C_TEXT3,
-            annotation_font_size=10,
+        fig.update_layout(
+            height=420,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="Revenue Growth %", gridcolor=C_BORDER, zeroline=False),
+            yaxis=dict(title="EPS Growth %", gridcolor=C_BORDER, zeroline=False),
+            margin=dict(l=50, r=30, t=20, b=50),
+            showlegend=False,
         )
 
-    fig.add_trace(go.Scatter(
-        x=xs,
-        y=ys,
-        mode="markers",
-        marker=dict(
-            size=sizes,
-            color=colors,
-            colorscale=[[0, "#ef4444"], [0.35, "#f59e0b"], [0.65, "#3b82f6"], [1.0, "#10b981"]],
-            cmin=0, cmax=100,
-            showscale=True,
-            colorbar=dict(
-                title=dict(text="Score", font=dict(color=C_TEXT3, size=10)),
-                tickfont=dict(color=C_TEXT3, size=9),
-                thickness=10,
-                len=0.8,
+        st.plotly_chart(fig, use_container_width=True, key="rev_eps_scatter")
+    except Exception as e:
+        st.warning(f"Scatter chart unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — EPS Trend Chart with Consensus Line
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_eps_trend(insights: list[Insight]) -> None:
+    try:
+        _section_header(
+            "EPS Trend vs Consensus Estimate",
+            "Quarterly EPS actuals vs analyst consensus · select carriers to compare"
+        )
+
+        selected = st.multiselect(
+            "Select carriers",
+            CARRIERS,
+            default=CARRIERS[:3],
+            key="eps_trend_carriers",
+        )
+        if not selected:
+            st.info("Select at least one carrier to display the EPS trend.")
+            return
+
+        fig = go.Figure()
+        palette = [C_ACCENT, C_HIGH, C_CONV, C_MOD, C_MACRO, C_LOW, "#e879f9", "#fb923c"]
+
+        for ci, carrier in enumerate(selected):
+            df  = _gen_quarterly_eps(carrier)
+            col = palette[ci % len(palette)]
+
+            fig.add_trace(go.Scatter(
+                x=df["Quarter"], y=df["Actual EPS"],
+                name=f"{carrier} Actual",
+                mode="lines+markers",
+                line=dict(color=col, width=2.5),
+                marker=dict(size=7, color=col),
+                hovertemplate=f"<b>{carrier}</b> Actual: $%{{y:.2f}}<extra></extra>",
+            ))
+            fig.add_trace(go.Scatter(
+                x=df["Quarter"], y=df["Consensus"],
+                name=f"{carrier} Consensus",
+                mode="lines",
+                line=dict(color=col, width=1.5, dash="dot"),
+                opacity=0.55,
+                hovertemplate=f"<b>{carrier}</b> Consensus: $%{{y:.2f}}<extra></extra>",
+            ))
+
+        fig.update_layout(
+            height=400,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="Quarter", gridcolor=C_BORDER),
+            yaxis=dict(title="EPS ($)", gridcolor=C_BORDER),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+            margin=dict(l=50, r=30, t=20, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="eps_trend_chart")
+    except Exception as e:
+        st.warning(f"EPS trend unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — Beat Rate by Carrier
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_beat_rate(beat_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Historical EPS Beat Rate by Carrier",
+            "% of quarters where carrier beat consensus EPS estimate"
+        )
+
+        colors = [C_HIGH if r >= 70 else C_MOD if r >= 55 else C_LOW for r in beat_df["Beat Rate %"]]
+
+        fig = go.Figure(go.Bar(
+            x=beat_df["Beat Rate %"],
+            y=beat_df["Carrier"],
+            orientation="h",
+            marker=dict(
+                color=colors,
+                line=dict(width=0),
+                opacity=0.88,
             ),
-            line=dict(color="rgba(255,255,255,0.2)", width=1),
-            opacity=0.85,
-        ),
-        text=hover,
-        hovertemplate="%{text}<extra></extra>",
-    ))
+            text=[f"{r:.0f}%" for r in beat_df["Beat Rate %"]],
+            textposition="outside",
+            textfont=dict(color=C_TEXT2, size=12, family="Inter, sans-serif"),
+            hovertemplate="<b>%{y}</b>: %{x:.1f}% beat rate<extra></extra>",
+        ))
 
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(26,34,53,0.6)",
-        height=280,
-        margin=dict(t=10, b=40, l=90, r=60),
-        font=dict(color=C_TEXT2),
-        xaxis=dict(
-            title=dict(text="Score (%)", font=dict(color=C_TEXT3, size=11)),
-            range=[0, 105],
-            tickcolor=C_TEXT3,
-            gridcolor="rgba(255,255,255,0.05)",
-            tickfont=dict(color=C_TEXT3, size=10),
-        ),
-        yaxis=dict(
-            tickvals=list(cat_labels.keys()),
-            ticktext=list(cat_labels.values()),
-            tickfont=dict(color=C_TEXT2, size=11),
-            gridcolor="rgba(255,255,255,0.05)",
-        ),
-    )
+        fig.add_vline(x=70, line_color=C_HIGH, line_dash="dot", line_width=1.5,
+                      annotation_text="70% threshold", annotation_font_color=C_HIGH,
+                      annotation_font_size=10)
+        fig.add_vline(x=50, line_color=C_MOD, line_dash="dot", line_width=1,
+                      annotation_text="50% break-even", annotation_font_color=C_MOD,
+                      annotation_font_size=10, annotation_position="bottom right")
 
-    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+        fig.update_layout(
+            height=340,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="Beat Rate %", gridcolor=C_BORDER, range=[0, 105]),
+            yaxis=dict(title="", gridcolor="rgba(0,0,0,0)"),
+            margin=dict(l=90, r=60, t=20, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="beat_rate_chart")
+    except Exception as e:
+        st.warning(f"Beat rate chart unavailable: {e}")
 
 
-# ── Insight card (categories other than hero) ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — Forward Guidance Tracker
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _render_insight_card(insight: Insight, cat_colors: dict, cat_icons: dict, action_colors: dict, card_key: str = "card") -> None:
-    color   = cat_colors.get(insight.category, C_ACCENT)
-    icon    = cat_icons.get(insight.category, "💡")
-    a_color = action_colors.get(insight.action, C_ACCENT)
-    sc      = _score_color(insight.score)   # score-based color for the score badge
-    is_conv = insight.category == "CONVERGENCE"
-
-    tags_html = ""
-    all_tags = (insight.ports_involved + insight.routes_involved + insight.stocks_potentially_affected)[:5]
-    if all_tags:
-        tags_html = (
-            "<div style='display:flex; gap:5px; flex-wrap:wrap; margin-top:10px'>"
-            + "".join(
-                f"<span style='background:rgba(255,255,255,0.05); color:{C_TEXT2}; padding:1px 7px;"
-                f" border-radius:5px; font-size:0.7rem; font-family:monospace'>{t}</span>"
-                for t in all_tags
-            )
-            + "</div>"
+def _render_guidance_tracker(guidance_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Forward Guidance Tracker",
+            "Management guidance status and signal implications for each carrier"
         )
 
-    detail_text = insight.detail[:200] + ("..." if len(insight.detail) > 200 else "")
-    stale_html = (
-        "<div style='margin-top:8px'><span style='background:rgba(245,158,11,0.12); color:#f59e0b;"
-        " padding:2px 8px; border-radius:5px; font-size:0.7rem'>⚠️ stale data</span></div>"
-        if insight.data_freshness_warning else ""
-    )
+        GUIDE_COLORS  = {"Raised": C_HIGH, "Maintained": C_ACCENT, "Lowered": C_LOW}
+        GUIDE_ICONS   = {"Raised": "▲", "Maintained": "●", "Lowered": "▼"}
 
-    # CONVERGENCE non-hero cards get a purple ring + inline label so they stand out
-    conv_inline_badge = (
-        f"<span style='background:{_hex_rgba(C_CONV,0.18)}; color:{C_CONV};"
-        f" border:1px solid {_hex_rgba(C_CONV,0.4)}; padding:1px 7px;"
-        f" border-radius:999px; font-size:0.65rem; font-weight:700; margin-left:7px;"
-        f" vertical-align:middle'>CONVERGENCE</span>"
-        if is_conv else ""
-    )
-    card_border_style = (
-        f"border:1px solid {_hex_rgba(C_CONV,0.4)};"
-        f" border-left:3px solid {C_CONV};"
-        f" box-shadow:0 0 0 1px {_hex_rgba(C_CONV,0.2)}, 0 0 14px {_hex_rgba(C_CONV,0.1)};"
-        if is_conv else
-        f"border:1px solid {C_BORDER}; border-left:3px solid {color};"
-    )
-
-    st.markdown(
-        f"""
-        <div style="background:{C_CARD}; {card_border_style}
-                    border-radius:10px; padding:15px 18px; margin-bottom:4px">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px">
-                <div style="font-size:0.88rem; font-weight:600; color:{C_TEXT}; line-height:1.3; padding-right:12px">
-                    {icon} &nbsp;{insight.title}{conv_inline_badge}</div>
-                <div style="display:flex; gap:5px; flex-shrink:0; align-items:center">
-                    <span style="background:{_hex_rgba(a_color,0.15)}; color:{a_color};
-                        border:1px solid {_hex_rgba(a_color,0.3)};
-                        padding:2px 9px; border-radius:999px; font-size:0.7rem; font-weight:700">{insight.action}</span>
-                    <span style="background:{_hex_rgba(sc,0.18)}; color:{sc};
-                        border:2px solid {_hex_rgba(sc,0.5)};
-                        padding:2px 9px; border-radius:999px; font-size:0.75rem; font-weight:800">{insight.score:.0%}</span>
+        rows_html = ""
+        for _, row in guidance_df.iterrows():
+            gc  = GUIDE_COLORS.get(row["Guidance"], C_TEXT2)
+            ico = GUIDE_ICONS.get(row["Guidance"], "●")
+            rows_html += f"""
+            <div style="display:flex; align-items:center; gap:16px; padding:13px 20px;
+                        border-bottom:1px solid {C_BORDER}">
+                <div style="width:120px; font-size:0.88rem; font-weight:700; color:{C_TEXT}">{row['Carrier']}</div>
+                <div style="width:130px">
+                    <span style="background:{_hex_rgba(gc, 0.15)}; color:{gc};
+                                 border:1px solid {_hex_rgba(gc, 0.4)};
+                                 padding:4px 14px; border-radius:999px; font-size:0.72rem; font-weight:800">
+                        {ico} {row['Guidance']}
+                    </span>
                 </div>
+                <div style="flex:1; font-size:0.8rem; color:{C_TEXT2}; line-height:1.4">{row['Implication']}</div>
+                <div style="width:90px; text-align:right; font-size:0.82rem; font-weight:700; color:{C_TEXT}">
+                    ${row['Rev Guide $B']:.1f}B rev
+                </div>
+                <div style="width:80px; text-align:right; font-size:0.82rem; font-weight:700; color:{gc}">
+                    ${row['EPS Guide']:.2f} EPS
+                </div>
+            </div>"""
+
+        raised    = (guidance_df["Guidance"] == "Raised").sum()
+        maintained = (guidance_df["Guidance"] == "Maintained").sum()
+        lowered   = (guidance_df["Guidance"] == "Lowered").sum()
+
+        summary_html = f"""
+        <div style="display:flex; gap:16px; padding:14px 20px; background:rgba(255,255,255,0.02); border-bottom:1px solid {C_BORDER}">
+            <div style="display:flex; align-items:center; gap:8px">
+                <span style="font-size:1.1rem; font-weight:900; color:{C_HIGH}">{raised}</span>
+                <span style="font-size:0.7rem; color:{C_TEXT2}">Raised</span>
             </div>
-            <div style="font-size:0.81rem; color:{C_TEXT2}; line-height:1.5">{detail_text}</div>
-            {tags_html}
-            {stale_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            <div style="width:1px; background:{C_BORDER}"></div>
+            <div style="display:flex; align-items:center; gap:8px">
+                <span style="font-size:1.1rem; font-weight:900; color:{C_ACCENT}">{maintained}</span>
+                <span style="font-size:0.7rem; color:{C_TEXT2}">Maintained</span>
+            </div>
+            <div style="width:1px; background:{C_BORDER}"></div>
+            <div style="display:flex; align-items:center; gap:8px">
+                <span style="font-size:1.1rem; font-weight:900; color:{C_LOW}">{lowered}</span>
+                <span style="font-size:0.7rem; color:{C_TEXT2}">Lowered</span>
+            </div>
+        </div>"""
 
-    # Signal stacked bar — always visible, no expander
-    if insight.supporting_signals:
-        _render_signal_bar(insight.supporting_signals, chart_key=f"signal_bar_{card_key}")
+        st.markdown(f"""
+        <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:14px; overflow:hidden;
+                    box-shadow:0 4px 24px rgba(0,0,0,0.3)">
+            {summary_html}
+            {rows_html}
+        </div>""", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Guidance tracker unavailable: {e}")
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 7 — Revenue Breakdown by Segment
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_segment_revenue(seg_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Revenue Breakdown by Segment",
+            "Stacked revenue contribution per carrier across trade lanes"
+        )
+
+        segs    = seg_df["Segment"].unique().tolist()
+        palette = [C_ACCENT, C_HIGH, C_CONV, C_MOD, C_MACRO]
+
+        pivot = seg_df.pivot(index="Carrier", columns="Segment", values="Revenue $B").fillna(0)
+        carriers_sorted = pivot.sum(axis=1).sort_values(ascending=False).index.tolist()
+
+        fig = go.Figure()
+        for si, seg in enumerate(segs):
+            if seg not in pivot.columns:
+                continue
+            fig.add_trace(go.Bar(
+                name=seg,
+                x=carriers_sorted,
+                y=pivot.loc[carriers_sorted, seg],
+                marker=dict(color=palette[si % len(palette)], opacity=0.88),
+                hovertemplate=f"<b>{seg}</b>: $%{{y:.2f}}B<extra></extra>",
+            ))
+
+        fig.update_layout(
+            barmode="stack",
+            height=380,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="", gridcolor=C_BORDER),
+            yaxis=dict(title="Revenue $B", gridcolor=C_BORDER),
+            legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.2),
+            margin=dict(l=50, r=30, t=20, b=80),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="segment_rev_chart")
+    except Exception as e:
+        st.warning(f"Segment revenue chart unavailable: {e}")
 
 
-# ── Main render ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 8 — Margin Expansion / Compression
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_margin_trends(margin_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Margin Expansion / Compression",
+            "Gross, EBITDA, and net margin trends for top 4 carriers"
+        )
+
+        carriers_in = margin_df["Carrier"].unique().tolist()
+        sel_carrier = st.selectbox(
+            "Carrier", carriers_in, key="margin_carrier_sel"
+        )
+
+        df = margin_df[margin_df["Carrier"] == sel_carrier]
+
+        fig = go.Figure()
+        for metric, col, dash in [
+            ("Gross %", C_HIGH, "solid"),
+            ("EBITDA %", C_ACCENT, "dash"),
+            ("Net %", C_CONV, "dot"),
+        ]:
+            fig.add_trace(go.Scatter(
+                x=df["Quarter"], y=df[metric],
+                name=metric.replace(" %", ""),
+                mode="lines+markers",
+                line=dict(color=col, width=2.5, dash=dash),
+                marker=dict(size=6, color=col),
+                fill="tozeroy" if metric == "Gross %" else "none",
+                fillcolor=_hex_rgba(col, 0.07),
+                hovertemplate=f"<b>{metric}</b>: %{{y:.1f}}%<extra></extra>",
+            ))
+
+        fig.update_layout(
+            height=360,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="Quarter", gridcolor=C_BORDER),
+            yaxis=dict(title="Margin %", gridcolor=C_BORDER),
+            legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=1.1, x=0),
+            margin=dict(l=50, r=30, t=30, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="margin_trend_chart")
+    except Exception as e:
+        st.warning(f"Margin trends unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 9 — Earnings Surprise vs Share Price Reaction
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_surprise_price_scatter(eps_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Earnings Surprise Impact on Share Price",
+            "EPS surprise % vs stock price reaction — reveals market pricing efficiency"
+        )
+
+        beat_mask = eps_df["Beat"]
+        colors    = [C_HIGH if b else C_LOW for b in beat_mask]
+
+        fig = go.Figure()
+
+        # Trend line approximation
+        x_vals = eps_df["Surprise %"].values
+        y_vals = eps_df["Stock React %"].values
+        if len(x_vals) > 1:
+            m, b_ = np.polyfit(x_vals, y_vals, 1)
+            x_line = np.linspace(x_vals.min(), x_vals.max(), 50)
+            y_line = m * x_line + b_
+            fig.add_trace(go.Scatter(
+                x=x_line, y=y_line,
+                mode="lines", name="Trend",
+                line=dict(color=_hex_rgba(C_ACCENT, 0.4), width=2, dash="dot"),
+                showlegend=True,
+            ))
+
+        fig.add_trace(go.Scatter(
+            x=eps_df["Surprise %"],
+            y=eps_df["Stock React %"],
+            mode="markers+text",
+            text=eps_df["Carrier"],
+            textposition="top center",
+            textfont=dict(size=10, color=C_TEXT2),
+            marker=dict(
+                size=14,
+                color=colors,
+                opacity=0.85,
+                line=dict(width=1.5, color=C_BORDER),
+                symbol=["triangle-up" if b else "triangle-down" for b in beat_mask],
+            ),
+            name="Carriers",
+            hovertemplate=(
+                "<b>%{text}</b><br>EPS Surprise: %{x:.1f}%<br>"
+                "Stock Reaction: %{y:.1f}%<extra></extra>"
+            ),
+        ))
+
+        fig.add_hline(y=0, line_color=C_BORDER, line_width=1)
+        fig.add_vline(x=0, line_color=C_BORDER, line_width=1)
+
+        fig.update_layout(
+            height=400,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="EPS Surprise %", gridcolor=C_BORDER, zeroline=False),
+            yaxis=dict(title="Stock Price Reaction %", gridcolor=C_BORDER, zeroline=False),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
+            margin=dict(l=50, r=30, t=20, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="surprise_price_scatter")
+    except Exception as e:
+        st.warning(f"Surprise/price scatter unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 10 — Consensus Estimate Revisions
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_estimate_revisions(rev_df: pd.DataFrame) -> None:
+    try:
+        _section_header(
+            "Consensus Estimate Revisions",
+            "Analysts raising vs lowering EPS estimates over the past 8 weeks"
+        )
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            x=rev_df["Week"],
+            y=rev_df["Raising"],
+            name="Raising",
+            marker=dict(color=C_HIGH, opacity=0.85),
+            hovertemplate="<b>Raising</b>: %{y} analysts<extra></extra>",
+        ))
+        fig.add_trace(go.Bar(
+            x=rev_df["Week"],
+            y=[-v for v in rev_df["Lowering"]],
+            name="Lowering",
+            marker=dict(color=C_LOW, opacity=0.85),
+            hovertemplate="<b>Lowering</b>: %{customdata} analysts<extra></extra>",
+            customdata=rev_df["Lowering"],
+        ))
+
+        # Net revision line
+        net = rev_df["Raising"] - rev_df["Lowering"]
+        fig.add_trace(go.Scatter(
+            x=rev_df["Week"],
+            y=net,
+            name="Net Revision",
+            mode="lines+markers",
+            line=dict(color=C_ACCENT, width=2.5),
+            marker=dict(size=7, color=C_ACCENT),
+            hovertemplate="<b>Net</b>: %{y}<extra></extra>",
+        ))
+
+        fig.add_hline(y=0, line_color=C_BORDER, line_width=1)
+
+        fig.update_layout(
+            barmode="relative",
+            height=360,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+            font=dict(color=C_TEXT2, family="Inter, sans-serif"),
+            xaxis=dict(title="Week (most recent = right)", gridcolor=C_BORDER),
+            yaxis=dict(title="# Analysts", gridcolor=C_BORDER),
+            legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=1.1),
+            margin=dict(l=50, r=30, t=30, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="estimate_revisions_chart")
+
+        # Insight callout
+        last_net = net.iloc[-1]
+        if last_net > 0:
+            callout_col = C_HIGH
+            callout_msg = f"Positive revision momentum: +{last_net:.0f} net analysts raising this week. Bullish signal."
+        elif last_net < 0:
+            callout_col = C_LOW
+            callout_msg = f"Negative revision pressure: {last_net:.0f} net analysts lowering this week. Watch for downside."
+        else:
+            callout_col = C_TEXT2
+            callout_msg = "Revisions balanced this week. Neutral signal."
+
+        st.markdown(
+            f"""<div style="background:{_hex_rgba(callout_col, 0.08)}; border:1px solid {_hex_rgba(callout_col, 0.3)};
+                          border-left:3px solid {callout_col}; border-radius:10px; padding:12px 18px; margin-top:8px">
+                <span style="font-size:0.82rem; color:{callout_col}; font-weight:700">{callout_msg}</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception as e:
+        st.warning(f"Estimate revisions unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LEGACY HELPERS (preserved from original)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_stale_banner(insights: list[Insight]) -> None:
+    try:
+        stale = [i for i in insights if i.data_freshness_warning]
+        if not stale:
+            return
+        st.markdown(
+            f"""<div style="background:{_hex_rgba(C_MOD, 0.12)}; border:1px solid {_hex_rgba(C_MOD, 0.35)};
+                           border-radius:10px; padding:10px 16px; margin-bottom:14px; display:flex; align-items:center; gap:10px">
+                <span style="font-size:1rem">⚠️</span>
+                <span style="font-size:0.82rem; color:{C_MOD}; font-weight:600">
+                    {len(stale)} signal(s) have stale data — refresh data sources for best accuracy.
+                </span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _render_signal_consensus(insights: list[Insight]) -> None:
+    try:
+        counts = {}
+        for i in insights:
+            counts[i.action] = counts.get(i.action, 0) + 1
+        total = len(insights)
+        if total == 0:
+            return
+
+        bar_segs = ""
+        for action, count in sorted(counts.items(), key=lambda x: -x[1]):
+            pct = count / total * 100
+            col = ACTION_COLORS.get(action, C_TEXT2)
+            bar_segs += f"""<div title="{action}: {count}" style="flex:{pct}; background:{col};
+                                height:100%; min-width:4px; transition:flex 0.4s ease"></div>"""
+
+        st.markdown(
+            f"""<div style="margin-bottom:12px">
+                <div style="font-size:0.65rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;
+                            letter-spacing:0.1em; margin-bottom:6px">Signal Consensus</div>
+                <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; gap:2px">
+                    {bar_segs}
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _render_filter_controls(insights: list[Insight]) -> list[Insight]:
+    try:
+        all_actions = sorted(set(i.action for i in insights))
+        all_cats    = sorted(set(i.category for i in insights))
+
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            sel_actions = st.multiselect("Action", all_actions, default=all_actions, key="results_filter_action")
+        with c2:
+            sel_cats = st.multiselect("Category", all_cats, default=all_cats, key="results_filter_cat")
+        with c3:
+            min_score = st.slider("Min Score", 0, 100, 0, 5, key="results_filter_score")
+
+        filtered = [
+            i for i in insights
+            if i.action in sel_actions
+            and i.category in sel_cats
+            and i.score >= min_score / 100.0
+        ]
+        return filtered
+    except Exception:
+        return insights
+
+
+def _render_rich_insight_card(ins: Insight, card_key: str = "") -> None:
+    try:
+        sc_col = _score_color(ins.score)
+        cat_col = CATEGORY_COLORS.get(ins.category, C_ACCENT)
+        cat_ico = CATEGORY_ICONS.get(ins.category, "📌")
+        ac_col  = ACTION_COLORS.get(ins.action, C_ACCENT)
+
+        with st.expander(
+            f"{cat_ico} [{ins.action}] {ins.title}  ·  {ins.score:.0%}",
+            expanded=False,
+            key=f"rich_card_{card_key}_{ins.title[:20]}",
+        ):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1:
+                st.markdown(
+                    f"<div style='font-size:0.82rem; color:{C_TEXT2}; line-height:1.6'>{ins.reasoning}</div>",
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                st.markdown(
+                    f"<div style='font-size:0.7rem; color:{C_TEXT3}'>Ports: {', '.join(ins.ports_involved[:3]) if ins.ports_involved else '—'}</div>",
+                    unsafe_allow_html=True,
+                )
+            with c3:
+                st.markdown(
+                    f"<div style='font-size:0.7rem; color:{C_TEXT3}'>Routes: {', '.join(ins.routes_involved[:2]) if ins.routes_involved else '—'}</div>",
+                    unsafe_allow_html=True,
+                )
+    except Exception:
+        pass
+
+
+def _render_distribution_charts(insights: list[Insight]) -> None:
+    try:
+        cats   = [i.category for i in insights]
+        scores = [i.score for i in insights]
+        actions = [i.action for i in insights]
+
+        cat_counts = {c: cats.count(c) for c in set(cats)}
+        act_counts = {a: actions.count(a) for a in set(actions)}
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = go.Figure(go.Pie(
+                labels=list(cat_counts.keys()),
+                values=list(cat_counts.values()),
+                marker=dict(colors=[CATEGORY_COLORS.get(k, C_TEXT2) for k in cat_counts]),
+                hole=0.5,
+                textfont=dict(size=11),
+            ))
+            fig.update_layout(
+                height=220, paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color=C_TEXT2), showlegend=True,
+                margin=dict(l=10, r=10, t=20, b=10),
+                legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+            )
+            st.plotly_chart(fig, use_container_width=True, key="dist_cat_pie")
+
+        with c2:
+            fig2 = go.Figure(go.Bar(
+                x=list(act_counts.keys()),
+                y=list(act_counts.values()),
+                marker=dict(color=[ACTION_COLORS.get(k, C_ACCENT) for k in act_counts], opacity=0.85),
+            ))
+            fig2.update_layout(
+                height=220, paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor=_hex_rgba(C_CARD, 0.8),
+                font=dict(color=C_TEXT2), showlegend=False,
+                xaxis=dict(gridcolor=C_BORDER),
+                yaxis=dict(gridcolor=C_BORDER),
+                margin=dict(l=30, r=10, t=20, b=40),
+            )
+            st.plotly_chart(fig2, use_container_width=True, key="dist_action_bar")
+    except Exception:
+        pass
+
+
+def _render_export_dataframe(insights: list[Insight]) -> None:
+    try:
+        if not insights:
+            return
+        rows = []
+        for ins in insights:
+            rows.append({
+                "Score":    f"{ins.score:.0%}",
+                "Action":   ins.action,
+                "Category": ins.category,
+                "Title":    ins.title,
+                "Ports":    ", ".join(ins.ports_involved[:3]) if ins.ports_involved else "—",
+                "Routes":   ", ".join(ins.routes_involved[:2]) if ins.routes_involved else "—",
+                "Signals":  len(ins.supporting_signals),
+                "Stale":    "⚠️" if ins.data_freshness_warning else "✓",
+            })
+
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True, height=min(400, 50 + 36 * len(df)))
+
+        buf = io.StringIO()
+        df.to_csv(buf, index=False)
+        st.download_button(
+            "Download CSV",
+            data=buf.getvalue(),
+            file_name="ship_signals_filtered.csv",
+            mime="text/csv",
+            use_container_width=False,
+            key="results_dl_btn",
+        )
+    except Exception:
+        pass
+
+
+def _render_hero_card(ins: Insight) -> None:
+    try:
+        sc_col  = _score_color(ins.score)
+        cat_col = CATEGORY_COLORS.get(ins.category, C_ACCENT)
+        cat_ico = CATEGORY_ICONS.get(ins.category, "📌")
+        ac_col  = ACTION_COLORS.get(ins.action, C_ACCENT)
+
+        ports_str  = ", ".join(ins.ports_involved[:4]) if ins.ports_involved else "—"
+        routes_str = ", ".join(ins.routes_involved[:3]) if ins.routes_involved else "—"
+
+        st.markdown(
+            f"""<div style="background:linear-gradient(135deg,{C_CARD},#0f1d35);
+                           border:1px solid {_hex_rgba(cat_col,0.35)}; border-left:4px solid {cat_col};
+                           border-radius:14px; padding:22px 26px; margin-bottom:16px;
+                           box-shadow:0 0 28px {_hex_rgba(cat_col,0.08)}">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap">
+                    <div style="flex:1">
+                        <div style="font-size:0.62rem; font-weight:800; color:{cat_col}; text-transform:uppercase;
+                                    letter-spacing:0.1em; margin-bottom:6px">{cat_ico} {ins.category} · TOP SIGNAL</div>
+                        <div style="font-size:1.05rem; font-weight:800; color:{C_TEXT}; margin-bottom:8px; line-height:1.3">{ins.title}</div>
+                        <div style="font-size:0.8rem; color:{C_TEXT2}; line-height:1.6; max-width:680px">{ins.reasoning}</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px">
+                        <div style="font-size:2rem; font-weight:900; color:{sc_col}; text-shadow:0 0 16px {_hex_rgba(sc_col,0.4)}">{ins.score:.0%}</div>
+                        <span style="background:{_hex_rgba(ac_col,0.15)}; color:{ac_col};
+                                     border:1px solid {_hex_rgba(ac_col,0.4)};
+                                     padding:4px 14px; border-radius:999px; font-size:0.72rem; font-weight:800">{ins.action}</span>
+                    </div>
+                </div>
+                <div style="display:flex; gap:20px; margin-top:14px; flex-wrap:wrap">
+                    <div style="font-size:0.72rem; color:{C_TEXT3}">Ports: <span style="color:{C_TEXT2}">{ports_str}</span></div>
+                    <div style="font-size:0.72rem; color:{C_TEXT3}">Routes: <span style="color:{C_TEXT2}">{routes_str}</span></div>
+                    <div style="font-size:0.72rem; color:{C_TEXT3}">Supporting signals: <span style="color:{C_TEXT2}">{len(ins.supporting_signals)}</span></div>
+                    {"<span style='font-size:0.7rem; color:" + C_MOD + "; background:" + _hex_rgba(C_MOD, 0.1) + "; padding:2px 8px; border-radius:4px'>⚠️ Stale data</span>" if ins.data_freshness_warning else ""}
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _render_insight_card(ins: Insight, cat_colors, cat_icons, act_colors, card_key: str = "") -> None:
+    try:
+        sc_col  = _score_color(ins.score)
+        cat_col = cat_colors.get(ins.category, C_ACCENT)
+        cat_ico = cat_icons.get(ins.category, "📌")
+        ac_col  = act_colors.get(ins.action, C_ACCENT)
+
+        key_safe = f"insight_card_{card_key}_{ins.title[:15].replace(' ','_')}"
+        with st.expander(f"{cat_ico} {ins.title}  ·  {ins.score:.0%}  ·  {ins.action}", expanded=False, key=key_safe):
+            st.markdown(
+                f"<div style='font-size:0.82rem; color:{C_TEXT2}; line-height:1.6'>{ins.reasoning}</div>",
+                unsafe_allow_html=True,
+            )
+            if ins.ports_involved:
+                st.markdown(f"<div style='font-size:0.72rem; color:{C_TEXT3}; margin-top:8px'>Ports: {', '.join(ins.ports_involved)}</div>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+
+def _render_convergence_meter(insights: list[Insight]) -> None:
+    try:
+        conv = [i for i in insights if i.category == "CONVERGENCE"]
+        if not conv:
+            return
+        avg  = sum(i.score for i in conv) / len(conv)
+        col  = _score_color(avg)
+        bar_w = int(avg * 100)
+        st.markdown(
+            f"""<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; padding:14px 18px; margin-bottom:16px">
+                <div style="font-size:0.62rem; font-weight:800; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:8px">
+                    Convergence Meter · {len(conv)} signals
+                </div>
+                <div style="background:rgba(255,255,255,0.05); border-radius:4px; height:10px; overflow:hidden">
+                    <div style="width:{bar_w}%; height:100%; background:{col};
+                                box-shadow:0 0 12px {_hex_rgba(col, 0.5)}; transition:width 0.5s ease"></div>
+                </div>
+                <div style="font-size:0.75rem; color:{col}; margin-top:6px; font-weight:700">{avg:.0%} avg convergence score</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _render_insight_timeline(insights: list[Insight], chart_key: str = "") -> None:
+    try:
+        if not insights:
+            return
+        carriers_x = [i.title[:20] for i in insights]
+        scores_y   = [i.score for i in insights]
+        colors     = [_score_color(s) for s in scores_y]
+
+        fig = go.Figure(go.Bar(
+            x=carriers_x, y=scores_y,
+            marker=dict(color=colors, opacity=0.85),
+            hovertemplate="<b>%{x}</b>: %{y:.0%}<extra></extra>",
+        ))
+        fig.update_layout(
+            height=220,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor=_hex_rgba(C_CARD, 0.6),
+            font=dict(color=C_TEXT2, size=11),
+            xaxis=dict(gridcolor=C_BORDER, tickangle=-30),
+            yaxis=dict(gridcolor=C_BORDER, tickformat=".0%", range=[0, 1]),
+            margin=dict(l=40, r=10, t=10, b=70),
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"timeline_{chart_key}")
+    except Exception:
+        pass
+
+
+def _render_seasonal(insights: list[Insight]) -> None:
+    try:
+        from processing.seasonal import get_active_seasonal_signals
+        seasonal = get_active_seasonal_signals()
+        active   = [s for s in seasonal if s.active_now]
+        upcoming = [s for s in seasonal if not s.active_now and s.days_until <= 60]
+
+        if not active and not upcoming:
+            st.markdown(f"<div style='color:{C_TEXT3}; font-size:0.85rem; padding:8px 0'>No active seasonal patterns in the next 60 days.</div>", unsafe_allow_html=True)
+            return
+
+        for sig in active:
+            s_color = C_HIGH if sig.direction == "bullish" else C_LOW if sig.direction == "bearish" else C_TEXT2
+            st.markdown(
+                f"""<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {s_color};
+                                border-radius:10px; padding:14px 18px; margin-bottom:8px">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px">
+                        <div style="font-size:0.9rem; font-weight:700; color:{C_TEXT}">🔄 &nbsp;{sig.name}</div>
+                        <span style="background:{_hex_rgba(s_color,0.15)}; color:{s_color};
+                            padding:2px 10px; border-radius:999px; font-size:0.7rem; font-weight:700">
+                            ACTIVE · {sig.strength:.0%} strength</span>
+                    </div>
+                    <div style="font-size:0.82rem; color:{C_TEXT2}; line-height:1.5">{sig.description}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+        for sig in upcoming:
+            s_color = C_MOD
+            st.markdown(
+                f"""<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {s_color};
+                                border-radius:10px; padding:12px 18px; margin-bottom:8px; opacity:0.75">
+                    <div style="font-size:0.82rem; font-weight:600; color:{C_TEXT}">⏳ {sig.name} — in {sig.days_until}d</div>
+                    <div style="font-size:0.75rem; color:{C_TEXT2}; margin-top:4px">{sig.description}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+    except ImportError:
+        st.markdown(f"<div style='color:{C_TEXT3}; font-size:0.82rem'>Seasonal module not available.</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Seasonal patterns unavailable: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN RENDER ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════════════
 
 def render(insights: list[Insight]) -> None:
 
-    st.markdown(
-        '<div style="font-size:0.72rem; font-weight:700; color:#64748b; text-transform:uppercase;'
-        ' letter-spacing:0.08em; margin-bottom:16px">Decision Engine Output</div>',
-        unsafe_allow_html=True,
-    )
-
     if not insights:
         st.markdown(
-            f"""
-            <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:12px; padding:32px; text-align:center">
+            f"""<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:12px; padding:32px; text-align:center">
                 <div style="font-size:2rem; margin-bottom:12px">🔍</div>
                 <div style="font-size:1rem; font-weight:600; color:{C_TEXT}; margin-bottom:8px">No insights generated yet</div>
                 <div style="font-size:0.85rem; color:{C_TEXT2}">Add API credentials in .env and click Refresh All Data in the sidebar.</div>
-            </div>
-            """,
+            </div>""",
             unsafe_allow_html=True,
         )
         return
 
-    # ── Data freshness banner (prominent, shown before KPI row) ────────────────
-    _render_stale_banner(insights)
+    # Pre-generate shared data
+    try:
+        eps_df     = _gen_eps_data(insights)
+        growth_df  = _gen_revenue_earnings_growth()
+        beat_df    = _gen_beat_rate()
+        guidance_df = _gen_guidance()
+        seg_df     = _gen_segment_revenue()
+        margin_df  = _gen_margins()
+        rev_df     = _gen_estimate_revisions()
+    except Exception as e:
+        st.error(f"Data generation error: {e}")
+        eps_df = pd.DataFrame()
+        growth_df = beat_df = guidance_df = seg_df = margin_df = rev_df = pd.DataFrame()
+
+    # ── 1. Results Hero Dashboard ──────────────────────────────────────────────
+    try:
+        _render_results_hero(insights, eps_df)
+    except Exception as e:
+        st.warning(f"Hero dashboard error: {e}")
+
+    # ── 2. Earnings Performance League Table ───────────────────────────────────
+    try:
+        _render_league_table(eps_df)
+    except Exception as e:
+        st.warning(f"League table error: {e}")
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # ── 3 & 5 side by side: Scatter + Beat Rate ────────────────────────────────
+    try:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            _render_rev_eps_scatter(growth_df)
+        with col_b:
+            _render_beat_rate(beat_df)
+    except Exception as e:
+        st.warning(f"Charts error: {e}")
+
+    # ── 4. EPS Trend Chart ─────────────────────────────────────────────────────
+    try:
+        _render_eps_trend(insights)
+    except Exception as e:
+        st.warning(f"EPS trend error: {e}")
+
+    # ── 6. Forward Guidance Tracker ────────────────────────────────────────────
+    try:
+        _render_guidance_tracker(guidance_df)
+    except Exception as e:
+        st.warning(f"Guidance tracker error: {e}")
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # ── 7 & 8 side by side: Segment Revenue + Margins ─────────────────────────
+    try:
+        col_c, col_d = st.columns(2)
+        with col_c:
+            _render_segment_revenue(seg_df)
+        with col_d:
+            _render_margin_trends(margin_df)
+    except Exception as e:
+        st.warning(f"Revenue/margins error: {e}")
+
+    # ── 9. Earnings Surprise vs Share Price ────────────────────────────────────
+    try:
+        _render_surprise_price_scatter(eps_df)
+    except Exception as e:
+        st.warning(f"Surprise scatter error: {e}")
+
+    # ── 10. Consensus Estimate Revisions ───────────────────────────────────────
+    try:
+        _render_estimate_revisions(rev_df)
+    except Exception as e:
+        st.warning(f"Estimate revisions error: {e}")
+
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:28px 0'>", unsafe_allow_html=True)
+
+    # ── Signal intelligence (legacy sections preserved) ────────────────────────
+    try:
+        _render_stale_banner(insights)
+    except Exception:
+        pass
+
+    try:
+        _render_signal_consensus(insights)
+    except Exception:
+        pass
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    try:
+        st.markdown(
+            f'<div style="font-size:0.72rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;'
+            f' letter-spacing:0.08em; margin-bottom:10px">Filter &amp; Sort Signals</div>',
+            unsafe_allow_html=True,
+        )
+        filtered_insights = _render_filter_controls(insights)
+    except Exception:
+        filtered_insights = insights
+
+    try:
+        st.markdown(
+            f'<div style="font-size:0.72rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;'
+            f' letter-spacing:0.08em; margin-bottom:12px; margin-top:4px">Signal Cards</div>',
+            unsafe_allow_html=True,
+        )
+        for fi, ins in enumerate(filtered_insights):
+            _render_rich_insight_card(ins, card_key=f"filtered_{fi}")
+    except Exception:
+        pass
+
+    try:
+        _render_distribution_charts(insights)
+    except Exception:
+        pass
+
+    try:
+        _render_export_dataframe(filtered_insights)
+    except Exception:
+        pass
+
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
 
     # ── KPI row ────────────────────────────────────────────────────────────────
-    convergence_count = sum(1 for i in insights if i.category == "CONVERGENCE")
-    high_count        = sum(1 for i in insights if i.score >= 0.70)
-    stale_count       = sum(1 for i in insights if i.data_freshness_warning)
-    top               = insights[0]
+    try:
+        convergence_count = sum(1 for i in insights if i.category == "CONVERGENCE")
+        high_count        = sum(1 for i in insights if i.score >= 0.70)
+        stale_count       = sum(1 for i in insights if i.data_freshness_warning)
+        top               = insights[0]
 
-    def kpi(label, value, sub="", color=C_ACCENT):
-        return (
-            f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {color};"
-            f" border-radius:10px; padding:14px 16px; text-align:center'>"
-            f"<div style='font-size:0.67rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.07em'>{label}</div>"
-            f"<div style='font-size:1.7rem; font-weight:800; color:{C_TEXT}; line-height:1.1; margin:4px 0'>{value}</div>"
-            + (f"<div style='font-size:0.75rem; color:{C_TEXT2}'>{sub}</div>" if sub else "")
-            + "</div>"
-        )
+        def kpi(label, value, sub="", color=C_ACCENT):
+            return (
+                f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-top:3px solid {color};"
+                f" border-radius:10px; padding:14px 16px; text-align:center'>"
+                f"<div style='font-size:0.67rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.07em'>{label}</div>"
+                f"<div style='font-size:1.7rem; font-weight:800; color:{C_TEXT}; line-height:1.1; margin:4px 0'>{value}</div>"
+                + (f"<div style='font-size:0.75rem; color:{C_TEXT2}'>{sub}</div>" if sub else "")
+                + "</div>"
+            )
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(kpi("Top Signal",   top.action,           f"{top.score:.0%} confidence",  ACTION_COLORS.get(top.action, C_ACCENT)), unsafe_allow_html=True)
-    c2.markdown(kpi("Total Insights", str(len(insights)), "active signals"),               unsafe_allow_html=True)
-    c3.markdown(kpi("Convergence",  str(convergence_count), "multi-signal aligned", C_CONV), unsafe_allow_html=True)
-    if stale_count:
-        c4.markdown(kpi("Stale Data",   str(stale_count),  "sources need refresh",  C_MOD),  unsafe_allow_html=True)
-    else:
-        c4.markdown(kpi("Data Quality", "OK",              "all sources fresh",     C_HIGH), unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(kpi("Top Signal", top.action, f"{top.score:.0%} confidence", ACTION_COLORS.get(top.action, C_ACCENT)), unsafe_allow_html=True)
+        c2.markdown(kpi("Total Insights", str(len(insights)), "active signals"), unsafe_allow_html=True)
+        c3.markdown(kpi("Convergence", str(convergence_count), "multi-signal aligned", C_CONV), unsafe_allow_html=True)
+        if stale_count:
+            c4.markdown(kpi("Stale Data", str(stale_count), "sources need refresh", C_MOD), unsafe_allow_html=True)
+        else:
+            c4.markdown(kpi("Data Quality", "OK", "all sources fresh", C_HIGH), unsafe_allow_html=True)
+    except Exception:
+        pass
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
     # ── Convergence meter ──────────────────────────────────────────────────────
-    _render_convergence_meter(insights)
+    try:
+        _render_convergence_meter(insights)
+    except Exception:
+        pass
 
     # ── Category tabs ──────────────────────────────────────────────────────────
-    cats = ["CONVERGENCE", "PORT_DEMAND", "ROUTE", "MACRO"]
-    tab_labels = ["All (" + str(len(insights)) + ")"] + [
-        CATEGORY_ICONS.get(c, "📌") + " "
-        + c.replace("_", " ").title()
-        + " (" + str(sum(1 for i in insights if i.category == c)) + ")"
-        for c in cats
-    ]
+    try:
+        cats = ["CONVERGENCE", "PORT_DEMAND", "ROUTE", "MACRO"]
+        tab_labels = ["All (" + str(len(insights)) + ")"] + [
+            CATEGORY_ICONS.get(c, "📌") + " "
+            + c.replace("_", " ").title()
+            + " (" + str(sum(1 for i in insights if i.category == c)) + ")"
+            for c in cats
+        ]
 
-    all_tab, conv_tab, port_tab, route_tab, macro_tab = st.tabs(tab_labels)
+        all_tab, conv_tab, port_tab, route_tab, macro_tab = st.tabs(tab_labels)
 
-    tab_map = {
-        all_tab:   insights,
-        conv_tab:  [i for i in insights if i.category == "CONVERGENCE"],
-        port_tab:  [i for i in insights if i.category == "PORT_DEMAND"],
-        route_tab: [i for i in insights if i.category == "ROUTE"],
-        macro_tab: [i for i in insights if i.category == "MACRO"],
-    }
+        tab_map = {
+            all_tab:   insights,
+            conv_tab:  [i for i in insights if i.category == "CONVERGENCE"],
+            port_tab:  [i for i in insights if i.category == "PORT_DEMAND"],
+            route_tab: [i for i in insights if i.category == "ROUTE"],
+            macro_tab: [i for i in insights if i.category == "MACRO"],
+        }
 
-    for i, (tab_obj, tab_insights) in enumerate(tab_map.items()):
-        with tab_obj:
-            if not tab_insights:
-                st.markdown(
-                    f"<div style='color:{C_TEXT3}; font-size:0.85rem; padding:16px 0'>No insights in this category.</div>",
-                    unsafe_allow_html=True,
-                )
-                continue
-
-            # Hero card for the top insight in this tab
-            _render_hero_card(tab_insights[0])
-
-            # Remaining cards
-            for j, insight in enumerate(tab_insights[1:]):
-                _render_insight_card(insight, CATEGORY_COLORS, CATEGORY_ICONS, ACTION_COLORS, card_key=f"{i}_{j}")
-
-            # Insight landscape at the bottom of each tab
-            with st.expander("Insight Landscape", expanded=True, key=f"results_landscape_{i}"):
-                _render_insight_timeline(tab_insights, chart_key=f"insight_timeline_{i}")
+        for ti, (tab_obj, tab_insights) in enumerate(tab_map.items()):
+            with tab_obj:
+                if not tab_insights:
+                    st.markdown(
+                        f"<div style='color:{C_TEXT3}; font-size:0.85rem; padding:16px 0'>No insights in this category.</div>",
+                        unsafe_allow_html=True,
+                    )
+                    continue
+                _render_hero_card(tab_insights[0])
+                for j, insight in enumerate(tab_insights[1:]):
+                    _render_insight_card(insight, CATEGORY_COLORS, CATEGORY_ICONS, ACTION_COLORS, card_key=f"{ti}_{j}")
+                with st.expander("Insight Landscape", expanded=True, key=f"results_landscape_{ti}"):
+                    _render_insight_timeline(tab_insights, chart_key=f"insight_timeline_{ti}")
+    except Exception as e:
+        st.warning(f"Category tabs error: {e}")
 
     # ── Seasonal patterns ──────────────────────────────────────────────────────
     st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
@@ -592,333 +1405,6 @@ def render(insights: list[Insight]) -> None:
         unsafe_allow_html=True,
     )
     try:
-        from processing.seasonal import get_active_seasonal_signals
-        seasonal = get_active_seasonal_signals()
-        active   = [s for s in seasonal if s.active_now]
-        upcoming = [s for s in seasonal if not s.active_now and s.days_until <= 60]
-
-        if active:
-            for sig in active:
-                s_color = C_HIGH if sig.direction == "bullish" else C_LOW if sig.direction == "bearish" else C_TEXT2
-                st.markdown(
-                    f"""
-                    <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {s_color};
-                                border-radius:10px; padding:14px 18px; margin-bottom:8px">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px">
-                            <div style="font-size:0.9rem; font-weight:700; color:{C_TEXT}">🔄 &nbsp;{sig.name}</div>
-                            <span style="background:{_hex_rgba(s_color,0.15)}; color:{s_color};
-                                padding:2px 10px; border-radius:999px; font-size:0.7rem; font-weight:700">
-                                ACTIVE · {sig.strength:.0%} strength</span>
-                        </div>
-                        <div style="font-size:0.82rem; color:{C_TEXT2}; line-height:1.5">{sig.description}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.markdown(
-                f'<div style="color:{C_TEXT3}; font-size:0.85rem">No active seasonal patterns. Next: see upcoming events below.</div>',
-                unsafe_allow_html=True,
-            )
-
-        if upcoming:
-            with st.expander(f"Upcoming within 60 days ({len(upcoming)} events)", key="results_upcoming_seasonal"):
-                for sig in upcoming:
-                    u_color = C_ACCENT if sig.direction == "bullish" else C_MOD if sig.direction == "bearish" else C_TEXT2
-                    desc_preview = sig.description[:110] + ("..." if len(sig.description) > 110 else "")
-                    st.markdown(
-                        f"""
-                        <div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-left:3px solid {u_color};
-                                    border-radius:8px; padding:10px 14px; margin-bottom:6px">
-                            <div style="display:flex; justify-content:space-between">
-                                <span style="font-size:0.85rem; font-weight:600; color:{C_TEXT}">{sig.name}</span>
-                                <span style="font-size:0.75rem; color:{C_TEXT2}">in {sig.days_until}d</span>
-                            </div>
-                            <div style="font-size:0.8rem; color:{C_TEXT2}; margin-top:4px; line-height:1.4">{desc_preview}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-    except Exception:
-        pass
-
-    # ── Data Sources & Health ──────────────────────────────────────────────────
-    with st.expander("Data Sources & Health", expanded=False, key="results_data_sources_expander"):
-        _render_data_health()
-
-    # ── Export ─────────────────────────────────────────────────────────────────
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>", unsafe_allow_html=True)
-    st.markdown(
-        f'<div style="font-size:0.72rem; font-weight:700; color:{C_TEXT3}; text-transform:uppercase;'
-        f' letter-spacing:0.08em; margin-bottom:12px">Export</div>',
-        unsafe_allow_html=True,
-    )
-
-    filtered = insights  # export all insights
-
-    export_rows = [
-        {
-            "ID": i.insight_id, "Category": i.category, "Title": i.title,
-            "Action": i.action, "Score": round(i.score, 4), "Detail": i.detail,
-            "Ports": ", ".join(i.ports_involved), "Routes": ", ".join(i.routes_involved),
-            "Stocks": ", ".join(i.stocks_potentially_affected), "Generated": i.generated_at,
-        }
-        for i in filtered
-    ]
-
-    col_csv, col_json, col_txt = st.columns(3)
-
-    with col_csv:
-        buf = io.StringIO()
-        pd.DataFrame(export_rows).to_csv(buf, index=False)
-        st.download_button("Export as CSV", buf.getvalue(), file_name="ship_insights.csv",
-                           mime="text/csv", use_container_width=True)
-
-    with col_json:
-        json_records = []
-        for i in filtered:
-            signals_list = [
-                {"name": s.name, "score": round(s.value, 4), "weight": round(s.weight, 4), "raw": round(s.contribution, 4)}
-                for s in i.supporting_signals
-            ]
-            json_records.append({
-                "insight_id": i.insight_id, "title": i.title, "category": i.category,
-                "score": round(i.score, 4), "score_label": i.score_label, "action": i.action,
-                "detail": i.detail, "signals": signals_list,
-                "ports_involved": i.ports_involved, "routes_involved": i.routes_involved,
-                "stocks_potentially_affected": i.stocks_potentially_affected,
-                "generated_at": i.generated_at, "data_freshness_warning": i.data_freshness_warning,
-            })
-        json_str = json.dumps(json_records, indent=2)
-        st.download_button("Export as JSON", json_str, file_name="ship_insights.json",
-                           mime="application/json", use_container_width=True)
-
-    with col_txt:
-        report_str = _build_text_report(filtered, high_count)
-        st.download_button("Export Text Report", report_str, file_name="ship_intelligence_report.md",
-                           mime="text/markdown", use_container_width=True)
-
-    # ── Daily Digest ───────────────────────────────────────────────────────────
-    st.markdown(
-        "<hr style='border-color:rgba(255,255,255,0.07); margin:24px 0'>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("## 📧 Daily Digest")
-
-    try:
-        from utils.digest_builder import build_digest, render_as_html, render_as_json, render_as_markdown
-
-        _digest = build_digest(
-            port_results=[],
-            route_results=[],
-            insights=insights,
-            freight_data={},
-            macro_data={},
-            stock_data=[],
-        )
-
-        _html_str  = render_as_html(_digest)
-        _md_str    = render_as_markdown(_digest)
-        _json_str  = render_as_json(_digest)
-
-        _col_dl_html, _col_md, _col_dl_json = st.columns(3)
-
-        with _col_dl_html:
-            st.download_button(
-                "Download HTML Report",
-                data=_html_str.encode("utf-8"),
-                file_name="shipping_digest_" + _digest.date + ".html",
-                mime="text/html",
-                use_container_width=True,
-            )
-
-        with _col_md:
-            st.text_area(
-                "Copy Markdown",
-                value=_md_str,
-                height=200,
-            )
-
-        with _col_dl_json:
-            st.download_button(
-                "Download JSON",
-                data=_json_str.encode("utf-8"),
-                file_name="shipping_digest_" + _digest.date + ".json",
-                mime="application/json",
-                use_container_width=True,
-            )
-
-        st.info(_digest.executive_summary.split("\n\n")[0])
-
-        _sent_color = {
-            "BULLISH":  "#10b981",
-            "BEARISH":  "#ef4444",
-            "NEUTRAL":  "#94a3b8",
-            "MIXED":    "#f59e0b",
-        }.get(_digest.market_sentiment, "#94a3b8")
-
-        _sent_bg = {
-            "BULLISH":  "rgba(16,185,129,0.12)",
-            "BEARISH":  "rgba(239,68,68,0.12)",
-            "NEUTRAL":  "rgba(100,116,139,0.12)",
-            "MIXED":    "rgba(245,158,11,0.12)",
-        }.get(_digest.market_sentiment, "rgba(100,116,139,0.12)")
-
-        st.markdown(
-            "<div style='"
-            "display:inline-flex; align-items:center; gap:12px;"
-            "background:" + _sent_bg + ";"
-            "border:2px solid " + _sent_color + ";"
-            "border-radius:14px; padding:16px 28px; margin-top:10px"
-            "'>"
-            "<span style='font-size:32px; font-weight:900; color:" + _sent_color + ";"
-            " letter-spacing:0.04em'>" + _digest.market_sentiment + "</span>"
-            "<span style='font-size:14px; color:" + _sent_color + "; opacity:0.75'>"
-            "Market Sentiment &nbsp;|&nbsp; score: " + str(_digest.sentiment_score) + "</span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    except Exception as _digest_err:
-        st.warning("Daily digest unavailable: " + str(_digest_err))
-
-
-# ── Supporting functions ────────────────────────────────────────────────────────
-
-def _build_text_report(insights: list[Insight], n_high: int) -> str:
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    n = len(insights)
-
-    lines: list[str] = []
-    lines.append("# Global Shipping Intelligence Report")
-    lines.append(f"Generated: {timestamp}")
-    lines.append("")
-    lines.append("## Executive Summary")
-    lines.append(f"{n} active signals | {n_high} high-conviction insights")
-    lines.append("")
-    lines.append("## Top Insights")
-
-    for idx, ins in enumerate(insights, start=1):
-        lines.append(f"### {idx}. {ins.title} [{ins.score:.0%}]")
-        lines.append(f"Action: {ins.action}")
-        lines.append(ins.detail)
-        if ins.supporting_signals:
-            sig_parts = [f"{s.name} ({s.value:.0%} x {s.weight:.0%})" for s in ins.supporting_signals]
-            lines.append("Signals: " + ", ".join(sig_parts))
-        tags = ins.ports_involved + ins.routes_involved + ins.stocks_potentially_affected
-        if tags:
-            lines.append("Tags: " + ", ".join(tags))
-        lines.append("")
-
-    lines.append("## Seasonal Context")
-    try:
-        from processing.seasonal import get_active_seasonal_signals
-        seasonal = get_active_seasonal_signals()
-        active = [s for s in seasonal if s.active_now]
-        if active:
-            for sig in active:
-                lines.append(f"- **{sig.name}** (ACTIVE, {sig.strength:.0%} strength): {sig.description}")
-        else:
-            lines.append("- No active seasonal patterns at time of export.")
-    except Exception:
-        lines.append("- Seasonal data unavailable.")
-
-    lines.append("")
-    lines.append("---")
-    lines.append("*Generated by Ship Tracker Decision Engine*")
-
-    return "\n".join(lines)
-
-
-def _render_data_health() -> None:
-    SOURCE_DEFS = [
-        ("stocks",    "Stocks",            2.0),
-        ("freight",   "Freight (FBX)",    26.0),
-        ("fred",      "Macro (FRED)",     26.0),
-        ("worldbank", "World Bank",       168.0),
-        ("comtrade",  "Trade (Comtrade)", 168.0),
-        ("ais",       "AIS Vessel",         8.0),
-    ]
-
-    cache_dir = Path("cache")
-    now = time.time()
-
-    rows: list[dict] = []
-    for subdir, label, stale_hours in SOURCE_DEFS:
-        source_path = cache_dir / subdir
-        if not source_path.exists():
-            rows.append({"source": label, "last_updated": "—", "age": "—", "status": "Missing", "status_color": C_LOW})
-            continue
-
-        parquet_files = list(source_path.glob("*.parquet"))
-        if not parquet_files:
-            rows.append({"source": label, "last_updated": "—", "age": "—", "status": "Missing", "status_color": C_LOW})
-            continue
-
-        newest    = max(parquet_files, key=lambda f: os.path.getmtime(f))
-        mtime     = os.path.getmtime(newest)
-        age_secs  = now - mtime
-        age_hours = age_secs / 3600.0
-
-        last_updated_str = datetime.utcfromtimestamp(mtime).strftime("%Y-%m-%d %H:%M UTC")
-
-        if age_hours < 1.0:
-            age_str = f"{int(age_secs / 60)}m ago"
-        elif age_hours < 48.0:
-            age_str = f"{age_hours:.1f}h ago"
-        else:
-            age_str = f"{age_hours / 24:.1f}d ago"
-
-        status       = "Fresh" if age_hours <= stale_hours else "Stale"
-        status_color = C_HIGH  if age_hours <= stale_hours else C_MOD
-
-        rows.append({"source": label, "last_updated": last_updated_str, "age": age_str,
-                     "status": status, "status_color": status_color})
-
-    header_style = (
-        "font-size:0.7rem; font-weight:700; color:" + C_TEXT3
-        + "; text-transform:uppercase; letter-spacing:0.07em; padding:8px 12px; text-align:left;"
-    )
-    cell_style = (
-        "font-size:0.82rem; color:" + C_TEXT2
-        + "; padding:8px 12px; border-top:1px solid " + C_BORDER + ";"
-    )
-    source_cell_style = (
-        "font-size:0.82rem; font-weight:600; color:" + C_TEXT
-        + "; padding:8px 12px; border-top:1px solid " + C_BORDER + ";"
-    )
-
-    table_rows_html = ""
-    for row in rows:
-        h = row["status_color"].lstrip("#")
-        rv, gv, bv = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        badge_style = (
-            "display:inline-block; padding:2px 10px; border-radius:999px;"
-            " font-size:0.7rem; font-weight:700;"
-            " background:rgba(" + str(rv) + "," + str(gv) + "," + str(bv) + ",0.15);"
-            " color:" + row["status_color"] + ";"
-            " border:1px solid rgba(" + str(rv) + "," + str(gv) + "," + str(bv) + ",0.3);"
-        )
-        table_rows_html += (
-            "<tr>"
-            "<td style='" + source_cell_style + "'>" + row["source"] + "</td>"
-            "<td style='" + cell_style + "'>" + row["last_updated"] + "</td>"
-            "<td style='" + cell_style + "'>" + row["age"] + "</td>"
-            "<td style='" + cell_style + "'><span style='" + badge_style + "'>" + row["status"] + "</span></td>"
-            "</tr>"
-        )
-
-    table_html = (
-        "<table style='width:100%; border-collapse:collapse;"
-        " background:" + C_CARD + "; border:1px solid " + C_BORDER + "; border-radius:10px; overflow:hidden'>"
-        "<thead><tr>"
-        "<th style='" + header_style + "'>Source</th>"
-        "<th style='" + header_style + "'>Last Updated</th>"
-        "<th style='" + header_style + "'>Age</th>"
-        "<th style='" + header_style + "'>Status</th>"
-        "</tr></thead>"
-        "<tbody>" + table_rows_html + "</tbody>"
-        "</table>"
-    )
-
-    st.markdown(table_html, unsafe_allow_html=True)
+        _render_seasonal(insights)
+    except Exception as e:
+        st.warning(f"Seasonal patterns error: {e}")
