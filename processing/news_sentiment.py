@@ -25,6 +25,13 @@ from typing import Any
 from loguru import logger
 
 try:
+    import pandas as pd  # type: ignore
+    _PANDAS_OK = True
+except ImportError:  # pragma: no cover
+    _PANDAS_OK = False
+    logger.warning("pandas not installed – build_sentiment_trend disabled")
+
+try:
     import feedparser as _feedparser  # type: ignore
     _FEEDPARSER_OK = True
 except ImportError:  # pragma: no cover
@@ -188,6 +195,38 @@ _ENTITY_PATTERNS: list[tuple[str, str]] = sorted(
     _ENTITY_MAP.items(), key=lambda kv: len(kv[0]), reverse=True
 )
 
+# ── Topic classification keywords ─────────────────────────────────────────────
+
+_TOPIC_KEYWORDS: dict[str, list[str]] = {
+    "freight_rates":   ["rate", "rates", "fbx", "scfi", "bdi", "pricing", "price", "freight rate", "tariff"],
+    "port_congestion": ["congestion", "congested", "delay", "delays", "backlog", "dwell time", "queue", "waiting"],
+    "sanctions":       ["sanction", "sanctions", "embargo", "embargoes", "restricted", "blocked", "blacklist"],
+    "weather":         ["storm", "typhoon", "hurricane", "fog", "disruption", "weather", "cyclone", "flood"],
+    "m_and_a":         ["merger", "acquisition", "takeover", "deal", "consolidation", "acquire", "merge"],
+    "regulatory":      ["imo", "cii", "ets", "compliance", "regulation", "carbon", "emission", "marpol", "sulphur"],
+    "geopolitical":    ["war", "conflict", "red sea", "suez", "panama", "chokepoint", "piracy", "houthi", "military"],
+    "demand":          ["demand", "volume", "teu", "cargo", "shipment", "trade", "import", "export"],
+    "fleet":           ["newbuild", "vessel", "delivery", "orderbook", "scrapping", "fleet", "ship order", "capacity"],
+}
+
+# ── Region extraction keywords ────────────────────────────────────────────────
+
+REGION_KEYWORDS: dict[str, list[str]] = {
+    "Asia-Pacific":   ["china", "shanghai", "shenzhen", "hong kong", "singapore", "japan", "korea", "vietnam", "asia", "pacific"],
+    "Europe":         ["rotterdam", "hamburg", "antwerp", "felixstowe", "europe", "eu", "mediterranean"],
+    "North America":  ["los angeles", "long beach", "new york", "savannah", "north america", "us", "usa", "canada"],
+    "Middle East":    ["dubai", "jebel ali", "oman", "gulf", "middle east", "persian"],
+    "Red Sea":        ["red sea", "suez", "houthis", "bab-el-mandeb", "aden"],
+    "Latin America":  ["brazil", "santos", "latin america", "south america", "chile"],
+    "Africa":         ["africa", "durban", "mombasa", "cape of good hope"],
+}
+
+# Urgency indicator words
+_URGENCY_WORDS = [
+    "breaking", "urgent", "alert", "warning", "immediate", "crisis",
+    "emergency", "halt", "suspended", "force majeure",
+]
+
 # ── Data model ────────────────────────────────────────────────────────────────
 
 
@@ -204,6 +243,9 @@ class NewsArticle:
     sentiment_label: str            # "BULLISH" | "BEARISH" | "NEUTRAL"
     entities:        list[str] = field(default_factory=list)
     relevance_score: float = 0.5   # 0.0 … 1.0
+    topic:           str   = "general"  # see _classify_topic()
+    urgency_score:   float = 0.0        # 0.0 … 1.0
+    regions:         list[str] = field(default_factory=list)  # see _extract_regions()
 
     # ── Serialisation helpers ─────────────────────────────────────────────────
 
@@ -328,6 +370,65 @@ def _score_relevance(text: str, entities: list[str]) -> float:
     score += min(0.4, len(entities) * 0.1)
 
     return min(1.0, score)
+
+
+# ── Topic classifier ──────────────────────────────────────────────────────────
+
+
+def _classify_topic(text: str) -> str:
+    """Classify news item into one of the predefined topics."""
+    lower = text.lower()
+    best_topic = "general"
+    best_count = 0
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        count = sum(1 for kw in keywords if kw in lower)
+        if count > best_count:
+            best_count = count
+            best_topic = topic
+    return best_topic
+
+
+# ── Urgency scorer ────────────────────────────────────────────────────────────
+
+
+def _score_urgency(text: str) -> float:
+    """Score how urgent a news item is (0.0–1.0)."""
+    lower = text.lower()
+    score = 0.0
+
+    # High-impact words
+    for word in _URGENCY_WORDS:
+        if word in lower:
+            score += 0.2
+
+    # Exclamation marks
+    if "!" in text:
+        score += 0.1
+
+    # Percentage figures e.g. "15%"
+    if re.search(r"\d+%", text):
+        score += 0.05
+
+    # ALL CAPS words (3+ chars, not all numbers)
+    if re.search(r"\b[A-Z]{3,}\b", text):
+        score += 0.05
+
+    return min(1.0, score)
+
+
+# ── Region extractor ──────────────────────────────────────────────────────────
+
+
+def _extract_regions(text: str) -> list[str]:
+    """Extract geographic region mentions from text."""
+    lower = text.lower()
+    found: list[str] = []
+    for region, keywords in REGION_KEYWORDS.items():
+        for kw in keywords:
+            if kw in lower:
+                found.append(region)
+                break
+    return found
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
@@ -473,11 +574,14 @@ def _fetch_one_feed(source_name: str, url: str) -> list[NewsArticle]:
         if pub_dt < cutoff:
             continue
 
-        combined = title + " " + summary
-        score    = _score_sentiment(combined)
-        label    = _label_from_score(score)
-        entities = _extract_entities(combined)
+        combined  = title + " " + summary
+        score     = _score_sentiment(combined)
+        label     = _label_from_score(score)
+        entities  = _extract_entities(combined)
         relevance = _score_relevance(combined, entities)
+        topic     = _classify_topic(combined)
+        urgency   = _score_urgency(combined)
+        regions   = _extract_regions(combined)
 
         articles.append(NewsArticle(
             title           = title,
@@ -489,6 +593,9 @@ def _fetch_one_feed(source_name: str, url: str) -> list[NewsArticle]:
             sentiment_label = label,
             entities        = entities,
             relevance_score = round(relevance, 4),
+            topic           = topic,
+            urgency_score   = round(urgency, 4),
+            regions         = regions,
         ))
 
     logger.info("Feed [{}]: {} articles (last {} days)", source_name, len(articles), _CUTOFF_DAYS)
@@ -565,15 +672,20 @@ def get_sentiment_summary(articles: list[NewsArticle]) -> dict[str, Any]:
     """
     if not articles:
         return {
-            "overall_score":      0.0,
-            "label":              "NEUTRAL",
-            "article_count":      0,
-            "bullish_count":      0,
-            "bearish_count":      0,
-            "neutral_count":      0,
-            "top_bullish":        [],
-            "top_bearish":        [],
-            "trending_entities":  [],
+            "overall_score":        0.0,
+            "label":                "NEUTRAL",
+            "article_count":        0,
+            "bullish_count":        0,
+            "bearish_count":        0,
+            "neutral_count":        0,
+            "top_bullish":          [],
+            "top_bearish":          [],
+            "trending_entities":    [],
+            "topic_breakdown":      {},
+            "region_breakdown":     {},
+            "urgency_distribution": {"high": 0, "medium": 0, "low": 0},
+            "trending_topics":      [],
+            "high_urgency_items":   [],
         }
 
     # Weighted average by relevance_score
@@ -593,16 +705,58 @@ def get_sentiment_summary(articles: list[NewsArticle]) -> dict[str, Any]:
         entity_counter.update(a.entities)
     trending_entities = [e for e, _ in entity_counter.most_common()]
 
+    # ── Topic breakdown ───────────────────────────────────────────────────────
+    topic_groups: dict[str, list[NewsArticle]] = {}
+    for a in articles:
+        topic_groups.setdefault(a.topic, []).append(a)
+
+    topic_breakdown: dict[str, dict] = {}
+    for t, group in topic_groups.items():
+        avg_sent = sum(x.sentiment_score for x in group) / len(group)
+        top_headline = max(group, key=lambda x: x.relevance_score).title
+        topic_breakdown[t] = {
+            "count":        len(group),
+            "avg_sentiment": round(avg_sent, 4),
+            "top_headline":  top_headline,
+        }
+
+    # ── Region breakdown ──────────────────────────────────────────────────────
+    region_counter: Counter[str] = Counter()
+    for a in articles:
+        region_counter.update(a.regions)
+    region_breakdown: dict[str, int] = dict(region_counter)
+
+    # ── Urgency distribution ──────────────────────────────────────────────────
+    urgency_distribution = {"high": 0, "medium": 0, "low": 0}
+    high_urgency_items: list[NewsArticle] = []
+    for a in articles:
+        if a.urgency_score > 0.5:
+            urgency_distribution["high"] += 1
+            high_urgency_items.append(a)
+        elif a.urgency_score >= 0.2:
+            urgency_distribution["medium"] += 1
+        else:
+            urgency_distribution["low"] += 1
+
+    # ── Trending topics ───────────────────────────────────────────────────────
+    topic_count_counter: Counter[str] = Counter(a.topic for a in articles)
+    trending_topics = [t for t, _ in topic_count_counter.most_common()]
+
     return {
-        "overall_score":      round(overall_score, 4),
-        "label":              _label_from_score(overall_score),
-        "article_count":      len(articles),
-        "bullish_count":      len(bullish),
-        "bearish_count":      len(bearish),
-        "neutral_count":      len(neutral),
-        "top_bullish":        top_bullish,
-        "top_bearish":        top_bearish,
-        "trending_entities":  trending_entities,
+        "overall_score":        round(overall_score, 4),
+        "label":                _label_from_score(overall_score),
+        "article_count":        len(articles),
+        "bullish_count":        len(bullish),
+        "bearish_count":        len(bearish),
+        "neutral_count":        len(neutral),
+        "top_bullish":          top_bullish,
+        "top_bearish":          top_bearish,
+        "trending_entities":    trending_entities,
+        "topic_breakdown":      topic_breakdown,
+        "region_breakdown":     region_breakdown,
+        "urgency_distribution": urgency_distribution,
+        "trending_topics":      trending_topics,
+        "high_urgency_items":   high_urgency_items,
     }
 
 
@@ -662,6 +816,87 @@ def get_route_news(route_id: str, articles: list[NewsArticle]) -> list[NewsArtic
 
     result.sort(key=lambda a: a.published_dt, reverse=True)
     return result
+
+
+# ── Public: build_sentiment_trend ─────────────────────────────────────────────
+
+
+def build_sentiment_trend(news_items: list[NewsArticle], days: int = 30):  # -> pd.DataFrame
+    """
+    Group news items by date and compute daily average sentiment.
+
+    Returns a DataFrame with columns: date, avg_sentiment, count,
+    bullish_pct, bearish_pct.  Missing days are filled with NaN so
+    callers can interpolate.
+
+    Requires pandas.  Returns an empty dict if pandas is unavailable.
+    """
+    if not _PANDAS_OK:
+        logger.warning("build_sentiment_trend requires pandas")
+        return {}
+
+    if not news_items:
+        return pd.DataFrame(columns=["date", "avg_sentiment", "count", "bullish_pct", "bearish_pct"])
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    recent = [a for a in news_items if a.published_dt >= cutoff]
+
+    rows: dict[str, list] = {}
+    for a in recent:
+        date_key = a.published_dt.strftime("%Y-%m-%d")
+        if date_key not in rows:
+            rows[date_key] = []
+        rows[date_key].append(a)
+
+    records = []
+    for date_key, group in rows.items():
+        n = len(group)
+        avg_sent = sum(x.sentiment_score for x in group) / n
+        bull_pct = sum(1 for x in group if x.sentiment_label == "BULLISH") / n * 100
+        bear_pct = sum(1 for x in group if x.sentiment_label == "BEARISH") / n * 100
+        records.append({
+            "date":          date_key,
+            "avg_sentiment": round(avg_sent, 4),
+            "count":         n,
+            "bullish_pct":   round(bull_pct, 2),
+            "bearish_pct":   round(bear_pct, 2),
+        })
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
+
+    # Reindex over full date range, filling gaps with NaN
+    full_range = pd.date_range(df.index.min(), df.index.max(), freq="D")
+    df = df.reindex(full_range)
+    df.index.name = "date"
+    df = df.reset_index()
+
+    return df
+
+
+# ── Public: get_top_stories ────────────────────────────────────────────────────
+
+
+def get_top_stories(news_items: list[NewsArticle], n: int = 10) -> list[NewsArticle]:
+    """
+    Return top N most impactful stories, ranked by:
+    combined_score = (abs(sentiment_score) * 0.4) + (relevance_score * 0.4) + (urgency_score * 0.2)
+    """
+    if not news_items:
+        return []
+
+    def _impact(a: NewsArticle) -> float:
+        return (
+            abs(a.sentiment_score) * 0.4
+            + a.relevance_score * 0.4
+            + a.urgency_score * 0.2
+        )
+
+    return sorted(news_items, key=_impact, reverse=True)[:n]
 
 
 # ── Streamlit render panel ────────────────────────────────────────────────────

@@ -585,6 +585,7 @@ SECTIONS = [
     ("supply_chain", "🔗", "Supply Chain",        "Visibility, network & intermodal"),
     ("risk",         "⚠️", "Risk & Compliance",   "Weather, regulatory & market cycle"),
     ("intelligence", "🤖", "Intelligence",        "News, AI assistant & sustainability"),
+    ("reports",      "📋", "Reports",             "Investor & summary reports"),
 ]
 
 SECTION_COLORS = {
@@ -596,6 +597,7 @@ SECTION_COLORS = {
     "supply_chain": "#ec4899",
     "risk":         "#ef4444",
     "intelligence": "#a78bfa",
+    "reports":      "#64748b",
 }
 
 if "nav_section" not in st.session_state:
@@ -979,6 +981,17 @@ elif active_section == "intelligence":
             _r()
         except Exception as e:
             st.error(f"Sustainability error: {e}")
+
+
+# ── 9. Reports ────────────────────────────────────────────────────────────
+elif active_section == "reports":
+    from ui import tab_report
+    (t0,) = st.tabs(["📋 Investor Report"])
+    with t0:
+        try:
+            tab_report.render(port_results, route_results, insights, freight_data, macro_data, stock_data)
+        except Exception as e:
+            st.error(f"Investor Report error: {e}")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────

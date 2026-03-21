@@ -88,6 +88,14 @@ SECTIONS: list[dict] = [
         "color": "#a78bfa",
         "sub_pages": ["News & Sentiment", "Deep Dive", "AI Assistant", "Sustainability"],
     },
+    {
+        "key": "reports",
+        "icon": "📋",
+        "label": "Reports",
+        "description": "Investor & summary reports",
+        "color": "#64748b",
+        "sub_pages": ["Investor Report"],
+    },
 ]
 
 # ── Session-state default ─────────────────────────────────────────────────────
