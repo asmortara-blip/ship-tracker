@@ -641,19 +641,12 @@ def _render_hub_betweenness(
                 )
 
             # Top 5 critical hubs callout
-            st.markdown(
-                '<div style="margin-top:18px;padding:14px;background:rgba(59,130,246,0.07);'
-                'border:1px solid rgba(59,130,246,0.2);border-radius:10px">'
-                '<div style="font-size:0.67rem;font-weight:700;color:' + _C_ACCENT + ';'
-                'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">'
-                'Top 5 Critical Hubs</div>',
-                unsafe_allow_html=True,
-            )
+            hub_rows_html = ""
             for rank, (locode, score) in enumerate(ranked[:5], 1):
                 pr   = port_lookup.get(locode)
                 flag = _LOCODE_FLAGS.get(locode, "\U0001f310")
                 name = pr.port_name if pr else locode
-                st.markdown(
+                hub_rows_html += (
                     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'
                     '<span style="font-size:0.78rem;font-weight:900;color:' + _C_ACCENT + ';'
                     'min-width:18px">' + str(rank) + '</span>'
@@ -661,10 +654,18 @@ def _render_hub_betweenness(
                     + flag + ' ' + name + '</span>'
                     '<span style="font-size:0.72rem;color:' + _C_TEXT3 + ';margin-left:auto">'
                     + f"{score:.3f}" + '</span>'
-                    '</div>',
-                    unsafe_allow_html=True,
+                    '</div>'
                 )
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div style="margin-top:18px;padding:14px;background:rgba(59,130,246,0.07);'
+                'border:1px solid rgba(59,130,246,0.2);border-radius:10px">'
+                '<div style="font-size:0.67rem;font-weight:700;color:' + _C_ACCENT + ';'
+                'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">'
+                'Top 5 Critical Hubs</div>'
+                + hub_rows_html +
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
     except Exception:
         logger.exception("Error rendering hub betweenness")

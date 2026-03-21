@@ -1641,10 +1641,6 @@ def _render_universe_donut(attributions: List[PerformanceAttribution]) -> None:
 
     with right_col:
         # Horizontal bar breakdown — each factor with gradient bar
-        st.markdown(
-            '<div style="display:flex; flex-direction:column; gap:14px; padding-top:8px">',
-            unsafe_allow_html=True,
-        )
         bar_items_html = ""
         for key, label, color in zip(factor_keys, factor_labels_short, factor_colors_list):
             share = avg_shares[key]
@@ -1693,7 +1689,9 @@ def _render_universe_donut(attributions: List[PerformanceAttribution]) -> None:
         )
 
         st.markdown(
-            f"{bar_items_html}{stats_html}",
+            f'<div style="display:flex; flex-direction:column; gap:14px; padding-top:8px">'
+            f'{bar_items_html}{stats_html}'
+            f'</div>',
             unsafe_allow_html=True,
         )
 

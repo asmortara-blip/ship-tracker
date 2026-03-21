@@ -1166,15 +1166,6 @@ def _render_stock_signal_analysis(ticker: str, stock_data: dict) -> None:
             unsafe_allow_html=True,
         )
     with c2:
-        ma_fig = go.Figure()
-        for ma_val, ma_name, ma_col in [
-            (ma20, "20d MA", "white"), (ma50, "50d MA", C_CONV), (ma200, "200d MA", C_GOLD)
-        ]:
-            ma_fig.add_trace(go.Scatter(
-                x=["Current"], y=[current], mode="markers",
-                marker=dict(color=C_TEXT, size=12, symbol="diamond"),
-                name="Price", showlegend=False,
-            ))
         # Horizontal gauge bars for key levels
         levels = [
             ("Current", current, C_TEXT),

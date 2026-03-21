@@ -475,16 +475,17 @@ def _render_bubble(role: str, text: str, ts: str, confidence: float = 0.85) -> N
         conf_pct   = int(confidence * 100)
         conf_lbl   = _confidence_label(confidence)
 
+        safe_text = (
+            text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
         st.markdown(
             '<div class="chat-row ' + row_cls + '">'
             '<div class="chat-avatar">' + avatar + '</div>'
             '<div style="max-width:72%">'
-            '<div class="chat-bubble ' + bubble_cls + '">',
-            unsafe_allow_html=True,
-        )
-        st.markdown(text)
-        st.markdown(
-            '</div>'
+            '<div class="chat-bubble ' + bubble_cls + '">' + safe_text + '</div>'
             '<div class="confidence-bar-wrap">'
             '<div class="confidence-bar-bg">'
             '<div class="confidence-bar-fill" style="width:' + str(conf_pct) + '%; '

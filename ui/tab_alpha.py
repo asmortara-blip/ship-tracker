@@ -276,7 +276,7 @@ def _render_signal_leaderboard(signals: list) -> None:
                 f'box-shadow:0 0 6px {bar_col}66"></div></div>'
             )
 
-            rank_col = _C_AMBER if rank == 1 else (_C_TEXT2 if rank <= 3 else "#475569")
+            rank_col = _C_AMBER if rank == 1 else (C_TEXT2 if rank <= 3 else "#475569")
 
             rows_html += (
                 f'<div style="display:grid;grid-template-columns:36px 90px 130px 160px 1fr 90px 80px;'
@@ -285,7 +285,7 @@ def _render_signal_leaderboard(signals: list) -> None:
                 f'background:{"rgba(255,255,255,0.02)" if rank % 2 == 0 else "transparent"}">'
                 f'<span style="font-size:0.8rem;font-weight:900;color:{rank_col};'
                 f'font-variant-numeric:tabular-nums;text-align:right">#{rank}</span>'
-                f'<span style="font-size:0.85rem;font-weight:700;color:{_C_TEXT};'
+                f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT};'
                 f'font-family:monospace">{ticker}</span>'
                 f'<div>{d_badge}</div>'
                 f'<span style="font-size:0.72rem;color:{t_col};font-weight:600">{sig_type}</span>'
@@ -929,7 +929,7 @@ def _render_live_signal_dashboard(signals: list) -> None:
 
                         # Header row
                         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
-                        f'<span style="font-size:1rem;font-weight:900;color:{_C_TEXT};'
+                        f'<span style="font-size:1rem;font-weight:900;color:{C_TEXT};'
                         f'font-family:monospace">{ticker}</span>'
                         f'<span style="background:{d_col}22;color:{d_col};border:1px solid {d_col}55;'
                         f'border-radius:6px;padding:1px 8px;font-size:0.62rem;font-weight:800;'
@@ -1186,7 +1186,7 @@ def _render_top_opportunity_cards(signals: list) -> None:
 
                     # Ticker + Direction
                     f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">'
-                    f'<span style="font-size:1.6rem;font-weight:900;color:{_C_TEXT};'
+                    f'<span style="font-size:1.6rem;font-weight:900;color:{C_TEXT};'
                     f'font-family:monospace;letter-spacing:0.05em">{ticker}</span>'
                     f'<span style="background:{d_col}22;color:{d_col};border:1px solid {d_col}55;'
                     f'border-radius:8px;padding:4px 12px;font-size:0.7rem;font-weight:900;'
@@ -1212,7 +1212,7 @@ def _render_top_opportunity_cards(signals: list) -> None:
                     f'<div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:12px;margin-bottom:12px">'
                     f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">'
                     f'<div><div style="font-size:0.58rem;color:#475569">ENTRY</div>'
-                    f'<div style="font-size:0.9rem;font-weight:700;color:{_C_TEXT}">${entry:.2f}</div></div>'
+                    f'<div style="font-size:0.9rem;font-weight:700;color:{C_TEXT}">${entry:.2f}</div></div>'
                     f'<div><div style="font-size:0.58rem;color:#475569">STOP</div>'
                     f'<div style="font-size:0.9rem;font-weight:700;color:{_C_SHORT}">${stop:.2f}</div></div>'
                     f'<div><div style="font-size:0.58rem;color:#475569">TARGET</div>'

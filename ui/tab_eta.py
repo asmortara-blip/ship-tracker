@@ -329,7 +329,7 @@ def _render_vessel_map(etas: list[ShipmentETA]) -> None:
             showarrow=False, font=dict(size=10, color=_C_TEXT2),
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_vessel_map")
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +401,7 @@ def _render_eta_accuracy_by_route(etas: list[ShipmentETA]) -> None:
         showlegend=False,
         title=dict(text="ETA On-Time Rate by Route", font=dict(size=13, color=_C_TEXT2), x=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_accuracy_by_route")
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +476,7 @@ def _render_delay_heatmap(etas: list[ShipmentETA]) -> None:
         yaxis=dict(tickfont=dict(size=9, color=_C_TEXT2), gridcolor="rgba(0,0,0,0)"),
         title=dict(text="Delay Cause Heatmap — Route × Cause", font=dict(size=13, color=_C_TEXT2), x=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_delay_heatmap")
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +543,7 @@ def _render_delay_distribution(etas: list[ShipmentETA]) -> None:
         title=dict(text="Delay Duration Distribution with Percentile Markers", font=dict(size=13, color=_C_TEXT2), x=0),
         bargap=0.05,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_delay_distribution")
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +586,7 @@ def _render_delay_cause_donut() -> None:
         title=dict(text="Global Delay Cause Attribution (2024–2026)", font=dict(size=13, color=_C_TEXT2), x=0),
         font=dict(color=_C_TEXT),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_delay_cause_pie")
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +852,7 @@ def _render_carrier_reliability(etas: list[ShipmentETA]) -> None:
         showlegend=False,
         title=dict(text="Carrier On-Time Reliability Ranking", font=dict(size=13, color=_C_TEXT2), x=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_carrier_reliability")
 
 
 # ---------------------------------------------------------------------------
@@ -950,7 +950,7 @@ def _render_eta_confidence_intervals(etas: list[ShipmentETA]) -> None:
         showarrow=False, font=dict(size=10, color=_C_TEXT2),
         align="left",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_confidence_intervals")
 
 
 # ---------------------------------------------------------------------------
@@ -1349,7 +1349,7 @@ def _render_congestion_timeline(port_results: list) -> None:
             font=dict(size=10, color=_C_TEXT2),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="eta_congestion_timeline")
 
 
 def _export_eta_csv(etas: list[ShipmentETA]) -> None:

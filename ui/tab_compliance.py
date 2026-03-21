@@ -865,15 +865,9 @@ def _render_cii_cards() -> None:
                 except Exception as inner_exc:
                     logger.warning(f"CII card error for {vt.get('type')}: {inner_exc}")
 
-        # CII band reference
-        st.markdown(
-            "<div style='background:" + C_CARD + "; border:1px solid " + C_BORDER + "; border-radius:10px; padding:14px 18px; margin-top:12px'>"
-            "<div style='font-size:0.80rem; font-weight:700; color:" + C_TEXT + "; margin-bottom:10px'>CII Rating Band Reference</div>"
-            "<div style='display:flex; gap:8px; flex-wrap:wrap'>",
-            unsafe_allow_html=True,
-        )
+        # CII band reference — build full HTML in one block to avoid split-fragment rendering
         band_descriptions = [
-            ("A", "Major superior — best 10th percentile", C_CII_A := "#10b981"),
+            ("A", "Major superior — best 10th percentile", "#10b981"),
             ("B", "Minor superior — better than average", "#22d3ee"),
             ("C", "Moderate — average CII performance",   "#f59e0b"),
             ("D", "Minor inferior — action plan if 3yr",  "#f97316"),
@@ -888,7 +882,14 @@ def _render_cii_cards() -> None:
                 f"<div style='font-size:0.70rem; color:{C_TEXT2}'>{desc}</div>"
                 f"</div>"
             )
-        st.markdown(bands_html + "</div></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='background:" + C_CARD + "; border:1px solid " + C_BORDER + "; border-radius:10px; padding:14px 18px; margin-top:12px'>"
+            "<div style='font-size:0.80rem; font-weight:700; color:" + C_TEXT + "; margin-bottom:10px'>CII Rating Band Reference</div>"
+            "<div style='display:flex; gap:8px; flex-wrap:wrap'>"
+            + bands_html
+            + "</div></div>",
+            unsafe_allow_html=True,
+        )
 
     except Exception as exc:
         logger.error(f"CII cards error: {exc}")
@@ -929,13 +930,8 @@ def _render_eu_ets() -> None:
 
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-        # Phase-in timeline bar
-        st.markdown(
-            f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; padding:16px 20px; margin-bottom:14px'>"
-            f"<div style='font-size:0.80rem; font-weight:700; color:{C_TEXT}; margin-bottom:12px'>EU ETS Phase-In Timeline</div>"
-            f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px'>",
-            unsafe_allow_html=True,
-        )
+        # Phase-in timeline bar — build full HTML in one block to avoid split-fragment rendering
+        year_cards_html = ""
         for year, pct, is_current in [
             ("2024", ets["phase_in_2024_pct"], False),
             ("2025", ets["phase_in_2025_pct"], True),
@@ -944,14 +940,20 @@ def _render_eu_ets() -> None:
             bar_color = C_TEAL if is_current else C_ACCENT if pct == 100 else C_TEXT3
             highlight = f"border:1px solid {C_TEAL};" if is_current else f"border:1px solid {C_BORDER};"
             curr_badge = f"&nbsp;{_badge('CURRENT', C_TEAL)}" if is_current else ""
-            st.markdown(
+            year_cards_html += (
                 f"<div style='background:{C_CARD2}; {highlight} border-radius:8px; padding:12px'>"
                 f"<div style='font-size:0.75rem; color:{C_TEXT2}; margin-bottom:6px'>{year}{curr_badge}</div>"
                 f"{_progress_bar(pct, bar_color, height=10, label='ETS obligation')}"
-                f"</div>",
-                unsafe_allow_html=True,
+                f"</div>"
             )
-        st.markdown("</div></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; padding:16px 20px; margin-bottom:14px'>"
+            f"<div style='font-size:0.80rem; font-weight:700; color:{C_TEXT}; margin-bottom:12px'>EU ETS Phase-In Timeline</div>"
+            f"<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px'>"
+            + year_cards_html
+            + "</div></div>",
+            unsafe_allow_html=True,
+        )
 
         # Route exposure table
         _section_title("Route ETS Exposure", "Emissions coverage and estimated annual ETS cost per route")

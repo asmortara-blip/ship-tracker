@@ -928,8 +928,6 @@ def _render_opportunity_scoring() -> None:
 
     categories = ["Trade Growth", "Demand Imbalance", "Infra Readiness", "Geopolitical Clarity", "Rate Upside"]
 
-    fig = go.Figure()
-
     score_data = [
         {
             "name": "Cape of Good Hope",
@@ -958,22 +956,6 @@ def _render_opportunity_scoring() -> None:
         },
     ]
 
-    for rd in score_data:
-        vals = rd["values"] + [rd["values"][0]]   # close the polygon
-        cats = categories + [categories[0]]
-        fig.add_trace(go.Scatterpolar(
-            r=vals,
-            theta=cats,
-            fill="toself",
-            fillcolor=rd["color"].replace("#", "rgba(").replace(")", ",0.10)") if "rgba" not in rd["color"]
-                       else rd["color"],
-            line=dict(color=rd["color"], width=2),
-            name=rd["name"],
-            hovertemplate="<b>" + rd["name"] + "</b><br>%{theta}: %{r:.0%}<extra></extra>",
-            opacity=0.85,
-        ))
-
-    # Use a simple rgba fill approach
     fig2 = go.Figure()
     for rd in score_data:
         vals = rd["values"] + [rd["values"][0]]

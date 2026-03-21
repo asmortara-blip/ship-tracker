@@ -1528,17 +1528,59 @@ def render(
 
     # -- Top-3 recommendations (only after form submission) --
     if rec is not None:
-        _render_top3_recommendations(rec, port_names, freight_data, macro_data)
+        try:
+            _render_top3_recommendations(rec, port_names, freight_data, macro_data)
+        except Exception as exc:
+            logger.error(f"Booking top3 recommendations failed: {exc}")
+            st.error("Error rendering booking recommendations.", icon="⚠️")
 
     # -- Always-visible sections --
-    _render_rate_timing_matrix(freight_data)
-    _render_spot_vs_contract(freight_data)
-    _render_lead_time_optimizer(freight_data)
-    _render_carrier_guide(freight_data)
-    _render_volume_optimizer(rec, freight_data)
-    _render_seasonal_calendar()
-    _render_capacity_forecast(freight_data)
+    try:
+        _render_rate_timing_matrix(freight_data)
+    except Exception as exc:
+        logger.error(f"Rate timing matrix failed: {exc}")
+        st.error("Error rendering Rate Timing Matrix section.", icon="⚠️")
+
+    try:
+        _render_spot_vs_contract(freight_data)
+    except Exception as exc:
+        logger.error(f"Spot vs contract failed: {exc}")
+        st.error("Error rendering Spot vs. Contract section.", icon="⚠️")
+
+    try:
+        _render_lead_time_optimizer(freight_data)
+    except Exception as exc:
+        logger.error(f"Lead time optimizer failed: {exc}")
+        st.error("Error rendering Lead Time Optimizer section.", icon="⚠️")
+
+    try:
+        _render_carrier_guide(freight_data)
+    except Exception as exc:
+        logger.error(f"Carrier guide failed: {exc}")
+        st.error("Error rendering Carrier Guide section.", icon="⚠️")
+
+    try:
+        _render_volume_optimizer(rec, freight_data)
+    except Exception as exc:
+        logger.error(f"Volume optimizer failed: {exc}")
+        st.error("Error rendering Volume Optimizer section.", icon="⚠️")
+
+    try:
+        _render_seasonal_calendar()
+    except Exception as exc:
+        logger.error(f"Seasonal calendar failed: {exc}")
+        st.error("Error rendering Seasonal Calendar section.", icon="⚠️")
+
+    try:
+        _render_capacity_forecast(freight_data)
+    except Exception as exc:
+        logger.error(f"Capacity forecast failed: {exc}")
+        st.error("Error rendering Capacity Forecast section.", icon="⚠️")
 
     # -- Cost breakdown (only after form submission) --
     if rec is not None:
-        _render_cost_breakdown(rec)
+        try:
+            _render_cost_breakdown(rec)
+        except Exception as exc:
+            logger.error(f"Cost breakdown failed: {exc}")
+            st.error("Error rendering Cost Breakdown section.", icon="⚠️")

@@ -1071,10 +1071,8 @@ def _render_hedging_effectiveness(freight_data: dict) -> None:
 
     with col_ctrl:
         st.markdown(
-            "<div style='background:" + C_CARD + "; border:1px solid " + C_BORDER + "; "
-            "border-radius:12px; padding:20px'>"
             "<div style='font-size:0.68rem; text-transform:uppercase; letter-spacing:0.1em; "
-            "color:" + C_TEXT3 + "; margin-bottom:14px'>CALCULATOR INPUTS</div>",
+            "color:" + C_TEXT3 + "; margin-bottom:10px; font-weight:700'>CALCULATOR INPUTS</div>",
             unsafe_allow_html=True,
         )
         hedge_route = st.selectbox(
@@ -1093,7 +1091,6 @@ def _render_hedging_effectiveness(freight_data: dict) -> None:
             min_value=100, max_value=50000, value=1000, step=100,
             key="hedge_eff_feu",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     route_id = available_routes[[r.replace("_", " ").title() for r in available_routes].index(hedge_route)]
 
@@ -1984,11 +1981,8 @@ def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
             route_display_map[rid.replace("_", " ").title()] = rid
 
     st.markdown(
-        "<div style='background:linear-gradient(135deg,rgba(59,130,246,0.05) 0%,rgba(0,0,0,0) 100%); "
-        "border:1px solid rgba(59,130,246,0.15); border-radius:12px; padding:20px 24px; "
-        "margin:32px 0 20px 0'>"
         "<div style='font-size:0.68rem; text-transform:uppercase; letter-spacing:0.12em; "
-        "color:" + C_TEXT3 + "; margin-bottom:12px'>ROUTE-SPECIFIC PRICER</div>",
+        "color:" + C_TEXT3 + "; margin:32px 0 12px 0; font-weight:700'>ROUTE-SPECIFIC PRICER</div>",
         unsafe_allow_html=True,
     )
     ctrl_left, ctrl_right = st.columns([2, 1])
@@ -2004,7 +1998,6 @@ def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
             min_value=1, max_value=12, value=3, step=1,
             key="deriv_months_slider",
         )
-    st.markdown("</div>", unsafe_allow_html=True)
 
     selected_route_id = route_display_map.get(selected_display, available_routes[0])
 

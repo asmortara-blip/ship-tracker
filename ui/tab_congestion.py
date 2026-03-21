@@ -932,7 +932,7 @@ def _render_cost_calculator(ports: list[dict]) -> None:
         f'Estimated additional cost per TEU incurred due to current port delays, '
         f'based on daily vessel operating expense (USD {_DAILY_VESSEL_COST:,}/vessel), '
         f'slot utilisation, and average wait days. Assumes {_TEU_PER_VESSEL:,} TEU average vessel.'
-        f'</div>',
+        f'</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -1003,8 +1003,6 @@ def _render_cost_calculator(ports: list[dict]) -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1363,20 +1363,19 @@ def _render_visibility_intelligence_scorecard(paths: list[SupplyChainPath]) -> N
             )
 
     with qual_col:
-        qual_col.markdown(
+        qual_html = (
             f'<div style="background:{C_CARD2}; border:1px solid {C_BORDER};'
             f' border-radius:10px; padding:14px 16px; height:100%">'
             f'<div style="font-size:0.58rem; font-weight:700; color:{C_TEXT3};'
             f' text-transform:uppercase; letter-spacing:0.10em; margin-bottom:10px">'
-            f'Data Quality Snapshot</div>',
-            unsafe_allow_html=True,
+            f'Data Quality Snapshot</div>'
         )
         for dim_label, dim_val in [
             ("Completeness", completeness),
             ("Timeliness",   timely),
         ]:
             dim_c = C_HIGH if dim_val >= 0.75 else C_WARN if dim_val >= 0.50 else C_DANGER
-            qual_col.markdown(
+            qual_html += (
                 f'<div style="margin-bottom:8px">'
                 f'<div style="display:flex; justify-content:space-between;'
                 f' align-items:center; margin-bottom:3px">'
@@ -1387,10 +1386,10 @@ def _render_visibility_intelligence_scorecard(paths: list[SupplyChainPath]) -> N
                 f' height:5px; overflow:hidden">'
                 f'<div style="background:{dim_c}; width:{int(dim_val*100)}%;'
                 f' height:5px; border-radius:4px; box-shadow:0 0 6px {dim_c}60">'
-                f'</div></div></div>',
-                unsafe_allow_html=True,
+                f'</div></div></div>'
             )
-        qual_col.markdown('</div>', unsafe_allow_html=True)
+        qual_html += '</div>'
+        qual_col.markdown(qual_html, unsafe_allow_html=True)
 
     with gap_col:
         gap_col.markdown(

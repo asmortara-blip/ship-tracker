@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import calendar as _cal
 import datetime
+import logging
 
 import plotly.graph_objects as go
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 from processing.cargo_analyzer import (
     CARGO_CHARACTERISTICS,
@@ -1886,15 +1889,74 @@ def render(trade_data: dict, wb_data: dict, route_results: list) -> None:
     except Exception:
         pass
 
-    _render_hero(flows)
-    _render_cargo_mix_overview(flows)
-    _render_top_hs_codes()
-    _render_seasonality()
-    _render_high_value_routes()
-    _render_dangerous_goods()
-    _render_reefer_cargo()
-    _render_loss_rates()
-    _render_imbalance()
-    _render_sankey(flows)
-    _render_route_cargo_mix(trade_data, route_results)
-    _render_value_trend(trade_data, flows)
+    try:
+        _render_hero(flows)
+    except Exception:
+        logger.exception("tab_cargo: error in hero")
+        st.error("Error rendering Cargo Overview header.", icon="⚠️")
+
+    try:
+        _render_cargo_mix_overview(flows)
+    except Exception:
+        logger.exception("tab_cargo: error in cargo mix overview")
+        st.error("Error rendering Cargo Mix Overview section.", icon="⚠️")
+
+    try:
+        _render_top_hs_codes()
+    except Exception:
+        logger.exception("tab_cargo: error in top hs codes")
+        st.error("Error rendering Top HS Codes section.", icon="⚠️")
+
+    try:
+        _render_seasonality()
+    except Exception:
+        logger.exception("tab_cargo: error in seasonality")
+        st.error("Error rendering Seasonality section.", icon="⚠️")
+
+    try:
+        _render_high_value_routes()
+    except Exception:
+        logger.exception("tab_cargo: error in high value routes")
+        st.error("Error rendering High-Value Routes section.", icon="⚠️")
+
+    try:
+        _render_dangerous_goods()
+    except Exception:
+        logger.exception("tab_cargo: error in dangerous goods")
+        st.error("Error rendering Dangerous Goods section.", icon="⚠️")
+
+    try:
+        _render_reefer_cargo()
+    except Exception:
+        logger.exception("tab_cargo: error in reefer cargo")
+        st.error("Error rendering Reefer Cargo section.", icon="⚠️")
+
+    try:
+        _render_loss_rates()
+    except Exception:
+        logger.exception("tab_cargo: error in loss rates")
+        st.error("Error rendering Cargo Loss Rates section.", icon="⚠️")
+
+    try:
+        _render_imbalance()
+    except Exception:
+        logger.exception("tab_cargo: error in imbalance")
+        st.error("Error rendering Trade Imbalance section.", icon="⚠️")
+
+    try:
+        _render_sankey(flows)
+    except Exception:
+        logger.exception("tab_cargo: error in sankey")
+        st.error("Error rendering Trade Flow Sankey section.", icon="⚠️")
+
+    try:
+        _render_route_cargo_mix(trade_data, route_results)
+    except Exception:
+        logger.exception("tab_cargo: error in route cargo mix")
+        st.error("Error rendering Route Cargo Mix section.", icon="⚠️")
+
+    try:
+        _render_value_trend(trade_data, flows)
+    except Exception:
+        logger.exception("tab_cargo: error in value trend")
+        st.error("Error rendering Cargo Value Trend section.", icon="⚠️")

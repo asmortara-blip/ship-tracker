@@ -648,39 +648,34 @@ def _render_mini_panels(route_results: dict[str, MonteCarloResult], max_routes: 
 def _render_parameter_controls() -> dict:
     """Render simulation parameter controls and return a dict of values."""
     try:
-        st.markdown(
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; '
-            f'border-radius:12px; padding:20px 22px; margin-bottom:4px">',
-            unsafe_allow_html=True,
-        )
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            n_sims = st.select_slider(
-                "Simulations",
-                options=[100, 200, 300, 500, 750, 1000],
-                value=300,
-                key="mc_param_n_sims",
-                help="More paths = more accuracy, slower rendering",
-            )
-        with c2:
-            vol_mode = st.selectbox(
-                "Volatility Mode",
-                options=["Historical", "Low (−30%)", "High (+30%)", "Custom"],
-                index=0,
-                key="mc_param_vol_mode",
-                help="Adjust annualised volatility used in GBM",
-            )
-        with c3:
-            horizon = st.slider(
-                "Forecast Horizon (days)",
-                min_value=30,
-                max_value=180,
-                value=90,
-                step=10,
-                key="mc_param_horizon",
-                help="Days to simulate forward",
-            )
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container():
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                n_sims = st.select_slider(
+                    "Simulations",
+                    options=[100, 200, 300, 500, 750, 1000],
+                    value=300,
+                    key="mc_param_n_sims",
+                    help="More paths = more accuracy, slower rendering",
+                )
+            with c2:
+                vol_mode = st.selectbox(
+                    "Volatility Mode",
+                    options=["Historical", "Low (−30%)", "High (+30%)", "Custom"],
+                    index=0,
+                    key="mc_param_vol_mode",
+                    help="Adjust annualised volatility used in GBM",
+                )
+            with c3:
+                horizon = st.slider(
+                    "Forecast Horizon (days)",
+                    min_value=30,
+                    max_value=180,
+                    value=90,
+                    step=10,
+                    key="mc_param_horizon",
+                    help="Days to simulate forward",
+                )
         return {"n_sims": n_sims, "vol_mode": vol_mode, "horizon": horizon}
     except Exception as exc:
         st.warning(f"Parameter controls unavailable: {exc}")
