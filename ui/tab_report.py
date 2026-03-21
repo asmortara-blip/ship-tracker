@@ -7,9 +7,10 @@ Sections
 0. Hero                  — page header + 4 metric boxes
 1. Report Configuration  — checkbox panel inside expander
 2. Generate & Download   — primary CTA button + download widget
-3. Report Preview        — inline iframe of cover + exec summary
-4. Key Insights Preview  — alpha signals, top insights, sentiment bar, macro row
-5. News Sentiment Preview — sentiment trend chart, top headlines, topic breakdown
+3. Report History        — saved report list with load/delete + stats summary
+4. Report Preview        — inline iframe of cover + exec summary
+5. Key Insights Preview  — alpha signals, top insights, sentiment bar, macro row
+6. News Sentiment Preview — sentiment trend chart, top headlines, topic breakdown
 
 Function signature:
     render(port_results, route_results, insights, freight_data, macro_data, stock_data)
@@ -91,6 +92,34 @@ except Exception:
 
     def get_report_as_bytes(html: str) -> bytes:  # type: ignore[misc]
         return html.encode()
+
+
+try:
+    from utils.report_history import (
+        list_reports as _list_reports,
+        load_report_html as _load_report_html,
+        delete_report as _delete_report,
+        get_report_stats as _get_report_stats,
+        save_report as _save_report,
+    )
+    _HISTORY_OK = True
+except Exception:
+    _HISTORY_OK = False
+
+    def _list_reports():  # type: ignore[misc]
+        return []
+
+    def _load_report_html(report_id: str):  # type: ignore[misc]
+        return None
+
+    def _delete_report(report_id: str) -> bool:  # type: ignore[misc]
+        return False
+
+    def _get_report_stats() -> dict:  # type: ignore[misc]
+        return {}
+
+    def _save_report(html_content: str, report_obj) -> None:  # type: ignore[misc]
+        return None
 
 
 try:
@@ -422,6 +451,13 @@ def _render_generate(
                     st.session_state["report_html"]  = html_str
                     st.session_state["report_bytes"] = html_bytes
                     st.session_state["report_obj"]   = report
+
+                    # Persist to report history — non-blocking
+                    if _HISTORY_OK and html_str and report is not None:
+                        try:
+                            _save_report(html_content=html_str, report_obj=report)
+                        except Exception as _save_exc:
+                            logger.warning("tab_report: save_report failed (non-fatal): %s", _save_exc)
 
                     # Success summary
                     n_insights = len(insights) if insights else 0
@@ -805,6 +841,169 @@ def _render_news_preview() -> None:
         st.warning("News sentiment preview unavailable.")
 
 
+# ── Section 6: Report History ─────────────────────────────────────────────────
+
+def _sentiment_badge_color(label: str) -> str:
+    mapping = {
+        "BULLISH": C_HIGH,
+        "BEARISH": C_LOW,
+        "NEUTRAL": C_MOD,
+        "MIXED":   C_ACCENT,
+    }
+    return mapping.get((label or "NEUTRAL").upper(), C_TEXT3)
+
+
+def _render_report_history() -> None:
+    try:
+        _divider("Report History")
+        st.subheader("📁 Report History")
+
+        if not _HISTORY_OK:
+            st.info("Report history module not available.")
+            return
+
+        # ── Summary stats ─────────────────────────────────────────────────────
+        try:
+            stats = _get_report_stats()
+            total = stats.get("total_reports", 0)
+            if total > 0:
+                size_mb   = stats.get("total_size_mb", 0.0)
+                avg_score = stats.get("avg_sentiment_score", 0.0)
+                dist      = stats.get("sentiment_distribution", {})
+                dominant  = max(dist, key=dist.get) if dist else "—"
+                d_color   = _sentiment_badge_color(dominant)
+
+                st.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'border-radius:10px;padding:14px 18px;margin-bottom:16px;'
+                    f'display:flex;gap:28px;align-items:center;flex-wrap:wrap;">'
+                    f'<div style="text-align:center">'
+                    f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
+                    f'letter-spacing:0.1em;margin-bottom:2px">Total Reports</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{total}</div>'
+                    f'</div>'
+                    f'<div style="text-align:center">'
+                    f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
+                    f'letter-spacing:0.1em;margin-bottom:2px">Total Size</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{size_mb:.2f} MB</div>'
+                    f'</div>'
+                    f'<div style="text-align:center">'
+                    f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
+                    f'letter-spacing:0.1em;margin-bottom:2px">Avg Sentiment</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{avg_score:+.3f}</div>'
+                    f'</div>'
+                    f'<div style="text-align:center">'
+                    f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
+                    f'letter-spacing:0.1em;margin-bottom:2px">Dominant Sentiment</div>'
+                    f'<div style="margin-top:4px">{_badge(dominant, d_color)}</div>'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            logger.exception("tab_report: report history stats failed")
+
+        # ── Report list ───────────────────────────────────────────────────────
+        try:
+            reports = _list_reports()
+        except Exception:
+            logger.exception("tab_report: list_reports failed")
+            reports = []
+
+        if not reports:
+            st.info("No saved reports yet. Generate your first report above.")
+            return
+
+        for idx, meta in enumerate(reports):
+            try:
+                sent_label  = (meta.sentiment_label or "NEUTRAL").upper()
+                risk_label  = (meta.risk_level or "MODERATE").upper()
+                dq_label    = (meta.data_quality or "PARTIAL").upper()
+                s_color     = _sentiment_badge_color(sent_label)
+                r_color     = _risk_color(risk_label)
+                dq_color    = C_HIGH if dq_label == "FULL" else (C_MOD if dq_label == "PARTIAL" else C_LOW)
+                size_str    = f"{meta.file_size_kb:.1f} KB"
+                sig_str     = str(meta.signal_count)
+                report_date = meta.report_date or meta.generated_at[:10]
+
+                # Header row
+                col_info, col_load, col_del = st.columns([6, 1, 1])
+
+                with col_info:
+                    st.markdown(
+                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                        f'border-left:3px solid {s_color};border-radius:10px;'
+                        f'padding:12px 16px;display:flex;align-items:center;'
+                        f'gap:14px;flex-wrap:wrap;">'
+                        f'<div style="min-width:90px">'
+                        f'<div style="font-size:0.65rem;color:{C_TEXT3};margin-bottom:2px">Date</div>'
+                        f'<div style="font-size:0.85rem;font-weight:700;color:{C_TEXT}">{report_date}</div>'
+                        f'</div>'
+                        f'<div>{_badge(sent_label, s_color)}</div>'
+                        f'<div>'
+                        f'<span style="font-size:0.65rem;color:{C_TEXT3}">Risk: </span>'
+                        f'{_badge(risk_label, r_color)}'
+                        f'</div>'
+                        f'<div>'
+                        f'<span style="font-size:0.65rem;color:{C_TEXT3}">Signals: </span>'
+                        f'<span style="font-size:0.8rem;font-weight:700;color:{C_CONV}">{sig_str}</span>'
+                        f'</div>'
+                        f'<div>'
+                        f'<span style="font-size:0.65rem;color:{C_TEXT3}">Quality: </span>'
+                        f'{_badge(dq_label, dq_color)}'
+                        f'</div>'
+                        f'<div style="margin-left:auto">'
+                        f'<span style="font-size:0.65rem;color:{C_TEXT3}">{size_str}</span>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                with col_load:
+                    if st.button(
+                        "Load",
+                        key=f"rep_hist_load_{meta.report_id}_{idx}",
+                        use_container_width=True,
+                        help="Load this report into the preview panel",
+                    ):
+                        try:
+                            html = _load_report_html(meta.report_id)
+                            if html:
+                                st.session_state["report_html"]  = html
+                                st.session_state["report_bytes"] = html.encode()
+                                st.session_state["report_obj"]   = None
+                                st.success(f"Loaded report from {report_date}.")
+                                st.rerun()
+                            else:
+                                st.warning("Report file not found on disk.")
+                        except Exception:
+                            logger.exception("tab_report: load report failed")
+                            st.warning("Could not load report.")
+
+                with col_del:
+                    if st.button(
+                        "Delete",
+                        key=f"rep_hist_del_{meta.report_id}_{idx}",
+                        use_container_width=True,
+                        help="Permanently delete this report",
+                        type="secondary",
+                    ):
+                        try:
+                            _delete_report(meta.report_id)
+                            st.rerun()
+                        except Exception:
+                            logger.exception("tab_report: delete report failed")
+                            st.warning("Could not delete report.")
+
+            except Exception:
+                logger.exception("tab_report: error rendering history row %d", idx)
+                st.warning(f"Could not render report entry {idx + 1}.")
+
+    except Exception:
+        logger.exception("tab_report: report history section failed")
+        st.warning("Report history unavailable.")
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def render(
@@ -848,11 +1047,14 @@ def render(
     # ── 2. Generate & Download ────────────────────────────────────────────────
     _render_generate(port_results, route_results, insights, freight_data, macro_data, stock_data)
 
-    # ── 3. Report Preview (only after generation) ─────────────────────────────
+    # ── 3. Report History ─────────────────────────────────────────────────────
+    _render_report_history()
+
+    # ── 4. Report Preview (only after generation) ─────────────────────────────
     _render_preview()
 
-    # ── 4. Key Insights Preview ───────────────────────────────────────────────
+    # ── 5. Key Insights Preview ───────────────────────────────────────────────
     _render_key_insights(insights, macro_data, stock_data)
 
-    # ── 5. News Sentiment Preview ─────────────────────────────────────────────
+    # ── 6. News Sentiment Preview ─────────────────────────────────────────────
     _render_news_preview()

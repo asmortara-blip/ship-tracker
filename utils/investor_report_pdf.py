@@ -22,6 +22,12 @@ try:
 except ImportError:
     _FPDF_OK = False
 
+try:
+    from processing.investor_report_engine import InvestorReport
+    _ENGINE_OK = True
+except ImportError:
+    _ENGINE_OK = False
+
 if TYPE_CHECKING:
     from processing.investor_report_engine import InvestorReport
 

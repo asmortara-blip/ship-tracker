@@ -648,6 +648,11 @@ def _generate_executive_summary(
     top_pick_str = stocks.top_pick if stocks.top_pick else "N/A"
     top_pick_price = stocks.prices.get(stocks.top_pick, 0.0)
     top_pick_chg = stocks.changes_30d.get(stocks.top_pick, 0.0)
+    # Build the price/change clause separately to avoid a nested .format() inside an f-string
+    if top_pick_price and top_pick_price > 0:
+        top_pick_price_clause = f"at ${top_pick_price:.2f}, up {top_pick_chg:.1f}% over 30 days"
+    else:
+        top_pick_price_clause = "based on signal scoring"
 
     p2 = (
         f"The alpha signal engine has generated {n_signals} active signals across the coverage universe, "
@@ -656,7 +661,7 @@ def _generate_executive_summary(
         f"reflecting {'strong risk-adjusted upside' if sharpe > 1.0 else ('acceptable risk-adjusted positioning' if sharpe > 0 else 'defensive positioning given headwinds')}. "
         f"The highest-priority long idea is {top_long_str}. "
         f"Among individual equities, {top_pick_str} is the top-rated pick "
-        f"{'at ${:.2f}, up {:.1f}% over 30 days'.format(top_pick_price, top_pick_chg) if top_pick_price else 'based on signal scoring'}, "
+        f"{top_pick_price_clause}, "
         f"supported by convergent signals across momentum, macro, and fundamental factors."
     )
 
@@ -1231,6 +1236,84 @@ def build_investor_report(
                      if their data source is unavailable.
     """
     logger.info("InvestorReportEngine: starting report build")
+    try:
+        return _build_investor_report_inner(
+            port_results=port_results,
+            route_results=route_results,
+            insights=insights,
+            freight_data=freight_data,
+            macro_data=macro_data,
+            stock_data=stock_data,
+            news_items=news_items,
+        )
+    except Exception as _fatal:
+        logger.error("build_investor_report total failure — returning safe default: {}", _fatal)
+        _now = datetime.now(timezone.utc)
+        _empty_sentiment = SentimentBreakdown(
+            overall_score=0.0, overall_label="NEUTRAL",
+            news_score=0.0, freight_score=0.0, macro_score=0.0, alpha_score=0.0,
+            bullish_count=0, bearish_count=0, neutral_count=0,
+            top_keywords=[], trending_topics=[],
+        )
+        _empty_alpha = AlphaSignalSummary(
+            signals=[], portfolio={}, top_long=[], top_short=[],
+            scorecard_df=pd.DataFrame(),
+            signal_count_by_type={}, signal_count_by_conviction={},
+        )
+        _empty_market = MarketIntelligenceSummary(
+            top_insights=[], top_ports=[], top_routes=[],
+            risk_level="MODERATE", active_opportunities=0, high_conviction_count=0,
+        )
+        _empty_freight = FreightRateSummary(
+            routes=[], avg_change_30d_pct=0.0,
+            biggest_mover={}, momentum_label="Stable", fbx_composite=0.0,
+        )
+        _empty_macro = MacroSnapshot(
+            bdi=0.0, bdi_change_30d_pct=0.0,
+            wti=0.0, wti_change_30d_pct=0.0,
+            treasury_10y=0.0, dxy_proxy=0.0,
+            pmi_proxy=50.0, supply_chain_stress="MODERATE",
+        )
+        _empty_stocks = StockAnalysis(
+            tickers=[], prices={}, changes_30d={},
+            signals_by_ticker={}, top_pick="", top_pick_rationale="",
+        )
+        _empty_ai = AIAnalysis(
+            executive_summary="Report generation encountered a critical error. Please retry.",
+            sentiment_narrative="",
+            opportunity_narrative="",
+            risk_narrative="",
+            outlook_30d="",
+            top_recommendations=[],
+            disclaimer=_DISCLAIMER,
+        )
+        return InvestorReport(
+            generated_at=_now.isoformat(),
+            report_date=_now.strftime("%B %d, %Y"),
+            sentiment=_empty_sentiment,
+            alpha=_empty_alpha,
+            market=_empty_market,
+            freight=_empty_freight,
+            macro=_empty_macro,
+            stocks=_empty_stocks,
+            ai=_empty_ai,
+            data_quality="DEGRADED",
+            news_items=[],
+            digest=None,
+        )
+
+
+def _build_investor_report_inner(
+    port_results: list,
+    route_results: list,
+    insights: list,
+    freight_data: dict,
+    macro_data: dict,
+    stock_data: dict,
+    news_items: list = None,
+) -> InvestorReport:
+    """Inner implementation of build_investor_report — called by the public
+    function which wraps it in a top-level try/except safety net."""
     now = datetime.now(timezone.utc)
     generated_at = now.isoformat()
     report_date = now.strftime("%B %d, %Y")
@@ -1329,6 +1412,9 @@ def build_investor_report(
     # ------------------------------------------------------------------
     # 7. Sentiment breakdown
     # ------------------------------------------------------------------
+    # Pre-initialise composite_label so step 9 (MarketIntelligenceSummary) can
+    # reference it even if this try block fails before assigning the variable.
+    composite_label: str = "NEUTRAL"
     try:
         freight_momentum_pct, momentum_label = _compute_freight_momentum(freight_data)
         bdi_change_30d = _extract_macro_change_30d(macro_data, "BDIY")
