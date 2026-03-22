@@ -1,876 +1,632 @@
-"""Monte Carlo freight rate forecasting tab.
+"""Monte Carlo simulation dashboard for shipping market forecasting.
 
-Visualises GBM simulation results: hero header, fan charts, probability
-distribution histograms, VaR/CVaR cards, scenario probability tables,
-per-route mini panels, parameter controls, and an all-routes comparison table.
+Sections:
+  1. Monte Carlo Configuration (st.form)
+  2. Simulation Fan Chart (Plotly)
+  3. Distribution at Horizon (Plotly histogram)
+  4. Statistics Table (HTML)
+  5. Scenario Overlays (Plotly)
+  6. Value at Risk / CVaR (KPI cards)
+  7. Path Analysis (breach timing + drawdown)
 """
 from __future__ import annotations
 
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+from loguru import logger
+from scipy import stats as scipy_stats
 
-from processing.monte_carlo import (
-    MonteCarloResult,
-    get_highest_upside_routes,
-    get_risk_adjusted_opportunity,
-    simulate_all_routes,
-    simulate_freight_rates,
-)
-from ui.styles import (
-    C_ACCENT,
-    C_BORDER,
-    C_CARD,
-    C_HIGH,
-    C_LOW,
-    C_MOD,
-    C_TEXT,
-    C_TEXT2,
-    C_TEXT3,
-    _hex_to_rgba,
-    dark_layout,
-    section_header,
-)
+# ── Palette ──────────────────────────────────────────────────────────────────
+C_BG      = "#0a0f1a"
+C_SURFACE = "#111827"
+C_CARD    = "#1a2235"
+C_BORDER  = "rgba(255,255,255,0.08)"
+C_HIGH    = "#10b981"
+C_MOD     = "#f59e0b"
+C_LOW     = "#ef4444"
+C_ACCENT  = "#3b82f6"
+C_TEXT    = "#f1f5f9"
+C_TEXT2   = "#94a3b8"
+C_TEXT3   = "#64748b"
+C_PURPLE  = "#8b5cf6"
+C_CYAN    = "#06b6d4"
 
 
-# ── Internal helpers ────────────────────────────────────────────────────────────
+# ── Simulation engine ─────────────────────────────────────────────────────────
 
-_C_BG       = "#0a0f1a"
-_C_SURFACE  = "#111827"
-_C_CARD2    = "#1e2d47"
-_C_BULL     = "#10b981"   # green
-_C_BEAR     = "#ef4444"   # red
-_C_MED      = "#f59e0b"   # amber
-_C_BLUE     = "#3b82f6"
-_C_PURPLE   = "#8b5cf6"
-_C_CYAN     = "#06b6d4"
-
-_HORIZON_DAYS = {30: "30d", 60: "60d", 90: "90d"}
-
-
-def _pct_delta(new_val: float, base: float) -> str:
-    """Format a percentage change string with sign."""
-    if base == 0:
-        return "—"
-    pct = (new_val - base) / base * 100.0
-    sign = "+" if pct >= 0 else ""
-    return f"{sign}{pct:.1f}%"
+def _run_gbm(
+    S0: float,
+    mu: float,
+    sigma: float,
+    T: int,
+    n_paths: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Geometric Brownian Motion: shape (n_paths, T+1)."""
+    dt = 1 / 252
+    drift = (mu - 0.5 * sigma ** 2) * dt
+    diffusion = sigma * np.sqrt(dt)
+    Z = rng.standard_normal((n_paths, T))
+    log_returns = drift + diffusion * Z
+    log_paths = np.cumsum(log_returns, axis=1)
+    paths = S0 * np.exp(np.hstack([np.zeros((n_paths, 1)), log_paths]))
+    return paths
 
 
-def _fmt_rate(rate: float) -> str:
-    """Format a freight rate with thousands separator."""
-    return f"${rate:,.0f}"
+def _run_jump_diffusion(
+    S0: float,
+    mu: float,
+    sigma: float,
+    T: int,
+    n_paths: int,
+    rng: np.random.Generator,
+    lam: float = 10.0,
+    jump_mu: float = 0.0,
+    jump_sigma: float = 0.05,
+) -> np.ndarray:
+    """Merton jump-diffusion model: GBM + Poisson jumps."""
+    dt = 1 / 252
+    drift = (mu - 0.5 * sigma ** 2 - lam * (np.exp(jump_mu + 0.5 * jump_sigma ** 2) - 1)) * dt
+    diffusion = sigma * np.sqrt(dt)
+    Z = rng.standard_normal((n_paths, T))
+    n_jumps = rng.poisson(lam * dt, (n_paths, T))
+    jump_sizes = np.where(
+        n_jumps > 0,
+        rng.normal(jump_mu * n_jumps, jump_sigma * np.sqrt(np.maximum(n_jumps, 1))),
+        0.0,
+    )
+    log_returns = drift + diffusion * Z + jump_sizes
+    log_paths = np.cumsum(log_returns, axis=1)
+    paths = S0 * np.exp(np.hstack([np.zeros((n_paths, 1)), log_paths]))
+    return paths
 
 
-def _divider(label: str) -> None:
+def _simulate(
+    S0: float,
+    mu_annual: float,
+    sigma_annual: float,
+    T: int,
+    n_paths: int,
+    model: str,
+    seed: int = 42,
+) -> np.ndarray:
+    """Dispatch to GBM or jump-diffusion. Returns shape (n_paths, T+1)."""
+    rng = np.random.default_rng(seed)
+    if model == "Jump Diffusion":
+        return _run_jump_diffusion(S0, mu_annual, sigma_annual, T, n_paths, rng)
+    return _run_gbm(S0, mu_annual, sigma_annual, T, n_paths, rng)
+
+
+# ── Section helpers ───────────────────────────────────────────────────────────
+
+def _section_header(title: str, subtitle: str = "") -> None:
+    sub_html = (
+        f'<p style="margin:4px 0 0; font-size:0.82rem; color:{C_TEXT2}">{subtitle}</p>'
+        if subtitle else ""
+    )
     st.markdown(
-        f'<div style="display:flex; align-items:center; gap:12px; margin:28px 0 16px">'
-        f'<div style="flex:1; height:1px; background:rgba(255,255,255,0.07)"></div>'
-        f'<span style="font-size:0.62rem; color:#475569; text-transform:uppercase;'
-        f' letter-spacing:0.14em; font-weight:700">{label}</span>'
-        f'<div style="flex:1; height:1px; background:rgba(255,255,255,0.07)"></div>'
+        f'<div style="margin:32px 0 16px">'
+        f'<h3 style="margin:0; font-size:1.05rem; font-weight:700; color:{C_TEXT}">{title}</h3>'
+        f'{sub_html}'
         f'</div>',
         unsafe_allow_html=True,
     )
 
 
-def _card(
-    label: str,
-    value: str,
-    sub: str = "",
-    top_color: str = _C_BLUE,
-    value_color: str = "#f1f5f9",
-    key_suffix: str = "",
-) -> str:
-    """Return HTML for a single stat card."""
-    sub_html = (
-        f'<div style="font-size:0.78rem; color:{C_TEXT3}; margin-top:4px">{sub}</div>'
-        if sub else ""
-    )
+def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; '
-        f'border-top:3px solid {top_color}; border-radius:10px; '
-        f'padding:16px 18px; text-align:center; height:100%">'
-        f'<div style="font-size:0.68rem; color:{C_TEXT3}; text-transform:uppercase; '
-        f'letter-spacing:0.08em; font-weight:700; margin-bottom:6px">{label}</div>'
-        f'<div style="font-size:1.65rem; font-weight:700; color:{value_color}; '
-        f'font-family:\'JetBrains Mono\', monospace">{value}</div>'
-        f'{sub_html}'
+        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px;'
+        f' padding:16px 20px; min-width:160px; flex:1">'
+        f'<div style="font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase;'
+        f' letter-spacing:0.1em; font-weight:600; margin-bottom:6px">{label}</div>'
+        f'<div style="font-size:1.35rem; font-weight:700; color:{color}">{value}</div>'
+        f'<div style="font-size:0.76rem; color:{C_TEXT2}; margin-top:4px">{sub}</div>'
         f'</div>'
     )
 
 
-def _cvar_95(result: MonteCarloResult) -> float:
-    """Compute CVaR (Expected Shortfall) at 95% confidence level."""
-    try:
-        final_rates = [path[-1] for path in result.simulated_paths]
-        losses = [result.current_rate - r for r in final_rates]
-        cutoff = float(np.percentile(losses, 95))
-        tail = [l for l in losses if l >= cutoff]
-        return float(np.mean(tail)) if tail else 0.0
-    except Exception:
-        return 0.0
+def _kpi_row(cards: list[str]) -> None:
+    inner = "".join(cards)
+    st.markdown(
+        f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px">{inner}</div>',
+        unsafe_allow_html=True,
+    )
 
 
-def _rate_volatility(result: MonteCarloResult) -> float:
-    """Return annualised rate volatility as a percentage."""
-    try:
-        final_rates = [path[-1] for path in result.simulated_paths]
-        vol = float(np.std(final_rates)) / result.current_rate * 100.0
-        return vol
-    except Exception:
-        return 0.0
+def _dark_layout() -> dict:
+    return dict(
+        template="plotly_dark",
+        paper_bgcolor=C_CARD,
+        plot_bgcolor=C_CARD,
+        font=dict(color=C_TEXT2, size=11),
+        margin=dict(l=48, r=24, t=36, b=40),
+        legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0),
+    )
 
 
-def _prob_above(result: MonteCarloResult, threshold: float) -> float:
-    """Return probability that the final rate is above *threshold*."""
-    try:
-        final_rates = [path[-1] for path in result.simulated_paths]
-        return float(np.mean([r > threshold for r in final_rates])) * 100.0
-    except Exception:
-        return 0.0
+# ── Section 1: Configuration form ────────────────────────────────────────────
 
-
-def _day_idx(result: MonteCarloResult, day: int) -> int:
-    return min(day - 1, result.forecast_days - 1)
-
-
-def _final_rates_at(result: MonteCarloResult, day: int) -> list[float]:
-    idx = _day_idx(result, day)
-    try:
-        return [path[idx] for path in result.simulated_paths]
-    except Exception:
-        return []
-
-
-# ── Section 1: Hero header ──────────────────────────────────────────────────────
-
-def _render_hero(result: MonteCarloResult) -> None:
-    """Full-width hero banner summarising a route's simulation."""
-    try:
-        prob_up_pct = result.prob_rate_increase * 100.0
-        sentiment   = "Bullish" if prob_up_pct >= 55 else ("Bearish" if prob_up_pct < 45 else "Neutral")
-        sent_color  = _C_BULL if sentiment == "Bullish" else (_C_BEAR if sentiment == "Bearish" else _C_MED)
-        sent_icon   = "▲" if sentiment == "Bullish" else ("▼" if sentiment == "Bearish" else "◆")
-        ci_lo, ci_hi = result.confidence_interval_90d
-        median_delta = _pct_delta(result.expected_rate_90d, result.current_rate)
-        median_color = _C_BULL if result.expected_rate_90d >= result.current_rate else _C_BEAR
-
-        st.markdown(
-            f'''<div style="
-                background: linear-gradient(135deg, #0d1829 0%, #111827 60%, #0a1628 100%);
-                border: 1px solid rgba(59,130,246,0.25);
-                border-left: 4px solid {sent_color};
-                border-radius: 14px;
-                padding: 24px 28px;
-                margin-bottom: 20px;
-                position: relative;
-                overflow: hidden;
-            ">
-                <div style="
-                    position: absolute; top: 0; right: 0; width: 300px; height: 100%;
-                    background: radial-gradient(ellipse at top right, {sent_color}18, transparent 70%);
-                    pointer-events: none;
-                "></div>
-
-                <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:16px">
-                    <div>
-                        <div style="font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.14em; font-weight:700; margin-bottom:6px">
-                            Monte Carlo Simulation · GBM
-                        </div>
-                        <div style="font-size:1.9rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.02em; line-height:1.1">
-                            {result.route_id}
-                        </div>
-                        <div style="margin-top:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
-                            <span style="
-                                background:{sent_color}22; border:1px solid {sent_color}55;
-                                color:{sent_color}; font-size:0.78rem; font-weight:700;
-                                padding:4px 12px; border-radius:20px; letter-spacing:0.04em
-                            ">{sent_icon} {sentiment}</span>
-                            <span style="color:{C_TEXT3}; font-size:0.8rem">{result.n_simulations:,} simulation paths · {result.forecast_days}d horizon</span>
-                        </div>
-                    </div>
-
-                    <div style="display:flex; gap:32px; flex-wrap:wrap; align-items:flex-start">
-                        <div style="text-align:right">
-                            <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:600; margin-bottom:4px">Current Rate</div>
-                            <div style="font-size:1.55rem; font-weight:700; color:{C_TEXT}; font-family:'JetBrains Mono',monospace">{_fmt_rate(result.current_rate)}</div>
-                            <div style="font-size:0.72rem; color:{C_TEXT3}">USD / FEU</div>
-                        </div>
-                        <div style="text-align:right">
-                            <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:600; margin-bottom:4px">Median Forecast (90d)</div>
-                            <div style="font-size:1.55rem; font-weight:700; color:{median_color}; font-family:'JetBrains Mono',monospace">{_fmt_rate(result.expected_rate_90d)}</div>
-                            <div style="font-size:0.72rem; color:{median_color}">{median_delta} vs current</div>
-                        </div>
-                        <div style="text-align:right">
-                            <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:600; margin-bottom:4px">Prob of Increase</div>
-                            <div style="font-size:1.55rem; font-weight:700; color:{sent_color}; font-family:'JetBrains Mono',monospace">{prob_up_pct:.1f}%</div>
-                            <div style="font-size:0.72rem; color:{C_TEXT3}">at end of {result.forecast_days}d window</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div style="margin-top:18px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06); display:flex; gap:24px; flex-wrap:wrap">
-                    <div>
-                        <span style="font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.08em">90d Confidence Interval (p5–p95)</span>
-                        <span style="font-size:0.85rem; color:{C_TEXT}; font-weight:600; margin-left:10px; font-family:'JetBrains Mono',monospace">
-                            {_fmt_rate(ci_lo)} — {_fmt_rate(ci_hi)}
-                        </span>
-                    </div>
-                    <div>
-                        <span style="font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.08em">Bull Case (p90)</span>
-                        <span style="font-size:0.85rem; color:{_C_BULL}; font-weight:600; margin-left:10px; font-family:'JetBrains Mono',monospace">{_fmt_rate(result.bull_case_90d)}</span>
-                    </div>
-                    <div>
-                        <span style="font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.08em">Bear Case (p10)</span>
-                        <span style="font-size:0.85rem; color:{_C_BEAR}; font-weight:600; margin-left:10px; font-family:'JetBrains Mono',monospace">{_fmt_rate(result.bear_case_90d)}</span>
-                    </div>
-                </div>
-            </div>''',
-            unsafe_allow_html=True,
+def _render_config_form() -> dict | None:
+    """Render simulation parameter form. Returns params dict on submit, else None."""
+    _section_header(
+        "Monte Carlo Configuration",
+        "Configure simulation parameters and run forecast paths.",
+    )
+    targets = ["BDI", "WCI", "ZIM Stock", "MATX Stock", "Container Rates"]
+    defaults: dict = {
+        "BDI": 1800.0,
+        "WCI": 3200.0,
+        "ZIM Stock": 18.0,
+        "MATX Stock": 110.0,
+        "Container Rates": 2800.0,
+    }
+    with st.form("mc_config_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            target = st.selectbox("Simulation target", targets, index=0)
+            n_paths = st.slider("Number of paths", 100, 10_000, 1_000, step=100)
+            horizon = st.slider("Horizon (days)", 30, 365, 90, step=5)
+        with c2:
+            s0 = st.number_input(
+                "Starting value",
+                min_value=0.01,
+                value=float(defaults.get(target, 1000.0)),
+                step=10.0,
+            )
+            sigma_pct = st.slider("Annual volatility (%)", 10, 80, 35)
+            mu_pct = st.slider("Annual drift (%)", -30, 30, 5)
+        model = st.radio(
+            "Model type",
+            ["GBM (Geometric Brownian Motion)", "Jump Diffusion"],
+            horizontal=True,
         )
-    except Exception as exc:
-        st.warning(f"Hero header unavailable: {exc}")
+        submitted = st.form_submit_button("Run Simulation", use_container_width=True)
+    if submitted:
+        model_key = "Jump Diffusion" if "Jump" in model else "GBM"
+        return dict(
+            target=target,
+            n_paths=n_paths,
+            horizon=horizon,
+            s0=s0,
+            sigma=sigma_pct / 100.0,
+            mu=mu_pct / 100.0,
+            model=model_key,
+        )
+    return None
 
 
-# ── Section 2: Enhanced fan chart ──────────────────────────────────────────────
+# ── Section 2: Fan chart ──────────────────────────────────────────────────────
 
-def _build_fan_chart(result: MonteCarloResult, n_sample_paths: int = 50) -> go.Figure:
-    """Build an enhanced Monte Carlo fan chart with 50 individual path traces."""
+def _render_fan_chart(paths: np.ndarray, target: str, s0: float) -> None:
+    _section_header("Simulation Fan Chart", "100 sample paths with confidence bands.")
     try:
-        days    = list(range(1, result.forecast_days + 1))
-        paths   = result.simulated_paths
-        current = result.current_rate
-        fig     = go.Figure()
-
-        # ── 50 semi-transparent individual paths ─────────────────────────────
-        total = len(paths)
-        step  = max(1, total // n_sample_paths)
-        sampled = paths[::step][:n_sample_paths]
-
-        for path in sampled:
-            final      = path[-1]
-            is_bull    = final >= current
-            line_color = "rgba(16,185,129,0.18)" if is_bull else "rgba(239,68,68,0.18)"
+        T = paths.shape[1] - 1
+        days = np.arange(T + 1)
+        pct = np.percentile(paths, [2.5, 10.0, 25.0, 50.0, 75.0, 90.0, 97.5], axis=0)
+        fig = go.Figure()
+        # confidence bands — from widest to narrowest
+        bands = [
+            (pct[0], pct[6], C_ACCENT, "95% CI", 0.10),
+            (pct[1], pct[5], C_HIGH,   "80% CI", 0.13),
+            (pct[2], pct[4], C_MOD,    "50% CI", 0.18),
+        ]
+        for lo, hi, color, name, opacity in bands:
             fig.add_trace(go.Scatter(
-                x=days, y=path,
-                mode="lines",
-                line={"width": 0.8, "color": line_color},
+                x=np.concatenate([days, days[::-1]]),
+                y=np.concatenate([hi, lo[::-1]]),
+                fill="toself",
+                fillcolor=color.replace("#", "rgba(") + f",{opacity})" if color.startswith("#") else color,
+                line=dict(width=0),
+                name=name,
                 hoverinfo="skip",
-                showlegend=False,
             ))
-
-        # ── Percentile fan fills ─────────────────────────────────────────────
-        p5  = result.percentiles["p5"]
-        p25 = result.percentiles["p25"]
-        p50 = result.percentiles["p50"]
-        p75 = result.percentiles["p75"]
-        p95 = result.percentiles["p95"]
-
-        # p5–p95 outer band
-        fig.add_trace(go.Scatter(
-            x=days + days[::-1],
-            y=p95 + p5[::-1],
-            fill="toself",
-            fillcolor="rgba(59,130,246,0.07)",
-            line={"width": 0},
-            name="90% range (p5–p95)",
-            hoverinfo="skip",
-        ))
-
-        # p25–p75 inner band
-        fig.add_trace(go.Scatter(
-            x=days + days[::-1],
-            y=p75 + p25[::-1],
-            fill="toself",
-            fillcolor="rgba(59,130,246,0.20)",
-            line={"width": 0},
-            name="50% range (p25–p75)",
-            hoverinfo="skip",
-        ))
-
-        # ── Five percentile boundary lines with distinct dash styles ─────────
-        pct_lines = [
-            ("p5",  p5,  "#ef4444", "dot",      "P5"),
-            ("p25", p25, "#f97316", "dashdot",   "P25"),
-            ("p50", p50, "#ffffff", "solid",     "Median"),
-            ("p75", p75, "#34d399", "dashdot",   "P75"),
-            ("p95", p95, "#10b981", "dot",       "P95"),
-        ]
-        for key, vals, color, dash, label in pct_lines:
-            width = 2.5 if key == "p50" else 1.5
+        # 100 sample paths
+        idx = np.linspace(0, paths.shape[0] - 1, min(100, paths.shape[0]), dtype=int)
+        for i in idx:
             fig.add_trace(go.Scatter(
-                x=days, y=vals,
+                x=days, y=paths[i],
                 mode="lines",
-                line={"width": width, "color": color, "dash": dash},
-                name=label,
-                hovertemplate=f"<b>{label}</b><br>Day %{{x}}<br>%{{y:$,.0f}}<extra></extra>",
+                line=dict(color=C_TEXT3, width=0.6),
+                opacity=0.3,
+                showlegend=False,
+                hoverinfo="skip",
             ))
-
-        # ── Current rate reference line ───────────────────────────────────────
-        fig.add_hline(
-            y=current,
-            line_dash="dash",
-            line_color="rgba(245,158,11,0.8)",
-            line_width=1.5,
-            annotation_text=f"  Current {_fmt_rate(current)}",
-            annotation_font_color=_C_MED,
-            annotation_font_size=11,
-        )
-
-        # ── Day-30/60/90 vertical markers ────────────────────────────────────
-        for marker_day, label in [(30, "D30"), (60, "D60"), (90, "D90")]:
-            if marker_day <= result.forecast_days:
-                fig.add_vline(
-                    x=marker_day,
-                    line_dash="dot",
-                    line_color="rgba(255,255,255,0.18)",
-                    line_width=1,
-                    annotation_text=label,
-                    annotation_font_color=C_TEXT3,
-                    annotation_font_size=10,
-                    annotation_position="top",
-                )
-
-        # ── Layout ────────────────────────────────────────────────────────────
-        layout = dark_layout(
-            title=f"Monte Carlo Fan Chart — {result.route_id}  ({result.n_simulations:,} paths)",
-            height=500,
-            showlegend=True,
-        )
-        layout["xaxis"]["title"] = {"text": "Days from today", "font": {"color": C_TEXT2, "size": 12}}
-        layout["yaxis"]["title"] = {"text": "Rate USD/FEU",    "font": {"color": C_TEXT2, "size": 12}}
-        layout["xaxis"]["range"] = [1, result.forecast_days]
-        layout["template"] = "plotly_dark"
-        layout["legend"]["orientation"] = "h"
-        fig.update_layout(**layout)
-        return fig
-    except Exception as exc:
-        fig = go.Figure()
-        fig.add_annotation(text=f"Fan chart error: {exc}", showarrow=False,
-                           font={"color": "#ef4444", "size": 14})
-        return fig
-
-
-# ── Section 3: Probability distribution histograms ─────────────────────────────
-
-def _build_histogram(result: MonteCarloResult, day: int) -> go.Figure:
-    """Build a distribution histogram for rates at *day*."""
-    try:
-        rates   = _final_rates_at(result, day)
-        current = result.current_rate
-        fig     = go.Figure()
-
-        # Main histogram bars
-        fig.add_trace(go.Histogram(
-            x=rates,
-            nbinsx=40,
-            marker_color=_C_BLUE,
-            marker_opacity=0.75,
-            name=f"D{day} distribution",
-            hovertemplate="Rate: %{x:$,.0f}<br>Count: %{y}<extra></extra>",
+        # median path
+        fig.add_trace(go.Scatter(
+            x=days, y=pct[3],
+            mode="lines",
+            line=dict(color=C_HIGH, width=2.5),
+            name="Median",
         ))
-
-        # Vertical percentile lines
-        pct_defs = [
-            (5,  rates, "#ef4444", "dot",  "P5"),
-            (25, rates, "#f97316", "dash", "P25"),
-            (50, rates, "#ffffff", "solid","Median"),
-            (75, rates, "#34d399", "dash", "P75"),
-            (95, rates, "#10b981", "dot",  "P95"),
-        ]
-        for pct, vals, color, dash, label in pct_defs:
-            val = float(np.percentile(vals, pct))
-            fig.add_vline(
-                x=val,
-                line_color=color,
-                line_dash=dash,
-                line_width=1.8,
-                annotation_text=f"  {label}<br>  {_fmt_rate(val)}",
-                annotation_font_color=color,
-                annotation_font_size=9,
-                annotation_position="top right",
-            )
-
-        # Current rate line
-        fig.add_vline(
-            x=current,
-            line_color=_C_MED,
-            line_dash="dash",
-            line_width=2,
-            annotation_text=f"  Now {_fmt_rate(current)}",
-            annotation_font_color=_C_MED,
-            annotation_font_size=10,
+        # starting value line
+        fig.add_hline(
+            y=s0, line_dash="dot",
+            line_color=C_TEXT3, line_width=1,
+            annotation_text="Start",
+            annotation_font_color=C_TEXT3,
         )
-
-        layout = dark_layout(
-            title=f"Rate Distribution at Day {day}",
-            height=300,
-            showlegend=False,
-        )
-        layout["xaxis"]["title"] = {"text": "Rate USD/FEU", "font": {"color": C_TEXT2, "size": 11}}
-        layout["yaxis"]["title"] = {"text": "Frequency",    "font": {"color": C_TEXT2, "size": 11}}
-        layout["template"] = "plotly_dark"
+        layout = _dark_layout()
+        layout.update(dict(
+            title=dict(text=f"{target} — Simulated Paths", font=dict(size=13, color=C_TEXT), x=0.02),
+            xaxis=dict(title="Days", gridcolor=C_BORDER, zeroline=False),
+            yaxis=dict(title="Value", gridcolor=C_BORDER, zeroline=False),
+            height=420,
+        ))
         fig.update_layout(**layout)
-        return fig
-    except Exception as exc:
+        st.plotly_chart(fig, use_container_width=True, key="mc_fan_chart")
+    except Exception:
+        logger.exception("Fan chart render failed")
+        st.warning("Fan chart unavailable.")
+
+
+# ── Section 3: Horizon distribution ──────────────────────────────────────────
+
+def _render_horizon_dist(paths: np.ndarray, s0: float, target: str) -> None:
+    _section_header(
+        "Distribution at Horizon",
+        "Histogram of final simulated values across all paths.",
+    )
+    try:
+        finals = paths[:, -1]
+        p5, p25, p50, p75, p95 = np.percentile(finals, [5, 25, 50, 75, 95])
         fig = go.Figure()
-        fig.add_annotation(text=f"Histogram error: {exc}", showarrow=False,
-                           font={"color": "#ef4444", "size": 13})
-        return fig
+        # full histogram
+        fig.add_trace(go.Histogram(
+            x=finals,
+            nbinsx=80,
+            marker_color=C_ACCENT,
+            opacity=0.7,
+            name="All paths",
+        ))
+        # left tail overlay
+        tail_lo = finals[finals <= p5]
+        fig.add_trace(go.Histogram(
+            x=tail_lo,
+            nbinsx=20,
+            marker_color=C_LOW,
+            opacity=0.9,
+            name="Bottom 5%",
+        ))
+        # right tail overlay
+        tail_hi = finals[finals >= p95]
+        fig.add_trace(go.Histogram(
+            x=tail_hi,
+            nbinsx=20,
+            marker_color=C_HIGH,
+            opacity=0.9,
+            name="Top 5%",
+        ))
+        pct_lines = [(p5, "P5", C_LOW), (p25, "P25", C_MOD), (p50, "P50", C_HIGH),
+                     (p75, "P75", C_MOD), (p95, "P95", C_LOW)]
+        for val, lbl, col in pct_lines:
+            fig.add_vline(
+                x=val, line_dash="dash", line_color=col, line_width=1.4,
+                annotation_text=f"{lbl}: {val:,.0f}",
+                annotation_font_color=col,
+                annotation_position="top",
+            )
+        layout = _dark_layout()
+        layout.update(dict(
+            title=dict(text=f"{target} — Final Value Distribution", font=dict(size=13, color=C_TEXT), x=0.02),
+            xaxis=dict(title="Final Value", gridcolor=C_BORDER),
+            yaxis=dict(title="Frequency", gridcolor=C_BORDER),
+            barmode="overlay",
+            height=380,
+        ))
+        fig.update_layout(**layout)
+        st.plotly_chart(fig, use_container_width=True, key="mc_horizon_dist")
+    except Exception:
+        logger.exception("Horizon distribution render failed")
+        st.warning("Distribution chart unavailable.")
 
 
-def _render_histograms(result: MonteCarloResult) -> None:
-    """Render tabbed probability distribution histograms for 30/60/90d."""
+# ── Section 4: Statistics table ───────────────────────────────────────────────
+
+def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float) -> None:
+    _section_header("Simulation Statistics", "Summary metrics across all simulated paths.")
     try:
-        tabs = st.tabs(["30-Day Horizon", "60-Day Horizon", "90-Day Horizon"])
-        for tab, day in zip(tabs, [30, 60, 90]):
-            with tab:
-                try:
-                    rates = _final_rates_at(result, day)
-                    if not rates:
-                        st.warning(f"No data at Day {day}")
-                        continue
-                    prob_up = float(np.mean([r > result.current_rate for r in rates])) * 100.0
-                    pct5    = float(np.percentile(rates, 5))
-                    pct50   = float(np.percentile(rates, 50))
-                    pct95   = float(np.percentile(rates, 95))
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Prob Above Current", f"{prob_up:.1f}%")
-                    c2.metric("P5",     _fmt_rate(pct5))
-                    c3.metric("Median", _fmt_rate(pct50))
-                    c4.metric("P95",    _fmt_rate(pct95))
-                    fig = _build_histogram(result, day)
-                    st.plotly_chart(fig, use_container_width=True, key=f"mc_hist_{result.route_id}_{day}")
-                except Exception as exc:
-                    st.warning(f"Day {day} histogram failed: {exc}")
-    except Exception as exc:
-        st.warning(f"Histogram panel unavailable: {exc}")
+        finals = paths[:, -1]
+        mean_v  = float(np.mean(finals))
+        med_v   = float(np.median(finals))
+        std_v   = float(np.std(finals))
+        skew_v  = float(scipy_stats.skew(finals))
+        kurt_v  = float(scipy_stats.kurtosis(finals))
+        p5_v, p25_v, p75_v, p95_v = np.percentile(finals, [5, 25, 75, 95])
+        prob_up  = float(np.mean(finals > s0) * 100)
+        prob_dn  = float(np.mean(finals < s0) * 100)
+        dt_ann   = horizon / 252
+        sharpe   = ((mean_v / s0 - 1) / max(sigma * np.sqrt(dt_ann), 1e-9))
 
-
-# ── Section 4: VaR & CVaR cards ────────────────────────────────────────────────
-
-def _render_var_cards(result: MonteCarloResult) -> None:
-    """Render 5-card row: VaR 95%, CVaR 95%, Upside 95%, Volatility, Sharpe."""
-    try:
-        cvar    = _cvar_95(result)
-        vol     = _rate_volatility(result)
-        sharpe  = get_risk_adjusted_opportunity(result)
-        upside  = max(0.0, result.bull_case_90d - result.current_rate)
-
-        sharpe_color = _C_BULL if sharpe >= 0 else _C_BEAR
-        vol_color    = _C_BEAR if vol > 30 else (_C_MED if vol > 15 else _C_BULL)
-
-        cols = st.columns(5)
-        cards = [
-            (cols[0], _card("VaR 95%",       f"-{_fmt_rate(result.var_95)}",
-                            "Worst expected loss",   _C_BEAR, _C_BEAR)),
-            (cols[1], _card("CVaR 95%",       f"-{_fmt_rate(cvar)}",
-                            "Expected tail loss",    "#b91c1c", _C_BEAR)),
-            (cols[2], _card("Upside 95%",     f"+{_fmt_rate(upside)}",
-                            "P90 vs current",        _C_BULL, _C_BULL)),
-            (cols[3], _card("Rate Volatility", f"{vol:.1f}%",
-                            "Annualised (simulated)", vol_color, vol_color)),
-            (cols[4], _card("Sharpe-like",    f"{sharpe:+.2f}",
-                            "Risk-adj. opportunity",  sharpe_color, sharpe_color)),
-        ]
-        for col, html in cards:
-            with col:
-                st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Risk cards unavailable: {exc}")
-
-
-# ── Section 5: Scenario probability table ──────────────────────────────────────
-
-def _render_scenario_table(result: MonteCarloResult) -> None:
-    """Render an HTML table of threshold probabilities for this route."""
-    try:
-        current = result.current_rate
-        thresholds = [
-            ("Bear Extreme",  current * 0.70, _C_BEAR),
-            ("Bear Case",     current * 0.85, _C_BEAR),
-            ("Flat − 5%",     current * 0.95, _C_MED),
-            ("Current Rate",  current,        _C_MED),
-            ("Flat + 5%",     current * 1.05, _C_BULL),
-            ("Bull Case",     current * 1.15, _C_BULL),
-            ("Bull Extreme",  current * 1.30, _C_BULL),
-        ]
-
-        rows_html = ""
-        for label, threshold, color in thresholds:
-            prob = _prob_above(result, threshold)
-            bar_width = min(int(prob), 100)
-            bar_color = _C_BULL if prob >= 50 else _C_BEAR
-            rows_html += (
-                f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05)'>"
-                f"<td style='padding:10px 14px; color:{color}; font-weight:600; font-size:0.83rem'>{label}</td>"
-                f"<td style='padding:10px 14px; color:{C_TEXT2}; font-family:\"JetBrains Mono\",monospace; font-size:0.82rem'>{_fmt_rate(threshold)}</td>"
-                f"<td style='padding:10px 14px'>"
-                f"  <div style='display:flex; align-items:center; gap:10px'>"
-                f"    <div style='flex:1; height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden'>"
-                f"      <div style='width:{bar_width}%; height:100%; background:{bar_color}; border-radius:3px'></div>"
-                f"    </div>"
-                f"    <span style='color:{bar_color}; font-weight:700; font-family:\"JetBrains Mono\",monospace; font-size:0.85rem; min-width:42px'>{prob:.1f}%</span>"
-                f"  </div>"
-                f"</td>"
-                f"</tr>"
+        def row(label: str, value: str) -> str:
+            return (
+                f'<tr>'
+                f'<td style="padding:8px 16px; color:{C_TEXT2}; font-size:0.82rem; border-bottom:1px solid {C_BORDER}">{label}</td>'
+                f'<td style="padding:8px 16px; color:{C_TEXT}; font-size:0.85rem; font-weight:600; border-bottom:1px solid {C_BORDER}; text-align:right">{value}</td>'
+                f'</tr>'
             )
 
+        rows = "".join([
+            row("Mean", f"{mean_v:,.2f}"),
+            row("Median", f"{med_v:,.2f}"),
+            row("Std Dev", f"{std_v:,.2f}"),
+            row("Skewness", f"{skew_v:.3f}"),
+            row("Kurtosis", f"{kurt_v:.3f}"),
+            row("5th Percentile", f"{p5_v:,.2f}"),
+            row("25th Percentile", f"{p25_v:,.2f}"),
+            row("75th Percentile", f"{p75_v:,.2f}"),
+            row("95th Percentile", f"{p95_v:,.2f}"),
+            row("Prob(> start)", f"{prob_up:.1f}%"),
+            row("Prob(< start)", f"{prob_dn:.1f}%"),
+            row("Sharpe (annualized)", f"{sharpe:.3f}"),
+        ])
+        html = (
+            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; overflow:hidden; margin-bottom:24px">'
+            f'<table style="width:100%; border-collapse:collapse">'
+            f'<thead><tr>'
+            f'<th style="padding:10px 16px; text-align:left; font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; background:{C_SURFACE}; border-bottom:1px solid {C_BORDER}">Metric</th>'
+            f'<th style="padding:10px 16px; text-align:right; font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; background:{C_SURFACE}; border-bottom:1px solid {C_BORDER}">Value</th>'
+            f'</tr></thead>'
+            f'<tbody>{rows}</tbody>'
+            f'</table></div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Stats table render failed")
+        st.warning("Statistics table unavailable.")
+
+
+# ── Section 5: Scenario overlays ─────────────────────────────────────────────
+
+def _render_scenario_overlays(
+    base_paths: np.ndarray,
+    s0: float,
+    sigma: float,
+    horizon: int,
+    model: str,
+    target: str,
+) -> None:
+    _section_header(
+        "Scenario Overlays",
+        "Median paths for macro event scenarios compared to base case.",
+    )
+    try:
+        scenarios = [
+            ("Red Sea normalization", 0.10,  C_HIGH,   "dot"),
+            ("Trade war escalation",  -0.15, C_LOW,    "dash"),
+            ("China demand surge",    0.20,  C_PURPLE, "dashdot"),
+        ]
+        T = base_paths.shape[1] - 1
+        days = np.arange(T + 1)
+        base_mu = st.session_state.get("mc_params", {}).get("mu", 0.05)
+        base_sigma = st.session_state.get("mc_params", {}).get("sigma", sigma)
+
+        fig = go.Figure()
+        base_median = np.median(base_paths, axis=0)
+        fig.add_trace(go.Scatter(
+            x=days, y=base_median,
+            mode="lines",
+            line=dict(color=C_TEXT, width=2.5),
+            name="Base case",
+        ))
+        for name, delta_mu, color, dash in scenarios:
+            try:
+                s_paths = _simulate(s0, base_mu + delta_mu, base_sigma, T, 500, model, seed=99)
+                s_median = np.median(s_paths, axis=0)
+                fig.add_trace(go.Scatter(
+                    x=days, y=s_median,
+                    mode="lines",
+                    line=dict(color=color, width=2.0, dash=dash),
+                    name=name,
+                ))
+            except Exception:
+                logger.warning(f"Scenario '{name}' failed to simulate")
+        fig.add_hline(y=s0, line_dash="dot", line_color=C_TEXT3, line_width=1)
+        layout = _dark_layout()
+        layout.update(dict(
+            title=dict(text=f"{target} — Scenario Comparison (Median Paths)", font=dict(size=13, color=C_TEXT), x=0.02),
+            xaxis=dict(title="Days", gridcolor=C_BORDER, zeroline=False),
+            yaxis=dict(title="Value", gridcolor=C_BORDER, zeroline=False),
+            height=400,
+        ))
+        fig.update_layout(**layout)
+        st.plotly_chart(fig, use_container_width=True, key="mc_scenario_chart")
+    except Exception:
+        logger.exception("Scenario overlay render failed")
+        st.warning("Scenario overlays unavailable.")
+
+
+# ── Section 6: VaR / CVaR cards ──────────────────────────────────────────────
+
+def _render_var_cards(paths: np.ndarray, s0: float) -> None:
+    _section_header(
+        "Value at Risk (VaR)",
+        "95% confidence VaR and Expected Shortfall based on simulated returns.",
+    )
+    try:
+        daily_returns = paths[:, 1] / s0 - 1
+        var_1d_pct = float(np.percentile(daily_returns, 5))
+        var_1d_pts = var_1d_pct * s0
+        var_10d_pct = var_1d_pct * np.sqrt(10)
+        var_10d_pts = var_10d_pct * s0
+        tail = daily_returns[daily_returns <= np.percentile(daily_returns, 5)]
+        cvar_pct = float(np.mean(tail))
+        cvar_pts = cvar_pct * s0
+        cards = [
+            _kpi_card("1-Day VaR (95%)", f"{var_1d_pts:+,.1f}", f"{var_1d_pct*100:.2f}%", C_LOW),
+            _kpi_card("10-Day VaR (95%)", f"{var_10d_pts:+,.1f}", f"{var_10d_pct*100:.2f}%", C_LOW),
+            _kpi_card("Expected Shortfall (CVaR)", f"{cvar_pts:+,.1f}", f"Worst 5% avg: {cvar_pct*100:.2f}%", C_LOW),
+        ]
+        _kpi_row(cards)
+    except Exception:
+        logger.exception("VaR cards render failed")
+        st.warning("VaR metrics unavailable.")
+
+
+# ── Section 7: Path analysis ──────────────────────────────────────────────────
+
+def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
+    _section_header(
+        "Path Analysis",
+        "Breach timing and maximum drawdown distribution across all paths.",
+    )
+    try:
+        up_thresh  = s0 * 1.20
+        dn_thresh  = s0 * 0.80
+        n_paths, T_plus1 = paths.shape
+        T = T_plus1 - 1
+
+        # Time to first breach +20%
+        breach_up_days = []
+        breach_dn_days = []
+        for i in range(n_paths):
+            up_idx = np.where(paths[i] >= up_thresh)[0]
+            if len(up_idx):
+                breach_up_days.append(int(up_idx[0]))
+            dn_idx = np.where(paths[i] <= dn_thresh)[0]
+            if len(dn_idx):
+                breach_dn_days.append(int(dn_idx[0]))
+
+        prob_up = len(breach_up_days) / n_paths * 100
+        prob_dn = len(breach_dn_days) / n_paths * 100
+        med_up  = float(np.median(breach_up_days)) if breach_up_days else float("nan")
+        med_dn  = float(np.median(breach_dn_days)) if breach_dn_days else float("nan")
+
+        # Max drawdown per path
+        drawdowns = []
+        for i in range(n_paths):
+            p = paths[i]
+            roll_max = np.maximum.accumulate(p)
+            dd = (p - roll_max) / roll_max
+            drawdowns.append(float(np.min(dd)) * 100)
+        drawdowns_arr = np.array(drawdowns)
+        med_dd = float(np.median(drawdowns_arr))
+        p95_dd = float(np.percentile(drawdowns_arr, 5))   # worst 5th pct
+
+        # KPI cards
+        def fmt_days(v: float) -> str:
+            return f"{v:.0f}d" if not np.isnan(v) else "N/A"
+
+        cards = [
+            _kpi_card("Median days to +20%",  fmt_days(med_up), f"{prob_up:.1f}% of paths", C_HIGH),
+            _kpi_card("Median days to -20%",  fmt_days(med_dn), f"{prob_dn:.1f}% of paths", C_LOW),
+            _kpi_card("Median Max Drawdown",  f"{med_dd:.1f}%", "across all paths", C_MOD),
+            _kpi_card("95th-pct Max Drawdown", f"{p95_dd:.1f}%", "worst 5% of paths", C_LOW),
+        ]
+        _kpi_row(cards)
+
+        # Drawdown distribution chart
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=drawdowns_arr,
+            nbinsx=60,
+            marker_color=C_LOW,
+            opacity=0.75,
+            name="Max Drawdown",
+        ))
+        fig.add_vline(
+            x=med_dd, line_dash="dash", line_color=C_MOD, line_width=1.5,
+            annotation_text=f"Median {med_dd:.1f}%",
+            annotation_font_color=C_MOD,
+        )
+        fig.add_vline(
+            x=p95_dd, line_dash="dot", line_color=C_LOW, line_width=1.5,
+            annotation_text=f"P5 {p95_dd:.1f}%",
+            annotation_font_color=C_LOW,
+        )
+        layout = _dark_layout()
+        layout.update(dict(
+            title=dict(text=f"{target} — Maximum Drawdown Distribution", font=dict(size=13, color=C_TEXT), x=0.02),
+            xaxis=dict(title="Max Drawdown (%)", gridcolor=C_BORDER),
+            yaxis=dict(title="Frequency", gridcolor=C_BORDER),
+            height=320,
+        ))
+        fig.update_layout(**layout)
+        st.plotly_chart(fig, use_container_width=True, key="mc_drawdown_dist")
+    except Exception:
+        logger.exception("Path analysis render failed")
+        st.warning("Path analysis unavailable.")
+
+
+# ── Main render ───────────────────────────────────────────────────────────────
+
+def render(stock_data=None, macro_data=None, freight_data=None) -> None:
+    """Monte Carlo simulation dashboard for shipping market forecasting."""
+    try:
         st.markdown(
-            f'''<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:12px; overflow:hidden">
-                <table style="width:100%; border-collapse:collapse">
-                    <thead>
-                        <tr style="background:rgba(255,255,255,0.04); border-bottom:1px solid rgba(255,255,255,0.1)">
-                            <th style="padding:11px 14px; text-align:left; font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:700">Scenario</th>
-                            <th style="padding:11px 14px; text-align:left; font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:700">Threshold Rate</th>
-                            <th style="padding:11px 14px; text-align:left; font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; font-weight:700">Prob Rate Exceeds</th>
-                        </tr>
-                    </thead>
-                    <tbody>{rows_html}</tbody>
-                </table>
-            </div>''',
+            f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
+            f'border:1px solid {C_BORDER}; border-radius:14px; padding:24px 28px; margin-bottom:28px">'
+            f'<h2 style="margin:0 0 6px; font-size:1.4rem; font-weight:800; color:{C_TEXT}">'
+            f'Monte Carlo Simulation</h2>'
+            f'<p style="margin:0; color:{C_TEXT2}; font-size:0.88rem">'
+            f'Stochastic path simulation for shipping indices and equities '
+            f'using GBM and Jump-Diffusion models.</p>'
+            f'</div>',
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        st.warning(f"Scenario table unavailable: {exc}")
-
-
-# ── Section 6: Per-route mini panels ───────────────────────────────────────────
-
-def _build_mini_fan(result: MonteCarloResult) -> go.Figure:
-    """Build a compact mini fan chart for a route card."""
-    try:
-        days = list(range(1, result.forecast_days + 1))
-        p5   = result.percentiles["p5"]
-        p50  = result.percentiles["p50"]
-        p95  = result.percentiles["p95"]
-        fig  = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=days + days[::-1],
-            y=p95 + p5[::-1],
-            fill="toself",
-            fillcolor="rgba(59,130,246,0.12)",
-            line={"width": 0},
-            hoverinfo="skip",
-            showlegend=False,
-        ))
-        fig.add_trace(go.Scatter(
-            x=days, y=p50,
-            mode="lines",
-            line={"width": 2, "color": "#ffffff"},
-            showlegend=False,
-            hovertemplate="Day %{x}<br>Median: %{y:$,.0f}<extra></extra>",
-        ))
-        fig.add_hline(
-            y=result.current_rate,
-            line_dash="dash",
-            line_color="rgba(245,158,11,0.6)",
-            line_width=1,
-        )
-        layout = dark_layout(height=140, showlegend=False)
-        layout["margin"] = {"l": 8, "r": 8, "t": 8, "b": 8}
-        layout["xaxis"]["showticklabels"] = False
-        layout["yaxis"]["showticklabels"] = True
-        layout["yaxis"]["tickfont"] = {"size": 9, "color": "#64748b"}
-        layout["template"] = "plotly_dark"
-        fig.update_layout(**layout)
-        return fig
     except Exception:
-        return go.Figure()
+        logger.exception("Header render failed")
 
-
-def _render_mini_panels(route_results: dict[str, MonteCarloResult], max_routes: int = 8) -> None:
-    """Render a 2-column grid of compact route cards with mini fan charts."""
+    # Section 1: config form
     try:
-        top_routes = get_highest_upside_routes(route_results, top_n=max_routes)
-        if not top_routes:
-            st.info("No route results to display.")
-            return
+        params = _render_config_form()
+        if params is not None:
+            st.session_state["mc_params"] = params
+            st.session_state["mc_paths"] = _simulate(
+                S0=params["s0"],
+                mu_annual=params["mu"],
+                sigma_annual=params["sigma"],
+                T=params["horizon"],
+                n_paths=params["n_paths"],
+                model=params["model"],
+            )
+    except Exception:
+        logger.exception("Config form failed")
+        st.error("Configuration form error.")
 
-        pairs = [top_routes[i:i+2] for i in range(0, len(top_routes), 2)]
-        for pair in pairs:
-            cols = st.columns(2)
-            for col, r in zip(cols, pair):
-                with col:
-                    try:
-                        prob_up = r.prob_rate_increase * 100.0
-                        sent_color = _C_BULL if prob_up >= 55 else (_C_BEAR if prob_up < 45 else _C_MED)
-                        upside_pct = (r.bull_case_90d - r.current_rate) / r.current_rate * 100.0 if r.current_rate else 0.0
-                        delta_str  = _pct_delta(r.expected_rate_90d, r.current_rate)
-                        delta_col  = _C_BULL if r.expected_rate_90d >= r.current_rate else _C_BEAR
+    # Retrieve cached results
+    paths = st.session_state.get("mc_paths")
+    params = st.session_state.get("mc_params", {})
 
-                        st.markdown(
-                            f'''<div style="
-                                background:{C_CARD}; border:1px solid {C_BORDER};
-                                border-top:3px solid {sent_color};
-                                border-radius:10px; padding:14px 16px; margin-bottom:12px
-                            ">
-                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px">
-                                    <div>
-                                        <div style="font-size:0.95rem; font-weight:700; color:{C_TEXT}">{r.route_id}</div>
-                                        <div style="font-size:0.72rem; color:{C_TEXT3}; margin-top:2px">{_fmt_rate(r.current_rate)} current</div>
-                                    </div>
-                                    <div style="text-align:right">
-                                        <div style="font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.08em">Prob Up</div>
-                                        <div style="font-size:1.1rem; font-weight:700; color:{sent_color}">{prob_up:.1f}%</div>
-                                    </div>
-                                </div>
-                                <div style="display:flex; gap:18px; margin-bottom:10px">
-                                    <div>
-                                        <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.07em">Median 90d</div>
-                                        <div style="font-size:0.88rem; font-weight:600; color:{delta_col}; font-family:'JetBrains Mono',monospace">{_fmt_rate(r.expected_rate_90d)} <span style="font-size:0.75rem">({delta_str})</span></div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.07em">Bull Case</div>
-                                        <div style="font-size:0.88rem; font-weight:600; color:{_C_BULL}; font-family:'JetBrains Mono',monospace">{_fmt_rate(r.bull_case_90d)}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.07em">Upside</div>
-                                        <div style="font-size:0.88rem; font-weight:600; color:{_C_BULL}; font-family:'JetBrains Mono',monospace">+{upside_pct:.1f}%</div>
-                                    </div>
-                                </div>
-                            </div>''',
-                            unsafe_allow_html=True,
-                        )
-                        mini_fig = _build_mini_fan(r)
-                        st.plotly_chart(mini_fig, use_container_width=True,
-                                        key=f"mc_mini_{r.route_id}")
-                    except Exception as exc:
-                        st.warning(f"{r.route_id} mini panel error: {exc}")
-    except Exception as exc:
-        st.warning(f"Mini panels unavailable: {exc}")
-
-
-# ── Section 7: Parameter controls ──────────────────────────────────────────────
-
-def _render_parameter_controls() -> dict:
-    """Render simulation parameter controls and return a dict of values."""
-    try:
-        with st.container():
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                n_sims = st.select_slider(
-                    "Simulations",
-                    options=[100, 200, 300, 500, 750, 1000],
-                    value=300,
-                    key="mc_param_n_sims",
-                    help="More paths = more accuracy, slower rendering",
-                )
-            with c2:
-                vol_mode = st.selectbox(
-                    "Volatility Mode",
-                    options=["Historical", "Low (−30%)", "High (+30%)", "Custom"],
-                    index=0,
-                    key="mc_param_vol_mode",
-                    help="Adjust annualised volatility used in GBM",
-                )
-            with c3:
-                horizon = st.slider(
-                    "Forecast Horizon (days)",
-                    min_value=30,
-                    max_value=180,
-                    value=90,
-                    step=10,
-                    key="mc_param_horizon",
-                    help="Days to simulate forward",
-                )
-        return {"n_sims": n_sims, "vol_mode": vol_mode, "horizon": horizon}
-    except Exception as exc:
-        st.warning(f"Parameter controls unavailable: {exc}")
-        return {"n_sims": 300, "vol_mode": "Historical", "horizon": 90}
-
-
-# ── Section 8: All-routes comparison table ──────────────────────────────────────
-
-def _render_comparison_table(route_results: dict[str, MonteCarloResult]) -> None:
-    """Render all-routes comparison table sorted by prob_rate_increase desc."""
-    try:
-        import pandas as pd
-
-        rows = []
-        for rid, r in route_results.items():
-            try:
-                upside_pct   = (r.bull_case_90d - r.current_rate) / r.current_rate * 100.0 if r.current_rate else 0.0
-                downside_pct = (r.bear_case_90d - r.current_rate) / r.current_rate * 100.0 if r.current_rate else 0.0
-                sharpe       = get_risk_adjusted_opportunity(r)
-                vol          = _rate_volatility(r)
-                rows.append({
-                    "Route":         rid,
-                    "Current Rate":  r.current_rate,
-                    "Expected 90d":  r.expected_rate_90d,
-                    "Bull Case":     r.bull_case_90d,
-                    "Bear Case":     r.bear_case_90d,
-                    "Prob Up (%)":   round(r.prob_rate_increase * 100.0, 1),
-                    "Upside (%)":    round(upside_pct, 1),
-                    "Downside (%)":  round(downside_pct, 1),
-                    "VaR 95%":       r.var_95,
-                    "Volatility (%)": round(vol, 1),
-                    "Sharpe-like":   round(sharpe, 2),
-                })
-            except Exception:
-                continue
-
-        if not rows:
-            st.warning("Simulation returned no results — try adjusting parameters")
-            return
-
-        df = (
-            pd.DataFrame(rows)
-            .sort_values("Prob Up (%)", ascending=False)
-            .reset_index(drop=True)
+    if paths is None:
+        st.markdown(
+            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px;'
+            f'padding:40px; text-align:center; color:{C_TEXT3}; margin-top:24px">'
+            f'Configure parameters above and click <strong style="color:{C_TEXT2}">Run Simulation</strong> to generate results.'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-
-        # Format currency columns
-        display_df = df.copy()
-        for col in ("Current Rate", "Expected 90d", "Bull Case", "Bear Case", "VaR 95%"):
-            display_df[col] = display_df[col].apply(lambda v: f"${v:,.0f}")
-
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Prob Up (%)":    st.column_config.ProgressColumn("Prob Up (%)", min_value=0, max_value=100, format="%.1f%%"),
-                "Sharpe-like":    st.column_config.NumberColumn("Sharpe-like", format="%.2f"),
-                "Volatility (%)": st.column_config.NumberColumn("Volatility (%)", format="%.1f%%"),
-            },
-        )
-
-        # Download
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="Download results as CSV",
-            data=csv_bytes,
-            file_name="monte_carlo_results.csv",
-            mime="text/csv",
-            key="mc_download_csv",
-        )
-    except Exception as exc:
-        st.warning(f"Comparison table unavailable: {exc}")
-
-
-# ── Main render ─────────────────────────────────────────────────────────────────
-
-def render(freight_data: dict, route_results: dict[str, MonteCarloResult]) -> None:
-    """Render the Monte Carlo tab.
-
-    Parameters
-    ----------
-    freight_data:
-        Raw freight data dict (route_id -> DataFrame).
-    route_results:
-        Pre-computed MonteCarloResult dict (route_id -> MonteCarloResult).
-        If empty, simulations will be run on-the-fly with default parameters.
-    """
-    # ── Parameter controls (always shown at top) ──────────────────────────────
-    _divider("Simulation Parameters")
-    params = _render_parameter_controls()
-
-    # ── Run / re-run simulations ──────────────────────────────────────────────
-    try:
-        if not route_results:
-            with st.spinner("Running Monte Carlo simulations…"):
-                route_results = simulate_all_routes(
-                    freight_data, n_simulations=params.get("n_sims", 300)
-                )
-    except Exception as exc:
-        st.error(f"Simulation error: {exc}")
         return
 
-    if not route_results:
-        st.warning("No Monte Carlo results available — check that freight data is loaded.")
-        return
+    target  = params.get("target", "BDI")
+    s0      = params.get("s0", 1000.0)
+    sigma   = params.get("sigma", 0.35)
+    mu      = params.get("mu", 0.05)
+    horizon = params.get("horizon", 90)
+    model   = params.get("model", "GBM")
 
-    # ── Route selector ────────────────────────────────────────────────────────
+    # Quick run summary
     try:
-        _divider("Route Selection")
-        section_header(
-            "Monte Carlo Rate Forecasting",
-            "GBM simulation across the forecast horizon — select a route to inspect",
-        )
+        n_paths_actual = paths.shape[0]
+        finals = paths[:, -1]
+        med_final = float(np.median(finals))
+        chg_pct = (med_final / s0 - 1) * 100
+        chg_col = C_HIGH if chg_pct >= 0 else C_LOW
+        summary_cards = [
+            _kpi_card("Target",          target,                    f"{model} model",      C_ACCENT),
+            _kpi_card("Paths",           f"{n_paths_actual:,}",     f"Horizon: {horizon}d", C_TEXT),
+            _kpi_card("Start",           f"{s0:,.2f}",              "initial value",       C_TEXT),
+            _kpi_card("Median at T",     f"{med_final:,.2f}",       f"{chg_pct:+.1f}%",    chg_col),
+            _kpi_card("Annualized Vol",  f"{sigma*100:.0f}%",       "input parameter",     C_MOD),
+        ]
+        _kpi_row(summary_cards)
+    except Exception:
+        logger.exception("Summary KPI row failed")
 
-        top_routes   = get_highest_upside_routes(route_results, top_n=len(route_results))
-        default_route = top_routes[0].route_id if top_routes else next(iter(route_results))
-        all_route_ids = sorted(route_results.keys())
-        default_idx   = all_route_ids.index(default_route) if default_route in all_route_ids else 0
-
-        selected_route = st.selectbox(
-            "Select route",
-            options=all_route_ids,
-            index=default_idx,
-            key="mc_route_selector",
-        )
-    except Exception as exc:
-        st.warning(f"Route selector error: {exc}")
-        selected_route = next(iter(route_results))
-
-    result = route_results.get(selected_route)
-    if result is None:
-        st.error(f"No simulation result for route: {selected_route}")
-        return
-
-    # ── Section 1: Hero header ────────────────────────────────────────────────
-    _divider("Overview")
-    _render_hero(result)
-
-    # ── Section 2: Enhanced fan chart ─────────────────────────────────────────
-    _divider("Simulation Fan Chart")
-    try:
-        fig = _build_fan_chart(result)
-        st.plotly_chart(fig, use_container_width=True, key="mc_fan_chart")
-    except Exception as exc:
-        st.warning(f"Fan chart unavailable: {exc}")
-
-    # ── Section 3: Probability distribution histograms ────────────────────────
-    _divider("Probability Distributions")
-    st.caption("Distribution of simulated rates at 30, 60, and 90-day horizons. Vertical lines mark key percentiles.")
-    _render_histograms(result)
-
-    # ── Section 4: VaR & CVaR cards ──────────────────────────────────────────
-    _divider("Risk Metrics")
-    _render_var_cards(result)
-
-    # ── Section 5: Scenario probability table ─────────────────────────────────
-    _divider("Scenario Probabilities")
-    st.caption(f"Probability that the simulated rate exceeds each threshold at day {result.forecast_days}.")
-    _render_scenario_table(result)
-
-    # ── Section 6: Per-route mini panels ─────────────────────────────────────
-    _divider("Top Route Opportunities")
-    st.caption("Top routes ranked by bull-case upside. Mini fan charts show the 90% confidence band and median.")
-    _render_mini_panels(route_results)
-
-    # ── Section 8: All-routes comparison table ────────────────────────────────
-    _divider("All-Routes Comparison")
-    try:
-        section_header(
-            "Route Comparison",
-            "All routes sorted by probability of rate increase — includes VaR and Sharpe columns",
-        )
-        _render_comparison_table(route_results)
-    except Exception as exc:
-        st.warning(f"Comparison table section failed: {exc}")
-
-
-# ── Wire-up instructions ────────────────────────────────────────────────────────
-#
-# To integrate this tab into app.py:
-#
-# 1. Import at the top of app.py:
-#        from processing.monte_carlo import simulate_all_routes
-#        import ui.tab_monte_carlo as tab_monte_carlo
-#
-# 2. After loading freight_data, compute (or cache) results once:
-#        @st.cache_data(ttl=3600, show_spinner=False)
-#        def _cached_mc(n_sims: int = 300):
-#            return simulate_all_routes(freight_data, n_simulations=n_sims)
-#        mc_results = _cached_mc()
-#
-# 3. Add a tab in the st.tabs(...) call:
-#        with tabs[<monte_carlo_index>]:
-#            tab_monte_carlo.render(freight_data, mc_results)
-#
-# The render() function is self-contained and tolerates an empty route_results
-# dict by running simulations on-the-fly (slower; prefer pre-computing above).
+    # Sections 2–7
+    _render_fan_chart(paths, target, s0)
+    _render_horizon_dist(paths, s0, target)
+    _render_stats_table(paths, s0, horizon, sigma)
+    _render_scenario_overlays(paths, s0, sigma, horizon, model, target)
+    _render_var_cards(paths, s0)
+    _render_path_analysis(paths, s0, target)

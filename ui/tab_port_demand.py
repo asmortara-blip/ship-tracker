@@ -176,10 +176,10 @@ def _section_header(title: str, subtitle: str = "", icon: str = "") -> None:
         f'<div style="margin-bottom:18px">'
         f'<div style="font-size:1.20rem; font-weight:900; color:{C_TEXT}; letter-spacing:-0.01em; '
         f'display:flex; align-items:center; gap:10px">'
-        f'{"<span style=\\"font-size:1.1rem\\">" + icon + "</span>" if icon else ""}'
-        f'{title}</div>'
-        f'{"<div style=\\"font-size:0.73rem; color:" + C_TEXT3 + "; margin-top:4px\\">" + subtitle + "</div>" if subtitle else ""}'
-        f'</div>',
+        + ('<span style="font-size:1.1rem">' + icon + '</span>' if icon else '')
+        + title + '</div>'
+        + ('<div style="font-size:0.73rem; color:' + C_TEXT3 + '; margin-top:4px">' + subtitle + '</div>' if subtitle else '')
+        + '</div>',
         unsafe_allow_html=True,
     )
 

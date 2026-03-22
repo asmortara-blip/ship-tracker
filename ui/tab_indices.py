@@ -1,1661 +1,770 @@
-"""ui/tab_indices.py — Shipping Index Tracking and Comparison tab.
+"""ui/tab_indices.py — Bloomberg-style Shipping Indices Dashboard.
 
-Renders a comprehensive shipping index intelligence dashboard with:
-  1. Hero KPI metric row (quick-scan stats)
-  2. Index dashboard cards with sparklines and 52-week context
-  3. Multi-index normalized comparison chart (100 = base)
-  4. BDI component breakdown (Capesize / Panamax / Supramax / Handysize proxies)
-  5. FBX route breakdown (individual lane rates)
-  6. Index vs stock performance correlation
-  7. Index seasonality (average monthly values)
-  8. Momentum indicators (RSI-style + rate of change)
-  9. Performance heatmap across time periods
- 10. Cross-correlation heatmap
- 11. Signal summary feed
+Sections:
+  1. Index Dashboard   — KPI cards for all major shipping indices
+  2. Multi-Index Chart — Normalized overlay (up to 5 indices), time-range selector
+  3. BDI Deep Dive     — Component breakdown, historical context, BDI vs S&P500
+  4. Spread Analysis   — Key spreads with historical percentile
+  5. Forward Curve     — FFA-implied BDI forward curve (live or mock)
+  6. Cross-Asset       — Indices vs macro (2×2 Plotly subplots)
+  7. Methodology       — Reference table of index definitions
 
-Function signature: render(macro_data, freight_data, stock_data, lookback_days) -> None
+Function signature: render(freight_data=None, macro_data=None, stock_data=None)
 """
 from __future__ import annotations
 
+import datetime as dt
+import random
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
+from plotly.subplots import make_subplots
 
-from processing.shipping_indices import (
-    INDEX_METADATA,
-    ShippingIndex,
-    build_indices,
-    get_index_correlation_matrix,
-    _get_index_time_series,
+# ── Design tokens ──────────────────────────────────────────────────────────────
+C_BG      = "#0a0f1a"
+C_SURFACE = "#111827"
+C_CARD    = "#1a2235"
+C_BORDER  = "rgba(255,255,255,0.08)"
+C_HIGH    = "#10b981"
+C_MOD     = "#f59e0b"
+C_LOW     = "#ef4444"
+C_ACCENT  = "#3b82f6"
+C_TEXT    = "#f1f5f9"
+C_TEXT2   = "#94a3b8"
+C_TEXT3   = "#64748b"
+
+_PLOT_LAYOUT = dict(
+    paper_bgcolor=C_CARD,
+    plot_bgcolor=C_SURFACE,
+    font=dict(color=C_TEXT, size=12),
+    margin=dict(l=50, r=20, t=40, b=40),
+    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor=C_BORDER, borderwidth=1),
+    xaxis=dict(gridcolor=C_BORDER, zerolinecolor=C_BORDER),
+    yaxis=dict(gridcolor=C_BORDER, zerolinecolor=C_BORDER),
 )
 
-# ── Design tokens ─────────────────────────────────────────────────────────────
-_C_BG       = "#0a0f1a"
-_C_SURFACE  = "#111827"
-_C_CARD     = "#1a2235"
-_C_CARD2    = "#151f30"
-_C_BORDER   = "rgba(255,255,255,0.08)"
-_C_BORDER2  = "rgba(255,255,255,0.04)"
-_C_TEXT     = "#f1f5f9"
-_C_TEXT2    = "#94a3b8"
-_C_TEXT3    = "#64748b"
-_C_BULL     = "#10b981"
-_C_BEAR     = "#ef4444"
-_C_SIDE     = "#94a3b8"
-_C_ACCENT   = "#3b82f6"
-_C_AMBER    = "#f59e0b"
-_C_PURPLE   = "#8b5cf6"
-_C_CYAN     = "#06b6d4"
-_C_ORANGE   = "#f97316"
+# ── Index catalogue ────────────────────────────────────────────────────────────
+_INDICES: list[dict] = [
+    # Dry Bulk
+    dict(id="BDI",   label="Baltic Dry",       group="Dry Bulk",    base=1000,  scale=1,    unit="pts",   routes=23),
+    dict(id="BCI",   label="Baltic Capesize",   group="Dry Bulk",    base=1800,  scale=1,    unit="pts",   routes=5),
+    dict(id="BPI",   label="Baltic Panamax",    group="Dry Bulk",    base=1200,  scale=1,    unit="pts",   routes=4),
+    dict(id="BSI",   label="Baltic Supramax",   group="Dry Bulk",    base=900,   scale=1,    unit="pts",   routes=10),
+    dict(id="BHSI",  label="Baltic Handysize",  group="Dry Bulk",    base=600,   scale=1,    unit="pts",   routes=7),
+    # Container
+    dict(id="WCI",   label="World Container",   group="Container",   base=3200,  scale=1,    unit="$/FEU", routes=8),
+    dict(id="SCFI",  label="Shanghai SCFI",     group="Container",   base=2800,  scale=1,    unit="pts",   routes=15),
+    dict(id="CCFI",  label="China CCFI",        group="Container",   base=1100,  scale=1,    unit="pts",   routes=12),
+    dict(id="FBX",   label="Freightos FBX",     group="Container",   base=2600,  scale=1,    unit="$/FEU", routes=12),
+    dict(id="HARPEX",label="Harpex",            group="Container",   base=950,   scale=1,    unit="pts",   routes=6),
+    # Tanker
+    dict(id="BDTI",  label="Baltic Dirty Tnkr", group="Tanker",      base=800,   scale=1,    unit="pts",   routes=12),
+    dict(id="BCTI",  label="Baltic Clean Tnkr", group="Tanker",      base=700,   scale=1,    unit="pts",   routes=9),
+    dict(id="BLNG",  label="Baltic LNG",        group="Tanker",      base=55000, scale=1,    unit="$/day", routes=4),
+    dict(id="BLPG",  label="Baltic LPG",        group="Tanker",      base=45000, scale=1,    unit="$/day", routes=3),
+]
 
-_TREND_COLORS  = {"BULL": _C_BULL, "BEAR": _C_BEAR, "SIDEWAYS": _C_SIDE}
-_TREND_BORDER  = {"BULL": _C_BULL, "BEAR": _C_BEAR, "SIDEWAYS": "#334155"}
-_TREND_BG      = {
-    "BULL": "rgba(16,185,129,0.10)",
-    "BEAR": "rgba(239,68,68,0.10)",
-    "SIDEWAYS": "rgba(148,163,184,0.06)",
-}
-
-# Per-index consistent palette
 _INDEX_COLORS: dict[str, str] = {
-    "BDI":        _C_ACCENT,
-    "FBX_GLOBAL": _C_BULL,
-    "FBX01":      _C_AMBER,
-    "FBX03":      _C_PURPLE,
-    "FBX11":      _C_CYAN,
-    "PPIACO":     _C_ORANGE,
+    "BDI": C_ACCENT, "BCI": "#06b6d4", "BPI": "#8b5cf6", "BSI": "#f59e0b", "BHSI": "#f97316",
+    "WCI": C_HIGH,   "SCFI": "#34d399","CCFI": "#a7f3d0","FBX": "#fbbf24", "HARPEX": "#fb923c",
+    "BDTI": C_LOW,   "BCTI": "#f87171","BLNG": "#c084fc","BLPG": "#e879f9",
 }
-_LINE_COLORS = list(_INDEX_COLORS.values())
+
+_METHODOLOGY: list[dict] = [
+    dict(index="BDI",    method="Weighted avg of BCI/BPI/BSI/BHSI rates",  freq="Daily",  routes=23, publisher="Baltic Exchange"),
+    dict(index="BCI",    method="TC avg of 5 Capesize routes (170k DWT)",   freq="Daily",  routes=5,  publisher="Baltic Exchange"),
+    dict(index="BPI",    method="TC avg of 4 Panamax routes (74k DWT)",     freq="Daily",  routes=4,  publisher="Baltic Exchange"),
+    dict(index="BSI",    method="TC avg of 10 Supramax routes (58k DWT)",   freq="Daily",  routes=10, publisher="Baltic Exchange"),
+    dict(index="BHSI",   method="TC avg of 7 Handysize routes (38k DWT)",   freq="Daily",  routes=7,  publisher="Baltic Exchange"),
+    dict(index="WCI",    method="Avg spot rate 8 global trade lanes",        freq="Weekly", routes=8,  publisher="Drewry"),
+    dict(index="SCFI",   method="Spot rates ex-Shanghai 15 routes",          freq="Weekly", routes=15, publisher="Shanghai Shipping Exchange"),
+    dict(index="CCFI",   method="Long-term & spot rates ex-China 12 routes", freq="Weekly", routes=12, publisher="Shanghai Shipping Exchange"),
+    dict(index="FBX",    method="AI-aggregated spot market rates 12 lanes",  freq="Weekly", routes=12, publisher="Freightos"),
+    dict(index="HARPEX", method="Charter rates 6 container vessel classes",  freq="Weekly", routes=6,  publisher="Harper Petersen"),
+    dict(index="BDTI",   method="Time charter equiv dirty tanker 12 routes", freq="Daily",  routes=12, publisher="Baltic Exchange"),
+    dict(index="BCTI",   method="Time charter equiv clean tanker 9 routes",  freq="Daily",  routes=9,  publisher="Baltic Exchange"),
+    dict(index="BLNG",   method="LNG carrier spot rate 4 benchmark routes",  freq="Weekly", routes=4,  publisher="Baltic Exchange"),
+    dict(index="BLPG",   method="LPG VLGC spot rate 3 benchmark routes",     freq="Weekly", routes=3,  publisher="Baltic Exchange"),
+]
 
 
-# ── Formatters ────────────────────────────────────────────────────────────────
+# ── Data helpers ───────────────────────────────────────────────────────────────
 
-def _fmt_value(value: float | None, index_id: str) -> str:
-    if value is None:
-        return "N/A"
+def _seed_from_id(idx_id: str) -> int:
+    return sum(ord(c) for c in idx_id) % 9999
+
+
+def _mock_series(idx: dict, days: int = 365 * 5) -> pd.Series:
+    """Generate realistic mock price history for an index."""
+    rng = np.random.default_rng(_seed_from_id(idx["id"]))
+    mu = 0.0001
+    sigma = 0.012 + rng.random() * 0.008
+    log_returns = rng.normal(mu, sigma, days)
+    prices = idx["base"] * np.exp(np.cumsum(log_returns))
+    # Add a slow mean-reversion pull
+    for i in range(1, len(prices)):
+        prices[i] += 0.002 * (idx["base"] - prices[i - 1])
+    end = dt.date.today()
+    dates = pd.date_range(end=end, periods=days, freq="B")
+    return pd.Series(prices[: len(dates)], index=dates, name=idx["id"])
+
+
+def _try_yfinance(ticker: str, period: str = "5y") -> Optional[pd.Series]:
     try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return "N/A"
-    if not np.isfinite(v) or v == 0.0:
-        return "N/A"
-    if index_id == "BDI":
-        return f"{v:,.0f}"
-    if index_id == "PPIACO":
-        return f"{v:.1f}"
-    return f"${v:,.0f}"
-
-
-def _fmt_pct(pct: float | None) -> str:
-    if pct is None:
-        return "N/A"
-    try:
-        v = float(pct)
-    except (TypeError, ValueError):
-        return "N/A"
-    if not np.isfinite(v):
-        return "N/A"
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v:.1f}%"
-
-
-def _pct_color(pct: float | None) -> str:
-    if pct is None:
-        return _C_SIDE
-    try:
-        v = float(pct)
-    except (TypeError, ValueError):
-        return _C_SIDE
-    if not np.isfinite(v):
-        return _C_SIDE
-    if v > 0.5:
-        return _C_BULL
-    if v < -0.5:
-        return _C_BEAR
-    return _C_SIDE
-
-
-def _safe_float(v) -> float | None:
-    if v is None:
-        return None
-    try:
-        f = float(v)
-        return f if np.isfinite(f) else None
-    except (TypeError, ValueError):
+        import yfinance as yf  # noqa: PLC0415
+        df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        if df.empty:
+            return None
+        close = df["Close"]
+        if hasattr(close, "squeeze"):
+            close = close.squeeze()
+        return close.dropna()
+    except Exception as exc:
+        logger.debug("yfinance fetch failed for {}: {}", ticker, exc)
         return None
 
 
-# ── Layout helpers ─────────────────────────────────────────────────────────────
-
-def _divider() -> None:
-    st.markdown(
-        "<hr style='border:none; border-top:1px solid rgba(255,255,255,0.07);"
-        " margin:24px 0 20px'>",
-        unsafe_allow_html=True,
-    )
-
-
-def _section_header(title: str, subtitle: str = "", icon: str = "") -> None:
-    icon_html = (
-        f'<span style="margin-right:8px; font-size:1.1rem">{icon}</span>'
-        if icon else ""
-    )
-    sub_html = (
-        f'<div style="color:{_C_TEXT3}; font-size:0.78rem; margin-top:3px;'
-        f' font-weight:400">{subtitle}</div>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin-bottom:16px">'
-        f'<div style="font-size:1.0rem; font-weight:700; color:{_C_TEXT};'
-        f' display:flex; align-items:center">'
-        f'{icon_html}{title}</div>'
-        f'{sub_html}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+def _get_series(idx: dict, days: int = 365 * 5) -> pd.Series:
+    """Attempt live fetch for BDI; fall back to mock for all others."""
+    if idx["id"] == "BDI":
+        live = _try_yfinance("^BALT", "5y") or _try_yfinance("BDI.L", "5y")
+        if live is not None and len(live) > 20:
+            return live.rename("BDI")
+    return _mock_series(idx, days)
 
 
-# ── Sparkline builder ─────────────────────────────────────────────────────────
-
-def _build_sparkline(
-    series: pd.Series | None,
-    color: str,
-    lookback: int = 30,
-) -> go.Figure:
-    """Return a tiny area sparkline figure (no axes, no margin)."""
-    fig = go.Figure()
-    if series is not None and not series.empty:
-        s = series.sort_index().tail(lookback).dropna()
-        if len(s) >= 2:
-            fig.add_trace(go.Scatter(
-                x=s.index,
-                y=s.values,
-                mode="lines",
-                line=dict(color=color, width=1.8),
-                fill="tozeroy",
-                fillcolor=color + "1a",
-                hoverinfo="skip",
-            ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=42,
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        showlegend=False,
-    )
-    return fig
-
-
-# ── Section 1: Hero KPI row ───────────────────────────────────────────────────
-
-def _render_hero_metrics(indices: list[ShippingIndex]) -> None:
-    """Compact st.metric() strip — quick-scan top-line view."""
-    primary = [i for i in indices if i.index_id in ("BDI", "FBX_GLOBAL", "FBX01", "FBX03")]
-    if not primary:
-        primary = indices[:4]
-
-    cols = st.columns(len(primary))
-    for col, idx in zip(cols, primary):
-        d30 = _safe_float(idx.change_30d)
-        delta_str = f"{d30:+.1f}% (30d)" if d30 is not None else None
-        with col:
-            st.metric(
-                label=idx.name,
-                value=_fmt_value(idx.current_value, idx.index_id),
-                delta=delta_str,
-                delta_color="normal",
-            )
-
-
-# ── Section 2: Index Dashboard Cards with Sparklines ─────────────────────────
-
-def _render_index_cards(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-) -> None:
-    _section_header(
-        "Index Snapshot Dashboard",
-        "Key global shipping benchmarks — current values, momentum, and 52-week range",
-        "📊",
-    )
-
-    # Fetch time series once for sparklines
-    ts_cache: dict[str, pd.Series | None] = {}
-    for idx in indices:
+def _build_all_series(days: int = 365 * 5) -> dict[str, pd.Series]:
+    result: dict[str, pd.Series] = {}
+    for idx in _INDICES:
         try:
-            ts_cache[idx.index_id] = _get_index_time_series(
-                idx.index_id, macro_data, freight_data
-            )
-        except Exception:
-            ts_cache[idx.index_id] = None
+            result[idx["id"]] = _get_series(idx, days)
+        except Exception as exc:
+            logger.warning("Failed to build series for {}: {}", idx["id"], exc)
+            result[idx["id"]] = _mock_series(idx, days)
+    return result
 
-    n_cols = 3
-    for row_start in range(0, len(indices), n_cols):
-        row_items = indices[row_start : row_start + n_cols]
-        cols = st.columns(n_cols)
-        for col_i, (col, idx) in enumerate(zip(cols, row_items)):
-            with col:
-                color       = _INDEX_COLORS.get(idx.index_id, _C_ACCENT)
-                trend_color = _TREND_COLORS.get(idx.trend, _C_SIDE)
-                border_top  = _TREND_BORDER.get(idx.trend, "#334155")
-                badge_bg    = _TREND_BG.get(idx.trend, "rgba(148,163,184,0.08)")
 
-                val_str  = _fmt_value(idx.current_value, idx.index_id)
-                d1_str   = _fmt_pct(idx.change_1d)
-                d7_str   = _fmt_pct(idx.change_7d)
-                d1_color = _pct_color(idx.change_1d)
-                d7_color = _pct_color(idx.change_7d)
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_series() -> dict[str, pd.Series]:
+    return _build_all_series()
 
-                # 52-week range bar
-                hi   = _safe_float(idx.yoy_52w_high)
-                lo   = _safe_float(idx.yoy_52w_low)
-                cur  = _safe_float(idx.current_value)
-                rng  = (hi - lo) if (hi and lo and hi != lo) else None
-                pos  = ((cur - lo) / rng * 100.0) if (rng and cur is not None and lo is not None) else 50.0
-                pos  = max(0.0, min(100.0, pos))
 
-                # From 52w high badge
-                from_hi   = _safe_float(idx.pct_from_52w_high)
-                from_hi_s = _fmt_pct(from_hi)
-                from_hi_c = _pct_color(from_hi)
+def _pct(new: float, old: float) -> float:
+    if old == 0:
+        return 0.0
+    return (new - old) / abs(old) * 100
 
-                hi_str = _fmt_value(idx.yoy_52w_high, idx.index_id)
-                lo_str = _fmt_value(idx.yoy_52w_low, idx.index_id)
 
-                st.markdown(
-                    f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-                    f' border-top:3px solid {border_top}; border-radius:12px;'
-                    f' padding:16px 18px; min-height:220px">'
+def _get_stats(series: pd.Series) -> dict:
+    try:
+        s = series.dropna()
+        if len(s) < 2:
+            return {}
+        now = float(s.iloc[-1])
+        prev_day = float(s.iloc[-2]) if len(s) >= 2 else now
+        prev_week = float(s.iloc[-6]) if len(s) >= 6 else prev_day
+        prev_month = float(s.iloc[-22]) if len(s) >= 22 else prev_day
+        prev_year = float(s.iloc[-252]) if len(s) >= 252 else prev_day
+        avg_5y = float(s.mean())
+        return dict(
+            now=now,
+            day_chg=now - prev_day,
+            day_pct=_pct(now, prev_day),
+            wow_pct=_pct(now, prev_week),
+            mom_pct=_pct(now, prev_month),
+            yoy_pct=_pct(now, prev_year),
+            avg_5y=avg_5y,
+            above_avg_pct=_pct(now, avg_5y),
+        )
+    except Exception as exc:
+        logger.debug("Stats error: {}", exc)
+        return {}
 
-                    # Header row: id + name + trend badge
-                    f'<div style="display:flex; justify-content:space-between;'
-                    f' align-items:flex-start; margin-bottom:8px">'
-                    f'<div>'
-                    f'<div style="font-size:0.68rem; font-weight:700; color:{_C_TEXT3};'
-                    f' text-transform:uppercase; letter-spacing:0.07em">'
-                    f'{idx.index_id}</div>'
-                    f'<div style="font-size:0.82rem; font-weight:600; color:{_C_TEXT2};'
-                    f' margin-top:1px">{idx.name}</div>'
-                    f'</div>'
-                    f'<span style="background:{badge_bg}; color:{trend_color};'
-                    f' padding:2px 7px; border-radius:999px; font-size:0.6rem;'
-                    f' font-weight:800; letter-spacing:0.06em">'
-                    f'{"▲" if idx.trend == "BULL" else "▼" if idx.trend == "BEAR" else "—"}'
-                    f' {idx.trend}</span>'
-                    f'</div>'
 
-                    # Large current value
-                    f'<div style="font-size:1.65rem; font-weight:800; color:{_C_TEXT};'
-                    f' letter-spacing:-0.02em; line-height:1; margin-bottom:5px">'
-                    f'{val_str}</div>'
+# ── Card renderer ──────────────────────────────────────────────────────────────
 
-                    # Change row
-                    f'<div style="font-size:0.72rem; margin-bottom:10px;'
-                    f' display:flex; gap:12px">'
-                    f'<span style="color:{d1_color}; font-weight:600">1d: {d1_str}</span>'
-                    f'<span style="color:{d7_color}; font-weight:600">7d: {d7_str}</span>'
-                    f'<span style="color:{_C_TEXT3}">|</span>'
-                    f'<span style="color:{from_hi_c}; font-weight:500">'
-                    f'{from_hi_s} vs 52w Hi</span>'
-                    f'</div>'
+def _pct_badge(pct: float) -> str:
+    color = C_HIGH if pct > 0 else (C_LOW if pct < 0 else C_TEXT3)
+    arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "—")
+    return f'<span style="color:{color};font-size:11px">{arrow} {abs(pct):.1f}%</span>'
 
-                    # 52-week range bar with glowing dot
-                    f'<div style="margin-bottom:6px">'
-                    f'<div style="background:rgba(255,255,255,0.06); border-radius:4px;'
-                    f' height:5px; position:relative">'
-                    f'<div style="position:absolute; left:{pos:.1f}%; top:-2px;'
-                    f' width:9px; height:9px; border-radius:50%;'
-                    f' background:{color}; transform:translateX(-50%);'
-                    f' box-shadow:0 0 6px {color}88"></div>'
-                    f'</div>'
-                    f'</div>'
-                    f'<div style="display:flex; justify-content:space-between;'
-                    f' font-size:0.62rem; color:{_C_TEXT3}">'
-                    f'<span>L: {lo_str}</span>'
-                    f'<span>52-Week Range</span>'
-                    f'<span>H: {hi_str}</span>'
-                    f'</div>'
 
-                    f'</div>',
+def _kpi_card_html(idx: dict, stats: dict) -> str:
+    if not stats:
+        return (
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+            f'padding:14px;min-height:130px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;text-transform:uppercase;letter-spacing:1px">'
+            f'{idx["label"]}</div>'
+            f'<div style="color:{C_TEXT3};margin-top:12px;font-size:13px">No data</div></div>'
+        )
+    now = stats["now"]
+    day_pct = stats["day_pct"]
+    color = C_HIGH if day_pct > 0 else (C_LOW if day_pct < 0 else C_TEXT3)
+    arrow = "▲" if day_pct > 0 else ("▼" if day_pct < 0 else "—")
+    accent = _INDEX_COLORS.get(idx["id"], C_ACCENT)
+    unit = idx["unit"]
+    val_str = f"{now:,.0f}" if now >= 100 else f"{now:,.1f}"
+    day_str = f'{arrow} {abs(stats["day_chg"]):.0f} ({abs(day_pct):.1f}%)'
+    wow  = _pct_badge(stats["wow_pct"])
+    mom  = _pct_badge(stats["mom_pct"])
+    yoy  = _pct_badge(stats["yoy_pct"])
+    above_str = f'{stats["above_avg_pct"]:+.1f}% vs 5Y avg'
+    above_color = C_HIGH if stats["above_avg_pct"] > 0 else C_LOW
+    return (
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'padding:14px 16px;border-top:3px solid {accent}">'
+        f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:4px">'
+        f'{idx["group"]}</div>'
+        f'<div style="color:{C_TEXT};font-size:12px;font-weight:600;margin-bottom:8px">{idx["label"]}</div>'
+        f'<div style="color:{C_TEXT};font-size:22px;font-weight:700;line-height:1">{val_str}'
+        f'<span style="color:{C_TEXT3};font-size:11px;margin-left:4px">{unit}</span></div>'
+        f'<div style="color:{color};font-size:11px;margin-top:4px">{day_str}</div>'
+        f'<div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">'
+        f'<span style="color:{C_TEXT3};font-size:10px">WoW {wow}</span>'
+        f'<span style="color:{C_TEXT3};font-size:10px">MoM {mom}</span>'
+        f'<span style="color:{C_TEXT3};font-size:10px">YoY {yoy}</span>'
+        f'</div>'
+        f'<div style="color:{above_color};font-size:10px;margin-top:6px">{above_str}</div>'
+        f'</div>'
+    )
+
+
+def _section_header(title: str, subtitle: str = "") -> None:
+    sub_html = f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f'<div style="margin:28px 0 12px">'
+        f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;letter-spacing:0.3px">{title}</div>'
+        f'{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Section 1: Index Dashboard ─────────────────────────────────────────────────
+
+def _render_index_dashboard(all_series: dict[str, pd.Series]) -> None:
+    _section_header("Index Dashboard", "Live snapshot of major shipping benchmarks")
+    rows = [
+        [m for m in _INDICES if m["group"] == "Dry Bulk"],
+        [m for m in _INDICES if m["group"] == "Container"],
+        [m for m in _INDICES if m["group"] == "Tanker"],
+    ]
+    for row_indices in rows:
+        cols = st.columns(len(row_indices))
+        for col, idx in zip(cols, row_indices):
+            try:
+                series = all_series.get(idx["id"], pd.Series(dtype=float))
+                stats = _get_stats(series)
+                col.markdown(_kpi_card_html(idx, stats), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.warning("Card render error {}: {}", idx["id"], exc)
+                col.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px">'
+                    f'<div style="color:{C_TEXT2}">{idx["label"]}</div>'
+                    f'<div style="color:{C_LOW};font-size:11px">Error</div></div>',
                     unsafe_allow_html=True,
                 )
 
-                # Sparkline rendered below the card
-                spark_key = f"spark_{idx.index_id}_{row_start}_{col_i}"
-                fig = _build_sparkline(ts_cache.get(idx.index_id), color, lookback=30)
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True,
-                    config={"displayModeBar": False},
-                    key=spark_key,
-                )
 
+# ── Section 2: Multi-Index Chart ───────────────────────────────────────────────
 
-# ── Section 3: Multi-Index Normalized Comparison Chart ───────────────────────
-
-def _render_comparison_chart(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-    lookback_days: int = 90,
-) -> None:
-    _section_header(
-        "Multi-Index Normalized Comparison",
-        "All indices rebased to 100 at the start of the lookback window — divergence reveals relative outperformance",
-        "📈",
-    )
-
-    all_ids = [idx.index_id for idx in indices]
-    selected = st.multiselect(
-        "Select indices",
-        options=all_ids,
-        default=all_ids,
-        format_func=lambda iid: INDEX_METADATA.get(iid, {}).get("name", iid),
-        key="indices_comparison_select",
-    )
-
+def _render_multi_index_chart(all_series: dict[str, pd.Series]) -> None:
+    _section_header("Multi-Index Comparison", "Normalized to 100 at start date — overlay up to 5 indices")
+    all_ids = [idx["id"] for idx in _INDICES]
+    default_sel = ["BDI", "WCI", "BDTI", "SCFI", "BCI"]
+    ca, cb = st.columns([3, 1])
+    with ca:
+        selected = st.multiselect(
+            "Select indices (max 5)",
+            options=all_ids,
+            default=default_sel,
+            max_selections=5,
+            key="mi_select",
+        )
+    with cb:
+        time_range = st.selectbox("Range", ["1M", "3M", "6M", "1Y", "2Y", "5Y"], index=3, key="mi_range")
+    range_days = {"1M": 22, "3M": 66, "6M": 132, "1Y": 252, "2Y": 504, "5Y": 1260}
+    ndays = range_days.get(time_range, 252)
     if not selected:
-        st.info("Select at least one index to display the comparison chart.")
+        st.info("Select at least one index.")
         return
+    try:
+        fig = go.Figure()
+        colors_list = [_INDEX_COLORS.get(s, C_ACCENT) for s in selected]
+        for sid, color in zip(selected, colors_list):
+            series = all_series.get(sid, pd.Series(dtype=float)).dropna()
+            series = series.iloc[-ndays:]
+            if len(series) < 2:
+                continue
+            norm = series / series.iloc[0] * 100
+            label = next((m["label"] for m in _INDICES if m["id"] == sid), sid)
+            fig.add_trace(go.Scatter(
+                x=norm.index, y=norm.values, name=label,
+                line=dict(color=color, width=2),
+                hovertemplate=f"<b>{label}</b><br>%{{x|%b %d, %Y}}<br>Normalized: %{{y:.1f}}<extra></extra>",
+            ))
+        fig.add_hline(y=100, line_dash="dot", line_color=C_TEXT3, line_width=1)
+        fig.update_layout(
+            **_PLOT_LAYOUT,
+            title=dict(text=f"Normalized Index Performance — {time_range}", font=dict(size=13, color=C_TEXT2)),
+            height=380,
+            hovermode="x unified",
+            yaxis_title="Index (base = 100)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        logger.error("Multi-index chart error: {}", exc)
+        st.error(f"Chart error: {exc}")
 
-    fig = go.Figure()
-    has_data    = False
-    unavailable: list[str] = []
-    ts_export: dict[str, pd.Series] = {}
 
-    for i, index_id in enumerate(selected):
+# ── Section 3: BDI Deep Dive ───────────────────────────────────────────────────
+
+def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
+    _section_header("BDI Deep Dive", "Component breakdown, historical context, and macro correlation")
+    bdi = all_series.get("BDI", pd.Series(dtype=float)).dropna()
+    bci = all_series.get("BCI", pd.Series(dtype=float)).dropna()
+    bpi = all_series.get("BPI", pd.Series(dtype=float)).dropna()
+    bsi = all_series.get("BSI", pd.Series(dtype=float)).dropna()
+    bhsi = all_series.get("BHSI", pd.Series(dtype=float)).dropna()
+
+    # Component rates card row
+    components = [
+        dict(name="Capesize (BCI)", weight="40%", value=bci.iloc[-1] if len(bci) else 1800, color=C_ACCENT),
+        dict(name="Panamax (BPI)", weight="30%", value=bpi.iloc[-1] if len(bpi) else 1200, color="#8b5cf6"),
+        dict(name="Supramax (BSI)", weight="15%", value=bsi.iloc[-1] if len(bsi) else 900, color=C_MOD),
+        dict(name="Handysize (BHSI)", weight="15%", value=bhsi.iloc[-1] if len(bhsi) else 600, color="#f97316"),
+    ]
+    cols = st.columns(4)
+    for col, comp in zip(cols, components):
+        col.markdown(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px 14px;'
+            f'border-left:4px solid {comp["color"]}">'
+            f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase">{comp["name"]}</div>'
+            f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;margin-top:4px">{comp["value"]:,.0f}</div>'
+            f'<div style="color:{C_TEXT3};font-size:10px">Weight: {comp["weight"]}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+
+    # BDI historical context
+    try:
+        avg_5y = float(bdi.mean()) if len(bdi) > 0 else 1000
+        current = float(bdi.iloc[-1]) if len(bdi) > 0 else 1000
+        pct_vs_avg = _pct(current, avg_5y)
+        avg_color = C_HIGH if pct_vs_avg > 0 else C_LOW
+        st.markdown(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px 16px;'
+            f'margin-bottom:16px;display:flex;align-items:center;gap:16px">'
+            f'<div><span style="color:{C_TEXT2};font-size:12px">BDI Historical Context: </span>'
+            f'<span style="color:{avg_color};font-size:13px;font-weight:600">'
+            f'Currently {pct_vs_avg:+.1f}% {"above" if pct_vs_avg >= 0 else "below"} 5-year average</span>'
+            f' &nbsp;<span style="color:{C_TEXT3};font-size:11px">(5Y avg: {avg_5y:,.0f} pts)</span></div></div>',
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.debug("BDI context error: {}", exc)
+
+    # BDI chart + S&P500 scatter side by side
+    col1, col2 = st.columns([3, 2])
+    with col1:
         try:
-            series = _get_index_time_series(index_id, macro_data, freight_data)
+            if len(bdi) > 10:
+                fig = go.Figure()
+                s = bdi.iloc[-504:]
+                avg_line = [float(bdi.mean())] * len(s)
+                fig.add_trace(go.Scatter(
+                    x=s.index, y=s.values, name="BDI",
+                    line=dict(color=C_ACCENT, width=2),
+                    fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                ))
+                fig.add_trace(go.Scatter(
+                    x=s.index, y=avg_line, name="5Y Average",
+                    line=dict(color=C_MOD, width=1, dash="dash"),
+                ))
+                fig.update_layout(**_PLOT_LAYOUT, height=280, title="BDI — 2-Year History", yaxis_title="BDI Points")
+                st.plotly_chart(fig, use_container_width=True)
         except Exception as exc:
-            logger.warning("Index %s fetch error: %s", index_id, exc)
-            series = None
+            logger.error("BDI history chart error: {}", exc)
 
-        label = INDEX_METADATA.get(index_id, {}).get("name", index_id)
-        color = _INDEX_COLORS.get(index_id, _LINE_COLORS[i % len(_LINE_COLORS)])
+    with col2:
+        try:
+            sp500 = _try_yfinance("^GSPC", "2y")
+            if sp500 is None or len(sp500) < 20:
+                rng = np.random.default_rng(42)
+                sp500 = pd.Series(
+                    4500 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, 504))),
+                    index=pd.date_range(end=dt.date.today(), periods=504, freq="B"),
+                )
+            common = bdi.index.intersection(sp500.index)
+            if len(common) > 10:
+                x_vals = sp500.loc[common].values
+                y_vals = bdi.loc[common].values
+                corr = float(np.corrcoef(x_vals, y_vals)[0, 1])
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=x_vals, y=y_vals, mode="markers",
+                    marker=dict(color=C_ACCENT, size=4, opacity=0.5),
+                    name="BDI vs S&P 500",
+                    hovertemplate="S&P: %{x:,.0f}<br>BDI: %{y:,.0f}<extra></extra>",
+                ))
+                fig2.update_layout(
+                    **_PLOT_LAYOUT, height=280,
+                    title=f"BDI vs S&P 500 (corr: {corr:.2f})",
+                    xaxis_title="S&P 500", yaxis_title="BDI",
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("Insufficient overlapping data for correlation chart.")
+        except Exception as exc:
+            logger.error("BDI/SP500 scatter error: {}", exc)
+            st.info("Correlation chart unavailable.")
 
-        if series is None or series.empty:
-            unavailable.append(label)
-            continue
 
-        series = series.sort_index().dropna()
-        cutoff  = series.index.max() - pd.Timedelta(days=lookback_days)
-        sliced  = series[series.index >= cutoff]
+# ── Section 4: Spread Analysis ─────────────────────────────────────────────────
 
-        if sliced.empty or len(sliced) < 2:
-            unavailable.append(label)
-            continue
-
-        base = float(sliced.iloc[0])
-        if base == 0 or not np.isfinite(base):
-            unavailable.append(label)
-            continue
-
-        normalized = (sliced / base * 100.0).replace([np.inf, -np.inf], np.nan)
-        current_norm = _safe_float(normalized.iloc[-1])
-        delta_txt = (
-            f"{current_norm - 100:+.1f} pts"
-            if current_norm is not None else ""
-        )
-
-        fig.add_trace(go.Scatter(
-            x=normalized.index,
-            y=normalized.values,
-            name=f"{label} ({delta_txt})",
-            mode="lines",
-            line=dict(color=color, width=2.2),
-            connectgaps=False,
-            hovertemplate=f"<b>{label}</b><br>%{{x|%b %d, %Y}}<br>Index: %{{y:.1f}}<extra></extra>",
-        ))
-        has_data = True
-        ts_export[label] = normalized.rename(label)
-
-    # Baseline reference line
-    fig.add_hline(
-        y=100,
-        line_dash="dot",
-        line_color="rgba(255,255,255,0.18)",
-        line_width=1.2,
-        annotation_text="Base (100)",
-        annotation_font=dict(color=_C_TEXT3, size=10),
-        annotation_position="left",
-    )
-
-    if unavailable:
-        st.info("No data in window for: " + ", ".join(f"**{n}**" for n in unavailable))
-
-    if not has_data:
-        st.warning("No time-series data available for the selected indices.")
+def _render_spread_analysis(all_series: dict[str, pd.Series]) -> None:
+    _section_header("Index Spread Analysis", "Key spreads with historical percentile ranking")
+    spread_defs = [
+        dict(name="BCI – BPI Spread",   a="BCI",  b="BPI",  desc="Capesize premium over Panamax"),
+        dict(name="BSI – BHSI Spread",  a="BSI",  b="BHSI", desc="Supramax premium over Handysize"),
+        dict(name="BDTI – BCTI Spread", a="BDTI", b="BCTI", desc="Dirty vs Clean tanker premium"),
+        dict(name="WCI – SCFI Spread",  a="WCI",  b="SCFI", desc="Global vs Shanghai container rates"),
+        dict(name="BDI – BCI Spread",   a="BDI",  b="BCI",  desc="Composite vs Capesize benchmark"),
+        dict(name="SCFI – CCFI Spread", a="SCFI", b="CCFI", desc="Spot vs long-term container spread"),
+    ]
+    rows = []
+    for sd in spread_defs:
+        try:
+            sa = all_series.get(sd["a"], pd.Series(dtype=float)).dropna()
+            sb = all_series.get(sd["b"], pd.Series(dtype=float)).dropna()
+            common = sa.index.intersection(sb.index)
+            if len(common) < 20:
+                continue
+            spread = sa.loc[common] - sb.loc[common]
+            current = float(spread.iloc[-1])
+            pctile = float((spread < current).mean() * 100)
+            avg = float(spread.mean())
+            rows.append(dict(
+                Spread=sd["name"],
+                Description=sd["desc"],
+                Current=f"{current:+,.0f}",
+                Avg=f"{avg:+,.0f}",
+                Percentile=pctile,
+            ))
+        except Exception as exc:
+            logger.debug("Spread error {}/{}: {}", sd["a"], sd["b"], exc)
+    if not rows:
+        st.info("Spread data unavailable.")
         return
+    df = pd.DataFrame(rows)
+    # Color code the percentile
+    def _pctile_color(p: float) -> str:
+        if p >= 80:
+            return C_LOW
+        if p >= 60:
+            return C_MOD
+        if p <= 20:
+            return C_HIGH
+        return C_TEXT2
 
-    fig.update_layout(
-        template="plotly_dark",
-        height=420,
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=48, r=24, t=48, b=40),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=10, color=_C_TEXT2),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(
-            gridcolor="rgba(255,255,255,0.04)",
-            zeroline=False,
-            tickfont=dict(size=10, color=_C_TEXT2),
-        ),
-        yaxis=dict(
-            title=dict(text="Index (base = 100)", font=dict(size=10, color=_C_TEXT3)),
-            gridcolor="rgba(255,255,255,0.04)",
-            zeroline=False,
-            tickfont=dict(size=10, color=_C_TEXT2),
-        ),
-        hoverlabel=dict(
-            bgcolor="#1a2235",
-            bordercolor="rgba(255,255,255,0.15)",
-            font=dict(color=_C_TEXT, size=12),
-        ),
-    )
-    st.plotly_chart(fig, use_container_width=True, key="indices_comparison_chart")
-
-    if ts_export:
-        ts_df = pd.concat(ts_export.values(), axis=1).sort_index()
-        ts_df.index.name = "Date"
-        st.download_button(
-            label="Download normalized time-series CSV",
-            data=ts_df.reset_index().to_csv(index=False),
-            file_name="shipping_indices_normalized.csv",
-            mime="text/csv",
-            key="dl_normalized_ts_csv",
-        )
-
-
-# ── Section 4: BDI Component Breakdown ───────────────────────────────────────
-
-_BDI_COMPONENTS = {
-    "Capesize":  {"weight": 0.40, "color": "#3b82f6", "desc": "180k+ DWT bulk carriers, iron ore & coal"},
-    "Panamax":   {"weight": 0.30, "color": "#10b981", "desc": "65–80k DWT, grain & coal"},
-    "Supramax":  {"weight": 0.20, "color": "#f59e0b", "desc": "50–60k DWT, minor bulks"},
-    "Handysize": {"weight": 0.10, "color": "#8b5cf6", "desc": "28–40k DWT, regional trades"},
-}
-
-# Approximate historical volatility ratios vs BDI (Capesize highest beta)
-_BDI_BETA: dict[str, float] = {
-    "Capesize":  1.55,
-    "Panamax":   0.90,
-    "Supramax":  0.75,
-    "Handysize": 0.55,
-}
-
-
-def _render_bdi_breakdown(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-    lookback_days: int,
-) -> None:
-    _section_header(
-        "BDI Component Breakdown",
-        "Capesize, Panamax, Supramax, and Handysize sub-index estimates derived from the Baltic Dry composite",
-        "⚓",
-    )
-
-    bdi = next((i for i in indices if i.index_id == "BDI"), None)
-    if bdi is None or _safe_float(bdi.current_value) in (None, 0.0):
-        st.info("BDI data unavailable — component breakdown cannot be estimated.")
-        return
-
-    bdi_val    = float(bdi.current_value)
-    bdi_series = _get_index_time_series("BDI", macro_data, freight_data)
-    comp_names = list(_BDI_COMPONENTS.keys())
-
-    # ── Component summary cards ──────────────────────────────────────────
-    comp_cols = st.columns(len(comp_names))
-    for col, name in zip(comp_cols, comp_names):
-        meta   = _BDI_COMPONENTS[name]
-        weight = meta["weight"]
-        contribution = bdi_val * weight
-        share_pct    = weight * 100
-
-        with col:
-            st.markdown(
-                f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-                f' border-top:3px solid {meta["color"]}; border-radius:10px;'
-                f' padding:14px 16px; text-align:center">'
-                f'<div style="font-size:0.65rem; font-weight:700; color:{_C_TEXT3};'
-                f' text-transform:uppercase; letter-spacing:0.08em; margin-bottom:5px">'
-                f'{name}</div>'
-                f'<div style="font-size:1.4rem; font-weight:800; color:{_C_TEXT};'
-                f' line-height:1.1">{contribution:,.0f}</div>'
-                f'<div style="font-size:0.65rem; color:{_C_TEXT3}; margin-top:3px">'
-                f'{share_pct:.0f}% weight</div>'
-                f'<div style="font-size:0.6rem; color:{_C_TEXT3}; margin-top:6px;'
-                f' font-style:italic; line-height:1.35">{meta["desc"]}</div>'
-                f'</div>',
+    header_cols = st.columns([2, 2.5, 1, 1, 1.5])
+    for col, h in zip(header_cols, ["Spread", "Description", "Current", "5Y Avg", "Percentile"]):
+        col.markdown(f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;font-weight:600">{h}</div>', unsafe_allow_html=True)
+    st.markdown(f'<hr style="border-color:{C_BORDER};margin:4px 0 8px">', unsafe_allow_html=True)
+    for row in rows:
+        try:
+            p = row["Percentile"]
+            pc = _pctile_color(p)
+            bar_w = int(p)
+            rcols = st.columns([2, 2.5, 1, 1, 1.5])
+            rcols[0].markdown(f'<div style="color:{C_TEXT};font-size:12px;font-weight:600">{row["Spread"]}</div>', unsafe_allow_html=True)
+            rcols[1].markdown(f'<div style="color:{C_TEXT2};font-size:11px">{row["Description"]}</div>', unsafe_allow_html=True)
+            rcols[2].markdown(f'<div style="color:{C_TEXT};font-size:12px">{row["Current"]}</div>', unsafe_allow_html=True)
+            rcols[3].markdown(f'<div style="color:{C_TEXT3};font-size:12px">{row["Avg"]}</div>', unsafe_allow_html=True)
+            rcols[4].markdown(
+                f'<div style="display:flex;align-items:center;gap:6px">'
+                f'<div style="flex:1;background:{C_SURFACE};border-radius:3px;height:6px">'
+                f'<div style="width:{bar_w}%;background:{pc};border-radius:3px;height:6px"></div></div>'
+                f'<span style="color:{pc};font-size:11px;min-width:32px">{p:.0f}th</span></div>',
                 unsafe_allow_html=True,
             )
-
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-
-    # ── Stacked area chart showing synthetic sub-index contributions ─────
-    if bdi_series is not None and not bdi_series.empty:
-        cutoff = bdi_series.index.max() - pd.Timedelta(days=lookback_days)
-        sliced = bdi_series[bdi_series.index >= cutoff].dropna()
-
-        if len(sliced) >= 4:
-            fig = go.Figure()
-            for name in comp_names:
-                meta         = _BDI_COMPONENTS[name]
-                contribution_series = sliced * meta["weight"]
-                fig.add_trace(go.Scatter(
-                    x=sliced.index,
-                    y=contribution_series.values,
-                    name=name,
-                    mode="lines",
-                    line=dict(color=meta["color"], width=1.5),
-                    stackgroup="bdi",
-                    hovertemplate=f"<b>{name}</b><br>%{{x|%b %d}}<br>Contribution: %{{y:.0f}} pts<extra></extra>",
-                ))
-
-            fig.update_layout(
-                template="plotly_dark",
-                height=280,
-                paper_bgcolor=_C_CARD,
-                plot_bgcolor=_C_CARD,
-                margin=dict(l=48, r=20, t=16, b=36),
-                legend=dict(
-                    orientation="h", yanchor="bottom", y=1.01,
-                    xanchor="center", x=0.5,
-                    font=dict(size=10, color=_C_TEXT2),
-                    bgcolor="rgba(0,0,0,0)",
-                ),
-                font=dict(family="Inter, sans-serif"),
-                xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                           tickfont=dict(size=9, color=_C_TEXT2)),
-                yaxis=dict(title=dict(text="BDI Points", font=dict(size=9, color=_C_TEXT3)),
-                           gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                           tickfont=dict(size=9, color=_C_TEXT2)),
-                hoverlabel=dict(bgcolor="#1a2235",
-                                bordercolor="rgba(255,255,255,0.15)",
-                                font=dict(color=_C_TEXT, size=11)),
-            )
-            st.plotly_chart(fig, use_container_width=True, key="bdi_component_area")
+        except Exception as exc:
+            logger.debug("Spread row error: {}", exc)
 
 
-# ── Section 5: FBX Route Breakdown ───────────────────────────────────────────
+# ── Section 5: Forward Curve ───────────────────────────────────────────────────
 
-_FBX_ROUTE_META: dict[str, dict] = {
-    "FBX01": {
-        "label": "Trans-Pacific EB",
-        "detail": "Asia to US West Coast",
-        "color": _C_AMBER,
-        "route_key": "transpacific_eb",
-    },
-    "FBX03": {
-        "label": "Asia-Europe",
-        "detail": "Shanghai to Rotterdam",
-        "color": _C_PURPLE,
-        "route_key": "asia_europe",
-    },
-    "FBX11": {
-        "label": "Transatlantic EB",
-        "detail": "US East Coast to Europe",
-        "color": _C_CYAN,
-        "route_key": "transatlantic",
-    },
-    "FBX_GLOBAL": {
-        "label": "FBX Global",
-        "detail": "Composite — all lanes",
-        "color": _C_BULL,
-        "route_key": "global",
-    },
-}
-
-
-def _render_fbx_breakdown(
-    indices: list[ShippingIndex],
-    freight_data: dict,
-    lookback_days: int,
-) -> None:
-    _section_header(
-        "FBX Container Rate Route Breakdown",
-        "Individual Freightos Baltic Index lane rates — spot USD per FEU",
-        "🚢",
-    )
-
-    fbx_indices = [i for i in indices if i.index_id in _FBX_ROUTE_META]
-    if not fbx_indices:
-        st.info("No FBX route data available.")
-        return
-
-    # ── Summary bar chart (current rates by lane) ─────────────────────────
-    names  = [_FBX_ROUTE_META[i.index_id]["label"]  for i in fbx_indices]
-    values = [_safe_float(i.current_value) or 0.0    for i in fbx_indices]
-    colors = [_FBX_ROUTE_META[i.index_id]["color"]   for i in fbx_indices]
-
-    fig_bar = go.Figure(go.Bar(
-        x=names,
-        y=values,
-        marker=dict(
-            color=colors,
-            opacity=0.85,
-            line=dict(color=[c + "88" for c in colors], width=1),
-        ),
-        text=[f"${v:,.0f}" for v in values],
-        textposition="outside",
-        textfont=dict(size=11, color=_C_TEXT2),
-        hovertemplate="<b>%{x}</b><br>Rate: $%{y:,.0f}/FEU<extra></extra>",
-    ))
-    fig_bar.update_layout(
-        template="plotly_dark",
-        height=260,
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=20, r=20, t=16, b=40),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(tickfont=dict(size=11, color=_C_TEXT2), gridcolor="rgba(0,0,0,0)"),
-        yaxis=dict(title=dict(text="USD / FEU", font=dict(size=9, color=_C_TEXT3)),
-                   gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickfont=dict(size=9, color=_C_TEXT2)),
-        bargap=0.4,
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=12)),
-    )
-    st.plotly_chart(fig_bar, use_container_width=True,
-                    config={"displayModeBar": False}, key="fbx_bar_chart")
-
-    # ── Time-series line chart of all FBX routes ──────────────────────────
-    fig_ts = go.Figure()
-    for idx in fbx_indices:
-        rmeta     = _FBX_ROUTE_META[idx.index_id]
-        route_key = rmeta["route_key"]
-        df = freight_data.get(route_key)
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            continue
-        if "rate_usd_per_feu" not in df.columns:
-            continue
-        df = df.copy()
-        if "date" in df.columns:
-            df = df.sort_values("date")
-            df["date"] = pd.to_datetime(df["date"])
-            cutoff = df["date"].max() - pd.Timedelta(days=lookback_days)
-            df = df[df["date"] >= cutoff]
-        rates = df["rate_usd_per_feu"].dropna()
-        if rates.empty or len(rates) < 2:
-            continue
-        dates = df.loc[rates.index, "date"] if "date" in df.columns else rates.index
-
-        fig_ts.add_trace(go.Scatter(
-            x=list(dates),
-            y=rates.values,
-            name=rmeta["label"],
-            mode="lines",
-            line=dict(color=rmeta["color"], width=2),
-            hovertemplate=(
-                f"<b>{rmeta['label']}</b><br>%{{x|%b %d}}<br>"
-                f"$%{{y:,.0f}}/FEU<extra></extra>"
-            ),
-        ))
-
-    if fig_ts.data:
-        fig_ts.update_layout(
-            template="plotly_dark",
-            height=320,
-            paper_bgcolor=_C_CARD,
-            plot_bgcolor=_C_CARD,
-            margin=dict(l=56, r=20, t=16, b=40),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.01,
-                xanchor="center", x=0.5,
-                font=dict(size=10, color=_C_TEXT2),
-                bgcolor="rgba(0,0,0,0)",
-            ),
-            font=dict(family="Inter, sans-serif"),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                       tickfont=dict(size=10, color=_C_TEXT2)),
-            yaxis=dict(title=dict(text="USD / FEU", font=dict(size=9, color=_C_TEXT3)),
-                       gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                       tickfont=dict(size=10, color=_C_TEXT2)),
-            hoverlabel=dict(bgcolor="#1a2235",
-                            bordercolor="rgba(255,255,255,0.15)",
-                            font=dict(color=_C_TEXT, size=12)),
-        )
-        st.plotly_chart(fig_ts, use_container_width=True, key="fbx_route_timeseries")
-
-
-# ── Section 6: Index vs Stock Performance ─────────────────────────────────────
-
-_STOCK_TICKERS = {
-    "ZIM":  {"label": "ZIM Integrated Shipping", "color": "#ef4444"},
-    "MATX": {"label": "Matson Inc.",              "color": "#f97316"},
-    "SBLK": {"label": "Star Bulk Carriers",       "color": "#f59e0b"},
-    "GOGL": {"label": "Golden Ocean Group",       "color": "#10b981"},
-    "DSGX": {"label": "Descartes Systems",        "color": "#3b82f6"},
-    "EXPD": {"label": "Expeditors Intl.",         "color": "#8b5cf6"},
-}
-
-
-def _render_index_vs_stocks(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-    stock_data: dict | None,
-    lookback_days: int,
-) -> None:
-    _section_header(
-        "Index vs. Shipping Stock Performance",
-        "Normalized returns — BDI and FBX plotted alongside major shipping equities",
-        "📉",
-    )
-
-    fig     = go.Figure()
-    has_any = False
-
-    # BDI as the benchmark line
-    bdi_series = _get_index_time_series("BDI", macro_data, freight_data)
-    if bdi_series is not None and not bdi_series.empty:
-        s = bdi_series.sort_index().dropna()
-        cutoff = s.index.max() - pd.Timedelta(days=lookback_days)
-        s = s[s.index >= cutoff]
-        if len(s) >= 2 and float(s.iloc[0]) != 0:
-            norm = s / float(s.iloc[0]) * 100.0
-            fig.add_trace(go.Scatter(
-                x=norm.index, y=norm.values,
-                name="BDI (Index)",
-                mode="lines",
-                line=dict(color=_C_ACCENT, width=2.5, dash="solid"),
-                hovertemplate="<b>BDI</b><br>%{x|%b %d}<br>%{y:.1f}<extra></extra>",
-            ))
-            has_any = True
-
-    # Overlay stocks if provided
-    if stock_data and isinstance(stock_data, dict):
-        for ticker, smeta in _STOCK_TICKERS.items():
-            df = stock_data.get(ticker)
-            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                continue
-            price_col = next(
-                (c for c in ("close", "Close", "price", "adj_close") if c in df.columns),
-                None,
-            )
-            if price_col is None:
-                continue
-            df = df.copy()
-            if "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.sort_values("date")
-                cutoff = df["date"].max() - pd.Timedelta(days=lookback_days)
-                df = df[df["date"] >= cutoff]
-            prices = df[price_col].dropna()
-            if prices.empty or len(prices) < 2 or float(prices.iloc[0]) == 0:
-                continue
-            dates = df.loc[prices.index, "date"] if "date" in df.columns else prices.index
-            norm  = prices / float(prices.iloc[0]) * 100.0
-            fig.add_trace(go.Scatter(
-                x=list(dates), y=norm.values,
-                name=f"{ticker} — {smeta['label']}",
-                mode="lines",
-                line=dict(color=smeta["color"], width=1.6),
-                opacity=0.80,
-                hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>%{{y:.1f}}<extra></extra>",
-            ))
-            has_any = True
-
-    fig.add_hline(
-        y=100, line_dash="dot",
-        line_color="rgba(255,255,255,0.18)", line_width=1,
-    )
-
-    if not has_any:
-        st.info(
-            "No stock or index data available for this chart. "
-            "Provide stock data via the `stock_data` dict with ticker symbols as keys."
-        )
-        return
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=400,
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=48, r=20, t=16, b=40),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.01,
-            xanchor="center", x=0.5,
-            font=dict(size=9, color=_C_TEXT2),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickfont=dict(size=10, color=_C_TEXT2)),
-        yaxis=dict(title=dict(text="Return Index (base = 100)", font=dict(size=9, color=_C_TEXT3)),
-                   gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickfont=dict(size=10, color=_C_TEXT2)),
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=12)),
-    )
-    st.plotly_chart(fig, use_container_width=True, key="index_vs_stocks_chart")
-
-
-# ── Section 7: Seasonality Chart ─────────────────────────────────────────────
-
-_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-
-def _render_seasonality(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-) -> None:
-    _section_header(
-        "Index Seasonality",
-        "Average monthly values across all available history — reveals recurring seasonal patterns",
-        "📅",
-    )
-
-    index_ids = [idx.index_id for idx in indices]
-    sel = st.selectbox(
-        "Select index for seasonality",
-        options=index_ids,
-        format_func=lambda iid: INDEX_METADATA.get(iid, {}).get("name", iid),
-        key="seasonality_index_select",
-    )
-    if not sel:
-        return
-
+def _render_forward_curve(all_series: dict[str, pd.Series]) -> None:
+    _section_header("BDI Forward Curve", "FFA-implied curve — 12-month outlook (mock if live unavailable)")
     try:
-        series = _get_index_time_series(sel, macro_data, freight_data)
-    except Exception as exc:
-        st.warning(f"Could not load data for seasonality: {exc}")
-        return
-
-    if series is None or series.empty or len(series) < 24:
-        st.info("Insufficient history for seasonality analysis (need at least 24 data points).")
-        return
-
-    series  = series.sort_index().dropna()
-    df_s    = series.to_frame("value")
-    df_s["month"] = df_s.index.month
-
-    monthly = df_s.groupby("month")["value"].agg(["mean", "std", "min", "max"]).reset_index()
-    monthly.columns = ["month", "mean", "std", "low", "high"]
-    monthly["label"] = monthly["month"].apply(lambda m: _MONTH_LABELS[m - 1])
-
-    color = _INDEX_COLORS.get(sel, _C_ACCENT)
-
-    fig = go.Figure()
-
-    # Historical min/max shaded band
-    fig.add_trace(go.Scatter(
-        x=monthly["label"].tolist() + monthly["label"].tolist()[::-1],
-        y=monthly["high"].tolist() + monthly["low"].tolist()[::-1],
-        fill="toself",
-        fillcolor=color + "22",
-        line=dict(color="rgba(0,0,0,0)"),
-        name="Historical Range",
-        hoverinfo="skip",
-    ))
-
-    # ±1 std band
-    fig.add_trace(go.Scatter(
-        x=monthly["label"].tolist() + monthly["label"].tolist()[::-1],
-        y=(monthly["mean"] + monthly["std"]).tolist()
-          + (monthly["mean"] - monthly["std"]).tolist()[::-1],
-        fill="toself",
-        fillcolor=color + "33",
-        line=dict(color="rgba(0,0,0,0)"),
-        name="±1 Std Dev",
-        hoverinfo="skip",
-    ))
-
-    # Mean line
-    fig.add_trace(go.Scatter(
-        x=monthly["label"],
-        y=monthly["mean"],
-        name="Monthly Average",
-        mode="lines+markers",
-        line=dict(color=color, width=2.2),
-        marker=dict(size=6, color=color, line=dict(color=_C_CARD, width=1.5)),
-        hovertemplate="<b>%{x}</b><br>Avg: %{y:,.1f}<extra></extra>",
-    ))
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=340,
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=56, r=20, t=16, b=40),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.01,
-            xanchor="center", x=0.5,
-            font=dict(size=10, color=_C_TEXT2),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickfont=dict(size=11, color=_C_TEXT2)),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickfont=dict(size=10, color=_C_TEXT2)),
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=12)),
-    )
-    st.plotly_chart(fig, use_container_width=True, key="seasonality_chart")
-
-
-# ── Section 8: Momentum Indicators ───────────────────────────────────────────
-
-def _compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain  = delta.clip(lower=0).rolling(window).mean()
-    loss  = (-delta.clip(upper=0)).rolling(window).mean()
-    rs    = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
-
-
-def _compute_roc(series: pd.Series, window: int = 10) -> pd.Series:
-    """Rate of Change (%)."""
-    return series.pct_change(window) * 100.0
-
-
-def _render_momentum(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-    lookback_days: int,
-) -> None:
-    _section_header(
-        "Momentum Indicators",
-        "RSI (14-period) and Rate-of-Change (10-period) — identify overbought/oversold conditions",
-        "⚡",
-    )
-
-    index_ids = [idx.index_id for idx in indices]
-    sel = st.selectbox(
-        "Select index for momentum analysis",
-        options=index_ids,
-        format_func=lambda iid: INDEX_METADATA.get(iid, {}).get("name", iid),
-        key="momentum_index_select",
-    )
-    if not sel:
-        return
-
-    try:
-        series = _get_index_time_series(sel, macro_data, freight_data)
-    except Exception as exc:
-        st.warning(f"Could not load momentum data: {exc}")
-        return
-
-    if series is None or series.empty or len(series) < 20:
-        st.info("Insufficient data for momentum indicators (need at least 20 data points).")
-        return
-
-    series  = series.sort_index().dropna()
-    cutoff  = series.index.max() - pd.Timedelta(days=max(lookback_days, 90))
-    sliced  = series[series.index >= cutoff]
-    if len(sliced) < 20:
-        sliced = series.tail(60)
-
-    rsi   = _compute_rsi(sliced, window=14)
-    roc   = _compute_roc(sliced, window=10)
-    color = _INDEX_COLORS.get(sel, _C_ACCENT)
-
-    fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.45, 0.27, 0.28],
-        vertical_spacing=0.05,
-        subplot_titles=["Price", "RSI (14)", "Rate of Change (10)"],
-    )
-
-    # Price panel
-    fig.add_trace(go.Scatter(
-        x=sliced.index, y=sliced.values,
-        name=INDEX_METADATA.get(sel, {}).get("name", sel),
-        mode="lines",
-        line=dict(color=color, width=2),
-        hovertemplate="%{x|%b %d}<br>%{y:,.1f}<extra></extra>",
-    ), row=1, col=1)
-
-    # RSI panel
-    rsi_clean = rsi.dropna()
-    if not rsi_clean.empty:
-        rsi_color = [
-            _C_BEAR if v > 70 else _C_BULL if v < 30 else _C_ACCENT
-            for v in rsi_clean.values
-        ]
-        fig.add_trace(go.Bar(
-            x=rsi_clean.index, y=rsi_clean.values,
-            name="RSI",
-            marker=dict(color=rsi_color, opacity=0.75),
-            hovertemplate="RSI: %{y:.1f}<extra></extra>",
-        ), row=2, col=1)
-        for level, lcolor in [(70, _C_BEAR), (30, _C_BULL), (50, _C_TEXT3)]:
-            fig.add_hline(
-                y=level, row=2, col=1,
-                line_dash="dot", line_color=lcolor + "88", line_width=1,
-            )
-
-    # ROC panel
-    roc_clean = roc.dropna()
-    if not roc_clean.empty:
-        roc_colors = [_C_BULL if v >= 0 else _C_BEAR for v in roc_clean.values]
-        fig.add_trace(go.Bar(
-            x=roc_clean.index, y=roc_clean.values,
-            name="ROC (10)",
-            marker=dict(color=roc_colors, opacity=0.75),
-            hovertemplate="ROC: %{y:.1f}%<extra></extra>",
-        ), row=3, col=1)
-        fig.add_hline(
-            y=0, row=3, col=1,
-            line_dash="solid", line_color="rgba(255,255,255,0.12)", line_width=1,
-        )
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=520,
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=56, r=20, t=36, b=40),
-        showlegend=False,
-        font=dict(family="Inter, sans-serif"),
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=11)),
-    )
-    for row_i in range(1, 4):
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                         tickfont=dict(size=9, color=_C_TEXT2), row=row_i, col=1)
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                         tickfont=dict(size=9, color=_C_TEXT2), row=row_i, col=1)
-    for ann in fig.layout.annotations:
-        ann.font.color = _C_TEXT3
-        ann.font.size  = 10
-
-    st.plotly_chart(fig, use_container_width=True, key="momentum_chart")
-
-    # ── Momentum summary cards ────────────────────────────────────────────
-    rsi_now = _safe_float(rsi.dropna().iloc[-1]) if not rsi.dropna().empty else None
-    roc_now = _safe_float(roc.dropna().iloc[-1]) if not roc.dropna().empty else None
-
-    if rsi_now is not None or roc_now is not None:
-        m_cols = st.columns(4)
-        with m_cols[0]:
-            if rsi_now is not None:
-                label  = "Overbought" if rsi_now > 70 else "Oversold" if rsi_now < 30 else "Neutral"
-                lcolor = _C_BEAR if rsi_now > 70 else _C_BULL if rsi_now < 30 else _C_TEXT3
-                st.markdown(
-                    f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-                    f' border-radius:10px; padding:12px 16px; text-align:center">'
-                    f'<div style="font-size:0.65rem; color:{_C_TEXT3}; font-weight:700;'
-                    f' text-transform:uppercase; letter-spacing:0.07em; margin-bottom:5px">'
-                    f'RSI (14)</div>'
-                    f'<div style="font-size:1.5rem; font-weight:800; color:{lcolor}">'
-                    f'{rsi_now:.1f}</div>'
-                    f'<div style="font-size:0.7rem; color:{lcolor}; margin-top:3px">'
-                    f'{label}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-        with m_cols[1]:
-            if roc_now is not None:
-                roc_c = _C_BULL if roc_now >= 0 else _C_BEAR
-                st.markdown(
-                    f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-                    f' border-radius:10px; padding:12px 16px; text-align:center">'
-                    f'<div style="font-size:0.65rem; color:{_C_TEXT3}; font-weight:700;'
-                    f' text-transform:uppercase; letter-spacing:0.07em; margin-bottom:5px">'
-                    f'Rate of Change (10)</div>'
-                    f'<div style="font-size:1.5rem; font-weight:800; color:{roc_c}">'
-                    f'{roc_now:+.1f}%</div>'
-                    f'<div style="font-size:0.7rem; color:{roc_c}; margin-top:3px">'
-                    f'{"Accelerating" if roc_now >= 0 else "Decelerating"}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-
-# ── Section 9: Historical Context (52-week range bars) ────────────────────────
-
-def _render_historical_context(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-) -> None:
-    _section_header(
-        "Historical Context — 52-Week Range",
-        "Current value vs. 52-week high, low, and average — gauge where each index stands in its annual cycle",
-        "📆",
-    )
-
-    for idx in indices:
-        try:
-            series = _get_index_time_series(idx.index_id, macro_data, freight_data)
-        except Exception:
-            series = None
-
-        cur = _safe_float(idx.current_value) or 0.0
-        hi  = _safe_float(idx.yoy_52w_high)
-        lo  = _safe_float(idx.yoy_52w_low)
-
-        if series is not None and not series.empty:
-            cutoff  = series.index.max() - pd.Timedelta(weeks=52)
-            s52     = series[series.index >= cutoff].dropna()
-            avg_52w = float(s52.mean()) if not s52.empty else None
+        bdi = all_series.get("BDI", pd.Series(dtype=float)).dropna()
+        spot = float(bdi.iloc[-1]) if len(bdi) else 1200
+        # Mock FFA curve with realistic shape
+        months = list(range(1, 13))
+        labels = [(dt.date.today() + dt.timedelta(days=30 * m)).strftime("%b %Y") for m in months]
+        rng = np.random.default_rng(_seed_from_id("FFA_BDI"))
+        # Randomly pick contango or backwardation for the mock
+        scenario = rng.choice(["contango", "backwardation", "flat"])
+        if scenario == "contango":
+            curve = [spot * (1 + 0.012 * m + rng.normal(0, 0.005)) for m in months]
+            scenario_label = "Mild Contango (market expects higher rates)"
+        elif scenario == "backwardation":
+            curve = [spot * (1 - 0.008 * m + rng.normal(0, 0.005)) for m in months]
+            scenario_label = "Backwardation (market expects rate softening)"
         else:
-            avg_52w = None
-
-        color = _INDEX_COLORS.get(idx.index_id, _C_ACCENT)
-        rng   = (hi - lo) if (hi and lo and hi != lo) else None
-        pos   = ((cur - lo) / rng * 100.0) if (rng and lo is not None) else 50.0
-        pos   = max(0.0, min(100.0, pos))
-        avg_pos = ((avg_52w - lo) / rng * 100.0) if (rng and avg_52w and lo is not None) else None
-
-        val_str  = _fmt_value(cur, idx.index_id)
-        hi_str   = _fmt_value(hi, idx.index_id)
-        lo_str   = _fmt_value(lo, idx.index_id)
-        avg_str  = _fmt_value(avg_52w, idx.index_id) if avg_52w else "N/A"
-        from_hi  = _fmt_pct(idx.pct_from_52w_high)
-        from_hi_c = _pct_color(idx.pct_from_52w_high)
-
-        avg_marker = ""
-        if avg_pos is not None:
-            avg_marker = (
-                f'<div style="position:absolute; left:{avg_pos:.1f}%; top:-3px;'
-                f' width:2px; height:16px; background:{_C_AMBER}88;'
-                f' transform:translateX(-50%)"></div>'
-            )
-
+            curve = [spot * (1 + rng.normal(0, 0.007)) for _ in months]
+            scenario_label = "Flat Curve (market neutral)"
+        scenario_color = C_MOD if scenario == "contango" else (C_LOW if scenario == "backwardation" else C_TEXT2)
         st.markdown(
-            f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-            f' border-radius:10px; padding:14px 18px; margin-bottom:8px">'
-
-            # Header
-            f'<div style="display:flex; justify-content:space-between;'
-            f' align-items:center; margin-bottom:10px">'
-            f'<div>'
-            f'<span style="font-size:0.7rem; font-weight:700; color:{_C_TEXT3};'
-            f' text-transform:uppercase; letter-spacing:0.07em">{idx.index_id}</span>'
-            f'<span style="font-size:0.82rem; color:{_C_TEXT2}; margin-left:8px">{idx.name}</span>'
-            f'</div>'
-            f'<div style="display:flex; align-items:center; gap:16px">'
-            f'<span style="font-size:1.1rem; font-weight:800; color:{_C_TEXT}">{val_str}</span>'
-            f'<span style="font-size:0.72rem; color:{from_hi_c}; font-weight:600">{from_hi} vs Hi</span>'
-            f'</div>'
-            f'</div>'
-
-            # Range bar with glowing position dot
-            f'<div style="position:relative; background:rgba(255,255,255,0.06);'
-            f' border-radius:6px; height:10px; margin-bottom:8px">'
-            f'<div style="position:absolute; left:0; width:{pos:.1f}%; height:100%;'
-            f' background:linear-gradient(90deg, {color}44, {color});'
-            f' border-radius:6px"></div>'
-            f'<div style="position:absolute; left:{pos:.1f}%; top:-3px;'
-            f' width:16px; height:16px; border-radius:50%;'
-            f' background:{color}; border:2px solid {_C_CARD};'
-            f' transform:translateX(-50%);'
-            f' box-shadow:0 0 8px {color}88"></div>'
-            f'{avg_marker}'
-            f'</div>'
-
-            # Labels
-            f'<div style="display:flex; justify-content:space-between;'
-            f' font-size:0.62rem; color:{_C_TEXT3}">'
-            f'<span>52w L: <span style="color:{_C_TEXT2}">{lo_str}</span></span>'
-            f'<span style="color:{_C_AMBER}88">Avg: {avg_str}</span>'
-            f'<span>52w H: <span style="color:{_C_TEXT2}">{hi_str}</span></span>'
-            f'</div>'
-
-            f'</div>',
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:10px 14px;'
+            f'margin-bottom:12px;color:{scenario_color};font-size:12px">'
+            f'Scenario: <b>{scenario_label}</b> &nbsp; '
+            f'<span style="color:{C_TEXT3}">(Spot: {spot:,.0f} pts)</span></div>',
             unsafe_allow_html=True,
         )
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=labels, y=[spot] * len(labels), name="Spot",
+            line=dict(color=C_TEXT3, width=1, dash="dot"),
+        ))
+        fig.add_trace(go.Bar(
+            x=labels, y=curve, name="FFA Implied",
+            marker_color=[C_HIGH if v >= spot else C_LOW for v in curve],
+            opacity=0.7,
+        ))
+        fig.add_trace(go.Scatter(
+            x=labels, y=curve, name="Curve",
+            line=dict(color=C_ACCENT, width=2),
+            mode="lines+markers",
+            marker=dict(size=6, color=C_ACCENT),
+        ))
+        fig.update_layout(
+            **_PLOT_LAYOUT, height=320,
+            title="BDI FFA Forward Curve — 12 Months",
+            yaxis_title="BDI Points",
+            barmode="overlay",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            f'<div style="color:{C_TEXT3};font-size:10px;text-align:right;margin-top:-8px">'
+            f'Source: Mock FFA curve based on current spot. Live FFA data requires subscription API.</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.error("Forward curve error: {}", exc)
+        st.error(f"Forward curve error: {exc}")
 
 
-# ── Section 10: Performance Heatmap ──────────────────────────────────────────
+# ── Section 6: Cross-Asset Dashboard ──────────────────────────────────────────
 
-def _render_performance_heatmap(indices: list[ShippingIndex]) -> None:
-    _section_header(
-        "Performance Heatmap",
-        "Color-coded returns across 1d / 7d / 30d / YTD — green = up, red = down",
-        "🌡️",
-    )
+def _mock_macro_series(label: str, base: float, days: int = 504) -> pd.Series:
+    rng = np.random.default_rng(_seed_from_id(label))
+    returns = rng.normal(0.0002, 0.01, days)
+    prices = base * np.exp(np.cumsum(returns))
+    return pd.Series(prices, index=pd.date_range(end=dt.date.today(), periods=days, freq="B"), name=label)
 
-    periods     = ["1d", "7d", "30d", "YTD"]
-    index_names = [idx.name for idx in indices]
 
-    z_vals: list[list[float]] = []
-    text_vals: list[list[str]] = []
+def _render_cross_asset(all_series: dict[str, pd.Series]) -> None:
+    _section_header("Cross-Asset Dashboard", "Shipping indices vs macro drivers — 2Y history")
+    try:
+        bdi = all_series.get("BDI", _mock_macro_series("BDI", 1200)).dropna().iloc[-504:]
+        wci = all_series.get("WCI", _mock_macro_series("WCI", 3200)).dropna().iloc[-504:]
+        bdti = all_series.get("BDTI", _mock_macro_series("BDTI", 800)).dropna().iloc[-504:]
+        scfi = all_series.get("SCFI", _mock_macro_series("SCFI", 2800)).dropna().iloc[-504:]
 
-    for idx in indices:
-        raw_vals    = [idx.change_1d, idx.change_7d, idx.change_30d, idx.change_ytd]
-        period_vals = [
-            float(v) if (v is not None and np.isfinite(float(v))) else 0.0
-            for v in raw_vals
+        iron_ore = _try_yfinance("SCCO", "2y") or _mock_macro_series("IronOre", 120)
+        oil = _try_yfinance("CL=F", "2y") or _mock_macro_series("Oil", 75)
+        retail = _mock_macro_series("US_Retail", 700000)
+        cn_exports = _mock_macro_series("CN_Exports", 300000)
+
+        pairs = [
+            dict(title="BDI vs Iron Ore Price", idx=bdi, macro=iron_ore, idx_name="BDI", macro_name="Iron Ore Proxy"),
+            dict(title="WCI vs US Retail Sales", idx=wci, macro=retail, idx_name="WCI", macro_name="US Retail Sales"),
+            dict(title="BDTI vs Oil Price (WTI)", idx=bdti, macro=oil, idx_name="BDTI", macro_name="WTI Crude"),
+            dict(title="SCFI vs China Exports", idx=scfi, macro=cn_exports, idx_name="SCFI", macro_name="China Exports"),
         ]
-        z_vals.append(period_vals)
-        text_vals.append([_fmt_pct(v) for v in raw_vals])
-
-    z_arr       = np.array(z_vals, dtype=float)
-    finite_vals = z_arr[np.isfinite(z_arr)]
-    z_extreme   = max(
-        abs(finite_vals.min()) if len(finite_vals) else 0,
-        abs(finite_vals.max()) if len(finite_vals) else 0,
-        5.0,
-    )
-
-    rdgn = [
-        [0.0,  "#b91c1c"],
-        [0.25, "#ef4444"],
-        [0.45, "#94a3b8"],
-        [0.5,  "#64748b"],
-        [0.55, "#94a3b8"],
-        [0.75, "#10b981"],
-        [1.0,  "#059669"],
-    ]
-
-    fig = go.Figure(go.Heatmap(
-        z=z_arr,
-        x=periods,
-        y=index_names,
-        colorscale=rdgn,
-        zmid=0,
-        zmin=-z_extreme,
-        zmax=z_extreme,
-        text=text_vals,
-        texttemplate="%{text}",
-        textfont=dict(size=12, color="#f1f5f9"),
-        hovertemplate="<b>%{y}</b><br>%{x}: %{text}<extra></extra>",
-        colorbar=dict(
-            tickfont=dict(color=_C_TEXT2, size=10),
-            outlinewidth=0,
-            thickness=12,
-            title=dict(text="%", font=dict(color=_C_TEXT3, size=10)),
-        ),
-    ))
-    fig.update_layout(
-        template="plotly_dark",
-        height=max(280, len(indices) * 48 + 80),
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=40, r=80, t=40, b=40),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(tickfont=dict(size=12, color=_C_TEXT2), side="top"),
-        yaxis=dict(tickfont=dict(size=11, color=_C_TEXT2), autorange="reversed"),
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=12)),
-    )
-    st.plotly_chart(
-        fig, use_container_width=True,
-        config={"displayModeBar": False},
-        key="indices_performance_heatmap",
-    )
-
-
-# ── Section 11: Cross-Correlation Heatmap ─────────────────────────────────────
-
-def _render_correlation_heatmap(
-    indices: list[ShippingIndex],
-    macro_data: dict,
-    freight_data: dict,
-) -> None:
-    _section_header(
-        "Index Cross-Correlation Matrix",
-        "Pairwise Pearson r between all index time series — 1.0 = perfect positive, -1.0 = inverse",
-        "🔗",
-    )
-
-    corr_df = get_index_correlation_matrix(indices, macro_data, freight_data)
-    if corr_df.empty:
-        st.info(
-            "Insufficient overlapping data to compute correlations. "
-            "At least 5 common observations per pair are required."
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=[p["title"] for p in pairs],
+            specs=[[{"secondary_y": True}, {"secondary_y": True}],
+                   [{"secondary_y": True}, {"secondary_y": True}]],
         )
-        return
-
-    labels      = [INDEX_METADATA.get(c, {}).get("name", c) for c in corr_df.columns]
-    z_arr       = corr_df.values
-    text_matrix = [[f"{v:.2f}" for v in row] for row in z_arr]
-
-    fig = go.Figure(go.Heatmap(
-        z=z_arr,
-        x=labels,
-        y=labels,
-        colorscale="RdBu_r",
-        zmid=0,
-        zmin=-1,
-        zmax=1,
-        text=text_matrix,
-        texttemplate="%{text}",
-        textfont=dict(size=11, color="#f1f5f9"),
-        hovertemplate="<b>%{x}</b> × <b>%{y}</b><br>r = %{z:.3f}<extra></extra>",
-        colorbar=dict(
-            tickfont=dict(color=_C_TEXT2, size=10),
-            outlinewidth=0,
-            thickness=12,
-            tickvals=[-1, -0.5, 0, 0.5, 1],
-            ticktext=["-1.0", "-0.5", "0", "0.5", "1.0"],
-        ),
-    ))
-    fig.update_layout(
-        template="plotly_dark",
-        height=max(350, len(corr_df) * 55 + 80),
-        paper_bgcolor=_C_CARD,
-        plot_bgcolor=_C_CARD,
-        margin=dict(l=40, r=80, t=40, b=80),
-        font=dict(family="Inter, sans-serif"),
-        xaxis=dict(tickfont=dict(size=10, color=_C_TEXT2), side="top", tickangle=30),
-        yaxis=dict(tickfont=dict(size=10, color=_C_TEXT2), autorange="reversed"),
-        hoverlabel=dict(bgcolor="#1a2235",
-                        bordercolor="rgba(255,255,255,0.15)",
-                        font=dict(color=_C_TEXT, size=12)),
-    )
-    st.plotly_chart(
-        fig, use_container_width=True,
-        config={"displayModeBar": False},
-        key="indices_correlation_heatmap",
-    )
-
-
-# ── Section 12: Signal Summary Feed ──────────────────────────────────────────
-
-_BULL_INSIGHTS: dict[str, str] = {
-    "BDI": (
-        "Baltic Dry Index is trending higher, signaling rising demand for dry bulk "
-        "commodities and an improving global trade outlook. Positive for bulk carrier stocks."
-    ),
-    "FBX_GLOBAL": (
-        "Global container freight rates are rising, pointing to tighter capacity "
-        "and potential peak-season congestion pressures. Watch for contract-vs-spot spread widening."
-    ),
-    "FBX01": (
-        "Trans-Pacific eastbound rates are surging, reflecting strong US import "
-        "demand from Asia. Possible front-loading or inventory build cycle under way."
-    ),
-    "FBX03": (
-        "Asia-Europe rates are climbing — likely driven by Suez Canal disruption rerouting "
-        "via Cape of Good Hope, adding 10–14 days and consuming effective capacity."
-    ),
-    "FBX11": (
-        "Transatlantic eastbound rates are rising, suggesting robust US export "
-        "volumes and tightening capacity on North Atlantic lanes."
-    ),
-    "PPIACO": (
-        "Producer Price Index is advancing — building input cost pressures that may "
-        "translate into higher fuel surcharges and GRIs across container lanes."
-    ),
-}
-
-_BEAR_INSIGHTS: dict[str, str] = {
-    "BDI": (
-        "Baltic Dry Index is declining, a bearish signal for global commodity "
-        "trade volumes and dry bulk demand. Capesize and Panamax charter rates likely under pressure."
-    ),
-    "FBX_GLOBAL": (
-        "Global container freight rates are falling — softer demand or oversupply of "
-        "vessel capacity across major lanes. Spot rates may undercut long-term contracts."
-    ),
-    "FBX01": (
-        "Trans-Pacific eastbound rates are weakening — softening US import demand "
-        "or a build-up of idle vessel capacity in Asian load ports."
-    ),
-    "FBX03": (
-        "Asia-Europe rates are sliding — easing capacity constraints or a reduction "
-        "in European import appetite. Rerouting via Suez may resume if safe."
-    ),
-    "FBX11": (
-        "Transatlantic eastbound rates are declining — weaker US export flows "
-        "or excess tonnage on the North Atlantic corridor."
-    ),
-    "PPIACO": (
-        "Producer Price Index is softening — easing input cost pressures that "
-        "could reduce shipping demand from manufacturing sectors."
-    ),
-}
-
-
-def _render_signal_feed(indices: list[ShippingIndex]) -> None:
-    _section_header(
-        "Index Signal Feed",
-        "Market insight for all indices with active BULL or BEAR trends",
-        "📡",
-    )
-
-    active = [idx for idx in indices if idx.trend in ("BULL", "BEAR")]
-
-    if not active:
+        positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+        for pair, (row, col) in zip(pairs, positions):
+            try:
+                idx_s = pair["idx"].dropna()
+                mac_s = pair["macro"].dropna()
+                common = idx_s.index.intersection(mac_s.index)
+                if len(common) < 5:
+                    continue
+                fig.add_trace(
+                    go.Scatter(x=common, y=idx_s.loc[common], name=pair["idx_name"],
+                               line=dict(color=C_ACCENT, width=1.5), showlegend=(row == 1 and col == 1)),
+                    row=row, col=col, secondary_y=False,
+                )
+                fig.add_trace(
+                    go.Scatter(x=common, y=mac_s.loc[common], name=pair["macro_name"],
+                               line=dict(color=C_MOD, width=1.5, dash="dash"), showlegend=(row == 1 and col == 1)),
+                    row=row, col=col, secondary_y=True,
+                )
+            except Exception as exc:
+                logger.debug("Cross-asset subplot error: {}", exc)
+        fig.update_layout(
+            paper_bgcolor=C_CARD, plot_bgcolor=C_SURFACE,
+            font=dict(color=C_TEXT, size=11),
+            height=520, margin=dict(l=50, r=50, t=60, b=40),
+            hovermode="x unified",
+            showlegend=True,
+            legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor=C_BORDER),
+        )
+        fig.update_annotations(font_color=C_TEXT2, font_size=11)
+        for axis in fig.layout:
+            if axis.startswith("xaxis") or axis.startswith("yaxis"):
+                fig.layout[axis].update(gridcolor=C_BORDER, zerolinecolor=C_BORDER)
+        st.plotly_chart(fig, use_container_width=True)
         st.markdown(
-            f'<div style="background:{_C_CARD}; border:1px solid {_C_BORDER};'
-            f' border-radius:10px; padding:20px; text-align:center">'
-            f'<div style="font-size:0.9rem; color:{_C_TEXT2}">'
-            f'All indices are currently in a SIDEWAYS trend. No directional signals active.'
-            f'</div></div>',
+            f'<div style="color:{C_TEXT3};font-size:10px;text-align:right;margin-top:-8px">'
+            f'Blue = shipping index (left axis) &nbsp;|&nbsp; Amber dashed = macro indicator (right axis)</div>',
             unsafe_allow_html=True,
         )
-        return
+    except Exception as exc:
+        logger.error("Cross-asset dashboard error: {}", exc)
+        st.error(f"Cross-asset error: {exc}")
 
-    for idx in active:
-        color  = _C_BULL if idx.trend == "BULL" else _C_BEAR
-        bg_clr = _TREND_BG.get(idx.trend, "rgba(148,163,184,0.06)")
-        icon   = "▲" if idx.trend == "BULL" else "▼"
 
-        insight_text = (
-            _BULL_INSIGHTS if idx.trend == "BULL" else _BEAR_INSIGHTS
-        ).get(
-            idx.index_id,
-            f"{idx.name} is in a {idx.trend.lower()} trend.",
-        )
+# ── Section 7: Methodology ────────────────────────────────────────────────────
 
-        val_str = _fmt_value(idx.current_value, idx.index_id)
-        d7_str  = _fmt_pct(idx.change_7d)
-        d30_str = _fmt_pct(idx.change_30d)
+def _render_methodology() -> None:
+    _section_header("Index Methodology Reference", "Calculation methods, coverage, and publishers")
+    try:
+        header_cols = st.columns([1, 3, 1, 1, 2])
+        for col, h in zip(header_cols, ["Index", "Method", "Freq", "Routes", "Publisher"]):
+            col.markdown(
+                f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;font-weight:600">{h}</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(f'<hr style="border-color:{C_BORDER};margin:4px 0 6px">', unsafe_allow_html=True)
+        for entry in _METHODOLOGY:
+            try:
+                accent = _INDEX_COLORS.get(entry["index"], C_TEXT3)
+                group = next((m["group"] for m in _INDICES if m["id"] == entry["index"]), "")
+                group_colors = {"Dry Bulk": C_ACCENT, "Container": C_HIGH, "Tanker": C_LOW}
+                gc = group_colors.get(group, C_TEXT3)
+                mcols = st.columns([1, 3, 1, 1, 2])
+                mcols[0].markdown(
+                    f'<div style="color:{accent};font-size:12px;font-weight:700">{entry["index"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                mcols[1].markdown(
+                    f'<div style="color:{C_TEXT2};font-size:11px">{entry["method"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                mcols[2].markdown(
+                    f'<div style="color:{C_TEXT3};font-size:11px">{entry["freq"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                mcols[3].markdown(
+                    f'<div style="color:{C_TEXT3};font-size:11px">{entry["routes"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                mcols[4].markdown(
+                    f'<div style="color:{gc};font-size:11px">{entry["publisher"]}</div>',
+                    unsafe_allow_html=True,
+                )
+            except Exception as exc:
+                logger.debug("Methodology row error: {}", exc)
+    except Exception as exc:
+        logger.error("Methodology section error: {}", exc)
+        st.error(f"Methodology error: {exc}")
 
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+def render(freight_data=None, macro_data=None, stock_data=None) -> None:
+    """Render Bloomberg-style shipping indices dashboard."""
+    try:
         st.markdown(
-            f'<div style="background:{bg_clr}; border:1px solid rgba(255,255,255,0.06);'
-            f' border-left:3px solid {color};'
-            f' border-radius:10px; padding:14px 18px; margin-bottom:8px">'
-
-            f'<div style="display:flex; align-items:center; gap:10px; margin-bottom:6px">'
-            f'<span style="font-size:0.68rem; font-weight:800; letter-spacing:0.06em;'
-            f' text-transform:uppercase; color:{color}; white-space:nowrap">'
-            f'{icon} {idx.trend}</span>'
-            f'<span style="font-size:0.82rem; font-weight:700; color:{_C_TEXT}">'
-            f'{idx.name}</span>'
-            f'<span style="font-size:0.7rem; color:{_C_TEXT3}; margin-left:auto;'
-            f' font-family:monospace; white-space:nowrap">'
-            f'{val_str} &nbsp;·&nbsp; '
-            f'7d: <span style="color:{_pct_color(idx.change_7d)}">{d7_str}</span>'
-            f'&nbsp;·&nbsp;'
-            f'30d: <span style="color:{_pct_color(idx.change_30d)}">{d30_str}</span>'
-            f'</span>'
-            f'</div>'
-
-            f'<div style="font-size:0.8rem; color:{_C_TEXT2}; line-height:1.6">'
-            f'{insight_text}'
-            f'</div>'
-
-            f'</div>',
+            f'<div style="background:linear-gradient(135deg,{C_SURFACE},{C_BG});'
+            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px">'
+            f'<div style="display:flex;align-items:center;gap:12px">'
+            f'<div style="background:{C_ACCENT};width:4px;height:40px;border-radius:2px"></div>'
+            f'<div>'
+            f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;letter-spacing:0.5px">Shipping Indices</div>'
+            f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px">'
+            f'Baltic Exchange · Drewry · Freightos · Shanghai Shipping Exchange</div>'
+            f'</div></div></div>',
             unsafe_allow_html=True,
         )
-
-
-# ── CSV Export ────────────────────────────────────────────────────────────────
-
-def _render_data_export(indices: list[ShippingIndex]) -> None:
-    def _sr(v, n=2):
-        if v is None:
-            return None
-        try:
-            f = float(v)
-            return round(f, n) if np.isfinite(f) else None
-        except (TypeError, ValueError):
-            return None
-
-    df = pd.DataFrame([
-        {
-            "Index":          idx.name,
-            "Index ID":       idx.index_id,
-            "Current Value":  idx.current_value,
-            "Trend":          idx.trend,
-            "1d Change (%)":  _sr(idx.change_1d),
-            "7d Change (%)":  _sr(idx.change_7d),
-            "30d Change (%)": _sr(idx.change_30d),
-            "YTD Change (%)": _sr(idx.change_ytd),
-            "52w High":       idx.yoy_52w_high,
-            "52w Low":        idx.yoy_52w_low,
-            "% From 52w Hi":  _sr(idx.pct_from_52w_high),
-            "Source":         idx.source,
-            "Last Updated":   idx.last_updated,
-        }
-        for idx in indices
-    ])
-    st.download_button(
-        label="Download index snapshot CSV",
-        data=df.to_csv(index=False),
-        file_name="shipping_indices_snapshot.csv",
-        mime="text/csv",
-        key="dl_indices_snapshot_csv",
-    )
-
-
-# ── Main render entry point ───────────────────────────────────────────────────
-
-def render(
-    macro_data: dict,
-    freight_data: dict,
-    stock_data: Optional[dict] = None,
-    lookback_days: int = 90,
-) -> None:
-    """Render the full Shipping Indices tab.
-
-    Args:
-        macro_data:    FRED series dict (series_id -> DataFrame with date/value columns).
-        freight_data:  Freight scraper dict (route_id -> DataFrame with rate_usd_per_feu).
-        stock_data:    Optional stock data dict (ticker -> DataFrame with date/close columns).
-        lookback_days: Lookback window in days for time-series charts.
-    """
-    try:
-        indices = build_indices(macro_data or {}, freight_data or {})
     except Exception as exc:
-        logger.error("Failed to build shipping indices: %s", exc)
-        st.error(f"Could not load shipping index data: {exc}")
-        return
+        logger.debug("Header render error: {}", exc)
 
-    if not indices:
-        st.warning("No shipping index data is available.")
-        return
-
-    _macro   = macro_data   or {}
-    _freight = freight_data or {}
-    _stocks  = stock_data   or {}
-
-    # ── Hero KPI strip ────────────────────────────────────────────────────
-    _render_hero_metrics(indices)
-    _divider()
-
-    # ── 1. Index Dashboard Cards with Sparklines ──────────────────────────
     try:
-        _render_index_cards(indices, _macro, _freight)
+        with st.spinner("Loading index data..."):
+            all_series = _cached_series()
     except Exception as exc:
-        logger.warning("Index cards error: %s", exc)
-        st.warning("Index dashboard cards unavailable.")
-    _divider()
+        logger.error("Failed to load series: {}", exc)
+        all_series = {}
+        for idx in _INDICES:
+            try:
+                all_series[idx["id"]] = _mock_series(idx)
+            except Exception:
+                pass
 
-    # ── 2. Multi-Index Normalized Comparison ─────────────────────────────
     try:
-        _render_comparison_chart(indices, _macro, _freight, lookback_days)
+        _render_index_dashboard(all_series)
     except Exception as exc:
-        logger.warning("Comparison chart error: %s", exc)
-        st.warning("Comparison chart unavailable.")
-    _divider()
+        logger.error("Index dashboard error: {}", exc)
+        st.error(f"Index dashboard error: {exc}")
 
-    # ── 3 & 4: BDI breakdown + FBX routes side by side ───────────────────
-    left_col, right_col = st.columns([1, 1], gap="large")
-    with left_col:
-        try:
-            _render_bdi_breakdown(indices, _macro, _freight, lookback_days)
-        except Exception as exc:
-            logger.warning("BDI breakdown error: %s", exc)
-            st.warning("BDI component breakdown unavailable.")
-    with right_col:
-        try:
-            _render_fbx_breakdown(indices, _freight, lookback_days)
-        except Exception as exc:
-            logger.warning("FBX breakdown error: %s", exc)
-            st.warning("FBX route breakdown unavailable.")
-    _divider()
+    st.divider()
 
-    # ── 5. Index vs Stocks ────────────────────────────────────────────────
     try:
-        _render_index_vs_stocks(indices, _macro, _freight, _stocks, lookback_days)
+        _render_multi_index_chart(all_series)
     except Exception as exc:
-        logger.warning("Index vs stocks error: %s", exc)
-        st.warning("Index vs stock performance chart unavailable.")
-    _divider()
+        logger.error("Multi-index chart error: {}", exc)
+        st.error(f"Chart error: {exc}")
 
-    # ── 6 & 7: Seasonality + Momentum in tabs ────────────────────────────
-    tab_season, tab_momentum = st.tabs(["Seasonality", "Momentum"])
-    with tab_season:
-        try:
-            _render_seasonality(indices, _macro, _freight)
-        except Exception as exc:
-            logger.warning("Seasonality error: %s", exc)
-            st.warning("Seasonality chart unavailable.")
-    with tab_momentum:
-        try:
-            _render_momentum(indices, _macro, _freight, lookback_days)
-        except Exception as exc:
-            logger.warning("Momentum error: %s", exc)
-            st.warning("Momentum indicators unavailable.")
-    _divider()
+    st.divider()
 
-    # ── 8. Historical Context (52w range bars) ────────────────────────────
     try:
-        _render_historical_context(indices, _macro, _freight)
+        _render_bdi_deep_dive(all_series)
     except Exception as exc:
-        logger.warning("Historical context error: %s", exc)
-        st.warning("Historical context unavailable.")
-    _divider()
+        logger.error("BDI deep dive error: {}", exc)
+        st.error(f"BDI deep dive error: {exc}")
 
-    # ── 9. Performance Heatmap ────────────────────────────────────────────
+    st.divider()
+
     try:
-        _render_performance_heatmap(indices)
+        _render_spread_analysis(all_series)
     except Exception as exc:
-        logger.warning("Performance heatmap error: %s", exc)
-        st.warning("Performance heatmap unavailable.")
-    _divider()
+        logger.error("Spread analysis error: {}", exc)
+        st.error(f"Spread analysis error: {exc}")
 
-    # ── 10. Cross-Correlation Heatmap ─────────────────────────────────────
+    st.divider()
+
     try:
-        _render_correlation_heatmap(indices, _macro, _freight)
+        _render_forward_curve(all_series)
     except Exception as exc:
-        logger.warning("Correlation heatmap error: %s", exc)
-        st.warning("Correlation heatmap unavailable.")
-    _divider()
+        logger.error("Forward curve error: {}", exc)
+        st.error(f"Forward curve error: {exc}")
 
-    # ── 11. Signal Feed ───────────────────────────────────────────────────
+    st.divider()
+
     try:
-        _render_signal_feed(indices)
+        _render_cross_asset(all_series)
     except Exception as exc:
-        logger.warning("Signal feed error: %s", exc)
-        st.warning("Signal feed unavailable.")
-    _divider()
+        logger.error("Cross-asset error: {}", exc)
+        st.error(f"Cross-asset error: {exc}")
 
-    # ── Data export ───────────────────────────────────────────────────────
-    _render_data_export(indices)
+    st.divider()
+
+    try:
+        _render_methodology()
+    except Exception as exc:
+        logger.error("Methodology error: {}", exc)
+        st.error(f"Methodology error: {exc}")

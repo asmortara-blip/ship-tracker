@@ -1506,12 +1506,7 @@ def _render_context_panel(
             dot = "ctx-dot-green" if loaded else "ctx-dot-grey"
             freshness_str = freshness if loaded else "Not loaded"
             st.markdown(
-                '<div class="ds-card">'
-                '<div class="ds-card-name">'
-                '<span class="ctx-dot ' + dot + '"></span>' + name
-                '</div>'
-                '<div class="ds-card-fresh">' + freshness_str + '</div>'
-                '</div>',
+                f'<div class="ds-card"><div class="ds-card-name"><span class="ctx-dot {dot}"></span>{name}</div><div class="ds-card-fresh">{freshness_str}</div></div>',
                 unsafe_allow_html=True,
             )
     except Exception as exc:

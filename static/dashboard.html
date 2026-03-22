@@ -1,0 +1,2286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShipTracker Intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #ffffff; color: #111827; }
+    .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    /* Scrollable panels */
+    #table-panel { overflow-y: auto; }
+    #signals-panel { overflow-y: auto; }
+
+    /* Sticky table header */
+    #vessel-table thead th { position: sticky; top: 0; background: #ffffff; z-index: 10; }
+
+    /* Row expansion animation */
+    .expansion-cell { padding: 0 !important; border: none !important; }
+    .expansion-inner {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.22s ease-out;
+    }
+    .expansion-inner.open {
+      max-height: 320px;
+      transition: max-height 0.28s ease-in;
+    }
+
+    /* Focus ring */
+    :focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+
+    /* Skeleton pulse */
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .skeleton-pulse { animation: pulse 1.4s cubic-bezier(0.4,0,0.6,1) infinite; }
+
+    /* Dropdown panel */
+    .dropdown-panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 50;
+      background: #ffffff;
+      border: 1px solid #E5E7EB;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      min-width: 180px;
+      padding: 4px 0;
+      display: none;
+    }
+    .dropdown-panel.open { display: block; }
+    .dropdown-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 6px 14px;
+      font-size: 12px;
+      color: #374151;
+      cursor: pointer;
+      background: none;
+      border: none;
+      white-space: nowrap;
+    }
+    .dropdown-item:hover { background: #F9FAFB; }
+    .dropdown-item.selected { color: #1d4ed8; font-weight: 500; }
+
+    /* Sort arrow styling */
+    .sort-arrow { font-size: 10px; margin-left: 3px; color: #9ca3af; cursor: pointer; user-select: none; }
+    .sort-arrow.active { color: #374151; }
+
+    /* Pill */
+    .filter-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      background: #F3F4F6;
+      border: 1px solid #E5E7EB;
+      padding: 2px 8px;
+      border-radius: 2px;
+      color: #374151;
+    }
+    .pill-remove {
+      cursor: pointer;
+      color: #6b7280;
+      font-size: 13px;
+      line-height: 1;
+      background: none;
+      border: none;
+      padding: 0 0 0 2px;
+    }
+    .pill-remove:hover { color: #111827; }
+
+    /* Signal card */
+    .signal-row {
+      padding: 8px 12px;
+      border-bottom: 1px solid #F3F4F6;
+      cursor: default;
+      transition: background 0.1s;
+    }
+    .signal-row:hover { background: #F9FAFB; }
+
+    /* Pagination button */
+    .pg-btn {
+      padding: 2px 10px;
+      font-size: 11px;
+      border: 1px solid #E5E7EB;
+      background: #ffffff;
+      color: #374151;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+    .pg-btn:hover:not(:disabled) { background: #F9FAFB; }
+    .pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Table row hover */
+    #vessel-table tbody tr.data-row:hover { background: #F9FAFB; }
+    #vessel-table tbody tr.data-row { cursor: pointer; }
+
+    /* Header fixed */
+    #app-header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 40;
+      background: #ffffff;
+      border-bottom: 1px solid #E5E7EB;
+    }
+    #pills-bar {
+      position: fixed;
+      top: 41px;
+      left: 0;
+      right: 0;
+      z-index: 39;
+      background: #ffffff;
+      border-bottom: 1px solid #F3F4F6;
+    }
+    #main-layout {
+      display: flex;
+      height: calc(100vh - 41px);
+    }
+    #main-layout.with-pills {
+      height: calc(100vh - 41px - 34px);
+    }
+  </style>
+</head>
+<body class="text-gray-900">
+
+<!-- ══════════════════════════════════════════
+     HEADER
+══════════════════════════════════════════ -->
+<header id="app-header">
+  <div style="display:flex; align-items:center; justify-content:space-between; height:41px; padding:0 16px;">
+
+    <!-- Wordmark -->
+    <div style="font-size:12px; font-weight:500; letter-spacing:0.12em; text-transform:uppercase; color:#111827; white-space:nowrap; flex-shrink:0;">
+      SHIPTRACKER INTELLIGENCE
+    </div>
+
+    <!-- Nav -->
+    <nav role="navigation" aria-label="Filters" style="display:flex; align-items:center; gap:0; flex:1; justify-content:center;">
+
+      <!-- Vessel Type -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-vessel-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="vesselType"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Vessel Type</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-vessel" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="">All Types</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="Container Ship">Container Ship</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="Bulk Carrier">Bulk Carrier</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="Tanker">Tanker</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="LNG Carrier">LNG Carrier</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="RORO">RORO</button>
+          <button class="dropdown-item" role="menuitem" data-key="vesselType" data-value="General Cargo">General Cargo</button>
+        </div>
+      </div>
+
+      <!-- Trade Route -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-route-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="tradeRoute"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Trade Route</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-route" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="">All Routes</button>
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="Asia-Europe">Asia-Europe</button>
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="Transpacific">Transpacific</button>
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="Transatlantic">Transatlantic</button>
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="Asia-Middle East">Asia-Middle East</button>
+          <button class="dropdown-item" role="menuitem" data-key="tradeRoute" data-value="Intra-Asia">Intra-Asia</button>
+        </div>
+      </div>
+
+      <!-- Port of Origin -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-origin-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="origin"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Port of Origin</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-origin" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="">All Ports</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Shanghai">Shanghai</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Singapore">Singapore</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Rotterdam">Rotterdam</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Los Angeles">Los Angeles</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Hamburg">Hamburg</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Felixstowe">Felixstowe</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Busan">Busan</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Hong Kong">Hong Kong</button>
+          <button class="dropdown-item" role="menuitem" data-key="origin" data-value="Dubai">Dubai</button>
+        </div>
+      </div>
+
+      <!-- Destination Port -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-dest-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="destination"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Destination Port</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-dest" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="">All Ports</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Rotterdam">Rotterdam</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Los Angeles">Los Angeles</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Hamburg">Hamburg</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="New York">New York</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Felixstowe">Felixstowe</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Antwerp">Antwerp</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Long Beach">Long Beach</button>
+          <button class="dropdown-item" role="menuitem" data-key="destination" data-value="Southampton">Southampton</button>
+        </div>
+      </div>
+
+      <!-- Commodity Class -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-commodity-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="commodity"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Commodity Class</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-commodity" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="">All Commodities</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Electronics">Electronics</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Automotive">Automotive</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Chemicals">Chemicals</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Grain">Grain</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Coal">Coal</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Iron Ore">Iron Ore</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="LNG">LNG</button>
+          <button class="dropdown-item" role="menuitem" data-key="commodity" data-value="Crude Oil">Crude Oil</button>
+        </div>
+      </div>
+
+      <!-- Time Range -->
+      <div class="dropdown-wrapper" style="position:relative;">
+        <button
+          id="dd-time-btn"
+          class="dropdown-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-key="timeRange"
+          style="display:flex;align-items:center;gap:4px;padding:6px 12px;font-size:12px;color:#374151;background:none;border:none;cursor:pointer;white-space:nowrap;"
+        >
+          <span class="dd-label">Time Range</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;"><path d="M2 3.5L5 6.5L8 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="dd-time" class="dropdown-panel" role="menu">
+          <button class="dropdown-item" role="menuitem" data-key="timeRange" data-value="">All Time</button>
+          <button class="dropdown-item" role="menuitem" data-key="timeRange" data-value="Last 24h">Last 24h</button>
+          <button class="dropdown-item" role="menuitem" data-key="timeRange" data-value="Last 7 days">Last 7 days</button>
+          <button class="dropdown-item" role="menuitem" data-key="timeRange" data-value="Last 30 days">Last 30 days</button>
+          <button class="dropdown-item" role="menuitem" data-key="timeRange" data-value="Last 90 days">Last 90 days</button>
+        </div>
+      </div>
+
+    </nav>
+
+    <!-- Live clock -->
+    <div
+      id="live-clock"
+      role="status"
+      aria-live="polite"
+      aria-label="Current time"
+      style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;color:#6B7280;white-space:nowrap;flex-shrink:0;"
+    ></div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════
+     FILTER PILLS BAR
+══════════════════════════════════════════ -->
+<div id="pills-bar" style="display:none; padding:5px 16px; min-height:34px; align-items:center; gap:6px; flex-wrap:wrap;">
+  <div id="pills-container" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; flex:1;"></div>
+  <button
+    id="clear-all-btn"
+    onclick="clearAllFilters()"
+    style="font-size:11px;color:#3b82f6;background:none;border:none;cursor:pointer;white-space:nowrap;padding:0 4px;"
+  >Clear all</button>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MAIN LAYOUT
+══════════════════════════════════════════ -->
+<div id="layout-offset" style="height:41px;"></div>
+<div id="pills-offset" style="height:0px;"></div>
+
+<div id="main-layout" style="display:flex; height:calc(100vh - 41px);">
+
+  <!-- LEFT: Shipping Table (60%) -->
+  <div id="table-panel" style="width:60%; border-right:1px solid #E5E7EB; display:flex; flex-direction:column; overflow:hidden;">
+
+    <!-- Section label -->
+    <div style="padding:10px 16px 8px; border-bottom:1px solid #E5E7EB; flex-shrink:0;">
+      <span style="font-size:11px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;color:#6B7280;">Vessel Movements</span>
+    </div>
+
+    <!-- Table wrapper -->
+    <div style="flex:1; overflow-y:auto; overflow-x:auto;">
+      <table id="vessel-table" style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:1px solid #E5E7EB;">
+            <th scope="col" style="text-align:left;padding:7px 8px 7px 16px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Vessel Name
+              <span class="sort-arrow" id="sort-name" onclick="sortBy('name')" title="Sort by vessel name">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              IMO
+              <span class="sort-arrow" id="sort-imo" onclick="sortBy('imo')" title="Sort by IMO">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Position
+              <span class="sort-arrow" id="sort-position" onclick="sortBy('position')" title="Sort by position">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Origin
+              <span class="sort-arrow" id="sort-origin" onclick="sortBy('origin')" title="Sort by origin">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Destination
+              <span class="sort-arrow" id="sort-destination" onclick="sortBy('destination')" title="Sort by destination">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              ETA
+              <span class="sort-arrow" id="sort-eta" onclick="sortBy('eta')" title="Sort by ETA">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Cargo
+              <span class="sort-arrow" id="sort-cargo" onclick="sortBy('cargo')" title="Sort by cargo">↑↓</span>
+            </th>
+            <th scope="col" style="text-align:left;padding:7px 8px 7px 8px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#6B7280;white-space:nowrap;">
+              Status
+              <span class="sort-arrow" id="sort-status" onclick="sortBy('status')" title="Sort by status">↑↓</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="vessel-tbody">
+          <!-- Skeleton rows rendered by JS -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div style="border-top:1px solid #E5E7EB; padding:8px 16px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
+      <span id="pagination-info" style="font-size:11px;color:#6B7280;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"></span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button id="pg-prev" class="pg-btn" onclick="changePage(-1)" aria-label="Previous page">Previous</button>
+        <span id="pg-num" style="font-size:11px;color:#6B7280;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"></span>
+        <button id="pg-next" class="pg-btn" onclick="changePage(1)" aria-label="Next page">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Market Signals (40%) -->
+  <div id="signals-panel" style="width:40%; display:flex; flex-direction:column; overflow:hidden;">
+
+    <!-- Section label + sort toggle -->
+    <div style="padding:10px 16px 8px; border-bottom:1px solid #E5E7EB; flex-shrink:0; display:flex; align-items:center; justify-content:space-between;">
+      <span style="font-size:11px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;color:#6B7280;">Derived Market Indicators</span>
+      <button
+        id="signal-sort-btn"
+        onclick="toggleSignalSort()"
+        style="font-size:11px;color:#6B7280;background:none;border:none;cursor:pointer;padding:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"
+      >Sorted by confidence ↓</button>
+    </div>
+
+    <!-- Signals list -->
+    <div id="signals-list" style="flex:1;overflow-y:auto;">
+      <!-- Rendered by JS -->
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════
+     FOOTER
+══════════════════════════════════════════ -->
+<footer style="position:fixed;bottom:0;left:0;right:0;background:#ffffff;border-top:1px solid #E5E7EB;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;z-index:30;">
+  <span style="font-size:11px;color:#9CA3AF;">Data sourced from AIS, Baltic Exchange, and proprietary feeds</span>
+  <span id="footer-timestamp" style="font-size:11px;color:#9CA3AF;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"></span>
+</footer>
+
+<!-- Footer spacer -->
+<div style="height:36px;"></div>
+
+<!-- ══════════════════════════════════════════
+     JAVASCRIPT
+══════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ── Configuration ──────────────────────────────────────────────────────────
+const SKELETON_DURATION_MS = 800;
+const PAGE_SIZE = 20;
+
+// ── State ──────────────────────────────────────────────────────────────────
+const state = {
+  filters: {},
+  sortCol: null,
+  sortDir: 'asc',
+  page: 1,
+  expandedRow: null,
+  signalSortDir: 'desc',
+  loading: true
+};
+
+// ── Vessel Data (50 vessels) ────────────────────────────────────────────────
+const vessels = [
+  {
+    name: 'MSC Gülsün',
+    imo: '9839430',
+    position: '35.2°N 12.8°E',
+    origin: 'Shanghai',
+    destination: 'Rotterdam',
+    eta: '2026-03-28',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Port Said',
+    nextPort: 'Algeciras',
+    speed: '19.4',
+    draft: '15.8',
+    flag: 'Panama',
+    yearBuilt: '2019',
+    operator: 'MSC Mediterranean',
+    agent: 'Swire Shipping',
+    notes: 'Ultra-large container vessel. 23,756 TEU capacity. Suez transit complete.'
+  },
+  {
+    name: 'Ever Given',
+    imo: '9811000',
+    position: '51.9°N 4.1°E',
+    origin: 'Felixstowe',
+    destination: 'Rotterdam',
+    eta: '2026-03-22',
+    cargo: 'Electronics',
+    status: 'AT PORT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Electronics',
+    lastPort: 'Felixstowe',
+    nextPort: 'Hamburg',
+    speed: '0.0',
+    draft: '14.5',
+    flag: 'Panama',
+    yearBuilt: '2018',
+    operator: 'Evergreen Marine',
+    agent: 'Evergreen Shipping Agency',
+    notes: 'Berthed at ECT Delta terminal. Discharging 3,400 TEU. Departs 23 Mar.'
+  },
+  {
+    name: 'CMA CGM Antoine de Saint Exupéry',
+    imo: '9776171',
+    position: '13.1°N 43.2°E',
+    origin: 'Shanghai',
+    destination: 'Hamburg',
+    eta: '2026-04-02',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Automotive',
+    lastPort: 'Colombo',
+    nextPort: 'Port Said',
+    speed: '17.8',
+    draft: '15.2',
+    flag: 'France',
+    yearBuilt: '2017',
+    operator: 'CMA CGM',
+    agent: 'CMA CGM Germany',
+    notes: 'FAL 1 service. Red Sea routing via Suez. 20,776 TEU capacity.'
+  },
+  {
+    name: 'Maersk Mc-Kinney Møller',
+    imo: '9619907',
+    position: '55.7°N 12.6°E',
+    origin: 'Busan',
+    destination: 'Rotterdam',
+    eta: '2026-03-24',
+    cargo: 'Electronics',
+    status: 'AWAITING BERTH',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Bremerhaven',
+    nextPort: 'Rotterdam',
+    speed: '8.2',
+    draft: '14.9',
+    flag: 'Denmark',
+    yearBuilt: '2013',
+    operator: 'A.P. Møller–Maersk',
+    agent: 'Maersk Line Agency',
+    notes: '18,270 TEU. Awaiting berth allocation at Maasvlakte II. ETA berth +6h.'
+  },
+  {
+    name: 'OOCL Hong Kong',
+    imo: '9776198',
+    position: '22.3°N 114.2°E',
+    origin: 'Hong Kong',
+    destination: 'Long Beach',
+    eta: '2026-04-05',
+    cargo: 'Electronics',
+    status: 'DEPARTED',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transpacific',
+    commodity: 'Electronics',
+    lastPort: 'Hong Kong',
+    nextPort: 'Long Beach',
+    speed: '20.1',
+    draft: '15.0',
+    flag: 'Hong Kong',
+    yearBuilt: '2017',
+    operator: 'Orient Overseas Container Line',
+    agent: 'OOCL Americas',
+    notes: 'PS4 transpacific service. 21,413 TEU. Departed HKG 0340 UTC.'
+  },
+  {
+    name: 'HMM Algeciras',
+    imo: '9863297',
+    position: '36.1°N 5.4°W',
+    origin: 'Busan',
+    destination: 'Rotterdam',
+    eta: '2026-03-30',
+    cargo: 'Electronics',
+    status: 'AT PORT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Algeciras',
+    nextPort: 'Rotterdam',
+    speed: '0.0',
+    draft: '14.7',
+    flag: 'South Korea',
+    yearBuilt: '2020',
+    operator: 'Hyundai Merchant Marine',
+    agent: 'Marmedsa Noatum',
+    notes: 'World\'s largest container ship at launch. 23,964 TEU. Transshipment ops.'
+  },
+  {
+    name: 'MSC Oscar',
+    imo: '9703291',
+    position: '28.4°N 78.6°E',
+    origin: 'Shanghai',
+    destination: 'Rotterdam',
+    eta: '2026-04-08',
+    cargo: 'Chemicals',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Chemicals',
+    lastPort: 'Singapore',
+    nextPort: 'Colombo',
+    speed: '18.6',
+    draft: '15.5',
+    flag: 'Panama',
+    yearBuilt: '2015',
+    operator: 'MSC Mediterranean',
+    agent: 'MSC India',
+    notes: 'AE-1 Shogun service. 19,224 TEU. Bay of Bengal transit. Colombo ETA +44h.'
+  },
+  {
+    name: 'Evergreen Ever Ace',
+    imo: '9838666',
+    position: '24.0°N 121.5°E',
+    origin: 'Kaohsiung',
+    destination: 'Los Angeles',
+    eta: '2026-04-01',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transpacific',
+    commodity: 'Electronics',
+    lastPort: 'Kaohsiung',
+    nextPort: 'Los Angeles',
+    speed: '20.3',
+    draft: '15.1',
+    flag: 'Panama',
+    yearBuilt: '2021',
+    operator: 'Evergreen Marine',
+    agent: 'Evergreen America',
+    notes: '23,992 TEU. Pacific crossing underway. No adverse weather reported.'
+  },
+  {
+    name: 'ONE Stork',
+    imo: '9778791',
+    position: '1.3°N 103.8°E',
+    origin: 'Singapore',
+    destination: 'Felixstowe',
+    eta: '2026-04-10',
+    cargo: 'Electronics',
+    status: 'AWAITING BERTH',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Singapore',
+    nextPort: 'Port Klang',
+    speed: '4.1',
+    draft: '13.8',
+    flag: 'Japan',
+    yearBuilt: '2017',
+    operator: 'Ocean Network Express',
+    agent: 'ONE Singapore',
+    notes: '14,000 TEU. Anchorage at Eastern Anchorage. Port congestion delay est. 18h.'
+  },
+  {
+    name: 'Cosco Shipping Universe',
+    imo: '9757187',
+    position: '31.2°N 121.9°E',
+    origin: 'Shanghai',
+    destination: 'Antwerp',
+    eta: '2026-04-12',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Automotive',
+    lastPort: 'Shanghai',
+    nextPort: 'Ningbo',
+    speed: '17.2',
+    draft: '14.6',
+    flag: 'China',
+    yearBuilt: '2016',
+    operator: 'COSCO Shipping Lines',
+    agent: 'COSCO Europe',
+    notes: '21,237 TEU. Yang Ming Witness sailing in convoy. AEX5 service.'
+  },
+  {
+    name: 'Yang Ming Witness',
+    imo: '9700912',
+    position: '29.9°N 122.1°E',
+    origin: 'Shanghai',
+    destination: 'Hamburg',
+    eta: '2026-04-14',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Automotive',
+    lastPort: 'Ningbo',
+    nextPort: 'Yantian',
+    speed: '16.9',
+    draft: '14.4',
+    flag: 'Taiwan',
+    yearBuilt: '2016',
+    operator: 'Yang Ming Marine',
+    agent: 'Yang Ming Germany',
+    notes: '14,080 TEU. AEX5 loop. Ningbo call completed. Yantian next.'
+  },
+  {
+    name: 'Hapag-Lloyd Berlin Express',
+    imo: '9786590',
+    position: '53.5°N 8.1°E',
+    origin: 'Busan',
+    destination: 'Hamburg',
+    eta: '2026-03-23',
+    cargo: 'Automotive',
+    status: 'DELAYED',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Automotive',
+    lastPort: 'Bremerhaven',
+    nextPort: 'Hamburg',
+    speed: '7.8',
+    draft: '13.6',
+    flag: 'Germany',
+    yearBuilt: '2017',
+    operator: 'Hapag-Lloyd AG',
+    agent: 'Hapag-Lloyd Hamburg',
+    notes: 'Delayed 14h. Propulsion maintenance at Bremerhaven. ETA revised to 1200 UTC 23 Mar.'
+  },
+  {
+    name: 'ZIM Kingston',
+    imo: '9741484',
+    position: '49.2°N 2.1°W',
+    origin: 'Shanghai',
+    destination: 'New York',
+    eta: '2026-03-26',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Electronics',
+    lastPort: 'Felixstowe',
+    nextPort: 'New York',
+    speed: '18.8',
+    draft: '13.2',
+    flag: 'Liberia',
+    yearBuilt: '2016',
+    operator: 'ZIM Integrated Shipping',
+    agent: 'ZIM Americas',
+    notes: '15,000 TEU. ZX1 Atlantic service. Channel crossing underway.'
+  },
+  {
+    name: 'Seaspan Emerald',
+    imo: '9632895',
+    position: '34.7°N 139.8°E',
+    origin: 'Tokyo',
+    destination: 'Los Angeles',
+    eta: '2026-04-02',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transpacific',
+    commodity: 'Automotive',
+    lastPort: 'Yokohama',
+    nextPort: 'Los Angeles',
+    speed: '19.7',
+    draft: '12.4',
+    flag: 'Marshall Islands',
+    yearBuilt: '2014',
+    operator: 'Seaspan Corporation',
+    agent: 'Seaspan Americas',
+    notes: '10,000 TEU. Chartered to ONE. TP-6 service. Good weather routing.'
+  },
+  {
+    name: 'Pacific Basin Kestrel',
+    imo: '9643801',
+    position: '14.2°S 36.8°E',
+    origin: 'Durban',
+    destination: 'Rotterdam',
+    eta: '2026-04-18',
+    cargo: 'Coal',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Coal',
+    lastPort: 'Durban',
+    nextPort: 'Cape Town',
+    speed: '12.1',
+    draft: '11.2',
+    flag: 'Hong Kong',
+    yearBuilt: '2014',
+    operator: 'Pacific Basin Shipping',
+    agent: 'SABS South Africa',
+    notes: 'Handysize bulk carrier. 37,000 DWT. Coal cargo ex-Richards Bay. Cape routing.'
+  },
+  {
+    name: 'Pacific Basin Shrike',
+    imo: '9688421',
+    position: '38.9°N 141.2°E',
+    origin: 'Busan',
+    destination: 'Tokyo',
+    eta: '2026-03-23',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Grain',
+    lastPort: 'Busan',
+    nextPort: 'Tokyo',
+    speed: '11.4',
+    draft: '9.8',
+    flag: 'Hong Kong',
+    yearBuilt: '2016',
+    operator: 'Pacific Basin Shipping',
+    agent: 'Sennichi Kisen',
+    notes: '28,500 DWT Handysize. Japanese coastal round voyage. 22,000 MT grain.'
+  },
+  {
+    name: 'Capesize Atlas',
+    imo: '9534712',
+    position: '8.4°S 14.3°W',
+    origin: 'Tubarão',
+    destination: 'Qingdao',
+    eta: '2026-04-20',
+    cargo: 'Iron Ore',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Iron Ore',
+    lastPort: 'Tubarão',
+    nextPort: 'Cape of Good Hope',
+    speed: '13.8',
+    draft: '17.8',
+    flag: 'Marshall Islands',
+    yearBuilt: '2011',
+    operator: 'Star Bulk Carriers',
+    agent: 'Vale Shipping Agency',
+    notes: '179,400 DWT. Vale C3 contract. 168,000 MT iron ore. Cape routing to China.'
+  },
+  {
+    name: 'Panamax Resolute',
+    imo: '9612450',
+    position: '25.6°N 80.1°W',
+    origin: 'New Orleans',
+    destination: 'Antwerp',
+    eta: '2026-04-01',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Grain',
+    lastPort: 'New Orleans',
+    nextPort: 'Antwerp',
+    speed: '13.2',
+    draft: '12.9',
+    flag: 'Liberia',
+    yearBuilt: '2012',
+    operator: 'Eagle Bulk Shipping',
+    agent: 'Bunge Marine',
+    notes: '82,000 DWT Kamsarmax. US Gulf grain. Florida Straits transit.'
+  },
+  {
+    name: 'Supramax Venture',
+    imo: '9701345',
+    position: '15.4°N 52.9°E',
+    origin: 'Dubai',
+    destination: 'Mumbai',
+    eta: '2026-03-25',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Grain',
+    lastPort: 'Dubai',
+    nextPort: 'Mumbai',
+    speed: '12.8',
+    draft: '10.4',
+    flag: 'Singapore',
+    yearBuilt: '2015',
+    operator: 'Norden A/S',
+    agent: 'Gulf Agency Company',
+    notes: '56,000 DWT Supramax. Arabian Sea transit. ADNOC charter.'
+  },
+  {
+    name: 'VLCC Oceania',
+    imo: '9478321',
+    position: '24.1°N 57.8°E',
+    origin: 'Ras Tanura',
+    destination: 'Rotterdam',
+    eta: '2026-04-15',
+    cargo: 'Crude Oil',
+    status: 'IN TRANSIT',
+    vesselType: 'Tanker',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Crude Oil',
+    lastPort: 'Ras Tanura',
+    nextPort: 'Fujairah',
+    speed: '14.6',
+    draft: '21.2',
+    flag: 'Marshall Islands',
+    yearBuilt: '2009',
+    operator: 'Frontline Ltd',
+    agent: 'Inchcape Shipping',
+    notes: '299,000 DWT VLCC. Saudi Aramco cargo. Arabian Gulf to Europe via Suez.'
+  },
+  {
+    name: 'VLCC Pacific Titan',
+    imo: '9502834',
+    position: '3.8°N 101.6°E',
+    origin: 'Basrah',
+    destination: 'Ningbo',
+    eta: '2026-04-08',
+    cargo: 'Crude Oil',
+    status: 'IN TRANSIT',
+    vesselType: 'Tanker',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Crude Oil',
+    lastPort: 'Malacca Strait',
+    nextPort: 'Singapore',
+    speed: '15.1',
+    draft: '20.8',
+    flag: 'Greece',
+    yearBuilt: '2010',
+    operator: 'Tsakos Energy Navigation',
+    agent: 'TEN Singapore',
+    notes: '317,000 DWT VLCC. Iraqi Basrah Heavy crude. 2.1M bbls. Malacca transit.'
+  },
+  {
+    name: 'Aframax Nordic',
+    imo: '9601238',
+    position: '57.2°N 19.4°E',
+    origin: 'Primorsk',
+    destination: 'Rotterdam',
+    eta: '2026-03-25',
+    cargo: 'Crude Oil',
+    status: 'DELAYED',
+    vesselType: 'Tanker',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Crude Oil',
+    lastPort: 'Primorsk',
+    nextPort: 'Kiel Canal',
+    speed: '9.4',
+    draft: '14.1',
+    flag: 'Norway',
+    yearBuilt: '2013',
+    operator: 'Frontline Ltd',
+    agent: 'Wilhelmsen Ship Services',
+    notes: '120,000 DWT Aframax. Baltic crossing. Ice-class vessel. Speed reduced—weather.'
+  },
+  {
+    name: 'Chemical Trader I',
+    imo: '9589034',
+    position: '37.8°N 26.9°E',
+    origin: 'Rotterdam',
+    destination: 'Singapore',
+    eta: '2026-04-20',
+    cargo: 'Chemicals',
+    status: 'IN TRANSIT',
+    vesselType: 'Tanker',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Chemicals',
+    lastPort: 'Piraeus',
+    nextPort: 'Port Said',
+    speed: '14.2',
+    draft: '10.6',
+    flag: 'Netherlands',
+    yearBuilt: '2014',
+    operator: 'Vopak Marine',
+    agent: 'Vopak Ship Agency',
+    notes: '45,000 DWT chemical tanker. IMO II cargo. Paraxylene and styrene monomers.'
+  },
+  {
+    name: 'Stolt Commitment',
+    imo: '9432910',
+    position: '21.4°N 61.8°W',
+    origin: 'Rotterdam',
+    destination: 'Houston',
+    eta: '2026-03-28',
+    cargo: 'Chemicals',
+    status: 'IN TRANSIT',
+    vesselType: 'Tanker',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Chemicals',
+    lastPort: 'Rotterdam',
+    nextPort: 'Houston',
+    speed: '15.6',
+    draft: '11.4',
+    flag: 'Luxembourg',
+    yearBuilt: '2008',
+    operator: 'Stolt-Nielsen',
+    agent: 'Stolt Americas',
+    notes: '38,000 DWT parcel tanker. Multi-grade chemicals. 14 parcel cargo.'
+  },
+  {
+    name: 'LNG Bonny',
+    imo: '9378891',
+    position: '5.1°N 2.8°E',
+    origin: 'Bonny Island',
+    destination: 'Barcelona',
+    eta: '2026-03-26',
+    cargo: 'LNG',
+    status: 'IN TRANSIT',
+    vesselType: 'LNG Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'LNG',
+    lastPort: 'Bonny Island',
+    nextPort: 'Barcelona',
+    speed: '19.2',
+    draft: '11.8',
+    flag: 'Marshall Islands',
+    yearBuilt: '2006',
+    operator: 'Shell Shipping',
+    agent: 'Shell Gas & Power',
+    notes: '145,000 m³ Q-Flex LNG. Nigerian NLNG cargo. Barcelona Enagás terminal.'
+  },
+  {
+    name: 'LNG Rivers',
+    imo: '9378906',
+    position: '0.2°N 5.6°W',
+    origin: 'Bonny Island',
+    destination: 'Zeebrugge',
+    eta: '2026-03-29',
+    cargo: 'LNG',
+    status: 'IN TRANSIT',
+    vesselType: 'LNG Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'LNG',
+    lastPort: 'Bonny Island',
+    nextPort: 'Dakar',
+    speed: '18.8',
+    draft: '11.6',
+    flag: 'Marshall Islands',
+    yearBuilt: '2006',
+    operator: 'Shell Shipping',
+    agent: 'Shell Gas Belgium',
+    notes: '145,000 m³ Q-Flex. NLNG cargo. Zeebrugge Fluxys terminal.'
+  },
+  {
+    name: 'Methane Princess',
+    imo: '9256673',
+    position: '37.4°N 0.9°W',
+    origin: 'Arzew',
+    destination: 'Barcelona',
+    eta: '2026-03-23',
+    cargo: 'LNG',
+    status: 'AT PORT',
+    vesselType: 'LNG Carrier',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'LNG',
+    lastPort: 'Arzew',
+    nextPort: 'Barcelona',
+    speed: '0.0',
+    draft: '10.9',
+    flag: 'UK',
+    yearBuilt: '2003',
+    operator: 'BP Shipping',
+    agent: 'BP Marine Mediterranean',
+    notes: '138,000 m³. Algerian Sonatrach LNG. Cartagena anchorage awaiting berth.'
+  },
+  {
+    name: 'Qatar Gas Transport II',
+    imo: '9301180',
+    position: '26.2°N 51.5°E',
+    origin: 'Ras Laffan',
+    destination: 'Singapore',
+    eta: '2026-04-06',
+    cargo: 'LNG',
+    status: 'IN TRANSIT',
+    vesselType: 'LNG Carrier',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'LNG',
+    lastPort: 'Ras Laffan',
+    nextPort: 'Singapore',
+    speed: '19.6',
+    draft: '12.2',
+    flag: 'Qatar',
+    yearBuilt: '2004',
+    operator: 'Nakilat',
+    agent: 'QatarGas',
+    notes: '216,000 m³ Q-Flex. QatarEnergy long-term offtake. Hormuz Strait transit.'
+  },
+  {
+    name: 'MOL Celebration',
+    imo: '9655678',
+    position: '44.8°N 135.4°E',
+    origin: 'Nagoya',
+    destination: 'Los Angeles',
+    eta: '2026-04-03',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'RORO',
+    tradeRoute: 'Transpacific',
+    commodity: 'Automotive',
+    lastPort: 'Nagoya',
+    nextPort: 'Los Angeles',
+    speed: '18.4',
+    draft: '9.6',
+    flag: 'Panama',
+    yearBuilt: '2015',
+    operator: 'MOL Auto Carrier',
+    agent: 'MOL Americas',
+    notes: '7,800 CEU RORO. Toyota/Honda vehicles. Pacific crossing. Port Hueneme call.'
+  },
+  {
+    name: 'Höegh Target',
+    imo: '9490342',
+    position: '51.6°N 1.2°E',
+    origin: 'Bremerhaven',
+    destination: 'Southampton',
+    eta: '2026-03-23',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'RORO',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Automotive',
+    lastPort: 'Bremerhaven',
+    nextPort: 'Southampton',
+    speed: '16.2',
+    draft: '8.8',
+    flag: 'Norway',
+    yearBuilt: '2012',
+    operator: 'Höegh Autoliners',
+    agent: 'Höegh UK',
+    notes: '6,400 CEU. VW Group vehicles. Short-sea European circuit.'
+  },
+  {
+    name: 'Glovis Splendor',
+    imo: '9721045',
+    position: '33.4°N 127.5°E',
+    origin: 'Ulsan',
+    destination: 'Los Angeles',
+    eta: '2026-04-07',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'RORO',
+    tradeRoute: 'Transpacific',
+    commodity: 'Automotive',
+    lastPort: 'Ulsan',
+    nextPort: 'Los Angeles',
+    speed: '18.9',
+    draft: '9.2',
+    flag: 'South Korea',
+    yearBuilt: '2016',
+    operator: 'Hyundai Glovis',
+    agent: 'Glovis Americas',
+    notes: '7,500 CEU. Hyundai/Kia vehicles. Korea-USA direct service.'
+  },
+  {
+    name: 'Atlantic Navigator II',
+    imo: '9562481',
+    position: '47.8°N 28.4°W',
+    origin: 'Rotterdam',
+    destination: 'New York',
+    eta: '2026-03-28',
+    cargo: 'Chemicals',
+    status: 'IN TRANSIT',
+    vesselType: 'General Cargo',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Chemicals',
+    lastPort: 'Rotterdam',
+    nextPort: 'New York',
+    speed: '14.4',
+    draft: '8.2',
+    flag: 'Bahamas',
+    yearBuilt: '2011',
+    operator: 'Atlantic Container Line',
+    agent: 'ACL Americas',
+    notes: '3,800 TEU ro-lo. Mixed cargo including project equipment. Midatlantic.'
+  },
+  {
+    name: 'Thoresen Navigator',
+    imo: '9498702',
+    position: '12.6°N 44.8°E',
+    origin: 'Dubai',
+    destination: 'Hamburg',
+    eta: '2026-04-05',
+    cargo: 'General Cargo',
+    status: 'IN TRANSIT',
+    vesselType: 'General Cargo',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Electronics',
+    lastPort: 'Aden',
+    nextPort: 'Port Said',
+    speed: '13.6',
+    draft: '7.4',
+    flag: 'Thailand',
+    yearBuilt: '2010',
+    operator: 'Thoresen Thai Agencies',
+    agent: 'Gulf Shipping',
+    notes: '15,000 DWT MPP. Mixed general cargo. Gulf of Aden transit.'
+  },
+  {
+    name: 'Capesize Providence',
+    imo: '9512378',
+    position: '34.1°N 130.4°E',
+    origin: 'Port Hedland',
+    destination: 'Qingdao',
+    eta: '2026-03-24',
+    cargo: 'Iron Ore',
+    status: 'AWAITING BERTH',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Iron Ore',
+    lastPort: 'Port Hedland',
+    nextPort: 'Qingdao',
+    speed: '5.6',
+    draft: '18.1',
+    flag: 'Greece',
+    yearBuilt: '2010',
+    operator: 'Diana Shipping',
+    agent: 'COSCO Qingdao',
+    notes: '177,000 DWT Capesize. BHP iron ore. Qingdao outer anchorage. 31 vessels waiting.'
+  },
+  {
+    name: 'Panamax Swift',
+    imo: '9634219',
+    position: '9.1°N 79.4°W',
+    origin: 'Vancouver',
+    destination: 'Rotterdam',
+    eta: '2026-04-10',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Grain',
+    lastPort: 'Panama Canal',
+    nextPort: 'Antwerp',
+    speed: '13.5',
+    draft: '12.6',
+    flag: 'Marshall Islands',
+    yearBuilt: '2013',
+    operator: 'Genco Shipping',
+    agent: 'Louis Dreyfus Armateurs',
+    notes: '80,000 DWT Kamsarmax. Canadian wheat. Panama Canal transit complete.'
+  },
+  {
+    name: 'MSC Beatrice',
+    imo: '9312819',
+    position: '43.2°N 9.4°E',
+    origin: 'Genoa',
+    destination: 'New York',
+    eta: '2026-03-30',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Automotive',
+    lastPort: 'Genoa',
+    nextPort: 'Barcelona',
+    speed: '18.2',
+    draft: '12.8',
+    flag: 'Panama',
+    yearBuilt: '2005',
+    operator: 'MSC Mediterranean',
+    agent: 'MSC Italy',
+    notes: '9,200 TEU. MSC Pendulum service. Med-Atlantic loop.'
+  },
+  {
+    name: 'Kamsarmax Pioneer',
+    imo: '9682014',
+    position: '6.4°S 105.2°E',
+    origin: 'Singapore',
+    destination: 'Rotterdam',
+    eta: '2026-04-22',
+    cargo: 'Coal',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Coal',
+    lastPort: 'Kalimantan',
+    nextPort: 'Singapore',
+    speed: '11.8',
+    draft: '13.4',
+    flag: 'Liberia',
+    yearBuilt: '2015',
+    operator: 'Golden Ocean Group',
+    agent: 'Glencore Marine',
+    notes: '82,500 DWT. Indonesian thermal coal. ARA delivery. Sunda Strait.'
+  },
+  {
+    name: 'CMA CGM Palais Royal',
+    imo: '9839454',
+    position: '48.4°N 4.9°W',
+    origin: 'Shanghai',
+    destination: 'Le Havre',
+    eta: '2026-03-23',
+    cargo: 'Electronics',
+    status: 'AT PORT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Le Havre',
+    nextPort: 'Dunkirk',
+    speed: '0.0',
+    draft: '15.4',
+    flag: 'France',
+    yearBuilt: '2020',
+    operator: 'CMA CGM',
+    agent: 'CMA CGM France',
+    notes: '23,000 TEU LNG-powered. Port 2000 terminal. Discharging. 4,200 TEU Europe.'
+  },
+  {
+    name: 'Evergreen Ever Alot',
+    imo: '9894662',
+    position: '16.8°N 111.4°E',
+    origin: 'Kaohsiung',
+    destination: 'Rotterdam',
+    eta: '2026-04-18',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Electronics',
+    lastPort: 'Kaohsiung',
+    nextPort: 'Singapore',
+    speed: '19.8',
+    draft: '16.0',
+    flag: 'Panama',
+    yearBuilt: '2023',
+    operator: 'Evergreen Marine',
+    agent: 'Evergreen Europe',
+    notes: '24,004 TEU — world\'s largest capacity. AEX3 Asia-Europe service.'
+  },
+  {
+    name: 'MSC Loreto',
+    imo: '9893207',
+    position: '31.8°N 35.1°E',
+    origin: 'Haifa',
+    destination: 'Antwerp',
+    eta: '2026-03-28',
+    cargo: 'Chemicals',
+    status: 'DELAYED',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Chemicals',
+    lastPort: 'Haifa',
+    nextPort: 'Piraeus',
+    speed: '14.1',
+    draft: '14.2',
+    flag: 'Panama',
+    yearBuilt: '2023',
+    operator: 'MSC Mediterranean',
+    agent: 'MSC Greece',
+    notes: '23,800 TEU. 22h port delay Haifa due industrial action. ETA Antwerp revised.'
+  },
+  {
+    name: 'Crude Titan III',
+    imo: '9551234',
+    position: '29.4°N 48.9°E',
+    origin: 'Kuwait',
+    destination: 'Rotterdam',
+    eta: '2026-04-12',
+    cargo: 'Crude Oil',
+    status: 'AT PORT',
+    vesselType: 'Tanker',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Crude Oil',
+    lastPort: 'Mina al Ahmadi',
+    nextPort: 'Fujairah',
+    speed: '0.0',
+    draft: '20.4',
+    flag: 'Greece',
+    yearBuilt: '2012',
+    operator: 'Euronav NV',
+    agent: 'KOTC Kuwait',
+    notes: '312,000 DWT VLCC. Mina al Ahmadi SBM loading. 2.2M bbls Kuwait Export Crude.'
+  },
+  {
+    name: 'BW LNG Shipping',
+    imo: '9417324',
+    position: '19.2°N 66.4°E',
+    origin: 'Ras Laffan',
+    destination: 'Osaka',
+    eta: '2026-04-04',
+    cargo: 'LNG',
+    status: 'IN TRANSIT',
+    vesselType: 'LNG Carrier',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'LNG',
+    lastPort: 'Ras Laffan',
+    nextPort: 'Colombo',
+    speed: '19.0',
+    draft: '11.9',
+    flag: 'Singapore',
+    yearBuilt: '2007',
+    operator: 'BW LNG',
+    agent: 'Osaka Gas',
+    notes: '155,000 m³ Q-Flex. Osaka Gas long-term. Arabian Sea northbound.'
+  },
+  {
+    name: 'Theresa Wainwright',
+    imo: '9599134',
+    position: '50.9°N 1.4°E',
+    origin: 'Hamburg',
+    destination: 'Felixstowe',
+    eta: '2026-03-22',
+    cargo: 'General Cargo',
+    status: 'IN TRANSIT',
+    vesselType: 'General Cargo',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Electronics',
+    lastPort: 'Antwerp',
+    nextPort: 'Felixstowe',
+    speed: '14.9',
+    draft: '6.8',
+    flag: 'UK',
+    yearBuilt: '2012',
+    operator: 'Samskip',
+    agent: 'Samskip UK',
+    notes: '1,200 TEU feeder. Short-sea northern Europe circuit. Frequent caller.'
+  },
+  {
+    name: 'Norden Venture',
+    imo: '9712892',
+    position: '22.8°N 88.4°E',
+    origin: 'Haldia',
+    destination: 'Rotterdam',
+    eta: '2026-04-25',
+    cargo: 'Coal',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Coal',
+    lastPort: 'Haldia',
+    nextPort: 'Colombo',
+    speed: '12.4',
+    draft: '11.8',
+    flag: 'Denmark',
+    yearBuilt: '2016',
+    operator: 'Norden A/S',
+    agent: 'Wilhelmsen India',
+    notes: '58,000 DWT Supramax. Bay of Bengal. Coal return voyage.'
+  },
+  {
+    name: 'MSC Angela',
+    imo: '9401694',
+    position: '40.6°N 28.9°E',
+    origin: 'Istanbul',
+    destination: 'Rotterdam',
+    eta: '2026-03-30',
+    cargo: 'Grain',
+    status: 'AWAITING BERTH',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Grain',
+    lastPort: 'Istanbul',
+    nextPort: 'Piraeus',
+    speed: '3.2',
+    draft: '11.6',
+    flag: 'Panama',
+    yearBuilt: '2007',
+    operator: 'MSC Mediterranean',
+    agent: 'MSC Turkey',
+    notes: '8,100 TEU. Bosphorus transit pending VTS slot. Estimated +4h delay.'
+  },
+  {
+    name: 'Pacific Basin Robin',
+    imo: '9724501',
+    position: '28.6°N 121.8°E',
+    origin: 'Ningbo',
+    destination: 'Busan',
+    eta: '2026-03-24',
+    cargo: 'Coal',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Coal',
+    lastPort: 'Ningbo',
+    nextPort: 'Busan',
+    speed: '11.6',
+    draft: '9.2',
+    flag: 'Hong Kong',
+    yearBuilt: '2017',
+    operator: 'Pacific Basin Shipping',
+    agent: 'Sinokor',
+    notes: '32,000 DWT Handysize. Intra-Asia round trip. 28,000 MT coal.'
+  },
+  {
+    name: 'Cosco Shipping Star',
+    imo: '9680432',
+    position: '9.8°N 109.2°E',
+    origin: 'Singapore',
+    destination: 'Los Angeles',
+    eta: '2026-04-09',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Transpacific',
+    commodity: 'Electronics',
+    lastPort: 'Singapore',
+    nextPort: 'Los Angeles',
+    speed: '20.0',
+    draft: '14.1',
+    flag: 'China',
+    yearBuilt: '2015',
+    operator: 'COSCO Shipping Lines',
+    agent: 'COSCO Americas',
+    notes: '13,500 TEU. TPX transpacific service. South China Sea.'
+  },
+  {
+    name: 'Hapag-Lloyd Colombo Express',
+    imo: '9401762',
+    position: '6.9°N 79.8°E',
+    origin: 'Colombo',
+    destination: 'Hamburg',
+    eta: '2026-04-08',
+    cargo: 'Automotive',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Automotive',
+    lastPort: 'Colombo',
+    nextPort: 'Suez Canal',
+    speed: '18.1',
+    draft: '13.9',
+    flag: 'Germany',
+    yearBuilt: '2005',
+    operator: 'Hapag-Lloyd AG',
+    agent: 'Hapag-Lloyd Sri Lanka',
+    notes: '13,200 TEU. AEX service. Departing Colombo transhipment hub.'
+  },
+  {
+    name: 'Iron Ore Express',
+    imo: '9467823',
+    position: '20.4°S 115.6°E',
+    origin: 'Port Hedland',
+    destination: 'Shanghai',
+    eta: '2026-03-30',
+    cargo: 'Iron Ore',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Iron Ore',
+    lastPort: 'Port Hedland',
+    nextPort: 'Shanghai',
+    speed: '14.2',
+    draft: '18.4',
+    flag: 'Liberia',
+    yearBuilt: '2008',
+    operator: 'BHP Billiton',
+    agent: 'BHPB Shipping',
+    notes: '205,000 DWT VLOC. BHP Pilbara blend iron ore. 168,000 MT. Dedicated route.'
+  },
+  {
+    name: 'Grain Master',
+    imo: '9580129',
+    position: '35.6°N 6.2°W',
+    origin: 'New Orleans',
+    destination: 'Casablanca',
+    eta: '2026-03-27',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Bulk Carrier',
+    tradeRoute: 'Transatlantic',
+    commodity: 'Grain',
+    lastPort: 'New Orleans',
+    nextPort: 'Casablanca',
+    speed: '12.9',
+    draft: '11.2',
+    flag: 'Malta',
+    yearBuilt: '2012',
+    operator: 'Cargill Ocean Transportation',
+    agent: 'Cargill Morocco',
+    notes: '64,000 DWT Ultramax. US Gulf corn. OCP Morocco contract.'
+  },
+  {
+    name: 'Singa Ruby',
+    imo: '9643567',
+    position: '1.1°N 104.0°E',
+    origin: 'Singapore',
+    destination: 'Hong Kong',
+    eta: '2026-03-25',
+    cargo: 'Chemicals',
+    status: 'DEPARTED',
+    vesselType: 'Tanker',
+    tradeRoute: 'Intra-Asia',
+    commodity: 'Chemicals',
+    lastPort: 'Singapore',
+    nextPort: 'Hong Kong',
+    speed: '14.8',
+    draft: '9.4',
+    flag: 'Singapore',
+    yearBuilt: '2014',
+    operator: 'Mitsui O.S.K. Lines',
+    agent: 'MOL Chemical Tankers',
+    notes: '19,000 DWT MR chemical tanker. Methanol and acetone. Singapore-HK shuttle.'
+  },
+  {
+    name: 'CMA CGM Trocadero',
+    imo: '9839466',
+    position: '25.2°N 55.3°E',
+    origin: 'Dubai',
+    destination: 'Southampton',
+    eta: '2026-04-16',
+    cargo: 'Electronics',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Middle East',
+    commodity: 'Electronics',
+    lastPort: 'Dubai',
+    nextPort: 'Jebel Ali',
+    speed: '16.4',
+    draft: '14.8',
+    flag: 'France',
+    yearBuilt: '2020',
+    operator: 'CMA CGM',
+    agent: 'CMA CGM UAE',
+    notes: '23,000 TEU LNG-fuelled. FAL 6 Gulf-Europe service.'
+  },
+  {
+    name: 'MSC Eloane',
+    imo: '9797560',
+    position: '1.4°S 9.6°E',
+    origin: 'Durban',
+    destination: 'Rotterdam',
+    eta: '2026-04-14',
+    cargo: 'Grain',
+    status: 'IN TRANSIT',
+    vesselType: 'Container Ship',
+    tradeRoute: 'Asia-Europe',
+    commodity: 'Grain',
+    lastPort: 'Durban',
+    nextPort: 'Tema',
+    speed: '17.6',
+    draft: '14.0',
+    flag: 'Panama',
+    yearBuilt: '2018',
+    operator: 'MSC Mediterranean',
+    agent: 'MSC West Africa',
+    notes: '15,900 TEU. Africa-Europe pendulum service. Gulf of Guinea transit.'
+  }
+];
+
+// ── Market Signal Data (20+ signals) ────────────────────────────────────────
+const signals = [
+  {
+    commodity: 'Container Freight Rates',
+    direction: 'UP',
+    confidence: 91,
+    basis: 'Qingdao/Rotterdam congestion index +18%; booking lead time +6 days',
+    horizon: '7–14 days'
+  },
+  {
+    commodity: 'VLCC Rates (TD3C)',
+    direction: 'UP',
+    confidence: 87,
+    basis: 'Arabian Gulf fixture activity +23%; Saudi Aramco spot volumes elevated',
+    horizon: '3–7 days'
+  },
+  {
+    commodity: 'Baltic Dry Index (BDI)',
+    direction: 'DOWN',
+    confidence: 83,
+    basis: 'Capesize tonnage oversupply Brazil-China; idle fleet +4.2% WoW',
+    horizon: '5–10 days'
+  },
+  {
+    commodity: 'LNG Spot (DES NWE)',
+    direction: 'UP',
+    confidence: 79,
+    basis: 'European storage draw +2.8 bcm; 6 cargoes diverted from Asia',
+    horizon: '3–5 days'
+  },
+  {
+    commodity: 'Panamax Rates (P82)',
+    direction: 'NEUTRAL',
+    confidence: 74,
+    basis: 'Grain fixture balanced; Atlantic-Pacific arbitrage closing',
+    horizon: '5–7 days'
+  },
+  {
+    commodity: 'Port Congestion Index',
+    direction: 'UP',
+    confidence: 88,
+    basis: 'Rotterdam dwell time +1.9 days; Singapore anchorage +31 vessels',
+    horizon: '2–4 days'
+  },
+  {
+    commodity: 'Iron Ore (62% Fe, CFR)',
+    direction: 'DOWN',
+    confidence: 76,
+    basis: 'China blast furnace utilization -3.1%; Qingdao port inventory at 143MT',
+    horizon: '7–14 days'
+  },
+  {
+    commodity: 'BDTI (Dirty Tanker Index)',
+    direction: 'UP',
+    confidence: 82,
+    basis: 'Aframax Baltic demand surge; Russian oil rerouting adding tonne-miles',
+    horizon: '4–8 days'
+  },
+  {
+    commodity: 'Coal (API2 ARA)',
+    direction: 'NEUTRAL',
+    confidence: 68,
+    basis: 'ARA stocks stable at 5.8MT; gas-coal switching threshold at $12.4/mmBtu',
+    horizon: '10–14 days'
+  },
+  {
+    commodity: 'SCFI Asia-Europe',
+    direction: 'UP',
+    confidence: 85,
+    basis: 'Vessel omissions on AEX3 service; rollover rate for bookings now 28%',
+    horizon: '7–10 days'
+  },
+  {
+    commodity: 'Handysize Rates (BHSI)',
+    direction: 'DOWN',
+    confidence: 71,
+    basis: 'Minor bulk demand softening; scrapper demand picking up old tonnage',
+    horizon: '7–10 days'
+  },
+  {
+    commodity: 'Crude Oil (Brent CFD)',
+    direction: 'UP',
+    confidence: 78,
+    basis: 'VLCC fixture pace exceeding 2-year seasonal avg; 14 fixtures in 48h',
+    horizon: '3–6 days'
+  },
+  {
+    commodity: 'SCFI Transpacific',
+    direction: 'DOWN',
+    confidence: 80,
+    basis: 'Long Beach imports -8.4% MoM; 3 ULCVs repositioned to Asia-Europe',
+    horizon: '5–8 days'
+  },
+  {
+    commodity: 'LNG Carrier Rates (160k)',
+    direction: 'UP',
+    confidence: 77,
+    basis: 'Spot availability tightening; 4 vessels in drydock; Atlantic re-exports rising',
+    horizon: '5–10 days'
+  },
+  {
+    commodity: 'Chemical Tanker (MR, CPP)',
+    direction: 'NEUTRAL',
+    confidence: 65,
+    basis: 'CPP rates flat; naphtha arb open but limited tonnage movement',
+    horizon: '7–12 days'
+  },
+  {
+    commodity: 'Grain (Wheat, Gulf)',
+    direction: 'UP',
+    confidence: 72,
+    basis: 'Ukrainian Black Sea tonnage tightening; US Gulf fixtures +15 WoW',
+    horizon: '10–14 days'
+  },
+  {
+    commodity: 'Supramax Rates (BSI)',
+    direction: 'UP',
+    confidence: 69,
+    basis: 'Atlantic Supramax demand recovering; grain + fertilizer combo voyages',
+    horizon: '5–7 days'
+  },
+  {
+    commodity: 'RORO Freight (Automotive)',
+    direction: 'DOWN',
+    confidence: 66,
+    basis: 'EV exports from China declining; Busan yard inventory elevated +12%',
+    horizon: '14–21 days'
+  },
+  {
+    commodity: 'Singapore Bunker (VLSFO)',
+    direction: 'UP',
+    confidence: 73,
+    basis: 'IFO380 spread widening; Singapore barge queue +18%; demand ex-refinery +6%',
+    horizon: '2–4 days'
+  },
+  {
+    commodity: 'Feeder Container Rates (Intra-Asia)',
+    direction: 'UP',
+    confidence: 81,
+    basis: 'OOCL/Evergreen feeder capacity cut 12%; hub congestion overflow to feeder',
+    horizon: '3–5 days'
+  },
+  {
+    commodity: 'Newbuilding Prices (ULCV)',
+    direction: 'NEUTRAL',
+    confidence: 62,
+    basis: 'Korean yard orderbook at 78% capacity; price discovery limited this week',
+    horizon: '30–60 days'
+  },
+  {
+    commodity: 'Suez Canal Transit Fees',
+    direction: 'UP',
+    confidence: 84,
+    basis: 'SCA implementing surcharge Feb–Apr; 14 vessels rerouting Cape Good Hope',
+    horizon: '14–30 days'
+  }
+];
+
+// ── Filter label map ────────────────────────────────────────────────────────
+const filterLabels = {
+  vesselType: 'Vessel Type',
+  tradeRoute: 'Trade Route',
+  origin: 'Port of Origin',
+  destination: 'Destination Port',
+  commodity: 'Commodity Class',
+  timeRange: 'Time Range'
+};
+
+// ── Dropdown IDs ────────────────────────────────────────────────────────────
+const dropdownMap = {
+  vesselType: 'dd-vessel',
+  tradeRoute: 'dd-route',
+  origin: 'dd-origin',
+  destination: 'dd-dest',
+  commodity: 'dd-commodity',
+  timeRange: 'dd-time'
+};
+
+// ── Clock ───────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const str = `${now.getUTCFullYear()}-${pad(now.getUTCMonth()+1)}-${pad(now.getUTCDate())} `
+    + `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`;
+  document.getElementById('live-clock').textContent = str;
+  document.getElementById('footer-timestamp').textContent = `Last updated: ${str}`;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Sort helpers ────────────────────────────────────────────────────────────
+function sortBy(col) {
+  if (state.sortCol === col) {
+    state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.sortCol = col;
+    state.sortDir = 'asc';
+  }
+  state.page = 1;
+  updateSortArrows();
+  renderTable();
+}
+
+function updateSortArrows() {
+  const cols = ['name','imo','position','origin','destination','eta','cargo','status'];
+  cols.forEach(c => {
+    const el = document.getElementById('sort-' + c);
+    if (!el) return;
+    if (state.sortCol === c) {
+      el.textContent = state.sortDir === 'asc' ? '↑' : '↓';
+      el.classList.add('active');
+    } else {
+      el.textContent = '↑↓';
+      el.classList.remove('active');
+    }
+  });
+}
+
+// ── Filter helpers ──────────────────────────────────────────────────────────
+function applyFilter(key, value) {
+  if (value === '' || value === null || value === undefined) {
+    delete state.filters[key];
+  } else {
+    state.filters[key] = value;
+  }
+  state.page = 1;
+  state.expandedRow = null;
+  renderPills();
+  renderTable();
+  updateDropdownLabels();
+  updateDropdownSelectedStates();
+}
+
+function removeFilter(key) {
+  delete state.filters[key];
+  state.page = 1;
+  state.expandedRow = null;
+  renderPills();
+  renderTable();
+  updateDropdownLabels();
+  updateDropdownSelectedStates();
+}
+
+function clearAllFilters() {
+  state.filters = {};
+  state.page = 1;
+  state.expandedRow = null;
+  renderPills();
+  renderTable();
+  updateDropdownLabels();
+  updateDropdownSelectedStates();
+}
+
+function updateDropdownLabels() {
+  const defaultLabels = {
+    vesselType: 'Vessel Type',
+    tradeRoute: 'Trade Route',
+    origin: 'Port of Origin',
+    destination: 'Destination Port',
+    commodity: 'Commodity Class',
+    timeRange: 'Time Range'
+  };
+  Object.keys(defaultLabels).forEach(key => {
+    const btn = document.querySelector(`[data-key="${key}"].dropdown-trigger`);
+    if (!btn) return;
+    const label = btn.querySelector('.dd-label');
+    if (!label) return;
+    if (state.filters[key]) {
+      label.textContent = state.filters[key];
+      label.style.color = '#111827';
+    } else {
+      label.textContent = defaultLabels[key];
+      label.style.color = '#374151';
+    }
+  });
+}
+
+function updateDropdownSelectedStates() {
+  document.querySelectorAll('.dropdown-item').forEach(item => {
+    const key = item.dataset.key;
+    const value = item.dataset.value;
+    const activeVal = state.filters[key] || '';
+    item.classList.toggle('selected', value === activeVal);
+  });
+}
+
+// ── Filter vessels ──────────────────────────────────────────────────────────
+function getFilteredVessels() {
+  let result = vessels.slice();
+
+  if (state.filters.vesselType) {
+    result = result.filter(v => v.vesselType === state.filters.vesselType);
+  }
+  if (state.filters.tradeRoute) {
+    result = result.filter(v => v.tradeRoute === state.filters.tradeRoute);
+  }
+  if (state.filters.origin) {
+    result = result.filter(v => v.origin === state.filters.origin);
+  }
+  if (state.filters.destination) {
+    result = result.filter(v => v.destination === state.filters.destination);
+  }
+  if (state.filters.commodity) {
+    result = result.filter(v => v.commodity === state.filters.commodity);
+  }
+  // timeRange is display-only (no date fields on vessels to filter by)
+
+  if (state.sortCol) {
+    const col = state.sortCol;
+    result.sort((a, b) => {
+      const av = (a[col] || '').toString().toLowerCase();
+      const bv = (b[col] || '').toString().toLowerCase();
+      if (av < bv) return state.sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return state.sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+
+  return result;
+}
+
+// ── Status styling ──────────────────────────────────────────────────────────
+function statusStyle(status) {
+  switch (status) {
+    case 'IN TRANSIT':     return 'color:#374151';
+    case 'DELAYED':        return 'color:#DC2626';
+    case 'AT PORT':        return 'color:#2563EB';
+    case 'AWAITING BERTH': return 'color:#D97706';
+    case 'DEPARTED':       return 'color:#9CA3AF';
+    default:               return 'color:#374151';
+  }
+}
+
+// ── Skeleton render ─────────────────────────────────────────────────────────
+function renderSkeleton() {
+  const tbody = document.getElementById('vessel-tbody');
+  let html = '';
+  for (let i = 0; i < PAGE_SIZE; i++) {
+    html += `<tr style="border-bottom:1px solid #F3F4F6;">`;
+    const widths = [120, 72, 90, 80, 88, 72, 72, 80];
+    widths.forEach(w => {
+      html += `<td style="padding:8px 8px;"><div class="skeleton-pulse" style="height:10px;width:${w}px;background:#E5E7EB;border-radius:2px;"></div></td>`;
+    });
+    html += `</tr>`;
+  }
+  tbody.innerHTML = html;
+  document.getElementById('pagination-info').textContent = '';
+  document.getElementById('pg-num').textContent = '';
+  document.getElementById('pg-prev').disabled = true;
+  document.getElementById('pg-next').disabled = true;
+}
+
+// ── Table render ────────────────────────────────────────────────────────────
+function renderTable() {
+  if (state.loading) return;
+
+  const filtered = getFilteredVessels();
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (state.page > totalPages) state.page = totalPages;
+
+  const start = (state.page - 1) * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, total);
+  const pageVessels = filtered.slice(start, end);
+
+  const tbody = document.getElementById('vessel-tbody');
+  let html = '';
+
+  pageVessels.forEach((v, idx) => {
+    const globalIdx = start + idx;
+    const isExpanded = state.expandedRow === v.imo;
+    const trStyle = isExpanded ? 'background:#F9FAFB;' : '';
+
+    html += `
+      <tr
+        class="data-row"
+        style="border-bottom:1px solid #F3F4F6;${trStyle}"
+        tabindex="0"
+        data-imo="${v.imo}"
+        aria-expanded="${isExpanded}"
+        onclick="expandRow('${v.imo}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();expandRow('${v.imo}')}"
+        role="button"
+        aria-label="Vessel ${v.name}, IMO ${v.imo}. Click to expand details."
+      >
+        <td style="padding:7px 8px 7px 16px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:500;color:#111827;" title="${v.name}">${v.name}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.imo}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.position}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.origin}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.destination}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.eta}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;white-space:nowrap;">${v.cargo}</td>
+        <td style="padding:7px 8px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;${statusStyle(v.status)}">${v.status}</td>
+      </tr>
+      <tr class="expansion-row" style="border-bottom:${isExpanded?'1px solid #E5E7EB':'none'};">
+        <td class="expansion-cell" colspan="8">
+          <div class="expansion-inner${isExpanded?' open':''}">
+            <div style="padding:10px 16px 10px 16px;background:#F9FAFB;border-top:1px solid #F3F4F6;">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 24px;">
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Last Port</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.lastPort}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Next Port</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.nextPort}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Speed</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.speed} kn</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Draft</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.draft} m</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Flag</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.flag}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Year Built</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.yearBuilt}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Operator</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.operator}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Agent</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.agent}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Vessel Type</div>
+                  <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${v.vesselType}</div>
+                </div>
+              </div>
+              <div style="margin-top:8px;padding-top:8px;border-top:1px solid #E5E7EB;">
+                <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#9CA3AF;margin-bottom:2px;">Notes</div>
+                <div style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;line-height:1.5;">${v.notes}</div>
+              </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+
+  if (pageVessels.length === 0) {
+    html = `<tr><td colspan="8" style="padding:32px 16px;text-align:center;font-size:11px;color:#9CA3AF;">No vessels match the selected filters.</td></tr>`;
+  }
+
+  tbody.innerHTML = html;
+
+  // Pagination info
+  const showStart = total === 0 ? 0 : start + 1;
+  const showEnd = end;
+  document.getElementById('pagination-info').textContent =
+    `Showing ${showStart}–${showEnd} of ${total} vessels`;
+  document.getElementById('pg-num').textContent = `Page ${state.page} of ${totalPages}`;
+  document.getElementById('pg-prev').disabled = state.page <= 1;
+  document.getElementById('pg-next').disabled = state.page >= totalPages;
+}
+
+// ── Row expansion ───────────────────────────────────────────────────────────
+function expandRow(imo) {
+  if (state.expandedRow === imo) {
+    state.expandedRow = null;
+  } else {
+    state.expandedRow = imo;
+  }
+  renderTable();
+}
+
+// ── Pagination ──────────────────────────────────────────────────────────────
+function changePage(delta) {
+  const filtered = getFilteredVessels();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  state.page = Math.max(1, Math.min(state.page + delta, totalPages));
+  state.expandedRow = null;
+  renderTable();
+}
+
+// ── Pills render ────────────────────────────────────────────────────────────
+function renderPills() {
+  const pillsBar = document.getElementById('pills-bar');
+  const container = document.getElementById('pills-container');
+  const pillsOffset = document.getElementById('pills-offset');
+  const mainLayout = document.getElementById('main-layout');
+
+  const active = Object.entries(state.filters);
+  if (active.length === 0) {
+    pillsBar.style.display = 'none';
+    pillsOffset.style.height = '0px';
+    mainLayout.style.height = 'calc(100vh - 41px)';
+    return;
+  }
+
+  pillsBar.style.display = 'flex';
+  pillsOffset.style.height = '34px';
+  mainLayout.style.height = 'calc(100vh - 41px - 34px)';
+
+  let html = '';
+  active.forEach(([key, val]) => {
+    const label = filterLabels[key] || key;
+    html += `
+      <span class="filter-pill">
+        ${label}: ${val}
+        <button
+          class="pill-remove"
+          aria-label="Remove ${label} filter"
+          onclick="removeFilter('${key}')"
+        >×</button>
+      </span>
+    `;
+  });
+  container.innerHTML = html;
+}
+
+// ── Signals render ──────────────────────────────────────────────────────────
+function renderSignals() {
+  const list = document.getElementById('signals-list');
+  const sorted = signals.slice().sort((a, b) => {
+    return state.signalSortDir === 'desc'
+      ? b.confidence - a.confidence
+      : a.confidence - b.confidence;
+  });
+
+  let html = '';
+  sorted.forEach(s => {
+    let dirStyle = '';
+    if (s.direction === 'UP')      dirStyle = 'color:#15803d;font-weight:500;';
+    else if (s.direction === 'DOWN') dirStyle = 'color:#DC2626;font-weight:500;';
+    else                            dirStyle = 'color:#6B7280;font-weight:500;';
+
+    html += `
+      <div class="signal-row">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:3px;">
+          <span style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:0.07em;color:#111827;">${s.commodity}</span>
+          <div style="display:flex;align-items:baseline;gap:12px;flex-shrink:0;margin-left:8px;">
+            <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;${dirStyle}">${s.direction}</span>
+            <span style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#374151;">${s.confidence}%</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;">
+          <span style="font-size:11px;color:#6B7280;flex:1;padding-right:8px;line-height:1.4;">${s.basis}</span>
+          <span style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#9CA3AF;flex-shrink:0;white-space:nowrap;">${s.horizon}</span>
+        </div>
+      </div>
+    `;
+  });
+  list.innerHTML = html;
+}
+
+function toggleSignalSort() {
+  state.signalSortDir = state.signalSortDir === 'desc' ? 'asc' : 'desc';
+  const btn = document.getElementById('signal-sort-btn');
+  btn.textContent = state.signalSortDir === 'desc'
+    ? 'Sorted by confidence ↓'
+    : 'Sorted by confidence ↑';
+  renderSignals();
+}
+
+// ── Dropdown logic ──────────────────────────────────────────────────────────
+function toggleDropdown(id) {
+  const panel = document.getElementById(id);
+  const isOpen = panel.classList.contains('open');
+  closeAllDropdowns();
+  if (!isOpen) {
+    panel.classList.add('open');
+    const btn = panel.previousElementSibling;
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    // Focus first item
+    const first = panel.querySelector('.dropdown-item');
+    if (first) first.focus();
+  }
+}
+
+function closeAllDropdowns() {
+  document.querySelectorAll('.dropdown-panel').forEach(p => {
+    p.classList.remove('open');
+  });
+  document.querySelectorAll('.dropdown-trigger').forEach(b => {
+    b.setAttribute('aria-expanded', 'false');
+  });
+}
+
+// ── Event wiring ────────────────────────────────────────────────────────────
+// Dropdown trigger clicks
+document.querySelectorAll('.dropdown-trigger').forEach(btn => {
+  const key = btn.dataset.key;
+  const panelId = dropdownMap[key];
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleDropdown(panelId);
+  });
+  btn.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleDropdown(panelId);
+    }
+    if (e.key === 'Escape') closeAllDropdowns();
+  });
+});
+
+// Dropdown item clicks
+document.querySelectorAll('.dropdown-item').forEach(item => {
+  item.addEventListener('click', e => {
+    e.stopPropagation();
+    const key = item.dataset.key;
+    const value = item.dataset.value;
+    applyFilter(key, value);
+    closeAllDropdowns();
+  });
+  item.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      closeAllDropdowns();
+      const btn = document.querySelector(`.dropdown-trigger[data-key="${item.dataset.key}"]`);
+      if (btn) btn.focus();
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = item.nextElementSibling;
+      if (next) next.focus();
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prev = item.previousElementSibling;
+      if (prev) prev.focus();
+    }
+  });
+});
+
+// Outside click closes dropdowns
+document.addEventListener('click', () => closeAllDropdowns());
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeAllDropdowns();
+});
+
+// ── Init ────────────────────────────────────────────────────────────────────
+renderSkeleton();
+renderSignals();
+renderPills();
+
+setTimeout(() => {
+  state.loading = false;
+  renderTable();
+}, SKELETON_DURATION_MS);
+
+</script>
+</body>
+</html>

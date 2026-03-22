@@ -1,24 +1,17 @@
 """
-Shipping News Intelligence Center — fully rewritten for 2026.
+Shipping News Intelligence — world-class rewrite.
 
 Sections
 --------
-0.  News Hero              — breaking count, positive/negative/neutral counts,
-                             top topic, last-updated timestamp
-1.  Sentiment Trend        — daily sentiment score (30 days) + freight-rate overlay
-2.  Topic Category Breakdown — news categorised into 6 topics with counts
-3.  Top Stories Feed       — polished cards: headline, source avatar, sentiment badge,
-                             topic tag, time-ago, summary
-4.  Sentiment by Topic     — horizontal bar chart, avg sentiment per topic
-5.  Market-Moving News     — highest-impact stories + estimated freight impact
-6.  Source Reliability     — predictive accuracy scorecard per publication
-7.  Geographic Focus       — news volume by region with styled map panel
-8.  Breaking Alerts        — urgent headlines with red-pulse border + priority badge
-9.  News Timeline          — chronological feed, sentiment-coded left-border colour
+1. Sentiment Pulse        — 4 hero KPIs
+2. Topic Heatmap          — 9 topics × 5 days Bloomberg-style grid
+3. Breaking News          — top-5 urgent article cards
+4. Full News Feed         — filterable table with expandable rows
+5. Named Entity Tracker   — top-mentioned entities table
+6. Geographic Sentiment   — plotly scatter_geo choropleth
 """
 from __future__ import annotations
 
-import math
 import random
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
@@ -26,1245 +19,824 @@ from typing import Any
 
 import plotly.graph_objects as go
 import streamlit as st
-from loguru import logger
 
-# ── Colour palette ─────────────────────────────────────────────────────────────
-
-C_BG     = "#0a0f1a"
-C_CARD   = "#1a2235"
-C_CARD2  = "#141c2e"
-C_BORDER = "rgba(255,255,255,0.08)"
-C_TEXT   = "#f1f5f9"
-C_TEXT2  = "#94a3b8"
-C_TEXT3  = "#64748b"
-C_HIGH   = "#10b981"   # green / bullish
-C_LOW    = "#ef4444"   # red   / bearish
-C_NEUT   = "#64748b"   # slate / neutral
-C_ACCENT = "#3b82f6"
-C_CONV   = "#8b5cf6"
-C_WARN   = "#f59e0b"
-C_CYAN   = "#06b6d4"
-C_PINK   = "#ec4899"
+# ── Palette ────────────────────────────────────────────────────────────────────
+C_BG      = "#0a0f1a"
+C_SURFACE = "#111827"
+C_CARD    = "#1a2235"
+C_BORDER  = "rgba(255,255,255,0.08)"
+C_HIGH    = "#10b981"
+C_MOD     = "#f59e0b"
+C_LOW     = "#ef4444"
+C_ACCENT  = "#3b82f6"
+C_TEXT    = "#f1f5f9"
+C_TEXT2   = "#94a3b8"
+C_TEXT3   = "#64748b"
+C_PURPLE  = "#8b5cf6"
+C_CYAN    = "#06b6d4"
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
+TOPICS = [
+    "Freight Rates", "Port Congestion", "Carrier Capacity",
+    "Geopolitics", "Fuel/Bunker", "Trade Policy",
+    "Vessel Finance", "Sustainability", "M&A",
+]
 
-TOPICS = ["rates", "congestion", "sanctions", "weather", "M&A", "regulatory"]
-
-_TOPIC_COLORS = {
-    "rates":      C_ACCENT,
-    "congestion": C_WARN,
-    "sanctions":  C_LOW,
-    "weather":    C_CYAN,
-    "M&A":        C_CONV,
-    "regulatory": C_PINK,
+_TOPIC_COLOR = {
+    "Freight Rates":    C_ACCENT,
+    "Port Congestion":  C_MOD,
+    "Carrier Capacity": C_CYAN,
+    "Geopolitics":      C_LOW,
+    "Fuel/Bunker":      C_PURPLE,
+    "Trade Policy":     "#f97316",
+    "Vessel Finance":   "#14b8a6",
+    "Sustainability":   C_HIGH,
+    "M&A":              "#ec4899",
 }
 
-_TOPIC_ICONS = {
-    "rates":      "📈",
-    "congestion": "🚦",
-    "sanctions":  "🚫",
-    "weather":    "🌊",
-    "M&A":        "🤝",
-    "regulatory": "⚖️",
+_SOURCE_COLOR = {
+    "Reuters":       C_ACCENT,
+    "Bloomberg":     "#f59e0b",
+    "Lloyd's List":  C_HIGH,
+    "TradeWinds":    C_CYAN,
+    "Splash247":     C_PURPLE,
+    "Hellenic Shipping News": "#f97316",
+    "The Loadstar":  "#14b8a6",
 }
 
-# ── Fallback articles ──────────────────────────────────────────────────────────
+# ── Mock data ──────────────────────────────────────────────────────────────────
 
-_FALLBACK_ARTICLES: list[dict] = [
-    {
-        "title": "Maersk reports 40% surge in Trans-Pacific bookings ahead of Q2 peak season",
-        "url": "#",
-        "source": "TradeWinds",
-        "published_dt": datetime(2026, 3, 18, 8, 0, tzinfo=timezone.utc),
-        "summary": (
-            "A.P. Moller-Maersk has reported a significant 40 percent increase in "
-            "Trans-Pacific bookings as shippers rush to lock in capacity ahead of the "
-            "traditional Q2 peak season, driven by pre-tariff inventory building."
-        ),
-        "sentiment_score": 0.35,
-        "sentiment_label": "BULLISH",
-        "entities": ["Trans-Pacific", "Shanghai", "Los Angeles"],
-        "relevance_score": 0.92,
-        "topic_tags": ["rates", "M&A"],
-        "region": "Asia-Pacific",
-        "breaking": False,
-        "freight_impact_pct": 3.2,
-    },
-    {
-        "title": "Red Sea crisis deepens: Houthi attacks force mass rerouting via Cape of Good Hope",
-        "url": "#",
-        "source": "Lloyd's List",
-        "published_dt": datetime(2026, 3, 19, 6, 15, tzinfo=timezone.utc),
-        "summary": (
-            "Ongoing Houthi attacks in the Red Sea continue to force major container lines "
-            "to divert around the Cape of Good Hope, adding an estimated $300 million per "
-            "week to industry operating costs amid the extended disruption."
-        ),
-        "sentiment_score": -0.62,
-        "sentiment_label": "BEARISH",
-        "entities": ["Asia-Europe", "Rotterdam", "Jebel Ali"],
-        "relevance_score": 0.97,
-        "topic_tags": ["sanctions", "congestion"],
-        "region": "Middle East",
-        "breaking": True,
-        "freight_impact_pct": -5.8,
-    },
-    {
-        "title": "Panama Canal water levels recover — draft restrictions to ease by April",
-        "url": "#",
-        "source": "Splash247",
-        "published_dt": datetime(2026, 3, 16, 10, 0, tzinfo=timezone.utc),
-        "summary": (
-            "Panama Canal Authority officials confirm that Gatun Lake levels have risen "
-            "following seasonal rains, and current draft restrictions of 44 feet are "
-            "expected to be lifted by early April, easing Trans-Pacific transit times."
-        ),
-        "sentiment_score": 0.42,
-        "sentiment_label": "BULLISH",
-        "entities": ["Trans-Pacific", "Los Angeles", "Long Beach"],
-        "relevance_score": 0.88,
-        "topic_tags": ["congestion", "weather"],
-        "region": "Americas",
-        "breaking": False,
-        "freight_impact_pct": 2.1,
-    },
-    {
-        "title": "COSCO orders 12 ultra-large 24,000 TEU vessels in $2.4B CSSC deal",
-        "url": "#",
-        "source": "gCaptain",
-        "published_dt": datetime(2026, 3, 15, 9, 0, tzinfo=timezone.utc),
-        "summary": (
-            "COSCO Shipping Holdings has placed an order for twelve 24,000 TEU "
-            "ultra-large container vessels at CSSC's Hudong-Zhonghua shipyard in a deal "
-            "valued at approximately $2.4 billion, delivering 2028-2030."
-        ),
-        "sentiment_score": 0.28,
-        "sentiment_label": "BULLISH",
-        "entities": ["Shanghai", "Asia-Europe"],
-        "relevance_score": 0.85,
-        "topic_tags": ["M&A", "rates"],
-        "region": "Asia-Pacific",
-        "breaking": False,
-        "freight_impact_pct": 1.5,
-    },
-    {
-        "title": "ZIM launches ZIM Swift Pacific: 14-day Shanghai–Los Angeles express service",
-        "url": "#",
-        "source": "Maritime Executive",
-        "published_dt": datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc),
-        "summary": (
-            "ZIM Integrated Shipping Services has launched ZIM Swift Pacific, a premium "
-            "express Trans-Pacific service offering a 14-day transit from Shanghai to "
-            "Los Angeles targeting high-value time-sensitive cargo segments."
-        ),
-        "sentiment_score": 0.31,
-        "sentiment_label": "BULLISH",
-        "entities": ["Trans-Pacific", "Shanghai", "Los Angeles"],
-        "relevance_score": 0.83,
-        "topic_tags": ["rates", "M&A"],
-        "region": "Asia-Pacific",
-        "breaking": False,
-        "freight_impact_pct": 1.8,
-    },
-    {
-        "title": "Port of Rotterdam hits all-time record: 15.3M TEU throughput in 2025",
-        "url": "#",
-        "source": "Port Technology",
-        "published_dt": datetime(2026, 3, 13, 8, 30, tzinfo=timezone.utc),
-        "summary": (
-            "The Port of Rotterdam has published its 2025 annual throughput figures, "
-            "recording a new all-time high of 15.3 million TEU, surpassing the previous "
-            "record set in 2021, driven by strong import demand and transshipment growth."
-        ),
-        "sentiment_score": 0.44,
-        "sentiment_label": "BULLISH",
-        "entities": ["Rotterdam", "Antwerp-Bruges", "Asia-Europe"],
-        "relevance_score": 0.82,
-        "topic_tags": ["congestion", "rates"],
-        "region": "Europe",
-        "breaking": False,
-        "freight_impact_pct": 0.9,
-    },
-    {
-        "title": "IMO CII framework triggers $200B fleet renewal wave through 2030",
-        "url": "#",
-        "source": "Hellenic Shipping News",
-        "published_dt": datetime(2026, 3, 12, 11, 0, tzinfo=timezone.utc),
-        "summary": (
-            "The IMO's Carbon Intensity Indicator framework and forthcoming 2027 "
-            "emissions levies are prompting carriers to commit to an estimated $200 billion "
-            "in fleet renewal, methanol dual-fuel retrofits, and LNG newbuildings through 2030."
-        ),
-        "sentiment_score": -0.10,
-        "sentiment_label": "NEUTRAL",
-        "entities": ["Rotterdam", "Singapore"],
-        "relevance_score": 0.79,
-        "topic_tags": ["regulatory", "M&A"],
-        "region": "Global",
-        "breaking": False,
-        "freight_impact_pct": -0.4,
-    },
-    {
-        "title": "Asia-Europe spot rates floor at $2,800/FEU as Cape premium stabilises",
-        "url": "#",
-        "source": "JOC",
-        "published_dt": datetime(2026, 3, 11, 15, 0, tzinfo=timezone.utc),
-        "summary": (
-            "Asia-Europe spot container rates have found a floor around $2,800 per FEU "
-            "as the market digests the structural cost uplift from Cape of Good Hope "
-            "diversions, with Drewry's WCI Shanghai-Rotterdam leg stabilising after weeks "
-            "of volatility."
-        ),
-        "sentiment_score": 0.06,
-        "sentiment_label": "NEUTRAL",
-        "entities": ["Asia-Europe", "Rotterdam", "Shanghai"],
-        "relevance_score": 0.87,
-        "topic_tags": ["rates", "congestion"],
-        "region": "Europe",
-        "breaking": False,
-        "freight_impact_pct": 0.2,
-    },
-    {
-        "title": "BREAKING: Taiwan Strait tensions escalate — insurers impose war-risk surcharges",
-        "url": "#",
-        "source": "Lloyd's List",
-        "published_dt": datetime(2026, 3, 20, 4, 0, tzinfo=timezone.utc),
-        "summary": (
-            "Lloyd's of London war-risk underwriters have applied emergency surcharges "
-            "on cargo transiting the Taiwan Strait following a 48-hour standoff between "
-            "PLA naval vessels and US carrier group assets in disputed waters."
-        ),
-        "sentiment_score": -0.78,
-        "sentiment_label": "BEARISH",
-        "entities": ["Trans-Pacific", "Shanghai", "Singapore"],
-        "relevance_score": 0.99,
-        "topic_tags": ["sanctions", "regulatory"],
-        "region": "Asia-Pacific",
-        "breaking": True,
-        "freight_impact_pct": -8.4,
-    },
-    {
-        "title": "US East Coast ILA contract breakthrough averts threatened strike action",
-        "url": "#",
-        "source": "JOC",
-        "published_dt": datetime(2026, 3, 18, 20, 0, tzinfo=timezone.utc),
-        "summary": (
-            "The International Longshoremen's Association and the US Maritime Alliance "
-            "reached a tentative agreement on wages and automation, averting a strike "
-            "that would have shut ports from Maine to Texas and disrupted $3B in weekly cargo."
-        ),
-        "sentiment_score": 0.58,
-        "sentiment_label": "BULLISH",
-        "entities": ["New York-New Jersey", "Savannah", "Houston"],
-        "relevance_score": 0.95,
-        "topic_tags": ["regulatory", "congestion"],
-        "region": "Americas",
-        "breaking": True,
-        "freight_impact_pct": 4.7,
-    },
+def _now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+_MOCK_ARTICLES: list[dict] = [
+    {"headline": "Maersk reports 40% surge in Trans-Pacific bookings ahead of Q2 peak",
+     "source": "TradeWinds", "sentiment_score": 0.42, "topic": "Freight Rates",
+     "published_at": _now() - timedelta(hours=2), "urgency": 0.81,
+     "summary": "A.P. Moller-Maersk has reported a significant 40% increase in Trans-Pacific bookings as shippers rush to lock in capacity ahead of the traditional Q2 peak season, driven by pre-tariff inventory building.",
+     "url": "#", "entities": ["Maersk", "Trans-Pacific", "Los Angeles", "Shanghai"]},
+
+    {"headline": "Red Sea Houthi attacks force mass rerouting via Cape of Good Hope",
+     "source": "Lloyd's List", "sentiment_score": -0.71, "topic": "Geopolitics",
+     "published_at": _now() - timedelta(hours=1), "urgency": 0.97,
+     "summary": "Ongoing Houthi attacks continue to force major container lines to divert around the Cape of Good Hope, adding an estimated $300 million per week in extra fuel costs to the global fleet.",
+     "url": "#", "entities": ["Houthi", "Red Sea", "Cape of Good Hope", "Suez Canal"]},
+
+    {"headline": "VLSFO bunker prices spike 8% in Singapore amid OPEC+ supply cut extension",
+     "source": "Reuters", "sentiment_score": -0.38, "topic": "Fuel/Bunker",
+     "published_at": _now() - timedelta(hours=3), "urgency": 0.74,
+     "summary": "Very low-sulphur fuel oil prices in Singapore surged 8% this week after OPEC+ announced an extension of production cuts through Q3 2026, tightening global oil supply.",
+     "url": "#", "entities": ["Singapore", "VLSFO", "OPEC+", "Saudi Aramco"]},
+
+    {"headline": "Port of Los Angeles breaks monthly throughput record with 1.1M TEU",
+     "source": "Bloomberg", "sentiment_score": 0.61, "topic": "Port Congestion",
+     "published_at": _now() - timedelta(hours=5), "urgency": 0.55,
+     "summary": "The Port of Los Angeles processed a record 1.1 million TEUs in February 2026, driven by front-loading ahead of potential tariff escalation and strong consumer demand.",
+     "url": "#", "entities": ["Port of Los Angeles", "Long Beach", "TEU"]},
+
+    {"headline": "MSC acquires Bolloré Africa Logistics in $5.7B landmark deal",
+     "source": "Bloomberg", "sentiment_score": 0.29, "topic": "M&A",
+     "published_at": _now() - timedelta(hours=6), "urgency": 0.88,
+     "summary": "Mediterranean Shipping Company has completed its acquisition of Bolloré Africa Logistics for $5.7 billion, cementing its position as the dominant container carrier in sub-Saharan Africa.",
+     "url": "#", "entities": ["MSC", "Bolloré", "Africa", "Aponte"]},
+
+    {"headline": "IMO carbon intensity regulation triggers 12% capacity withdrawal from slow steaming",
+     "source": "Hellenic Shipping News", "sentiment_score": -0.22, "topic": "Sustainability",
+     "published_at": _now() - timedelta(hours=8), "urgency": 0.61,
+     "summary": "New IMO CII ratings have forced operators to slow-steam vessels, effectively withdrawing an estimated 12% of nominal fleet capacity from the market.",
+     "url": "#", "entities": ["IMO", "CII", "Hapag-Lloyd", "Evergreen"]},
+
+    {"headline": "US-China trade tensions escalate: 35% tariff on Chinese goods looms",
+     "source": "Reuters", "sentiment_score": -0.58, "topic": "Trade Policy",
+     "published_at": _now() - timedelta(hours=9), "urgency": 0.91,
+     "summary": "The White House confirmed it is considering a blanket 35% tariff on Chinese manufactured goods, which analysts warn could trigger an immediate 20% drop in Trans-Pacific container volumes.",
+     "url": "#", "entities": ["US", "China", "Trans-Pacific", "White House"]},
+
+    {"headline": "Hapag-Lloyd secures $3.2B green ammonia vessel financing with ING",
+     "source": "The Loadstar", "sentiment_score": 0.47, "topic": "Vessel Finance",
+     "published_at": _now() - timedelta(hours=11), "urgency": 0.44,
+     "summary": "Hapag-Lloyd has secured a $3.2 billion facility from ING Bank for the construction of 12 ammonia-dual-fuel ultra-large container vessels, the largest green shipping finance deal of 2026.",
+     "url": "#", "entities": ["Hapag-Lloyd", "ING Bank", "Green Ammonia", "ULCV"]},
+
+    {"headline": "Shanghai port dwell times rise to 4.8 days as Chinese New Year backlog clears",
+     "source": "Splash247", "sentiment_score": -0.15, "topic": "Port Congestion",
+     "published_at": _now() - timedelta(hours=13), "urgency": 0.52,
+     "summary": "Average dwell times at Yangshan Deep Water Port have climbed to 4.8 days as operators struggle to clear a backlog accumulated during the extended Chinese New Year period.",
+     "url": "#", "entities": ["Shanghai", "Yangshan", "COSCO", "dwell time"]},
+
+    {"headline": "Baltic Dry Index climbs 18% on Capesize demand surge from Brazilian iron ore",
+     "source": "TradeWinds", "sentiment_score": 0.68, "topic": "Freight Rates",
+     "published_at": _now() - timedelta(hours=14), "urgency": 0.66,
+     "summary": "The Baltic Dry Index rose 18% over the past two weeks driven by strong Capesize demand from Brazilian iron ore exporters shipping to Chinese steel mills.",
+     "url": "#", "entities": ["Baltic Dry Index", "Capesize", "Brazil", "Vale", "China"]},
+
+    {"headline": "CMA CGM invests $1.2B in digital port automation across 12 terminals",
+     "source": "Hellenic Shipping News", "sentiment_score": 0.38, "topic": "Carrier Capacity",
+     "published_at": _now() - timedelta(hours=16), "urgency": 0.39,
+     "summary": "CMA CGM announced a $1.2 billion investment in automated port technology across 12 terminals in Europe, Asia and the Americas, aiming to cut vessel turnaround times by 30%.",
+     "url": "#", "entities": ["CMA CGM", "Rotterdam", "Singapore", "Automation"]},
+
+    {"headline": "Panama Canal drought eases: daily transits climb back to 36 from 24",
+     "source": "Lloyd's List", "sentiment_score": 0.54, "topic": "Port Congestion",
+     "published_at": _now() - timedelta(hours=18), "urgency": 0.57,
+     "summary": "Above-average rainfall over Lake Gatun has allowed Panama Canal Authority to raise daily transit limits to 36 vessels, recovering from the 24-vessel drought restriction imposed in late 2025.",
+     "url": "#", "entities": ["Panama Canal", "Lake Gatun", "ACP", "Panamax"]},
+
+    {"headline": "EU shipping ETS costs hit $420M in Q1 2026 — operators pass costs to shippers",
+     "source": "Reuters", "sentiment_score": -0.33, "topic": "Sustainability",
+     "published_at": _now() - timedelta(hours=20), "urgency": 0.63,
+     "summary": "European shipping companies faced a combined €390 million in EU Emissions Trading System charges in Q1 2026, with most passing the costs directly to shippers via BAF surcharges.",
+     "url": "#", "entities": ["EU ETS", "Maersk", "MSC", "BAF surcharge"]},
+
+    {"headline": "Evergreen orders 20 methanol-powered 24,000 TEU vessels in $6B newbuild spree",
+     "source": "Splash247", "sentiment_score": 0.22, "topic": "Vessel Finance",
+     "published_at": _now() - timedelta(hours=22), "urgency": 0.48,
+     "summary": "Evergreen Marine has placed orders for 20 methanol dual-fuel ultra-large container vessels at Korean yards DSME and HHI, representing the single largest newbuild order of 2026.",
+     "url": "#", "entities": ["Evergreen", "DSME", "HHI", "Methanol", "Korea"]},
+
+    {"headline": "Geopolitical risk premium adds $180/TEU to Europe-Asia spot rates",
+     "source": "Bloomberg", "sentiment_score": -0.44, "topic": "Freight Rates",
+     "published_at": _now() - timedelta(hours=25), "urgency": 0.78,
+     "summary": "Analysts at Drewry estimate that the combined effect of Red Sea diversions and Black Sea tensions has added approximately $180 per TEU to Europe-Asia spot rates versus pre-crisis levels.",
+     "url": "#", "entities": ["Drewry", "Europe-Asia", "Red Sea", "Black Sea"]},
+
+    {"headline": "Australia bans Russian tankers from port calls citing insurance concerns",
+     "source": "Lloyd's List", "sentiment_score": -0.51, "topic": "Geopolitics",
+     "published_at": _now() - timedelta(hours=27), "urgency": 0.72,
+     "summary": "Australia announced an immediate ban on Russian-flagged and Russian-owned tankers from its ports, citing concerns over shadow fleet insurance coverage and environmental liability.",
+     "url": "#", "entities": ["Australia", "Russia", "Shadow Fleet", "Tanker"]},
+
+    {"headline": "FuelEU Maritime: carriers scramble to secure green methanol supply chains",
+     "source": "The Loadstar", "sentiment_score": -0.08, "topic": "Sustainability",
+     "published_at": _now() - timedelta(hours=30), "urgency": 0.35,
+     "summary": "With FuelEU Maritime regulation now in force, container lines are racing to sign long-term green methanol supply agreements with producers in Chile, Iceland and Morocco.",
+     "url": "#", "entities": ["FuelEU", "Methanol", "Chile", "Iceland", "Morocco"]},
+
+    {"headline": "Cosco Shipping acquires 30% stake in Port of Hamburg for €1.8B",
+     "source": "Reuters", "sentiment_score": 0.15, "topic": "M&A",
+     "published_at": _now() - timedelta(hours=33), "urgency": 0.67,
+     "summary": "COSCO Shipping Ports secured a 30% stake in the Port of Hamburg's HHLA terminal operator after the EU approved the deal with conditions, ending a two-year regulatory review.",
+     "url": "#", "entities": ["COSCO", "Hamburg", "HHLA", "EU Commission"]},
+
+    {"headline": "Trans-Atlantic rates surge 22% as blank sailings thin available capacity",
+     "source": "TradeWinds", "sentiment_score": 0.35, "topic": "Carrier Capacity",
+     "published_at": _now() - timedelta(hours=36), "urgency": 0.59,
+     "summary": "Trans-Atlantic container spot rates jumped 22% week-on-week after the Ocean Alliance and 2M announced a combined 14 blank sailings, dramatically reducing available capacity.",
+     "url": "#", "entities": ["Trans-Atlantic", "Ocean Alliance", "2M", "blank sailings"]},
+
+    {"headline": "LNG as marine fuel gains share: 18% of newbuild orders in 2025 were LNG-ready",
+     "source": "Hellenic Shipping News", "sentiment_score": 0.28, "topic": "Fuel/Bunker",
+     "published_at": _now() - timedelta(hours=40), "urgency": 0.31,
+     "summary": "Analysis of 2025 newbuild orders shows 18% specified LNG dual-fuel capability, up from 11% in 2024, as shipowners hedge against long-term fuel price and regulatory uncertainty.",
+     "url": "#", "entities": ["LNG", "Newbuild", "DNV", "Korea Shipbuilding"]},
+
+    {"headline": "Indian subcontinent ports see 28% volume rise as nearshoring shifts trade lanes",
+     "source": "Bloomberg", "sentiment_score": 0.49, "topic": "Trade Policy",
+     "published_at": _now() - timedelta(hours=44), "urgency": 0.42,
+     "summary": "Nhava Sheva, Mundra and Colombo ports recorded a combined 28% volume increase year-on-year as manufacturers shift production from China to India and Vietnam.",
+     "url": "#", "entities": ["India", "Nhava Sheva", "Mundra", "Colombo", "Vietnam"]},
 ]
 
-# ── Source reliability data ────────────────────────────────────────────────────
+# ── Entity mock data ───────────────────────────────────────────────────────────
 
-_SOURCE_RELIABILITY: list[dict] = [
-    {"source": "Lloyd's List",          "accuracy": 0.84, "lead_time_days": 1.2, "stories": 312, "tier": "Premium"},
-    {"source": "TradeWinds",            "accuracy": 0.81, "lead_time_days": 0.8, "stories": 487, "tier": "Premium"},
-    {"source": "JOC",                   "accuracy": 0.79, "lead_time_days": 1.5, "stories": 394, "tier": "Premium"},
-    {"source": "gCaptain",              "accuracy": 0.76, "lead_time_days": 0.5, "stories": 621, "tier": "Standard"},
-    {"source": "Splash247",             "accuracy": 0.74, "lead_time_days": 0.6, "stories": 533, "tier": "Standard"},
-    {"source": "Maritime Executive",    "accuracy": 0.72, "lead_time_days": 2.1, "stories": 278, "tier": "Standard"},
-    {"source": "Hellenic Shipping News","accuracy": 0.68, "lead_time_days": 1.0, "stories": 892, "tier": "Wire"},
-    {"source": "Port Technology",       "accuracy": 0.65, "lead_time_days": 3.2, "stories": 201, "tier": "Specialist"},
+_MOCK_ENTITIES = [
+    {"entity": "Maersk", "type": "Carrier", "mentions": 34, "sentiment": 0.31, "trend": "up"},
+    {"entity": "MSC", "type": "Carrier", "mentions": 28, "sentiment": 0.18, "trend": "up"},
+    {"entity": "Red Sea", "type": "Region", "mentions": 26, "sentiment": -0.68, "trend": "flat"},
+    {"entity": "Shanghai", "type": "Port", "mentions": 21, "sentiment": -0.12, "trend": "down"},
+    {"entity": "COSCO", "type": "Carrier", "mentions": 18, "sentiment": 0.09, "trend": "up"},
+    {"entity": "Baltic Dry Index", "type": "Index", "mentions": 16, "sentiment": 0.55, "trend": "up"},
+    {"entity": "Hapag-Lloyd", "type": "Carrier", "mentions": 15, "sentiment": 0.22, "trend": "flat"},
+    {"entity": "Panama Canal", "type": "Waterway", "mentions": 14, "sentiment": 0.41, "trend": "up"},
+    {"entity": "CMA CGM", "type": "Carrier", "mentions": 13, "sentiment": 0.34, "trend": "flat"},
+    {"entity": "Singapore", "type": "Port", "mentions": 12, "sentiment": 0.08, "trend": "down"},
+    {"entity": "VLSFO", "type": "Commodity", "mentions": 11, "sentiment": -0.29, "trend": "down"},
+    {"entity": "Evergreen", "type": "Carrier", "mentions": 10, "sentiment": 0.15, "trend": "flat"},
 ]
 
-# ── Region data ────────────────────────────────────────────────────────────────
+# ── Geographic sentiment data ──────────────────────────────────────────────────
 
-_REGIONS = [
-    {"name": "Asia-Pacific",  "lat":  20, "lon": 120, "color": C_ACCENT},
-    {"name": "Europe",        "lat":  52, "lon":  10, "color": C_CONV},
-    {"name": "Middle East",   "lat":  25, "lon":  50, "color": C_WARN},
-    {"name": "Americas",      "lat":  20, "lon": -85, "color": C_HIGH},
-    {"name": "Africa",        "lat":  -5, "lon":  25, "color": C_CYAN},
-    {"name": "Global",        "lat":   0, "lon":   0, "color": C_PINK},
+_GEO_DATA = [
+    {"region": "Asia-Pacific", "lat": 15, "lon": 110, "sentiment": 0.12, "volume": 87},
+    {"region": "Europe", "lat": 52, "lon": 10, "sentiment": -0.08, "volume": 64},
+    {"region": "North America", "lat": 40, "lon": -100, "sentiment": 0.31, "volume": 52},
+    {"region": "Middle East", "lat": 25, "lon": 45, "sentiment": -0.61, "volume": 71},
+    {"region": "Africa", "lat": -5, "lon": 25, "sentiment": 0.04, "volume": 23},
+    {"region": "South America", "lat": -15, "lon": -60, "sentiment": 0.39, "volume": 18},
+    {"region": "Red Sea", "lat": 20, "lon": 38, "sentiment": -0.79, "volume": 45},
+    {"region": "Trans-Pacific", "lat": 30, "lon": 170, "sentiment": 0.28, "volume": 56},
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-
-def _gaf(article: Any, field: str, default: Any = None) -> Any:
-    """Get article field — works for both dicts and attribute-based objects."""
-    if isinstance(article, dict):
-        return article.get(field, default)
-    return getattr(article, field, default)
-
-
-def _sentiment_color(label: str) -> str:
-    if label == "BULLISH":
-        return C_HIGH
-    if label == "BEARISH":
-        return C_LOW
-    return C_NEUT
-
-
-def _sentiment_bg(label: str) -> str:
-    if label == "BULLISH":
-        return "rgba(16,185,129,0.15)"
-    if label == "BEARISH":
-        return "rgba(239,68,68,0.15)"
-    return "rgba(100,116,139,0.12)"
-
-
-def _age_str(published_dt: datetime) -> str:
-    now = datetime.now(tz=timezone.utc)
-    pub = published_dt
-    if pub.tzinfo is None:
-        pub = pub.replace(tzinfo=timezone.utc)
-    delta = now - pub
-    secs = int(delta.total_seconds())
-    if secs < 3600:
-        return f"{max(1, secs // 60)}m ago"
-    if secs < 86400:
-        return f"{secs // 3600}h ago"
-    return f"{secs // 86400}d ago"
-
-
-def _source_color(source: str) -> str:
-    palette = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b",
-               "#10b981", "#f97316", "#ec4899", "#64748b"]
-    return palette[sum(ord(c) for c in source) % len(palette)]
-
-
-def _source_initials(source: str) -> str:
-    parts = source.split()
-    if len(parts) >= 2:
-        return (parts[0][0] + parts[1][0]).upper()
-    return source[:2].upper()
-
-
-def _impact_score(article: Any) -> float:
-    s = abs(_gaf(article, "sentiment_score") or 0.0)
-    r = _gaf(article, "relevance_score") or 0.5
-    return s * r
-
-
-def _normalised_articles(raw: list[Any]) -> list[dict]:
-    """Return a list of plain dicts regardless of whether raw items are dicts or objects."""
+def _normalise(items: list[dict]) -> list[dict]:
+    """Normalise incoming dicts so internal keys are consistent."""
     out = []
-    for a in raw:
-        out.append({
-            "title":           _gaf(a, "title", "Untitled"),
-            "url":             _gaf(a, "url", "#"),
-            "source":          _gaf(a, "source", "Unknown"),
-            "published_dt":    _gaf(a, "published_dt", datetime.now(tz=timezone.utc)),
-            "summary":         _gaf(a, "summary", ""),
-            "sentiment_score": _gaf(a, "sentiment_score", 0.0) or 0.0,
-            "sentiment_label": _gaf(a, "sentiment_label", "NEUTRAL") or "NEUTRAL",
-            "entities":        _gaf(a, "entities", []) or [],
-            "relevance_score": _gaf(a, "relevance_score", 0.5) or 0.5,
-            "topic_tags":      _gaf(a, "topic_tags", []) or [],
-            "region":          _gaf(a, "region", "Global"),
-            "breaking":        _gaf(a, "breaking", False),
-            "freight_impact_pct": _gaf(a, "freight_impact_pct", 0.0) or 0.0,
-        })
+    for raw in items:
+        try:
+            pub = raw.get("published_at") or raw.get("published_dt") or _now()
+            if isinstance(pub, str):
+                try:
+                    pub = datetime.fromisoformat(pub)
+                except Exception:
+                    pub = _now()
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            score = float(raw.get("sentiment_score", 0.0))
+            out.append({
+                "headline":        str(raw.get("headline") or raw.get("title") or ""),
+                "source":          str(raw.get("source", "Unknown")),
+                "sentiment_score": max(-1.0, min(1.0, score)),
+                "topic":           str(raw.get("topic") or (raw.get("topic_tags") or [""])[0] or "General"),
+                "published_at":    pub,
+                "urgency":         float(raw.get("urgency") or raw.get("relevance_score") or 0.5),
+                "summary":         str(raw.get("summary", "")),
+                "url":             str(raw.get("url", "#")),
+                "entities":        list(raw.get("entities") or []),
+            })
+        except Exception:
+            pass
     return out
 
 
-def _section_header(title: str, subtitle: str = "") -> None:
-    st.markdown(
-        f'<div style="margin:8px 0 4px;">'
-        f'<span style="font-size:1.05rem;font-weight:700;color:{C_TEXT};'
-        f'letter-spacing:0.02em;">{title}</span>'
-        + (f'<br><span style="font-size:0.78rem;color:{C_TEXT3};'
-           f'letter-spacing:0.01em;">{subtitle}</span>' if subtitle else "")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _pill(text: str, color: str, bg: str | None = None) -> str:
-    bg = bg or color + "22"
-    return (
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:99px;'
-        f'font-size:0.68rem;font-weight:700;letter-spacing:0.05em;'
-        f'color:{color};background:{bg};border:1px solid {color}44;">'
-        f'{text}</span>'
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 0 — News Hero
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_news_hero(articles: list[dict]) -> None:
+def _time_ago(dt: datetime) -> str:
     try:
-        now_str = datetime.now(tz=timezone.utc).strftime("%d %b %Y  %H:%M UTC")
+        delta = _now() - dt
+        s = int(delta.total_seconds())
+        if s < 60:
+            return f"{s}s ago"
+        if s < 3600:
+            return f"{s // 60}m ago"
+        if s < 86400:
+            return f"{s // 3600}h ago"
+        return f"{s // 86400}d ago"
+    except Exception:
+        return "—"
 
-        breaking  = sum(1 for a in articles if a.get("breaking"))
-        positive  = sum(1 for a in articles if a["sentiment_label"] == "BULLISH")
-        negative  = sum(1 for a in articles if a["sentiment_label"] == "BEARISH")
-        neutral_n = sum(1 for a in articles if a["sentiment_label"] == "NEUTRAL")
-        total     = len(articles)
 
-        # Top topic by frequency
-        topic_counter: Counter = Counter()
+def _sentiment_label(score: float) -> tuple[str, str]:
+    if score >= 0.15:
+        return "BULLISH", C_HIGH
+    if score <= -0.15:
+        return "BEARISH", C_LOW
+    return "NEUTRAL", C_TEXT3
+
+
+def _topic_chip(topic: str) -> str:
+    color = _TOPIC_COLOR.get(topic, C_ACCENT)
+    return (
+        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
+        f'border-radius:4px;padding:1px 7px;font-size:10px;font-weight:600;'
+        f'letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
+    )
+
+
+def _source_badge(source: str) -> str:
+    color = _SOURCE_COLOR.get(source, C_TEXT2)
+    return (
+        f'<span style="color:{color};font-size:10px;font-weight:700;'
+        f'letter-spacing:0.8px;white-space:nowrap;">{source.upper()}</span>'
+    )
+
+
+def _score_pill(score: float) -> str:
+    color = C_HIGH if score >= 0.15 else (C_LOW if score <= -0.15 else C_TEXT3)
+    sign  = "+" if score > 0 else ""
+    return (
+        f'<code style="background:{color}22;color:{color};border-radius:4px;'
+        f'padding:2px 6px;font-size:11px;">{sign}{score:.2f}</code>'
+    )
+
+# ── Section 1: Sentiment Pulse ─────────────────────────────────────────────────
+
+def _render_sentiment_pulse(articles: list[dict]) -> None:
+    try:
+        cutoff = _now() - timedelta(hours=24)
+        recent = [a for a in articles if a["published_at"] >= cutoff] or articles
+
+        scores     = [a["sentiment_score"] for a in recent]
+        avg_score  = sum(scores) / len(scores) if scores else 0.0
+        bullish_n  = sum(1 for s in scores if s >= 0.15)
+        bearish_n  = sum(1 for s in scores if s <= -0.15)
+        volume_24h = len(recent)
+        bull_pct   = 100 * bullish_n / len(scores) if scores else 0
+        bear_pct   = 100 * bearish_n / len(scores) if scores else 0
+
+        score_color = C_HIGH if avg_score >= 0.15 else (C_LOW if avg_score <= -0.15 else C_MOD)
+        sign = "+" if avg_score > 0 else ""
+
+        kpis = [
+            ("Overall Sentiment", f"{sign}{avg_score:.2f}", "Score  –1 → +1", score_color),
+            ("Bullish Articles",  f"{bull_pct:.0f}%",       f"{bullish_n} articles",  C_HIGH),
+            ("Bearish Articles",  f"{bear_pct:.0f}%",       f"{bearish_n} articles",  C_LOW),
+            ("News Volume",       f"{volume_24h}",           "articles last 24 h",     C_ACCENT),
+        ]
+
+        cols = st.columns(4, gap="small")
+        for col, (label, value, sub, color) in zip(cols, kpis):
+            with col:
+                st.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'border-top:3px solid {color};border-radius:10px;padding:18px 20px;'
+                    f'text-align:center;">'
+                    f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;'
+                    f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">{label}</div>'
+                    f'<div style="color:{color};font-size:34px;font-weight:800;'
+                    f'line-height:1;font-family:monospace;">{value}</div>'
+                    f'<div style="color:{C_TEXT3};font-size:11px;margin-top:6px;">{sub}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+    except Exception as exc:
+        st.warning(f"Sentiment pulse error: {exc}")
+
+# ── Section 2: Topic Heatmap ───────────────────────────────────────────────────
+
+def _render_topic_heatmap(articles: list[dict]) -> None:
+    try:
+        today   = _now().date()
+        day_labels = []
+        for i in range(4, -1, -1):
+            d = today - timedelta(days=i)
+            day_labels.append(d.strftime("%a %-d"))
+
+        # bucket articles
+        grid: dict[tuple[str, str], list[float]] = defaultdict(list)
         for a in articles:
-            for t in a.get("topic_tags", []):
-                topic_counter[t] += 1
-        top_topic = topic_counter.most_common(1)[0][0] if topic_counter else "rates"
+            day_key = a["published_at"].date().strftime("%a %-d")
+            if day_key in day_labels:
+                grid[(a["topic"], day_key)].append(a["sentiment_score"])
 
-        overall_score = (
-            sum(a["sentiment_score"] for a in articles) / total if total else 0.0
+        # header row
+        header_cells = "".join(
+            f'<th style="padding:6px 10px;text-align:center;color:{C_TEXT2};'
+            f'font-size:11px;font-weight:600;letter-spacing:0.5px;'
+            f'border-bottom:1px solid {C_BORDER};">{d}</th>'
+            for d in day_labels
         )
-        market_label = (
-            "BULLISH" if overall_score > 0.05
-            else ("BEARISH" if overall_score < -0.05 else "NEUTRAL")
+        header = (
+            f'<tr><th style="padding:6px 12px;text-align:left;color:{C_TEXT3};'
+            f'font-size:11px;">Topic</th>{header_cells}</tr>'
         )
-        market_color = _sentiment_color(market_label)
 
-        # Hero card
+        rows_html = ""
+        for topic in TOPICS:
+            tc = _TOPIC_COLOR.get(topic, C_ACCENT)
+            topic_cell = (
+                f'<td style="padding:8px 12px;white-space:nowrap;">'
+                f'<span style="color:{tc};font-size:12px;font-weight:600;">{topic}</span></td>'
+            )
+            day_cells = ""
+            for day in day_labels:
+                scores = grid.get((topic, day), [])
+                if scores:
+                    avg  = sum(scores) / len(scores)
+                    cnt  = len(scores)
+                    bg   = C_HIGH if avg >= 0.2 else (C_LOW if avg <= -0.2 else C_MOD)
+                    sign = "+" if avg > 0 else ""
+                    cell_inner = (
+                        f'<div style="font-size:11px;font-weight:700;color:{bg};">'
+                        f'{sign}{avg:.1f}</div>'
+                        f'<div style="font-size:9px;color:{C_TEXT3};">{cnt}art</div>'
+                    )
+                    cell_bg = f"{bg}1a"
+                else:
+                    cell_inner = f'<div style="color:{C_TEXT3};font-size:11px;">—</div>'
+                    cell_bg    = "transparent"
+                day_cells += (
+                    f'<td style="padding:6px 8px;text-align:center;'
+                    f'background:{cell_bg};border-radius:6px;">{cell_inner}</td>'
+                )
+            rows_html += f"<tr>{topic_cell}{day_cells}</tr>"
+
         st.markdown(
-            f"""
-            <div style="background:linear-gradient(135deg,#0d1b2e 0%,#1a2a45 60%,#0f1f35 100%);
-                        border:1px solid {C_ACCENT}33;border-radius:16px;
-                        padding:28px 32px 24px;margin-bottom:20px;
-                        box-shadow:0 8px 40px rgba(59,130,246,0.12);">
-              <div style="display:flex;align-items:flex-start;justify-content:space-between;
-                          flex-wrap:wrap;gap:16px;">
-                <div>
-                  <div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;
-                              color:{C_ACCENT};text-transform:uppercase;margin-bottom:6px;">
-                    SHIPPING NEWS INTELLIGENCE CENTER
-                  </div>
-                  <div style="font-size:1.85rem;font-weight:800;color:{C_TEXT};
-                              letter-spacing:-0.02em;line-height:1.15;margin-bottom:4px;">
-                    Market Sentiment:&nbsp;
-                    <span style="color:{market_color};">{market_label}</span>
-                  </div>
-                  <div style="font-size:0.8rem;color:{C_TEXT3};margin-top:2px;">
-                    Updated {now_str} &nbsp;·&nbsp; {total} stories indexed
-                  </div>
-                </div>
-                <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                  <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);
-                              border-radius:12px;padding:14px 20px;text-align:center;min-width:90px;">
-                    <div style="font-size:1.7rem;font-weight:800;color:{C_LOW};">{breaking}</div>
-                    <div style="font-size:0.68rem;color:{C_TEXT3};font-weight:600;letter-spacing:0.06em;">BREAKING</div>
-                  </div>
-                  <div style="background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.30);
-                              border-radius:12px;padding:14px 20px;text-align:center;min-width:90px;">
-                    <div style="font-size:1.7rem;font-weight:800;color:{C_HIGH};">{positive}</div>
-                    <div style="font-size:0.68rem;color:{C_TEXT3};font-weight:600;letter-spacing:0.06em;">BULLISH</div>
-                  </div>
-                  <div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);
-                              border-radius:12px;padding:14px 20px;text-align:center;min-width:90px;">
-                    <div style="font-size:1.7rem;font-weight:800;color:{C_LOW};">{negative}</div>
-                    <div style="font-size:0.68rem;color:{C_TEXT3};font-weight:600;letter-spacing:0.06em;">BEARISH</div>
-                  </div>
-                  <div style="background:rgba(100,116,139,0.10);border:1px solid rgba(100,116,139,0.25);
-                              border-radius:12px;padding:14px 20px;text-align:center;min-width:90px;">
-                    <div style="font-size:1.7rem;font-weight:800;color:{C_NEUT};">{neutral_n}</div>
-                    <div style="font-size:0.68rem;color:{C_TEXT3};font-weight:600;letter-spacing:0.06em;">NEUTRAL</div>
-                  </div>
-                  <div style="background:rgba(139,92,246,0.10);border:1px solid rgba(139,92,246,0.28);
-                              border-radius:12px;padding:14px 20px;text-align:center;min-width:90px;">
-                    <div style="font-size:1rem;font-weight:800;color:{C_CONV};padding-top:4px;">
-                      {_TOPIC_ICONS.get(top_topic,'')} {top_topic.upper()}
-                    </div>
-                    <div style="font-size:0.68rem;color:{C_TEXT3};font-weight:600;letter-spacing:0.06em;">TOP TOPIC</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            """,
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+            f'border-radius:12px;padding:20px;overflow-x:auto;">'
+            f'<table style="width:100%;border-collapse:separate;border-spacing:4px;">'
+            f'<thead>{header}</thead>'
+            f'<tbody>{rows_html}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        st.warning(f"Heatmap error: {exc}")
+
+# ── Section 3: Breaking News ───────────────────────────────────────────────────
+
+def _render_breaking_news(articles: list[dict]) -> None:
+    try:
+        top5 = sorted(articles, key=lambda a: a["urgency"], reverse=True)[:5]
+        if not top5:
+            st.info("No breaking news available.")
+            return
+
+        for a in top5:
+            label, lcolor = _sentiment_label(a["sentiment_score"])
+            urgency_pct   = int(a["urgency"] * 100)
+            urg_color     = C_LOW if urgency_pct >= 80 else (C_MOD if urgency_pct >= 55 else C_ACCENT)
+            tc            = _TOPIC_COLOR.get(a["topic"], C_ACCENT)
+            sc            = _SOURCE_COLOR.get(a["source"], C_TEXT2)
+            ago           = _time_ago(a["published_at"])
+            sign          = "+" if a["sentiment_score"] > 0 else ""
+            score_str     = f"{sign}{a['sentiment_score']:.2f}"
+
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'border-left:4px solid {urg_color};border-radius:10px;'
+                f'padding:18px 22px;margin-bottom:12px;">'
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
+                f'<span style="color:{sc};font-size:10px;font-weight:700;letter-spacing:1px;">{a["source"].upper()}</span>'
+                f'<span style="background:{lcolor}22;color:{lcolor};border:1px solid {lcolor}44;'
+                f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:700;">{label}</span>'
+                f'<span style="background:{tc}22;color:{tc};border:1px solid {tc}44;'
+                f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:600;">{a["topic"]}</span>'
+                f'<span style="margin-left:auto;color:{urg_color};font-size:10px;font-weight:700;">'
+                f'URGENCY {urgency_pct}</span>'
+                f'</div>'
+                f'<div style="color:{C_TEXT};font-size:17px;font-weight:700;line-height:1.4;'
+                f'margin-bottom:8px;">{a["headline"]}</div>'
+                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.6;margin-bottom:10px;">{a["summary"][:200]}…</div>'
+                f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
+                f'<span style="color:{C_TEXT3};font-size:11px;">{ago}</span>'
+                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
+                f'padding:1px 6px;font-size:11px;">{score_str}</code>'
+                f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:11px;'
+                f'text-decoration:none;margin-left:auto;">Read full story ↗</a>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as exc:
+        st.warning(f"Breaking news error: {exc}")
+
+# ── Section 4: Full News Feed ──────────────────────────────────────────────────
+
+def _render_news_feed(articles: list[dict]) -> None:
+    try:
+        all_topics = sorted({a["topic"] for a in articles})
+        topic_opts = ["All Topics"] + all_topics
+        sel_topic  = st.selectbox("Filter by topic", topic_opts, key="news_feed_topic_filter")
+
+        filtered = articles if sel_topic == "All Topics" else [a for a in articles if a["topic"] == sel_topic]
+        filtered = sorted(filtered, key=lambda a: a["published_at"], reverse=True)
+
+        if not filtered:
+            st.info("No articles match the filter.")
+            return
+
+        # Column headers
+        st.markdown(
+            f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
+            f'gap:10px;padding:6px 14px;border-bottom:1px solid {C_BORDER};'
+            f'color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:0.8px;'
+            f'text-transform:uppercase;">'
+            f'<span>Source</span><span>Headline</span>'
+            f'<span style="text-align:center;">Score</span>'
+            f'<span>Topic</span><span style="text-align:right;">Time</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        for idx, a in enumerate(filtered):
+            label, lcolor = _sentiment_label(a["sentiment_score"])
+            sc    = _SOURCE_COLOR.get(a["source"], C_TEXT2)
+            tc    = _TOPIC_COLOR.get(a["topic"], C_ACCENT)
+            ago   = _time_ago(a["published_at"])
+            sign  = "+" if a["sentiment_score"] > 0 else ""
+            score_str = f"{sign}{a['sentiment_score']:.2f}"
+            hl_short  = a["headline"][:90] + ("…" if len(a["headline"]) > 90 else "")
+
+            # Row
+            row_bg = C_CARD if idx % 2 == 0 else C_SURFACE
+            st.markdown(
+                f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
+                f'gap:10px;padding:10px 14px;background:{row_bg};'
+                f'border-radius:6px;align-items:center;margin-bottom:2px;">'
+                f'<span style="color:{sc};font-size:10px;font-weight:700;'
+                f'letter-spacing:0.5px;">{a["source"]}</span>'
+                f'<span style="color:{C_TEXT};font-size:13px;" title="{a["headline"]}">{hl_short}</span>'
+                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
+                f'padding:1px 5px;font-size:11px;text-align:center;">{score_str}</code>'
+                f'<span style="background:{tc}22;color:{tc};border-radius:4px;'
+                f'padding:1px 7px;font-size:10px;font-weight:600;">{a["topic"]}</span>'
+                f'<span style="color:{C_TEXT3};font-size:11px;text-align:right;">{ago}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            with st.expander(f"Summary — {a['headline'][:60]}…", expanded=False):
+                ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
+                st.markdown(
+                    f'<div style="background:{C_BG};border-radius:8px;padding:14px 18px;">'
+                    f'<p style="color:{C_TEXT};font-size:13px;line-height:1.7;margin:0 0 12px 0;">'
+                    f'{a["summary"]}</p>'
+                    f'<div style="color:{C_TEXT3};font-size:11px;">'
+                    f'<strong style="color:{C_TEXT2};">Entities mentioned:</strong> {ent_str}</div>'
+                    f'<div style="margin-top:10px;">'
+                    f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;">Read full article ↗</a>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+    except Exception as exc:
+        st.warning(f"News feed error: {exc}")
+
+# ── Section 5: Named Entity Tracker ───────────────────────────────────────────
+
+def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
+    try:
+        # Augment with live entity counts if we have articles
+        entity_counts: Counter = Counter()
+        entity_sentiments: dict[str, list[float]] = defaultdict(list)
+        for a in articles:
+            for ent in a["entities"]:
+                entity_counts[ent] += 1
+                entity_sentiments[ent].append(a["sentiment_score"])
+
+        # Merge with _MOCK_ENTITIES
+        seen = set()
+        rows = []
+        for e in entities:
+            name = e["entity"]
+            seen.add(name)
+            mentions = entity_counts.get(name, e["mentions"])
+            scores   = entity_sentiments.get(name, [e["sentiment"]])
+            avg_sent = sum(scores) / len(scores) if scores else e["sentiment"]
+            trend    = e["trend"]
+            rows.append((name, e["type"], mentions, avg_sent, trend))
+        for name, cnt in entity_counts.most_common(20):
+            if name not in seen:
+                scores   = entity_sentiments[name]
+                avg_sent = sum(scores) / len(scores) if scores else 0.0
+                rows.append((name, "—", cnt, avg_sent, "flat"))
+
+        rows.sort(key=lambda r: r[2], reverse=True)
+
+        # Header
+        st.markdown(
+            f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
+            f'gap:8px;padding:6px 14px;border-bottom:1px solid {C_BORDER};'
+            f'color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:0.8px;'
+            f'text-transform:uppercase;">'
+            f'<span>Entity</span><span>Type</span>'
+            f'<span style="text-align:center;">Mentions</span>'
+            f'<span style="text-align:center;">Sentiment</span>'
+            f'<span style="text-align:center;">Trend</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        for i, (name, etype, mentions, avg_sent, trend) in enumerate(rows[:15]):
+            label, lcolor = _sentiment_label(avg_sent)
+            sign          = "+" if avg_sent > 0 else ""
+            sent_str      = f"{sign}{avg_sent:.2f}"
+            trend_icon    = "▲" if trend == "up" else ("▼" if trend == "down" else "●")
+            trend_color   = C_HIGH if trend == "up" else (C_LOW if trend == "down" else C_TEXT3)
+            row_bg        = C_CARD if i % 2 == 0 else C_SURFACE
+
+            st.markdown(
+                f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
+                f'gap:8px;padding:9px 14px;background:{row_bg};'
+                f'border-radius:6px;align-items:center;margin-bottom:2px;">'
+                f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">{name}</span>'
+                f'<span style="color:{C_TEXT2};font-size:12px;">{etype}</span>'
+                f'<span style="color:{C_ACCENT};font-size:13px;font-weight:700;'
+                f'text-align:center;display:block;">{mentions}</span>'
+                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
+                f'padding:1px 5px;font-size:11px;display:block;text-align:center;">{sent_str}</code>'
+                f'<span style="color:{trend_color};font-size:14px;font-weight:700;'
+                f'text-align:center;display:block;">{trend_icon}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as exc:
+        st.warning(f"Entity tracker error: {exc}")
+
+# ── Section 6: Geographic Sentiment Map ───────────────────────────────────────
+
+def _render_geo_map(articles: list[dict]) -> None:
+    try:
+        # Prefer live data; fall back to mock
+        geo = _GEO_DATA[:]
+
+        # Build regional sentiment from articles if possible
+        region_scores: dict[str, list[float]] = defaultdict(list)
+        region_vol: dict[str, int] = defaultdict(int)
+        for a in articles:
+            for g in geo:
+                if g["region"].lower() in a["headline"].lower() or g["region"].lower() in a["summary"].lower():
+                    region_scores[g["region"]].append(a["sentiment_score"])
+                    region_vol[g["region"]] += 1
+
+        for g in geo:
+            if region_scores[g["region"]]:
+                sc = region_scores[g["region"]]
+                g["sentiment"] = sum(sc) / len(sc)
+                g["volume"]    = max(g["volume"], region_vol[g["region"]])
+
+        lats   = [g["lat"]       for g in geo]
+        lons   = [g["lon"]       for g in geo]
+        sents  = [g["sentiment"] for g in geo]
+        vols   = [g["volume"]    for g in geo]
+        labels = [g["region"]    for g in geo]
+
+        colors = [C_HIGH if s >= 0.15 else (C_LOW if s <= -0.15 else C_MOD) for s in sents]
+        sizes  = [max(14, min(50, v // 2)) for v in vols]
+        signs  = ["+" if s > 0 else "" for s in sents]
+        texts  = [
+            f"{labels[i]}<br>Sentiment: {signs[i]}{sents[i]:.2f}<br>Volume: {vols[i]} articles"
+            for i in range(len(geo))
+        ]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scattergeo(
+            lat=lats,
+            lon=lons,
+            mode="markers+text",
+            marker=dict(
+                size=sizes,
+                color=sents,
+                colorscale=[[0, C_LOW], [0.5, C_MOD], [1, C_HIGH]],
+                cmin=-1,
+                cmax=1,
+                colorbar=dict(
+                    title="Sentiment",
+                    thickness=12,
+                    len=0.6,
+                    tickfont=dict(color=C_TEXT2, size=10),
+                    titlefont=dict(color=C_TEXT2, size=11),
+                ),
+                line=dict(width=1, color=C_BORDER),
+                opacity=0.88,
+            ),
+            text=[l[:12] for l in labels],
+            textposition="top center",
+            textfont=dict(color=C_TEXT2, size=9),
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=texts,
+        ))
+
+        fig.update_layout(
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                coastlinecolor=C_BORDER,
+                showland=True,
+                landcolor=C_SURFACE,
+                showocean=True,
+                oceancolor=C_BG,
+                showlakes=False,
+                showcountries=True,
+                countrycolor=C_BORDER,
+                bgcolor=C_BG,
+                projection_type="natural earth",
+            ),
+            paper_bgcolor=C_BG,
+            plot_bgcolor=C_BG,
+            font=dict(color=C_TEXT2),
+            margin=dict(l=0, r=0, t=10, b=0),
+            height=400,
+        )
+
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    except Exception as exc:
+        st.warning(f"Geo map error: {exc}")
+
+# ── Main entry point ───────────────────────────────────────────────────────────
+
+def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
+    """Render the Shipping News Intelligence tab."""
+
+    # ── Normalise & fallback ──────────────────────────────────────────────────
+    try:
+        raw = news_items if news_items else []
+        articles = _normalise(raw)
+        if not articles:
+            articles = _normalise(_MOCK_ARTICLES)
+            using_mock = True
+        else:
+            using_mock = False
+    except Exception:
+        articles   = _normalise(_MOCK_ARTICLES)
+        using_mock = True
+
+    # ── Page header ───────────────────────────────────────────────────────────
+    try:
+        updated = max((a["published_at"] for a in articles), default=_now())
+        updated_str = updated.strftime("%d %b %Y %H:%M UTC")
+        mock_badge = (
+            f'<span style="background:{C_MOD}22;color:{C_MOD};border:1px solid {C_MOD}44;'
+            f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:700;'
+            f'margin-left:10px;">DEMO DATA</span>'
+            if using_mock else ""
+        )
+        st.markdown(
+            f'<div style="display:flex;align-items:baseline;gap:12px;'
+            f'margin-bottom:22px;flex-wrap:wrap;">'
+            f'<h2 style="color:{C_TEXT};font-size:22px;font-weight:800;margin:0;'
+            f'letter-spacing:-0.3px;">Shipping News Intelligence</h2>'
+            f'{mock_badge}'
+            f'<span style="color:{C_TEXT3};font-size:11px;margin-left:auto;">'
+            f'Last updated {updated_str}</span>'
+            f'</div>',
             unsafe_allow_html=True,
         )
     except Exception:
-        logger.exception("news_hero failed")
+        st.subheader("Shipping News Intelligence")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 1 — Sentiment Trend (30-day) + freight overlay
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_sentiment_trend(articles: list[dict]) -> None:
+    # ── 1. Sentiment Pulse ────────────────────────────────────────────────────
     try:
-        _section_header(
-            "Sentiment Trend — Last 30 Days",
-            "Daily average news sentiment score with SCFI spot-rate overlay",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">01</span>&nbsp;&nbsp;Sentiment Pulse</div>',
+            unsafe_allow_html=True,
         )
+        _render_sentiment_pulse(articles)
+    except Exception as exc:
+        st.warning(f"Section 1 error: {exc}")
 
-        today = datetime.now(tz=timezone.utc).date()
-        days  = [today - timedelta(days=i) for i in range(29, -1, -1)]
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-        # Bucket articles by calendar day
-        day_scores: dict[Any, list[float]] = defaultdict(list)
-        for a in articles:
-            pub = a["published_dt"]
-            if pub.tzinfo is None:
-                pub = pub.replace(tzinfo=timezone.utc)
-            day_scores[pub.date()].append(a["sentiment_score"])
-
-        # Fill gaps with interpolated noise
-        rng = random.Random(42)
-        trend: list[float] = []
-        for d in days:
-            if day_scores.get(d):
-                trend.append(sum(day_scores[d]) / len(day_scores[d]))
-            else:
-                trend.append(rng.gauss(0.05, 0.18))
-
-        # Synthetic freight rate (SCFI-like), correlated weakly with sentiment
-        freight = [2600.0]
-        for i in range(1, 30):
-            delta = trend[i] * 60 + rng.gauss(0, 35)
-            freight.append(max(1200, freight[-1] + delta))
-
-        x_labels = [d.strftime("%b %d") for d in days]
-
-        fig = go.Figure()
-
-        # Coloured area zones
-        fig.add_hrect(y0=0.1,  y1=1.0,  fillcolor="rgba(16,185,129,0.06)",  line_width=0)
-        fig.add_hrect(y0=-0.1, y1=0.1,  fillcolor="rgba(100,116,139,0.06)", line_width=0)
-        fig.add_hrect(y0=-1.0, y1=-0.1, fillcolor="rgba(239,68,68,0.06)",   line_width=0)
-
-        # Sentiment line
-        fig.add_trace(go.Scatter(
-            x=x_labels, y=trend,
-            name="Sentiment",
-            line=dict(color=C_ACCENT, width=2.5, shape="spline"),
-            mode="lines",
-            fill="tozeroy",
-            fillcolor="rgba(59,130,246,0.08)",
-            yaxis="y1",
-        ))
-
-        # Zero reference
-        fig.add_hline(y=0, line_dash="dot", line_color=C_BORDER, line_width=1)
-
-        # Freight rate overlay
-        fig.add_trace(go.Scatter(
-            x=x_labels, y=freight,
-            name="SCFI Spot ($/FEU)",
-            line=dict(color=C_WARN, width=1.8, dash="dot"),
-            mode="lines",
-            yaxis="y2",
-            opacity=0.85,
-        ))
-
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            height=280,
-            margin=dict(l=12, r=60, t=18, b=30),
-            font=dict(color=C_TEXT2, family="Inter, sans-serif", size=11),
-            legend=dict(
-                orientation="h", x=0, y=1.12,
-                font=dict(size=10, color=C_TEXT2),
-                bgcolor="rgba(0,0,0,0)",
-            ),
-            xaxis=dict(
-                showgrid=False, zeroline=False, tickfont=dict(size=9),
-                tickvals=x_labels[::5],
-            ),
-            yaxis=dict(
-                title="Sentiment Score", range=[-1, 1],
-                showgrid=True, gridcolor=C_BORDER,
-                tickfont=dict(size=9), zeroline=False,
-                title_font=dict(size=10),
-            ),
-            yaxis2=dict(
-                title="SCFI $/FEU", overlaying="y", side="right",
-                showgrid=False, tickfont=dict(size=9),
-                title_font=dict(size=10), zeroline=False,
-            ),
-            hovermode="x unified",
-        )
-        st.plotly_chart(fig, use_container_width=True,
-                        config={"displayModeBar": False},
-                        key="news_sentiment_trend_chart")
-    except Exception:
-        logger.exception("sentiment_trend failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 2 — Topic Category Breakdown
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_topic_breakdown(articles: list[dict]) -> None:
+    # ── 2. Topic Heatmap ──────────────────────────────────────────────────────
     try:
-        _section_header(
-            "Topic Category Breakdown",
-            "News volume across six core shipping market themes",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">02</span>&nbsp;&nbsp;Topic Heatmap — '
+            f'9 Topics × 5 Days</div>',
+            unsafe_allow_html=True,
         )
+        _render_topic_heatmap(articles)
+    except Exception as exc:
+        st.warning(f"Section 2 error: {exc}")
 
-        topic_counts: Counter = Counter()
-        topic_sentiment: dict[str, list[float]] = defaultdict(list)
-        for a in articles:
-            for t in a.get("topic_tags", []):
-                topic_counts[t] += 1
-                topic_sentiment[t].append(a["sentiment_score"])
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-        # Ensure all topics appear
-        for t in TOPICS:
-            topic_counts.setdefault(t, 0)
-
-        total = sum(topic_counts.values()) or 1
-
-        cols = st.columns(len(TOPICS))
-        for col, topic in zip(cols, TOPICS):
-            with col:
-                count = topic_counts[topic]
-                pct   = count / total * 100
-                scores = topic_sentiment.get(topic, [0.0])
-                avg_s  = sum(scores) / len(scores) if scores else 0.0
-                s_label = "BULLISH" if avg_s > 0.05 else ("BEARISH" if avg_s < -0.05 else "NEUTRAL")
-                s_color = _sentiment_color(s_label)
-                icon    = _TOPIC_ICONS.get(topic, "•")
-                tc      = _TOPIC_COLORS.get(topic, C_ACCENT)
-
-                st.markdown(
-                    f"""
-                    <div style="background:{C_CARD};border:1px solid {tc}33;
-                                border-top:3px solid {tc};border-radius:10px;
-                                padding:14px 12px;text-align:center;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.25);">
-                      <div style="font-size:1.4rem;">{icon}</div>
-                      <div style="font-size:0.68rem;font-weight:700;letter-spacing:0.07em;
-                                  color:{tc};text-transform:uppercase;margin:4px 0 2px;">
-                        {topic}
-                      </div>
-                      <div style="font-size:1.6rem;font-weight:800;color:{C_TEXT};">{count}</div>
-                      <div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:6px;">{pct:.0f}% of stories</div>
-                      <div style="height:4px;background:rgba(255,255,255,0.07);
-                                  border-radius:2px;overflow:hidden;margin-bottom:6px;">
-                        <div style="height:100%;width:{pct:.0f}%;background:{tc};
-                                    border-radius:2px;"></div>
-                      </div>
-                      <div style="font-size:0.66rem;font-weight:700;color:{s_color};
-                                  letter-spacing:0.06em;">{s_label}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-    except Exception:
-        logger.exception("topic_breakdown failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 3 — Top Stories Feed
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_top_stories(articles: list[dict]) -> None:
+    # ── 3. Breaking News ──────────────────────────────────────────────────────
     try:
-        _section_header(
-            "Top Stories",
-            "Ranked by relevance score — latest intelligence from global shipping press",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_LOW};">03</span>&nbsp;&nbsp;Breaking News — Top 5 Urgent</div>',
+            unsafe_allow_html=True,
         )
+        _render_breaking_news(articles)
+    except Exception as exc:
+        st.warning(f"Section 3 error: {exc}")
 
-        sorted_arts = sorted(articles, key=lambda a: a["relevance_score"], reverse=True)
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-        for i, a in enumerate(sorted_arts[:8]):
-            label      = a["sentiment_label"]
-            s_color    = _sentiment_color(label)
-            s_bg       = _sentiment_bg(label)
-            src        = a["source"]
-            src_color  = _source_color(src)
-            src_init   = _source_initials(src)
-            age        = _age_str(a["published_dt"])
-            topics     = a.get("topic_tags", [])[:2]
-            topic_pills = " ".join(
-                _pill(_TOPIC_ICONS.get(t, "") + " " + t.upper(),
-                      _TOPIC_COLORS.get(t, C_ACCENT))
-                for t in topics
-            )
-            breaking_badge = (
-                _pill("BREAKING", C_LOW, "rgba(239,68,68,0.18)")
-                if a.get("breaking") else ""
-            )
-            relevance_bar_w = int(a["relevance_score"] * 100)
-            score_str = f"{a['sentiment_score']:+.2f}"
-
-            st.markdown(
-                f"""
-                <div style="background:{C_CARD};border:1px solid {C_BORDER};
-                            border-left:4px solid {s_color};border-radius:12px;
-                            padding:18px 20px;margin-bottom:12px;
-                            box-shadow:0 2px 14px rgba(0,0,0,0.25);
-                            transition:border-color 0.2s;">
-                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-                    <!-- Source avatar -->
-                    <div style="width:34px;height:34px;border-radius:50%;
-                                background:{src_color};display:flex;align-items:center;
-                                justify-content:center;font-size:0.7rem;font-weight:700;
-                                color:#fff;flex-shrink:0;">{src_init}</div>
-                    <div style="flex:1;min-width:0;">
-                      <div style="font-size:0.72rem;color:{C_TEXT2};font-weight:600;">{src}</div>
-                      <div style="font-size:0.68rem;color:{C_TEXT3};">{age}</div>
-                    </div>
-                    <!-- Badges right -->
-                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                      {breaking_badge}
-                      <span style="background:{s_bg};border:1px solid {s_color}55;
-                                   color:{s_color};padding:2px 9px;border-radius:99px;
-                                   font-size:0.68rem;font-weight:700;letter-spacing:0.05em;">
-                        {label} {score_str}
-                      </span>
-                      {topic_pills}
-                    </div>
-                  </div>
-                  <!-- Headline -->
-                  <a href="{a['url']}" style="text-decoration:none;">
-                    <div style="font-size:0.96rem;font-weight:700;color:{C_TEXT};
-                                line-height:1.4;margin-bottom:8px;
-                                hover:color:{C_ACCENT};">{a['title']}</div>
-                  </a>
-                  <!-- Summary -->
-                  <div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.6;
-                              margin-bottom:10px;">{a['summary'][:220]}{'…' if len(a['summary'])>220 else ''}</div>
-                  <!-- Relevance bar -->
-                  <div style="display:flex;align-items:center;gap:8px;">
-                    <div style="font-size:0.66rem;color:{C_TEXT3};white-space:nowrap;">Relevance</div>
-                    <div style="flex:1;height:3px;background:rgba(255,255,255,0.07);border-radius:2px;">
-                      <div style="height:100%;width:{relevance_bar_w}%;background:{C_ACCENT};border-radius:2px;"></div>
-                    </div>
-                    <div style="font-size:0.66rem;color:{C_TEXT3};white-space:nowrap;">{a['relevance_score']:.0%}</div>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        logger.exception("top_stories failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 4 — Sentiment by Topic (bar chart)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_sentiment_by_topic(articles: list[dict]) -> None:
+    # ── 4. Full News Feed ─────────────────────────────────────────────────────
     try:
-        _section_header(
-            "Sentiment by Topic",
-            "Average sentiment score per category — positive = bullish signal",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">04</span>&nbsp;&nbsp;Full News Feed</div>',
+            unsafe_allow_html=True,
         )
+        _render_news_feed(articles)
+    except Exception as exc:
+        st.warning(f"Section 4 error: {exc}")
 
-        topic_scores: dict[str, list[float]] = defaultdict(list)
-        for a in articles:
-            for t in a.get("topic_tags", []):
-                topic_scores[t].append(a["sentiment_score"])
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-        avgs  = []
-        cols  = []
-        for t in TOPICS:
-            s = topic_scores.get(t, [0.0])
-            avg = sum(s) / len(s) if s else 0.0
-            avgs.append(avg)
-            cols.append(C_HIGH if avg > 0.05 else (C_LOW if avg < -0.05 else C_NEUT))
-
-        fig = go.Figure(go.Bar(
-            y=TOPICS,
-            x=avgs,
-            orientation="h",
-            marker=dict(color=cols, line=dict(width=0)),
-            text=[f"{v:+.2f}" for v in avgs],
-            textposition="outside",
-            textfont=dict(color=C_TEXT2, size=10),
-            hovertemplate="%{y}: %{x:+.3f}<extra></extra>",
-        ))
-        fig.add_vline(x=0, line_color=C_BORDER, line_width=1.5)
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            height=260,
-            margin=dict(l=10, r=60, t=12, b=12),
-            font=dict(color=C_TEXT2, family="Inter, sans-serif", size=11),
-            xaxis=dict(
-                range=[-1, 1], showgrid=True,
-                gridcolor=C_BORDER, zeroline=False, tickfont=dict(size=9),
-                title="Average Sentiment Score", title_font=dict(size=10),
-            ),
-            yaxis=dict(showgrid=False, tickfont=dict(size=11)),
-            bargap=0.35,
-        )
-        st.plotly_chart(fig, use_container_width=True,
-                        config={"displayModeBar": False},
-                        key="news_sentiment_by_topic")
-    except Exception:
-        logger.exception("sentiment_by_topic failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 5 — Market-Moving News Tracker
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_market_moving(articles: list[dict]) -> None:
+    # ── 5. Named Entity Tracker ───────────────────────────────────────────────
     try:
-        _section_header(
-            "Market-Moving News Tracker",
-            "Highest-impact stories ranked by sentiment × relevance signal strength",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">05</span>&nbsp;&nbsp;Named Entity Tracker</div>',
+            unsafe_allow_html=True,
         )
+        _render_entity_tracker(articles, _MOCK_ENTITIES)
+    except Exception as exc:
+        st.warning(f"Section 5 error: {exc}")
 
-        ranked = sorted(articles, key=lambda a: _impact_score(a), reverse=True)[:5]
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-        for rank, a in enumerate(ranked, 1):
-            label      = a["sentiment_label"]
-            s_color    = _sentiment_color(label)
-            impact_pct = a.get("freight_impact_pct", 0.0) or 0.0
-            imp_color  = C_HIGH if impact_pct > 0 else (C_LOW if impact_pct < 0 else C_NEUT)
-            imp_str    = f"{impact_pct:+.1f}% est. rate impact"
-            imp_score  = _impact_score(a)
-            bar_w      = min(100, int(imp_score * 120))
-            rank_bg    = [C_WARN, C_TEXT2, C_CYAN, C_TEXT3, C_TEXT3][rank - 1]
-
-            st.markdown(
-                f"""
-                <div style="background:{C_CARD};border:1px solid {C_BORDER};
-                            border-radius:12px;padding:16px 20px;margin-bottom:10px;
-                            display:flex;gap:16px;align-items:flex-start;
-                            box-shadow:0 2px 12px rgba(0,0,0,0.2);">
-                  <!-- Rank badge -->
-                  <div style="min-width:36px;height:36px;border-radius:50%;
-                              background:{rank_bg}22;border:2px solid {rank_bg};
-                              display:flex;align-items:center;justify-content:center;
-                              font-size:0.85rem;font-weight:800;color:{rank_bg};
-                              flex-shrink:0;">#{rank}</div>
-                  <div style="flex:1;min-width:0;">
-                    <div style="font-size:0.9rem;font-weight:700;color:{C_TEXT};
-                                margin-bottom:5px;line-height:1.35;">{a['title']}</div>
-                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
-                      <span style="font-size:0.7rem;color:{C_TEXT3};">{a['source']}</span>
-                      <span style="font-size:0.7rem;color:{C_TEXT3};">{_age_str(a['published_dt'])}</span>
-                      <span style="font-size:0.7rem;font-weight:700;color:{s_color};
-                                   letter-spacing:0.04em;">{label}</span>
-                      <span style="font-size:0.72rem;font-weight:700;color:{imp_color};">{imp_str}</span>
-                    </div>
-                    <!-- Impact bar -->
-                    <div style="display:flex;align-items:center;gap:8px;">
-                      <div style="font-size:0.64rem;color:{C_TEXT3};white-space:nowrap;">Signal</div>
-                      <div style="flex:1;height:4px;background:rgba(255,255,255,0.07);border-radius:2px;">
-                        <div style="height:100%;width:{bar_w}%;background:{s_color};border-radius:2px;"></div>
-                      </div>
-                      <div style="font-size:0.64rem;color:{C_TEXT3};white-space:nowrap;">{imp_score:.2f}</div>
-                    </div>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        logger.exception("market_moving failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 6 — Source Reliability Scorecard
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_source_reliability() -> None:
+    # ── 6. Geographic Sentiment Map ───────────────────────────────────────────
     try:
-        _section_header(
-            "Source Reliability Scorecard",
-            "Predictive accuracy — how well each outlet anticipates market moves",
+        st.markdown(
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
+            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">06</span>&nbsp;&nbsp;Geographic Sentiment Map</div>',
+            unsafe_allow_html=True,
         )
+        _render_geo_map(articles)
+    except Exception as exc:
+        st.warning(f"Section 6 error: {exc}")
 
-        tier_colors = {
-            "Premium":    C_ACCENT,
-            "Standard":   C_HIGH,
-            "Wire":       C_WARN,
-            "Specialist": C_CONV,
-        }
-
-        header_html = f"""
-        <div style="display:grid;grid-template-columns:1fr 110px 110px 80px 90px;
-                    gap:8px;padding:8px 12px;margin-bottom:4px;">
-          <div style="font-size:0.67rem;font-weight:700;color:{C_TEXT3};letter-spacing:0.07em;">SOURCE</div>
-          <div style="font-size:0.67rem;font-weight:700;color:{C_TEXT3};letter-spacing:0.07em;text-align:center;">ACCURACY</div>
-          <div style="font-size:0.67rem;font-weight:700;color:{C_TEXT3};letter-spacing:0.07em;text-align:center;">LEAD TIME</div>
-          <div style="font-size:0.67rem;font-weight:700;color:{C_TEXT3};letter-spacing:0.07em;text-align:center;">STORIES</div>
-          <div style="font-size:0.67rem;font-weight:700;color:{C_TEXT3};letter-spacing:0.07em;text-align:center;">TIER</div>
-        </div>
-        """
-        st.markdown(header_html, unsafe_allow_html=True)
-
-        for src_data in _SOURCE_RELIABILITY:
-            src   = src_data["source"]
-            acc   = src_data["accuracy"]
-            lead  = src_data["lead_time_days"]
-            cnt   = src_data["stories"]
-            tier  = src_data["tier"]
-            tc    = tier_colors.get(tier, C_NEUT)
-            sc    = _source_color(src)
-            init  = _source_initials(src)
-            bar_w = int(acc * 100)
-            acc_c = C_HIGH if acc >= 0.78 else (C_WARN if acc >= 0.70 else C_LOW)
-
-            st.markdown(
-                f"""
-                <div style="display:grid;grid-template-columns:1fr 110px 110px 80px 90px;
-                            gap:8px;align-items:center;background:{C_CARD};
-                            border:1px solid {C_BORDER};border-radius:10px;
-                            padding:10px 12px;margin-bottom:6px;">
-                  <!-- Source -->
-                  <div style="display:flex;align-items:center;gap:10px;">
-                    <div style="width:28px;height:28px;border-radius:50%;
-                                background:{sc};flex-shrink:0;display:flex;
-                                align-items:center;justify-content:center;
-                                font-size:0.62rem;font-weight:700;color:#fff;">{init}</div>
-                    <span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{src}</span>
-                  </div>
-                  <!-- Accuracy bar -->
-                  <div style="text-align:center;">
-                    <div style="font-size:0.82rem;font-weight:700;color:{acc_c};margin-bottom:3px;">{acc:.0%}</div>
-                    <div style="height:3px;background:rgba(255,255,255,0.07);border-radius:2px;">
-                      <div style="height:100%;width:{bar_w}%;background:{acc_c};border-radius:2px;"></div>
-                    </div>
-                  </div>
-                  <!-- Lead time -->
-                  <div style="text-align:center;font-size:0.8rem;color:{C_TEXT2};">{lead:.1f}d ahead</div>
-                  <!-- Story count -->
-                  <div style="text-align:center;font-size:0.8rem;color:{C_TEXT2};">{cnt:,}</div>
-                  <!-- Tier badge -->
-                  <div style="text-align:center;">
-                    <span style="background:{tc}22;border:1px solid {tc}55;
-                                 color:{tc};padding:3px 10px;border-radius:99px;
-                                 font-size:0.65rem;font-weight:700;letter-spacing:0.05em;">{tier}</span>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        logger.exception("source_reliability failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 7 — Geographic Focus Breakdown
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_geographic_focus(articles: list[dict]) -> None:
+    # ── Footer ────────────────────────────────────────────────────────────────
     try:
-        _section_header(
-            "Geographic Focus",
-            "News volume and sentiment heat by region",
+        st.markdown(
+            f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;'
+            f'margin-top:32px;padding-top:16px;border-top:1px solid {C_BORDER};">'
+            f'Shipping News Intelligence &nbsp;|&nbsp; '
+            f'{len(articles)} articles indexed &nbsp;|&nbsp; '
+            f'Sentiment scored by NLP pipeline'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-
-        region_counts: Counter = Counter()
-        region_sentiment: dict[str, list[float]] = defaultdict(list)
-        for a in articles:
-            r = a.get("region", "Global")
-            region_counts[r] += 1
-            region_sentiment[r].append(a["sentiment_score"])
-
-        total = sum(region_counts.values()) or 1
-
-        # Left panel: bar list; Right panel: bubble map
-        left_col, right_col = st.columns([1, 1])
-
-        with left_col:
-            for rdata in sorted(_REGIONS, key=lambda r: region_counts.get(r["name"], 0), reverse=True):
-                rname = rdata["name"]
-                count = region_counts.get(rname, 0)
-                pct   = count / total * 100
-                scores = region_sentiment.get(rname, [0.0])
-                avg_s  = sum(scores) / len(scores) if scores else 0.0
-                s_c    = _sentiment_color(
-                    "BULLISH" if avg_s > 0.05 else ("BEARISH" if avg_s < -0.05 else "NEUTRAL")
-                )
-                rc = rdata["color"]
-                st.markdown(
-                    f"""
-                    <div style="background:{C_CARD};border:1px solid {C_BORDER};
-                                border-radius:9px;padding:10px 14px;margin-bottom:7px;">
-                      <div style="display:flex;justify-content:space-between;
-                                  align-items:center;margin-bottom:5px;">
-                        <span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{rname}</span>
-                        <span style="font-size:0.78rem;font-weight:700;color:{s_c};">{avg_s:+.2f}</span>
-                      </div>
-                      <div style="display:flex;align-items:center;gap:8px;">
-                        <div style="flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;">
-                          <div style="height:100%;width:{pct:.0f}%;background:{rc};border-radius:3px;"></div>
-                        </div>
-                        <span style="font-size:0.68rem;color:{C_TEXT3};white-space:nowrap;">{count} stories</span>
-                      </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-        with right_col:
-            # Bubble map
-            lats  = [r["lat"] for r in _REGIONS]
-            lons  = [r["lon"] for r in _REGIONS]
-            names = [r["name"] for r in _REGIONS]
-            sizes = [max(8, region_counts.get(r["name"], 0) * 12) for r in _REGIONS]
-            clrs  = [r["color"] for r in _REGIONS]
-
-            fig = go.Figure(go.Scattergeo(
-                lat=lats, lon=lons,
-                text=names,
-                mode="markers+text",
-                textposition="top center",
-                textfont=dict(size=9, color=C_TEXT2),
-                marker=dict(
-                    size=sizes,
-                    color=clrs,
-                    opacity=0.75,
-                    line=dict(color=C_CARD, width=1.5),
-                ),
-                hovertemplate="%{text}: %{marker.size:.0f} articles<extra></extra>",
-            ))
-            fig.update_geos(
-                showland=True, landcolor="#1a2235",
-                showocean=True, oceancolor="#0a0f1a",
-                showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
-                showframe=False,
-                projection_type="natural earth",
-                bgcolor=C_CARD,
-            )
-            fig.update_layout(
-                paper_bgcolor=C_CARD,
-                geo=dict(bgcolor=C_CARD),
-                height=300,
-                margin=dict(l=0, r=0, t=0, b=0),
-                font=dict(color=C_TEXT2),
-            )
-            st.plotly_chart(fig, use_container_width=True,
-                            config={"displayModeBar": False},
-                            key="news_geo_map")
-    except Exception:
-        logger.exception("geographic_focus failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 8 — Breaking Alerts Panel
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_breaking_alerts(articles: list[dict]) -> None:
-    try:
-        breaking = [a for a in articles if a.get("breaking")]
-        if not breaking:
-            return
-
-        _section_header(
-            "Breaking Alerts",
-            "Priority intelligence — requires immediate attention",
-        )
-
-        for a in breaking:
-            label   = a["sentiment_label"]
-            s_color = _sentiment_color(label)
-            age     = _age_str(a["published_dt"])
-
-            st.markdown(
-                f"""
-                <style>
-                @keyframes pulse-border {{
-                  0%   {{ border-color: rgba(239,68,68,0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }}
-                  70%  {{ border-color: rgba(239,68,68,0.4); box-shadow: 0 0 0 8px rgba(239,68,68,0); }}
-                  100% {{ border-color: rgba(239,68,68,0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0); }}
-                }}
-                .breaking-card {{
-                  animation: pulse-border 1.8s infinite;
-                }}
-                </style>
-                <div class="breaking-card"
-                     style="background:rgba(239,68,68,0.08);
-                            border:2px solid rgba(239,68,68,0.9);
-                            border-radius:12px;padding:18px 20px;margin-bottom:12px;">
-                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-                    <span style="background:{C_LOW};color:#fff;padding:3px 10px;
-                                 border-radius:99px;font-size:0.68rem;font-weight:800;
-                                 letter-spacing:0.08em;">BREAKING</span>
-                    <span style="font-size:0.7rem;color:{C_TEXT3};">{a['source']} · {age}</span>
-                    <span style="font-size:0.7rem;font-weight:700;color:{s_color};">{label}</span>
-                  </div>
-                  <div style="font-size:0.98rem;font-weight:700;color:{C_TEXT};
-                              line-height:1.4;margin-bottom:8px;">{a['title']}</div>
-                  <div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.55;">{a['summary'][:300]}{'…' if len(a['summary'])>300 else ''}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        logger.exception("breaking_alerts failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Section 9 — News Timeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_news_timeline(articles: list[dict]) -> None:
-    try:
-        _section_header(
-            "News Timeline",
-            "Chronological feed with sentiment-coded border — most recent first",
-        )
-
-        sorted_arts = sorted(
-            articles,
-            key=lambda a: a["published_dt"] if a["published_dt"].tzinfo else a["published_dt"].replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-
-        # Group by date
-        by_date: dict[str, list[dict]] = defaultdict(list)
-        for a in sorted_arts:
-            pub = a["published_dt"]
-            if pub.tzinfo is None:
-                pub = pub.replace(tzinfo=timezone.utc)
-            label_date = pub.strftime("%A, %d %b %Y")
-            by_date[label_date].append(a)
-
-        for date_label, day_arts in list(by_date.items())[:7]:
-            st.markdown(
-                f'<div style="font-size:0.72rem;font-weight:700;color:{C_TEXT3};'
-                f'letter-spacing:0.08em;text-transform:uppercase;'
-                f'padding:6px 0 4px;margin-top:4px;border-bottom:1px solid {C_BORDER};'
-                f'margin-bottom:8px;">{date_label}</div>',
-                unsafe_allow_html=True,
-            )
-            for a in day_arts:
-                label   = a["sentiment_label"]
-                s_color = _sentiment_color(label)
-                pub     = a["published_dt"]
-                if pub.tzinfo is None:
-                    pub = pub.replace(tzinfo=timezone.utc)
-                time_str = pub.strftime("%H:%M")
-                topics   = a.get("topic_tags", [])[:2]
-                t_pills  = " ".join(
-                    _pill(t.upper(), _TOPIC_COLORS.get(t, C_ACCENT))
-                    for t in topics
-                )
-
-                st.markdown(
-                    f"""
-                    <div style="display:flex;gap:0;margin-bottom:8px;">
-                      <!-- Timeline track -->
-                      <div style="display:flex;flex-direction:column;align-items:center;
-                                  width:40px;flex-shrink:0;padding-top:4px;">
-                        <div style="font-size:0.64rem;color:{C_TEXT3};white-space:nowrap;
-                                    margin-bottom:4px;">{time_str}</div>
-                        <div style="width:10px;height:10px;border-radius:50%;
-                                    background:{s_color};flex-shrink:0;"></div>
-                        <div style="width:2px;flex:1;background:{C_BORDER};margin-top:2px;"></div>
-                      </div>
-                      <!-- Card -->
-                      <div style="flex:1;background:{C_CARD};border:1px solid {C_BORDER};
-                                  border-left:3px solid {s_color};border-radius:0 10px 10px 0;
-                                  padding:10px 14px;margin-left:8px;margin-bottom:2px;">
-                        <div style="font-size:0.85rem;font-weight:700;color:{C_TEXT};
-                                    margin-bottom:4px;line-height:1.35;">{a['title']}</div>
-                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                          <span style="font-size:0.68rem;color:{C_TEXT3};">{a['source']}</span>
-                          <span style="font-size:0.68rem;font-weight:700;color:{s_color};">{label}</span>
-                          {t_pills}
-                        </div>
-                      </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-    except Exception:
-        logger.exception("news_timeline failed")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def render(
-    news_articles: list[Any] | None = None,
-    port_results: Any = None,
-    route_results: Any = None,
-    insights: Any = None,
-    rss_failed: bool = False,
-) -> None:
-    """
-    Render the Shipping News Intelligence Center tab.
-
-    Args:
-        news_articles: List of NewsArticle objects or empty list / None.
-                       Fields expected: title, url, published_dt, source,
-                       summary, sentiment_score, sentiment_label, entities,
-                       relevance_score.
-        port_results:  Optional port analysis results (unused here, reserved).
-        route_results: Optional route analysis results (unused here, reserved).
-        insights:      Optional pre-computed insights (unused here, reserved).
-        rss_failed:    True when the RSS fetch raised an exception; shows a
-                       warning banner instead of silently falling back.
-    """
-    logger.debug("tab_news.render() called — articles: {}", len(news_articles or []))
-
-    raw: list[Any] = news_articles or []
-    articles = _normalised_articles(raw) if raw else list(_FALLBACK_ARTICLES)
-
-    # RSS failure banner
-    try:
-        if rss_failed:
-            st.warning(
-                "Live news feed unavailable — showing curated fallback intelligence. "
-                "Check your RSS / API configuration.",
-                icon="⚠️",
-            )
     except Exception:
         pass
-
-    # ── Section 0: News Hero ──────────────────────────────────────────────────
-    _render_news_hero(articles)
-
-    # ── Section 1: Sentiment Trend ────────────────────────────────────────────
-    _render_sentiment_trend(articles)
-
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-    # ── Section 8: Breaking Alerts (surfaced early) ───────────────────────────
-    _render_breaking_alerts(articles)
-
-    st.divider()
-
-    # ── Section 2: Topic Category Breakdown ──────────────────────────────────
-    _render_topic_breakdown(articles)
-
-    st.divider()
-
-    # ── Section 3: Top Stories Feed ──────────────────────────────────────────
-    _render_top_stories(articles)
-
-    st.divider()
-
-    # ── Section 4 + 5: Sentiment by Topic  |  Market-Moving News ─────────────
-    col_l, col_r = st.columns([1, 1])
-    with col_l:
-        _render_sentiment_by_topic(articles)
-    with col_r:
-        _render_market_moving(articles)
-
-    st.divider()
-
-    # ── Section 6: Source Reliability Scorecard ───────────────────────────────
-    _render_source_reliability()
-
-    st.divider()
-
-    # ── Section 7: Geographic Focus ───────────────────────────────────────────
-    _render_geographic_focus(articles)
-
-    st.divider()
-
-    # ── Section 9: News Timeline ──────────────────────────────────────────────
-    _render_news_timeline(articles)
