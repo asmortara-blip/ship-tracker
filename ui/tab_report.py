@@ -140,6 +140,16 @@ except Exception:
 
 
 try:
+    from utils.excel_export import export_full_report as _export_full_report
+    _EXCEL_OK = True
+except Exception:
+    _EXCEL_OK = False
+
+    def _export_full_report(*args, **kwargs) -> bytes:  # type: ignore[misc]
+        raise ImportError("utils.excel_export not available")
+
+
+try:
     from processing.news_sentiment import (
         fetch_all_news as _fetch_all_news,
         get_sentiment_summary as _get_sentiment_summary,
@@ -673,13 +683,31 @@ def _render_generate(
                     return
 
             # Step 2: Render PDF
-            if _PDF_OK and report is not None:
+            if not _PDF_OK:
+                st.error(
+                    "PDF renderer unavailable: `utils.investor_report_pdf` failed to import. "
+                    "Run `pip install fpdf2` and restart the app."
+                )
+                st.session_state["report_pdf"] = None
+            elif report is None:
+                st.error(
+                    "PDF generation skipped: report object is None "
+                    "(investor_report_engine did not return a valid report)."
+                )
+                st.session_state["report_pdf"] = None
+            else:
                 with st.spinner("Rendering institutional PDF..."):
                     try:
                         pdf_bytes = render_investor_report_pdf(report)
                         st.session_state["report_pdf"] = pdf_bytes
+                        st.write(f"PDF size: {len(pdf_bytes):,} bytes")
                     except Exception as _pdf_exc:
-                        logger.warning("tab_report: PDF render failed (non-fatal): %s", _pdf_exc)
+                        logger.exception("tab_report: PDF render failed")
+                        st.error(
+                            f"PDF render failed: {_pdf_exc}. "
+                            "Check logs for full traceback. "
+                            "The HTML download is still available below."
+                        )
                         st.session_state["report_pdf"] = None
 
             # Persist to report history — non-blocking
@@ -746,6 +774,40 @@ def _render_generate(
                     use_container_width=True,
                     key="rep_download_html_secondary_btn",
                 )
+
+        # Excel download button
+        if (pdf_bytes or html_bytes) and _EXCEL_OK:
+            col_xl, _ = st.columns([2, 5])
+            with col_xl:
+                if st.button("📊 Download as Excel", key="rep_excel_build_btn",
+                             use_container_width=True):
+                    try:
+                        with st.spinner("Building Excel workbook…"):
+                            excel_bytes = _export_full_report(
+                                port_results=port_results,
+                                route_results=route_results,
+                                insights=insights,
+                                freight_data=freight_data,
+                                macro_data=macro_data,
+                                stock_data=stock_data,
+                            )
+                        st.session_state["report_excel"] = excel_bytes
+                    except Exception as _xl_exc:
+                        logger.warning("tab_report: Excel build failed: %s", _xl_exc)
+                        st.warning("Excel export failed — check openpyxl is installed.")
+
+            excel_ready = st.session_state.get("report_excel")
+            if excel_ready:
+                col_xl2, _ = st.columns([2, 5])
+                with col_xl2:
+                    st.download_button(
+                        label="📊 Excel Workbook",
+                        data=excel_ready,
+                        file_name=f"shipping_data_{date_str}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="rep_download_excel_btn",
+                    )
 
         # Post-generation dashboard
         if (pdf_bytes or html_bytes) and insights:

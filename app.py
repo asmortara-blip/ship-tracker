@@ -111,6 +111,16 @@ def get_macro_data(lookback_days: int):
     return fetch_macro_series(lookback_days, cache, ttl_hours=cfg["cache"]["fred_ttl_hours"])
 
 
+@st.cache_data(ttl=21600, show_spinner=False)  # 6h TTL
+def get_rate_forecasts(freight_data, macro_data):
+    try:
+        from processing.rate_forecaster import forecast_all_routes
+        return forecast_all_routes(freight_data, macro_data)
+    except Exception as e:
+        logger.warning("Rate forecasting failed: %s", e)
+        return {}
+
+
 @st.cache_data(ttl=604800, show_spinner="Loading World Bank data...")
 def get_wb_data():
     from data.cache_manager import CacheManager
@@ -141,6 +151,7 @@ def get_freight_data(lookback_days: int):
     from data.freight_scraper import fetch_fbx_rates
     cache = CacheManager()
     return fetch_fbx_rates(lookback_days, cache, ttl_hours=cfg["cache"]["freight_ttl_hours"])
+
 
 
 @st.cache_data(ttl=86400, show_spinner=False)  # 24h TTL
@@ -279,6 +290,9 @@ except Exception as exc:
     logger.error(f"Forecast error: {exc}")
     forecasts = []
 
+# ML rate forecasts (GBR + Ridge) — preferred for the Routes tab when available
+ml_forecasts: dict = get_rate_forecasts(freight_data, macro_data)
+
 try:
     from processing.freight_volatility import analyze_all_routes_volatility
     volatility_reports = analyze_all_routes_volatility(freight_data)
@@ -302,6 +316,13 @@ try:
     alerts = generate_alerts(port_results, route_results, freight_data, macro_data, insights)
 except Exception as exc:
     logger.warning(f"Alert engine unavailable: {exc}")
+
+# Alert engine v2 — load persisted unread count for sidebar badge
+try:
+    from engine.alert_engine_v2 import get_unread_count as _get_unread_count
+    _unread_alert_count = _get_unread_count()
+except Exception:
+    _unread_alert_count = 0
 
 try:
     from processing.news_sentiment import fetch_all_news
@@ -655,6 +676,8 @@ with st.sidebar:
         btn_label = f"{sec_icon}  {sec_label}"
         if alerts and sec_key == "risk":
             btn_label += f"  ({len(alerts)})"
+        if sec_key == "intelligence" and _unread_alert_count > 0:
+            btn_label += f"  🔔 {_unread_alert_count}"
         if st.button(btn_label, key=f"nav_{sec_key}", use_container_width=True):
             st.session_state["nav_section"] = sec_key
             st.rerun()
@@ -711,9 +734,10 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
         "📈 Markets", "⚡ Alpha", "🔥 Results",
         "📊 Indices", "📜 Derivatives", "🎭 Scenarios", "🔮 Monte Carlo",
+        "📈 Backtesting", "💼 Portfolio", "⚡ Options & Flow",
     ])
     with t0:
         try:
@@ -757,12 +781,31 @@ elif active_section == "markets":
             _r(freight_data, route_results)
         except Exception as e:
             st.error(f"Monte Carlo error: {e}")
+    with t7:
+        try:
+            from ui import tab_backtest
+            tab_backtest.render(stock_data, macro_data, insights)
+        except Exception as e:
+            st.error(f"Tab error: {e}")
+    with t8:
+        try:
+            from ui import tab_portfolio
+            tab_portfolio.render(stock_data, macro_data, insights)
+        except Exception as e:
+            st.error(f"Tab error: {e}")
+    with t9:
+        try:
+            from ui import tab_options
+            tab_options.render(stock_data, insights, signals=insights)
+        except Exception as e:
+            st.error(f"Options & Flow error: {e}")
 
 # ── 3. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
         "🏗️ Port Demand", "🏭 Port Monitor", "🚢 Routes",
         "⏱️ ETA Predictor", "🚧 Congestion", "🛤️ Emerging Routes",
+        "🗺️ Vessel Map",
     ])
     with t0:
         try:
@@ -779,7 +822,7 @@ elif active_section == "ports_routes":
     with t2:
         try:
             from ui.tab_routes import render as _r
-            _r(route_results, freight_data, forecasts)
+            _r(route_results, freight_data, ml_forecasts or forecasts)
         except Exception as e:
             st.error(f"Routes error: {e}")
     with t3:
@@ -800,6 +843,12 @@ elif active_section == "ports_routes":
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Emerging Routes error: {e}")
+    with t6:
+        try:
+            from ui.tab_vessel_map import render as _r
+            _r(port_results, route_results, freight_data)
+        except Exception as e:
+            st.error(f"Vessel Map error: {e}")
 
 # ── 4. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":
@@ -963,9 +1012,10 @@ elif active_section == "risk":
 
 # ── 8. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":
-    t0, t1, t2, t3 = st.tabs([
+    t0, t1, t2, t3, t4 = st.tabs([
         "📰 News & Sentiment", "🔬 Deep Dive",
         "🤖 AI Assistant", "🌿 Sustainability",
+        "🔔 Alerts",
     ])
     with t0:
         try:
@@ -994,6 +1044,12 @@ elif active_section == "intelligence":
             _r()
         except Exception as e:
             st.error(f"Sustainability error: {e}")
+    with t4:
+        try:
+            from ui import tab_alerts
+            tab_alerts.render(port_results, route_results, insights, freight_data, macro_data, stock_data)
+        except Exception as e:
+            st.error(f"Tab error: {e}")
 
 
 # ── 9. Reports ────────────────────────────────────────────────────────────

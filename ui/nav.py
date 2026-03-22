@@ -38,7 +38,7 @@ SECTIONS: list[dict] = [
         "label": "Markets & Signals",
         "description": "Signals, alpha & correlations",
         "color": "#10b981",
-        "sub_pages": ["Markets", "Alpha Signals", "Results", "Indices", "Derivatives", "Scenarios", "Monte Carlo"],
+        "sub_pages": ["Markets", "Alpha Signals", "Results", "Indices", "Derivatives", "Scenarios", "Monte Carlo", "Backtesting", "Portfolio", "Options & Flow"],
     },
     {
         "key": "ports_routes",
@@ -46,7 +46,7 @@ SECTIONS: list[dict] = [
         "label": "Ports & Routes",
         "description": "Port demand, routes & congestion",
         "color": "#06b6d4",
-        "sub_pages": ["Port Demand", "Port Monitor", "Routes", "ETA Predictor", "Congestion", "Emerging Routes"],
+        "sub_pages": ["Port Demand", "Port Monitor", "Routes", "ETA Predictor", "Congestion", "Emerging Routes", "Vessel Map"],
     },
     {
         "key": "carriers",
@@ -86,7 +86,7 @@ SECTIONS: list[dict] = [
         "label": "Intelligence",
         "description": "News, AI assistant & insights",
         "color": "#a78bfa",
-        "sub_pages": ["News & Sentiment", "Deep Dive", "AI Assistant", "Sustainability"],
+        "sub_pages": ["News & Sentiment", "Deep Dive", "AI Assistant", "Sustainability", "Alerts"],
     },
     {
         "key": "reports",
@@ -380,14 +380,16 @@ def render_sidebar_nav(
     insights=None,
     stock_data=None,
     alerts=None,
+    unread_alert_count: int = 0,
 ) -> str:
     """Render the full sidebar navigation and return the active section key.
 
     Parameters
     ----------
-    insights:   Insight records (list/DataFrame) used for health indicator.
-    stock_data: Stock/market data (list/DataFrame) used for health indicator.
-    alerts:     Alert records; count shown as a badge on the Risk section.
+    insights:            Insight records (list/DataFrame) used for health indicator.
+    stock_data:          Stock/market data (list/DataFrame) used for health indicator.
+    alerts:              Alert records; count shown as a badge on the Risk section.
+    unread_alert_count:  Unacknowledged alert count shown as a badge on Intelligence section.
 
     Returns
     -------
@@ -438,10 +440,12 @@ def render_sidebar_nav(
 
         is_active = key == active_key
 
-        # Badge markup for alerts on the Risk section
+        # Badge markup — risk section uses legacy alert count; intelligence uses unread v2 count
         badge_html = ""
         if key == "risk" and n_alerts > 0:
             badge_html = f'<span class="nav-alert-badge">{n_alerts}</span>'
+        elif key == "intelligence" and unread_alert_count > 0:
+            badge_html = f'<span class="nav-alert-badge">{unread_alert_count}</span>'
 
         # Determine CSS wrapper class and inline CSS variables for active color
         wrapper_class = "nav-btn-active" if is_active else "nav-btn-inactive"
@@ -463,8 +467,13 @@ def render_sidebar_nav(
         )
 
         btn_label = f"{icon}  {label}{badge_html}"
+        _btn_text = f"{icon}  {label}"
+        if key == "risk" and n_alerts > 0:
+            _btn_text += f"  🔴 {n_alerts}"
+        elif key == "intelligence" and unread_alert_count > 0:
+            _btn_text += f"  🔔 {unread_alert_count}"
         if st.sidebar.button(
-            f"{icon}  {label}" + (f"  🔴 {n_alerts}" if key == "risk" and n_alerts > 0 else ""),
+            _btn_text,
             key=f"nav_btn_{key}",
             use_container_width=True,
             help=section["description"],

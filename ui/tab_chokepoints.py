@@ -25,6 +25,13 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+try:
+    from data.canal_feed import fetch_panama_stats, fetch_suez_stats, get_canal_shipping_impact
+    _CANAL_FEED_OK = True
+except Exception as _cf_import_err:
+    _CANAL_FEED_OK = False
+    logger.warning(f"canal_feed not available: {_cf_import_err}")
+
 from processing.chokepoint_analyzer import (
     CHOKEPOINTS,
     Chokepoint,
@@ -2259,6 +2266,197 @@ def _render_fee_benchmark() -> None:
 # ---------------------------------------------------------------------------
 # Main render entry point
 # ---------------------------------------------------------------------------
+# Canal Wait Times — live data section
+# ---------------------------------------------------------------------------
+
+def _render_canal_wait_times() -> None:
+    """Fetch and display Panama / Suez live wait-time stat cards."""
+    if not _CANAL_FEED_OK:
+        return
+
+    try:
+        panama = fetch_panama_stats(cache_ttl_hours=12.0)
+        suez   = fetch_suez_stats(cache_ttl_hours=12.0)
+    except Exception as exc:
+        logger.warning(f"canal wait times: fetch failed: {exc}")
+        return
+
+    try:
+        impact = get_canal_shipping_impact(panama, suez)
+    except Exception as exc:
+        logger.warning(f"canal wait times: impact failed: {exc}")
+        impact = {}
+
+    # ── Section header ────────────────────────────────────────────────────────
+    st.markdown(
+        f"<div style='margin:28px 0 16px 0; padding-bottom:12px; "
+        f"border-bottom:1px solid {C_BORDER2}'>"
+        f"<div style='font-size:0.62rem; text-transform:uppercase; letter-spacing:0.16em; "
+        f"color:{C_TEXT3}; margin-bottom:5px'>LIVE INTELLIGENCE</div>"
+        f"<div style='font-size:1.1rem; font-weight:800; color:{C_TEXT}; "
+        f"letter-spacing:-0.02em'>Canal Transit Conditions</div>"
+        f"<div style='font-size:0.78rem; color:{C_TEXT2}; margin-top:4px'>"
+        f"Real-time wait times, capacity utilisation, and restriction status for the "
+        f"Panama and Suez canals</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    _STATUS_COLORS = {
+        "Normal":     (C_GREEN, "rgba(16,185,129,0.13)"),
+        "Restricted": (C_WARN,  "rgba(245,158,11,0.14)"),
+        "Disrupted":  (C_RED,   "rgba(239,68,68,0.16)"),
+    }
+
+    def _canal_card(stats) -> str:
+        scolor, sbg = _STATUS_COLORS.get(stats.status, (C_TEXT2, "rgba(148,163,184,0.10)"))
+        avg_wait = (stats.northbound_wait_days + stats.southbound_wait_days) / 2
+
+        # Water level row — Panama only
+        water_html = ""
+        if stats.canal == "Panama" and stats.water_level_m > 0:
+            # Gatun Lake alert threshold ~26.5 m
+            w_color = C_GREEN if stats.water_level_m >= 26.5 else C_WARN if stats.water_level_m >= 25.5 else C_RED
+            water_html = (
+                f"<div style='display:flex; justify-content:space-between; "
+                f"padding:6px 0; border-bottom:1px solid {C_BORDER}'>"
+                f"<span style='font-size:0.75rem; color:{C_TEXT2}'>Gatun Lake Level</span>"
+                f"<span style='font-size:0.78rem; font-weight:700; color:{w_color}'>"
+                f"{stats.water_level_m:.1f} m</span></div>"
+            )
+
+        # Capacity bar
+        util = min(stats.capacity_utilization_pct, 100.0)
+        bar_color = C_GREEN if util < 75 else C_WARN if util < 90 else C_RED
+
+        return (
+            f"<div style='background:{C_CARD2}; border:1px solid {C_BORDER2}; "
+            f"border-radius:10px; padding:18px 20px; height:100%'>"
+            # Title row
+            f"<div style='display:flex; justify-content:space-between; align-items:center; "
+            f"margin-bottom:14px'>"
+            f"<div style='font-size:1.0rem; font-weight:800; color:{C_TEXT}; "
+            f"letter-spacing:-0.02em'>{stats.canal} Canal</div>"
+            f"<span style='background:{sbg}; color:{scolor}; border:1px solid {scolor}55; "
+            f"padding:2px 10px; border-radius:999px; font-size:0.62rem; font-weight:700; "
+            f"letter-spacing:0.07em'>{stats.status.upper()}</span>"
+            f"</div>"
+            # Metrics grid
+            f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px'>"
+            # NB wait
+            f"<div style='background:rgba(255,255,255,0.03); border-radius:6px; padding:8px 10px'>"
+            f"<div style='font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.08em; margin-bottom:3px'>NB Wait</div>"
+            f"<div style='font-size:1.05rem; font-weight:800; color:{C_TEXT}'>"
+            f"{stats.northbound_wait_days:.1f}d</div></div>"
+            # SB wait
+            f"<div style='background:rgba(255,255,255,0.03); border-radius:6px; padding:8px 10px'>"
+            f"<div style='font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.08em; margin-bottom:3px'>SB Wait</div>"
+            f"<div style='font-size:1.05rem; font-weight:800; color:{C_TEXT}'>"
+            f"{stats.southbound_wait_days:.1f}d</div></div>"
+            # Daily transits
+            f"<div style='background:rgba(255,255,255,0.03); border-radius:6px; padding:8px 10px'>"
+            f"<div style='font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.08em; margin-bottom:3px'>Daily Transits</div>"
+            f"<div style='font-size:1.05rem; font-weight:800; color:{C_BLUE}'>"
+            f"{stats.daily_transits}</div></div>"
+            # Avg wait
+            f"<div style='background:rgba(255,255,255,0.03); border-radius:6px; padding:8px 10px'>"
+            f"<div style='font-size:0.65rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.08em; margin-bottom:3px'>Avg Wait</div>"
+            f"<div style='font-size:1.05rem; font-weight:800; color:{C_TEXT}'>"
+            f"{avg_wait:.1f}d</div></div>"
+            f"</div>"
+            # Water level (Panama only)
+            + water_html +
+            # Capacity bar
+            f"<div style='margin:10px 0 6px'>"
+            f"<div style='display:flex; justify-content:space-between; margin-bottom:4px'>"
+            f"<span style='font-size:0.68rem; color:{C_TEXT3}'>Capacity Utilisation</span>"
+            f"<span style='font-size:0.72rem; font-weight:700; color:{bar_color}'>"
+            f"{util:.0f}%</span></div>"
+            f"<div style='background:rgba(255,255,255,0.08); border-radius:999px; height:5px'>"
+            f"<div style='background:{bar_color}; width:{util:.1f}%; height:5px; "
+            f"border-radius:999px; transition:width 0.4s'></div></div></div>"
+            # Restrictions
+            f"<div style='margin-top:10px; padding:8px 10px; "
+            f"background:rgba(255,255,255,0.03); border-radius:6px; "
+            f"border-left:3px solid {scolor}'>"
+            f"<div style='font-size:0.62rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.08em; margin-bottom:3px'>Restrictions</div>"
+            f"<div style='font-size:0.73rem; color:{C_TEXT2}; line-height:1.4'>"
+            f"{stats.restrictions}</div></div>"
+            # Source footnote
+            f"<div style='margin-top:8px; font-size:0.6rem; color:{C_TEXT3}'>"
+            f"Source: <a href='{stats.source_url}' style='color:{C_TEXT3}' "
+            f"target='_blank'>{stats.source_url[:50]}...</a> &mdash; "
+            f"{stats.fetched_at[:16]} UTC</div>"
+            f"</div>"
+        )
+
+    col_pan, col_sue = st.columns(2, gap="medium")
+    with col_pan:
+        st.markdown(_canal_card(panama), unsafe_allow_html=True)
+    with col_sue:
+        st.markdown(_canal_card(suez), unsafe_allow_html=True)
+
+    # Shipping impact summary bar
+    if impact:
+        p_lvl = impact.get("panama_impact", "Low")
+        s_lvl = impact.get("suez_impact", "Low")
+        premium = impact.get("rate_premium_est_pct", 0.0)
+        narrative = impact.get("narrative", "")
+        routes = impact.get("affected_routes", [])
+
+        _IMPACT_COLORS = {
+            "Low":      C_GREEN,
+            "Moderate": C_WARN,
+            "High":     C_ORANGE,
+            "Critical": C_RED,
+        }
+        p_color = _IMPACT_COLORS.get(p_lvl, C_TEXT2)
+        s_color = _IMPACT_COLORS.get(s_lvl, C_TEXT2)
+
+        routes_html = (
+            " &bull; ".join(
+                f"<span style='color:{C_TEXT2}'>{r}</span>" for r in routes[:4]
+            ) if routes else "No major route impacts"
+        )
+
+        st.markdown(
+            f"<div style='margin-top:14px; padding:14px 18px; "
+            f"background:{C_CARD}; border:1px solid {C_BORDER2}; border-radius:8px; "
+            f"display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap'>"
+            f"<div style='min-width:110px'>"
+            f"<div style='font-size:0.6rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.1em; margin-bottom:3px'>Panama Impact</div>"
+            f"<div style='font-size:0.88rem; font-weight:800; color:{p_color}'>{p_lvl}</div>"
+            f"</div>"
+            f"<div style='min-width:110px'>"
+            f"<div style='font-size:0.6rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.1em; margin-bottom:3px'>Suez Impact</div>"
+            f"<div style='font-size:0.88rem; font-weight:800; color:{s_color}'>{s_lvl}</div>"
+            f"</div>"
+            f"<div style='min-width:130px'>"
+            f"<div style='font-size:0.6rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.1em; margin-bottom:3px'>Est. Rate Premium</div>"
+            f"<div style='font-size:0.88rem; font-weight:800; color:{C_WARN}'>"
+            f"+{premium:.1f}%</div>"
+            f"</div>"
+            f"<div style='flex:1; min-width:200px'>"
+            f"<div style='font-size:0.6rem; color:{C_TEXT3}; text-transform:uppercase; "
+            f"letter-spacing:0.1em; margin-bottom:4px'>Affected Routes</div>"
+            f"<div style='font-size:0.71rem; line-height:1.6'>{routes_html}</div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        if narrative:
+            st.caption(narrative)
+
+
+# ---------------------------------------------------------------------------
 
 def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
     """Render the Maritime Chokepoints tab — 8 enhanced analytical sections."""
@@ -2334,6 +2532,12 @@ def render(route_results: list, freight_data: dict, macro_data: dict) -> None:
     except Exception as _rs_err:
         logger.warning(f"compute_chokepoint_risk_score failed: {_rs_err}")
         risk_scores = {}
+
+    # ── Canal Wait Times (live data) ─────────────────────────────────────────
+    try:
+        _render_canal_wait_times()
+    except Exception as _e:
+        logger.warning(f"Canal wait times failed: {_e}")
 
     # ── Section 0: Live Intelligence Strip (NEW) ─────────────────────────────
     try:

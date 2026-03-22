@@ -1427,7 +1427,7 @@ def _render_world_map(route_results: list[RouteOpportunity]) -> None:
 
 
 def _render_forecasts(forecasts: list, C_BG: str, C_SURFACE: str, C_CARD: str, C_TEXT: str, C_TEXT3: str) -> None:
-    """Render rate forecasts section."""
+    """Render legacy linear-trend forecasts (list of old RateForecast dataclasses)."""
     try:
         for fc in forecasts[:6]:
             pct_30 = (fc.forecast_30d - fc.current_rate) / fc.current_rate * 100 if fc.current_rate > 0 else 0
@@ -1480,12 +1480,239 @@ def _render_forecasts(forecasts: list, C_BG: str, C_SURFACE: str, C_CARD: str, C
         st.warning(f"Forecasts unavailable: {exc}")
 
 
+def _render_ml_forecasts(route_results, forecasts: dict) -> None:
+    """Render ML-based rate forecasts from rate_forecaster.forecast_all_routes().
+
+    Args:
+        route_results: list[RouteOpportunity] — used only for ordering.
+        forecasts:     dict[route_id → RateForecast] from rate_forecaster.
+    """
+    if not forecasts:
+        st.info("ML forecasts are not yet available. They will appear after sufficient rate history has been collected.")
+        return
+
+    # ── Direction arrow helpers ────────────────────────────────────────────────
+    def _arrow(direction: str) -> str:
+        return {"Rising": "▲", "Falling": "▼", "Stable": "●"}.get(direction, "→")
+
+    def _dir_color(direction: str) -> str:
+        return {"Rising": _C_HIGH, "Falling": _C_LOW, "Stable": _C_MOD}.get(direction, _C_TEXT3)
+
+    # ── Pick top-5 by absolute 30d expected move ──────────────────────────────
+    sorted_fcs = sorted(
+        forecasts.values(),
+        key=lambda f: abs(f.forecast_30d - f.current_rate),
+        reverse=True,
+    )
+    top5 = sorted_fcs[:5]
+
+    # ── Forecast cards ─────────────────────────────────────────────────────────
+    st.markdown(
+        '<p style="font-size:0.72rem;color:#64748b;text-transform:uppercase;'
+        'letter-spacing:0.12em;margin-bottom:12px">Top 5 Routes by Expected Move</p>',
+        unsafe_allow_html=True,
+    )
+
+    for fc in top5:
+        pct_30 = (fc.forecast_30d - fc.current_rate) / fc.current_rate * 100 if fc.current_rate > 0 else 0.0
+        ci_low, ci_high = fc.confidence_interval_30d
+        dir_color = _dir_color(fc.direction)
+        arrow = _arrow(fc.direction)
+
+        # Card HTML
+        drivers_html = "".join(
+            f'<span style="background:#1e293b;color:#94a3b8;border-radius:4px;'
+            f'padding:2px 7px;font-size:0.65rem;margin-right:4px">{d}</span>'
+            for d in (fc.key_drivers or [])[:3]
+        )
+
+        # Confidence bar: fill proportion = direction_confidence
+        bar_pct = int(fc.direction_confidence * 100)
+        bar_fill_color = dir_color
+
+        # CI range bar: scale relative to current rate
+        ci_range = ci_high - ci_low
+        ci_pct_lo = (ci_low  - fc.current_rate) / fc.current_rate * 100 if fc.current_rate else 0
+        ci_pct_hi = (ci_high - fc.current_rate) / fc.current_rate * 100 if fc.current_rate else 0
+
+        st.markdown(
+            f"""
+            <div style="background:{_C_CARD};border:1px solid rgba(255,255,255,0.07);
+                        border-radius:10px;padding:16px 20px;margin-bottom:10px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                <div>
+                  <span style="font-weight:700;font-size:0.95rem;color:{_C_TEXT}">{fc.route_name}</span>
+                  <span style="margin-left:10px;background:{dir_color}22;color:{dir_color};
+                               border:1px solid {dir_color}66;border-radius:999px;
+                               padding:2px 9px;font-size:0.68rem;font-weight:700">
+                    {arrow} {fc.direction}
+                  </span>
+                </div>
+                <span style="font-size:0.72rem;color:{_C_TEXT3}">{fc.last_updated}</span>
+              </div>
+
+              <div style="display:flex;gap:24px;margin-bottom:12px">
+                <div>
+                  <div style="font-size:0.65rem;color:{_C_TEXT3};margin-bottom:2px">CURRENT RATE</div>
+                  <div style="font-size:1.10rem;font-weight:700;color:{_C_TEXT}">${fc.current_rate:,.0f}<span style="font-size:0.65rem;color:{_C_TEXT3}">/FEU</span></div>
+                </div>
+                <div>
+                  <div style="font-size:0.65rem;color:{_C_TEXT3};margin-bottom:2px">7-DAY</div>
+                  <div style="font-size:1.10rem;font-weight:700;color:{_C_TEXT}">${fc.forecast_7d:,.0f}</div>
+                </div>
+                <div>
+                  <div style="font-size:0.65rem;color:{_C_TEXT3};margin-bottom:2px">30-DAY FORECAST</div>
+                  <div style="font-size:1.10rem;font-weight:700;color:{dir_color}">${fc.forecast_30d:,.0f}
+                    <span style="font-size:0.75rem;font-weight:600">&nbsp;{pct_30:+.1f}%</span>
+                  </div>
+                </div>
+                <div>
+                  <div style="font-size:0.65rem;color:{_C_TEXT3};margin-bottom:2px">90-DAY</div>
+                  <div style="font-size:1.10rem;font-weight:700;color:{_C_TEXT}">${fc.forecast_90d:,.0f}</div>
+                </div>
+              </div>
+
+              <div style="margin-bottom:10px">
+                <div style="font-size:0.63rem;color:{_C_TEXT3};margin-bottom:4px">
+                  30d confidence interval &nbsp;
+                  <span style="color:{_C_TEXT2}">${ci_low:,.0f} – ${ci_high:,.0f}</span>
+                  &nbsp;({ci_pct_lo:+.1f}% to {ci_pct_hi:+.1f}%)
+                </div>
+                <div style="background:#1e293b;border-radius:4px;height:6px;position:relative;overflow:hidden">
+                  <div style="position:absolute;left:0;top:0;bottom:0;
+                              width:{int((ci_low/max(fc.current_rate,1))*100) if ci_low < fc.current_rate else 50}%;
+                              background:rgba(255,255,255,0.05)"></div>
+                  <div style="position:absolute;
+                              left:{max(0, int(50 + ci_pct_lo))}%;
+                              width:{max(4, int(ci_pct_hi - ci_pct_lo))}%;
+                              top:0;bottom:0;
+                              background:{dir_color};opacity:0.7;border-radius:4px"></div>
+                  <div style="position:absolute;left:50%;top:-1px;bottom:-1px;
+                              width:2px;background:rgba(255,255,255,0.3)"></div>
+                </div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <span style="font-size:0.63rem;color:{_C_TEXT3}">Direction confidence</span>
+                <div style="flex:1;background:#1e293b;border-radius:4px;height:5px;overflow:hidden">
+                  <div style="width:{bar_pct}%;height:100%;background:{bar_fill_color};border-radius:4px"></div>
+                </div>
+                <span style="font-size:0.63rem;color:{_C_TEXT2};font-weight:600">{bar_pct}%</span>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <span style="font-size:0.63rem;color:{_C_TEXT3}">Key drivers:</span>
+                {drivers_html if drivers_html else '<span style="font-size:0.63rem;color:{_C_TEXT3}">—</span>'}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ── Grouped bar chart: current vs 30d forecast ────────────────────────────
+    _divider("Current Rates vs 30-Day ML Forecast")
+    all_fcs = sorted_fcs[:10]
+    bar_names  = [f.route_name for f in all_fcs]
+    bar_actual = [f.current_rate for f in all_fcs]
+    bar_fc30   = [f.forecast_30d for f in all_fcs]
+
+    bar_fig = go.Figure(data=[
+        go.Bar(
+            name="Current Rate",
+            x=bar_names,
+            y=bar_actual,
+            marker_color=_C_ACCENT,
+            marker_line_width=0,
+            hovertemplate="%{x}<br>Current: $%{y:,.0f}/FEU<extra></extra>",
+        ),
+        go.Bar(
+            name="30d Forecast",
+            x=bar_names,
+            y=bar_fc30,
+            marker_color=_C_CONV,
+            marker_line_width=0,
+            hovertemplate="%{x}<br>30d Forecast: $%{y:,.0f}/FEU<extra></extra>",
+        ),
+    ])
+    bar_fig.update_layout(
+        barmode="group",
+        template="plotly_dark",
+        paper_bgcolor=_C_BG,
+        plot_bgcolor=_C_SURFACE,
+        height=340,
+        margin=dict(l=20, r=20, t=30, b=100),
+        font=dict(color=_C_TEXT, family="Inter, sans-serif", size=11),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=_C_TEXT2, size=11),
+            orientation="h",
+            yanchor="bottom", y=1.02,
+        ),
+        xaxis=dict(
+            tickangle=-35,
+            gridcolor="rgba(255,255,255,0.04)",
+            tickfont=dict(size=10),
+        ),
+        yaxis=dict(
+            title="Rate (USD/FEU)",
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
+        hoverlabel=dict(
+            bgcolor=_C_CARD,
+            bordercolor="rgba(255,255,255,0.15)",
+            font=dict(color=_C_TEXT, size=12),
+        ),
+    )
+    st.plotly_chart(bar_fig, use_container_width=True, key="ml_forecast_bar_chart")
+
+    # ── Model quality table ────────────────────────────────────────────────────
+    _divider("Model Quality — Forecast Diagnostics")
+    quality_rows = []
+    for fc in sorted_fcs:
+        r2_pct = f"{fc.model_r2 * 100:.0f}%"
+        dc_pct = f"{fc.direction_confidence * 100:.0f}%"
+        quality_rows.append({
+            "Route":                fc.route_name,
+            "R² Score":             r2_pct,
+            "Direction":            f"{_arrow(fc.direction)} {fc.direction}",
+            "Direction Confidence": dc_pct,
+            "Last Updated":         fc.last_updated,
+        })
+
+    if quality_rows:
+        q_df = pd.DataFrame(quality_rows)
+        st.dataframe(
+            q_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Route":                st.column_config.TextColumn("Route", width="medium"),
+                "R² Score":             st.column_config.TextColumn("R² Score", width="small"),
+                "Direction":            st.column_config.TextColumn("Direction", width="small"),
+                "Direction Confidence": st.column_config.TextColumn("Confidence", width="small"),
+                "Last Updated":         st.column_config.TextColumn("Updated", width="medium"),
+            },
+        )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Main render — EXACT signature preserved
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts: list | None = None) -> None:
-    """Render the Routes tab."""
+def render(
+    route_results: list[RouteOpportunity],
+    freight_data: dict,
+    forecasts: "list | dict | None" = None,
+) -> None:
+    """Render the Routes tab.
+
+    Args:
+        route_results: Scored route opportunities from the optimizer.
+        freight_data:  Raw rate DataFrames keyed by route_id.
+        forecasts:     Either a list[RateForecast] (legacy linear model) or a
+                       dict[route_id → RateForecast] from rate_forecaster
+                       (ML model).  Both formats are supported.
+    """
     if not route_results:
         st.info(
             "🚢 Route opportunity data is loading or unavailable — freight rate data refreshes every 24 hours. "
@@ -1571,12 +1798,25 @@ def render(route_results: list[RouteOpportunity], freight_data: dict, forecasts:
 
     # ── Forecasts ─────────────────────────────────────────────────────────────
     if forecasts:
-        try:
-            _divider("30 / 60 / 90-Day Rate Forecasts")
-            st.caption("Linear trend extrapolation with seasonal adjustment. Low-confidence forecasts shown for reference only.")
-            _render_forecasts(forecasts, _C_BG, _C_SURFACE, _C_CARD, _C_TEXT, _C_TEXT3)
-        except Exception as exc:
-            st.warning(f"Forecasts error: {exc}")
+        if isinstance(forecasts, dict):
+            # ML forecasts from rate_forecaster.forecast_all_routes()
+            try:
+                _divider("ML Rate Forecasts — 7 / 30 / 90-Day (GBR + Ridge)")
+                st.caption(
+                    "Gradient Boosting (30d/90d) and Ridge Regression (7d) trained on "
+                    "rate history + macro indicators. Feature importances identify key drivers."
+                )
+                _render_ml_forecasts(route_results, forecasts)
+            except Exception as exc:
+                st.warning(f"ML forecasts error: {exc}")
+        else:
+            # Legacy linear forecasts from processing.forecaster
+            try:
+                _divider("30 / 60 / 90-Day Rate Forecasts")
+                st.caption("Linear trend extrapolation with seasonal adjustment. Low-confidence forecasts shown for reference only.")
+                _render_forecasts(forecasts, _C_BG, _C_SURFACE, _C_CARD, _C_TEXT, _C_TEXT3)
+            except Exception as exc:
+                st.warning(f"Forecasts error: {exc}")
 
     # ── CSV Download ──────────────────────────────────────────────────────────
     try:

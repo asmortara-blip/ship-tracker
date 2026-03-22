@@ -41,51 +41,58 @@ if TYPE_CHECKING:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  COLOR PALETTE — Goldman-inspired dark institutional
+#  COLOR PALETTE — Light institutional theme (Goldman Sachs GIR style)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Page / surface
-INK_BG      = (13,  27,  42)    # #0D1B2A  deep navy — page background
-INK_SURFACE = (19,  34,  55)    # #132237  section backgrounds
-INK_CARD    = (26,  46,  69)    # #1A2E45  card / table backgrounds
-INK_BORDER  = (30,  58,  95)    # #1E3A5F  borders / rules
-
-# Accent
-GOLD        = (201, 168, 76)    # #C9A84C  primary gold accent
-STEEL       = (46,  134, 193)   # #2E86C1  steel blue
-TEAL        = (26,  188, 156)   # #1ABC9C  bullish / positive
-CRIMSON     = (231, 76,  60)    # #E74C3C  bearish / negative
-AMBER       = (243, 156, 18)    # #F39C12  neutral / caution
-PURPLE      = (155, 89,  182)   # #9B59B6  convergence
-
-# Text
-TEXT_HI     = (236, 240, 241)   # #ECF0F1  primary text (near white)
-TEXT_MID    = (149, 165, 166)   # #95A5A6  secondary text
-TEXT_LO     = (100, 116, 130)   # muted text
 WHITE       = (255, 255, 255)
+OFF_WHITE   = (250, 250, 252)   # page background
+LIGHT_GRAY  = (245, 245, 248)   # alternating table rows
+MID_GRAY    = (220, 220, 228)   # table borders, rules
+DARK_GRAY   = (60,  60,  75)    # body text
+NAVY        = (15,  40,  90)    # headers, section titles
+NAVY_LIGHT  = (30,  65,  140)   # subheadings, accents
+GREEN       = (22,  120, 68)    # positive numbers only
+RED         = (185, 30,  30)    # negative numbers only
+AMBER       = (160, 100, 0)     # neutral/caution numbers
+GOLD_LINE   = (180, 150, 60)    # thin accent lines (sparingly)
 BLACK       = (0,   0,   0)
 
+# Aliases kept for helper functions that reference old names
+TEAL        = GREEN
+CRIMSON     = RED
+STEEL       = NAVY_LIGHT
+PURPLE      = NAVY_LIGHT
+GOLD        = GOLD_LINE
+TEXT_HI     = DARK_GRAY
+TEXT_MID    = DARK_GRAY
+TEXT_LO     = (120, 120, 135)
+INK_BG      = OFF_WHITE
+INK_SURFACE = LIGHT_GRAY
+INK_CARD    = WHITE
+INK_BORDER  = MID_GRAY
+
 _RISK_COLORS = {
-    "LOW":      TEAL,
+    "LOW":      GREEN,
     "MODERATE": AMBER,
-    "HIGH":     CRIMSON,
-    "CRITICAL": (185, 28, 28),
+    "HIGH":     RED,
+    "CRITICAL": (160, 20, 20),
 }
 
 _CONVICTION_COLORS = {
-    "HIGH":   TEAL,
+    "HIGH":   GREEN,
     "MEDIUM": AMBER,
-    "LOW":    CRIMSON,
+    "LOW":    RED,
 }
 
 _ACTION_COLORS = {
-    "BUY":     TEAL,
-    "LONG":    TEAL,
-    "SELL":    CRIMSON,
-    "SHORT":   CRIMSON,
+    "BUY":     GREEN,
+    "LONG":    GREEN,
+    "SELL":    RED,
+    "SHORT":   RED,
     "HOLD":    AMBER,
-    "MONITOR": STEEL,
-    "WATCH":   STEEL,
+    "MONITOR": NAVY_LIGHT,
+    "WATCH":   NAVY_LIGHT,
 }
 
 
@@ -129,7 +136,7 @@ def _clamp(val: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 def _sentiment_color(label: str) -> tuple:
-    return {"BULLISH": TEAL, "BEARISH": CRIMSON, "NEUTRAL": TEXT_MID,
+    return {"BULLISH": GREEN, "BEARISH": RED, "NEUTRAL": DARK_GRAY,
             "MIXED": AMBER}.get(str(label).upper(), TEXT_LO)
 
 
@@ -137,24 +144,24 @@ def _change_color(pct: float) -> tuple:
     try:
         v = float(pct)
         if v > 0:
-            return TEAL
+            return GREEN
         if v < 0:
-            return CRIMSON
-        return TEXT_LO
+            return RED
+        return DARK_GRAY
     except (TypeError, ValueError):
-        return TEXT_LO
+        return DARK_GRAY
 
 
 def _score_color(score: float) -> tuple:
     try:
         v = float(score)
         if v >= 0.70:
-            return TEAL
+            return GREEN
         if v >= 0.40:
             return AMBER
-        return CRIMSON
+        return RED
     except (TypeError, ValueError):
-        return TEXT_LO
+        return DARK_GRAY
 
 
 def _split_paragraphs(text: str, max_len: int = 900) -> List[str]:
@@ -196,9 +203,10 @@ def _is_number(s: str) -> bool:
 
 class InstitutionalReportPDF(FPDF):
     """
-    fpdf2 subclass styled for Goldman-tier institutional research output.
+    fpdf2 subclass styled for Goldman Sachs GIR-quality light institutional output.
 
-    Letter size (215.9 × 279.4 mm), 15 mm margins, dark navy page background.
+    Letter size (215.9 × 279.4 mm), 15 mm margins, white/off-white page background.
+    Dense research note aesthetic — no gradients, no glow, no dark backgrounds.
     """
 
     PAGE_W  = 215.9
@@ -224,19 +232,19 @@ class InstitutionalReportPDF(FPDF):
         if self.page_no() == 1:
             return  # Cover has its own full-bleed header
 
-        # Background strip
-        self.set_fill_color(*INK_SURFACE)
+        # White header strip
+        self.set_fill_color(*WHITE)
         self.rect(0, 0, self.PAGE_W, 11, "F")
 
-        # Gold bottom rule on header
-        self.set_draw_color(*GOLD)
-        self.set_line_width(0.4)
-        self.line(0, 11, self.PAGE_W, 11)
+        # Thin navy bottom rule
+        self.set_draw_color(*NAVY)
+        self.set_line_width(0.5)
+        self.line(self.L_MARG, 11, self.PAGE_W - self.R_MARG, 11)
 
-        # Firm name — left
+        # Firm name — left (navy, small caps style)
         self.set_xy(self.L_MARG, 3.5)
         self.set_font("Helvetica", "B", 7)
-        self.set_text_color(*TEXT_MID)
+        self.set_text_color(*NAVY)
         self.cell(80, 4, "GLOBAL SHIPPING INTELLIGENCE", align="L")
 
         # CONFIDENTIAL — center
@@ -257,15 +265,15 @@ class InstitutionalReportPDF(FPDF):
         if self.page_no() == 1:
             return  # Cover has its own footer
 
-        # Gold top rule
-        self.set_draw_color(*GOLD)
-        self.set_line_width(0.35)
+        # Thin gold rule
+        self.set_draw_color(*GOLD_LINE)
+        self.set_line_width(0.3)
         self.line(self.L_MARG, self.PAGE_H - 12, self.PAGE_W - self.R_MARG, self.PAGE_H - 12)
 
-        # "FOR INSTITUTIONAL USE ONLY" — center
+        # "FOR INSTITUTIONAL USE ONLY" — left-of-center, navy small caps style
         self.set_xy(self.L_MARG, self.PAGE_H - 10)
         self.set_font("Helvetica", "B", 6)
-        self.set_text_color(*TEXT_LO)
+        self.set_text_color(*NAVY)
         self.cell(self.INNER_W * 0.6, 4, "FOR INSTITUTIONAL USE ONLY — NOT FOR REDISTRIBUTION", align="C")
 
         # Date — right
@@ -277,24 +285,25 @@ class InstitutionalReportPDF(FPDF):
     # ── Section header bar ───────────────────────────────────────────────────
 
     def section_header(self, title: str, subtitle: str = "") -> None:
-        """INK_SURFACE bg, 3mm GOLD left border, title in GOLD Bold 12pt."""
+        """Light gray background bar, 3mm navy left border, title navy 12pt bold."""
         y = self.get_y()
-        h = 11 if not subtitle else 16
-        self.set_fill_color(*INK_SURFACE)
+        h = 14 if not subtitle else 19
+        # Light gray background bar
+        self.set_fill_color(*LIGHT_GRAY)
         self.rect(self.L_MARG, y, self.INNER_W, h, "F")
-        # Gold left border (3mm)
-        self.set_fill_color(*GOLD)
+        # Navy left border (3mm)
+        self.set_fill_color(*NAVY)
         self.rect(self.L_MARG, y, 3, h, "F")
-        # Title
-        self.set_xy(self.L_MARG + 6, y + 2)
+        # Title — navy, 12pt bold
+        self.set_xy(self.L_MARG + 6, y + 2.5)
         self.set_font("Helvetica", "B", 12)
-        self.set_text_color(*GOLD)
+        self.set_text_color(*NAVY)
         self.cell(self.INNER_W - 10, 7, title.upper(), align="L")
-        # Subtitle
+        # Subtitle — dark gray, 8pt
         if subtitle:
-            self.set_xy(self.L_MARG + 6, y + 9)
+            self.set_xy(self.L_MARG + 6, y + 11)
             self.set_font("Helvetica", "", 8)
-            self.set_text_color(*TEXT_MID)
+            self.set_text_color(*DARK_GRAY)
             self.cell(self.INNER_W - 10, 5, subtitle, align="L")
         self.set_y(y + h + 4)
 
@@ -302,27 +311,29 @@ class InstitutionalReportPDF(FPDF):
 
     def kpi_box(self, x: float, y: float, w: float, h: float,
                 label: str, value: str, sub: str = "", color: tuple = None) -> None:
-        """INK_CARD bg, GOLD top border 1mm, label 7pt TEXT_MID, value bold 14pt."""
-        color = color or GOLD
-        self.set_fill_color(*INK_CARD)
+        """White bg, thin mid-gray border, navy label, value in color (dark by default)."""
+        color = color or DARK_GRAY
+        # White box with thin border
+        self.set_fill_color(*WHITE)
         self.rect(x, y, w, h, "F")
-        # Top color border
-        self.set_fill_color(*color)
+        self.set_draw_color(*MID_GRAY)
+        self.set_line_width(0.3)
+        self.rect(x, y, w, h)
+        # Navy top accent line (1mm)
+        self.set_fill_color(*NAVY)
         self.rect(x, y, w, 1.2, "F")
-        # Label
-        self.set_xy(x + 2.5, y + 3)
+        # Label — navy, small caps style
+        self.set_xy(x + 2.5, y + 3.5)
         self.set_font("Helvetica", "B", 6.5)
-        self.set_text_color(*TEXT_LO)
+        self.set_text_color(*NAVY)
         self.cell(w - 5, 4, label.upper()[:28], align="L")
-        # Value
-        self.set_xy(x + 2.5, y + 8)
-        self.set_font("Helvetica", "B", 14)
-        self.set_text_color(*color)
+        # Value — colored (green/red/amber for directional, dark gray for neutral)
         val_str = str(value)[:12]
-        # Shrink font if value is long
-        font_sz = 14 if len(val_str) <= 8 else 11 if len(val_str) <= 11 else 9
+        font_sz = 13 if len(val_str) <= 8 else 10 if len(val_str) <= 11 else 8
+        self.set_xy(x + 2.5, y + 8.5)
         self.set_font("Helvetica", "B", font_sz)
-        self.cell(w - 5, 8, val_str, align="L")
+        self.set_text_color(*color)
+        self.cell(w - 5, 7, val_str, align="L")
         # Sub-label
         if sub:
             self.set_xy(x + 2.5, y + h - 5)
@@ -336,24 +347,20 @@ class InstitutionalReportPDF(FPDF):
                    col_widths: List[float], row_colors: List[tuple] = None,
                    header_bg: tuple = None) -> float:
         """
-        Professional table with alternating INK_SURFACE/INK_CARD rows.
-        Right-aligns number columns, left-aligns text. Returns ending Y.
+        Light institutional table: navy header, alternating white/light_gray rows,
+        thin mid-gray borders. Positive numbers green, negative numbers red,
+        all other text dark_gray. Returns ending Y.
         """
-        header_bg = header_bg or INK_BORDER
         row_h = 5.5
 
-        # Header row
+        # Header row — navy background, white text
         y = self.get_y()
-        self.set_fill_color(*header_bg)
+        self.set_fill_color(*NAVY)
         self.rect(self.L_MARG, y, self.INNER_W, 6.5, "F")
-        # Gold underline on header
-        self.set_draw_color(*GOLD)
-        self.set_line_width(0.3)
-        self.line(self.L_MARG, y + 6.5, self.L_MARG + self.INNER_W, y + 6.5)
 
         x = self.L_MARG
         self.set_font("Helvetica", "B", 7)
-        self.set_text_color(*TEXT_HI)
+        self.set_text_color(*WHITE)
         for hdr, cw in zip(headers, col_widths):
             self.set_xy(x + 1.5, y + 1.5)
             self.cell(cw - 3, 3.5, str(hdr).upper(), align="L")
@@ -367,15 +374,23 @@ class InstitutionalReportPDF(FPDF):
                 self.add_page()
                 y = self.get_y()
 
-            # Alternating fill
-            bg = INK_SURFACE if i % 2 == 0 else INK_CARD
+            # Alternating fill — white / light_gray
+            bg = WHITE if i % 2 == 0 else LIGHT_GRAY
             self.set_fill_color(*bg)
             self.rect(self.L_MARG, y, self.INNER_W, row_h, "F")
 
-            # Per-row color marker on left edge (optional)
+            # Thin bottom border
+            self.set_draw_color(*MID_GRAY)
+            self.set_line_width(0.15)
+            self.line(self.L_MARG, y + row_h, self.L_MARG + self.INNER_W, y + row_h)
+
+            # Per-row directional color marker on left edge (2px, very subtle)
             if row_colors and i < len(row_colors) and row_colors[i]:
-                self.set_fill_color(*row_colors[i])
-                self.rect(self.L_MARG, y, 1.5, row_h, "F")
+                rc = row_colors[i]
+                # Only draw if it's green or red (directional) — skip neutral
+                if rc in (GREEN, RED):
+                    self.set_fill_color(*rc)
+                    self.rect(self.L_MARG, y, 1.5, row_h, "F")
 
             x = self.L_MARG
             for j, (cell_val, cw) in enumerate(zip(row, col_widths)):
@@ -383,13 +398,22 @@ class InstitutionalReportPDF(FPDF):
                 txt = str(cell_val)
                 is_num = _is_number(txt)
                 align = "R" if is_num else "L"
+
+                # Determine text color: directional numbers get green/red
                 if j == 0:
                     self.set_font("Helvetica", "B", 7)
-                    self.set_text_color(*TEXT_HI)
+                    self.set_text_color(*DARK_GRAY)
                 else:
                     self.set_font("Helvetica", "", 7)
-                    self.set_text_color(*TEXT_MID)
-                # Truncate so it doesn't overflow
+                    # Color directional numbers
+                    stripped = txt.strip()
+                    if is_num and stripped.startswith("+"):
+                        self.set_text_color(*GREEN)
+                    elif is_num and stripped.startswith("-"):
+                        self.set_text_color(*RED)
+                    else:
+                        self.set_text_color(*DARK_GRAY)
+
                 max_chars = max(4, int(cw / 1.65))
                 disp = txt[:max_chars]
                 self.cell(cw - 3, 3.5, disp, align=align)
@@ -403,78 +427,84 @@ class InstitutionalReportPDF(FPDF):
     def insight_card(self, rank: int, title: str, detail: str, score: float,
                      action: str, category: str,
                      ports: str = "", routes: str = "", stocks: str = "") -> None:
-        """Numbered insight card with colored category badge and score bar."""
+        """
+        Light institutional insight card: white background, thin mid-gray border,
+        navy-to-color left border strip, dark gray text, no colored backgrounds.
+        """
         if self.will_page_break(28):
             self.add_page()
         y = self.get_y()
         card_h = 28
         s_color = _score_color(score)
-        act_color = _ACTION_COLORS.get(str(action).upper(), STEEL)
+        act_color = _ACTION_COLORS.get(str(action).upper(), NAVY_LIGHT)
 
-        # Card background
-        self.set_fill_color(*INK_CARD)
+        # White card background
+        self.set_fill_color(*WHITE)
         self.rect(self.L_MARG, y, self.INNER_W, card_h, "F")
-        # Left border colored by score
+        # Thin border
+        self.set_draw_color(*MID_GRAY)
+        self.set_line_width(0.2)
+        self.rect(self.L_MARG, y, self.INNER_W, card_h)
+        # Left border strip colored by score conviction
         self.set_fill_color(*s_color)
         self.rect(self.L_MARG, y, 2.5, card_h, "F")
 
-        # Rank circle (faux)
-        self.set_fill_color(*INK_BORDER)
+        # Rank number — navy, small box
+        self.set_fill_color(*LIGHT_GRAY)
         self.rect(self.L_MARG + 5, y + 3, 7, 7, "F")
         self.set_xy(self.L_MARG + 5, y + 3.5)
         self.set_font("Helvetica", "B", 7)
-        self.set_text_color(*GOLD)
+        self.set_text_color(*NAVY)
         self.cell(7, 6, str(rank), align="C")
 
-        # Title
+        # Title — navy bold
         self.set_xy(self.L_MARG + 15, y + 2.5)
         self.set_font("Helvetica", "B", 9)
-        self.set_text_color(*TEXT_HI)
+        self.set_text_color(*NAVY)
         self.cell(self.INNER_W - 75, 5, str(title)[:60], align="L")
 
-        # Action badge
+        # Action text badge (outline style, no filled background)
         ax = self.L_MARG + self.INNER_W - 44
-        self.set_fill_color(*act_color)
-        self.rect(ax, y + 2, 22, 5.5, "F")
+        self.set_draw_color(*act_color)
+        self.set_line_width(0.3)
+        self.rect(ax, y + 2, 22, 5.5)
         self.set_xy(ax, y + 2.5)
         self.set_font("Helvetica", "B", 6.5)
-        self.set_text_color(*WHITE)
+        self.set_text_color(*act_color)
         self.cell(22, 4.5, str(action).upper()[:10], align="C")
 
-        # Category badge
+        # Category text — small, dark gray italic-style
         cx = self.L_MARG + self.INNER_W - 20
-        self.set_fill_color(*PURPLE)
-        self.rect(cx, y + 2, 17, 5.5, "F")
         self.set_xy(cx, y + 2.5)
-        self.set_font("Helvetica", "B", 6)
-        self.set_text_color(*WHITE)
+        self.set_font("Helvetica", "", 6)
+        self.set_text_color(*TEXT_LO)
         self.cell(17, 4.5, str(category)[:10].upper(), align="C")
 
-        # Score bar track
+        # Score bar track — light gray
         bar_x = self.L_MARG + 15
         bar_y = y + 9
         bar_w = self.INNER_W - 55
-        bar_h = 2.5
-        self.set_fill_color(*INK_BORDER)
+        bar_h = 2.0
+        self.set_fill_color(*LIGHT_GRAY)
         self.rect(bar_x, bar_y, bar_w, bar_h, "F")
         fill_w = bar_w * _clamp(float(score))
         if fill_w > 0:
             self.set_fill_color(*s_color)
             self.rect(bar_x, bar_y, fill_w, bar_h, "F")
 
-        # Score label
+        # Score label — same color as bar fill
         self.set_xy(bar_x + bar_w + 2, y + 7.5)
         self.set_font("Helvetica", "B", 7.5)
         self.set_text_color(*s_color)
         self.cell(18, 4, f"{score * 100:.0f}%", align="L")
 
-        # Detail text
+        # Detail text — dark gray, 7pt dense
         self.set_xy(self.L_MARG + 15, y + 13.5)
         self.set_font("Helvetica", "", 7)
-        self.set_text_color(*TEXT_MID)
+        self.set_text_color(*DARK_GRAY)
         self.cell(self.INNER_W - 20, 4, str(detail)[:110], align="L")
 
-        # Ports / Routes / Stocks
+        # Ports / Routes / Stocks metadata
         meta_parts = []
         if ports:
             meta_parts.append(f"Ports: {ports}")
@@ -517,51 +547,52 @@ class InstitutionalReportPDF(FPDF):
             self.add_page()
         y = self.get_y()
 
-        # Card background
-        self.set_fill_color(*INK_CARD)
+        # White card background with thin border
+        self.set_fill_color(*WHITE)
         self.rect(self.L_MARG, y, self.INNER_W, card_h, "F")
-        # Action-colored left border
-        self.set_fill_color(*act_color)
-        self.rect(self.L_MARG, y, 3.5, card_h, "F")
-        # Subtle top border
-        self.set_draw_color(*INK_BORDER)
+        self.set_draw_color(*MID_GRAY)
         self.set_line_width(0.2)
         self.rect(self.L_MARG, y, self.INNER_W, card_h)
+        # Action-colored left border strip
+        self.set_fill_color(*act_color)
+        self.rect(self.L_MARG, y, 3.5, card_h, "F")
 
-        # ── Row 1: rank + action badge + title + ticker ──
-        # Rank circle
-        self.set_fill_color(*INK_BORDER)
+        # ── Row 1: rank + action (outline badge) + title + ticker ──
+        # Rank — light gray box, navy number
+        self.set_fill_color(*LIGHT_GRAY)
         self.rect(self.L_MARG + 7, y + 2.5, 8, 8, "F")
         self.set_xy(self.L_MARG + 7, y + 3)
         self.set_font("Helvetica", "B", 8)
-        self.set_text_color(*GOLD)
+        self.set_text_color(*NAVY)
         self.cell(8, 7, str(rank), align="C")
 
-        # Action badge
-        self.set_fill_color(*act_color)
-        self.rect(self.L_MARG + 18, y + 3, 22, 6, "F")
+        # Action outline badge — color border, colored text, white fill
+        self.set_fill_color(*WHITE)
+        self.set_draw_color(*act_color)
+        self.set_line_width(0.4)
+        self.rect(self.L_MARG + 18, y + 3, 22, 6, "FD")
         self.set_xy(self.L_MARG + 18, y + 3.5)
         self.set_font("Helvetica", "B", 7.5)
-        self.set_text_color(*WHITE)
+        self.set_text_color(*act_color)
         self.cell(22, 5, action[:8], align="C")
 
-        # Title
+        # Title — navy bold
         self.set_xy(self.L_MARG + 43, y + 3)
         self.set_font("Helvetica", "B", 9)
-        self.set_text_color(*TEXT_HI)
+        self.set_text_color(*NAVY)
         self.cell(self.INNER_W - 90, 6, str(title)[:55], align="L")
 
-        # Ticker
+        # Ticker — navy light, bold
         self.set_xy(self.L_MARG + self.INNER_W - 40, y + 3)
         self.set_font("Helvetica", "B", 10)
-        self.set_text_color(*GOLD)
+        self.set_text_color(*NAVY_LIGHT)
         self.cell(38, 6, ticker, align="R")
 
-        # ── Row 2: stats ──
+        # ── Row 2: stats — labels in TEXT_LO, values in appropriate color ──
         stats_y = y + 12
         stats = [
             ("CONVICTION",     conviction,            conv_color),
-            ("TIME HORIZON",   horizon,               TEXT_MID),
+            ("TIME HORIZON",   horizon,               DARK_GRAY),
             ("EXP. RETURN",    f"{exp_ret:+.1f}%",    _change_color(exp_ret)),
             ("RISK RATING",    risk_rat,               _RISK_COLORS.get(risk_rat.upper(), AMBER)),
         ]
@@ -577,15 +608,15 @@ class InstitutionalReportPDF(FPDF):
             self.set_text_color(*col)
             self.cell(col_w - 4, 4.5, str(val)[:16], align="L")
 
-        # ── Row 3: price levels (if available) ──
+        # ── Row 3: price levels (if available) — light gray band ──
         if has_price:
             price_y = y + 21.5
-            self.set_fill_color(*INK_BORDER)
+            self.set_fill_color(*LIGHT_GRAY)
             self.rect(self.L_MARG + 4, price_y, self.INNER_W - 8, 6, "F")
             px_items = [
-                (f"ENTRY: {_fmt_price(entry)}",  TEXT_HI),
-                (f"TARGET: {_fmt_price(target)}", TEAL),
-                (f"STOP: {_fmt_price(stop)}",     CRIMSON),
+                (f"ENTRY: {_fmt_price(entry)}",   DARK_GRAY),
+                (f"TARGET: {_fmt_price(target)}",  GREEN),
+                (f"STOP: {_fmt_price(stop)}",      RED),
             ]
             for k, (ptxt, pcol) in enumerate(px_items):
                 self.set_xy(self.L_MARG + 6 + k * 50, price_y + 1)
@@ -593,11 +624,11 @@ class InstitutionalReportPDF(FPDF):
                 self.set_text_color(*pcol)
                 self.cell(48, 4, ptxt, align="L")
 
-        # ── Rationale ──
+        # ── Rationale — dark gray, dense 7pt ──
         rat_y = y + (29 if has_price else 21)
         self.set_xy(self.L_MARG + 4, rat_y)
         self.set_font("Helvetica", "", 7)
-        self.set_text_color(*TEXT_MID)
+        self.set_text_color(*DARK_GRAY)
         self.cell(self.INNER_W - 8, 4, str(rationale)[:170], align="L")
 
         self.set_y(y + card_h + 3)
@@ -622,18 +653,19 @@ class InstitutionalReportPDF(FPDF):
 
     def prose(self, text: str, indent: float = 0, size: int = 8,
               color: tuple = None) -> None:
-        """Wrapped justified prose text."""
-        color = color or TEXT_MID
+        """Wrapped justified prose text — dark gray, dense 8.5pt."""
+        color = color or DARK_GRAY
         self.set_font("Helvetica", "", size)
         self.set_text_color(*color)
         self.set_x(self.L_MARG + indent)
-        self.multi_cell(self.INNER_W - indent, 5, str(text), align="J")
+        self.multi_cell(self.INNER_W - indent, 4.5, str(text), align="J")
         self.ln(1.5)
 
     # ── Horizontal rule ──────────────────────────────────────────────────────
 
     def rule(self, color: tuple = None, thickness: float = 0.3) -> None:
-        color = color or INK_BORDER
+        """Thin horizontal rule — mid gray by default."""
+        color = color or MID_GRAY
         y = self.get_y()
         self.set_draw_color(*color)
         self.set_line_width(thickness)
@@ -662,12 +694,16 @@ class InstitutionalReportPDF(FPDF):
     # ── Section label (sub-heading) ───────────────────────────────────────────
 
     def sub_heading(self, text: str, color: tuple = None) -> None:
-        color = color or TEXT_HI
+        """Light gray bar, navy-light left pip, navy_light text — clean sub-section label."""
+        color = color or NAVY_LIGHT
         y = self.get_y()
-        self.set_fill_color(*INK_SURFACE)
+        self.set_fill_color(*LIGHT_GRAY)
         self.rect(self.L_MARG, y, self.INNER_W, 6.5, "F")
-        self.set_xy(self.L_MARG + 3, y + 1.5)
-        self.set_font("Helvetica", "B", 9)
+        # 2mm navy_light left pip
+        self.set_fill_color(*NAVY_LIGHT)
+        self.rect(self.L_MARG, y, 2, 6.5, "F")
+        self.set_xy(self.L_MARG + 4, y + 1.5)
+        self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(*color)
         self.cell(self.INNER_W - 6, 4, str(text).upper(), align="L")
         self.set_y(y + 6.5 + 2)
@@ -675,7 +711,8 @@ class InstitutionalReportPDF(FPDF):
     # ── Fill page background ──────────────────────────────────────────────────
 
     def fill_page_bg(self, color: tuple = None) -> None:
-        color = color or INK_BG
+        """Fill page with off-white background (used only on cover)."""
+        color = color or OFF_WHITE
         self.set_fill_color(*color)
         self.rect(0, 0, self.PAGE_W, self.PAGE_H, "F")
 
@@ -683,9 +720,14 @@ class InstitutionalReportPDF(FPDF):
 
     def mini_stat(self, x: float, y: float, w: float, h: float,
                   label: str, value: str, color: tuple = None) -> None:
-        color = color or STEEL
-        self.set_fill_color(*INK_CARD)
+        """White box, thin border, navy label, colored value — light theme stat."""
+        color = color or NAVY_LIGHT
+        self.set_fill_color(*WHITE)
         self.rect(x, y, w, h, "F")
+        self.set_draw_color(*MID_GRAY)
+        self.set_line_width(0.25)
+        self.rect(x, y, w, h)
+        # Bottom accent line in value color
         self.set_fill_color(*color)
         self.rect(x, y + h - 1, w, 1, "F")
         self.set_xy(x + 2, y + 2)
@@ -703,9 +745,10 @@ class InstitutionalReportPDF(FPDF):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
-    """Page 1: Cover — full dark navy, Goldman-style."""
+    """Page 1: Cover — light institutional, Goldman GIR style."""
     pdf.add_page()
-    pdf.fill_page_bg()
+    # White page background
+    pdf.fill_page_bg(OFF_WHITE)
 
     W  = pdf.PAGE_W
     H  = pdf.PAGE_H
@@ -716,63 +759,84 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
     sent_score = float(getattr(sent, "overall_score", 0.0) or 0.0)
     sent_color = _sentiment_color(sent_label)
 
-    # ── TOP STRIP (full-width, height 45mm) ──────────────────────────────────
+    # ── TOP NAVY HEADER BAND (full-width, height 45mm) ───────────────────────
     strip_h = 45
-    pdf.set_fill_color(*INK_SURFACE)
+    pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, W, strip_h, "F")
-    # Gold accent line at very top
-    pdf.set_fill_color(*GOLD)
-    pdf.rect(0, 0, W, 1.5, "F")
 
-    # LEFT 60% — identity block
-    left_w = W * 0.60
-    pdf.set_xy(LM, 6)
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(*GOLD)
-    pdf.cell(left_w - LM, 10, "GLOBAL SHIPPING INTELLIGENCE", align="L")
-    pdf.set_xy(LM, 16)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(*TEXT_MID)
-    pdf.cell(left_w - LM, 6, "INSTITUTIONAL MARKET BRIEFING", align="L")
-
-    # Thin gold rule
-    pdf.set_draw_color(*GOLD)
-    pdf.set_line_width(0.5)
-    pdf.line(LM, 24, left_w - 4, 24)
-
-    # Report date
-    pdf.set_xy(LM, 26)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(*TEXT_MID)
-    pdf.cell(left_w - LM, 5, _safe(report.report_date), align="L")
-
-    # Classification
-    pdf.set_xy(LM, 33)
-    pdf.set_font("Helvetica", "B", 7)
-    pdf.set_text_color(*CRIMSON)
-    pdf.cell(left_w - LM, 4, "CONFIDENTIAL — FOR INSTITUTIONAL USE ONLY", align="L")
-
-    # RIGHT 40% — large sentiment box
-    rx = left_w + 2
-    rw = W - rx - 2
-    pdf.set_fill_color(*sent_color)
-    pdf.rect(rx, 2, rw, strip_h - 4, "F")
-    # Sentiment label
-    pdf.set_xy(rx, 5)
-    pdf.set_font("Helvetica", "B", 14)
+    # Firm name — left in white
+    pdf.set_xy(LM, 7)
+    pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(*WHITE)
-    pdf.cell(rw, 9, sent_label, align="C")
+    pdf.cell(W * 0.65 - LM, 9, "GLOBAL SHIPPING INTELLIGENCE", align="L")
+
+    # Sub-line
+    pdf.set_xy(LM, 16)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(180, 195, 220)   # light blue-gray on navy
+    pdf.cell(W * 0.65 - LM, 5, "INSTITUTIONAL MARKET BRIEFING", align="L")
+
+    # Thin gold rule under firm name
+    pdf.set_draw_color(*GOLD_LINE)
+    pdf.set_line_width(0.4)
+    pdf.line(LM, 23, W * 0.65 - 4, 23)
+
+    # Report date and classification — white on navy
+    pdf.set_xy(LM, 25)
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(210, 220, 235)
+    pdf.cell(W * 0.65 - LM, 5, _safe(report.report_date), align="L")
+
+    # CONFIDENTIAL — right side of header band in white
+    pdf.set_xy(W * 0.65, 7)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*WHITE)
+    pdf.cell(W * 0.35 - LM, 5, "CONFIDENTIAL", align="R")
+    pdf.set_xy(W * 0.65, 13)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(180, 195, 220)
+    pdf.cell(W * 0.35 - LM, 5, "FOR INSTITUTIONAL USE ONLY", align="R")
+
+    # ── SENTIMENT BOX on header — bordered rectangle ──────────────────────────
+    rx = W * 0.65 + 2
+    rw = W - rx - LM
+    # Navy border box on navy — use off-white fill for contrast
+    pdf.set_fill_color(240, 245, 255)   # very light blue-white
+    pdf.rect(rx, 5, rw, strip_h - 10, "F")
+    pdf.set_draw_color(*GOLD_LINE)
+    pdf.set_line_width(0.5)
+    pdf.rect(rx, 5, rw, strip_h - 10)
+    # Sentiment label
+    pdf.set_xy(rx, 8)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*sent_color)
+    pdf.cell(rw, 5, sent_label, align="C")
     # Score
     score_txt = f"{sent_score:+.3f}"
     pdf.set_xy(rx, 14)
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.set_text_color(*WHITE)
-    pdf.cell(rw, 14, score_txt, align="C")
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*sent_color)
+    pdf.cell(rw, 10, score_txt, align="C")
     # Sub-label
-    pdf.set_xy(rx, 30)
-    pdf.set_font("Helvetica", "", 7)
-    pdf.set_text_color(*WHITE)
-    pdf.cell(rw, 5, "COMPOSITE SENTIMENT SCORE", align="C")
+    pdf.set_xy(rx, 28)
+    pdf.set_font("Helvetica", "", 6.5)
+    pdf.set_text_color(*DARK_GRAY)
+    pdf.cell(rw, 4, "COMPOSITE SENTIMENT", align="C")
+
+    # ── MAIN TITLE AREA (below header band) ──────────────────────────────────
+    pdf.set_xy(LM, strip_h + 8)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(pdf.INNER_W, 11, "GLOBAL SHIPPING INTELLIGENCE", align="L")
+    pdf.set_xy(LM, strip_h + 19)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*DARK_GRAY)
+    pdf.cell(pdf.INNER_W, 6, _safe(report.report_date), align="L")
+
+    # Thin mid-gray rule
+    pdf.set_draw_color(*MID_GRAY)
+    pdf.set_line_width(0.3)
+    pdf.line(LM, strip_h + 27, W - LM, strip_h + 27)
 
     # ── 4 KPI BOXES ──────────────────────────────────────────────────────────
     market = report.market
@@ -782,14 +846,14 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
     risk_level = _safe(getattr(market, "risk_level",      "MODERATE")).upper()
     risk_color = _RISK_COLORS.get(risk_level, AMBER)
     dq         = _safe(getattr(report, "data_quality",    "PARTIAL")).upper()
-    dq_color   = TEAL if dq == "FULL" else AMBER if dq == "PARTIAL" else CRIMSON
+    dq_color   = GREEN if dq == "FULL" else AMBER if dq == "PARTIAL" else RED
 
-    kpi_y = strip_h + 6
+    kpi_y = strip_h + 31
     kpi_h = 26
     kpi_w = (pdf.INNER_W - 9) / 4
     kpis = [
         ("MARKET SENTIMENT",  sent_label,           f"Score: {sent_score:+.3f}",   sent_color),
-        ("ALPHA SIGNALS",     _fmt_int(n_signals),  "Active signals",              STEEL),
+        ("ALPHA SIGNALS",     _fmt_int(n_signals),  "Active signals",              NAVY_LIGHT),
         ("RISK LEVEL",        risk_level,            "Current assessment",          risk_color),
         ("DATA QUALITY",      dq,                   "Feed status",                 dq_color),
     ]
@@ -801,10 +865,10 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
     hl_y = kpi_y + kpi_h + 8
     col_w = (pdf.INNER_W - 6) / 2
 
-    # Left: KEY FINDINGS
+    # Left: KEY FINDINGS — navy label
     pdf.set_xy(LM, hl_y)
     pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(*GOLD)
+    pdf.set_text_color(*NAVY)
     pdf.cell(col_w, 5, "KEY FINDINGS", align="L")
     pdf.set_y(hl_y + 6)
 
@@ -815,13 +879,17 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
         score  = float(getattr(ins, "score",  0.0) or 0.0)
         s_col  = _score_color(score)
         iy = pdf.get_y()
-        pdf.set_fill_color(*INK_CARD)
+        # White card, thin border, score-color left pip
+        pdf.set_fill_color(*WHITE)
         pdf.rect(LM, iy, col_w, 8, "F")
+        pdf.set_draw_color(*MID_GRAY)
+        pdf.set_line_width(0.15)
+        pdf.rect(LM, iy, col_w, 8)
         pdf.set_fill_color(*s_col)
         pdf.rect(LM, iy, 2, 8, "F")
         pdf.set_xy(LM + 4, iy + 1)
         pdf.set_font("Helvetica", "B", 7)
-        pdf.set_text_color(*TEXT_HI)
+        pdf.set_text_color(*NAVY)
         pdf.cell(col_w - 28, 4, title, align="L")
         pdf.set_xy(LM + col_w - 22, iy + 1)
         pdf.set_font("Helvetica", "B", 7)
@@ -829,11 +897,11 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
         pdf.cell(20, 4, action.upper(), align="R")
         pdf.set_y(iy + 9)
 
-    # Right: MARKET BRIEF
+    # Right: MARKET BRIEF — navy label
     rx2 = LM + col_w + 6
     pdf.set_xy(rx2, hl_y)
     pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(*GOLD)
+    pdf.set_text_color(*NAVY)
     pdf.cell(col_w, 5, "MARKET BRIEF", align="L")
 
     exec_summary = _safe(getattr(report.ai, "executive_summary", ""))
@@ -841,21 +909,18 @@ def _page_cover(pdf: InstitutionalReportPDF, report) -> None:
     first_para = paras[0] if paras else "Market intelligence is being aggregated."
     pdf.set_xy(rx2, hl_y + 6)
     pdf.set_font("Helvetica", "", 7.5)
-    pdf.set_text_color(*TEXT_MID)
+    pdf.set_text_color(*DARK_GRAY)
     pdf.multi_cell(col_w, 4.5, first_para[:500], align="J")
 
-    # ── BOTTOM STRIP ─────────────────────────────────────────────────────────
-    pdf.set_fill_color(*INK_SURFACE)
-    pdf.rect(0, H - 14, W, 14, "F")
-    pdf.set_draw_color(*GOLD)
+    # ── BOTTOM STRIP — thin gold rule + disclaimer text ───────────────────────
+    pdf.set_draw_color(*GOLD_LINE)
     pdf.set_line_width(0.4)
-    pdf.line(0, H - 14, W, H - 14)
-    pdf.set_xy(LM, H - 10)
+    pdf.line(LM, H - 16, W - LM, H - 16)
+    pdf.set_xy(LM, H - 13)
     pdf.set_font("Helvetica", "B", 7)
-    pdf.set_text_color(*TEXT_LO)
+    pdf.set_text_color(*NAVY)
     pdf.cell(W - 2 * LM, 5,
-             "GENERATED BY SHIP TRACKER INTELLIGENCE PLATFORM  "
-             "|  NOT INVESTMENT ADVICE  |  SEE DISCLAIMER",
+             "FOR INSTITUTIONAL USE ONLY  |  NOT INVESTMENT ADVICE  |  SEE DISCLAIMER",
              align="C")
 
 
@@ -897,7 +962,7 @@ def _page_executive_summary(pdf: InstitutionalReportPDF, report) -> None:
         pdf.prose(para)
         pdf.ln(1)
 
-    pdf.rule(INK_BORDER)
+    pdf.rule()
 
     # Two columns: Investment Thesis | Risk Factors
     top_insights = list(getattr(market, "top_insights", []))[:3]
@@ -906,10 +971,10 @@ def _page_executive_summary(pdf: InstitutionalReportPDF, report) -> None:
     col_w = (pdf.INNER_W - 5) / 2
     start_y = pdf.get_y()
 
-    # Left: INVESTMENT THESIS
+    # Left: INVESTMENT THESIS — navy label
     pdf.set_xy(pdf.L_MARG, start_y)
     pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(*GOLD)
+    pdf.set_text_color(*NAVY)
     pdf.cell(col_w, 5, "INVESTMENT THESIS", align="L")
     pdf.set_y(start_y + 6)
 
@@ -920,37 +985,41 @@ def _page_executive_summary(pdf: InstitutionalReportPDF, report) -> None:
         iy = pdf.get_y()
         if pdf.will_page_break(14):
             break
-        pdf.set_fill_color(*INK_CARD)
+        # White card, thin border, score left pip
+        pdf.set_fill_color(*WHITE)
         pdf.rect(pdf.L_MARG, iy, col_w, 14, "F")
+        pdf.set_draw_color(*MID_GRAY)
+        pdf.set_line_width(0.15)
+        pdf.rect(pdf.L_MARG, iy, col_w, 14)
         pdf.set_fill_color(*_score_color(score))
         pdf.rect(pdf.L_MARG, iy, 2, 14, "F")
-        # Number
+        # Number — navy
         pdf.set_xy(pdf.L_MARG + 4, iy + 1.5)
         pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(*GOLD)
+        pdf.set_text_color(*NAVY)
         pdf.cell(6, 6, str(i), align="C")
-        # Title
+        # Title — navy
         pdf.set_xy(pdf.L_MARG + 12, iy + 1.5)
         pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_text_color(*TEXT_HI)
+        pdf.set_text_color(*NAVY)
         pdf.cell(col_w - 14, 4.5, str(title)[:55], align="L")
-        # Detail
+        # Detail — dark gray
         pdf.set_xy(pdf.L_MARG + 12, iy + 7)
         pdf.set_font("Helvetica", "", 6.5)
-        pdf.set_text_color(*TEXT_MID)
+        pdf.set_text_color(*DARK_GRAY)
         pdf.cell(col_w - 14, 4, detail[:90], align="L")
         pdf.set_y(iy + 15)
 
     left_end = pdf.get_y()
 
-    # Right: RISK FACTORS
+    # Right: RISK FACTORS — red label (directional)
     pdf.set_xy(pdf.L_MARG + col_w + 5, start_y)
     pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(*CRIMSON)
+    pdf.set_text_color(*RED)
     pdf.cell(col_w, 5, "RISK FACTORS", align="L")
     pdf.set_xy(pdf.L_MARG + col_w + 5, start_y + 6)
     pdf.set_font("Helvetica", "", 7.5)
-    pdf.set_text_color(*TEXT_MID)
+    pdf.set_text_color(*DARK_GRAY)
     risk_paras = _split_paragraphs(risk_narrative)
     for rp in risk_paras[:2]:
         pdf.set_x(pdf.L_MARG + col_w + 5)
@@ -1044,11 +1113,15 @@ def _page_sentiment(pdf: InstitutionalReportPDF, report) -> None:
             if kw_x + pill_w > pdf.PAGE_W - pdf.R_MARG:
                 kw_x = pdf.L_MARG
                 kw_y += pill_h + pill_gap
-            pdf.set_fill_color(*INK_BORDER)
+            # Light gray pill with navy text (outline style)
+            pdf.set_fill_color(*LIGHT_GRAY)
             pdf.rect(kw_x, kw_y, pill_w, pill_h, "F")
+            pdf.set_draw_color(*MID_GRAY)
+            pdf.set_line_width(0.2)
+            pdf.rect(kw_x, kw_y, pill_w, pill_h)
             pdf.set_xy(kw_x + 3, kw_y + 1)
             pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*GOLD)
+            pdf.set_text_color(*NAVY_LIGHT)
             pdf.cell(pill_w - 6, 4, kw_str, align="L")
             kw_x += pill_w + pill_gap
         pdf.set_y(kw_y + pill_h + 4)
@@ -1209,13 +1282,19 @@ def _page_market_intelligence(pdf: InstitutionalReportPDF, report) -> None:
     active_opps = int(getattr(market, "active_opportunities",  0) or 0)
     high_conv   = int(getattr(market, "high_conviction_count", 0) or 0)
 
-    # ── Risk level badge ──────────────────────────────────────────────────────
+    # ── Risk level indicator — white box, colored border, colored text ────────
     ry = pdf.get_y()
-    pdf.set_fill_color(*risk_color)
+    pdf.set_fill_color(*WHITE)
     pdf.rect(pdf.L_MARG, ry, 68, 12, "F")
+    pdf.set_draw_color(*risk_color)
+    pdf.set_line_width(0.6)
+    pdf.rect(pdf.L_MARG, ry, 68, 12)
+    # Color top accent
+    pdf.set_fill_color(*risk_color)
+    pdf.rect(pdf.L_MARG, ry, 68, 1.5, "F")
     pdf.set_xy(pdf.L_MARG + 3, ry + 2.5)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.set_text_color(*WHITE)
+    pdf.set_text_color(*risk_color)
     pdf.cell(62, 7, f"RISK LEVEL: {risk_level}", align="C")
 
     pdf.set_xy(pdf.L_MARG + 74, ry + 1)
@@ -1494,19 +1573,23 @@ def _page_stocks(pdf: InstitutionalReportPDF, report) -> None:
         if pdf.will_page_break(20):
             pdf.add_page()
         py = pdf.get_y()
-        pdf.set_fill_color(*INK_CARD)
+        # White card, thin border, green left pip
+        pdf.set_fill_color(*WHITE)
         pdf.rect(pdf.L_MARG, py, pdf.INNER_W, 20, "F")
-        pdf.set_fill_color(*TEAL)
+        pdf.set_draw_color(*MID_GRAY)
+        pdf.set_line_width(0.2)
+        pdf.rect(pdf.L_MARG, py, pdf.INNER_W, 20)
+        pdf.set_fill_color(*GREEN)
         pdf.rect(pdf.L_MARG, py, 3.5, 20, "F")
-        # Label
+        # Label — navy
         pdf.set_xy(pdf.L_MARG + 7, py + 2)
         pdf.set_font("Helvetica", "B", 7)
-        pdf.set_text_color(*GOLD)
+        pdf.set_text_color(*NAVY)
         pdf.cell(30, 4, "TOP PICK", align="L")
-        # Ticker
+        # Ticker — navy bold large
         pdf.set_xy(pdf.L_MARG + 7, py + 7)
         pdf.set_font("Helvetica", "B", 16)
-        pdf.set_text_color(*TEXT_HI)
+        pdf.set_text_color(*NAVY)
         pdf.cell(28, 9, top_pick, align="L")
         # Price / change
         pdf.set_xy(pdf.L_MARG + 42, py + 7)
@@ -1544,10 +1627,10 @@ def _page_stocks(pdf: InstitutionalReportPDF, report) -> None:
             by = pdf.get_y()
             pdf.set_xy(pdf.L_MARG, by)
             pdf.set_font("Helvetica", "B", 8)
-            pdf.set_text_color(*GOLD)
+            pdf.set_text_color(*NAVY_LIGHT)
             pdf.cell(20, 5, ticker, align="L")
             pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*TEXT_MID)
+            pdf.set_text_color(*DARK_GRAY)
             sig_strs = []
             for sg in sigs[:4]:
                 nm  = _safe(getattr(sg, "signal_name", "—"))[:18]
@@ -1565,13 +1648,16 @@ def _page_recommendations(pdf: InstitutionalReportPDF, report) -> None:
     pdf.section_header("09  |  AI Recommendations",
                        "Rule-based signal synthesis — ranked by conviction and expected return")
 
-    # Warning bar
+    # Warning bar — light yellow tint, amber text, thin border
     wy = pdf.get_y()
-    pdf.set_fill_color(*AMBER)
+    pdf.set_fill_color(255, 248, 220)   # very light amber/cream
     pdf.rect(pdf.L_MARG, wy, pdf.INNER_W, 7, "F")
+    pdf.set_draw_color(*AMBER)
+    pdf.set_line_width(0.3)
+    pdf.rect(pdf.L_MARG, wy, pdf.INNER_W, 7)
     pdf.set_xy(pdf.L_MARG + 3, wy + 1.5)
     pdf.set_font("Helvetica", "B", 7.5)
-    pdf.set_text_color(*BLACK)
+    pdf.set_text_color(*AMBER)
     pdf.cell(pdf.INNER_W - 6, 4,
              "AI-GENERATED RECOMMENDATIONS — NOT INVESTMENT ADVICE — SEE DISCLAIMER",
              align="C")
@@ -1593,15 +1679,16 @@ def _page_recommendations(pdf: InstitutionalReportPDF, report) -> None:
         if pdf.will_page_break(30):
             pdf.add_page()
         oy = pdf.get_y() + 3
-        pdf.set_fill_color(*INK_SURFACE)
-        pdf.rect(pdf.L_MARG, oy, pdf.INNER_W, 4, "F")
-        # GOLD top border
-        pdf.set_fill_color(*GOLD)
-        pdf.rect(pdf.L_MARG, oy, pdf.INNER_W, 1.2, "F")
+        # Light gray header bar with navy label
+        pdf.set_fill_color(*LIGHT_GRAY)
+        pdf.rect(pdf.L_MARG, oy, pdf.INNER_W, 6.5, "F")
+        # Navy left pip
+        pdf.set_fill_color(*NAVY)
+        pdf.rect(pdf.L_MARG, oy, 2, 6.5, "F")
         # Label
-        pdf.set_xy(pdf.L_MARG + 3, oy + 1.5)
+        pdf.set_xy(pdf.L_MARG + 5, oy + 1.5)
         pdf.set_font("Helvetica", "B", 8)
-        pdf.set_text_color(*GOLD)
+        pdf.set_text_color(*NAVY)
         pdf.cell(40, 4, "30-DAY OUTLOOK", align="L")
         pdf.set_y(oy + 7)
 
@@ -1739,9 +1826,9 @@ def _score_color_abs(score: float) -> tuple:
     try:
         v = float(score)
         if v >= 0.1:
-            return TEAL
+            return GREEN
         if v <= -0.1:
-            return CRIMSON
+            return RED
         return TEXT_LO
     except (TypeError, ValueError):
         return TEXT_LO
@@ -1793,8 +1880,7 @@ def render_investor_report_pdf(report: "InvestorReport") -> bytes:
         pdf = InstitutionalReportPDF()
         pdf._report_date = _safe(getattr(report, "report_date", ""))
 
-        # Fill every page with the dark background before content
-        # (fpdf2 doesn't do this automatically — section headers handle it page by page)
+        # Pages are white by default — no fill needed (light institutional theme)
 
         _safe_page(lambda: _page_cover(pdf, report),               "Cover Page")
         _safe_page(lambda: _page_executive_summary(pdf, report),   "Executive Summary")
