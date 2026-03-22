@@ -1,137 +1,78 @@
 """investor_report_html.py — Institutional-grade HTML investor report builder.
 
-Produces a fully self-contained HTML document from an InvestorReport object.
-No external dependencies except an optional Plotly CDN reference (currently
-unused — all charts are pure CSS/SVG for offline compatibility).
+Produces a fully self-contained HTML document styled after Bloomberg Intelligence
+/ Goldman Sachs research notes. White/off-white background, navy headers, dense
+data tables, print-ready layout.
 
 Usage:
     from utils.investor_report_html import render_investor_report_html
     html = render_investor_report_html(report)
-    bytes_out = html.encode("utf-8")  # for download
+    bytes_out = html.encode("utf-8")
 """
 from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List
 
-# ── Engine schema imports ─────────────────────────────────────────────────────
-try:
-    from processing.investor_report_engine import (
-        InvestorReport,
-        SentimentBreakdown,
-        AlphaSignalSummary,
-        MarketIntelligenceSummary,
-        FreightRateSummary,
-        MacroSnapshot,
-        StockAnalysis,
-        AIAnalysis,
-    )
-    _ENGINE_SCHEMA_OK = True
-except Exception:
-    _ENGINE_SCHEMA_OK = False
-    # Provide a minimal stub so the module loads even without the engine
-    InvestorReport = None  # type: ignore[misc,assignment]
+# ---------------------------------------------------------------------------
+# Color palette — Bloomberg/GS institutional light theme
+# ---------------------------------------------------------------------------
+C_BODY          = "#ffffff"
+C_SURFACE       = "#f8f9fa"
+C_SURFACE2      = "#f1f3f5"
+C_BORDER        = "#d0d7de"
+C_BORDER_LIGHT  = "#e9ecef"
+C_NAVY          = "#0f285a"       # primary header / accent
+C_NAVY_MID      = "#1a3a72"       # lighter navy for sub-headers
+C_NAVY_RULE     = "#2c4a8a"       # rule lines
+C_TEXT          = "#1a1a2e"       # primary body text
+C_TEXT2         = "#4a5568"       # secondary text
+C_TEXT3         = "#718096"       # muted / captions
+C_GOLD          = "#b8860b"       # accent gold (GS brand feel)
+C_POS           = "#166044"       # positive numbers (dark green)
+C_NEG           = "#b91e1e"       # negative numbers (dark red)
+C_NEUT          = "#5a6272"       # neutral
+C_POS_BG        = "#ecfdf5"
+C_NEG_BG        = "#fef2f2"
+C_WARN          = "#7c4a00"
+C_WARN_BG       = "#fffbeb"
+C_HIGHLIGHT     = "#eff6ff"       # light blue row highlight
+C_NAV_BG        = "#0f285a"       # horizontal nav bar bg
 
-
-# ── Color palette — Goldman/institutional dark theme ──────────────────────────
-C_BG        = "#0D1B2A"    # deep navy
-C_SURFACE   = "#132237"    # section bg
-C_CARD      = "#1A2E45"    # card bg
-C_BORDER    = "#1E3A5F"    # subtle borders
-C_GOLD      = "#C9A84C"    # primary gold accent
-C_STEEL     = "#2E86C1"    # steel blue
-C_TEAL      = "#1ABC9C"    # bullish/positive
-C_CRIMSON   = "#E74C3C"    # bearish/negative
-C_AMBER     = "#F39C12"    # neutral/caution
-C_PURPLE    = "#9B59B6"    # convergence
-C_TEXT      = "#ECF0F1"    # primary text
-C_TEXT2     = "#95A5A6"    # secondary text
-C_TEXT3     = "#6C7A89"    # muted text
-
-# Aliases kept for internal helper compatibility
-C_HIGH   = C_TEAL
-C_LOW    = C_CRIMSON
-C_MOD    = C_AMBER
-C_ACCENT = C_STEEL
-C_CONV   = C_PURPLE
-C_MACRO  = C_STEEL
-
-_SENTIMENT_COLORS = {
-    "BULLISH": C_TEAL,
-    "BEARISH": C_CRIMSON,
-    "NEUTRAL": C_TEXT2,
-    "MIXED":   C_AMBER,
+# Conviction / rating palette
+_CONV_COLORS = {
+    "HIGH":   C_POS,
+    "MEDIUM": C_WARN,
+    "LOW":    C_TEXT3,
 }
-
-_CONVICTION_COLORS = {
-    "HIGH":   C_TEAL,
-    "MEDIUM": C_AMBER,
-    "LOW":    C_TEXT2,
+_SENT_COLORS = {
+    "BULLISH": C_POS,
+    "BEARISH": C_NEG,
+    "NEUTRAL": C_NEUT,
+    "MIXED":   C_WARN,
 }
-
-_ACTION_COLORS = {
-    "BUY":     C_TEAL,
-    "LONG":    C_TEAL,
-    "SELL":    C_CRIMSON,
-    "SHORT":   C_CRIMSON,
-    "HOLD":    C_AMBER,
-    "MONITOR": C_STEEL,
-    "AVOID":   C_CRIMSON,
-    "WATCH":   C_TEXT2,
-}
-
 _RISK_COLORS = {
-    "LOW":      C_TEAL,
-    "MODERATE": C_AMBER,
-    "HIGH":     C_CRIMSON,
-    "CRITICAL": "#C0392B",
+    "LOW":      C_POS,
+    "MODERATE": C_WARN,
+    "HIGH":     C_NEG,
+    "CRITICAL": "#7f0000",
 }
-
-_CATEGORY_COLORS = {
-    "CONVERGENCE": C_PURPLE,
-    "ROUTE":       C_STEEL,
-    "PORT_DEMAND": C_TEAL,
-    "MACRO":       C_STEEL,
-}
-
-_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE"]
-
-_TICKER_NAMES = {
-    "ZIM":  "ZIM Integrated Shipping Services",
-    "MATX": "Matson Inc.",
-    "SBLK": "Star Bulk Carriers",
-    "DAC":  "Danaos Corporation",
-    "CMRE": "Costamare Inc.",
+_ACTION_COLORS = {
+    "BUY":     C_POS,
+    "LONG":    C_POS,
+    "SELL":    C_NEG,
+    "SHORT":   C_NEG,
+    "HOLD":    C_WARN,
+    "MONITOR": C_NAVY_MID,
+    "AVOID":   C_NEG,
+    "WATCH":   C_TEXT3,
 }
 
 
-# ── Small pure helpers ────────────────────────────────────────────────────────
-
-def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
-def _color_for_change(pct: float) -> str:
-    if pct > 0.5:
-        return C_TEAL
-    if pct < -0.5:
-        return C_CRIMSON
-    return C_AMBER
-
-
-def _format_pct(val: float) -> str:
-    sign = "+" if val > 0 else ""
-    return f"{sign}{val:.1f}%"
-
-
-def _format_price(val: float) -> str:
-    if val >= 1000:
-        return f"${val:,.0f}"
-    return f"${val:.2f}"
-
+# ---------------------------------------------------------------------------
+# Safe accessor helpers
+# ---------------------------------------------------------------------------
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
     try:
@@ -150,2020 +91,1627 @@ def _safe_str(val: Any, default: str = "—") -> str:
 def _safe_attr(obj: Any, *attrs: str, default: Any = None) -> Any:
     for attr in attrs:
         try:
-            val = obj[attr] if isinstance(obj, dict) else getattr(obj, attr, None)
-            if val is not None:
-                return val
+            v = obj[attr] if isinstance(obj, dict) else getattr(obj, attr, None)
+            if v is not None:
+                return v
         except (KeyError, TypeError):
             pass
     return default
 
 
-# ── SVG / CSS visual helpers ─────────────────────────────────────────────────
-
-def _score_bar_svg(score: float, color: str, width: int = 200, height: int = 8) -> str:
-    """Inline SVG progress bar for a [0, 1] score."""
-    score = max(0.0, min(1.0, score))
-    fill_w = max(2, int(score * width))
-    pct_label = f"{score * 100:.0f}%"
-    track_color = _hex_to_rgba(C_BORDER, 0.6)
-    return (
-        f'<div style="display:inline-flex;align-items:center;gap:8px">'
-        f'<svg width="{width}" height="{height}" style="flex-shrink:0">'
-        f'<rect width="{width}" height="{height}" rx="{height//2}" fill="{track_color}"/>'
-        f'<rect width="{fill_w}" height="{height}" rx="{height//2}" fill="{color}"/>'
-        f'</svg>'
-        f'<span style="font-size:0.73rem;color:{C_TEXT2};font-weight:600;'
-        f'font-family:\'JetBrains Mono\',\'Courier New\',monospace">{pct_label}</span>'
-        f'</div>'
-    )
+def _safe_list(val: Any) -> list:
+    if isinstance(val, list):
+        return val
+    return []
 
 
-def _sentiment_gauge_svg(score: float) -> str:
-    """SVG semicircle gauge (-1 to +1). Needle rotates with score. Larger, centered."""
-    score = max(-1.0, min(1.0, score))
-    # Map -1..+1 to 0..180 degrees (left to right across top semicircle)
-    angle_deg = (score + 1.0) / 2.0 * 180.0
-    cx, cy, r = 130, 130, 100
-    rad = math.radians(180.0 - angle_deg)
-    nx = cx + r * math.cos(rad)
-    ny = cy - r * math.sin(rad)
-
-    if score >= 0.25:
-        needle_col = C_TEAL
-    elif score <= -0.25:
-        needle_col = C_CRIMSON
-    else:
-        needle_col = C_AMBER
-
-    return f"""<svg width="260" height="150" viewBox="0 0 260 150" xmlns="http://www.w3.org/2000/svg"
-     style="display:block;margin:0 auto">
-  <defs>
-    <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="{C_CRIMSON}"/>
-      <stop offset="40%"  stop-color="{C_AMBER}"/>
-      <stop offset="100%" stop-color="{C_TEAL}"/>
-    </linearGradient>
-  </defs>
-  <!-- Track arc -->
-  <path d="M 30 130 A 100 100 0 0 1 230 130"
-        fill="none" stroke="{_hex_to_rgba(C_BORDER, 0.8)}" stroke-width="18"
-        stroke-linecap="round"/>
-  <!-- Colored arc -->
-  <path d="M 30 130 A 100 100 0 0 1 230 130"
-        fill="none" stroke="url(#gaugeGrad)" stroke-width="14"
-        stroke-linecap="round" opacity="0.75"/>
-  <!-- Needle -->
-  <line x1="{cx}" y1="{cy}" x2="{nx:.1f}" y2="{ny:.1f}"
-        stroke="{needle_col}" stroke-width="3.5" stroke-linecap="round"/>
-  <!-- Pivot -->
-  <circle cx="{cx}" cy="{cy}" r="7" fill="{needle_col}"/>
-  <circle cx="{cx}" cy="{cy}" r="3" fill="{C_BG}"/>
-  <!-- Labels -->
-  <text x="14" y="148" fill="{C_CRIMSON}" font-size="10"
-        font-family="'JetBrains Mono',monospace" font-weight="700">BEAR</text>
-  <text x="204" y="148" fill="{C_TEAL}" font-size="10"
-        font-family="'JetBrains Mono',monospace" font-weight="700">BULL</text>
-  <text x="{cx}" y="148" fill="{needle_col}" font-size="13"
-        font-family="'JetBrains Mono','Courier New',monospace" font-weight="800"
-        text-anchor="middle">{score:+.2f}</text>
-</svg>"""
+def _safe_dict(val: Any) -> dict:
+    if isinstance(val, dict):
+        return val
+    return {}
 
 
-def _stacked_bar(bullish: int, bearish: int, neutral: int) -> str:
-    """Pure-CSS horizontal stacked bar showing sentiment distribution."""
-    total = bullish + bearish + neutral
-    if total == 0:
-        return '<div style="color:{};font-size:0.8rem">No data</div>'.format(C_TEXT3)
+# ---------------------------------------------------------------------------
+# Formatters
+# ---------------------------------------------------------------------------
 
-    bull_pct = bullish / total * 100
-    bear_pct = bearish / total * 100
-    neut_pct = neutral / total * 100
-
-    return f"""
-<div style="display:flex;flex-direction:column;gap:6px">
-  <div style="display:flex;height:18px;border-radius:9px;overflow:hidden;
-              background:{_hex_to_rgba(C_BORDER, 0.4)}">
-    <div style="width:{bull_pct:.1f}%;background:{C_TEAL};transition:width 0.3s"></div>
-    <div style="width:{neut_pct:.1f}%;background:{C_TEXT3};transition:width 0.3s"></div>
-    <div style="width:{bear_pct:.1f}%;background:{C_CRIMSON};transition:width 0.3s"></div>
-  </div>
-  <div style="display:flex;gap:16px;font-size:0.73rem">
-    <span style="color:{C_TEAL}">&#9632; Bullish {bullish} ({bull_pct:.0f}%)</span>
-    <span style="color:{C_TEXT3}">&#9632; Neutral {neutral} ({neut_pct:.0f}%)</span>
-    <span style="color:{C_CRIMSON}">&#9632; Bearish {bearish} ({bear_pct:.0f}%)</span>
-  </div>
-</div>"""
+def _fmt_pct(val: float, decimals: int = 1) -> str:
+    sign = "+" if val > 0 else ""
+    return f"{sign}{val:.{decimals}f}%"
 
 
-def _badge(text: str, color: str, bg: str = None) -> str:
-    bg_val = bg if bg else _hex_to_rgba(color, 0.15)
-    border = _hex_to_rgba(color, 0.35)
-    return (
-        f'<span class="ir-badge" style="background:{bg_val};color:{color};'
-        f'border:1px solid {border}">{text}</span>'
-    )
+def _fmt_price(val: float) -> str:
+    if val >= 10_000:
+        return f"${val:,.0f}"
+    if val >= 1_000:
+        return f"${val:,.1f}"
+    return f"${val:.2f}"
 
 
-def _stat_box(label: str, value: str, sub: str = "", color: str = None) -> str:
-    val_color = color if color else C_TEXT
-    return (
-        f'<div class="ir-kpi">'
-        f'<div class="ir-kpi-label">{label}</div>'
-        f'<div class="ir-kpi-value" style="color:{val_color}">{value}</div>'
-        f'{"<div class=ir-kpi-sub>" + sub + "</div>" if sub else ""}'
-        f'</div>'
-    )
+def _fmt_num(val: float, decimals: int = 2) -> str:
+    return f"{val:,.{decimals}f}"
 
 
-def _section_header_html(num: int, title: str, subtitle: str = "") -> str:
-    return f"""
-<div class="ir-section-header">
-  <div class="ir-section-number">{num:02d}</div>
-  <div>
-    <div class="ir-section-title">{title}</div>
-    <div class="ir-section-subtitle">{subtitle}</div>
-  </div>
-</div>"""
+def _pct_color(pct: float) -> str:
+    if pct > 0.5:
+        return C_POS
+    if pct < -0.5:
+        return C_NEG
+    return C_NEUT
 
 
-# Legacy single-arg wrapper (kept so callers don't break)
-def _section_header(title: str, color: str = None) -> str:
-    # Color arg ignored — new design uses section numbers and gold rule
-    return f"""
-<div class="ir-section-header">
-  <div>
-    <div class="ir-section-title">{title}</div>
-  </div>
-</div>"""
-
-
-def _change_html(pct: float) -> str:
-    col = _color_for_change(pct)
+def _pct_cell(pct: float) -> str:
+    col = _pct_color(pct)
+    bg  = C_POS_BG if pct > 0.5 else (C_NEG_BG if pct < -0.5 else "transparent")
     arrow = "&#9650;" if pct >= 0 else "&#9660;"
-    return f'<span style="color:{col};font-weight:600;font-family:\'JetBrains Mono\',monospace">{arrow} {_format_pct(pct)}</span>'
+    return (
+        f'<td style="color:{col};background:{bg};text-align:right;'
+        f'font-family:\'Courier New\',monospace;font-weight:600;white-space:nowrap">'
+        f'{arrow}&nbsp;{_fmt_pct(pct)}</td>'
+    )
 
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+def _change_span(pct: float) -> str:
+    col   = _pct_color(pct)
+    arrow = "&#9650;" if pct >= 0 else "&#9660;"
+    return (
+        f'<span style="color:{col};font-weight:600;'
+        f'font-family:\'Courier New\',monospace">'
+        f'{arrow}&nbsp;{_fmt_pct(pct)}</span>'
+    )
 
-def _css() -> str:
-    return f"""
-/* ── Reset & base ── */
-*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-html {{ font-size: 14px; scroll-behavior: smooth; }}
 
-body {{
-    font-family: 'Inter', 'Helvetica Neue', -apple-system, sans-serif;
-    background: {C_BG};
-    color: {C_TEXT};
+def _badge(text: str, color: str = C_NAVY, bg: str = "") -> str:
+    bg_val = bg if bg else _hex_rgba(color, 0.10)
+    return (
+        f'<span style="display:inline-block;padding:1px 8px;border-radius:3px;'
+        f'font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;'
+        f'background:{bg_val};color:{color};border:1px solid {_hex_rgba(color,0.30)}">'
+        f'{text}</span>'
+    )
+
+
+def _hex_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+# ---------------------------------------------------------------------------
+# CSS
+# ---------------------------------------------------------------------------
+
+def _build_css() -> str:
+    return """
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+/* ── Base ── */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     font-size: 13px;
-    line-height: 1.6;
-    max-width: 1100px;
+    line-height: 1.65;
+    color: #1a1a2e;
+    background: #ffffff;
+    max-width: 1240px;
     margin: 0 auto;
-    padding: 0;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}}
+}
 
-a {{ color: {C_STEEL}; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
+a { color: #0f285a; text-decoration: none; }
+a:hover { text-decoration: underline; }
 
-code, .mono {{
-    font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
-    font-size: 0.88em;
-}}
+/* ── Mono ── */
+.mono, code, pre {
+    font-family: 'SFMono-Regular', 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+}
 
-/* ── Section layout ── */
-.ir-section {{
-    margin: 0;
-    padding: 48px 48px 32px;
-    border-top: 1px solid {C_BORDER};
-    page-break-before: always;
-}}
-.ir-section:first-child {{ border-top: none; }}
-
-/* ── Section header — GS/Bloomberg style ── */
-.ir-section-header {{
+/* ── Top header bar ── */
+.ir-topbar {
     display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 32px;
-    padding-bottom: 16px;
-    border-bottom: 2px solid {C_GOLD};
-}}
-.ir-section-number {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 48px;
-    font-weight: 900;
-    color: rgba(201,168,76,0.15);
-    line-height: 1;
-    min-width: 70px;
-    flex-shrink: 0;
-}}
-.ir-section-title {{
-    font-size: 22px;
-    font-weight: 700;
-    color: {C_TEXT};
-    letter-spacing: -0.3px;
-    line-height: 1.2;
-}}
-.ir-section-subtitle {{
+    align-items: center;
+    justify-content: space-between;
+    background: #0f285a;
+    color: #ffffff;
+    padding: 10px 32px;
     font-size: 11px;
-    color: {C_TEXT2};
+    letter-spacing: .08em;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-top: 5px;
-}}
+}
+.ir-topbar-firm {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    color: #ffffff;
+}
+.ir-topbar-confidential {
+    background: #b8860b;
+    color: #fff;
+    padding: 3px 14px;
+    border-radius: 2px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    font-size: 10px;
+}
+.ir-topbar-date {
+    color: #a8bcd4;
+    font-size: 11px;
+    text-align: right;
+}
 
-/* ── KPI / stat grid ── */
-.ir-kpi-grid,
-.ir-stat-grid {{
+/* ── Cover section ── */
+.ir-cover {
+    background: linear-gradient(160deg, #0f285a 0%, #1a3a72 60%, #0f285a 100%);
+    color: #ffffff;
+    padding: 56px 56px 48px;
+}
+.ir-cover-eyebrow {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: #a8bcd4;
+    margin-bottom: 12px;
+}
+.ir-cover-title {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -.5px;
+    line-height: 1.15;
+    color: #ffffff;
+    margin-bottom: 10px;
+}
+.ir-cover-subtitle {
+    font-size: 15px;
+    color: #c8d8ea;
+    margin-bottom: 36px;
+    font-weight: 400;
+}
+.ir-cover-metrics {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 16px;
-    margin: 24px 0;
-}}
-.ir-kpi {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-top: 3px solid {C_GOLD};
-    border-radius: 8px;
-    padding: 16px;
-}}
-.ir-kpi-label {{
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: {C_TEXT2};
-    margin-bottom: 8px;
-}}
-.ir-kpi-value {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 24px;
-    font-weight: 700;
-    color: {C_TEXT};
-    line-height: 1.1;
-}}
-.ir-kpi-sub {{
-    font-size: 11px;
-    color: {C_TEXT2};
-    margin-top: 4px;
-}}
-
-/* ── Institutional data tables ── */
-.ir-table-wrap {{
+    gap: 1px;
+    background: rgba(255,255,255,0.12);
     border-radius: 6px;
     overflow: hidden;
-    border: 1px solid {C_BORDER};
-    margin-bottom: 24px;
-}}
-table.ir-table {{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    margin: 0;
-}}
-table.ir-table th {{
-    background: {C_SURFACE};
-    color: {C_TEXT2};
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    padding: 10px 12px;
-    border-bottom: 2px solid {C_BORDER};
-    white-space: nowrap;
-    text-align: left;
-}}
-table.ir-table td {{
-    padding: 9px 12px;
-    border-bottom: 1px solid {C_BORDER};
-    color: {C_TEXT};
-    vertical-align: middle;
-}}
-table.ir-table tr:last-child td {{ border-bottom: none; }}
-table.ir-table tr:nth-child(even) td {{ background: rgba(26,46,69,0.4); }}
-table.ir-table tr:hover td {{ background: rgba(201,168,76,0.05); color: {C_TEXT}; }}
-
-/* Table utility classes */
-table.ir-table .num,
-table.ir-table .tc-mono,
-table.ir-table .tc-right {{ font-family: 'JetBrains Mono', monospace; text-align: right; }}
-table.ir-table .pos {{ color: {C_TEAL}; font-weight: 600; }}
-table.ir-table .neg {{ color: {C_CRIMSON}; font-weight: 600; }}
-table.ir-table .neu {{ color: {C_AMBER}; }}
-table.ir-table .tc-center {{ text-align: center; }}
-table.ir-table .tc-name {{ color: {C_TEXT}; font-weight: 600; }}
-table.ir-table .tc-ticker {{
-    font-family: 'JetBrains Mono', monospace;
-    color: {C_GOLD};
-    font-weight: 700;
-}}
-table.ir-table .tc-dim {{ color: {C_TEXT3}; font-size: 0.78rem; }}
-table.ir-table .tc-rank {{
-    color: {C_TEXT3};
-    font-weight: 700;
+    margin-bottom: 32px;
+}
+.ir-cover-metric {
+    background: rgba(0,0,0,0.20);
+    padding: 18px 20px;
     text-align: center;
-    width: 36px;
-}}
-
-/* ── Signal table (compact variant) ── */
-table.ir-signal-table {{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.76rem;
-    margin-top: 10px;
-}}
-table.ir-signal-table th {{
-    color: {C_TEXT3};
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.62rem;
-    padding: 4px 8px;
-    border-bottom: 1px solid {C_BORDER};
-    text-align: left;
-}}
-table.ir-signal-table td {{
-    padding: 5px 8px;
-    color: {C_TEXT2};
-    border-bottom: 1px solid rgba(30,58,95,0.4);
-}}
-table.ir-signal-table tr:last-child td {{ border-bottom: none; }}
-
-/* ── Insight cards ── */
-.ir-insight,
-.ir-insight-card {{
-    background: {C_SURFACE};
-    border: 1px solid {C_BORDER};
-    border-left: 4px solid var(--cat-color, {C_GOLD});
-    border-radius: 8px;
-    padding: 20px 24px;
-    margin-bottom: 16px;
-}}
-.ir-insight-header {{
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 12px;
-}}
-.ir-insight-title {{
-    font-size: 15px;
+}
+.ir-cover-metric-label {
+    font-size: 9px;
     font-weight: 700;
-    color: {C_TEXT};
-    line-height: 1.3;
-    margin-top: 6px;
-}}
-.ir-insight-detail {{
-    font-size: 13px;
-    color: {C_TEXT2};
-    line-height: 1.7;
-    margin-bottom: 14px;
-}}
-.ir-insight-score-circle {{
-    width: 54px;
-    height: 54px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.85rem;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: #a8bcd4;
+    margin-bottom: 6px;
+}
+.ir-cover-metric-value {
+    font-size: 22px;
     font-weight: 800;
-    flex-shrink: 0;
-    border: 2px solid;
-    font-family: 'JetBrains Mono', monospace;
-}}
-.ir-insight-meta-row {{
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-    margin-bottom: 10px;
-}}
-.ir-insight-footer {{
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    font-size: 0.75rem;
-    color: {C_TEXT3};
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid {C_BORDER};
-}}
-
-/* ── Recommendation cards ── */
-.ir-rec,
-.ir-rec-card {{
-    background: {C_SURFACE};
-    border: 1px solid {C_BORDER};
-    border-left: 5px solid var(--action-color, {C_TEAL});
-    border-radius: 8px;
-    padding: 24px;
-    margin-bottom: 20px;
-    display: grid;
-    grid-template-columns: 48px 1fr;
-    gap: 18px;
-    align-items: start;
-}}
-.ir-rec-rank {{
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    background: var(--action-color, {C_TEAL});
-    border-radius: 50%;
-    font-weight: 900;
-    font-size: 14px;
-    color: {C_BG};
-    font-family: 'JetBrains Mono', monospace;
-    flex-shrink: 0;
-}}
-.ir-rec-title {{
-    font-size: 17px;
-    font-weight: 700;
-    color: {C_TEXT};
-    line-height: 1.3;
-    margin-bottom: 8px;
-}}
-.ir-rec-meta {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 14px;
-}}
-.ir-rec-prices {{
-    background: rgba(30,58,95,0.5);
-    border-radius: 6px;
-    padding: 12px 16px;
-    margin: 12px 0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-}}
-.ir-rec-grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 10px;
-    margin-bottom: 14px;
-}}
-.ir-rec-kv {{
-    background: rgba(30,58,95,0.4);
-    border-radius: 6px;
-    padding: 8px 12px;
-}}
-.ir-rec-kv-label {{
-    font-size: 0.60rem;
-    font-weight: 700;
-    color: {C_TEXT3};
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 3px;
-}}
-.ir-rec-kv-value {{
-    font-size: 0.88rem;
-    font-weight: 700;
-    color: {C_TEXT};
-    font-family: 'JetBrains Mono', monospace;
-}}
-.ir-rec-rationale {{
-    font-size: 0.83rem;
-    color: {C_TEXT2};
-    line-height: 1.7;
-    border-top: 1px solid {C_BORDER};
-    padding-top: 12px;
+    font-family: 'SFMono-Regular', 'Courier New', monospace;
+    line-height: 1;
+}
+.ir-cover-metric-sub {
+    font-size: 10px;
+    color: #a8bcd4;
     margin-top: 4px;
-}}
-
-/* ── Cover page ── */
-.ir-cover {{
-    background: linear-gradient(135deg, {C_BG} 0%, {C_SURFACE} 40%, {C_BG} 100%);
-    min-height: 100vh;
-    padding: 60px 60px 40px;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    overflow: hidden;
-    page-break-after: always;
-    border-top: none;
-}}
-.ir-cover::before {{
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 6px; height: 100%;
-    background: linear-gradient(180deg, {C_GOLD} 0%, {C_AMBER} 100%);
-}}
-
-/* ── Prose ── */
-.ir-prose {{
-    font-size: 13px;
-    line-height: 1.75;
-    color: {C_TEXT2};
-    margin: 16px 0 24px;
-}}
-.ir-prose p {{ margin: 0 0 14px; }}
-.ir-prose p:last-child {{ margin-bottom: 0; }}
-.ir-prose-highlight {{
-    background: rgba(30,58,95,0.35);
-    border: 1px solid {C_BORDER};
-    border-left: 4px solid {C_GOLD};
-    border-radius: 8px;
-    padding: 20px 24px;
-    margin-top: 24px;
-}}
-
-/* ── Score bars ── */
-.ir-score-row {{
-    display: grid;
-    grid-template-columns: 160px 1fr auto;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 0;
-    border-bottom: 1px solid {C_BORDER};
-}}
-.ir-score-row:last-child {{ border-bottom: none; }}
-.ir-score-label {{
-    font-size: 12px;
-    color: {C_TEXT2};
-    font-weight: 600;
-}}
-
-/* ── Keyword pills ── */
-.ir-keyword-cloud {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: 12px 0;
-}}
-.ir-keyword-pill {{
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    background: rgba(201,168,76,0.10);
-    border: 1px solid rgba(201,168,76,0.25);
-    color: {C_GOLD};
-    white-space: nowrap;
-}}
-
-/* ── Badge ── */
-.ir-badge {{
+}
+.ir-dq-pill {
     display: inline-block;
-    padding: 3px 10px;
+    padding: 4px 14px;
     border-radius: 20px;
     font-size: 10px;
     font-weight: 700;
+    letter-spacing: .1em;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-}}
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #c8d8ea;
+    background: rgba(255,255,255,0.08);
+}
 
-/* ── Stock cards ── */
-.ir-stock-grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 16px;
-    margin-bottom: 24px;
-}}
-.ir-stock-card {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 8px;
-    padding: 20px 22px;
-}}
-.ir-stock-header {{
+/* ── Horizontal nav ── */
+.ir-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #0f285a;
+    border-bottom: 3px solid #b8860b;
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 12px;
-}}
-.ir-stock-ticker {{
-    font-size: 1.4rem;
-    font-weight: 900;
-    color: {C_GOLD};
-    font-family: 'JetBrains Mono', monospace;
-    line-height: 1;
-}}
-.ir-stock-name {{
-    font-size: 0.73rem;
-    color: {C_TEXT3};
-    margin-top: 3px;
-}}
-.ir-stock-price {{ text-align: right; }}
-.ir-stock-price-val {{
-    font-size: 1.3rem;
-    font-weight: 800;
-    color: {C_TEXT};
-    font-family: 'JetBrains Mono', monospace;
-    line-height: 1;
-}}
-.ir-stock-price-chg {{
-    font-size: 0.78rem;
-    font-weight: 700;
-    margin-top: 4px;
-}}
-
-/* ── Generic cards ── */
-.ir-card {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 8px;
-    padding: 24px 28px;
-    margin-bottom: 14px;
-}}
-.ir-card-highlight {{
-    background: {C_SURFACE};
-    border: 1px solid {C_BORDER};
-    border-left: 4px solid {C_GOLD};
-}}
-
-/* ── Disclaimer ── */
-.ir-disclaimer-box {{
-    background: rgba(30,58,95,0.25);
-    border: 1px solid {C_BORDER};
-    border-radius: 8px;
-    padding: 20px 24px;
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.ir-nav::-webkit-scrollbar { display: none; }
+.ir-nav a {
+    display: block;
+    padding: 12px 18px;
     font-size: 11px;
-    color: {C_TEXT3};
-    line-height: 1.75;
-}}
-
-/* ── Divider ── */
-.ir-divider {{
-    height: 1px;
-    background: {C_BORDER};
-    margin: 28px 0;
-}}
-
-/* ── Sub-section title ── */
-.ir-sub-title {{
-    font-size: 10px;
     font-weight: 700;
-    color: {C_TEXT3};
+    letter-spacing: .08em;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    margin-bottom: 14px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid {C_BORDER};
-}}
+    color: #a8bcd4;
+    white-space: nowrap;
+    border-right: 1px solid rgba(255,255,255,0.08);
+    transition: background .15s, color .15s;
+}
+.ir-nav a:hover {
+    background: rgba(255,255,255,0.10);
+    color: #ffffff;
+    text-decoration: none;
+}
+
+/* ── Sections ── */
+.ir-section {
+    padding: 48px 56px 40px;
+    border-bottom: 1px solid #e9ecef;
+    background: #ffffff;
+}
+.ir-section:nth-child(even) { background: #f8f9fa; }
+
+/* ── Section header ── */
+.ir-section-head {
+    display: flex;
+    align-items: flex-end;
+    gap: 20px;
+    margin-bottom: 28px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #0f285a;
+}
+.ir-section-num {
+    font-family: 'SFMono-Regular', 'Courier New', monospace;
+    font-size: 36px;
+    font-weight: 900;
+    color: rgba(15,40,90,0.12);
+    line-height: 1;
+    min-width: 56px;
+}
+.ir-section-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f285a;
+    letter-spacing: -.3px;
+    line-height: 1.2;
+}
+.ir-section-sub {
+    font-size: 10px;
+    color: #718096;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    margin-top: 4px;
+}
+
+/* ── KPI / stat cards ── */
+.ir-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+}
+.ir-kpi {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-top: 3px solid #0f285a;
+    border-radius: 4px;
+    padding: 14px 16px;
+}
+.ir-section:nth-child(even) .ir-kpi { background: #ffffff; }
+.ir-kpi-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: #718096;
+    margin-bottom: 6px;
+}
+.ir-kpi-value {
+    font-size: 22px;
+    font-weight: 800;
+    font-family: 'SFMono-Regular', 'Courier New', monospace;
+    line-height: 1.1;
+    color: #1a1a2e;
+}
+.ir-kpi-sub {
+    font-size: 10px;
+    color: #718096;
+    margin-top: 4px;
+}
+
+/* ── Tables ── */
+.ir-table-wrap {
+    overflow-x: auto;
+    margin: 16px 0;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+}
+.ir-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+.ir-table thead th {
+    background: #0f285a;
+    color: #ffffff;
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    padding: 10px 12px;
+    text-align: left;
+    white-space: nowrap;
+    border-right: 1px solid rgba(255,255,255,0.10);
+    position: sticky;
+    top: 0;
+}
+.ir-table thead th:last-child { border-right: none; }
+.ir-table tbody tr { border-bottom: 1px solid #e9ecef; }
+.ir-table tbody tr:last-child { border-bottom: none; }
+.ir-table tbody tr:nth-child(even) { background: #f8f9fa; }
+.ir-table tbody tr:hover { background: #eff6ff; }
+.ir-table td {
+    padding: 9px 12px;
+    vertical-align: middle;
+    color: #1a1a2e;
+    border-right: 1px solid #e9ecef;
+}
+.ir-table td:last-child { border-right: none; }
+.ir-table .num { font-family: 'SFMono-Regular','Courier New',monospace; text-align: right; }
+.ir-table .right { text-align: right; }
+.ir-table .center { text-align: center; }
 
 /* ── Two-column layout ── */
-.ir-two-col {{
+.ir-two-col {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin: 20px 0;
+}
+.ir-three-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 20px;
-}}
+    margin: 20px 0;
+}
+@media (max-width: 900px) {
+    .ir-two-col, .ir-three-col { grid-template-columns: 1fr; }
+}
 
-/* ── Responsive ── */
-@media (max-width: 700px) {{
-    .ir-section {{ padding: 32px 24px 24px; }}
-    .ir-two-col {{ grid-template-columns: 1fr; }}
-    .ir-stock-grid {{ grid-template-columns: 1fr; }}
-    .ir-rec-card, .ir-rec {{ grid-template-columns: 1fr; }}
-    .ir-cover {{ padding: 40px 24px; }}
-}}
+/* ── Sub-cards ── */
+.ir-card {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    padding: 18px 20px;
+}
+.ir-section:nth-child(even) .ir-card { background: #ffffff; }
+.ir-card-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: #0f285a;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #d0d7de;
+}
+
+/* ── Narrative text ── */
+.ir-narrative {
+    color: #1a1a2e;
+    font-size: 13px;
+    line-height: 1.75;
+    max-width: 820px;
+}
+.ir-narrative p { margin-bottom: 14px; }
+.ir-narrative p:last-child { margin-bottom: 0; }
+
+/* ── Sentiment stacked bar ── */
+.ir-sent-bar {
+    height: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: #e9ecef;
+    display: flex;
+    margin: 8px 0 6px;
+}
+
+/* ── Recommendation boxes ── */
+.ir-rec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 20px 0;
+}
+.ir-rec-box {
+    border: 1px solid #d0d7de;
+    border-left: 5px solid #0f285a;
+    border-radius: 4px;
+    padding: 18px 20px;
+    background: #ffffff;
+}
+.ir-rec-rank {
+    font-size: 28px;
+    font-weight: 900;
+    color: rgba(15,40,90,0.12);
+    font-family: 'SFMono-Regular','Courier New',monospace;
+    line-height: 1;
+    float: right;
+}
+.ir-rec-title { font-size: 14px; font-weight: 700; color: #0f285a; margin-bottom: 6px; }
+.ir-rec-body { font-size: 12px; color: #4a5568; line-height: 1.6; margin-bottom: 10px; }
+.ir-rec-meta { font-size: 10px; color: #718096; }
+
+/* ── News feed ── */
+.ir-news-item {
+    padding: 10px 0;
+    border-bottom: 1px solid #e9ecef;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+.ir-news-item:last-child { border-bottom: none; }
+.ir-news-score {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 800;
+    font-family: 'SFMono-Regular','Courier New',monospace;
+    flex-shrink: 0;
+}
+.ir-news-headline { font-size: 12px; color: #1a1a2e; font-weight: 500; line-height: 1.4; }
+.ir-news-meta { font-size: 10px; color: #718096; margin-top: 3px; }
+
+/* ── Topic pills ── */
+.ir-topics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ir-topic-pill {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid #d0d7de;
+    background: #f8f9fa;
+    color: #4a5568;
+}
+
+/* ── Score bar ── */
+.ir-score-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.ir-score-bar-track {
+    flex: 1;
+    height: 6px;
+    background: #e9ecef;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.ir-score-bar-fill { height: 100%; border-radius: 3px; }
+.ir-score-pct {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'SFMono-Regular','Courier New',monospace;
+    color: #4a5568;
+    min-width: 32px;
+    text-align: right;
+}
+
+/* ── Risk table ── */
+.ir-risk-row-HIGH td { background: #fef2f2 !important; }
+.ir-risk-row-CRITICAL td { background: #fef2f2 !important; }
+
+/* ── Footer ── */
+.ir-footer {
+    background: #0f285a;
+    color: #a8bcd4;
+    padding: 32px 56px 40px;
+    font-size: 10.5px;
+    line-height: 1.7;
+}
+.ir-footer-disclaimer {
+    color: #718096;
+    font-size: 10px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.10);
+    line-height: 1.6;
+}
+
+/* ── Divider ── */
+.ir-rule {
+    border: none;
+    border-top: 1px solid #d0d7de;
+    margin: 24px 0;
+}
 
 /* ── Print ── */
-@media print {{
-    body {{
-        background: white !important;
-        color: #111111 !important;
-        max-width: none;
-    }}
-    .ir-cover {{
-        background: white !important;
-        color: #111111 !important;
-        min-height: auto;
-        padding: 60px 40px;
-    }}
-    .ir-section {{ padding: 32px 40px 24px; }}
-    .ir-section-title,
-    .ir-insight-title,
-    .ir-rec-title,
-    .ir-stock-ticker,
-    .ir-kpi-value {{ color: #111111 !important; }}
-    .ir-prose, .ir-insight-detail, .ir-rec-rationale,
-    .ir-kpi-label, .ir-kpi-sub {{ color: #444444 !important; }}
-    .ir-card, .ir-insight, .ir-insight-card, .ir-rec, .ir-rec-card,
-    .ir-stock-card, .ir-kpi {{
-        background: #f8f8f8 !important;
-        border-color: #cccccc !important;
-        box-shadow: none !important;
-    }}
-    .ir-table-wrap {{ border-color: #cccccc !important; }}
-    table.ir-table th {{
-        background: #eeeeee !important;
-        color: #333333 !important;
-    }}
-    table.ir-table td {{ color: #444444 !important; border-color: #e0e0e0 !important; }}
-    .ir-cover {{ page-break-after: always; }}
-    .ir-section {{ page-break-before: always; }}
-    .ir-keyword-pill {{
-        background: #eee !important;
-        border-color: #ccc !important;
-        color: #333 !important;
-    }}
-    a {{ color: #1a56db !important; }}
-    .ir-prose-highlight, .ir-card-highlight {{
-        background: #f0f4ff !important;
-        border-color: #93b4fb !important;
-    }}
-    .ir-disclaimer-box {{
-        background: #f8f8f8 !important;
-        border-color: #cccccc !important;
-        color: #666666 !important;
-    }}
-    @page {{
-        margin: 1.5cm 1.8cm;
-        size: A4;
-    }}
-}}
+@media print {
+    body { max-width: 100%; font-size: 11px; background: #fff; color: #000; }
+    .ir-topbar { background: #0f285a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ir-cover { background: #0f285a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ir-nav { display: none; }
+    .ir-section { page-break-before: always; padding: 32px 32px 24px; }
+    .ir-section:first-child { page-break-before: avoid; }
+    .ir-table thead th { background: #0f285a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ir-table tbody tr:nth-child(even) { background: #f8f9fa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ir-footer { background: #0f285a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ir-rec-box { break-inside: avoid; }
+    .ir-kpi-row { grid-template-columns: repeat(4, 1fr); }
+    .ir-two-col { grid-template-columns: 1fr 1fr; }
+    a[href]::after { content: none; }
+}
 """
 
 
-# ── Section builders ──────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Component builders
+# ---------------------------------------------------------------------------
 
-def _cover_page(report: "InvestorReport") -> str:
-    try:
-        overall_label = getattr(report.sentiment, "overall_label", "NEUTRAL")
-        overall_score = _safe_float(getattr(report.sentiment, "overall_score", 0.0))
-    except Exception:
-        overall_label = "NEUTRAL"
-        overall_score = 0.0
-
-    sent_color = _SENTIMENT_COLORS.get(overall_label, C_TEXT2)
-    dq_color   = {
-        "FULL":     C_TEAL,
-        "PARTIAL":  C_AMBER,
-        "DEGRADED": C_CRIMSON,
-    }.get(getattr(report, "data_quality", "FULL"), C_TEXT2)
-    dq_label = getattr(report, "data_quality", "FULL") or "FULL"
-
-    gauge_svg = _sentiment_gauge_svg(overall_score)
-
-    try:
-        signals   = getattr(report.alpha, "signals", []) or []
-        n_long    = sum(1 for s in signals if _safe_attr(s, "direction") == "LONG")
-        n_short   = sum(1 for s in signals if _safe_attr(s, "direction") == "SHORT")
-        n_signals = len(signals)
-        risk_level = getattr(report.market, "risk_level", "MODERATE")
-        exp_return = _safe_float((getattr(report.alpha, "portfolio", {}) or {}).get("expected_return", 0.0))
-    except Exception:
-        n_signals = n_long = n_short = 0
-        risk_level = "MODERATE"
-        exp_return = 0.0
-
-    risk_color = _RISK_COLORS.get(risk_level, C_AMBER)
-    ret_color  = _color_for_change(exp_return)
-
-    kpi_grid = f"""
-<div class="ir-kpi-grid" style="margin-top:32px;margin-bottom:32px">
-  {_stat_box("Sentiment Score", f"{overall_score:+.3f}", sub=overall_label, color=sent_color)}
-  {_stat_box("Alpha Signals", str(n_signals), sub=f"{n_long}L / {n_short}S", color=C_GOLD)}
-  {_stat_box("Risk Level", risk_level, color=risk_color)}
-  {_stat_box("Exp. Return", _format_pct(exp_return), sub="Portfolio alpha est.", color=ret_color)}
+def _topbar(report_date: str) -> str:
+    return f"""
+<div class="ir-topbar">
+  <span class="ir-topbar-firm">ShipIntel Research</span>
+  <span class="ir-topbar-confidential">Confidential &mdash; Institutional Distribution Only</span>
+  <span class="ir-topbar-date">{report_date}</span>
 </div>"""
+
+
+def _cover(report) -> str:
+    sent  = report.sentiment
+    macro = report.macro
+    alpha = report.alpha
+    ai    = report.ai
+
+    overall_score = _safe_float(_safe_attr(sent, "overall_score"), 0.0)
+    overall_label = _safe_str(_safe_attr(sent, "overall_label"), "NEUTRAL")
+    dq            = _safe_str(_safe_attr(report, "data_quality"), "FULL")
+    report_date   = _safe_str(_safe_attr(report, "report_date"), "—")
+    gen_at        = _safe_str(_safe_attr(report, "generated_at"), "")
+    bdi           = _safe_float(_safe_attr(macro, "bdi"), 0.0)
+    bdi_chg       = _safe_float(_safe_attr(macro, "bdi_change_30d_pct"), 0.0)
+    wti           = _safe_float(_safe_attr(macro, "wti"), 0.0)
+    sc_stress     = _safe_str(_safe_attr(macro, "supply_chain_stress"), "MODERATE")
+    sig_count     = _safe_float(_safe_attr(alpha, "signal_count_by_conviction"), None)
+    hi_conv       = _safe_float(
+        (_safe_dict(_safe_attr(alpha, "signal_count_by_conviction"))).get("HIGH", 0), 0
+    )
+    active_opp    = _safe_float(_safe_attr(report.market, "active_opportunities"), 0)
+
+    sent_col   = _SENT_COLORS.get(overall_label.upper(), C_NEUT)
+    dq_label   = {"FULL": "Full Data", "PARTIAL": "Partial Data", "DEGRADED": "Degraded Data"}.get(dq, dq)
+    score_sign = "+" if overall_score > 0 else ""
+
+    gen_str = ""
+    if gen_at:
+        try:
+            dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+            gen_str = dt.strftime("%H:%M UTC")
+        except Exception:
+            gen_str = gen_at[:16]
 
     return f"""
 <div class="ir-cover">
-  <!-- Faint giant section number in background -->
-  <div style="position:absolute;top:40px;right:56px;font-family:'JetBrains Mono',monospace;
-              font-size:220px;font-weight:900;color:rgba(201,168,76,0.04);
-              line-height:1;user-select:none;pointer-events:none">01</div>
+  <div class="ir-cover-eyebrow">Shipping Intelligence &bull; {report_date}</div>
+  <div class="ir-cover-title">Global Shipping Markets<br>Investor Research Report</div>
+  <div class="ir-cover-subtitle">
+    Comprehensive coverage of freight rates, macro indicators, alpha signals,<br>
+    and equity analysis across the institutional shipping universe
+  </div>
 
-  <!-- Firm branding strip -->
-  <div style="display:flex;align-items:center;gap:16px;margin-bottom:48px;z-index:1">
-    <div style="width:4px;height:32px;background:linear-gradient(180deg,{C_GOLD},{C_AMBER});
-                border-radius:2px;flex-shrink:0"></div>
-    <div>
-      <div style="font-size:11px;font-weight:700;color:{C_GOLD};text-transform:uppercase;
-                  letter-spacing:0.25em">Ship Tracker Intelligence</div>
-      <div style="font-size:10px;color:{C_TEXT3};letter-spacing:0.15em;text-transform:uppercase">
-        Global Shipping Equity Research
-      </div>
+  <div class="ir-cover-metrics">
+    <div class="ir-cover-metric">
+      <div class="ir-cover-metric-label">Composite Sentiment</div>
+      <div class="ir-cover-metric-value" style="color:{sent_col}">{score_sign}{overall_score:.2f}</div>
+      <div class="ir-cover-metric-sub">{overall_label}</div>
     </div>
-    <div style="margin-left:auto;font-size:10px;color:{C_TEXT3};text-align:right;
-                font-family:'JetBrains Mono',monospace">
-      {getattr(report, 'report_date', '')}<br>
-      <span style="color:{C_TEXT3}">CONFIDENTIAL</span>
+    <div class="ir-cover-metric">
+      <div class="ir-cover-metric-label">Baltic Dry Index</div>
+      <div class="ir-cover-metric-value">{_fmt_num(bdi, 0) if bdi else '—'}</div>
+      <div class="ir-cover-metric-sub">{_fmt_pct(bdi_chg)} 30d</div>
+    </div>
+    <div class="ir-cover-metric">
+      <div class="ir-cover-metric-label">WTI Crude</div>
+      <div class="ir-cover-metric-value">{_fmt_price(wti) if wti else '—'}</div>
+      <div class="ir-cover-metric-sub">per barrel</div>
+    </div>
+    <div class="ir-cover-metric">
+      <div class="ir-cover-metric-label">High-Conviction Signals</div>
+      <div class="ir-cover-metric-value">{int(hi_conv)}</div>
+      <div class="ir-cover-metric-sub">{int(active_opp)} active opportunities</div>
+    </div>
+    <div class="ir-cover-metric">
+      <div class="ir-cover-metric-label">Supply Chain Stress</div>
+      <div class="ir-cover-metric-value" style="font-size:16px;color:{_RISK_COLORS.get(sc_stress.upper(), C_NEUT)}">{sc_stress}</div>
+      <div class="ir-cover-metric-sub">current assessment</div>
     </div>
   </div>
 
-  <div style="z-index:1;width:100%;max-width:720px">
-    <div style="font-size:clamp(1.8rem,4vw,3.0rem);font-weight:900;color:{C_TEXT};
-                line-height:1.1;letter-spacing:-0.03em;margin-bottom:12px">
-      Global Shipping Intelligence Report
-    </div>
-    <div style="font-size:1.0rem;color:{C_TEXT2};margin-bottom:8px;letter-spacing:0.02em">
-      Institutional Sentiment Analysis &amp; Alpha Signal Briefing
-    </div>
-    <div style="font-size:0.85rem;color:{C_TEXT3};margin-bottom:40px">
-      {getattr(report, 'report_date', '')}
-    </div>
-
-    <!-- Gauge block -->
-    <div style="background:rgba(26,46,69,0.6);border:1px solid {C_BORDER};
-                border-top:3px solid {C_GOLD};border-radius:10px;
-                padding:28px 32px;margin-bottom:8px;display:inline-block;
-                min-width:320px;text-align:center">
-      <div style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;
-                  letter-spacing:0.15em;margin-bottom:16px">Overall Market Sentiment</div>
-      <div style="font-size:1.7rem;font-weight:900;letter-spacing:0.05em;
-                  margin-bottom:20px;text-transform:uppercase;color:{sent_color}">
-        {overall_label}
-      </div>
-      {gauge_svg}
-    </div>
-
-    {kpi_grid}
-
-    <div style="font-size:0.78rem;color:{C_TEXT3};margin-bottom:40px">
-      Data Quality:&nbsp;
-      <span style="color:{dq_color};font-weight:700">{dq_label}</span>
-      &nbsp;&bull;&nbsp;Sentiment Score:&nbsp;
-      <span style="color:{sent_color};font-weight:700;
-            font-family:'JetBrains Mono',monospace">
-        {overall_score:+.3f}
-      </span>
-    </div>
-  </div>
-
-  <!-- Confidential footer -->
-  <div style="margin-top:auto;padding-top:32px;border-top:1px solid {C_BORDER};
-              width:100%;z-index:1">
-    <div style="display:flex;align-items:center;justify-content:space-between;
-                flex-wrap:wrap;gap:12px">
-      <div style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;
-                  letter-spacing:0.20em">
-        Confidential &mdash; For Institutional Use Only
-      </div>
-      <div style="font-size:10px;color:{C_TEXT3};
-                  font-family:'JetBrains Mono',monospace">
-        Generated: {getattr(report, 'generated_at', '')}
-      </div>
-    </div>
-    <div style="font-size:10px;color:{C_TEXT3};margin-top:6px">
-      Not for redistribution. Past performance does not guarantee future results.
-    </div>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span class="ir-dq-pill">Data Quality: {dq_label}</span>
+    {"<span class='ir-dq-pill'>Generated: " + gen_str + "</span>" if gen_str else ""}
   </div>
 </div>"""
 
 
-def _executive_summary(report: "InvestorReport") -> str:
-    try:
-        signals   = getattr(report.alpha, "signals", []) or []
-        insights  = getattr(report.market, "top_insights", []) or []
-        portfolio = getattr(report.alpha, "portfolio", {}) or {}
-        risk_level = getattr(report.market, "risk_level", "MODERATE")
-        overall_label = getattr(report.sentiment, "overall_label", "NEUTRAL")
-        overall_score = _safe_float(getattr(report.sentiment, "overall_score", 0.0))
-    except Exception:
-        signals = []
-        insights = []
-        portfolio = {}
-        risk_level = "MODERATE"
-        overall_label = "NEUTRAL"
-        overall_score = 0.0
-
-    risk_color   = _RISK_COLORS.get(risk_level, C_AMBER)
-    sent_color   = _SENTIMENT_COLORS.get(overall_label, C_TEXT2)
-
-    n_signals    = len(signals)
-    n_long       = sum(1 for s in signals if _safe_attr(s, "direction") == "LONG")
-    n_short      = sum(1 for s in signals if _safe_attr(s, "direction") == "SHORT")
-    exp_return   = _safe_float(portfolio.get("expected_return", 0.0))
-    top_insight  = insights[0] if insights else None
-    top_opp_str  = _safe_attr(top_insight, "title", default="—") if top_insight else "—"
-
-    stats_html = f"""
-<div class="ir-kpi-grid">
-  {_stat_box("Sentiment Score", f"{overall_score:+.3f}",
-             sub=overall_label, color=sent_color)}
-  {_stat_box("Alpha Signals", str(n_signals),
-             sub=f"{n_long}L / {n_short}S", color=C_GOLD)}
-  {_stat_box("Risk Level", risk_level, color=risk_color)}
-  {_stat_box("Expected Return", _format_pct(exp_return),
-             sub="Portfolio alpha est.", color=_color_for_change(exp_return))}
-</div>"""
-
-    # Prose paragraphs
-    prose_text = getattr(report.ai, "executive_summary", "") or ""
-    paras = [p.strip() for p in prose_text.split("\n\n") if p.strip()]
-    prose_html = "".join(f"<p>{p}</p>" for p in paras) if paras else (
-        f"<p style='color:{C_TEXT3}'>Executive summary not available.</p>"
-    )
-
-    # Key findings (top 3 insights) as ir-insight cards
-    top3 = insights[:3]
-    findings_html = ""
-    for ins in top3:
-        title  = _safe_attr(ins, "title", default="Signal detected")
-        detail = _safe_attr(ins, "detail", default="")
-        detail_short = detail[:200].rstrip(".") + ("…" if len(detail) > 200 else "") if detail else ""
-        cat    = _safe_attr(ins, "category", default="")
-        cat_color = _CATEGORY_COLORS.get(cat, C_GOLD)
-        findings_html += f"""
-<div class="ir-insight" style="--cat-color:{cat_color}">
-  <div class="ir-insight-header">
-    <div>
-      {_badge(cat, cat_color) if cat else ""}
-      <div class="ir-insight-title">{title}</div>
-    </div>
-  </div>
-  <div class="ir-insight-detail">{detail_short}</div>
-</div>"""
-
-    top_opp_text = f"""
-<div style="margin-top:20px">
-  <div class="ir-sub-title">Top Opportunity</div>
-  <div style="font-size:0.93rem;color:{C_TEAL};font-weight:600;line-height:1.5">
-    {top_opp_str}
-  </div>
-</div>""" if top_opp_str != "—" else ""
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(2, "EXECUTIVE SUMMARY", "Market Overview &amp; Investment Thesis")}
-  {stats_html}
-  <div class="ir-card ir-card-highlight">
-    <div class="ir-prose">{prose_html}</div>
-    {top_opp_text}
-  </div>
-  {"<div class='ir-sub-title' style='margin-top:32px'>Key Findings</div>" + findings_html if findings_html else ""}
-</div>"""
-
-
-def _sentiment_section(report: "InvestorReport") -> str:
-    try:
-        sb = report.sentiment  # SentimentBreakdown object from engine
-    except Exception:
-        sb = None
-
-    def _sb_float(attr: str) -> float:
-        try:
-            return _safe_float(getattr(sb, attr, 0.0))
-        except Exception:
-            return 0.0
-
-    def _sb_int(attr: str) -> int:
-        try:
-            return int(getattr(sb, attr, 0) or 0)
-        except Exception:
-            return 0
-
-    def _sb_list(attr: str) -> list:
-        try:
-            return list(getattr(sb, attr, []) or [])
-        except Exception:
-            return []
-
-    # Score breakdown rows
-    score_rows = [
-        ("News Sentiment",    _sb_float("news_score"),    C_STEEL),
-        ("Freight Momentum",  _sb_float("freight_score"), C_TEAL),
-        ("Macro Backdrop",    _sb_float("macro_score"),   C_AMBER),
-        ("Alpha Signals",     _sb_float("alpha_score"),   C_PURPLE),
+def _nav() -> str:
+    links = [
+        ("#s1", "Executive Summary"),
+        ("#s2", "Alpha Signals"),
+        ("#s3", "Freight Rates"),
+        ("#s4", "Macroeconomic"),
+        ("#s5", "Equities"),
+        ("#s6", "Market Intel"),
+        ("#s7", "Risk & Scenarios"),
+        ("#s8", "Recommendations"),
     ]
+    items = "".join(f'<a href="{href}">{label}</a>' for href, label in links)
+    return f'<nav class="ir-nav">{items}</nav>'
 
-    def _norm(v: float) -> float:
-        """Map [-1,+1] to [0,1] for bar width."""
-        return (v + 1.0) / 2.0
 
-    score_bars_html = ""
-    for label, val, color in score_rows:
-        norm = _norm(_safe_float(val))
-        val_col = C_TEAL if val > 0.1 else (C_CRIMSON if val < -0.1 else C_TEXT2)
-        score_bars_html += f"""
-<div class="ir-score-row">
-  <div class="ir-score-label">{label}</div>
-  <div>{_score_bar_svg(norm, color, 260, 8)}</div>
-  <div style="font-size:0.75rem;color:{val_col};font-weight:700;min-width:60px;
-              text-align:right;font-family:'JetBrains Mono',monospace">{val:+.3f}</div>
-</div>"""
-
-    # Stacked bar
-    stacked = _stacked_bar(_sb_int("bullish_count"), _sb_int("bearish_count"), _sb_int("neutral_count"))
-
-    # Keywords
-    keywords_html = ""
-    top_keywords = _sb_list("top_keywords")
-    if top_keywords:
-        pills = "".join(
-            f'<span class="ir-keyword-pill">{kw}</span>'
-            for kw in top_keywords[:20]
-        )
-        keywords_html = f'<div class="ir-keyword-cloud">{pills}</div>'
-
-    # Trending topics table
-    topics_html = ""
-    trending_topics = _sb_list("trending_topics")
-    if trending_topics:
-        rows_h = ""
-        for t in trending_topics[:10]:
-            name     = _safe_str(t.get("topic", t.get("name", "—")))
-            mentions = t.get("mentions", t.get("count", "—"))
-            sent_val = t.get("sentiment", t.get("score", None))
-            sent_str = f"{sent_val:+.2f}" if isinstance(sent_val, (int, float)) else "—"
-            sent_col = _color_for_change(_safe_float(sent_val)) if sent_val is not None else C_TEXT3
-            rows_h += f"""<tr>
-  <td class="tc-name">{name}</td>
-  <td class="num">{mentions}</td>
-  <td class="num" style="color:{sent_col};font-weight:700">{sent_str}</td>
-</tr>"""
-        topics_html = f"""
-<div class="ir-sub-title" style="margin-top:24px">Trending Topics</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr><th>Topic</th><th class="num">Mentions</th>
-    <th class="num">Sentiment</th></tr></thead>
-    <tbody>{rows_h}</tbody>
-  </table>
-</div>"""
-
-    # Top headlines
-    headlines_html = ""
-    try:
-        news_items = list(getattr(report, "news_items", []) or [])
-    except Exception:
-        news_items = []
-    if news_items:
-        hl_rows = ""
-        for hl in news_items[:5]:
-            if isinstance(hl, dict):
-                h_title  = _safe_str(hl.get("title", hl.get("headline", "—")))
-                h_source = _safe_str(hl.get("source", "—"))
-                h_date   = _safe_str(hl.get("published", hl.get("date", "")))
-                h_sent   = hl.get("sentiment_score", hl.get("sentiment", None))
-            else:
-                h_title  = _safe_str(getattr(hl, "title", "—"))
-                h_source = _safe_str(getattr(hl, "source", "—"))
-                h_date   = _safe_str(getattr(hl, "published_dt", "") or "")
-                h_sent   = getattr(hl, "sentiment_score", None)
-            h_col   = _color_for_change(_safe_float(h_sent)) if h_sent is not None else C_TEXT3
-            h_label = ("BULL" if _safe_float(h_sent) > 0.1
-                       else "BEAR" if _safe_float(h_sent) < -0.1 else "NEUT")
-            hl_rows += f"""<tr>
-  <td style="color:{C_TEXT};font-weight:600;line-height:1.4">{h_title}</td>
-  <td class="tc-dim">{h_source}{"&nbsp;&bull;&nbsp;" + str(h_date) if h_date else ""}</td>
-  <td style="text-align:center">{_badge(h_label, h_col)}</td>
-</tr>"""
-        headlines_html = f"""
-<div class="ir-sub-title" style="margin-top:24px">Top News Headlines</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr><th>Headline</th><th>Source / Date</th><th style="text-align:center">Tone</th></tr></thead>
-    <tbody>{hl_rows}</tbody>
-  </table>
-</div>"""
-
-    # AI narrative prose
-    narrative_text = getattr(report.ai, "sentiment_narrative", "") or ""
-    narrative_paras = [p.strip() for p in narrative_text.split("\n\n") if p.strip()]
-    narrative_html  = "".join(f"<p>{p}</p>" for p in narrative_paras)
-
+def _section_head(num: int, title: str, sub: str = "") -> str:
     return f"""
-<div class="ir-section">
-  {_section_header_html(3, "MARKET SENTIMENT ANALYSIS", "Component Scores &amp; Signal Distribution")}
-
-  <div class="ir-two-col" style="gap:24px;margin-bottom:24px">
-    <div>
-      <div class="ir-sub-title">Sentiment Score Breakdown</div>
-      {score_bars_html}
-    </div>
-    <div>
-      <div class="ir-sub-title">Signal Distribution</div>
-      <div style="margin-top:12px">{stacked}</div>
-    </div>
-  </div>
-
-  {"<div class='ir-sub-title'>Market Keywords</div>" + keywords_html if keywords_html else ""}
-  {topics_html}
-  {headlines_html}
-
-  {f'<div class="ir-prose ir-prose-highlight" style="margin-top:28px">{narrative_html}</div>' if narrative_html else ""}
-</div>"""
-
-
-def _alpha_section(report: "InvestorReport") -> str:
-    try:
-        signals   = getattr(report.alpha, "signals", []) or []
-        portfolio = getattr(report.alpha, "portfolio", {}) or {}
-    except Exception:
-        signals = []
-        portfolio = {}
-
-    # Portfolio summary stats
-    exp_ret  = _safe_float(portfolio.get("expected_return", 0.0))
-    sharpe   = _safe_float(portfolio.get("sharpe", 0.0))
-    port_vol = _safe_float(portfolio.get("portfolio_vol", 0.0))
-    max_dd   = _safe_float(portfolio.get("max_dd_estimate", 0.0))
-
-    port_stats = f"""
-<div class="ir-kpi-grid" style="margin-bottom:28px">
-  {_stat_box("Expected Return", _format_pct(exp_ret), color=_color_for_change(exp_ret))}
-  {_stat_box("Sharpe Ratio", f"{sharpe:.2f}",
-             color=C_TEAL if sharpe > 1 else (C_AMBER if sharpe > 0 else C_CRIMSON))}
-  {_stat_box("Portfolio Vol", f"{port_vol:.1f}%", color=C_TEXT2)}
-  {_stat_box("Max DD Est.", f"-{max_dd:.1f}%", color=C_CRIMSON)}
-</div>"""
-
-    # Conviction breakdown mini bar chart (CSS)
-    high_n   = sum(1 for s in signals if _safe_attr(s, "conviction") == "HIGH")
-    med_n    = sum(1 for s in signals if _safe_attr(s, "conviction") == "MEDIUM")
-    low_n    = sum(1 for s in signals if _safe_attr(s, "conviction") == "LOW")
-    total_n  = len(signals) or 1
-
-    conv_html = f"""
-<div class="ir-sub-title">Signal Conviction Distribution</div>
-<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px">
-  {_conv_bar("HIGH",   high_n, total_n, C_TEAL)}
-  {_conv_bar("MEDIUM", med_n,  total_n, C_AMBER)}
-  {_conv_bar("LOW",    low_n,  total_n, C_TEXT3)}
-</div>"""
-
-    # By signal type
-    type_counts: Dict[str, int] = {}
-    for s in signals:
-        t = _safe_attr(s, "signal_type", default="OTHER")
-        type_counts[t] = type_counts.get(t, 0) + 1
-    type_html = ""
-    if type_counts:
-        type_html = '<div class="ir-sub-title">By Signal Type</div>'
-        type_html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:24px">'
-        type_colors = {
-            "MOMENTUM":       C_TEAL,
-            "MEAN_REVERSION": C_PURPLE,
-            "FUNDAMENTAL":    C_STEEL,
-            "MACRO":          C_STEEL,
-            "TECHNICAL":      C_AMBER,
-        }
-        for st, cnt in sorted(type_counts.items(), key=lambda x: -x[1]):
-            col = type_colors.get(st, C_TEXT2)
-            type_html += _conv_bar(st, cnt, total_n, col)
-        type_html += "</div>"
-
-    # LONG / SHORT signal tables
-    long_signals  = [s for s in signals if _safe_attr(s, "direction") == "LONG"]
-    short_signals = [s for s in signals if _safe_attr(s, "direction") == "SHORT"]
-
-    long_table  = _signal_table("LONG Signals", long_signals, C_TEAL)   if long_signals  else ""
-    short_table = _signal_table("SHORT Signals", short_signals, C_CRIMSON) if short_signals else ""
-
-    # AI narrative
-    opp_text  = getattr(report.ai, "opportunity_narrative", "") or ""
-    opp_paras = [p.strip() for p in opp_text.split("\n\n") if p.strip()]
-    opp_html  = "".join(f"<p>{p}</p>" for p in opp_paras)
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(4, "ALPHA SIGNAL INTELLIGENCE", "Portfolio Metrics &amp; Directional Signals")}
-  {port_stats}
-  <div class="ir-two-col">
-    <div>{conv_html}</div>
-    <div>{type_html}</div>
-  </div>
-  {long_table}
-  {short_table}
-  {f'<div class="ir-prose ir-prose-highlight" style="margin-top:24px">{opp_html}</div>'
-   if opp_html else ""}
-</div>"""
-
-
-def _conv_bar(label: str, count: int, total: int, color: str) -> str:
-    pct = count / total * 100 if total else 0
-    return f"""
-<div style="display:flex;align-items:center;gap:12px">
-  <div style="font-size:11px;color:{C_TEXT2};font-weight:600;min-width:100px">{label}</div>
-  <div style="flex:1;height:8px;background:{_hex_to_rgba(C_BORDER, 0.6)};
-              border-radius:4px;overflow:hidden">
-    <div style="width:{pct:.1f}%;height:100%;background:{color};border-radius:4px"></div>
-  </div>
-  <div style="font-size:11px;color:{C_TEXT3};min-width:28px;
-              font-family:'JetBrains Mono',monospace">{count}</div>
-</div>"""
-
-
-def _signal_table(title: str, signals: list, header_color: str) -> str:
-    if not signals:
-        return ""
-    rows_h = ""
-    for s in signals[:20]:
-        ticker   = _safe_str(_safe_attr(s, "ticker"))
-        name     = _safe_str(_safe_attr(s, "signal_name"))
-        strength = _safe_float(_safe_attr(s, "strength", default=0.0))
-        conv     = _safe_str(_safe_attr(s, "conviction", default="—"))
-        conv_col = _CONVICTION_COLORS.get(conv, C_TEXT2)
-        entry    = _safe_attr(s, "entry_price")
-        target   = _safe_attr(s, "target_price")
-        stop     = _safe_attr(s, "stop_loss")
-        exp_ret  = _safe_float(_safe_attr(s, "expected_return_pct", default=0.0))
-        horizon  = _safe_str(_safe_attr(s, "time_horizon", default="—"))
-
-        entry_s  = _format_price(entry)  if entry  is not None else "—"
-        target_s = _format_price(target) if target is not None else "—"
-        stop_s   = _format_price(stop)   if stop   is not None else "—"
-        ret_col  = _color_for_change(exp_ret)
-
-        rows_h += f"""<tr>
-  <td class="tc-name">{name}</td>
-  <td class="tc-ticker">{ticker}</td>
-  <td class="tc-right">{_score_bar_svg(strength, header_color, 80, 6)}</td>
-  <td class="tc-center">{_badge(conv, conv_col)}</td>
-  <td class="num">{entry_s}</td>
-  <td class="num">{target_s}</td>
-  <td class="num">{stop_s}</td>
-  <td class="num" style="color:{ret_col};font-weight:700">{_format_pct(exp_ret)}</td>
-  <td class="tc-center tc-dim">{horizon}</td>
-</tr>"""
-
-    return f"""
-<div class="ir-sub-title" style="color:{header_color};margin-top:24px">{title}</div>
-<div class="ir-table-wrap" style="margin-bottom:20px">
-  <table class="ir-table">
-    <thead><tr>
-      <th>Signal</th><th>Ticker</th><th>Strength</th><th class="tc-center">Conviction</th>
-      <th class="num">Entry</th><th class="num">Target</th>
-      <th class="num">Stop</th><th class="num">Exp. Ret.</th>
-      <th class="tc-center">Horizon</th>
-    </tr></thead>
-    <tbody>{rows_h}</tbody>
-  </table>
-</div>"""
-
-
-def _market_intelligence_section(report: "InvestorReport") -> str:
-    try:
-        insights   = getattr(report.market, "top_insights", []) or []
-        risk_level = getattr(report.market, "risk_level", "MODERATE")
-    except Exception:
-        insights = []
-        risk_level = "MODERATE"
-
-    risk_color  = _RISK_COLORS.get(risk_level, C_AMBER)
-
-    # Risk level header
-    risk_html = f"""
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:28px">
-  <div style="font-size:12px;color:{C_TEXT2}">Market Risk Level:</div>
-  {_badge(risk_level, risk_color)}
-</div>"""
-
-    # Top insights cards
-    cards_html = ""
-    for ins in insights[:5]:
-        cat    = _safe_str(_safe_attr(ins, "category",   default="ROUTE"))
-        action = _safe_str(_safe_attr(ins, "action",     default="Monitor"))
-        score  = _safe_float(_safe_attr(ins, "score",    default=0.5))
-        title  = _safe_str(_safe_attr(ins, "title",      default="Signal"))
-        detail = _safe_str(_safe_attr(ins, "detail",     default=""))
-        ports  = _safe_attr(ins, "ports_involved",       default=[]) or []
-        routes = _safe_attr(ins, "routes_involved",      default=[]) or []
-        stocks = _safe_attr(ins, "stocks_potentially_affected", default=[]) or []
-        sigs   = _safe_attr(ins, "supporting_signals",   default=[]) or []
-        stale  = _safe_attr(ins, "data_freshness_warning", default=False)
-
-        cat_color  = _CATEGORY_COLORS.get(cat, C_GOLD)
-        score_col  = C_TEAL if score >= 0.70 else (C_AMBER if score >= 0.40 else C_CRIMSON)
-        act_color  = _ACTION_COLORS.get(action, C_TEXT2)
-        score_pct  = f"{score * 100:.0f}%"
-
-        stale_badge = ("&nbsp;" + _badge("Stale Data", C_AMBER)) if stale else ""
-
-        # Supporting signals mini-list
-        sig_items = ""
-        for sg in sigs[:4]:
-            sg_name = _safe_str(_safe_attr(sg, "name",      default="Signal"))
-            sg_dir  = _safe_str(_safe_attr(sg, "direction", default="neutral"))
-            sg_val  = _safe_float(_safe_attr(sg, "value",   default=0.0))
-            sg_col  = C_TEAL if sg_dir == "bullish" else (C_CRIMSON if sg_dir == "bearish" else C_TEXT3)
-            arrow   = "&#9650;" if sg_dir == "bullish" else ("&#9660;" if sg_dir == "bearish" else "&#8594;")
-            sig_items += (
-                f'<div style="font-size:11px;color:{C_TEXT2};padding:2px 0">'
-                f'<span style="color:{sg_col}">{arrow}</span> {sg_name} '
-                f'<span style="color:{C_TEXT3};font-family:\'JetBrains Mono\',monospace">{sg_val:.2f}</span>'
-                f'</div>'
-            )
-
-        ports_txt  = ", ".join(ports)  or "—"
-        routes_txt = ", ".join(routes) or "—"
-        stocks_txt = ", ".join(stocks) or "—"
-
-        cards_html += f"""
-<div class="ir-insight" style="--cat-color:{cat_color}">
-  <div class="ir-insight-header">
-    <div style="flex:1">
-      <div class="ir-insight-meta-row">
-        {_badge(cat, cat_color)}
-        {_badge(action, act_color)}
-        {stale_badge}
-      </div>
-      <div class="ir-insight-title">{title}</div>
-    </div>
-    <div class="ir-insight-score-circle"
-         style="background:{_hex_to_rgba(score_col, 0.14)};
-                color:{score_col};border-color:{_hex_to_rgba(score_col, 0.35)}">
-      {score_pct}
-    </div>
-  </div>
-  <div class="ir-insight-detail">{detail}</div>
-  {f'<div style="margin-bottom:12px">{sig_items}</div>' if sig_items else ""}
-  <div class="ir-insight-footer">
-    <span><strong style="color:{C_TEXT2}">Ports:</strong> {ports_txt}</span>
-    <span><strong style="color:{C_TEXT2}">Routes:</strong> {routes_txt}</span>
-    <span><strong style="color:{C_TEXT2}">Stocks:</strong> {stocks_txt}</span>
-  </div>
-  <div style="margin-top:10px">{_score_bar_svg(score, score_col, 220, 7)}</div>
-</div>"""
-
-    # Port summary table
-    port_rows = _extract_port_rows(insights)
-    port_table_html = ""
-    if port_rows:
-        rows_h = ""
-        for rank, pr in enumerate(port_rows[:10], 1):
-            port_name  = pr.get("port", "—")
-            region     = pr.get("region", "—")
-            d_score    = _safe_float(pr.get("demand_score", 0.5))
-            congestion = pr.get("congestion", None)
-            status     = pr.get("status", "—")
-            d_col      = C_TEAL if d_score >= 0.70 else (C_AMBER if d_score >= 0.40 else C_CRIMSON)
-            s_col      = _RISK_COLORS.get(str(status).upper(), C_TEXT2)
-
-            cong_html = "—"
-            if congestion is not None:
-                cval = _safe_float(congestion)
-                c_col = C_CRIMSON if cval >= 0.6 else (C_AMBER if cval >= 0.35 else C_TEAL)
-                cong_html = f'<span style="color:{c_col};font-weight:600">{cval:.0%}</span>'
-
-            rows_h += f"""<tr>
-  <td class="tc-rank">#{rank}</td>
-  <td class="tc-name">{port_name}</td>
-  <td class="tc-dim">{region}</td>
-  <td>{_score_bar_svg(d_score, d_col, 100, 6)}</td>
-  <td>{cong_html}</td>
-  <td>{_badge(status, s_col) if status != "—" else "—"}</td>
-</tr>"""
-        port_table_html = f"""
-<div class="ir-sub-title" style="margin-top:32px">Top Port Overview</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr>
-      <th>Rank</th><th>Port</th><th>Region</th>
-      <th>Demand Score</th><th>Congestion</th><th>Status</th>
-    </tr></thead>
-    <tbody>{rows_h}</tbody>
-  </table>
-</div>"""
-
-    # Route opportunities table
-    route_rows = _extract_route_rows(insights)
-    route_table_html = ""
-    if route_rows:
-        rows_h = ""
-        for rank, rr in enumerate(route_rows[:10], 1):
-            rname  = rr.get("route", "—")
-            score  = _safe_float(rr.get("score", 0.5))
-            rate   = rr.get("rate", None)
-            chg30  = rr.get("change_30d", None)
-            opp    = rr.get("opportunity", "—")
-            s_col  = C_TEAL if score >= 0.70 else (C_AMBER if score >= 0.40 else C_CRIMSON)
-            rate_s = _format_price(rate) if rate is not None else "—"
-            chg_s  = _change_html(_safe_float(chg30)) if chg30 is not None else "—"
-            rows_h += f"""<tr>
-  <td class="tc-rank">#{rank}</td>
-  <td class="tc-name">{rname}</td>
-  <td>{_score_bar_svg(score, s_col, 80, 6)}</td>
-  <td class="num">{rate_s}</td>
-  <td class="num">{chg_s}</td>
-  <td class="tc-dim">{opp}</td>
-</tr>"""
-        route_table_html = f"""
-<div class="ir-sub-title" style="margin-top:24px">Top Route Opportunities</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr>
-      <th>Rank</th><th>Route</th><th>Score</th>
-      <th class="num">Rate</th>
-      <th class="num">30d Change</th><th>Opportunity</th>
-    </tr></thead>
-    <tbody>{rows_h}</tbody>
-  </table>
-</div>"""
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(5, "MARKET INTELLIGENCE &amp; INSIGHTS", "Port Demand · Route Opportunities · Risk Assessment")}
-  {risk_html}
-  {cards_html if cards_html else f'<p style="color:{C_TEXT3}">No insights available.</p>'}
-  {port_table_html}
-  {route_table_html}
-</div>"""
-
-
-def _extract_port_rows(insights: list) -> list:
-    """Collect unique port names from insights and synthesise summary rows."""
-    seen: Dict[str, dict] = {}
-    for ins in insights:
-        ports = _safe_attr(ins, "ports_involved", default=[]) or []
-        score = _safe_float(_safe_attr(ins, "score", default=0.5))
-        for p in ports:
-            if p not in seen:
-                seen[p] = {"port": p, "region": "—", "demand_score": score,
-                            "congestion": None, "status": "Active", "_count": 1}
-            else:
-                seen[p]["demand_score"] = (seen[p]["demand_score"] + score) / 2
-                seen[p]["_count"] += 1
-    return sorted(seen.values(), key=lambda x: -x["demand_score"])
-
-
-def _extract_route_rows(insights: list) -> list:
-    """Collect unique route names from insights."""
-    seen: Dict[str, dict] = {}
-    for ins in insights:
-        routes = _safe_attr(ins, "routes_involved", default=[]) or []
-        score  = _safe_float(_safe_attr(ins, "score", default=0.5))
-        action = _safe_attr(ins, "action", default="Monitor")
-        for r in routes:
-            if r not in seen:
-                seen[r] = {"route": r, "score": score,
-                           "rate": None, "change_30d": None, "opportunity": action}
-            else:
-                seen[r]["score"] = (seen[r]["score"] + score) / 2
-    return sorted(seen.values(), key=lambda x: -x["score"])
-
-
-def _freight_section(report: "InvestorReport") -> str:
-    try:
-        fr = report.freight
-        momentum_label   = getattr(fr, "momentum_label", "Stable") or "Stable"
-        fbx_composite    = getattr(fr, "fbx_composite", None)
-        avg_change_30d   = getattr(fr, "avg_change_30d_pct", None)
-        biggest_mover    = getattr(fr, "biggest_mover", {}) or {}
-        biggest_route    = biggest_mover.get("route_id", "") if isinstance(biggest_mover, dict) else ""
-        biggest_pct      = biggest_mover.get("change_pct", None) if isinstance(biggest_mover, dict) else None
-        routes           = getattr(fr, "routes", []) or []
-    except Exception:
-        momentum_label = "Stable"
-        fbx_composite  = None
-        avg_change_30d = None
-        biggest_route  = ""
-        biggest_pct    = None
-        routes         = []
-
-    mom_col = (
-        C_TEAL if momentum_label == "Accelerating"
-        else C_CRIMSON if momentum_label == "Decelerating"
-        else C_TEXT2
-    )
-    arrow_sym = (
-        "&#9650;" if momentum_label == "Accelerating"
-        else "&#9660;" if momentum_label == "Decelerating"
-        else "&#8594;"
-    )
-
-    fbx_str  = _format_price(fbx_composite) if fbx_composite is not None else "N/A"
-    avg_chg  = _format_pct(_safe_float(avg_change_30d)) if avg_change_30d is not None else "—"
-
-    summary_html = f"""
-<div class="ir-kpi-grid" style="margin-bottom:28px">
-  {_stat_box("Momentum", f'<span style="color:{mom_col}">{arrow_sym} {momentum_label}</span>')}
-  {_stat_box("FBX Composite", fbx_str, sub="$/FEU", color=C_STEEL)}
-  {_stat_box("Avg 30d Change", avg_chg,
-             color=_color_for_change(_safe_float(avg_change_30d)))}
-  {_stat_box("Biggest Mover", biggest_route or "—",
-             sub=_format_pct(_safe_float(biggest_pct)) if biggest_pct is not None else "",
-             color=_color_for_change(_safe_float(biggest_pct)))}
-</div>"""
-
-    # Routes table
-    rows_html = ""
-    for row in routes:
-        rname  = _safe_str(row.get("route", row.get("name", "—")))
-        rate   = row.get("current_rate", row.get("rate", None))
-        chg30  = row.get("change_30d",  row.get("pct_30d",  None))
-        chg90  = row.get("change_90d",  row.get("pct_90d",  None))
-        updated = _safe_str(row.get("updated", row.get("as_of", "")))
-
-        rate_s  = _format_price(_safe_float(rate)) if rate is not None else "—"
-        chg30_h = _change_html(_safe_float(chg30)) if chg30 is not None else "—"
-        chg90_h = _change_html(_safe_float(chg90)) if chg90 is not None else "—"
-
-        rows_html += f"""<tr>
-  <td class="tc-name">{rname}</td>
-  <td class="num" style="color:{C_TEXT};font-weight:700">{rate_s}</td>
-  <td class="num">{chg30_h}</td>
-  <td class="num">{chg90_h}</td>
-  <td class="tc-dim">{updated}</td>
-</tr>"""
-
-    table_html = ""
-    if rows_html:
-        table_html = f"""
-<div class="ir-sub-title">Route Rate Table</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr>
-      <th>Route</th>
-      <th class="num">Current Rate ($/FEU)</th>
-      <th class="num">30d Change</th>
-      <th class="num">90d Change</th>
-      <th>Updated</th>
-    </tr></thead>
-    <tbody>{rows_html}</tbody>
-  </table>
-</div>"""
-
-    # Narrative
-    narr_text  = getattr(report.ai, "sentiment_narrative", "") or ""
-    narr_paras = [p.strip() for p in narr_text.split("\n\n") if p.strip()]
-    narr_html  = "".join(f"<p>{p}</p>" for p in narr_paras[-2:])  # last 2 paras = freight focus
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(6, "FREIGHT RATE ANALYSIS", "FBX Composite · Route Rates · Momentum")}
-  {summary_html}
-  {table_html}
-  {f'<div class="ir-prose" style="margin-top:20px">{narr_html}</div>' if narr_html else ""}
-</div>"""
-
-
-def _macro_section(report: "InvestorReport") -> str:
-    try:
-        m = report.macro
-        bdi              = getattr(m, "bdi", None)
-        bdi_change_30d   = getattr(m, "bdi_change_30d_pct", None)
-        wti              = getattr(m, "wti", None)
-        treasury_10y     = getattr(m, "treasury_10y", None)
-        supply_chain_stress = getattr(m, "supply_chain_stress", None)
-        pmi_proxy        = getattr(m, "pmi_proxy", None)
-    except Exception:
-        bdi = bdi_change_30d = wti = treasury_10y = supply_chain_stress = pmi_proxy = None
-
-    def _opt(val: Optional[float], fmt: str = ".1f", prefix: str = "",
-             suffix: str = "", default: str = "N/A") -> str:
-        if val is None:
-            return default
-        try:
-            return f"{prefix}{val:{fmt}}{suffix}"
-        except Exception:
-            return str(val)
-
-    bdi_s      = _opt(bdi,  ".0f")
-    bdi_chg_s  = _opt(bdi_change_30d, "+.1f", suffix="%") if bdi_change_30d is not None else "N/A"
-    wti_s      = _opt(wti,  ".2f", prefix="$")
-    tsy_s      = _opt(treasury_10y, ".2f", suffix="%")
-    scs_s      = str(supply_chain_stress) if supply_chain_stress is not None else "N/A"
-    pmi_s      = _opt(pmi_proxy, ".1f")
-
-    bdi_chg_col = _color_for_change(_safe_float(bdi_change_30d))
-    _stress_color_map = {"LOW": C_TEAL, "MODERATE": C_AMBER, "HIGH": C_CRIMSON}
-    scs_col = _stress_color_map.get(str(supply_chain_stress).upper(), C_TEXT2) \
-              if supply_chain_stress is not None else C_TEXT2
-    pmi_col = (C_TEAL if _safe_float(pmi_proxy) > 52
-               else C_CRIMSON if _safe_float(pmi_proxy) < 48
-               else C_AMBER) if pmi_proxy is not None else C_TEXT2
-
-    macro_stats = f"""
-<div class="ir-kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-     margin-bottom:28px">
-  {_stat_box("BDI", bdi_s, color=C_STEEL)}
-  {_stat_box("BDI 30d Chg", bdi_chg_s, color=bdi_chg_col)}
-  {_stat_box("WTI Crude", wti_s, sub="$/bbl", color=C_TEXT2)}
-  {_stat_box("10Y Treasury", tsy_s, sub="yield", color=C_TEXT2)}
-  {_stat_box("SC Stress", scs_s, color=scs_col)}
-  {_stat_box("PMI Proxy", pmi_s, color=pmi_col)}
-</div>"""
-
-    narr_html = ""
-
-    # Risk narrative
-    risk_text  = getattr(report.ai, "risk_narrative", "") or ""
-    risk_paras = [p.strip() for p in risk_text.split("\n\n") if p.strip()]
-    risk_html  = "".join(f"<p>{p}</p>" for p in risk_paras)
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(7, "MACRO ENVIRONMENT", "BDI · Crude · Rates · Supply Chain Stress")}
-  {macro_stats}
-  {f'<div class="ir-prose">{narr_html}</div>' if narr_html else ""}
-  {f'<div class="ir-prose ir-prose-highlight" style="margin-top:20px">{risk_html}</div>'
-   if risk_html else ""}
-</div>"""
-
-
-def _stocks_section(report: "InvestorReport") -> str:
-    try:
-        stocks_obj = report.stocks
-        tickers           = list(getattr(stocks_obj, "tickers", []) or [])
-        prices            = dict(getattr(stocks_obj, "prices", {}) or {})
-        changes_30d       = dict(getattr(stocks_obj, "changes_30d", {}) or {})
-        signals_by_ticker = dict(getattr(stocks_obj, "signals_by_ticker", {}) or {})
-        top_ticker        = _safe_str(getattr(stocks_obj, "top_pick", ""))
-    except Exception:
-        tickers = []
-        prices = {}
-        changes_30d = {}
-        signals_by_ticker = {}
-        top_ticker = ""
-
-    # Also get alpha signals for any ticker not covered by stocks_obj
-    try:
-        alpha_signals = getattr(report.alpha, "signals", []) or []
-    except Exception:
-        alpha_signals = []
-
-    # Build a fallback ticker_signals dict from alpha signals
-    ticker_signals_fallback: Dict[str, list] = {}
-    for s in alpha_signals:
-        t = _safe_attr(s, "ticker", default="")
-        if t:
-            ticker_signals_fallback.setdefault(t, []).append(s)
-
-    # If no tickers, fall back to _TICKERS that have alpha signals
-    if not tickers:
-        tickers = [t for t in _TICKERS if ticker_signals_fallback.get(t)]
-        best_ret = -999.0
-        for s in alpha_signals:
-            if (_safe_attr(s, "conviction") == "HIGH"
-                    and _safe_attr(s, "direction") == "LONG"):
-                ret = _safe_float(_safe_attr(s, "expected_return_pct", default=0.0))
-                if ret > best_ret:
-                    best_ret = ret
-                    top_ticker = _safe_attr(s, "ticker", default="")
-
-    cards_html = ""
-    for ticker in tickers:
-        price    = prices.get(ticker)
-        chg30    = changes_30d.get(ticker)
-        sigs     = signals_by_ticker.get(ticker) or ticker_signals_fallback.get(ticker, [])
-        top_sig  = max(sigs, key=lambda s: _safe_float(_safe_attr(s, "strength", default=0))) \
-                   if sigs else None
-
-        name     = _TICKER_NAMES.get(ticker, ticker)
-        price_s  = _format_price(price) if price is not None else "—"
-        chg_col  = _color_for_change(_safe_float(chg30))
-        chg_html = f'<span style="color:{chg_col};font-weight:700">{_change_html(_safe_float(chg30))}</span>' \
-                   if chg30 is not None else f'<span style="color:{C_TEXT3}">—</span>'
-
-        is_top = ticker == top_ticker
-        glow_style = (
-            f"background:linear-gradient(135deg,{C_CARD},{C_SURFACE});"
-            f"border-color:{_hex_to_rgba(C_TEAL, 0.35)};"
-            f"box-shadow:0 0 28px {_hex_to_rgba(C_TEAL, 0.12)};"
-            f"border-top:3px solid {C_GOLD};"
-        ) if is_top else ""
-
-        # Top signal badge
-        top_sig_html = ""
-        if top_sig is not None:
-            ts_dir  = _safe_attr(top_sig, "direction", default="NEUTRAL")
-            ts_conv = _safe_attr(top_sig, "conviction", default="LOW")
-            ts_ret  = _safe_float(_safe_attr(top_sig, "expected_return_pct", default=0.0))
-            ts_col  = C_TEAL if ts_dir == "LONG" else (C_CRIMSON if ts_dir == "SHORT" else C_TEXT2)
-            top_sig_html = (
-                f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
-                f'{_badge(ts_dir, ts_col)}'
-                f'{_badge(ts_conv, _CONVICTION_COLORS.get(ts_conv, C_TEXT2))}'
-                f'<span style="font-size:11px;color:{ts_col};font-weight:700;align-self:center;'
-                f'font-family:\'JetBrains Mono\',monospace">{_format_pct(ts_ret)}</span>'
-                f'</div>'
-            )
-
-        # Mini signal list
-        sig_list = ""
-        for sg in sigs[:3]:
-            sg_dir  = _safe_attr(sg, "direction", default="NEUTRAL")
-            sg_name = _safe_attr(sg, "signal_name", default="Signal")
-            sg_col  = C_TEAL if sg_dir == "LONG" else (C_CRIMSON if sg_dir == "SHORT" else C_TEXT3)
-            arrow   = "&#9650;" if sg_dir == "LONG" else ("&#9660;" if sg_dir == "SHORT" else "&#8594;")
-            sig_list += (
-                f'<div style="font-size:11px;color:{C_TEXT2};padding:2px 0">'
-                f'<span style="color:{sg_col}">{arrow}</span> {sg_name}'
-                f'</div>'
-            )
-
-        top_pick_badge = (
-            f'<div style="margin-bottom:8px">{_badge("TOP PICK", C_GOLD)}</div>'
-            if is_top else ""
-        )
-
-        cards_html += f"""
-<div class="ir-stock-card" style="{glow_style}">
-  {top_pick_badge}
-  <div class="ir-stock-header">
-    <div>
-      <div class="ir-stock-ticker">{ticker}</div>
-      <div class="ir-stock-name">{name}</div>
-    </div>
-    <div class="ir-stock-price">
-      <div class="ir-stock-price-val">{price_s}</div>
-      <div class="ir-stock-price-chg">{chg_html}</div>
-    </div>
-  </div>
-  {top_sig_html}
-  <div>{sig_list}</div>
-</div>"""
-
-    return f"""
-<div class="ir-section">
-  {_section_header_html(8, "SHIPPING STOCK ANALYSIS", "Per-Ticker Signal Grid &amp; Top Pick")}
-  <div class="ir-stock-grid">
-    {cards_html if cards_html else
-     f'<p style="color:{C_TEXT3}">No stock data available.</p>'}
-  </div>
-</div>"""
-
-
-def _recommendations_section(report: "InvestorReport") -> str:
-    try:
-        recs = list(getattr(report.ai, "top_recommendations", []) or [])
-    except Exception:
-        recs = []
-
-    cards_html = ""
-    for rec in recs:
-        rank        = rec.get("rank", "—")
-        title       = rec.get("title", "Untitled")
-        action      = rec.get("action", "MONITOR")
-        ticker      = rec.get("ticker", "")
-        conviction  = rec.get("conviction", "MEDIUM")
-        time_horizon = rec.get("time_horizon", "—")
-        rationale   = rec.get("rationale", "")
-        exp_return  = _safe_float(rec.get("expected_return", 0.0))
-        risk_rating = rec.get("risk_rating", "MODERATE")
-        entry       = rec.get("entry", None)
-        target      = rec.get("target", None)
-        stop        = rec.get("stop", None)
-
-        action_col = _ACTION_COLORS.get(str(action).upper(), C_TEXT2)
-        conv_col   = _CONVICTION_COLORS.get(conviction, C_TEXT2)
-        risk_col   = _RISK_COLORS.get(risk_rating, C_AMBER)
-        ret_col    = _color_for_change(exp_return)
-
-        ticker_str = f" &mdash; {_badge(ticker, C_GOLD)}" if ticker else ""
-
-        # Price grid
-        price_kvs = ""
-        if entry is not None:
-            price_kvs += _rec_kv("Entry", _format_price(_safe_float(entry)))
-        if target is not None:
-            price_kvs += _rec_kv("Target", _format_price(_safe_float(target)), C_TEAL)
-        if stop is not None:
-            price_kvs += _rec_kv("Stop", _format_price(_safe_float(stop)), C_CRIMSON)
-        price_row = f'<div class="ir-rec-grid">{price_kvs}</div>' if price_kvs else ""
-
-        cards_html += f"""
-<div class="ir-rec" style="--action-color:{action_col}">
-  <div class="ir-rec-rank">{rank}</div>
+<div class="ir-section-head">
+  <div class="ir-section-num">{num:02d}</div>
   <div>
-    <div class="ir-rec-title">
-      {title}{ticker_str}
-    </div>
-    <div class="ir-rec-meta">
-      {_badge(action, action_col)}
-      {_badge(f"Conv: {conviction}", conv_col)}
-      {_badge(f"Risk: {risk_rating}", risk_col)}
-      <span style="font-size:11px;color:{ret_col};font-weight:700;align-self:center;
-                   font-family:'JetBrains Mono',monospace">
-        {_format_pct(exp_return)} expected
-      </span>
-      <span style="font-size:11px;color:{C_TEXT3};align-self:center">
-        {time_horizon}
-      </span>
-    </div>
-    {price_row}
-    {"<div class='ir-rec-rationale'>" + rationale + "</div>" if rationale else ""}
+    <div class="ir-section-title">{title}</div>
+    {"<div class='ir-section-sub'>" + sub + "</div>" if sub else ""}
   </div>
 </div>"""
 
-    # Outlook box
-    outlook_text  = getattr(report.ai, "outlook_30d", "") or ""
-    outlook_paras = [p.strip() for p in outlook_text.split("\n\n") if p.strip()]
-    outlook_html  = "".join(f"<p>{p}</p>" for p in outlook_paras)
 
+def _kpi(label: str, value: str, sub: str = "", color: str = "") -> str:
+    col_style = f"color:{color};" if color else ""
     return f"""
-<div class="ir-section">
-  {_section_header_html(9, "AI RECOMMENDATIONS", "Ranked Actionable Ideas &amp; 30-Day Outlook")}
-  {cards_html if cards_html else f'<p style="color:{C_TEXT3}">No recommendations generated.</p>'}
-  {f'''
-  <div class="ir-card ir-card-highlight" style="margin-top:24px">
-    <div class="ir-sub-title" style="color:{C_GOLD}">30-Day Forward Outlook</div>
-    <div class="ir-prose">{outlook_html}</div>
-  </div>''' if outlook_html else ""}
+<div class="ir-kpi">
+  <div class="ir-kpi-label">{label}</div>
+  <div class="ir-kpi-value" style="{col_style}">{value}</div>
+  {"<div class='ir-kpi-sub'>" + sub + "</div>" if sub else ""}
 </div>"""
 
 
-def _rec_kv(label: str, value: str, color: str = None) -> str:
-    val_color = color if color else C_TEXT
-    return (
-        f'<div class="ir-rec-kv">'
-        f'<div class="ir-rec-kv-label">{label}</div>'
-        f'<div class="ir-rec-kv-value" style="color:{val_color}">{value}</div>'
-        f'</div>'
-    )
-
-
-def _appendix(report: "InvestorReport") -> str:
-    try:
-        signals = list(getattr(report.alpha, "signals", []) or [])
-    except Exception:
-        signals = []
-
-    # Full signals scorecard table
-    scorecard_html = ""
-    if signals:
-        rows_h = ""
-        for s in signals:
-            ticker   = _safe_str(_safe_attr(s, "ticker"))
-            name     = _safe_str(_safe_attr(s, "signal_name"))
-            stype    = _safe_str(_safe_attr(s, "signal_type",  default="—"))
-            direct   = _safe_str(_safe_attr(s, "direction",    default="—"))
-            strength = _safe_float(_safe_attr(s, "strength",   default=0.0))
-            conv     = _safe_str(_safe_attr(s, "conviction",   default="—"))
-            entry    = _safe_attr(s, "entry_price")
-            target   = _safe_attr(s, "target_price")
-            stop     = _safe_attr(s, "stop_loss")
-            exp_ret  = _safe_float(_safe_attr(s, "expected_return_pct", default=0.0))
-            rr       = _safe_float(_safe_attr(s, "risk_reward", default=0.0))
-            horizon  = _safe_str(_safe_attr(s, "time_horizon",  default="—"))
-
-            dir_col  = C_TEAL if direct == "LONG" else (C_CRIMSON if direct == "SHORT" else C_TEXT3)
-            conv_col = _CONVICTION_COLORS.get(conv, C_TEXT2)
-            ret_col  = _color_for_change(exp_ret)
-
-            rows_h += f"""<tr>
-  <td class="tc-ticker">{ticker}</td>
-  <td class="tc-name">{name}</td>
-  <td class="tc-dim">{stype}</td>
-  <td style="color:{dir_col};font-weight:700">{direct}</td>
-  <td class="num">{strength:.2f}</td>
-  <td class="tc-center">{_badge(conv, conv_col)}</td>
-  <td class="num">{_format_price(entry) if entry else "—"}</td>
-  <td class="num">{_format_price(target) if target else "—"}</td>
-  <td class="num">{_format_price(stop) if stop else "—"}</td>
-  <td class="num" style="color:{ret_col};font-weight:700">{_format_pct(exp_ret)}</td>
-  <td class="num">{rr:.2f}x</td>
-  <td class="tc-center tc-dim">{horizon}</td>
-</tr>"""
-        scorecard_html = f"""
-<div class="ir-sub-title">Full Signal Scorecard</div>
-<div class="ir-table-wrap" style="overflow-x:auto">
-  <table class="ir-table">
-    <thead><tr>
-      <th>Ticker</th><th>Signal</th><th>Type</th><th>Direction</th>
-      <th class="num">Strength</th><th class="tc-center">Conviction</th>
-      <th class="num">Entry</th><th class="num">Target</th>
-      <th class="num">Stop</th><th class="num">Exp. Ret.</th>
-      <th class="num">R/R</th><th class="tc-center">Horizon</th>
-    </tr></thead>
-    <tbody>{rows_h}</tbody>
-  </table>
+def _score_bar(score: float, color: str) -> str:
+    """Horizontal 0–1 score bar."""
+    pct = max(0.0, min(1.0, score)) * 100
+    return f"""
+<div class="ir-score-bar-wrap">
+  <div class="ir-score-bar-track">
+    <div class="ir-score-bar-fill" style="width:{pct:.1f}%;background:{color}"></div>
+  </div>
+  <span class="ir-score-pct">{pct:.0f}%</span>
 </div>"""
 
-    # Data sources
-    sources = [
-        ("Freight Rates",     "Freightos Baltic Index (FBX), Baltic Exchange"),
-        ("Macroeconomic",     "US Federal Reserve Economic Data (FRED API)"),
-        ("Trade Flows",       "UN Comtrade, World Bank WITS"),
-        ("Shipping Equities", "Yahoo Finance (yfinance)"),
-        ("Port AIS Data",     "MarineTraffic / AIS aggregation"),
-        ("Port Registry",     "World Port Index (UKHO)"),
-        ("News & Sentiment",  "Ship Tracker NLP Pipeline"),
-        ("Alpha Engine",      "Ship Tracker Multi-Factor Alpha Engine v2"),
+
+def _sent_stacked_bar(bullish: int, bearish: int, neutral: int) -> str:
+    total = bullish + bearish + neutral
+    if total == 0:
+        return '<p style="color:#718096;font-size:11px">No sentiment data</p>'
+    bp = bullish / total * 100
+    np_ = neutral / total * 100
+    rp = bearish / total * 100
+    return f"""
+<div class="ir-sent-bar">
+  <div style="width:{bp:.1f}%;background:{C_POS}"></div>
+  <div style="width:{np_:.1f}%;background:#cbd5e0"></div>
+  <div style="width:{rp:.1f}%;background:{C_NEG}"></div>
+</div>
+<div style="display:flex;gap:14px;font-size:10px;margin-top:4px;flex-wrap:wrap">
+  <span style="color:{C_POS};font-weight:600">&#9632; Bullish {bullish} ({bp:.0f}%)</span>
+  <span style="color:#718096;font-weight:600">&#9632; Neutral {neutral} ({np_:.0f}%)</span>
+  <span style="color:{C_NEG};font-weight:600">&#9632; Bearish {bearish} ({rp:.0f}%)</span>
+</div>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 1 — Executive Summary
+# ---------------------------------------------------------------------------
+
+def _section_executive_summary(report) -> str:
+    sent = report.sentiment
+    ai   = report.ai
+
+    overall_score = _safe_float(_safe_attr(sent, "overall_score"), 0.0)
+    overall_label = _safe_str(_safe_attr(sent, "overall_label"), "NEUTRAL")
+    news_score    = _safe_float(_safe_attr(sent, "news_score"), 0.0)
+    freight_score = _safe_float(_safe_attr(sent, "freight_score"), 0.0)
+    macro_score   = _safe_float(_safe_attr(sent, "macro_score"), 0.0)
+    alpha_score   = _safe_float(_safe_attr(sent, "alpha_score"), 0.0)
+    bullish       = int(_safe_float(_safe_attr(sent, "bullish_count"), 0))
+    bearish       = int(_safe_float(_safe_attr(sent, "bearish_count"), 0))
+    neutral       = int(_safe_float(_safe_attr(sent, "neutral_count"), 0))
+    keywords      = _safe_list(_safe_attr(sent, "top_keywords"))
+    trending      = _safe_list(_safe_attr(sent, "trending_topics"))
+
+    exec_summary   = _safe_str(_safe_attr(ai, "executive_summary"), "")
+    sent_narrative = _safe_str(_safe_attr(ai, "sentiment_narrative"), "")
+
+    sent_col = _SENT_COLORS.get(overall_label.upper(), C_NEUT)
+    sign     = "+" if overall_score > 0 else ""
+
+    # Sentiment component rows
+    components = [
+        ("News Sentiment",    news_score,    "#1a3a72"),
+        ("Freight Momentum",  freight_score, "#2c5282"),
+        ("Macro Environment", macro_score,   "#2b6cb0"),
+        ("Alpha Signals",     alpha_score,   "#2c4a8a"),
     ]
-    src_rows = "".join(
-        f'<tr><td class="tc-name">{s}</td>'
-        f'<td style="color:{C_TEXT3}">{d}</td></tr>'
-        for s, d in sources
-    )
-    sources_table = f"""
-<div class="ir-sub-title" style="margin-top:32px">Data Sources</div>
-<div class="ir-table-wrap">
-  <table class="ir-table">
-    <thead><tr><th>Data Type</th><th>Source / Provider</th></tr></thead>
-    <tbody>{src_rows}</tbody>
-  </table>
-</div>"""
+    comp_rows = ""
+    for lbl, sc, col in components:
+        # Normalize -1..1 to 0..1
+        normalized = (sc + 1.0) / 2.0
+        bar = _score_bar(normalized, col)
+        sign_sc = "+" if sc > 0 else ""
+        comp_rows += f"""
+<tr>
+  <td style="font-weight:600;white-space:nowrap">{lbl}</td>
+  <td style="width:220px;padding:9px 12px">{bar}</td>
+  <td class="num" style="font-weight:700;color:{_pct_color(sc * 50)}">{sign_sc}{sc:.3f}</td>
+</tr>"""
 
-    # Disclaimer
-    disclaimer_text = getattr(report.ai, "disclaimer", None) or (
-        "This report has been prepared by the Ship Tracker Intelligence Platform for "
-        "informational purposes only. It does not constitute financial, investment, legal, "
-        "or tax advice, and should not be relied upon as such. Past performance is not "
-        "indicative of future results. All alpha signals, price targets, and return "
-        "estimates are model-generated and carry inherent uncertainty. Shipping markets "
-        "are subject to geopolitical, macroeconomic, and regulatory risks that may "
-        "materially affect outcomes. Recipients should conduct their own due diligence "
-        "and consult qualified advisors before making investment decisions. This document "
-        "is confidential and intended solely for the named institutional recipient. "
-        "Redistribution without written consent is prohibited."
-    )
+    # Topic pills
+    topic_html = ""
+    if trending:
+        for t in trending[:12]:
+            topic  = _safe_str(_safe_attr(t, "topic") if isinstance(t, dict) else t)
+            count  = int(_safe_float(_safe_attr(t, "count") if isinstance(t, dict) else 0, 0))
+            label  = f"{topic}" + (f" ({count})" if count else "")
+            topic_html += f'<span class="ir-topic-pill">{label}</span>'
+    elif keywords:
+        for k in keywords[:14]:
+            topic_html += f'<span class="ir-topic-pill">{_safe_str(k)}</span>'
+
+    # Narrative paragraphs
+    def _paras(text: str) -> str:
+        if not text:
+            return '<p style="color:#718096;font-style:italic">Narrative not available.</p>'
+        parts = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not parts:
+            parts = [text.strip()]
+        return "".join(f"<p>{p}</p>" for p in parts)
 
     return f"""
-<div class="ir-section">
-  {_section_header_html(10, "APPENDIX &amp; DISCLAIMER", "Full Signal Scorecard · Data Sources · Legal")}
-  {scorecard_html}
-  {sources_table}
-  <div class="ir-sub-title" style="margin-top:32px">Legal Disclaimer</div>
-  <div class="ir-disclaimer-box">{disclaimer_text}</div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid {C_BORDER};
-              font-size:11px;color:{C_TEXT3};text-align:center;line-height:1.8">
-    Generated by <strong style="color:{C_TEXT2}">Ship Tracker Intelligence Platform</strong>
-    &nbsp;&mdash;&nbsp;{report.generated_at}<br>
-    Data: yfinance &bull; FRED &bull; World Bank &bull; Freightos FBX
-    &bull; MarineTraffic AIS
+<section class="ir-section" id="s1">
+  {_section_head(1, "Executive Summary", "Composite market assessment and sentiment overview")}
+
+  <div class="ir-two-col">
+    <div>
+      <div class="ir-narrative">{_paras(exec_summary)}</div>
+      {"<div class='ir-narrative' style='margin-top:16px'>" + _paras(sent_narrative) + "</div>" if sent_narrative else ""}
+    </div>
+    <div>
+      <div class="ir-card">
+        <div class="ir-card-title">Composite Sentiment Score</div>
+        <div style="text-align:center;padding:16px 0 8px">
+          <div style="font-size:52px;font-weight:900;font-family:'SFMono-Regular','Courier New',monospace;color:{sent_col};line-height:1">{sign}{overall_score:.3f}</div>
+          <div style="margin-top:8px">{_badge(overall_label, sent_col)}</div>
+        </div>
+        <hr class="ir-rule">
+        <div class="ir-table-wrap" style="border:none;margin:0">
+          <table class="ir-table" style="border:none">
+            <thead><tr>
+              <th>Component</th><th>Score Bar</th><th class="right">Score</th>
+            </tr></thead>
+            <tbody>{comp_rows}</tbody>
+          </table>
+        </div>
+        <hr class="ir-rule">
+        <div class="ir-card-title" style="margin-top:4px">News Article Sentiment</div>
+        {_sent_stacked_bar(bullish, bearish, neutral)}
+      </div>
+
+      {"<div class='ir-card' style='margin-top:16px'><div class='ir-card-title'>Trending Topics &amp; Keywords</div><div class='ir-topics'>" + topic_html + "</div></div>" if topic_html else ""}
+    </div>
+  </div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 2 — Alpha Signals
+# ---------------------------------------------------------------------------
+
+def _section_alpha_signals(report) -> str:
+    alpha = report.alpha
+    signals    = _safe_list(_safe_attr(alpha, "signals"))
+    top_long   = _safe_list(_safe_attr(alpha, "top_long"))
+    top_short  = _safe_list(_safe_attr(alpha, "top_short"))
+    cnt_type   = _safe_dict(_safe_attr(alpha, "signal_count_by_type"))
+    cnt_conv   = _safe_dict(_safe_attr(alpha, "signal_count_by_conviction"))
+
+    ai = report.ai
+    opp_narrative = _safe_str(_safe_attr(ai, "opportunity_narrative"), "")
+
+    # KPIs
+    total_sigs = len(signals)
+    hi_conv    = int(_safe_float(cnt_conv.get("HIGH", 0), 0))
+    med_conv   = int(_safe_float(cnt_conv.get("MEDIUM", 0), 0))
+    lo_conv    = int(_safe_float(cnt_conv.get("LOW", 0), 0))
+    long_ct    = sum(1 for s in signals if _safe_str(_safe_attr(s, "direction")).upper() in ("LONG", "BUY"))
+    short_ct   = sum(1 for s in signals if _safe_str(_safe_attr(s, "direction")).upper() in ("SHORT", "SELL"))
+
+    kpis = f"""
+<div class="ir-kpi-row">
+  {_kpi("Total Signals", str(total_sigs), "active this session")}
+  {_kpi("High Conviction", str(hi_conv), "strong setup", C_POS)}
+  {_kpi("Medium Conviction", str(med_conv), "developing", C_WARN)}
+  {_kpi("Long Bias", str(long_ct), "directional long signals", C_POS)}
+  {_kpi("Short Bias", str(short_ct), "directional short signals", C_NEG)}
+</div>"""
+
+    # Signal table
+    def _signal_row(s: Any, i: int) -> str:
+        ticker   = _safe_str(_safe_attr(s, "ticker"))
+        sig_type = _safe_str(_safe_attr(s, "signal_type", "type"), "—")
+        direction= _safe_str(_safe_attr(s, "direction"), "—").upper()
+        conviction=_safe_str(_safe_attr(s, "conviction"), "—").upper()
+        strength = _safe_float(_safe_attr(s, "strength", "score"), 0.0)
+        rationale= _safe_str(_safe_attr(s, "rationale", "description"), "—")
+
+        dir_col  = _ACTION_COLORS.get(direction, C_NEUT)
+        conv_col = _CONV_COLORS.get(conviction, C_NEUT)
+        str_bar  = _score_bar(strength, conv_col)
+
+        return f"""<tr>
+  <td class="num" style="color:#718096;width:32px">{i}</td>
+  <td style="font-weight:700;font-family:'SFMono-Regular','Courier New',monospace">{ticker}</td>
+  <td><span style="font-size:11px;color:#4a5568">{sig_type}</span></td>
+  <td>{_badge(direction, dir_col)}</td>
+  <td>{_badge(conviction, conv_col)}</td>
+  <td style="width:160px">{str_bar}</td>
+  <td style="font-size:11.5px;color:#4a5568;max-width:300px">{rationale[:140]}{"…" if len(rationale) > 140 else ""}</td>
+</tr>"""
+
+    signal_rows = "".join(_signal_row(s, i + 1) for i, s in enumerate(signals[:50]))
+    if not signal_rows:
+        signal_rows = '<tr><td colspan="7" style="text-align:center;color:#718096;padding:24px">No signals available</td></tr>'
+
+    # Top longs
+    def _top_side_list(title: str, items: list, color: str) -> str:
+        if not items:
+            return f'<div class="ir-card"><div class="ir-card-title">{title}</div><p style="color:#718096;font-size:11px">No signals</p></div>'
+        rows = ""
+        for i, s in enumerate(items[:5]):
+            ticker     = _safe_str(_safe_attr(s, "ticker"))
+            conviction = _safe_str(_safe_attr(s, "conviction"), "—").upper()
+            strength   = _safe_float(_safe_attr(s, "strength", "score"), 0.0)
+            rationale  = _safe_str(_safe_attr(s, "rationale", "description"), "—")
+            rows += f"""
+<div style="padding:10px 0;border-bottom:1px solid #e9ecef">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <span style="font-weight:700;font-size:14px;font-family:'SFMono-Regular','Courier New',monospace;color:{color}">{ticker}</span>
+    {_badge(conviction, _CONV_COLORS.get(conviction, C_NEUT))}
+  </div>
+  {_score_bar(strength, color)}
+  <div style="font-size:11px;color:#4a5568;margin-top:4px">{rationale[:100]}{"…" if len(rationale) > 100 else ""}</div>
+</div>"""
+        return f'<div class="ir-card"><div class="ir-card-title">{title}</div>{rows}</div>'
+
+    # Signal type breakdown
+    type_rows = ""
+    for sig_type, cnt in sorted(cnt_type.items(), key=lambda x: -x[1]):
+        pct = cnt / total_sigs * 100 if total_sigs else 0
+        bar = _score_bar(pct / 100, C_NAVY)
+        type_rows += f"""<tr>
+  <td>{sig_type}</td>
+  <td style="width:160px">{bar}</td>
+  <td class="num">{cnt}</td>
+  <td class="num">{pct:.0f}%</td>
+</tr>"""
+
+    def _paras(text: str) -> str:
+        if not text:
+            return ""
+        parts = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not parts:
+            parts = [text.strip()]
+        return "".join(f"<p>{p}</p>" for p in parts)
+
+    opp_html = ""
+    if opp_narrative:
+        opp_html = f'<div class="ir-narrative" style="margin-bottom:20px">{_paras(opp_narrative)}</div>'
+
+    return f"""
+<section class="ir-section" id="s2">
+  {_section_head(2, "Alpha Signals", "Quantitative signal framework — current session")}
+  {kpis}
+  {opp_html}
+
+  <div class="ir-two-col" style="margin-bottom:24px">
+    {_top_side_list("Top Long Ideas", top_long, C_POS)}
+    {_top_side_list("Top Short Ideas", top_short, C_NEG)}
+  </div>
+
+  <div style="margin-bottom:16px;font-size:12px;font-weight:700;color:#0f285a;text-transform:uppercase;letter-spacing:.08em">
+    Full Signal Table
+  </div>
+  <div class="ir-table-wrap">
+    <table class="ir-table">
+      <thead><tr>
+        <th>#</th>
+        <th>Ticker</th>
+        <th>Signal Type</th>
+        <th>Direction</th>
+        <th>Conviction</th>
+        <th>Strength</th>
+        <th>Rationale</th>
+      </tr></thead>
+      <tbody>{signal_rows}</tbody>
+    </table>
+  </div>
+
+  {"<div class='ir-card' style='margin-top:24px'><div class='ir-card-title'>Signal Type Distribution</div><div class='ir-table-wrap' style='border:none;margin:0'><table class='ir-table' style='border:none'><thead><tr><th>Type</th><th>Distribution</th><th class='right'>Count</th><th class='right'>Share</th></tr></thead><tbody>" + type_rows + "</tbody></table></div></div>" if type_rows else ""}
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 3 — Freight Rates
+# ---------------------------------------------------------------------------
+
+def _section_freight_rates(report) -> str:
+    freight = report.freight
+    routes        = _safe_list(_safe_attr(freight, "routes"))
+    avg_chg       = _safe_float(_safe_attr(freight, "avg_change_30d_pct"), 0.0)
+    biggest_mover = _safe_dict(_safe_attr(freight, "biggest_mover"))
+    momentum_lbl  = _safe_str(_safe_attr(freight, "momentum_label"), "Stable")
+    fbx           = _safe_float(_safe_attr(freight, "fbx_composite"), 0.0)
+
+    mom_color = C_POS if momentum_lbl.lower() == "accelerating" else (C_NEG if momentum_lbl.lower() == "decelerating" else C_NEUT)
+
+    bm_route = _safe_str(_safe_attr(biggest_mover, "route_id", "route"), "—")
+    bm_chg   = _safe_float(_safe_attr(biggest_mover, "change_pct", "change_30d_pct"), 0.0)
+    bm_rate  = _safe_float(_safe_attr(biggest_mover, "rate"), 0.0)
+
+    kpis = f"""
+<div class="ir-kpi-row">
+  {_kpi("Fleet Avg 30d Change", _fmt_pct(avg_chg), "blended across all routes", _pct_color(avg_chg))}
+  {_kpi("FBX Composite", _fmt_num(fbx, 0) if fbx else "—", "Freightos Baltic Index")}
+  {_kpi("Momentum", momentum_lbl, "current freight trend", mom_color)}
+  {_kpi("Biggest Mover", bm_route, f"{_fmt_pct(bm_chg)} / {_fmt_price(bm_rate)}", _pct_color(bm_chg))}
+  {_kpi("Routes Tracked", str(len(routes)), "in coverage universe")}
+</div>"""
+
+    # Route rows
+    def _route_row(r: Any) -> str:
+        route_id  = _safe_str(_safe_attr(r, "route_id", "route"))
+        rate      = _safe_float(_safe_attr(r, "rate"), 0.0)
+        chg_30d   = _safe_float(_safe_attr(r, "change_30d"), 0.0)
+        chg_pct   = _safe_float(_safe_attr(r, "change_pct", "change_30d_pct"), 0.0)
+        trend     = _safe_str(_safe_attr(r, "trend"), "—")
+        label     = _safe_str(_safe_attr(r, "label"), "")
+
+        trend_col = C_POS if trend.upper() in ("UP", "RISING", "BULLISH") else (C_NEG if trend.upper() in ("DOWN", "FALLING", "BEARISH") else C_NEUT)
+        arrow_t   = "&#9650;" if trend.upper() in ("UP", "RISING") else ("&#9660;" if trend.upper() in ("DOWN", "FALLING") else "&#9654;")
+
+        return f"""<tr>
+  <td style="font-weight:600;font-family:'SFMono-Regular','Courier New',monospace">{route_id}</td>
+  <td style="color:#4a5568;font-size:11.5px">{label}</td>
+  <td class="num">{_fmt_price(rate) if rate else "—"}</td>
+  <td class="num">{_fmt_price(chg_30d) if chg_30d else "—"}</td>
+  {_pct_cell(chg_pct)}
+  <td class="center"><span style="color:{trend_col};font-weight:700">{arrow_t} {trend}</span></td>
+</tr>"""
+
+    route_rows = "".join(_route_row(r) for r in routes)
+    if not route_rows:
+        route_rows = '<tr><td colspan="6" style="text-align:center;color:#718096;padding:24px">No freight data available</td></tr>'
+
+    return f"""
+<section class="ir-section" id="s3">
+  {_section_head(3, "Freight Rates", "Route-level rate analysis — 30-day momentum")}
+  {kpis}
+
+  <div class="ir-table-wrap">
+    <table class="ir-table">
+      <thead><tr>
+        <th>Route ID</th>
+        <th>Description</th>
+        <th class="right">Rate ($/FEU)</th>
+        <th class="right">30d Change ($)</th>
+        <th class="right">30d Change (%)</th>
+        <th class="center">Trend</th>
+      </tr></thead>
+      <tbody>{route_rows}</tbody>
+    </table>
+  </div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — Macroeconomic
+# ---------------------------------------------------------------------------
+
+def _section_macroeconomic(report) -> str:
+    macro = report.macro
+    bdi       = _safe_float(_safe_attr(macro, "bdi"), 0.0)
+    bdi_chg   = _safe_float(_safe_attr(macro, "bdi_change_30d_pct"), 0.0)
+    wti       = _safe_float(_safe_attr(macro, "wti"), 0.0)
+    wti_chg   = _safe_float(_safe_attr(macro, "wti_change_30d_pct"), 0.0)
+    tsy10     = _safe_float(_safe_attr(macro, "treasury_10y"), 0.0)
+    dxy       = _safe_float(_safe_attr(macro, "dxy_proxy"), 0.0)
+    pmi       = _safe_float(_safe_attr(macro, "pmi_proxy"), 0.0)
+    sc_stress = _safe_str(_safe_attr(macro, "supply_chain_stress"), "MODERATE")
+
+    stress_col = _RISK_COLORS.get(sc_stress.upper(), C_NEUT)
+
+    indicators = [
+        ("Baltic Dry Index",    bdi,    bdi_chg,  "pts",       "Shipping demand barometer; rises w/ cargo volumes"),
+        ("WTI Crude Oil",       wti,    wti_chg,  "$/bbl",     "Bunker fuel proxy; cost pressure indicator"),
+        ("10Y US Treasury",     tsy10,  None,     "%",         "Risk-free rate; discount rate for equities"),
+        ("DXY Proxy (USD/CNY)", dxy,    None,     "",          "Dollar strength indicator; inverse shipping headwind"),
+        ("Industrial Prod.",    pmi,    None,     "index",     "Manufacturing activity proxy; cargo demand leading indicator"),
+    ]
+
+    def _fmt_val(v: float, unit: str) -> str:
+        if not v:
+            return "—"
+        if unit == "$/bbl":
+            return _fmt_price(v)
+        if unit == "%":
+            return f"{v:.2f}%"
+        if unit == "pts":
+            return f"{v:,.0f}"
+        return f"{v:,.2f}"
+
+    ind_rows = ""
+    for name, val, chg, unit, desc in indicators:
+        val_str = _fmt_val(val, unit)
+        chg_html = _change_span(chg) if chg is not None else '<span style="color:#718096">—</span>'
+        # Signal: is this indicator supportive or headwind for shipping?
+        if name == "Baltic Dry Index":
+            outlook = "Supportive" if val > 1500 else ("Neutral" if val > 900 else "Headwind")
+            out_col = C_POS if outlook == "Supportive" else (C_NEUT if outlook == "Neutral" else C_NEG)
+        elif name == "WTI Crude Oil":
+            outlook = "Cost Pressure" if wti > 90 else ("Moderate" if wti > 70 else "Supportive")
+            out_col = C_NEG if outlook == "Cost Pressure" else (C_NEUT if outlook == "Moderate" else C_POS)
+        elif name == "10Y US Treasury":
+            outlook = "Headwind" if tsy10 > 4.5 else ("Neutral" if tsy10 > 3.5 else "Supportive")
+            out_col = C_NEG if outlook == "Headwind" else (C_NEUT if outlook == "Neutral" else C_POS)
+        else:
+            outlook = "—"
+            out_col = C_NEUT
+
+        ind_rows += f"""<tr>
+  <td style="font-weight:600">{name}</td>
+  <td class="num" style="font-size:14px;font-weight:700">{val_str}</td>
+  <td class="right">{chg_html}</td>
+  <td class="center">{"<span style='color:" + out_col + ";font-weight:600;font-size:11px'>" + outlook + "</span>" if outlook != "—" else "<span style='color:#718096'>—</span>"}</td>
+  <td style="font-size:11px;color:#4a5568">{desc}</td>
+</tr>"""
+
+    kpis = f"""
+<div class="ir-kpi-row">
+  {_kpi("Baltic Dry Index", f"{bdi:,.0f}" if bdi else "—", f"{_fmt_pct(bdi_chg)} 30d", _pct_color(bdi_chg))}
+  {_kpi("WTI Crude", _fmt_price(wti) if wti else "—", f"{_fmt_pct(wti_chg)} 30d", _pct_color(wti_chg))}
+  {_kpi("10Y Treasury", f"{tsy10:.2f}%" if tsy10 else "—", "yield")}
+  {_kpi("USD/CNY", f"{dxy:.4f}" if dxy else "—", "DXY proxy")}
+  {_kpi("Supply Chain Stress", sc_stress, "composite assessment", stress_col)}
+</div>"""
+
+    # Stress box
+    stress_interpretations = {
+        "LOW":      ("Supply chains operating smoothly. Freight availability high, rates stable. "
+                     "Low BDI volatility. No material port congestion signals."),
+        "MODERATE": ("Some supply chain friction evident. Mixed signals across freight corridors. "
+                     "Monitor key choke points. Rate volatility elevated."),
+        "HIGH":     ("Elevated supply chain stress. Significant disruption risk in at least one major corridor. "
+                     "Rate spikes possible. Recommend defensive positioning or hedging."),
+        "CRITICAL": ("Critical supply chain conditions. Major disruption active. "
+                     "Immediate action warranted. Surcharge risk, capacity shortages confirmed."),
+    }
+    stress_text = stress_interpretations.get(sc_stress.upper(),
+        "Supply chain stress level could not be determined from available data.")
+
+    return f"""
+<section class="ir-section" id="s4">
+  {_section_head(4, "Macroeconomic Environment", "Key indicators and their impact on shipping markets")}
+  {kpis}
+
+  <div class="ir-table-wrap" style="margin-bottom:24px">
+    <table class="ir-table">
+      <thead><tr>
+        <th>Indicator</th>
+        <th class="right">Current Value</th>
+        <th class="right">30d Change</th>
+        <th class="center">Shipping Outlook</th>
+        <th>Commentary</th>
+      </tr></thead>
+      <tbody>{ind_rows}</tbody>
+    </table>
+  </div>
+
+  <div class="ir-card" style="border-left:5px solid {stress_col}">
+    <div class="ir-card-title">Supply Chain Stress Assessment</div>
+    <div style="display:flex;align-items:center;gap:20px;margin-bottom:12px">
+      <div style="font-size:28px;font-weight:900;color:{stress_col};font-family:'SFMono-Regular','Courier New',monospace">{sc_stress}</div>
+      {_badge(sc_stress + " STRESS", stress_col)}
+    </div>
+    <p style="font-size:12.5px;color:#4a5568;line-height:1.7">{stress_text}</p>
+  </div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 5 — Equity Coverage
+# ---------------------------------------------------------------------------
+
+def _section_equities(report) -> str:
+    stocks = report.stocks
+    tickers         = _safe_list(_safe_attr(stocks, "tickers"))
+    prices          = _safe_dict(_safe_attr(stocks, "prices"))
+    changes_30d     = _safe_dict(_safe_attr(stocks, "changes_30d"))
+    signals_by_tkr  = _safe_dict(_safe_attr(stocks, "signals_by_ticker"))
+    top_pick        = _safe_str(_safe_attr(stocks, "top_pick"), "—")
+    top_pick_rat    = _safe_str(_safe_attr(stocks, "top_pick_rationale"), "—")
+
+    _TICKER_NAMES = {
+        "ZIM":  "ZIM Integrated Shipping Services",
+        "MATX": "Matson Inc.",
+        "SBLK": "Star Bulk Carriers",
+        "DAC":  "Danaos Corporation",
+        "CMRE": "Costamare Inc.",
+    }
+
+    if not tickers:
+        tickers = ["ZIM", "MATX", "SBLK", "DAC", "CMRE"]
+
+    def _equity_row(tkr: str) -> str:
+        price   = _safe_float(prices.get(tkr), 0.0)
+        chg     = _safe_float(changes_30d.get(tkr), 0.0)
+        sigs    = _safe_list(signals_by_tkr.get(tkr, []))
+        name    = _TICKER_NAMES.get(tkr, tkr)
+        is_pick = tkr == top_pick
+
+        # Derive rating from signals
+        long_sigs  = [s for s in sigs if _safe_str(_safe_attr(s, "direction")).upper() in ("LONG", "BUY")]
+        short_sigs = [s for s in sigs if _safe_str(_safe_attr(s, "direction")).upper() in ("SHORT", "SELL")]
+        if long_sigs:
+            rating     = "BUY"
+            rat_col    = C_POS
+            conviction = _safe_str(_safe_attr(long_sigs[0], "conviction"), "MEDIUM").upper()
+        elif short_sigs:
+            rating  = "SELL"
+            rat_col = C_NEG
+            conviction = _safe_str(_safe_attr(short_sigs[0], "conviction"), "MEDIUM").upper()
+        else:
+            rating  = "HOLD"
+            rat_col = C_WARN
+            conviction = "LOW"
+
+        sig_count = len(sigs)
+        pick_star = " &#9733;" if is_pick else ""
+
+        return f"""<tr{"" if not is_pick else " style='background:#eff6ff'"}>
+  <td style="font-weight:800;font-family:'SFMono-Regular','Courier New',monospace;font-size:14px">{tkr}{pick_star}</td>
+  <td style="font-size:11.5px;color:#4a5568">{name}</td>
+  <td class="num" style="font-size:14px;font-weight:700">{_fmt_price(price) if price else "—"}</td>
+  {_pct_cell(chg)}
+  <td class="center">{_badge(rating, rat_col)}</td>
+  <td class="center">{_badge(conviction, _CONV_COLORS.get(conviction, C_NEUT))}</td>
+  <td class="num">{sig_count}</td>
+</tr>"""
+
+    equity_rows = "".join(_equity_row(t) for t in tickers)
+
+    return f"""
+<section class="ir-section" id="s5">
+  {_section_head(5, "Equity Coverage", "Shipping equity universe — ratings, prices, and signal summary")}
+
+  <div class="ir-kpi-row">
+    {_kpi("Top Pick", top_pick, "highest conviction", C_POS)}
+    {_kpi("Universe Size", str(len(tickers)), "tickers in coverage")}
+    {_kpi("Rated Buy", str(sum(1 for t in tickers if _safe_list(signals_by_tkr.get(t,[])) and _safe_str(_safe_attr(_safe_list(signals_by_tkr.get(t,[]))[0], "direction")).upper() in ("LONG","BUY"))), "active buy ratings", C_POS)}
+  </div>
+
+  <div class="ir-table-wrap">
+    <table class="ir-table">
+      <thead><tr>
+        <th>Ticker</th>
+        <th>Company</th>
+        <th class="right">Price</th>
+        <th class="right">30d Return</th>
+        <th class="center">Rating</th>
+        <th class="center">Conviction</th>
+        <th class="right">Signals</th>
+      </tr></thead>
+      <tbody>{equity_rows}</tbody>
+    </table>
+  </div>
+
+  {"<div class='ir-card' style='margin-top:20px;border-left:5px solid " + C_POS + "'><div class='ir-card-title'>Top Pick Rationale: " + top_pick + "</div><p style='font-size:12.5px;color:#4a5568;line-height:1.7'>" + top_pick_rat + "</p></div>" if top_pick_rat and top_pick_rat != "—" else ""}
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 6 — Market Intel
+# ---------------------------------------------------------------------------
+
+def _section_market_intel(report) -> str:
+    market     = report.market
+    news_items = _safe_list(_safe_attr(report, "news_items"))
+
+    top_insights = _safe_list(_safe_attr(market, "top_insights"))
+    top_ports    = _safe_list(_safe_attr(market, "top_ports"))
+    top_routes   = _safe_list(_safe_attr(market, "top_routes"))
+    risk_level   = _safe_str(_safe_attr(market, "risk_level"), "MODERATE")
+    active_opp   = int(_safe_float(_safe_attr(market, "active_opportunities"), 0))
+    hi_conv_ct   = int(_safe_float(_safe_attr(market, "high_conviction_count"), 0))
+
+    risk_col = _RISK_COLORS.get(risk_level.upper(), C_NEUT)
+
+    kpis = f"""
+<div class="ir-kpi-row">
+  {_kpi("Overall Risk Level", risk_level, "market risk assessment", risk_col)}
+  {_kpi("Active Opportunities", str(active_opp), "actionable insights")}
+  {_kpi("High-Conviction Insights", str(hi_conv_ct), "score ≥ 0.70")}
+  {_kpi("Top Ports Coverage", str(len(top_ports)), "ports in focus")}
+  {_kpi("Top Routes Coverage", str(len(top_routes)), "routes in focus")}
+</div>"""
+
+    # Insights table
+    def _insight_row(ins: Any) -> str:
+        title  = _safe_str(_safe_attr(ins, "title", "description", "insight"))
+        score  = _safe_float(_safe_attr(ins, "score", "conviction_score"), 0.0)
+        action = _safe_str(_safe_attr(ins, "action", "recommended_action"), "Monitor")
+        cat    = _safe_str(_safe_attr(ins, "category", "type"), "—")
+        act_col= _ACTION_COLORS.get(action.upper().split()[0], C_NEUT)
+        return f"""<tr>
+  <td style="font-size:12px;color:#1a1a2e">{title}</td>
+  <td class="center">{_badge(cat, C_NAVY_MID)}</td>
+  <td style="width:120px">{_score_bar(score, C_NAVY)}</td>
+  <td class="center">{_badge(action, act_col)}</td>
+</tr>"""
+
+    insight_rows = "".join(_insight_row(i) for i in top_insights[:10])
+    if not insight_rows:
+        insight_rows = '<tr><td colspan="4" style="text-align:center;color:#718096;padding:24px">No insights available</td></tr>'
+
+    # News feed
+    def _news_item_html(item: Any) -> str:
+        headline = _safe_str(_safe_attr(item, "headline", "title"))
+        source   = _safe_str(_safe_attr(item, "source"), "—")
+        score    = _safe_float(_safe_attr(item, "sentiment_score"), 0.0)
+        pub      = _safe_str(_safe_attr(item, "published_at"), "")
+
+        if pub:
+            try:
+                dt  = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+                pub = dt.strftime("%b %d, %H:%M")
+            except Exception:
+                pub = str(pub)[:16]
+
+        score_col  = C_POS if score > 0.15 else (C_NEG if score < -0.15 else C_NEUT)
+        score_bg   = C_POS_BG if score > 0.15 else (C_NEG_BG if score < -0.15 else C_SURFACE2)
+        score_disp = f"{score:+.2f}"
+
+        return f"""
+<div class="ir-news-item">
+  <div class="ir-news-score" style="background:{score_bg};color:{score_col}">{score_disp}</div>
+  <div style="flex:1">
+    <div class="ir-news-headline">{headline}</div>
+    <div class="ir-news-meta">{source}{"&ensp;&bull;&ensp;" + pub if pub else ""}</div>
   </div>
 </div>"""
 
+    news_html = "".join(_news_item_html(n) for n in news_items[:15])
+    if not news_html:
+        news_html = '<p style="color:#718096;font-size:11px;padding:12px 0">No news items available</p>'
 
-# ── Public API ────────────────────────────────────────────────────────────────
+    # Port spotlight
+    def _port_row(p: Any) -> str:
+        name   = _safe_str(_safe_attr(p, "port_name", "port", "name"))
+        score  = _safe_float(_safe_attr(p, "demand_score", "score"), 0.0)
+        region = _safe_str(_safe_attr(p, "region"), "—")
+        return f"""<tr>
+  <td style="font-weight:600">{name}</td>
+  <td style="color:#4a5568;font-size:11.5px">{region}</td>
+  <td style="width:120px">{_score_bar(score, C_NAVY_MID)}</td>
+</tr>"""
 
-def render_investor_report_html(report: "InvestorReport") -> str:
-    """Return a complete, self-contained HTML string for the investor report.
+    port_rows = "".join(_port_row(p) for p in top_ports[:6])
 
-    Parameters
-    ----------
-    report : InvestorReport
-        Fully-populated InvestorReport dataclass.
+    return f"""
+<section class="ir-section" id="s6">
+  {_section_head(6, "Market Intelligence", "Port demand, route insights, and news sentiment feed")}
+  {kpis}
 
-    Returns
-    -------
-    str
-        Standalone HTML document with all CSS embedded. No external
-        dependencies — works offline and can be printed to PDF.
+  <div class="ir-table-wrap" style="margin-bottom:24px">
+    <table class="ir-table">
+      <thead><tr>
+        <th>Insight</th>
+        <th class="center">Category</th>
+        <th>Conviction</th>
+        <th class="center">Action</th>
+      </tr></thead>
+      <tbody>{insight_rows}</tbody>
+    </table>
+  </div>
+
+  <div class="ir-two-col">
+    <div class="ir-card">
+      <div class="ir-card-title">News Sentiment Feed (Top 15)</div>
+      {news_html}
+    </div>
+    <div>
+      {"<div class='ir-card' style='margin-bottom:16px'><div class='ir-card-title'>Port Demand Spotlight</div><div class='ir-table-wrap' style='border:none;margin:0'><table class='ir-table' style='border:none'><thead><tr><th>Port</th><th>Region</th><th>Demand Score</th></tr></thead><tbody>" + port_rows + "</tbody></table></div></div>" if port_rows else ""}
+    </div>
+  </div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 7 — Risk & Scenarios
+# ---------------------------------------------------------------------------
+
+def _section_risk(report) -> str:
+    market    = report.market
+    ai        = report.ai
+    macro     = report.macro
+
+    risk_level    = _safe_str(_safe_attr(market, "risk_level"), "MODERATE")
+    risk_narrative= _safe_str(_safe_attr(ai, "risk_narrative"), "")
+    sc_stress     = _safe_str(_safe_attr(macro, "supply_chain_stress"), "MODERATE")
+    bdi           = _safe_float(_safe_attr(macro, "bdi"), 0.0)
+    wti           = _safe_float(_safe_attr(macro, "wti"), 0.0)
+    tsy10         = _safe_float(_safe_attr(macro, "treasury_10y"), 0.0)
+
+    risk_col = _RISK_COLORS.get(risk_level.upper(), C_NEUT)
+
+    def _paras(text: str) -> str:
+        if not text:
+            return ""
+        parts = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not parts:
+            parts = [text.strip()]
+        return "".join(f"<p>{p}</p>" for p in parts)
+
+    # Risk factor table — synthetic from available macro
+    risk_factors = []
+    if bdi > 0:
+        bdi_risk = "LOW" if bdi > 1500 else ("MODERATE" if bdi > 900 else "HIGH")
+        risk_factors.append(("Baltic Dry Index Level", bdi_risk, f"BDI at {bdi:,.0f}. {'Demand solid.' if bdi > 1500 else 'Demand soft — overcapacity risk.' if bdi < 900 else 'Demand moderate.'}"))
+    if wti > 0:
+        wti_risk = "HIGH" if wti > 90 else ("MODERATE" if wti > 70 else "LOW")
+        risk_factors.append(("Bunker Fuel / Oil Price", wti_risk, f"WTI at {_fmt_price(wti)}. {'Significant cost pressure on operating margins.' if wti > 90 else 'Elevated but manageable fuel cost.' if wti > 70 else 'Supportive fuel cost environment.'}"))
+    if tsy10 > 0:
+        tsy_risk = "HIGH" if tsy10 > 4.5 else ("MODERATE" if tsy10 > 3.5 else "LOW")
+        risk_factors.append(("Interest Rate Environment", tsy_risk, f"10Y Treasury at {tsy10:.2f}%. {'High rates compress shipping equity multiples.' if tsy10 > 4.5 else 'Elevated rates; monitor refinancing risk.' if tsy10 > 3.5 else 'Supportive rate environment for capital-intensive shipping.'}"))
+
+    risk_factors.append(("Supply Chain Stress", sc_stress, {
+        "LOW":      "Supply chains operating smoothly. Low disruption probability.",
+        "MODERATE": "Some friction and delays reported. Monitor key chokepoints.",
+        "HIGH":     "Elevated disruption risk. Active bottlenecks in at least one corridor.",
+        "CRITICAL": "Critical disruptions active. Immediate portfolio impact likely.",
+    }.get(sc_stress.upper(), "")))
+    risk_factors.append(("Geopolitical Risk", "MODERATE", "Ongoing monitoring of key maritime corridors. Rerouting risk in select chokepoints."))
+    risk_factors.append(("Vessel Oversupply", "LOW" if bdi > 1200 else "MODERATE", "Orderbook levels within historical norms. No immediate capacity glut expected."))
+
+    def _risk_row(name: str, level: str, desc: str) -> str:
+        col  = _RISK_COLORS.get(level.upper(), C_NEUT)
+        bg   = C_NEG_BG if level.upper() in ("HIGH", "CRITICAL") else (C_WARN_BG if level.upper() == "MODERATE" else "transparent")
+        return f"""<tr class="ir-risk-row-{level.upper()}" style="background:{bg}">
+  <td style="font-weight:600">{name}</td>
+  <td class="center">{_badge(level, col)}</td>
+  <td style="font-size:11.5px;color:#4a5568">{desc}</td>
+</tr>"""
+
+    risk_rows = "".join(_risk_row(n, l, d) for n, l, d in risk_factors)
+
+    # Scenario analysis
+    scenarios = [
+        ("Bull Case",  C_POS,  "BDI sustains above 1,800. WTI corrects toward $70. Supply chains normalize. Freight rates stabilize at elevated levels. Shipping equities re-rate higher driven by yield compression and strong earnings."),
+        ("Base Case",  C_NEUT, "BDI oscillates 1,000–1,600. Rates stable with seasonal variation. No major supply chain disruptions. Equities trade near book value with modest dividend support."),
+        ("Bear Case",  C_NEG,  "BDI breaks below 900. WTI spikes above $95 on supply shock. New vessel deliveries exceed demand absorption. Rate collapse across all corridors. Equity multiple compression."),
+    ]
+
+    scenario_html = ""
+    for title, col, desc in scenarios:
+        scenario_html += f"""
+<div style="border:1px solid #d0d7de;border-left:5px solid {col};border-radius:4px;padding:16px 18px;background:#ffffff">
+  <div style="font-weight:700;font-size:13px;color:{col};margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em">{title}</div>
+  <p style="font-size:12px;color:#4a5568;line-height:1.7;margin:0">{desc}</p>
+</div>"""
+
+    return f"""
+<section class="ir-section" id="s7">
+  {_section_head(7, "Risk & Scenario Analysis", "Current risk matrix and forward scenario framework")}
+
+  <div class="ir-kpi-row">
+    {_kpi("Overall Risk Level", risk_level, "composite market risk", risk_col)}
+    {_kpi("Supply Chain", sc_stress, "chain stress level", _RISK_COLORS.get(sc_stress.upper(), C_NEUT))}
+  </div>
+
+  {"<div class='ir-narrative' style='margin-bottom:20px'>" + _paras(risk_narrative) + "</div>" if risk_narrative else ""}
+
+  <div class="ir-table-wrap" style="margin-bottom:24px">
+    <table class="ir-table">
+      <thead><tr>
+        <th>Risk Factor</th>
+        <th class="center">Level</th>
+        <th>Assessment</th>
+      </tr></thead>
+      <tbody>{risk_rows}</tbody>
+    </table>
+  </div>
+
+  <div style="font-size:12px;font-weight:700;color:#0f285a;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px">
+    Scenario Analysis — 30-Day Outlook
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
+    {scenario_html}
+  </div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Section 8 — Recommendations
+# ---------------------------------------------------------------------------
+
+def _section_recommendations(report) -> str:
+    ai = report.ai
+    recs     = _safe_list(_safe_attr(ai, "top_recommendations"))
+    outlook  = _safe_str(_safe_attr(ai, "outlook_30d"), "")
+
+    def _paras(text: str) -> str:
+        if not text:
+            return ""
+        parts = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not parts:
+            parts = [text.strip()]
+        return "".join(f"<p>{p}</p>" for p in parts)
+
+    rec_html = ""
+    for rec in recs[:9]:
+        rank       = int(_safe_float(_safe_attr(rec, "rank"), 0))
+        title      = _safe_str(_safe_attr(rec, "title"))
+        action     = _safe_str(_safe_attr(rec, "action"), "MONITOR").upper()
+        ticker     = _safe_str(_safe_attr(rec, "ticker"), "")
+        conviction = _safe_str(_safe_attr(rec, "conviction"), "MEDIUM").upper()
+        rationale  = _safe_str(_safe_attr(rec, "rationale", "description", "body"), "")
+        horizon    = _safe_str(_safe_attr(rec, "horizon", "time_horizon"), "30d")
+
+        act_col  = _ACTION_COLORS.get(action.split()[0], C_NAVY)
+        conv_col = _CONV_COLORS.get(conviction, C_NEUT)
+
+        ticker_html = f"&ensp;{_badge(ticker, C_NAVY_MID)}" if ticker else ""
+        rec_html += f"""
+<div class="ir-rec-box" style="border-left-color:{act_col}">
+  <div class="ir-rec-rank">{rank:02d}</div>
+  <div class="ir-rec-title">{title}</div>
+  <div style="margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px">
+    {_badge(action, act_col)}{ticker_html}&ensp;{_badge(conviction, conv_col)}&ensp;<span style="font-size:10px;color:#718096">Horizon: {horizon}</span>
+  </div>
+  <div class="ir-rec-body">{rationale}</div>
+</div>"""
+
+    if not rec_html:
+        rec_html = '<p style="color:#718096;font-size:12px">No recommendations available for this session.</p>'
+
+    return f"""
+<section class="ir-section" id="s8">
+  {_section_head(8, "Recommendations", "Priority-ranked actionable recommendations for the current session")}
+
+  {"<div class='ir-card' style='margin-bottom:24px'><div class='ir-card-title'>30-Day Outlook</div><div class='ir-narrative'>" + _paras(outlook) + "</div></div>" if outlook else ""}
+
+  <div class="ir-rec-grid">{rec_html}</div>
+</section>"""
+
+
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+
+def _footer(report) -> str:
+    disclaimer = _safe_str(_safe_attr(report.ai, "disclaimer"), "")
+    gen_at     = _safe_str(_safe_attr(report, "generated_at"), "")
+
+    if not disclaimer:
+        disclaimer = (
+            "This report is produced by ShipIntel Research using rule-based quantitative analysis "
+            "and publicly available data. It is intended for institutional distribution only. "
+            "Nothing in this report constitutes investment advice or a solicitation to buy or sell "
+            "any security. Past performance is not indicative of future results. All data subject "
+            "to revision. Freight rates are indicative only and do not represent firm quotes. "
+            "Equity ratings are model-generated and do not reflect a registered investment adviser's opinion."
+        )
+
+    sources = [
+        "Baltic Exchange — BDI and route rate data",
+        "Freightos — FBX composite index",
+        "FRED / Federal Reserve — WTI, 10Y Treasury, Industrial Production, USD/CNY",
+        "Proprietary alpha engine — signal generation and conviction scoring",
+        "Multi-source news aggregation — sentiment scoring",
+    ]
+    source_list = "".join(f"<li>{s}</li>" for s in sources)
+
+    try:
+        gen_display = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).strftime("%B %d, %Y at %H:%M UTC")
+    except Exception:
+        gen_display = gen_at or "—"
+
+    return f"""
+<footer class="ir-footer">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:16px">
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#c8d8ea;margin-bottom:10px">Data Sources</div>
+      <ul style="list-style:disc;padding-left:18px;color:#a8bcd4;font-size:10.5px;line-height:1.8">{source_list}</ul>
+    </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#c8d8ea;margin-bottom:10px">Report Information</div>
+      <div style="color:#a8bcd4;font-size:10.5px;line-height:1.9">
+        <div>Generated: {gen_display}</div>
+        <div>Distribution: Institutional Only</div>
+        <div>Classification: Confidential</div>
+        <div>Engine: ShipIntel Research Platform v2</div>
+      </div>
+    </div>
+  </div>
+  <div class="ir-footer-disclaimer">
+    <strong style="color:#a8bcd4">Disclaimer:</strong> {disclaimer}
+  </div>
+</footer>"""
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def render_investor_report_html(report) -> str:
+    """Return a complete self-contained HTML document as a string.
+
+    Args:
+        report: InvestorReport dataclass instance from investor_report_engine.py.
+                Also accepts any object with equivalent attributes.
+
+    Returns:
+        UTF-8 compatible HTML string. No external dependencies.
     """
-    # Auto-fill timestamps if not set
-    now = datetime.now(timezone.utc)
+    report_date = _safe_str(_safe_attr(report, "report_date"), "—")
+    gen_at      = _safe_str(_safe_attr(report, "generated_at"), "")
+
     try:
-        if not report.report_date:
-            report.report_date = now.strftime("%B %d, %Y")
+        gen_dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+        gen_display = gen_dt.strftime("%B %d, %Y")
     except Exception:
-        pass
-    try:
-        if not report.generated_at:
-            report.generated_at = now.strftime("%Y-%m-%d %H:%M UTC")
-    except Exception:
-        pass
+        gen_display = report_date
 
-    # Sort market insights by score descending (in-place on the list object)
-    try:
-        insights = getattr(report.market, "top_insights", None)
-        if insights:
-            report.market.top_insights = sorted(
-                insights,
-                key=lambda i: _safe_float(_safe_attr(i, "score", default=0.0)),
-                reverse=True,
-            )
-    except Exception:
-        pass
+    css = _build_css()
 
-    # Sort recommendations by rank key
-    try:
-        recs = getattr(report.ai, "top_recommendations", None)
-        if recs:
-            report.ai.top_recommendations = sorted(
-                recs,
-                key=lambda r: r.get("rank", 999) if isinstance(r, dict) else getattr(r, "rank", 999),
-            )
-    except Exception:
-        pass
+    body_parts = [
+        _topbar(gen_display),
+        _cover(report),
+        _nav(),
+        _section_executive_summary(report),
+        _section_alpha_signals(report),
+        _section_freight_rates(report),
+        _section_macroeconomic(report),
+        _section_equities(report),
+        _section_market_intel(report),
+        _section_risk(report),
+        _section_recommendations(report),
+        _footer(report),
+    ]
 
-    body = (
-        _cover_page(report)
-        + _executive_summary(report)
-        + _sentiment_section(report)
-        + _alpha_section(report)
-        + _market_intelligence_section(report)
-        + _freight_section(report)
-        + _macro_section(report)
-        + _stocks_section(report)
-        + _recommendations_section(report)
-        + _appendix(report)
-    )
-
-    date_str = report.report_date
-
-    return f"""<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Global Shipping Intelligence Report \u2014 {date_str}</title>
+  <meta name="description" content="ShipIntel Research — Institutional Shipping Market Report">
+  <title>ShipIntel Research | Global Shipping Report | {gen_display}</title>
   <style>
-{_css()}
+{css}
   </style>
 </head>
 <body>
-{body}
+{"".join(body_parts)}
 </body>
 </html>"""
 
-
-def get_report_bytes(html_str: str) -> bytes:
-    """Encode the HTML report string to UTF-8 bytes for download."""
-    return html_str.encode("utf-8")
+    return html
