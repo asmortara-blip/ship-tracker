@@ -686,6 +686,8 @@ def get_sentiment_summary(articles: list[NewsArticle]) -> dict[str, Any]:
             "urgency_distribution": {"high": 0, "medium": 0, "low": 0},
             "trending_topics":      [],
             "high_urgency_items":   [],
+            "source_count":         0,
+            "newsapi_articles":     0,
         }
 
     # Weighted average by relevance_score
@@ -742,6 +744,14 @@ def get_sentiment_summary(articles: list[NewsArticle]) -> dict[str, Any]:
     topic_count_counter: Counter[str] = Counter(a.topic for a in articles)
     trending_topics = [t for t, _ in topic_count_counter.most_common()]
 
+    source_count = len({a.source for a in articles})
+
+    # Count how many articles came from NewsAPI vs RSS
+    # NewsAPI articles are tagged with source names from the API payload;
+    # RSS articles come from the six named feeds in RSS_FEEDS.
+    _rss_sources = set(RSS_FEEDS.keys())
+    newsapi_article_count = sum(1 for a in articles if a.source not in _rss_sources)
+
     return {
         "overall_score":        round(overall_score, 4),
         "label":                _label_from_score(overall_score),
@@ -757,6 +767,8 @@ def get_sentiment_summary(articles: list[NewsArticle]) -> dict[str, Any]:
         "urgency_distribution": urgency_distribution,
         "trending_topics":      trending_topics,
         "high_urgency_items":   high_urgency_items,
+        "source_count":         source_count,
+        "newsapi_articles":     newsapi_article_count,
     }
 
 
@@ -1174,3 +1186,150 @@ def render_news_panel(articles: list[NewsArticle], max_items: int = 8) -> None:
         with st.expander(remaining_label, expanded=False):
             for article in overflow:
                 st.markdown(_article_card_html(article), unsafe_allow_html=True)
+
+
+# ── Public: fetch_all_news_enhanced ───────────────────────────────────────────
+
+
+def fetch_all_news_enhanced(
+    cache: Any,
+    max_items: int = 150,
+    cache_ttl_hours: float = 1.0,
+) -> list[NewsArticle]:
+    """
+    Fetch from both RSS feeds AND NewsAPI (if a key is configured), merge,
+    deduplicate by title similarity, and return sorted by relevance_score desc.
+
+    NewsAPI articles are converted to NewsArticle objects and scored with the
+    same sentiment/relevance/topic/urgency pipeline used for RSS articles.
+
+    Falls back to RSS-only when no NewsAPI key is configured.
+
+    Args:
+        cache:           CacheManager instance or directory path string / Path.
+        max_items:       Maximum articles to return.
+        cache_ttl_hours: TTL for both RSS and NewsAPI caches.
+
+    Returns:
+        list[NewsArticle] sorted by relevance_score descending.
+    """
+    # ── 1. RSS articles ───────────────────────────────────────────────────────
+    rss_articles: list[NewsArticle] = []
+    try:
+        rss_articles = fetch_all_news(cache, ttl_hours=cache_ttl_hours)
+    except Exception as exc:
+        logger.warning("fetch_all_news_enhanced: RSS fetch error: {}", exc)
+
+    # ── 2. NewsAPI articles ───────────────────────────────────────────────────
+    newsapi_articles: list[NewsArticle] = []
+
+    try:
+        from data.newsapi_feed import fetch_newsapi_articles, newsapi_available  # type: ignore
+        _newsapi_importable = True
+    except ImportError:
+        _newsapi_importable = False
+        logger.debug("fetch_all_news_enhanced: data.newsapi_feed not importable — RSS only")
+
+    if _newsapi_importable and newsapi_available():
+        try:
+            # Resolve CacheManager from whatever was passed
+            if hasattr(cache, "cache_dir"):
+                _cm = cache
+            else:
+                from data.cache_manager import CacheManager as _CM
+                _cm = _CM(str(cache))
+
+            raw_dicts = fetch_newsapi_articles(
+                cache=_cm,
+                cache_ttl_hours=cache_ttl_hours,
+            )
+
+            for d in raw_dicts:
+                title       = (d.get("title") or "").strip()
+                url         = (d.get("url")   or "").strip()
+                description = (d.get("description") or d.get("content") or "").strip()
+                source_name = (d.get("source_name") or "NewsAPI").strip()
+                author      = (d.get("author") or "").strip()
+                published   = d.get("published_at")
+
+                if not title or not url:
+                    continue
+
+                # Normalise published_at to a timezone-aware datetime
+                if isinstance(published, str):
+                    try:
+                        published = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                    except (ValueError, AttributeError):
+                        published = datetime.now(tz=timezone.utc)
+                if published is None or not isinstance(published, datetime):
+                    published = datetime.now(tz=timezone.utc)
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=timezone.utc)
+
+                combined  = title + " " + description
+                score     = _score_sentiment(combined)
+                label     = _label_from_score(score)
+                entities  = _extract_entities(combined)
+                relevance = _score_relevance(combined, entities)
+                topic     = _classify_topic(combined)
+                urgency   = _score_urgency(combined)
+                regions   = _extract_regions(combined)
+
+                newsapi_articles.append(NewsArticle(
+                    title           = title,
+                    url             = url,
+                    published_dt    = published,
+                    source          = source_name,
+                    summary         = description[:500],
+                    sentiment_score = round(score, 4),
+                    sentiment_label = label,
+                    entities        = entities,
+                    relevance_score = round(relevance, 4),
+                    topic           = topic,
+                    urgency_score   = round(urgency, 4),
+                    regions         = regions,
+                ))
+
+            logger.info(
+                "fetch_all_news_enhanced: {} NewsAPI articles converted",
+                len(newsapi_articles),
+            )
+        except Exception as exc:
+            logger.warning("fetch_all_news_enhanced: NewsAPI conversion error: {}", exc)
+    elif _newsapi_importable:
+        logger.debug("fetch_all_news_enhanced: NewsAPI key not configured — RSS only")
+
+    # ── 3. Merge and deduplicate ──────────────────────────────────────────────
+    # Start from RSS articles (already deduped internally).
+    # Walk NewsAPI articles and skip any whose title is >80% similar to one
+    # already in the merged set (token Jaccard similarity).
+
+    merged: list[NewsArticle] = list(rss_articles)
+    existing_titles: list[str] = [a.title for a in merged]
+
+    for candidate in newsapi_articles:
+        is_dupe = False
+        for existing_title in existing_titles:
+            if _titles_similar(candidate.title, existing_title, threshold=0.80):
+                is_dupe = True
+                break
+        if not is_dupe:
+            merged.append(candidate)
+            existing_titles.append(candidate.title)
+
+    # ── 4. Sort by relevance_score desc, then recency ─────────────────────────
+    merged.sort(
+        key=lambda a: (a.relevance_score, a.published_dt.timestamp()),
+        reverse=True,
+    )
+
+    result = merged[:max_items]
+
+    logger.info(
+        "fetch_all_news_enhanced: {} RSS + {} NewsAPI → {} merged (cap {})",
+        len(rss_articles),
+        len(newsapi_articles),
+        len(result),
+        max_items,
+    )
+    return result

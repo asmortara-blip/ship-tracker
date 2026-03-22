@@ -143,6 +143,19 @@ def get_freight_data(lookback_days: int):
     return fetch_fbx_rates(lookback_days, cache, ttl_hours=cfg["cache"]["freight_ttl_hours"])
 
 
+@st.cache_data(ttl=86400, show_spinner=False)  # 24h TTL
+def get_fundamentals_data() -> dict:
+    """Fetch Alpha Vantage fundamentals if key is configured."""
+    try:
+        from data.alphavantage_feed import fetch_all_shipping_fundamentals, alphavantage_available
+        if not alphavantage_available():
+            return {}
+        return fetch_all_shipping_fundamentals()
+    except Exception as e:
+        logger.warning("Fundamentals data unavailable: %s", e)
+        return {}
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     # Brand header
@@ -986,10 +999,11 @@ elif active_section == "intelligence":
 # ── 9. Reports ────────────────────────────────────────────────────────────
 elif active_section == "reports":
     from ui import tab_report
+    fundamentals_data = get_fundamentals_data()
     (t0,) = st.tabs(["📋 Investor Report"])
     with t0:
         try:
-            tab_report.render(port_results, route_results, insights, freight_data, macro_data, stock_data)
+            tab_report.render(port_results, route_results, insights, freight_data, macro_data, stock_data, fundamentals_data=fundamentals_data)
         except Exception as e:
             st.error(f"Investor Report error: {e}")
 

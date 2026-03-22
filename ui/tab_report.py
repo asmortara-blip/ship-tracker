@@ -790,7 +790,7 @@ def _render_preview() -> None:
 
 # ── Section 5: Key Insights Preview ──────────────────────────────────────────
 
-def _render_key_insights(insights: list, macro_data: dict | None, stock_data: dict | None) -> None:
+def _render_key_insights(insights: list, macro_data: dict | None, stock_data: dict | None, fundamentals_data: dict | None = None) -> None:
     try:
         _divider("Report Snapshot")
 
@@ -939,6 +939,15 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
                             f'</div>',
                             unsafe_allow_html=True,
                         )
+
+        # ── Fundamentals table (Alpha Vantage) ────────────────────────────
+        if fundamentals_data:
+            try:
+                from data.alphavantage_feed import build_fundamentals_table_html
+                fund_html = build_fundamentals_table_html(fundamentals_data)
+                st.markdown(fund_html, unsafe_allow_html=True)
+            except Exception:
+                pass
 
     except Exception:
         logger.exception("tab_report: key insights preview failed")
@@ -1292,17 +1301,19 @@ def render(
     freight_data,
     macro_data,
     stock_data,
+    fundamentals_data=None,
 ) -> None:
     """Render the Investor Intelligence Report tab.
 
     Parameters
     ----------
-    port_results:   List of port analysis result objects or dicts.
-    route_results:  List of route analysis result objects or dicts.
-    insights:       List of Insight objects from the decision engine.
-    freight_data:   Dict or list of freight rate records.
-    macro_data:     Dict of macro indicator values.
-    stock_data:     Dict or list of shipping equity records.
+    port_results:      List of port analysis result objects or dicts.
+    route_results:     List of route analysis result objects or dicts.
+    insights:          List of Insight objects from the decision engine.
+    freight_data:      Dict or list of freight rate records.
+    macro_data:        Dict of macro indicator values.
+    stock_data:        Dict or list of shipping equity records.
+    fundamentals_data: Optional dict of Alpha Vantage fundamentals keyed by ticker.
     """
     try:
         apply_dark_layout()
@@ -1320,6 +1331,16 @@ def render(
     # ── 0. Hero ───────────────────────────────────────────────────────────────
     _render_hero(insights)
 
+    # Show API status pills
+    try:
+        from data.newsapi_feed import newsapi_available
+        from data.alphavantage_feed import alphavantage_available
+        news_status = "🟢 NewsAPI" if newsapi_available() else "⚪ NewsAPI (no key)"
+        av_status = "🟢 Alpha Vantage" if alphavantage_available() else "⚪ Alpha Vantage (no key)"
+        st.caption(f"Data Sources: {news_status} · {av_status} · 🟢 FRED · 🟢 yfinance")
+    except Exception:
+        pass
+
     # ── 1. What's Inside ──────────────────────────────────────────────────────
     _render_whats_inside()
 
@@ -1336,7 +1357,7 @@ def render(
     _render_preview()
 
     # ── 6. Key Insights Preview ───────────────────────────────────────────────
-    _render_key_insights(insights, macro_data, stock_data)
+    _render_key_insights(insights, macro_data, stock_data, fundamentals_data=fundamentals_data)
 
     # ── 7. News Sentiment Preview ─────────────────────────────────────────────
     _render_news_preview()

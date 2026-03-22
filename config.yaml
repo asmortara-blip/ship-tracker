@@ -429,3 +429,19 @@ logging:
   log_dir: "logs"
   rotation: "daily"
   retention_days: 14
+
+# ----- External API Keys -----
+# Keys are loaded from Streamlit Secrets or environment variables.
+# See .streamlit/secrets.toml.example for setup instructions.
+#
+# NewsAPI (https://newsapi.org):
+#   Free tier: 100 requests/day, articles from last 30 days
+#   Set: NEWS_API_KEY in Streamlit Secrets
+#
+# Alpha Vantage (https://alphavantage.co):
+#   Free tier: 25 requests/day, 5 requests/minute
+#   Set: ALPHA_VANTAGE_KEY in Streamlit Secrets
+#
+# FRED API (https://fred.stlouisfed.org/docs/api):
+#   Free, unlimited
+#   Set: FRED_API_KEY in Streamlit Secrets
