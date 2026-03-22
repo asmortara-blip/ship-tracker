@@ -29,7 +29,7 @@ def _get_api_health() -> dict:
 
     for source, cfg_src in sources.items():
         files = (
-            list(cache_dir.glob(cfg_src["pattern"] + ".parquet"))
+            list(cache_dir.rglob(cfg_src["pattern"] + ".parquet"))
             if cache_dir.exists()
             else []
         )

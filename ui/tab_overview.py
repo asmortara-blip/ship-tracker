@@ -817,28 +817,23 @@ def _render_quick_actions() -> None:
 
         chips_html = ""
         for icon, label, color, tooltip in actions:
-            chips_html += f"""
-            <span title="{tooltip}" style="
-                display:inline-flex;align-items:center;gap:6px;
-                background:{_rgba(color,0.09)};color:{color};
-                border:1px solid {_rgba(color,0.28)};
-                padding:7px 16px;border-radius:999px;
-                font-size:0.74rem;font-weight:700;letter-spacing:0.03em;
-                margin:0 6px 8px 0;cursor:default;user-select:none;
-                transition:background 0.2s">
-                {icon}&nbsp;{label}
-            </span>"""
+            bg = _rgba(color, 0.09)
+            bd = _rgba(color, 0.28)
+            chips_html += (
+                f'<span title="{tooltip}" style="display:inline-flex;align-items:center;gap:6px;'
+                f'background:{bg};color:{color};border:1px solid {bd};'
+                f'padding:7px 16px;border-radius:999px;font-size:0.74rem;font-weight:700;'
+                f'letter-spacing:0.03em;margin:0 6px 8px 0;cursor:default;user-select:none;">'
+                f'{icon}&nbsp;{label}</span>'
+            )
 
-        st.markdown(f"""
-        <div style="margin-bottom:20px">
-            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0">
-                {chips_html}
-            </div>
-            <div style="font-size:0.68rem;color:{C_TEXT3};margin-top:6px">
-                Use the sidebar navigation to jump to any section instantly.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        full_html = (
+            f'<div style="margin-bottom:20px">'
+            f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0">{chips_html}</div>'
+            f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-top:6px">'
+            f'Use the sidebar navigation to jump to any section instantly.</div></div>'
+        )
+        st.markdown(full_html, unsafe_allow_html=True)
     except Exception:
         pass
 
