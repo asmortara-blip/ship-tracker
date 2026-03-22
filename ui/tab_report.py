@@ -1,16 +1,17 @@
 """
 Investor Intelligence Report Tab — generate and download an institutional-grade
-sentiment analysis briefing as a fully self-contained HTML document.
+sentiment analysis briefing as a PDF (primary) or HTML (secondary) document.
 
 Sections
 --------
-0. Hero                  — page header + 4 metric boxes
-1. Report Configuration  — checkbox panel inside expander
-2. Generate & Download   — primary CTA button + download widget
-3. Report History        — saved report list with load/delete + stats summary
-4. Report Preview        — inline iframe of cover + exec summary
-5. Key Insights Preview  — alpha signals, top insights, sentiment bar, macro row
-6. News Sentiment Preview — sentiment trend chart, top headlines, topic breakdown
+0. Hero                  — Bloomberg-style terminal header + 4 metric boxes
+1. What's Inside         — Visual table of contents preview card
+2. Report Configuration  — checkbox panel inside expander
+3. Generate & Download   — primary CTA (PDF) + secondary (HTML) + post-gen dashboard
+4. Report History        — saved report list with load/delete + stats summary
+5. Report Preview        — inline iframe of cover + exec summary
+6. Key Insights Preview  — alpha signals, top insights, sentiment bar, macro row
+7. News Sentiment Preview — sentiment trend chart, top headlines, topic breakdown
 
 Function signature:
     render(port_results, route_results, insights, freight_data, macro_data, stock_data)
@@ -41,6 +42,12 @@ C_MACRO   = "#06b6d4"
 C_TEXT    = "#f1f5f9"
 C_TEXT2   = "#94a3b8"
 C_TEXT3   = "#64748b"
+
+# Goldman / Bloomberg premium palette
+BG_CARD = "#1A2E45"
+GOLD    = "#C9A84C"
+TEAL    = "#1ABC9C"
+CRIMSON = "#E74C3C"
 
 # ── Imports — best-effort, graceful fallback ───────────────────────────────────
 
@@ -78,6 +85,16 @@ except Exception:
 
     def render_investor_report_html(report) -> str:  # type: ignore[misc]
         raise ImportError("utils.investor_report_html not available")
+
+
+try:
+    from utils.investor_report_pdf import render_investor_report_pdf  # type: ignore[import]
+    _PDF_OK = True
+except Exception:
+    _PDF_OK = False
+
+    def render_investor_report_pdf(report) -> bytes:  # type: ignore[misc]
+        raise ImportError("utils.investor_report_pdf not available")
 
 
 # Fallback to the existing html_report module if the investor-specific one is missing
@@ -151,17 +168,17 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
 
 def _score_color(score: float) -> str:
     if score >= 0.65:
-        return C_HIGH
+        return TEAL
     if score >= 0.45:
         return C_MOD
-    return C_LOW
+    return CRIMSON
 
 
 def _risk_color(level: str) -> str:
     mapping = {
-        "LOW":      C_HIGH,
+        "LOW":      TEAL,
         "MODERATE": C_MOD,
-        "HIGH":     C_LOW,
+        "HIGH":     CRIMSON,
         "CRITICAL": "#b91c1c",
     }
     return mapping.get(level.upper(), C_MOD)
@@ -169,11 +186,11 @@ def _risk_color(level: str) -> str:
 
 def _action_color(action: str) -> str:
     mapping = {
-        "Prioritize": C_HIGH,
+        "Prioritize": TEAL,
         "Monitor":    C_ACCENT,
         "Watch":      C_TEXT2,
         "Caution":    C_MOD,
-        "Avoid":      C_LOW,
+        "Avoid":      CRIMSON,
     }
     return mapping.get(action, C_TEXT2)
 
@@ -212,7 +229,7 @@ def _badge(text: str, color: str) -> str:
     )
 
 
-def _stat_card(label: str, value: str, sub: str = "", color: str = C_ACCENT,
+def _stat_card(label: str, value: str, sub: str = "", color: str = GOLD,
                glow: bool = False) -> str:
     sub_html = (
         f'<div style="font-size:0.7rem;color:{C_TEXT3};margin-top:4px">{sub}</div>'
@@ -220,11 +237,12 @@ def _stat_card(label: str, value: str, sub: str = "", color: str = C_ACCENT,
     )
     shadow = f"box-shadow:0 0 24px {_hex_to_rgba(color, 0.20)};" if glow else ""
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+        f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.25);'
         f'border-top:2px solid {color};border-radius:12px;padding:16px 18px;'
         f'text-align:center;{shadow}">'
-        f'<div style="font-size:0.62rem;font-weight:700;color:{C_TEXT3};'
-        f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px">{label}</div>'
+        f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.58rem;'
+        f'font-weight:700;color:{C_TEXT3};'
+        f'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px">{label}</div>'
         f'<div style="font-size:1.4rem;font-weight:800;color:{C_TEXT};line-height:1">{value}</div>'
         f'{sub_html}'
         f'</div>'
@@ -235,11 +253,12 @@ def _divider(label: str) -> None:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,'
-        f'rgba(255,255,255,0.0),rgba(255,255,255,0.08))"></div>'
-        f'<span style="font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;'
-        f'letter-spacing:0.14em;font-weight:700">{label}</span>'
+        f'rgba(201,168,76,0.0),rgba(201,168,76,0.18))"></div>'
+        f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:0.60rem;'
+        f'color:{GOLD};text-transform:uppercase;'
+        f'letter-spacing:0.18em;font-weight:700">{label}</span>'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,'
-        f'rgba(255,255,255,0.08),rgba(255,255,255,0.0))"></div>'
+        f'rgba(201,168,76,0.18),rgba(201,168,76,0.0))"></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -316,7 +335,7 @@ def _compute_metrics(insights: list) -> dict:
     }
 
 
-# ── Section 0: Hero ───────────────────────────────────────────────────────────
+# ── Section 0: Hero (Bloomberg terminal style) ────────────────────────────────
 
 def _render_hero(insights: list) -> None:
     try:
@@ -327,72 +346,184 @@ def _render_hero(insights: list) -> None:
         risk_level      = metrics["risk_level"]
         data_quality    = metrics["data_quality"]
 
-        s_color = C_HIGH if sentiment_label == "BULLISH" else (C_LOW if sentiment_label == "BEARISH" else C_MOD)
+        s_color = TEAL if sentiment_label == "BULLISH" else (CRIMSON if sentiment_label == "BEARISH" else C_MOD)
         r_color = _risk_color(risk_level)
-        q_color = C_HIGH if data_quality in ("Excellent", "Good") else (C_MOD if data_quality == "Fair" else C_LOW)
+        q_color = TEAL if data_quality in ("Excellent", "Good") else (C_MOD if data_quality == "Fair" else CRIMSON)
 
-        st.markdown(
-            f"""
-            <div style="background:linear-gradient(135deg,#0d1b2e 0%,#1a2a45 60%,#0f1f35 100%);
-                        border:1px solid {C_ACCENT}33;border-radius:16px;
-                        padding:28px 32px 24px;margin-bottom:20px;
-                        box-shadow:0 8px 40px rgba(59,130,246,0.12);">
-              <div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;
-                          color:{C_ACCENT};text-transform:uppercase;margin-bottom:6px;">
-                INVESTOR INTELLIGENCE REPORT
-              </div>
-              <div style="font-size:1.75rem;font-weight:800;color:{C_TEXT};
-                          letter-spacing:-0.02em;line-height:1.2;margin-bottom:6px;">
-                Institutional-grade sentiment analysis,&nbsp;
-                <span style="color:{C_CONV};">alpha signals</span>,
-                and market intelligence
-              </div>
-              <div style="font-size:0.8rem;color:{C_TEXT3};margin-bottom:0;">
-                Compiled into a downloadable briefing &nbsp;·&nbsp;
-                {datetime.now(tz=timezone.utc).strftime("%d %b %Y  %H:%M UTC")}
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        now_str = datetime.now(tz=timezone.utc).strftime("%d %b %Y  %H:%M UTC")
 
-        cols = st.columns(4)
-        cards = [
-            _stat_card(
-                "Market Sentiment",
-                sentiment_label,
-                sub=f"Score {sentiment_score:.2f}",
-                color=s_color,
-                glow=True,
-            ),
-            _stat_card(
-                "Active Alpha Signals",
-                str(alpha_count),
-                sub="Score ≥ 0.60",
-                color=C_CONV,
-            ),
-            _stat_card(
-                "Risk Level",
-                risk_level,
-                color=r_color,
-            ),
-            _stat_card(
-                "Data Quality",
-                data_quality,
-                sub=f"{len(insights)} insights indexed",
-                color=q_color,
-            ),
-        ]
-        for col, card in zip(cols, cards):
-            with col:
-                st.markdown(card, unsafe_allow_html=True)
+        hero_html = f"""
+<div style="background: linear-gradient(135deg, #0D1B2A 0%, #132237 50%, #0D1B2A 100%);
+            border: 1px solid rgba(201,168,76,0.3); border-radius: 12px;
+            padding: 32px; margin-bottom: 24px; position: relative; overflow: hidden;">
+  <!-- Gold accent bar -->
+  <div style="position:absolute; top:0; left:0; width:4px; height:100%;
+               background: linear-gradient(180deg, #C9A84C, #F39C12);"></div>
+  <!-- Subtle grid overlay -->
+  <div style="position:absolute;top:0;left:0;right:0;bottom:0;
+              background:repeating-linear-gradient(0deg,transparent,transparent 39px,
+              rgba(201,168,76,0.03) 39px,rgba(201,168,76,0.03) 40px),
+              repeating-linear-gradient(90deg,transparent,transparent 79px,
+              rgba(201,168,76,0.03) 79px,rgba(201,168,76,0.03) 80px);
+              pointer-events:none;"></div>
+  <div style="padding-left: 16px; position:relative;">
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px;
+                color: {GOLD}; letter-spacing: 0.25em; text-transform: uppercase;
+                margin-bottom: 8px; opacity: 0.85;">
+      SHIP TRACKER &nbsp;/&nbsp; INTELLIGENCE PLATFORM &nbsp;/&nbsp; {now_str}
+    </div>
+    <div style="font-size: 28px; font-weight: 800; color: #ECF0F1;
+                margin-bottom: 4px; letter-spacing: -0.5px; line-height: 1.2;">
+      Global Shipping Intelligence Report
+    </div>
+    <div style="font-size: 13px; color: #95A5A6; margin-bottom: 28px;">
+      Institutional-Grade Sentiment Analysis, Alpha Signal Intelligence &amp; Market Briefing
+    </div>
+    <!-- 4 KPI metrics -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+      <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                  border-top:2px solid {s_color};border-radius:10px;padding:14px 16px;
+                  text-align:center;box-shadow:0 0 20px {_hex_to_rgba(s_color, 0.15)};">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#95A5A6;
+                    text-transform:uppercase;letter-spacing:0.15em;margin-bottom:8px;">MARKET SENTIMENT</div>
+        <div style="font-size:1.5rem;font-weight:800;color:{s_color};line-height:1;">{sentiment_label}</div>
+        <div style="font-size:0.7rem;color:#95A5A6;margin-top:4px;">Score {sentiment_score:.2f}</div>
+      </div>
+      <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                  border-top:2px solid {GOLD};border-radius:10px;padding:14px 16px;
+                  text-align:center;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#95A5A6;
+                    text-transform:uppercase;letter-spacing:0.15em;margin-bottom:8px;">ALPHA SIGNALS</div>
+        <div style="font-size:1.5rem;font-weight:800;color:{GOLD};line-height:1;">{alpha_count}</div>
+        <div style="font-size:0.7rem;color:#95A5A6;margin-top:4px;">Score ≥ 0.60</div>
+      </div>
+      <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                  border-top:2px solid {r_color};border-radius:10px;padding:14px 16px;
+                  text-align:center;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#95A5A6;
+                    text-transform:uppercase;letter-spacing:0.15em;margin-bottom:8px;">RISK LEVEL</div>
+        <div style="font-size:1.5rem;font-weight:800;color:{r_color};line-height:1;">{risk_level}</div>
+        <div style="font-size:0.7rem;color:#95A5A6;margin-top:4px;">&nbsp;</div>
+      </div>
+      <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                  border-top:2px solid {q_color};border-radius:10px;padding:14px 16px;
+                  text-align:center;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#95A5A6;
+                    text-transform:uppercase;letter-spacing:0.15em;margin-bottom:8px;">DATA QUALITY</div>
+        <div style="font-size:1.5rem;font-weight:800;color:{q_color};line-height:1;">{data_quality}</div>
+        <div style="font-size:0.7rem;color:#95A5A6;margin-top:4px;">{len(insights)} insights indexed</div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+        st.markdown(hero_html, unsafe_allow_html=True)
 
     except Exception:
         logger.exception("tab_report: hero section failed")
         st.warning("Hero section unavailable.")
 
 
-# ── Section 1: Report Configuration ──────────────────────────────────────────
+# ── Section 1: What's Inside ──────────────────────────────────────────────────
+
+def _render_whats_inside() -> None:
+    try:
+        toc_html = f"""
+<div style="background: linear-gradient(135deg, {BG_CARD} 0%, #152238 100%);
+            border: 1px solid rgba(201,168,76,0.25); border-radius: 12px;
+            padding: 24px 28px; margin-bottom: 24px;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+    <div style="font-size:24px;">📄</div>
+    <div>
+      <div style="font-size:1rem;font-weight:800;color:#ECF0F1;letter-spacing:-0.3px;">
+        10-Page Institutional PDF Report
+      </div>
+      <div style="font-size:0.75rem;color:#95A5A6;margin-top:2px;">
+        Professional-grade market intelligence — formatted for institutional investors
+      </div>
+    </div>
+  </div>
+  <div style="border-left:2px solid rgba(201,168,76,0.3);padding-left:16px;display:flex;flex-direction:column;gap:8px;">
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">01</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Cover Page</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— Sentiment gauge + key metrics dashboard</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">02</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Executive Summary</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— AI-generated market narrative &amp; outlook</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">03</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Sentiment Analysis</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— News breakdown + topic heatmap</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">04</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:{GOLD};">Alpha Signal Intelligence</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— Trade ideas with entry / target / stop</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">05</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Market Intelligence</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— Top insights + port/route rankings</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">06</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Freight Rate Analysis</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— FBX rates + momentum charts</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">07</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Macro Environment</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— BDI, WTI, yields, PMI</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">08</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Shipping Equity Analysis</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— ZIM, MATX, SBLK, DAC, CMRE</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">09</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:{TEAL};">AI Recommendations</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— Ranked trade ideas with conviction scores</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{GOLD};min-width:28px;">10</span>
+      <div>
+        <span style="font-size:0.83rem;font-weight:700;color:#ECF0F1;">Disclaimer &amp; Appendix</span>
+        <span style="font-size:0.75rem;color:#95A5A6;margin-left:8px;">— Data sources + full signal table</span>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+        st.markdown(toc_html, unsafe_allow_html=True)
+    except Exception:
+        logger.exception("tab_report: what's inside section failed")
+        st.warning("Contents preview unavailable.")
+
+
+# ── Section 2: Report Configuration ──────────────────────────────────────────
 
 def _render_config() -> dict:
     """Render the configuration expander and return the checkbox state dict."""
@@ -415,7 +546,88 @@ def _render_config() -> dict:
     return cfg
 
 
-# ── Section 2: Generate & Download ───────────────────────────────────────────
+# ── Post-generation dashboard ─────────────────────────────────────────────────
+
+def _render_post_gen_dashboard(insights: list, report) -> None:
+    """Show a 'Report Generated' summary dashboard with key metrics."""
+    try:
+        metrics = _compute_metrics(insights)
+        sentiment_label = metrics["sentiment_label"]
+        sentiment_score = metrics["sentiment_score"]
+        alpha_count     = metrics["alpha_count"]
+        risk_level      = metrics["risk_level"]
+        data_quality    = metrics["data_quality"]
+
+        s_color = TEAL if sentiment_label == "BULLISH" else (CRIMSON if sentiment_label == "BEARISH" else C_MOD)
+        r_color = _risk_color(risk_level)
+
+        # Try to pull top trade idea from the report object
+        top_ticker  = "—"
+        top_action  = "—"
+        top_return  = "—"
+        try:
+            if report is not None:
+                signals = _safe_get(report, "alpha_signals", default=None) or \
+                          _safe_get(report, "signals", default=None) or []
+                if signals:
+                    top = signals[0]
+                    top_ticker = _safe_get(top, "ticker", default=_safe_get(top, "symbol", default="—"))
+                    top_action = _safe_get(top, "action", default="—")
+                    raw_ret    = _safe_get(top, "expected_return", default=_safe_get(top, "target_return", default=None))
+                    top_return = f"{raw_ret:.1%}" if isinstance(raw_ret, float) else str(raw_ret or "—")
+        except Exception:
+            pass
+
+        st.markdown(
+            f"""
+<div style="background:linear-gradient(135deg,#0D1B2A 0%,#132237 100%);
+            border:1px solid rgba(201,168,76,0.3);border-radius:12px;
+            padding:24px 28px;margin:20px 0;">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:{GOLD};
+              letter-spacing:0.2em;text-transform:uppercase;margin-bottom:16px;">
+    REPORT GENERATED — SUMMARY DASHBOARD
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;">
+    <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                border-top:3px solid {s_color};border-radius:10px;padding:14px;text-align:center;">
+      <div style="font-size:0.58rem;color:#95A5A6;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Sentiment</div>
+      <div style="font-size:1.3rem;font-weight:800;color:{s_color};">{sentiment_label}</div>
+      <div style="font-size:0.7rem;color:#95A5A6;margin-top:3px;">{sentiment_score:.2f}</div>
+    </div>
+    <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                border-top:3px solid {GOLD};border-radius:10px;padding:14px;text-align:center;">
+      <div style="font-size:0.58rem;color:#95A5A6;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Alpha Signals</div>
+      <div style="font-size:1.3rem;font-weight:800;color:{GOLD};">{alpha_count}</div>
+      <div style="font-size:0.7rem;color:#95A5A6;margin-top:3px;">found</div>
+    </div>
+    <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                border-top:3px solid {TEAL};border-radius:10px;padding:14px;text-align:center;">
+      <div style="font-size:0.58rem;color:#95A5A6;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Top Trade</div>
+      <div style="font-size:1.1rem;font-weight:800;color:{TEAL};">{top_ticker}</div>
+      <div style="font-size:0.7rem;color:#95A5A6;margin-top:3px;">{top_action} · {top_return}</div>
+    </div>
+    <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                border-top:3px solid {r_color};border-radius:10px;padding:14px;text-align:center;">
+      <div style="font-size:0.58rem;color:#95A5A6;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Risk Level</div>
+      <div style="font-size:1.3rem;font-weight:800;color:{r_color};">{risk_level}</div>
+      <div style="font-size:0.7rem;color:#95A5A6;margin-top:3px;">&nbsp;</div>
+    </div>
+    <div style="background:rgba(26,46,69,0.8);border:1px solid rgba(201,168,76,0.2);
+                border-top:3px solid {C_ACCENT};border-radius:10px;padding:14px;text-align:center;">
+      <div style="font-size:0.58rem;color:#95A5A6;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Data Quality</div>
+      <div style="font-size:1.3rem;font-weight:800;color:{C_ACCENT};">{data_quality}</div>
+      <div style="font-size:0.7rem;color:#95A5A6;margin-top:3px;">{len(insights)} insights</div>
+    </div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("tab_report: post-gen dashboard failed")
+
+
+# ── Section 3: Generate & Download ───────────────────────────────────────────
 
 def _render_generate(
     port_results, route_results, insights, freight_data, macro_data, stock_data
@@ -424,13 +636,17 @@ def _render_generate(
         _divider("Generate Report")
 
         generate_clicked = st.button(
-            "Generate Report",
+            "🚀 Generate Intelligence Report",
             type="primary",
             use_container_width=True,
             key="rep_generate_btn",
         )
 
         if generate_clicked:
+            report = None
+            html_str = None
+
+            # Step 1: Compile market intelligence
             with st.spinner("Compiling market intelligence..."):
                 try:
                     if _ENGINE_OK and _REPORT_HTML_OK:
@@ -440,7 +656,6 @@ def _render_generate(
                         )
                         html_str = render_investor_report_html(report)
                     else:
-                        # Graceful fallback to the existing HTML report generator
                         html_str = generate_html_report(
                             port_results, route_results, insights,
                             freight_data, macro_data, stock_data,
@@ -452,45 +667,96 @@ def _render_generate(
                     st.session_state["report_bytes"] = html_bytes
                     st.session_state["report_obj"]   = report
 
-                    # Persist to report history — non-blocking
-                    if _HISTORY_OK and html_str and report is not None:
-                        try:
-                            _save_report(html_content=html_str, report_obj=report)
-                        except Exception as _save_exc:
-                            logger.warning("tab_report: save_report failed (non-fatal): %s", _save_exc)
-
-                    # Success summary
-                    n_insights = len(insights) if insights else 0
-                    n_routes   = len(route_results) if route_results else 0
-                    n_ports    = len(port_results) if port_results else 0
-                    st.success(
-                        f"Report compiled — {n_insights} insights · "
-                        f"{n_routes} routes · {n_ports} ports"
-                    )
-
                 except Exception as e:
                     st.error("Report generation failed. Please try again.")
                     st.exception(e)
+                    return
 
-        # Download button — always shown after first generation
+            # Step 2: Render PDF
+            if _PDF_OK and report is not None:
+                with st.spinner("Rendering institutional PDF..."):
+                    try:
+                        pdf_bytes = render_investor_report_pdf(report)
+                        st.session_state["report_pdf"] = pdf_bytes
+                    except Exception as _pdf_exc:
+                        logger.warning("tab_report: PDF render failed (non-fatal): %s", _pdf_exc)
+                        st.session_state["report_pdf"] = None
+
+            # Persist to report history — non-blocking
+            if _HISTORY_OK and html_str and report is not None:
+                try:
+                    _save_report(html_content=html_str, report_obj=report)
+                except Exception as _save_exc:
+                    logger.warning("tab_report: save_report failed (non-fatal): %s", _save_exc)
+
+            # Success banner
+            n_insights = len(insights) if insights else 0
+            n_routes   = len(route_results) if route_results else 0
+            n_ports    = len(port_results) if port_results else 0
+            pdf_ready  = bool(st.session_state.get("report_pdf"))
+            st.success(
+                f"{'PDF + HTML report' if pdf_ready else 'HTML report'} compiled — "
+                f"{n_insights} insights · {n_routes} routes · {n_ports} ports"
+            )
+
+        # ── Download buttons — shown after first generation ───────────────────
+        pdf_bytes  = st.session_state.get("report_pdf")
         html_bytes = st.session_state.get("report_bytes")
-        if html_bytes:
-            date_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        report_obj = st.session_state.get("report_obj")
+
+        date_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+        if pdf_bytes or html_bytes:
+            st.markdown(
+                f'<div style="margin:12px 0 4px;font-family:\'JetBrains Mono\',monospace;'
+                f'font-size:0.62rem;color:{GOLD};text-transform:uppercase;letter-spacing:0.18em;">'
+                f'DOWNLOAD</div>',
+                unsafe_allow_html=True,
+            )
+
+        if pdf_bytes:
+            st.download_button(
+                label="📥 Download Report (PDF)",
+                data=pdf_bytes,
+                file_name=f"shipping_intelligence_{date_str}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="rep_download_pdf_btn",
+            )
+        elif html_bytes:
+            # PDF not available — promote HTML as primary
             st.download_button(
                 label="📥 Download Report (HTML)",
                 data=html_bytes,
                 file_name=f"shipping_intelligence_report_{date_str}.html",
                 mime="text/html",
                 use_container_width=True,
-                key="rep_download_btn",
+                key="rep_download_html_primary_btn",
             )
+
+        # Secondary HTML button (only shown when PDF is available too)
+        if pdf_bytes and html_bytes:
+            col_html, _ = st.columns([2, 5])
+            with col_html:
+                st.download_button(
+                    label="🌐 Download as HTML",
+                    data=html_bytes,
+                    file_name=f"shipping_intelligence_report_{date_str}.html",
+                    mime="text/html",
+                    use_container_width=True,
+                    key="rep_download_html_secondary_btn",
+                )
+
+        # Post-generation dashboard
+        if (pdf_bytes or html_bytes) and insights:
+            _render_post_gen_dashboard(insights, report_obj)
 
     except Exception:
         logger.exception("tab_report: generate section failed")
         st.warning("Generate section unavailable.")
 
 
-# ── Section 3: Report Preview ─────────────────────────────────────────────────
+# ── Section 4: Report Preview ─────────────────────────────────────────────────
 
 def _render_preview() -> None:
     try:
@@ -502,17 +768,14 @@ def _render_preview() -> None:
         st.caption("Full report opens in your browser after download. Showing cover + executive summary preview.")
 
         # Truncate to roughly the first two sections to avoid overwhelming the page.
-        # Strategy: keep up to the first occurrence of the 3rd <section> tag, or 12 000 chars.
         truncated = html_str
         try:
-            # Find position of third <section (or <div class="section")
             idx = 0
             for _ in range(2):
                 next_idx = truncated.find("<section", idx + 1)
                 if next_idx == -1:
                     break
                 idx = next_idx
-            # Close off the HTML cleanly
             cutoff = min(idx if idx > 0 else len(truncated), 14_000)
             truncated = html_str[:cutoff] + "\n</body></html>"
         except Exception:
@@ -525,12 +788,18 @@ def _render_preview() -> None:
         st.warning("Report preview unavailable.")
 
 
-# ── Section 4: Key Insights Preview ──────────────────────────────────────────
+# ── Section 5: Key Insights Preview ──────────────────────────────────────────
 
 def _render_key_insights(insights: list, macro_data: dict | None, stock_data: dict | None) -> None:
     try:
         _divider("Report Snapshot")
-        st.subheader("📊 Report Snapshot")
+
+        # Section label
+        st.markdown(
+            f'<div style="font-size:1rem;font-weight:800;color:#ECF0F1;'
+            f'letter-spacing:-0.3px;margin-bottom:4px;">📊 Report Snapshot</div>',
+            unsafe_allow_html=True,
+        )
 
         if not insights:
             st.info("No insights available yet. Run the analysis engine to populate this section.")
@@ -547,9 +816,10 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
 
         if alpha_signals:
             st.markdown(
-                f'<div style="font-size:0.8rem;font-weight:700;color:{C_CONV};'
-                f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">'
-                f'Top Alpha Signals</div>',
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.62rem;'
+                f'font-weight:700;color:{GOLD};'
+                f'text-transform:uppercase;letter-spacing:0.18em;margin-bottom:10px;">'
+                f'TOP ALPHA SIGNALS</div>',
                 unsafe_allow_html=True,
             )
             sig_cols = st.columns(min(len(alpha_signals), 3))
@@ -561,12 +831,13 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
                 s_color   = _action_color(action)
                 with col:
                     st.markdown(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                        f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.2);'
                         f'border-left:3px solid {s_color};border-radius:10px;'
                         f'padding:14px 16px;margin-bottom:8px;">'
-                        f'<div style="font-size:0.65rem;font-weight:700;color:{C_TEXT3};'
+                        f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.62rem;'
+                        f'font-weight:700;color:{C_TEXT3};'
                         f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">{ticker}</div>'
-                        f'<div style="font-size:0.85rem;font-weight:700;color:{C_TEXT};'
+                        f'<div style="font-size:0.85rem;font-weight:700;color:#ECF0F1;'
                         f'margin-bottom:8px;line-height:1.3">{title}</div>'
                         f'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
                         f'{_badge(action, s_color)}'
@@ -578,9 +849,10 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
 
         # ── Top 3 insights as compact cards ──────────────────────────────────
         st.markdown(
-            f'<div style="font-size:0.8rem;font-weight:700;color:{C_ACCENT};'
-            f'text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 8px">'
-            f'Top Insights</div>',
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.62rem;'
+            f'font-weight:700;color:{C_ACCENT};'
+            f'text-transform:uppercase;letter-spacing:0.18em;margin:18px 0 10px;">'
+            f'TOP INSIGHTS</div>',
             unsafe_allow_html=True,
         )
         top_insights = sorted_insights[:3]
@@ -592,11 +864,11 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
             i_color = _score_color(score)
             a_color = _action_color(action)
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.15);'
                 f'border-radius:8px;padding:10px 14px;margin-bottom:6px;'
                 f'display:flex;align-items:center;justify-content:space-between;gap:12px">'
                 f'<div style="flex:1;min-width:0">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT}">{title}</span>'
+                f'<span style="font-size:0.82rem;font-weight:600;color:#ECF0F1">{title}</span>'
                 f'&nbsp;<span style="font-size:0.65rem;color:{C_TEXT3}">{cat}</span>'
                 f'</div>'
                 f'<div style="display:flex;gap:8px;align-items:center;flex-shrink:0">'
@@ -615,11 +887,12 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
 
         st.markdown(
             f'<div style="margin:20px 0 6px">'
-            f'<div style="font-size:0.72rem;font-weight:700;color:{C_TEXT3};'
-            f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">'
-            f'Sentiment Distribution</div>'
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.60rem;'
+            f'font-weight:700;color:{C_TEXT3};'
+            f'text-transform:uppercase;letter-spacing:0.15em;margin-bottom:10px">'
+            f'SENTIMENT DISTRIBUTION</div>'
             f'<div style="display:flex;border-radius:6px;overflow:hidden;height:18px;gap:2px">'
-            f'<div style="width:{bullish_pct:.1f}%;background:{C_HIGH};'
+            f'<div style="width:{bullish_pct:.1f}%;background:{TEAL};'
             f'display:flex;align-items:center;justify-content:center;'
             f'font-size:0.6rem;font-weight:700;color:#fff;min-width:0;">'
             f'{"Bullish" if bullish_pct > 15 else ""}</div>'
@@ -627,15 +900,15 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
             f'display:flex;align-items:center;justify-content:center;'
             f'font-size:0.6rem;font-weight:700;color:#fff;min-width:0;">'
             f'{"Neutral" if neutral_pct > 15 else ""}</div>'
-            f'<div style="width:{bearish_pct:.1f}%;background:{C_LOW};'
+            f'<div style="width:{bearish_pct:.1f}%;background:{CRIMSON};'
             f'display:flex;align-items:center;justify-content:center;'
             f'font-size:0.6rem;font-weight:700;color:#fff;min-width:0;">'
             f'{"Bearish" if bearish_pct > 15 else ""}</div>'
             f'</div>'
             f'<div style="display:flex;gap:16px;margin-top:6px">'
-            f'<span style="font-size:0.65rem;color:{C_HIGH}">■ Bullish {bullish_pct:.0f}%</span>'
+            f'<span style="font-size:0.65rem;color:{TEAL}">■ Bullish {bullish_pct:.0f}%</span>'
             f'<span style="font-size:0.65rem;color:{C_MOD}">■ Neutral {neutral_pct:.0f}%</span>'
-            f'<span style="font-size:0.65rem;color:{C_LOW}">■ Bearish {bearish_pct:.0f}%</span>'
+            f'<span style="font-size:0.65rem;color:{CRIMSON}">■ Bearish {bearish_pct:.0f}%</span>'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -646,9 +919,10 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
             macro_items = list(macro_data.items())[:6]
             if macro_items:
                 st.markdown(
-                    f'<div style="font-size:0.72rem;font-weight:700;color:{C_MACRO};'
-                    f'text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 8px">'
-                    f'Key Macro Indicators</div>',
+                    f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.60rem;'
+                    f'font-weight:700;color:{C_MACRO};'
+                    f'text-transform:uppercase;letter-spacing:0.15em;margin:18px 0 10px">'
+                    f'KEY MACRO INDICATORS</div>',
                     unsafe_allow_html=True,
                 )
                 macro_cols = st.columns(min(len(macro_items), 6))
@@ -656,12 +930,12 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
                     val_str = f"{v:.2f}" if isinstance(v, (int, float)) else str(v)[:12]
                     with col:
                         st.markdown(
-                            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                            f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.15);'
                             f'border-top:2px solid {C_MACRO};border-radius:8px;'
                             f'padding:10px 12px;text-align:center;">'
                             f'<div style="font-size:0.58rem;color:{C_TEXT3};'
                             f'text-transform:uppercase;margin-bottom:4px">{k}</div>'
-                            f'<div style="font-size:1rem;font-weight:800;color:{C_TEXT}">{val_str}</div>'
+                            f'<div style="font-size:1rem;font-weight:800;color:#ECF0F1">{val_str}</div>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
@@ -671,7 +945,7 @@ def _render_key_insights(insights: list, macro_data: dict | None, stock_data: di
         st.warning("Key insights preview unavailable.")
 
 
-# ── Section 5: News Sentiment Preview ────────────────────────────────────────
+# ── Section 6: News Sentiment Preview ────────────────────────────────────────
 
 def _render_news_preview() -> None:
     try:
@@ -735,9 +1009,9 @@ def _render_news_preview() -> None:
                     y=avg_scores,
                     mode="lines+markers",
                     name="Avg Sentiment",
-                    line=dict(color=C_ACCENT, width=2),
+                    line=dict(color=GOLD, width=2),
                     marker=dict(
-                        color=[C_HIGH if s > 0.05 else (C_LOW if s < -0.05 else C_MOD) for s in avg_scores],
+                        color=[TEAL if s > 0.05 else (CRIMSON if s < -0.05 else C_MOD) for s in avg_scores],
                         size=7,
                     ),
                     hovertemplate="%{x}<br>Sentiment: %{y:.3f}<extra></extra>",
@@ -759,15 +1033,16 @@ def _render_news_preview() -> None:
         # ── Top 5 headlines ───────────────────────────────────────────────────
         def _sent_color(label: str) -> str:
             if label == "BULLISH":
-                return C_HIGH
+                return TEAL
             if label == "BEARISH":
-                return C_LOW
+                return CRIMSON
             return C_TEXT3
 
         st.markdown(
-            f'<div style="font-size:0.8rem;font-weight:700;color:{C_TEXT};'
-            f'text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 8px">'
-            f'Top Headlines</div>',
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.60rem;'
+            f'font-weight:700;color:{C_TEXT};'
+            f'text-transform:uppercase;letter-spacing:0.15em;margin:16px 0 10px">'
+            f'TOP HEADLINES</div>',
             unsafe_allow_html=True,
         )
         top5 = sorted(articles, key=lambda a: abs(a.get("sentiment_score", 0.0) or 0.0), reverse=True)[:5]
@@ -779,14 +1054,14 @@ def _render_news_preview() -> None:
             url    = article.get("url", "#")
             lc     = _sent_color(label)
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.15);'
                 f'border-left:3px solid {lc};border-radius:8px;'
                 f'padding:10px 14px;margin-bottom:6px;display:flex;'
                 f'align-items:center;gap:12px;">'
                 f'{_badge(label, lc)}'
                 f'<div style="flex:1;min-width:0">'
                 f'<a href="{url}" target="_blank" style="font-size:0.82rem;font-weight:600;'
-                f'color:{C_TEXT};text-decoration:none;line-height:1.3">{title}</a>'
+                f'color:#ECF0F1;text-decoration:none;line-height:1.3">{title}</a>'
                 f'<div style="font-size:0.65rem;color:{C_TEXT3};margin-top:3px">{source}</div>'
                 f'</div>'
                 f'<span style="font-size:0.75rem;font-weight:700;color:{lc};flex-shrink:0">'
@@ -807,9 +1082,9 @@ def _render_news_preview() -> None:
                 t_labels = [t for t, _ in topics_sorted]
                 t_vals   = [c for _, c in topics_sorted]
                 _TOPIC_COLORS_MAP = {
-                    "rates":      C_ACCENT,
+                    "rates":      GOLD,
                     "congestion": C_MOD,
-                    "sanctions":  C_LOW,
+                    "sanctions":  CRIMSON,
                     "weather":    C_MACRO,
                     "M&A":        C_CONV,
                     "regulatory": "#ec4899",
@@ -841,14 +1116,14 @@ def _render_news_preview() -> None:
         st.warning("News sentiment preview unavailable.")
 
 
-# ── Section 6: Report History ─────────────────────────────────────────────────
+# ── Section 7: Report History ─────────────────────────────────────────────────
 
 def _sentiment_badge_color(label: str) -> str:
     mapping = {
-        "BULLISH": C_HIGH,
-        "BEARISH": C_LOW,
+        "BULLISH": TEAL,
+        "BEARISH": CRIMSON,
         "NEUTRAL": C_MOD,
-        "MIXED":   C_ACCENT,
+        "MIXED":   GOLD,
     }
     return mapping.get((label or "NEUTRAL").upper(), C_TEXT3)
 
@@ -856,7 +1131,11 @@ def _sentiment_badge_color(label: str) -> str:
 def _render_report_history() -> None:
     try:
         _divider("Report History")
-        st.subheader("📁 Report History")
+        st.markdown(
+            f'<div style="font-size:1rem;font-weight:800;color:#ECF0F1;'
+            f'letter-spacing:-0.3px;margin-bottom:4px;">📁 Report History</div>',
+            unsafe_allow_html=True,
+        )
 
         if not _HISTORY_OK:
             st.info("Report history module not available.")
@@ -874,23 +1153,23 @@ def _render_report_history() -> None:
                 d_color   = _sentiment_badge_color(dominant)
 
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.2);'
                     f'border-radius:10px;padding:14px 18px;margin-bottom:16px;'
                     f'display:flex;gap:28px;align-items:center;flex-wrap:wrap;">'
                     f'<div style="text-align:center">'
                     f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
                     f'letter-spacing:0.1em;margin-bottom:2px">Total Reports</div>'
-                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{total}</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:#ECF0F1">{total}</div>'
                     f'</div>'
                     f'<div style="text-align:center">'
                     f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
                     f'letter-spacing:0.1em;margin-bottom:2px">Total Size</div>'
-                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{size_mb:.2f} MB</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:#ECF0F1">{size_mb:.2f} MB</div>'
                     f'</div>'
                     f'<div style="text-align:center">'
                     f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
                     f'letter-spacing:0.1em;margin-bottom:2px">Avg Sentiment</div>'
-                    f'<div style="font-size:1.3rem;font-weight:800;color:{C_TEXT}">{avg_score:+.3f}</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800;color:#ECF0F1">{avg_score:+.3f}</div>'
                     f'</div>'
                     f'<div style="text-align:center">'
                     f'<div style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;'
@@ -921,7 +1200,7 @@ def _render_report_history() -> None:
                 dq_label    = (meta.data_quality or "PARTIAL").upper()
                 s_color     = _sentiment_badge_color(sent_label)
                 r_color     = _risk_color(risk_label)
-                dq_color    = C_HIGH if dq_label == "FULL" else (C_MOD if dq_label == "PARTIAL" else C_LOW)
+                dq_color    = TEAL if dq_label == "FULL" else (C_MOD if dq_label == "PARTIAL" else CRIMSON)
                 size_str    = f"{meta.file_size_kb:.1f} KB"
                 sig_str     = str(meta.signal_count)
                 report_date = meta.report_date or meta.generated_at[:10]
@@ -931,13 +1210,13 @@ def _render_report_history() -> None:
 
                 with col_info:
                     st.markdown(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                        f'<div style="background:{BG_CARD};border:1px solid rgba(201,168,76,0.15);'
                         f'border-left:3px solid {s_color};border-radius:10px;'
                         f'padding:12px 16px;display:flex;align-items:center;'
                         f'gap:14px;flex-wrap:wrap;">'
                         f'<div style="min-width:90px">'
                         f'<div style="font-size:0.65rem;color:{C_TEXT3};margin-bottom:2px">Date</div>'
-                        f'<div style="font-size:0.85rem;font-weight:700;color:{C_TEXT}">{report_date}</div>'
+                        f'<div style="font-size:0.85rem;font-weight:700;color:#ECF0F1">{report_date}</div>'
                         f'</div>'
                         f'<div>{_badge(sent_label, s_color)}</div>'
                         f'<div>'
@@ -946,7 +1225,7 @@ def _render_report_history() -> None:
                         f'</div>'
                         f'<div>'
                         f'<span style="font-size:0.65rem;color:{C_TEXT3}">Signals: </span>'
-                        f'<span style="font-size:0.8rem;font-weight:700;color:{C_CONV}">{sig_str}</span>'
+                        f'<span style="font-size:0.8rem;font-weight:700;color:{GOLD}">{sig_str}</span>'
                         f'</div>'
                         f'<div>'
                         f'<span style="font-size:0.65rem;color:{C_TEXT3}">Quality: </span>'
@@ -1041,20 +1320,23 @@ def render(
     # ── 0. Hero ───────────────────────────────────────────────────────────────
     _render_hero(insights)
 
-    # ── 1. Configuration ──────────────────────────────────────────────────────
+    # ── 1. What's Inside ──────────────────────────────────────────────────────
+    _render_whats_inside()
+
+    # ── 2. Configuration ──────────────────────────────────────────────────────
     _render_config()
 
-    # ── 2. Generate & Download ────────────────────────────────────────────────
+    # ── 3. Generate & Download ────────────────────────────────────────────────
     _render_generate(port_results, route_results, insights, freight_data, macro_data, stock_data)
 
-    # ── 3. Report History ─────────────────────────────────────────────────────
+    # ── 4. Report History ─────────────────────────────────────────────────────
     _render_report_history()
 
-    # ── 4. Report Preview (only after generation) ─────────────────────────────
+    # ── 5. Report Preview (only after generation) ─────────────────────────────
     _render_preview()
 
-    # ── 5. Key Insights Preview ───────────────────────────────────────────────
+    # ── 6. Key Insights Preview ───────────────────────────────────────────────
     _render_key_insights(insights, macro_data, stock_data)
 
-    # ── 6. News Sentiment Preview ─────────────────────────────────────────────
+    # ── 7. News Sentiment Preview ─────────────────────────────────────────────
     _render_news_preview()
