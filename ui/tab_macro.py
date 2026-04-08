@@ -290,12 +290,11 @@ def _delta_html(delta: float, unit: str = "") -> str:
 
 def _section_title(text: str, subtitle: str = "") -> None:
     sub_html = f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px;">{subtitle}</div>' if subtitle else ""
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 14px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER};">'
         f'<span style="color:{C_TEXT};font-size:17px;font-weight:700;letter-spacing:-0.01em;">{text}</span>'
         f'{sub_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -321,11 +320,10 @@ def _kpi_card(label: str, value: str, prior: str, delta: float,
 
 
 def _region_header(title: str, color: str) -> None:
-    st.markdown(
+    st.html(
         f'<div style="color:{color};font-size:13px;font-weight:700;letter-spacing:0.06em;'
         f'text-transform:uppercase;margin:18px 0 8px 0;padding-left:10px;'
         f'border-left:3px solid {color};">{title}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -368,9 +366,8 @@ def _render_macro_dashboard(kpis: dict) -> None:
                 val_str   = f"{val:,.1f}" if isinstance(val, float) else str(val)
                 prior_str = f"{prior:,.1f}" if isinstance(prior, float) else str(prior)
                 with cols[col_idx]:
-                    st.markdown(
+                    st.html(
                         _kpi_card(label, val_str, prior_str, delta, unit, status),
-                        unsafe_allow_html=True,
                     )
         except Exception as exc:
             logger.warning(f"Macro dashboard region {region} error: {exc}")
@@ -405,7 +402,7 @@ def _render_demand_drivers(drivers: list[dict]) -> None:
             f'<div style="{header_style}">Shipping Assessment</div>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
 
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 8px 8px;overflow:hidden;">'
         for i, d in enumerate(drivers):
@@ -423,7 +420,7 @@ def _render_demand_drivers(drivers: list[dict]) -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
     except Exception as exc:
         logger.warning(f"Demand drivers render error: {exc}")
         st.info("Demand drivers data unavailable.")
@@ -464,7 +461,7 @@ def _render_leading_indicators(indicators: list[dict]) -> None:
                     f'</div>'
                 )
                 with cols[i % 4]:
-                    st.markdown(card_html, unsafe_allow_html=True)
+                    st.html(card_html)
             except Exception as exc:
                 logger.warning(f"Leading indicator card {i} error: {exc}")
     except Exception as exc:
@@ -532,9 +529,8 @@ def _render_oecd_imf(data: dict) -> None:
                         f'</tr>'
                     )
                 tbl += "</tbody></table>"
-                st.markdown(
+                st.html(
                     f'<div style="border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">{tbl}</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.warning(f"GDP forecast table error: {exc}")
@@ -565,9 +561,8 @@ def _render_oecd_imf(data: dict) -> None:
                         f'</tr>'
                     )
                 tbl += "</tbody></table>"
-                st.markdown(
+                st.html(
                     f'<div style="border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">{tbl}</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.warning(f"Trade flow table error: {exc}")
@@ -599,9 +594,8 @@ def _render_oecd_imf(data: dict) -> None:
                         f'</tr>'
                     )
                 tbl += "</tbody></table>"
-                st.markdown(
+                st.html(
                     f'<div style="border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">{tbl}</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.warning(f"Commodity forecast table error: {exc}")
@@ -625,10 +619,9 @@ def _render_rates_credit(data: dict) -> None:
 
         with left:
             try:
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
                     f'text-transform:uppercase;margin-bottom:10px;">Benchmark Rates</div>',
-                    unsafe_allow_html=True,
                 )
                 base = data.get("base_rates", {})
                 rate_html = f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">'
@@ -642,17 +635,16 @@ def _render_rates_credit(data: dict) -> None:
                         f'</div>'
                     )
                 rate_html += "</div>"
-                st.markdown(rate_html, unsafe_allow_html=True)
+                st.html(rate_html)
             except Exception as exc:
                 logger.warning(f"Base rates render error: {exc}")
 
-            st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+            st.html("<div style='height:16px;'></div>")
 
             try:
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
                     f'text-transform:uppercase;margin-bottom:10px;">HY Spreads — Shipping Bonds</div>',
-                    unsafe_allow_html=True,
                 )
                 hy = data.get("hy_spreads", {})
                 hy_html = f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">'
@@ -672,16 +664,15 @@ def _render_rates_credit(data: dict) -> None:
                         f'</div>'
                     )
                 hy_html += "</div>"
-                st.markdown(hy_html, unsafe_allow_html=True)
+                st.html(hy_html)
             except Exception as exc:
                 logger.warning(f"HY spreads render error: {exc}")
 
         with right:
             try:
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
                     f'text-transform:uppercase;margin-bottom:10px;">Vessel Financing — All-In Cost</div>',
-                    unsafe_allow_html=True,
                 )
                 vf   = data.get("vessel_financing", [])
                 th   = f"color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;"
@@ -705,20 +696,18 @@ def _render_rates_credit(data: dict) -> None:
                         f'</tr>'
                     )
                 vtbl += "</tbody></table>"
-                st.markdown(
+                st.html(
                     f'<div style="border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">{vtbl}</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.warning(f"Vessel financing table error: {exc}")
 
-            st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+            st.html("<div style='height:16px;'></div>")
 
             try:
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
                     f'text-transform:uppercase;margin-bottom:10px;">Newbuild Order Book — Rate Sensitivity</div>',
-                    unsafe_allow_html=True,
                 )
                 obs  = data.get("orderbook_sensitivity", [])
                 ob_html = f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">'
@@ -736,7 +725,7 @@ def _render_rates_credit(data: dict) -> None:
                         f'</div>'
                     )
                 ob_html += "</div>"
-                st.markdown(ob_html, unsafe_allow_html=True)
+                st.html(ob_html)
             except Exception as exc:
                 logger.warning(f"Orderbook sensitivity render error: {exc}")
 
@@ -797,9 +786,8 @@ def _render_commodities(rows: list[dict]) -> None:
             except Exception as exc:
                 logger.warning(f"Commodity row {i} error: {exc}")
         tbl += "</tbody></table>"
-        st.markdown(
+        st.html(
             f'<div style="border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">{tbl}</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Commodity dashboard render error: {exc}")
@@ -814,7 +802,7 @@ def render(macro_data, stock_data=None, insights=None) -> None:
     """Render the Global Macro Intelligence tab."""
     try:
         # Page-level header
-        st.markdown(
+        st.html(
             f'<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:6px;">'
             f'<span style="color:{C_TEXT};font-size:24px;font-weight:800;letter-spacing:-0.02em;">'
             f'Global Macro Intelligence</span>'
@@ -826,7 +814,6 @@ def render(macro_data, stock_data=None, insights=None) -> None:
             f'Macro drivers, leading indicators, and commodity dynamics influencing '
             f'global shipping demand across all vessel segments'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Header render error: {exc}")

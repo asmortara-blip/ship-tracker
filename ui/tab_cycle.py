@@ -156,13 +156,12 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'{subtitle}</span>'
         if subtitle else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="margin:24px 0 10px;padding-bottom:8px;'
         f'border-bottom:1px solid {C_BORDER};">'
         f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:14px;font-weight:700;'
         f'text-transform:uppercase;letter-spacing:1px;">{title}</span>'
         f'{sub}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -205,7 +204,7 @@ def _render_cycle_dashboard(phase: str) -> None:
             f'</div>'
             f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception as exc:
         st.warning(f"Cycle dashboard unavailable: {exc}")
 
@@ -318,7 +317,7 @@ def _render_cycle_clock(phase: str, position_score: float) -> None:
             f'</div>'
             f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception as exc:
         st.warning(f"Cycle clock unavailable: {exc}")
 
@@ -397,7 +396,7 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
             f'</table>'
             f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception as exc:
         st.warning(f"Indicator table unavailable: {exc}")
 
@@ -642,7 +641,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
                 f'{opts_html}'
                 f'</div>'
             )
-            st.markdown(html, unsafe_allow_html=True)
+            st.html(html)
     except Exception as exc:
         st.warning(f"Trade recommendations unavailable: {exc}")
 
@@ -652,14 +651,13 @@ def _render_trade_recommendations(current_phase: str) -> None:
 def render(macro_data=None, freight_data=None, insights=None, stock_data=None):
     """Render the Shipping Market Cycle Positioning tab."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="padding:4px 0 18px;">'
             f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:18px;font-weight:800;'
             f'letter-spacing:0.5px;">Shipping Cycle Positioning</span>'
             f'<span style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:12px;margin-left:12px;">'
             f'~7-year cycle analysis &amp; trade recommendations</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         st.subheader("Shipping Cycle Positioning")

@@ -350,7 +350,6 @@ def _inject_nav_css() -> None:
         }
         </style>
         """,
-        unsafe_allow_html=True,
     )
 
 
@@ -411,7 +410,7 @@ def render_sidebar_nav(
     active_key = st.session_state[_NAV_KEY]
 
     # ── Brand / logo block ────────────────────────────────────────────────────
-    st.sidebar.markdown(
+    st.sidebar.html(
         """
         <div class="nav-brand">
             <div class="nav-brand-title">
@@ -419,8 +418,7 @@ def render_sidebar_nav(
             </div>
             <div class="nav-brand-sub">Shipping Intelligence Platform</div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     # ── Navigation section buttons ────────────────────────────────────────────
@@ -429,9 +427,8 @@ def render_sidebar_nav(
     cluster_2_keys = {"trade_macro", "supply_chain", "risk", "intelligence"}
 
     # Label for first cluster
-    st.sidebar.markdown(
-        '<div class="nav-section-label">Core</div>',
-        unsafe_allow_html=True,
+    st.sidebar.html(
+        '<div class="nav-section-label">Core</div>'
     )
 
     for section in SECTIONS:
@@ -442,9 +439,8 @@ def render_sidebar_nav(
 
         # Insert second cluster label before trade_macro
         if key == "trade_macro":
-            st.sidebar.markdown(
-                '<div class="nav-section-label">Analysis</div>',
-                unsafe_allow_html=True,
+            st.sidebar.html(
+                '<div class="nav-section-label">Analysis</div>'
             )
 
         is_active = key == active_key
@@ -470,9 +466,8 @@ def render_sidebar_nav(
             inline_style = ""
 
         # Wrap button in a styled div; the st.button provides real interactivity
-        st.sidebar.markdown(
-            f'<div class="nav-btn-wrap"><div class="{wrapper_class}" {inline_style}>',
-            unsafe_allow_html=True,
+        st.sidebar.html(
+            f'<div class="nav-btn-wrap"><div class="{wrapper_class}" {inline_style}>'
         )
 
         btn_label = f"{icon}  {label}{badge_html}"
@@ -490,18 +485,17 @@ def render_sidebar_nav(
             st.session_state[_NAV_KEY] = key
             st.rerun()
 
-        st.sidebar.markdown("</div></div>", unsafe_allow_html=True)
+        st.sidebar.html("</div></div>")
 
     # ── Mini health indicator ─────────────────────────────────────────────────
     health_class, health_label = _health_status(insights, stock_data)
-    st.sidebar.markdown(
+    st.sidebar.html(
         f"""
         <div class="nav-health">
             <span class="health-dot {health_class}"></span>
             <span>{health_label}</span>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     return st.session_state[_NAV_KEY]
@@ -522,7 +516,7 @@ def render_mini_stats(
     insight_count: Total insight records loaded.
     high_count:    Count of high-priority / high-demand signals.
     """
-    st.sidebar.markdown(
+    st.sidebar.html(
         f"""
         <div class="mini-stats">
             <div class="mini-stat-item">
@@ -542,8 +536,7 @@ def render_mini_stats(
                 <span class="mini-stat-label">High</span>
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -573,7 +566,7 @@ def render_section_breadcrumb(section: dict, sub_page: str = "") -> None:
         f"linear-gradient(90deg, {color} 0%, {_hex_to_rgba(color, 0.0)} 100%)"
     )
 
-    st.markdown(
+    st.html(
         f"""
         <div class="nav-breadcrumb">
             <span class="nav-bc-icon">{icon}</span>
@@ -583,5 +576,4 @@ def render_section_breadcrumb(section: dict, sub_page: str = "") -> None:
             <div class="nav-bc-bar" style="background:{gradient};"></div>
         </div>
         """,
-        unsafe_allow_html=True,
     )

@@ -82,20 +82,18 @@ _SEVERITY_COLOR: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 def _hr() -> None:
-    st.markdown(
+    st.html(
         "<hr style='border:none; border-top:1px solid rgba(232,230,225,0.06);"
         " margin:32px 0'>",
-        unsafe_allow_html=True,
     )
 
 
 def _subheading(text: str, color: str = "") -> None:
     c = color or C_TEXT2
-    st.markdown(
+    st.html(
         f'<div style="font-size:0.72rem; font-weight:700; color:{c};'
         f' text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px">'
         f'{text}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -108,7 +106,7 @@ def _kpi_card(
 ) -> None:
     acc = accent or C_ACCENT
     width_style = "width:100%;" if full_width else ""
-    st.markdown(
+    st.html(
         f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
         f' border-top:2px solid {acc}; border-radius:6px; padding:16px 18px;'
         f' text-align:center; {width_style}">'
@@ -118,19 +116,17 @@ def _kpi_card(
         f' font-variant-numeric:tabular-nums; line-height:1.1">{value}</div>'
         f'<div style="font-size:0.70rem; color:{C_TEXT3}; margin-top:3px">{sub}</div>'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
 def _insight_box(text: str, color: str = "", label: str = "Key Insight") -> None:
     c = color or C_ACCENT
-    st.markdown(
+    st.html(
         f'<div style="background:{_rgba(c, 0.06)}; border:1px solid {_rgba(c, 0.22)};'
         f' border-left:3px solid {c}; border-radius:8px; padding:12px 16px;'
         f' font-size:0.82rem; color:{C_TEXT2}; margin-top:10px">'
         f'<strong style="color:{c}">{label}:</strong>&nbsp;{text}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -355,7 +351,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     compact overview before the full detail sections below."""
 
     # ── Page header ──────────────────────────────────────────────────────────
-    st.markdown("""
+    st.html("""
     <div style="padding: 16px 0 24px 0; border-bottom: 1px solid rgba(232,230,225,0.05); margin-bottom: 24px">
         <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.15em;
                     color:#475569; margin-bottom:6px">TRADE FINANCE INTELLIGENCE</div>
@@ -366,13 +362,12 @@ def _render_finance_banner(macro_data: dict) -> None:
             Letter of credit volumes, financing costs, FX hedging, credit availability — and their impact on global shipping demand
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # ── KPI Row 1: headline metrics ───────────────────────────────────────────
-    st.markdown(
+    st.html(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
         " color:#6b6760; margin-bottom:10px; font-weight:700'>Key Trade Finance Metrics</div>",
-        unsafe_allow_html=True,
     )
 
     dgs10_val = _latest_macro_value(macro_data, "DGS10")
@@ -409,14 +404,13 @@ def _render_finance_banner(macro_data: dict) -> None:
     with b6:
         _kpi_card("Finance Gap (SME)", "$1.95T", "unmet global demand", C_LOW)
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── Financing cost by route — compact bar chart ───────────────────────────
-    st.markdown(
+    st.html(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
         " color:#6b6760; margin-bottom:10px; font-weight:700'>"
         "Financing Cost by Route (bps over SOFR) vs Cargo Value Cost (%)</div>",
-        unsafe_allow_html=True,
     )
 
     routes_sorted = sorted(_ROUTE_FINANCE_DATA, key=lambda x: x["cost_bps"])
@@ -462,14 +456,13 @@ def _render_finance_banner(macro_data: dict) -> None:
     fig_route.update_layout(margin=dict(t=36, b=10, l=10, r=80))
     st.plotly_chart(fig_route, use_container_width=True, key="banner_route_cost_chart")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:20px'></div>")
 
     # ── Interest rate impact over time ────────────────────────────────────────
-    st.markdown(
+    st.html(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
         " color:#6b6760; margin-bottom:10px; font-weight:700'>"
         "Interest Rate Impact on Trade Finance Costs (2019–2026)</div>",
-        unsafe_allow_html=True,
     )
 
     hist_years  = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
@@ -512,17 +505,16 @@ def _render_finance_banner(macro_data: dict) -> None:
     fig_rate_ts.update_layout(margin=dict(t=16, b=24, l=10, r=10))
     st.plotly_chart(fig_rate_ts, use_container_width=True, key="banner_rate_impact_ts")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:20px'></div>")
 
     # ── Documentary credit vs open account trend ──────────────────────────────
     col_lc, col_fx = st.columns([3, 2])
 
     with col_lc:
-        st.markdown(
+        st.html(
             "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
             " color:#6b6760; margin-bottom:10px; font-weight:700'>"
             "Documentary Credit vs Open Account (2015–2026)</div>",
-            unsafe_allow_html=True,
         )
         years_lc = _LC_OA_DATA["year"]
         lc_pct   = _LC_OA_DATA["lc_pct"]
@@ -559,16 +551,15 @@ def _render_finance_banner(macro_data: dict) -> None:
         st.plotly_chart(fig_lc_oa, use_container_width=True, key="banner_lc_oa_trend")
 
     with col_fx:
-        st.markdown(
+        st.html(
             "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
             " color:#6b6760; margin-bottom:10px; font-weight:700'>"
             "FX Hedging Cost — Forward vs Spot (Major Trade Currencies)</div>",
-            unsafe_allow_html=True,
         )
         trend_color = {"STABLE": C_HIGH, "TIGHTENING": C_CYAN, "WIDENING": C_LOW, "PEGGED": C_TEXT3}
         trend_icon  = {"STABLE": "→", "TIGHTENING": "↘", "WIDENING": "↗", "PEGGED": "="}
         # Table header
-        st.markdown(
+        st.html(
             "<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
             " gap:4px; padding:4px 6px; background:rgba(232,230,225,0.04);"
             " border-radius:6px; margin-bottom:6px'>"
@@ -578,7 +569,6 @@ def _render_finance_banner(macro_data: dict) -> None:
             "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>COST%</span>"
             "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>TREND</span>"
             "</div>",
-            unsafe_allow_html=True,
         )
         for h in sorted(_FX_HEDGE_DATA, key=lambda x: x["hedge_cost_pct"], reverse=True):
             tc = trend_color.get(h["trend"], C_TEXT3)
@@ -587,7 +577,7 @@ def _render_finance_banner(macro_data: dict) -> None:
             # format spot/fwd nicely
             spot_str = f"{h['spot']}" if isinstance(h["spot"], float) and h["spot"] < 10 else f"{h['spot']:.1f}" if isinstance(h["spot"], float) and h["spot"] < 200 else f"{h['spot']:.0f}"
             fwd_str  = f"{h['fwd_3m']}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 10 else f"{h['fwd_3m']:.1f}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 200 else f"{h['fwd_3m']:.0f}"
-            st.markdown(
+            st.html(
                 f"<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
                 f" gap:4px; padding:6px 6px; border-bottom:1px solid rgba(232,230,225,0.04)'>"
                 f"<span style='font-size:0.73rem; font-weight:700; color:{C_TEXT}'>{h['pair']}</span>"
@@ -596,10 +586,9 @@ def _render_finance_banner(macro_data: dict) -> None:
                 f"<span style='font-size:0.72rem; font-weight:700; color:{cost_c}'>{h['hedge_cost_pct']:.2f}%</span>"
                 f"<span style='font-size:0.68rem; color:{tc}; font-weight:600'>{ti} {h['trend']}</span>"
                 f"</div>",
-                unsafe_allow_html=True,
             )
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:8px'></div>")
     _insight_box(
         f"With the 10Y Treasury at <strong style='color:{C_ACCENT}'>{current_rate:.2f}%</strong>,"
         f" global L/C costs are running <strong style='color:{C_LOW}'>+${added_lc_cost}B/yr</strong>"
@@ -635,7 +624,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
         with col:
             _kpi_card(label, val, sub, accent)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:16px'></div>")
 
     # If live indicators available, render composite score bar
     if indicators:
@@ -645,7 +634,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
         dom_color = _SIGNAL_COLOR.get(dom, C_TEXT3)
         pct_bar = round(cs * 100)
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
             f' border-radius:6px; padding:14px 20px; display:flex;'
             f' align-items:center; gap:24px; margin-bottom:4px">'
@@ -670,7 +659,6 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
             f'</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
     # LC volume trend mini chart
@@ -706,7 +694,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
         _subheading("Global Letter of Credit Outstanding Volume ($T)")
 
     with col_info:
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+        st.html("<div style='height:12px'></div>")
         items = [
             ("Documentary LC", "$1.82T", C_ACCENT),
             ("Standby LC", "$1.12T", C_CYAN),
@@ -716,14 +704,13 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
             ("Top Issuer", "HSBC / Citi", C_TEXT3),
         ]
         for lbl, val, c in items:
-            st.markdown(
+            st.html(
                 f'<div style="display:flex; justify-content:space-between;'
                 f' align-items:center; padding:7px 0;'
                 f' border-bottom:1px solid rgba(232,230,225,0.04)">'
                 f'<span style="font-size:0.73rem; color:{C_TEXT2}">{lbl}</span>'
                 f'<span style="font-size:0.73rem; font-weight:700; color:{c}">{val}</span>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     # Indicator detail expander
@@ -805,10 +792,9 @@ def _render_route_financing() -> None:
     _subheading("Route Financing Detail")
     cols = st.columns([3, 1, 1, 1, 1])
     for hdr, col in zip(["Route", "Cost (bps)", "YoY Change", "Risk Level", "LC Share"], cols):
-        col.markdown(
+        col.html(
             f'<div style="font-size:0.62rem; font-weight:700; color:{C_TEXT3};'
-            f' text-transform:uppercase; letter-spacing:0.06em">{hdr}</div>',
-            unsafe_allow_html=True,
+            f' text-transform:uppercase; letter-spacing:0.06em">{hdr}</div>'
         )
 
     for r in sorted(_ROUTE_FINANCE_DATA, key=lambda x: x["cost_bps"], reverse=True):
@@ -816,26 +802,26 @@ def _render_route_financing() -> None:
         chg_str = f'+{r["change_bps"]}' if r["change_bps"] >= 0 else str(r["change_bps"])
         chg_color = C_LOW if r["change_bps"] > 0 else C_HIGH
         c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
-        c1.markdown(
+        c1.html(
             f'<div style="font-size:0.75rem; color:{C_TEXT}; padding:4px 0">'
-            f'{r["route"]}</div>', unsafe_allow_html=True)
-        c2.markdown(
+            f'{r["route"]}</div>')
+        c2.html(
             f'<div style="font-size:0.75rem; color:{rc}; font-weight:700; padding:4px 0">'
-            f'{r["cost_bps"]} bps</div>', unsafe_allow_html=True)
-        c3.markdown(
+            f'{r["cost_bps"]} bps</div>')
+        c3.html(
             f'<div style="font-size:0.75rem; color:{chg_color}; font-weight:600;'
-            f' padding:4px 0">{chg_str} bps</div>', unsafe_allow_html=True)
-        c4.markdown(
+            f' padding:4px 0">{chg_str} bps</div>')
+        c4.html(
             f'<div style="padding:4px 0"><span style="background:{_rgba(rc,0.15)};'
             f' color:{rc}; border:1px solid {_rgba(rc,0.3)}; padding:2px 8px;'
             f' border-radius:3px; font-size:0.60rem; font-weight:700">'
-            f'{r["risk"]}</span></div>', unsafe_allow_html=True)
-        c5.markdown(
+            f'{r["risk"]}</span></div>')
+        c5.html(
             f'<div style="font-size:0.75rem; color:{C_TEXT2}; padding:4px 0">'
-            f'{r["lc_share_pct"]}%</div>', unsafe_allow_html=True)
-        st.markdown(
+            f'{r["lc_share_pct"]}%</div>')
+        st.html(
             f'<div style="border-bottom:1px solid rgba(232,230,225,0.04)"></div>',
-            unsafe_allow_html=True)
+)
 
     _insight_box(
         "Emerging-market routes (Africa-Europe, Middle East-Asia) carry financing premiums"
@@ -888,7 +874,7 @@ def _render_rate_impact(macro_data: dict) -> None:
         color=C_LOW, label="Rate Cycle Impact",
     )
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:16px'></div>")
 
     # ── Dual-axis chart: rate history + demand impact ────────────────────────
     hist_years  = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
@@ -924,10 +910,9 @@ def _render_rate_impact(macro_data: dict) -> None:
     st.plotly_chart(fig_hist, use_container_width=True, key="finance_rate_history_chart")
 
     # ── Interactive what-if slider ────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="margin-top:4px; margin-bottom:8px; font-size:0.78rem;'
         f' font-weight:600; color:{C_TEXT2}">What-If Rate Scenario Modeller</div>',
-        unsafe_allow_html=True,
     )
     scenario_rate = st.slider(
         "Model rate cut/hike to (%)",
@@ -1009,7 +994,7 @@ def _render_bank_availability() -> None:
     with k3: _kpi_card("Avg YoY Volume Growth", f"{avg_yoy:+.1f}%", "across top 10", C_HIGH if avg_yoy > 0 else C_LOW)
     with k4: _kpi_card("Market Concentration", "Top 5 = 68%", "of global TF volumes", C_MOD)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:16px'></div>")
 
     # Chart: horizontal bar — TF volume, coloured by credit availability
     sorted_banks = sorted(_BANK_TF_DATA, key=lambda b: b["tf_vol_bn"])
@@ -1064,7 +1049,7 @@ def _render_bank_availability() -> None:
         for b in sorted(_BANK_TF_DATA, key=lambda x: x["tf_vol_bn"], reverse=True):
             ac = avail_color_map.get(b["credit_avail"], C_TEXT3)
             yoy_c = C_HIGH if b["yoy_chg"] > 0 else C_LOW
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
                 f' border-left:3px solid {ac}; border-radius:8px;'
                 f' padding:9px 12px; margin-bottom:7px">'
@@ -1078,7 +1063,6 @@ def _render_bank_availability() -> None:
                 f'<div style="font-size:0.65rem; color:{C_TEXT3}; margin-top:1px">'
                 f'{b["specialty"]}</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     # Credit availability trend mini chart (simulated quarterly)
@@ -1178,7 +1162,7 @@ def _render_lc_oa_trend() -> None:
         st.plotly_chart(fig, use_container_width=True, key="finance_lc_oa_trend")
 
     with col_stats:
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.html("<div style='height:8px'></div>")
         lc_change  = lc[-1] - lc[0]
         oa_change  = oa[-1] - oa[0]
         rate_str   = f"{abs(lc_change)/len(years):.1f} pp/yr"
@@ -1192,14 +1176,13 @@ def _render_lc_oa_trend() -> None:
             ("Doc. Coll. 2026", f"{dc[-1]}%", C_MOD),
         ]
         for lbl, val, c in items:
-            st.markdown(
+            st.html(
                 f'<div style="display:flex; justify-content:space-between;'
                 f' align-items:center; padding:8px 0;'
                 f' border-bottom:1px solid rgba(232,230,225,0.04)">'
                 f'<span style="font-size:0.72rem; color:{C_TEXT2}">{lbl}</span>'
                 f'<span style="font-size:0.72rem; font-weight:700; color:{c}">{val}</span>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     st.caption(
@@ -1293,7 +1276,7 @@ def _render_finance_gap() -> None:
     with k4: _kpi_card("SME Rejection Rate", f"{rej_now}%", "of applicants rejected", C_LOW)
 
     # Breakdown by region
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:12px'></div>")
     _subheading("Regional SME Finance Access Rates (2026 estimate)")
 
     region_access = [
@@ -1310,7 +1293,7 @@ def _render_finance_gap() -> None:
     for i, (region, access_pct, rej_pct, col_c) in enumerate(region_access):
         with cols_reg[i % 4]:
             fill_pct = access_pct
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
                 f' border-radius:8px; padding:10px 12px; margin-bottom:8px">'
                 f'<div style="font-size:0.65rem; font-weight:700; color:{C_TEXT3};'
@@ -1325,7 +1308,6 @@ def _render_finance_gap() -> None:
                 f' border-radius:4px"></div>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     _insight_box(
@@ -1392,7 +1374,7 @@ def _render_fx_hedging() -> None:
             tc = trend_color.get(h["trend"], C_TEXT3)
             ti = trend_icon.get(h["trend"], "?")
             cost_c = C_LOW if h["hedge_cost_pct"] > 3 else C_MOD if h["hedge_cost_pct"] > 1.5 else C_HIGH
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
                 f' border-radius:8px; padding:9px 12px; margin-bottom:6px">'
                 f'<div style="display:flex; justify-content:space-between; align-items:center">'
@@ -1409,11 +1391,10 @@ def _render_fx_hedging() -> None:
                 f'<div style="font-size:0.62rem; color:{C_TEXT3}; margin-top:2px">'
                 f'30d Vol: {h["vol_30d"]:.1f}%</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     # Hedging cost impact on trade margin
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:8px'></div>")
     _subheading("Hedging Cost Impact on Trade Finance Margins")
 
     # Simulate: for a $10M shipment, what's the cost of hedging?
@@ -1509,14 +1490,14 @@ def _render_scf_programs() -> None:
     with k3: _kpi_card("Avg Cost Saving", f"{saving[-1]} bps", "vs traditional credit", C_HIGH)
     with k4: _kpi_card("Supplier Onboarding", f"{supp[-1]}%", "of eligible suppliers", C_CYAN)
 
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:14px'></div>")
     _subheading("Major SCF Programs — Volume & Savings")
 
     prog_cols = st.columns(3)
     for i, prog in enumerate(_SCF_PROGRAMS):
         with prog_cols[i % 3]:
             saving_c = C_HIGH if prog["saving_bps"] > 70 else C_MOD
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
                 f' border-top:2px solid {saving_c}; border-radius:6px;'
                 f' padding:12px 14px; margin-bottom:10px">'
@@ -1540,7 +1521,6 @@ def _render_scf_programs() -> None:
                 f'{prog["saving_bps"]} bps</span>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
     _insight_box(
@@ -1770,13 +1750,13 @@ def _render_sanctions_tracker() -> None:
                         "of affected route volumes rerouted", C_MOD)
     with k3: _kpi_card("Longest Running", "64y", "Cuba (since 1962)", C_ACCENT)
 
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:12px'></div>")
 
     for sanction in _SANCTIONS_DATA:
         sev       = sanction["severity"]
         sev_color = _SEVERITY_COLOR.get(sev, C_TEXT3)
         routes_str = " · ".join(sanction["affected_routes"])
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD}; border:1px solid {_rgba(sev_color, 0.25)};'
             f' border-left:4px solid {sev_color}; border-radius:6px;'
             f' padding:14px 16px; margin-bottom:10px">'
@@ -1802,7 +1782,6 @@ def _render_sanctions_tracker() -> None:
             f'<strong>Diverted vol:</strong> {sanction["diverted_vol_pct"]}%</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
 

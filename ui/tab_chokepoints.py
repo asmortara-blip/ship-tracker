@@ -245,7 +245,7 @@ def _render_status_board() -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
             f'overflow:hidden;margin-bottom:24px;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
@@ -281,7 +281,6 @@ def _render_status_board() -> None:
             f'</table>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"status_board render error: {e}")
@@ -356,7 +355,7 @@ def _render_panama_card() -> None:
             f'<td style="padding:6px 8px;color:{C_MOD};font-size:12px;font-weight:600;">$200,000–320,000</td></tr>'
         )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px;height:100%;">'
             f'<div style="font-size:14px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">'
             f'Panama Canal — Deep Dive</div>'
@@ -391,7 +390,6 @@ def _render_panama_card() -> None:
             f'</table>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"panama_card render error: {e}")
@@ -456,7 +454,6 @@ def _render_suez_card() -> None:
             f'Southbound 04:00 local. Average transit: 12–16 hours.</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"suez_card render error: {e}")
@@ -481,7 +478,7 @@ def _render_canal_deep_dives() -> None:
 
 def _render_red_sea_monitor() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_LOW}0d;border:1px solid {C_LOW}44;border-radius:6px;'
             f'padding:20px;margin-bottom:24px;">'
             f'<div style="font-size:15px;font-weight:700;color:{C_LOW};margin-bottom:4px;">'
@@ -490,7 +487,6 @@ def _render_red_sea_monitor() -> None:
             f'Houthi maritime attacks — Oct 2023 to present. Ongoing disruption to Bab-el-Mandeb / Suez corridor.'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         tab_timeline, tab_carriers, tab_insurance = st.tabs([
@@ -523,10 +519,9 @@ def _render_red_sea_monitor() -> None:
                         f'</div>'
                     )
 
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
                     f'padding:20px;max-height:480px;overflow-y:auto;">{timeline_rows}</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as e:
                 logger.error(f"houthi timeline render error: {e}")
@@ -549,7 +544,7 @@ def _render_red_sea_monitor() -> None:
                         f'</tr>'
                     )
 
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
                     f'<table style="width:100%;border-collapse:collapse;">'
                     f'<thead><tr style="background:{C_CARD};">'
@@ -565,7 +560,6 @@ def _render_red_sea_monitor() -> None:
                     f'<tbody>{carrier_rows}</tbody>'
                     f'</table>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as e:
                 logger.error(f"carrier_policies render error: {e}")
@@ -626,7 +620,6 @@ def _render_red_sea_monitor() -> None:
                     f'</table>'
                     f'</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
             except Exception as e:
                 logger.error(f"insurance tab render error: {e}")
@@ -752,7 +745,7 @@ def _render_rate_premiums() -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
             f'<span style="font-size:14px;font-weight:700;color:{C_TEXT};">Rate Premium by Route — Chokepoint Attribution</span>'
@@ -776,7 +769,6 @@ def _render_rate_premiums() -> None:
             f'</table>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"rate_premiums render error: {e}")
@@ -804,7 +796,7 @@ def _render_historical_comparison() -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
             f'<span style="font-size:14px;font-weight:700;color:{C_TEXT};">Historical Major Disruptions — Impact Comparison</span>'
@@ -829,7 +821,6 @@ def _render_historical_comparison() -> None:
             f'</table>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"historical_comparison render error: {e}")
@@ -892,7 +883,7 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
     """Render the Strategic Waterway & Chokepoint Intelligence tab."""
     try:
         # Page header
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:20px 24px;margin-bottom:24px;">'
             f'<div style="font-size:20px;font-weight:700;color:{C_TEXT};margin-bottom:4px;">'
@@ -915,17 +906,15 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
             f'</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as e:
         logger.error(f"header render error: {e}")
 
     # Section 1: Status Board
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:10px;'
             f'text-transform:uppercase;letter-spacing:0.08em;">Chokepoint Status Board</div>',
-            unsafe_allow_html=True,
         )
         _render_status_board()
     except Exception as e:
@@ -935,10 +924,9 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
     # Section 2: Canal Deep Dives
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:10px;'
             f'text-transform:uppercase;letter-spacing:0.08em;">Canal Deep Dives</div>',
-            unsafe_allow_html=True,
         )
         _render_canal_deep_dives()
     except Exception as e:
@@ -962,10 +950,9 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
     # Section 4: Traffic Map
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:10px;'
             f'text-transform:uppercase;letter-spacing:0.08em;">Chokepoint Traffic Map</div>',
-            unsafe_allow_html=True,
         )
         _render_traffic_map()
     except Exception as e:
@@ -975,10 +962,9 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
     # Section 5: Rate Premium Analysis
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:10px;'
             f'text-transform:uppercase;letter-spacing:0.08em;">Rate Premium Analysis</div>',
-            unsafe_allow_html=True,
         )
         _render_rate_premiums()
     except Exception as e:
@@ -988,10 +974,9 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
     # Section 6: Historical Disruption Comparison
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:10px;'
             f'text-transform:uppercase;letter-spacing:0.08em;">Historical Disruption Comparison</div>',
-            unsafe_allow_html=True,
         )
         _render_historical_comparison()
     except Exception as e:

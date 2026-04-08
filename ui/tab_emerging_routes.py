@@ -268,7 +268,7 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
         if delta else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
@@ -276,7 +276,6 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
         f'{delta_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -285,12 +284,11 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
         if subtitle else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 12px;">'
         f'<div style="font-size:1.05rem;font-weight:600;color:{C_TEXT};">{title}</div>'
         f'{sub}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -315,14 +313,13 @@ def _maturity_badge(m: str) -> str:
 # ---------------------------------------------------------------------------
 def _render_hero() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
             f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Emerging Routes Intelligence</div>'
             f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'12 new corridors identified · Strategic macro drivers · Real-time carrier adoption tracking</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -356,7 +353,7 @@ def _render_route_discovery_table() -> None:
             f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Maturity</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, r in enumerate(_ROUTES):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -375,7 +372,7 @@ def _render_route_discovery_table() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
     except Exception:
         logger.exception("Route discovery table failed")
         st.error("Route discovery table unavailable.")
@@ -388,7 +385,7 @@ def _render_strategic_drivers() -> None:
         for idx, (driver, desc, routes) in enumerate(_DRIVERS):
             color = driver_colors[idx % len(driver_colors)]
             routes_str = " · ".join(routes)
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border-left:3px solid {color};'
                 f'border-radius:0 10px 10px 0;border:1px solid {C_BORDER};'
                 f'border-left:3px solid {color};padding:14px 18px;margin-bottom:8px;">'
@@ -396,7 +393,6 @@ def _render_strategic_drivers() -> None:
                 f'<div style="font-size:0.8rem;color:{C_TEXT2};margin-top:4px;">{desc}</div>'
                 f'<div style="font-size:0.75rem;color:{color};margin-top:6px;">Routes: {routes_str}</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception:
         logger.exception("Strategic drivers render failed")
@@ -467,7 +463,7 @@ def _render_carrier_adoption() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Commitment</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, (carrier, routes, activity, level) in enumerate(_CARRIER_ADOPTION):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -482,7 +478,7 @@ def _render_carrier_adoption() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
     except Exception:
         logger.exception("Carrier adoption render failed")
         st.error("Carrier adoption tracker unavailable.")
@@ -502,7 +498,7 @@ def _render_risk_assessment() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Key Concern</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, (route, pol, infra, wx, concern) in enumerate(_RISKS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -517,7 +513,7 @@ def _render_risk_assessment() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
     except Exception:
         logger.exception("Risk assessment render failed")
         st.error("Risk assessment unavailable.")

@@ -129,24 +129,22 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="color:{color};font-size:0.78rem;margin-top:2px;">{delta}</div>'
         if delta else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="color:{C_TEXT3};font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;">{label}</div>'
         f'<div style="color:{C_TEXT};font-size:1.55rem;font-weight:700;margin-top:6px;">{value}</div>'
         f'{delta_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub = f'<div style="color:{C_TEXT3};font-size:0.82rem;margin-top:3px;font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>' if subtitle else ""
-    st.markdown(
+    st.html(
         f'<div style="border-left:3px solid {C_ACCENT};padding-left:12px;margin:28px 0 14px;">'
         f'<span style="color:{C_TEXT};font-size:1.05rem;font-weight:600;font-family:\'Libre Baskerville\',serif;">{title}</span>'
         f'{sub}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -236,7 +234,7 @@ def _render_port_inland_table() -> None:
                 '</tr>'
             )
         footer = '</table></div>'
-        st.markdown(header + body_rows + footer, unsafe_allow_html=True)
+        st.html(header + body_rows + footer)
     except Exception:
         logger.exception("Port-to-inland table failed")
         st.error("Port-to-inland table unavailable")
@@ -411,13 +409,12 @@ def _render_dwell_tracker() -> None:
                 f'<td style="padding:9px 12px;text-align:center;">{status}</td>'
                 '</tr>'
             )
-        st.markdown(header + body_rows + '</table></div>', unsafe_allow_html=True)
+        st.html(header + body_rows + '</table></div>')
 
-        st.markdown(
+        st.html(
             f'<div style="margin-top:8px;font-size:0.78rem;color:{C_TEXT3};">'
             f'LA/LB currently at 8.2 days — 2.2 days above critical threshold. '
             f'Primary cause: BNSF slot allocation lag and chassis queue at ICTF.</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Dwell tracker failed")
@@ -457,7 +454,7 @@ def _render_equipment_availability() -> None:
                 f'<td style="padding:9px 12px;color:{wait_color};text-align:center;font-weight:600;">{r["wait_h"]}h</td>'
                 '</tr>'
             )
-        st.markdown(header + body_rows + '</table></div>', unsafe_allow_html=True)
+        st.html(header + body_rows + '</table></div>')
     except Exception:
         logger.exception("Equipment availability failed")
         st.error("Equipment availability table unavailable")
@@ -503,13 +500,12 @@ def _render_inland_destination() -> None:
                 ("Denver",        55, 45, 17,   820),
                 ("Other Midwest", 45, 55, 21,   950),
             ]
-            st.markdown(
+            st.html(
                 f'<div style="font-size:0.78rem;color:{C_TEXT3};text-transform:uppercase;'
                 f'letter-spacing:0.06em;margin-bottom:8px;">Rail vs Truck Split by Destination</div>',
-                unsafe_allow_html=True,
             )
             for dest, rail_pct, truck_pct, days, cost in dest_rows:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
                     f'padding:10px 14px;margin-bottom:6px;">'
                     f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
@@ -524,7 +520,6 @@ def _render_inland_destination() -> None:
                     f'</div>'
                     f'<span style="color:{C_MOD};font-size:0.75rem;width:44px;text-align:right;">Truck {truck_pct}%</span>'
                     f'</div></div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("Inland destination analysis failed")
@@ -540,16 +535,15 @@ def _render_cost_comparison() -> None:
         mode_colors = {"Ocean": C_ACCENT, "Intermodal": C_HIGH, "Truck": C_MOD}
 
         for pair in _COST_COMPARE:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT};font-size:0.92rem;font-weight:700;margin:14px 0 8px;">'
                 f'{pair["origin"]} → {pair["dest"]}</div>',
-                unsafe_allow_html=True,
             )
             cols = st.columns(len(pair["options"]))
             for col, opt in zip(cols, pair["options"]):
                 mc = mode_colors.get(opt["mode"], C_TEXT2)
                 with col:
-                    st.markdown(
+                    st.html(
                         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
                         f'padding:14px 16px;height:100%;">'
                         f'<div style="color:{C_TEXT3};font-size:0.72rem;margin-bottom:6px;">{opt["label"]}</div>'
@@ -559,9 +553,8 @@ def _render_cost_comparison() -> None:
                         f'<span style="background:{mc}22;color:{mc};font-size:0.7rem;font-weight:700;'
                         f'padding:2px 8px;border-radius:8px;">{opt["mode"].upper()}</span>'
                         f'</div></div>',
-                        unsafe_allow_html=True,
                     )
-            st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+            st.html('<div style="height:4px;"></div>')
 
         # Bar chart: cost vs days for all options
         all_labels, all_costs, all_days, all_colors = [], [], [], []
@@ -663,7 +656,7 @@ def _render_market_signals() -> None:
         except Exception:
             corr = 0.87
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-top:6px;">'
             f'<div style="display:flex;gap:32px;align-items:center;">'
             f'<div><div style="color:{C_TEXT3};font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;">Pearson Correlation</div>'
@@ -673,7 +666,6 @@ def _render_market_signals() -> None:
             f'Congestion typically leads rates by 2–3 weeks, providing a leading indicator for '
             f'rate movements. LA/LB rail dwell spikes have preceded USWC rate surges in 4 of the '
             f'last 5 congestion events.</div></div></div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Market signals failed")
@@ -687,7 +679,7 @@ def _render_market_signals() -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Intermodal & Supply Chain Connectivity tab."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_ACCENT}18,{C_HIGH}0a);'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:22px 28px;margin-bottom:20px;">'
             f'<div style="color:{C_TEXT};font-size:1.35rem;font-weight:700;letter-spacing:-0.02em;font-family:\'Libre Baskerville\',serif;">'
@@ -696,7 +688,6 @@ def render(port_results=None, route_results=None, insights=None) -> None:
             f'Port-to-inland rail corridors · Chassis availability · Dwell times · '
             f'Multi-modal cost analysis · Market signals</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Header render failed")
@@ -716,13 +707,12 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     _render_market_signals()
 
     try:
-        st.markdown(
+        st.html(
             f'<div style="margin-top:24px;padding:12px 18px;background:{C_SURFACE};'
             f'border-top:1px solid {C_BORDER};border-radius:6px;color:{C_TEXT3};font-size:0.75rem;font-family:\'Libre Franklin\',sans-serif;">'
             f'Data sources: BNSF / UP / CSX capacity bulletins, POLA/POLB drayage reports, '
             f'IANA intermodal statistics, Freightos index, proprietary congestion model. '
             f'Refresh: weekly. Chassis data: pool operators + port authority surveys.</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Footer failed")

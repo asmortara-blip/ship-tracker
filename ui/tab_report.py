@@ -213,7 +213,6 @@ def _render_hero(last_generated: str | None) -> None:
           </div>
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
 
@@ -224,7 +223,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
     quality_color = C_HIGH if live_count >= 6 else (C_MOD if live_count >= 3 else C_LOW)
     quality_label = "LIVE" if live_count >= 6 else ("PARTIAL" if live_count >= 3 else "MOCK")
 
-    st.markdown(
+    st.html(
         f"""
         <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:24px 28px 8px;margin-bottom:20px;">
@@ -242,14 +241,13 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
           </div>
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
     col_left, col_right = st.columns([1, 1], gap="large")
     config: dict[str, Any] = {}
 
     with col_left:
-        st.markdown(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">REPORT SCOPE</div>', unsafe_allow_html=True)
+        st.html(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">REPORT SCOPE</div>')
         scope = st.radio(
             "scope",
             ["Full Report", "Quick Digest", "Signal Focus", "Freight Focus"],
@@ -258,7 +256,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
         )
         config["scope"] = scope
 
-        st.markdown(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin:12px 0 6px;">NARRATIVE TONE</div>', unsafe_allow_html=True)
+        st.html(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin:12px 0 6px;">NARRATIVE TONE</div>')
         tone = st.radio(
             "tone",
             ["Formal", "Analytical", "Summary"],
@@ -268,7 +266,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
         config["tone"] = tone
 
     with col_right:
-        st.markdown(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">INCLUDE SECTIONS</div>', unsafe_allow_html=True)
+        st.html(f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">INCLUDE SECTIONS</div>')
         sections = {}
         section_defs = [
             ("exec_summary",   "Executive Summary"),
@@ -283,7 +281,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
             sections[key] = st.checkbox(label, value=True, key=f"rep_sec_{key}")
         config["sections"] = sections
 
-    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:8px;'></div>")
     return config
 
 
@@ -291,7 +289,7 @@ def _render_generate_button(
     config: dict,
     port_results, route_results, insights, freight_data, macro_data, stock_data,
 ) -> None:
-    st.markdown(
+    st.html(
         f"""
         <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:24px 28px;margin-bottom:20px;">
@@ -303,16 +301,14 @@ def _render_generate_button(
           </div>
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
     if not _ENGINE_OK:
-        st.markdown(
+        st.html(
             f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.3);'
             f'border-radius:8px;padding:14px 18px;color:{C_LOW};font-size:13px;margin-bottom:16px;">'
             f'<strong>Engine unavailable.</strong> The report engine could not be loaded. '
             f'Check that <code>processing.investor_report_engine</code> is installed.</div>',
-            unsafe_allow_html=True,
         )
         return
 
@@ -334,10 +330,9 @@ def _render_generate_button(
         status_box = st.empty()
         try:
             for i, step in enumerate(steps):
-                status_box.markdown(
+                status_box.html(
                     f'<div style="text-align:center;color:{C_TEXT2};font-size:13px;padding:8px;">'
-                    f'<span style="color:{C_ACCENT};font-weight:700;">&#9654;</span> {step}</div>',
-                    unsafe_allow_html=True,
+                    f'<span style="color:{C_ACCENT};font-weight:700;">&#9654;</span> {step}</div>'
                 )
                 progress_bar.progress((i + 1) / len(steps))
 
@@ -362,22 +357,20 @@ def _render_generate_button(
             progress_bar.empty()
             status_box.empty()
             logger.error(f"Report generation failed: {exc}")
-            st.markdown(
+            st.html(
                 f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.35);'
                 f'border-radius:8px;padding:16px 20px;margin-top:12px;">'
                 f'<div style="color:{C_LOW};font-weight:700;font-size:13px;margin-bottom:4px;">Generation Failed</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;">{exc}</div></div>',
-                unsafe_allow_html=True,
             )
 
 
 def _render_report_preview(report: Any, ts: str) -> None:
     if report is None:
-        st.markdown(
+        st.html(
             f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
             f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;">'
             f'<strong>No report data.</strong> The report object is None — generation may have failed silently.</div>',
-            unsafe_allow_html=True,
         )
         return
 
@@ -400,7 +393,7 @@ def _render_report_preview(report: Any, ts: str) -> None:
     risk_col = _risk_color(str(risk_level))
     score_pct = f"{float(sentiment_score):.2f}" if str(sentiment_score).replace(".", "", 1).lstrip("-").isdigit() else "—"
 
-    st.markdown(
+    st.html(
         f"""
         <div style="background:linear-gradient(135deg,rgba(46,158,110,0.08),rgba(53,114,176,0.04));
                     border:1px solid rgba(46,158,110,0.3);border-radius:6px;padding:20px 24px;margin-bottom:20px;">
@@ -435,7 +428,6 @@ def _render_report_preview(report: Any, ts: str) -> None:
           </div>
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
     # Section pills
@@ -449,31 +441,28 @@ def _render_report_preview(report: Any, ts: str) -> None:
         f'color:{C_TEXT2};font-size:11px;padding:4px 10px;border-radius:20px;">{s}</span>'
         for s in section_names
     )
-    st.markdown(
+    st.html(
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 20px;margin-bottom:20px;">'
         f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">REPORT SECTIONS</div>'
         f'<div style="display:flex;flex-wrap:wrap;gap:6px;">{pills_html}</div></div>',
-        unsafe_allow_html=True,
     )
 
     # Executive summary preview
     if exec_summary:
         preview = exec_summary[:300] + ("…" if len(exec_summary) > 300 else "")
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:18px 22px;margin-bottom:20px;">'
             f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">EXECUTIVE SUMMARY — PREVIEW</div>'
             f'<div style="font-size:13px;color:{C_TEXT};line-height:1.7;font-style:italic;">{preview}</div></div>',
-            unsafe_allow_html=True,
         )
 
 
 def _render_downloads(report: Any) -> None:
-    st.markdown(
+    st.html(
         f'<div style="font-size:12px;font-weight:700;letter-spacing:2px;color:{C_TEXT};'
         f'margin-bottom:12px;">DOWNLOAD REPORT</div>',
-        unsafe_allow_html=True,
     )
 
     col_pdf, col_html, col_xl = st.columns([2, 1, 1], gap="medium")
@@ -496,23 +485,20 @@ def _render_downloads(report: Any) -> None:
                 )
             except Exception as exc:
                 logger.error(f"PDF render failed: {exc}")
-                st.markdown(
+                st.html(
                     f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.3);'
                     f'border-radius:8px;padding:12px 16px;color:{C_LOW};font-size:12px;">'
                     f'<strong>PDF generation failed:</strong> {exc}</div>',
-                    unsafe_allow_html=True,
                 )
         elif not _PDF_OK:
-            st.markdown(
+            st.html(
                 f'<div style="background:rgba(100,116,139,0.1);border:1px solid rgba(100,116,139,0.2);'
                 f'border-radius:8px;padding:12px 16px;color:{C_TEXT3};font-size:12px;">'
                 f'PDF unavailable — install <code>fpdf2</code> and check <code>utils.investor_report_pdf</code>.</div>',
-                unsafe_allow_html=True,
             )
         else:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT3};font-size:12px;padding:12px;">Generate a report first.</div>',
-                unsafe_allow_html=True,
             )
 
     # HTML
@@ -533,19 +519,16 @@ def _render_downloads(report: Any) -> None:
                 )
             except Exception as exc:
                 logger.error(f"HTML render failed: {exc}")
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_LOW};font-size:11px;padding:4px;">HTML error: {exc}</div>',
-                    unsafe_allow_html=True,
                 )
         elif not _HTML_OK:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">HTML renderer unavailable.</div>',
-                unsafe_allow_html=True,
             )
         else:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Generate a report first.</div>',
-                unsafe_allow_html=True,
             )
 
     # Excel
@@ -565,35 +548,30 @@ def _render_downloads(report: Any) -> None:
                 )
             except Exception as exc:
                 logger.error(f"Excel export failed: {exc}")
-                st.markdown(
+                st.html(
                     f'<div style="color:{C_LOW};font-size:11px;padding:4px;">Excel error: {exc}</div>',
-                    unsafe_allow_html=True,
                 )
         elif not _EXCEL_OK:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Excel export unavailable.</div>',
-                unsafe_allow_html=True,
             )
         else:
-            st.markdown(
+            st.html(
                 f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Generate a report first.</div>',
-                unsafe_allow_html=True,
             )
 
 
 def _render_history() -> None:
-    st.markdown(
+    st.html(
         f'<div style="font-size:12px;font-weight:700;letter-spacing:2px;color:{C_TEXT};'
         f'margin:28px 0 12px;">REPORT HISTORY</div>',
-        unsafe_allow_html=True,
     )
 
     if not _HISTORY_OK:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
             f'padding:14px 18px;color:{C_TEXT3};font-size:12px;">'
             f'Report history unavailable — <code>utils.report_history</code> not loaded.</div>',
-            unsafe_allow_html=True,
         )
         return
 
@@ -604,10 +582,9 @@ def _render_history() -> None:
         reports = []
 
     if not reports:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
             f'padding:14px 18px;color:{C_TEXT3};font-size:12px;">No historical reports saved yet.</div>',
-            unsafe_allow_html=True,
         )
         return
 
@@ -623,7 +600,7 @@ def _render_history() -> None:
 
             col_info, col_btn = st.columns([4, 1], gap="small")
             with col_info:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
                     f'padding:12px 16px;display:flex;align-items:center;gap:16px;">'
                     f'<span style="font-size:12px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{rep_date}</span>'
@@ -631,7 +608,6 @@ def _render_history() -> None:
                     f'<span style="font-size:11px;color:{C_TEXT3};">Quality: {rep_qual}</span>'
                     f'<span style="font-size:11px;color:{C_TEXT3};margin-left:auto;">{rep_size} KB</span>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
             with col_btn:
                 try:
@@ -646,9 +622,9 @@ def _render_history() -> None:
                             use_container_width=True,
                         )
                     else:
-                        st.markdown(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">Unavailable</div>', unsafe_allow_html=True)
+                        st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">Unavailable</div>')
                 except Exception:
-                    st.markdown(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">—</div>', unsafe_allow_html=True)
+                    st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">—</div>')
         except Exception as exc:
             logger.warning(f"Could not render history row {i}: {exc}")
 
@@ -673,7 +649,7 @@ def _render_data_sources(api_status: dict[str, bool]) -> None:
             f'</div></div>'
         )
 
-    st.markdown(
+    st.html(
         f"""
         <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:22px 26px;margin-top:28px;">
@@ -693,17 +669,15 @@ def _render_data_sources(api_status: dict[str, bool]) -> None:
           </div>
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
 
 def _render_api_config(api_status: dict[str, bool]) -> None:
     with st.expander("API Configuration", expanded=False):
-        st.markdown(
+        st.html(
             f'<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;line-height:1.6;">'
             f'Configure API keys via <code>st.secrets</code> (secrets.toml) or environment variables. '
             f'Keys are never displayed — only their presence is checked.</div>',
-            unsafe_allow_html=True,
         )
         key_map = {
             "Baltic Exchange":   "BALTIC_API_KEY",
@@ -729,17 +703,15 @@ def _render_api_config(api_status: dict[str, bool]) -> None:
                 f'<span style="font-size:11px;color:{status_color};font-weight:600;">{status_txt}</span>'
                 f'</div>'
             )
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;'
             f'padding:12px 16px;">{rows_html}</div>',
-            unsafe_allow_html=True,
         )
-        st.markdown(
+        st.html(
             f'<div style="margin-top:12px;font-size:11px;color:{C_TEXT3};line-height:1.7;">'
             f'Add keys to <code>.streamlit/secrets.toml</code>:<br>'
             f'<code>ALPHA_VANTAGE_KEY = "your-key-here"</code><br>'
             f'Or set environment variables before launching the app.</div>',
-            unsafe_allow_html=True,
         )
 
 
@@ -779,7 +751,7 @@ def render(
         logger.error(f"Config panel error: {exc}")
         st.error("Could not render configuration panel.")
 
-    st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:4px;'></div>")
 
     # 3 — Generate button
     try:
@@ -790,7 +762,7 @@ def render(
 
     # 4 — Report preview (only if report exists)
     if report is not None:
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
         try:
             _render_report_preview(report, last_ts or _now_utc())
         except Exception as exc:
@@ -798,42 +770,39 @@ def render(
             st.error("Could not render report preview.")
 
         # 5 — Downloads
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:22px 26px;margin-bottom:20px;">',
-            unsafe_allow_html=True,
         )
         try:
             _render_downloads(report)
         except Exception as exc:
             logger.error(f"Download section error: {exc}")
             st.error("Could not render download buttons.")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.html("</div>")
 
     elif report is None and last_ts is not None:
         # Report was generated but came back None
-        st.markdown(
+        st.html(
             f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
             f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;margin-top:16px;">'
             f'<strong>Report data is None.</strong> The engine ran but returned no data. '
             f'Check logs for details.</div>',
-            unsafe_allow_html=True,
         )
     else:
         # Not yet generated — show download placeholders
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:22px 26px;margin-top:8px;margin-bottom:20px;">',
-            unsafe_allow_html=True,
         )
         try:
             _render_downloads(None)
         except Exception as exc:
             logger.error(f"Download placeholder error: {exc}")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.html("</div>")
 
     # 6 — Report History
-    st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+    st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
     try:
         _render_history()
     except Exception as exc:
@@ -848,7 +817,7 @@ def render(
         st.error("Could not render data source status.")
 
     # 8 — API Configuration
-    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:16px;'></div>")
     try:
         _render_api_config(api_status)
     except Exception as exc:

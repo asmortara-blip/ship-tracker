@@ -195,12 +195,11 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<div style="font-size:13px;font-family:{F_BODY};color:{C_TEXT3};margin-top:2px">{subtitle}</div>'
         if subtitle else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 14px 0;border-bottom:2px solid {C_TEXT};padding-bottom:8px">'
         f'<div style="font-size:17px;font-weight:700;color:{C_TEXT};'
         f'font-family:{F_HEADLINE};letter-spacing:0.2px">{title}</div>'
         f'{sub_html}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -236,7 +235,7 @@ def _render_header(profiles: list) -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};'
             f'border:1px solid {C_BORDER};border-radius:3px;padding:24px;margin-bottom:20px;'
             f'border-top:3px solid {C_TEXT}">'
@@ -247,7 +246,6 @@ def _render_header(profiles: list) -> None:
             f'Q1 2026 · Top 12 global container carriers · Alliance structure, reliability &amp; market concentration</div>'
             f'<div style="display:flex;gap:12px">{cols_html}</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_header: {exc}")
@@ -329,9 +327,8 @@ def _render_alliance_panel(profiles: list) -> None:
                 f'</div></div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;flex-wrap:wrap;gap:12px">{cards_html}</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_alliance_panel: {exc}")
@@ -386,14 +383,13 @@ def _render_performance_table(profiles: list) -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="overflow-x:auto;background:{C_CARD};'
             f'border:1px solid {C_BORDER};border-radius:3px">'
             f'<table style="width:100%;border-collapse:collapse">'
             f'<thead><tr>{header_html}</tr></thead>'
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_performance_table: {exc}")
@@ -455,10 +451,9 @@ def _render_reliability_rankings(profiles: list) -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden">'
             f'{rows_html}</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_reliability_rankings: {exc}")
@@ -513,7 +508,7 @@ def _render_market_concentration() -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:16px;flex-wrap:wrap">'
             f'<div style="flex:1;min-width:260px;background:{C_CARD};border:1px solid {C_BORDER};'
             f'border-radius:3px;padding:20px;border-top:3px solid {hhi_color}">'
@@ -541,7 +536,6 @@ def _render_market_concentration() -> None:
             f'<div style="font-size:10px;font-weight:700;font-family:{F_BODY};color:{C_TEXT3};'
             f'letter-spacing:0.8px;text-transform:uppercase;margin-bottom:16px">Concentration Ratios</div>'
             f'{ratio_rows}</div></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_market_concentration: {exc}")
@@ -604,7 +598,7 @@ def _render_blank_sailing_tracker(alerts: list[dict]) -> None:
 
         total_teu = sum(a.get("teu_impact", 0) for a in alerts)
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
             f'border-radius:3px;overflow-x:auto">'
             f'<div style="padding:12px 16px;border-bottom:1px solid {C_BORDER};'
@@ -617,7 +611,6 @@ def _render_blank_sailing_tracker(alerts: list[dict]) -> None:
             f'<thead><tr>{header_html}</tr></thead>'
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_carriers._render_blank_sailing_tracker: {exc}")
@@ -638,13 +631,12 @@ def _render_carrier_news() -> None:
             updates_map = {}
 
         if not updates_map or all(len(v) == 0 for v in updates_map.values()):
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:3px;padding:20px;text-align:center;'
                 f'font-family:{F_BODY};color:{C_TEXT3}">'
                 f'News feeds unavailable — feedparser library may not be installed '
                 f'or RSS sources are unreachable.</div>',
-                unsafe_allow_html=True,
             )
             return
 
@@ -683,10 +675,9 @@ def _render_carrier_news() -> None:
                     logger.debug(f"tab_carriers: news item render error: {item_exc}")
 
         if items_html:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:3px;overflow:hidden">{items_html}</div>',
-                unsafe_allow_html=True,
             )
         else:
             st.info("No news items available.")
@@ -791,7 +782,7 @@ def _render_deep_dives(profiles: list) -> None:
                         f'margin-left:8px">Private</span>'
                     )
 
-                    st.markdown(
+                    st.html(
                         f'<div style="margin-bottom:6px">'
                         f'<span style="font-size:16px;font-weight:700;font-family:{F_HEADLINE};'
                         f'color:{carrier_color}">'
@@ -809,7 +800,6 @@ def _render_deep_dives(profiles: list) -> None:
                         f'</div>'
                         f'{financials_html}'
                         f'{risks_strengths_html}',
-                        unsafe_allow_html=True,
                     )
                 except Exception as inner_exc:
                     logger.error(f"tab_carriers._render_deep_dives [{sname}]: {inner_exc}")
@@ -835,13 +825,12 @@ def render(
         insights:      Optional pre-computed insights dict (unused directly).
     """
     try:
-        st.markdown(
+        st.html(
             f'<style>'
             f'@import url("https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Libre+Franklin:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap");'
             f'[data-testid="stExpander"] summary {{color:{C_TEXT} !important;'
             f'font-family:{F_BODY} !important}}'
             f'</style>',
-            unsafe_allow_html=True,
         )
     except Exception:
         pass

@@ -59,14 +59,13 @@ def _card_wrap(inner: str, accent: str = C_ACCENT) -> str:
 def _section_header(title: str, subtitle: str = "") -> None:
     sub = (f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-top:3px">'
            f'{subtitle}</div>') if subtitle else ""
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 14px 0">'
         f'<div style="font-size:0.68rem;font-weight:800;color:{C_ACCENT};'
         f'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:4px">'
         f'ALPHA SIGNALS</div>'
         f'<div style="font-size:1.05rem;font-weight:800;color:{C_TEXT};'
         f'letter-spacing:-0.01em">{title}</div>{sub}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -572,7 +571,7 @@ def render(stock_data, insights, freight_data=None):
                 ("Information Coefficient", f"{ic:.3f}", "conviction vs return corr", C_ACCENT),
             ]
             for idx, (label, value, delta, accent) in enumerate(kpis):
-                cols[idx % 3].markdown(_kpi(label, value, delta, accent), unsafe_allow_html=True)
+                cols[idx % 3].html(_kpi(label, value, delta, accent))
         except Exception as exc:
             logger.error(f"tab_results: KPI render failed: {exc}")
             st.warning("KPI render error.")
@@ -583,7 +582,7 @@ def render(stock_data, insights, freight_data=None):
         _section_header("Signal Leaderboard", "Top-performing signal types ranked by win rate")
         try:
             lb = _leaderboard_stats(df)
-            st.markdown(_leaderboard_html(lb), unsafe_allow_html=True)
+            st.html(_leaderboard_html(lb))
         except Exception as exc:
             logger.error(f"tab_results: leaderboard failed: {exc}")
             st.warning("Leaderboard unavailable.")
@@ -596,7 +595,7 @@ def render(stock_data, insights, freight_data=None):
             inst_df = _instrument_stats(df)
             c1, c2 = st.columns([1, 1])
             with c1:
-                st.markdown(_instrument_table_html(inst_df), unsafe_allow_html=True)
+                st.html(_instrument_table_html(inst_df))
             with c2:
                 fig_bar = _plotly_win_rate_bar(inst_df)
                 st.plotly_chart(fig_bar, use_container_width=True, key="win_rate_bar")
@@ -658,7 +657,7 @@ def render(stock_data, insights, freight_data=None):
                     f'<span style="color:{C_ACCENT};font-weight:700">{ic:.3f}</span></div>'
                     f'</div></div>'
                 )
-                st.markdown(_card_wrap(stats_html, C_ACCENT), unsafe_allow_html=True)
+                st.html(_card_wrap(stats_html, C_ACCENT))
         except Exception as exc:
             logger.error(f"tab_results: return dist failed: {exc}")
             st.warning("Return distribution unavailable.")
@@ -672,7 +671,7 @@ def render(stock_data, insights, freight_data=None):
         )
         try:
             pivot = _monthly_attribution(df)
-            st.markdown(_monthly_attr_html(pivot), unsafe_allow_html=True)
+            st.html(_monthly_attr_html(pivot))
         except Exception as exc:
             logger.error(f"tab_results: monthly attribution failed: {exc}")
             st.warning("Monthly attribution unavailable.")
@@ -682,7 +681,7 @@ def render(stock_data, insights, freight_data=None):
         # ══════════════════════════════════════════════════════════════════
         _section_header("Recent Signal Log", "Last 50 signals — open and closed")
         try:
-            st.markdown(_signal_log_html(df, n=50), unsafe_allow_html=True)
+            st.html(_signal_log_html(df, n=50))
         except Exception as exc:
             logger.error(f"tab_results: signal log render failed: {exc}")
             st.warning("Signal log unavailable.")
@@ -720,7 +719,7 @@ def render(stock_data, insights, freight_data=None):
                 f'{slowest} — maintains alpha across longer holding windows</div>'
                 f'</div>'
             )
-            st.markdown(note_html, unsafe_allow_html=True)
+            st.html(note_html)
         except Exception as exc:
             logger.error(f"tab_results: decay analysis failed: {exc}")
             st.warning("Signal decay analysis unavailable.")

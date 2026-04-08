@@ -243,11 +243,10 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
     """
     if not alerts:
         if not compact:
-            st.markdown(
+            st.html(
                 '<div style="font-size:0.85rem; color:#6b6760; padding:8px 0">'
                 'No active alerts at this time.'
                 '</div>',
-                unsafe_allow_html=True,
             )
         return
 
@@ -257,7 +256,7 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
     # ── Compact view ──────────────────────────────────────────────────────────
     if compact:
         # Summary header
-        st.markdown(_summary_header_html(summary), unsafe_allow_html=True)
+        st.html(_summary_header_html(summary))
 
         # Top 3 alerts across all severity levels
         top_alerts: list[ShippingAlert] = []
@@ -267,12 +266,12 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
 
         cards_html = "".join(_alert_card_html(a, compact=True) for a in top_alerts)
         if cards_html:
-            st.markdown(cards_html, unsafe_allow_html=True)
+            st.html(cards_html)
         return
 
     # ── Full alert center ─────────────────────────────────────────────────────
     # Section title
-    st.markdown(
+    st.html(
         f"""
         <div style="
             display:flex;
@@ -286,7 +285,6 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
           {_summary_header_html(summary)}
         </div>
         """,
-        unsafe_allow_html=True,
     )
 
     # Render each severity group in CRITICAL → WARNING → INFO order
@@ -301,12 +299,11 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
         icon  = {"CRITICAL": "🚨", "WARNING": "⚠️", "INFO": "ℹ️"}.get(severity, "")
         label = f"{icon} {severity.title()} ({len(group)})"
 
-        st.markdown(
+        st.html(
             f'<div style="font-size:0.78rem; font-weight:700; color:{color}; '
             f'text-transform:uppercase; letter-spacing:0.08em; '
             f'margin: 16px 0 8px 0">{label}</div>',
-            unsafe_allow_html=True,
         )
 
         cards_html = "".join(_alert_card_html(a, compact=False) for a in group)
-        st.markdown(cards_html, unsafe_allow_html=True)
+        st.html(cards_html)

@@ -105,12 +105,11 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<p style="margin:4px 0 0; font-size:0.82rem; color:{C_TEXT2}; font-family:Libre Franklin, sans-serif">{subtitle}</p>'
         if subtitle else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="margin:32px 0 16px">'
         f'<h3 style="margin:0; font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">{title}</h3>'
         f'{sub_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -128,9 +127,8 @@ def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str
 
 def _kpi_row(cards: list[str]) -> None:
     inner = "".join(cards)
-    st.markdown(
+    st.html(
         f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px">{inner}</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -370,7 +368,7 @@ def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float
             f'<tbody>{rows}</tbody>'
             f'</table></div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception:
         logger.exception("Stats table render failed")
         st.warning("Statistics table unavailable.")
@@ -553,7 +551,7 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
 def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Monte Carlo simulation dashboard for shipping market forecasting."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
             f'border:1px solid {C_BORDER}; border-radius:6px; padding:24px 28px; margin-bottom:28px">'
             f'<h2 style="margin:0 0 6px; font-size:1.4rem; font-weight:800; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">'
@@ -562,7 +560,6 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
             f'Stochastic path simulation for shipping indices and equities '
             f'using GBM and Jump-Diffusion models.</p>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Header render failed")
@@ -589,12 +586,11 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     params = st.session_state.get("mc_params", {})
 
     if paths is None:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px;'
             f'padding:40px; text-align:center; color:{C_TEXT3}; margin-top:24px">'
             f'Configure parameters above and click <strong style="color:{C_TEXT2}">Run Simulation</strong> to generate results.'
             f'</div>',
-            unsafe_allow_html=True,
         )
         return
 

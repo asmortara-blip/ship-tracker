@@ -99,13 +99,12 @@ def _usd(val: float) -> str:
     return f"${val:,.0f}"
 
 def _divider(label: str) -> None:
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,transparent,{C_BORDER})"></div>'
         f'<span style="font-family:{F_BODY};font-size:0.60rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.14em;white-space:nowrap">{label}</span>'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,{C_BORDER},transparent)"></div>'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 def _pill(text: str, color: str) -> str:
@@ -146,7 +145,7 @@ def _section_pulse(routes: list[dict]) -> None:
 
         wc = _chg_color(avg_w); mc = _chg_color(avg_m); yc = _chg_color(avg_y)
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:28px 32px;margin-bottom:20px">'
             f'<div style="font-family:{F_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px">Global Freight Rate Index (avg /TEU)</div>'
             f'<div style="display:flex;align-items:flex-end;gap:32px;flex-wrap:wrap">'
@@ -159,7 +158,6 @@ def _section_pulse(routes: list[dict]) -> None:
             f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">YoY</div>'
             f'<div style="font-family:{F_MONO};font-size:1.1rem;font-weight:700;color:{yc}">{_chg_arrow(avg_y)} {_pct(avg_y)}</div></div>'
             f'</div></div></div>',
-            unsafe_allow_html=True,
         )
 
         sorted_w = sorted(routes, key=lambda r: r.get("w", 0), reverse=True)
@@ -169,7 +167,7 @@ def _section_pulse(routes: list[dict]) -> None:
         pills_gain = " ".join(_pill(f'{r["route"]} {_pct(r.get("w",0))}', C_HIGH) for r in gainers)
         pills_loss = " ".join(_pill(f'{r["route"]} {_pct(r.get("w",0))}', C_LOW)  for r in losers)
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">'
             f'<div style="background:{C_CARD};border:1px solid {C_HIGH}22;border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
             f'<div style="font-family:{F_BODY};font-size:0.68rem;color:{C_HIGH};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Gainers (WoW)</div>'
@@ -177,7 +175,6 @@ def _section_pulse(routes: list[dict]) -> None:
             f'<div style="background:{C_CARD};border:1px solid {C_LOW}22;border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
             f'<div style="font-family:{F_BODY};font-size:0.68rem;color:{C_LOW};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Losers (WoW)</div>'
             f'<div>{pills_loss}</div></div></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_routes _section_pulse: {exc}")
@@ -230,7 +227,7 @@ def _section_league_table(routes: list[dict]) -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;margin-bottom:8px">'
             f'<table style="width:100%;border-collapse:collapse">'
             f'<thead><tr>'
@@ -246,7 +243,6 @@ def _section_league_table(routes: list[dict]) -> None:
             f'</tr></thead>'
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_routes _section_league_table: {exc}")
@@ -297,9 +293,8 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">{cards_html}</div>',
-            unsafe_allow_html=True,
         )
 
         # Grouped bar: current vs 30d forecast top 10
@@ -350,7 +345,7 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
                     f'</tr>'
                 )
             h = f"padding:8px 14px;font-family:{F_BODY};font-size:0.62rem;text-transform:uppercase;letter-spacing:0.10em;color:{C_TEXT3};background:{C_SURFACE}"
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;margin-top:8px">'
                 f'<div style="padding:12px 16px;font-family:{F_HEADLINE};font-size:0.78rem;font-weight:700;color:{C_TEXT}">Model Quality</div>'
                 f'<table style="width:100%;border-collapse:collapse">'
@@ -362,7 +357,6 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
                 f'</tr></thead>'
                 f'<tbody>{quality_rows}</tbody>'
                 f'</table></div>',
-                unsafe_allow_html=True,
             )
         except Exception as exc:
             logger.warning(f"tab_routes model quality table: {exc}")
@@ -406,14 +400,13 @@ def _section_volatility(routes: list[dict]) -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:12px 18px;font-family:{F_BODY};font-size:0.76rem;color:{C_TEXT2}">'
             f'Rolling 30-day annualized volatility. '
             f'<span style="color:{C_LOW};font-weight:600">Red (&gt;30%)</span> = high disruption risk &nbsp;|&nbsp; '
             f'<span style="color:{C_MOD};font-weight:600">Amber (18–30%)</span> = elevated &nbsp;|&nbsp; '
             f'<span style="color:{C_HIGH};font-weight:600">Green (&lt;18%)</span> = stable'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_routes _section_volatility: {exc}")
@@ -465,7 +458,7 @@ def _section_seasonal() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">'
             f'{_pill("Chinese New Year dip: Feb", C_LOW)}'
             f'{_pill("Pre-CNY build: Jan", C_MOD)}'
@@ -474,7 +467,6 @@ def _section_seasonal() -> None:
             f'{_pill("2021: pandemic demand surge", C_LOW)}'
             f'{_pill("2023: post-COVID correction", C_ACCENT)}'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_routes _section_seasonal: {exc}")
@@ -516,11 +508,10 @@ def _section_rate_drivers() -> None:
         demand_block  = _block("Demand Factors",     C_MOD,    demand)
         disrupt_block = _block("Disruptions",        C_LOW,    disrupt)
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px">'
             f'{supply_block}{demand_block}{disrupt_block}'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error(f"tab_routes _section_rate_drivers: {exc}")
@@ -581,7 +572,7 @@ def _section_route_profiles(routes: list[dict]) -> None:
                         lo_52    = r["rate"] * 0.82
                         carrier_pills = " ".join(_pill(c, C_ACCENT) for c in carriers)
 
-                        st.markdown(
+                        st.html(
                             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:14px 16px">'
                             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
                             f'<div><div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3}">52W High</div>'
@@ -596,7 +587,6 @@ def _section_route_profiles(routes: list[dict]) -> None:
                             f'<div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3};margin-bottom:6px">Top Carriers</div>'
                             f'<div>{carrier_pills}</div>'
                             f'</div>',
-                            unsafe_allow_html=True,
                         )
 
                         # Seasonal pattern mini bar
@@ -635,14 +625,13 @@ def _section_route_profiles(routes: list[dict]) -> None:
 def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> None:
     """Freight Rate Analytics & ML Forecasting tab."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="padding:4px 0 8px">'
             f'<h2 style="margin:0;font-family:{F_HEADLINE};font-size:1.45rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.5px">'
             f'Freight Rate Analytics</h2>'
             f'<p style="margin:4px 0 0;font-family:{F_BODY};font-size:0.80rem;color:{C_TEXT3}">'
             f'Real-time rates · ML forecasting · Volatility · Seasonal patterns · Route profiles'
             f'</p></div>',
-            unsafe_allow_html=True,
         )
 
         routes = _get_routes(freight_data, route_results)

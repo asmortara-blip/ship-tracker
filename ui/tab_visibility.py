@@ -164,14 +164,13 @@ def _render_hero_kpis() -> None:
         cols = st.columns(6)
         for col, (label, value, color, tip) in zip(cols, kpis):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
                     f'border-radius:6px;padding:18px 14px;text-align:center;">'
                     f'<div style="font-size:26px;font-weight:800;color:{color};">{value}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
                     f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         logger.warning(f"hero kpis error: {exc}")
@@ -180,9 +179,8 @@ def _render_hero_kpis() -> None:
 
 def _render_pipeline() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Shipment Pipeline</div>',
-            unsafe_allow_html=True,
         )
 
         col_colors = {
@@ -208,13 +206,12 @@ def _render_pipeline() -> None:
                     f'</div>'
                 )
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px;">'
                     f'<div style="font-size:10px;font-weight:800;color:{color};letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
                     f'<div style="font-size:20px;font-weight:800;color:{C_TEXT};margin-bottom:10px;">{len(shipments)}</div>'
                     f'{cards_html}'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         logger.warning(f"pipeline error: {exc}")
@@ -223,9 +220,8 @@ def _render_pipeline() -> None:
 
 def _render_visibility_scores() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Visibility Score by Trade Lane</div>',
-            unsafe_allow_html=True,
         )
 
         header = (
@@ -262,7 +258,7 @@ def _render_visibility_scores() -> None:
                 f'</tr>'
             )
 
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+        st.html(header + rows + "</tbody></table></div>")
     except Exception as exc:
         logger.warning(f"visibility scores error: {exc}")
         st.info("Visibility score data unavailable.")
@@ -270,9 +266,8 @@ def _render_visibility_scores() -> None:
 
 def _render_exception_management() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Exception Management</div>',
-            unsafe_allow_html=True,
         )
 
         header = (
@@ -304,7 +299,7 @@ def _render_exception_management() -> None:
                 f'</tr>'
             )
 
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+        st.html(header + rows + "</tbody></table></div>")
     except Exception as exc:
         logger.warning(f"exception mgmt error: {exc}")
         st.info("Exception data unavailable.")
@@ -312,10 +307,9 @@ def _render_exception_management() -> None:
 
 def _render_milestone_tracking() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 4px;font-family:\'Libre Baskerville\',serif;">Milestone Tracking</div>'
             f'<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Sample shipment MAEU-2847561 — Shanghai → Rotterdam (MV Maersk Edmonton, Voy. 026W)</div>',
-            unsafe_allow_html=True,
         )
 
         completed_count = sum(1 for _, _, done, _, _ in _MILESTONE_STEPS if done)
@@ -323,7 +317,7 @@ def _render_milestone_tracking() -> None:
         pct = int(completed_count / total * 100)
 
         # Progress bar
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-bottom:14px;">'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
             f'<span style="font-size:12px;color:{C_TEXT2};">Journey Progress</span>'
@@ -333,7 +327,6 @@ def _render_milestone_tracking() -> None:
             f'<div style="background:linear-gradient(90deg,{C_ACCENT},{C_HIGH});width:{pct}%;height:100%;border-radius:6px;"></div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         # Timeline
@@ -368,7 +361,7 @@ def _render_milestone_tracking() -> None:
                 f'</div>'
             )
         timeline_html += "</div>"
-        st.markdown(timeline_html, unsafe_allow_html=True)
+        st.html(timeline_html)
     except Exception as exc:
         logger.warning(f"milestone tracking error: {exc}")
         st.info("Milestone data unavailable.")
@@ -376,9 +369,8 @@ def _render_milestone_tracking() -> None:
 
 def _render_carrier_rankings() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Digital Visibility Rankings</div>',
-            unsafe_allow_html=True,
         )
 
         header = (
@@ -410,7 +402,7 @@ def _render_carrier_rankings() -> None:
                 f'</tr>'
             )
 
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+        st.html(header + rows + "</tbody></table></div>")
     except Exception as exc:
         logger.warning(f"carrier rankings error: {exc}")
         st.info("Carrier ranking data unavailable.")
@@ -454,7 +446,7 @@ def _render_visibility_chart() -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Supply Chain Visibility & Tracking tab."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Supply Chain Visibility & Tracking</div>'
@@ -462,7 +454,6 @@ def render(port_results=None, route_results=None, insights=None) -> None:
             f'Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"header error: {exc}")
@@ -470,9 +461,8 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     _render_hero_kpis()
     _render_pipeline()
 
-    st.markdown(
+    st.html(
         f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-        unsafe_allow_html=True,
     )
 
     col_left, col_right = st.columns([3, 2])
@@ -484,16 +474,14 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         except Exception as exc:
             logger.warning(f"chart col error: {exc}")
 
-    st.markdown(
+    st.html(
         f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-        unsafe_allow_html=True,
     )
 
     _render_exception_management()
 
-    st.markdown(
+    st.html(
         f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-        unsafe_allow_html=True,
     )
 
     col_a, col_b = st.columns([2, 3])
@@ -503,14 +491,13 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         _render_milestone_tracking()
 
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
             f'Data refreshed every 15 minutes from AIS feeds, carrier APIs, and port EDI streams. '
             f'Visibility scores calculated as rolling 30-day averages. '
             f'Exception alerts generated when deviations exceed configured thresholds.'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"footer error: {exc}")

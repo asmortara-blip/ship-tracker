@@ -230,7 +230,7 @@ def _render_header(df: pd.DataFrame) -> None:
         sector_view = "OVERWEIGHT" if n_buy > n_hold else "NEUTRAL"
         sv_color = C_HIGH if sector_view == "OVERWEIGHT" else C_MOD
 
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE},{C_CARD});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:28px 32px;margin-bottom:20px;">'
             f'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;">'
@@ -267,7 +267,6 @@ def _render_header(df: pd.DataFrame) -> None:
             f'</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("header render failed")
@@ -277,10 +276,9 @@ def _render_header(df: pd.DataFrame) -> None:
 
 def _render_screening_table(df: pd.DataFrame) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin-bottom:10px;">Stock Screening — Coverage Universe</div>',
-            unsafe_allow_html=True,
         )
 
         rows_html = ""
@@ -322,7 +320,7 @@ def _render_screening_table(df: pd.DataFrame) -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception:
         logger.exception("screening table render failed")
 
@@ -331,10 +329,9 @@ def _render_screening_table(df: pd.DataFrame) -> None:
 
 def _render_valuation_matrix(df: pd.DataFrame) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Valuation Matrix</div>',
-            unsafe_allow_html=True,
         )
         col1, col2 = st.columns(2)
 
@@ -419,10 +416,9 @@ def _render_valuation_matrix(df: pd.DataFrame) -> None:
 
 def _render_deep_dive(df: pd.DataFrame) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Stock Deep-Dive</div>',
-            unsafe_allow_html=True,
         )
         for _, r in df.iterrows():
             tk = r["ticker"]
@@ -448,7 +444,7 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                                     f'</tr>'
                                 )
                             h_style = f'padding:5px 10px;font-size:10px;color:{C_TEXT3};text-transform:uppercase;border-bottom:2px solid {C_BORDER};'
-                            st.markdown(
+                            st.html(
                                 f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};letter-spacing:1px;'
                                 f'text-transform:uppercase;margin-bottom:8px;">Quarterly Income Statement ($M)</div>'
                                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">'
@@ -461,13 +457,12 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                                 f'</tr></thead>'
                                 f'<tbody>{q_rows}</tbody>'
                                 f'</table></div>',
-                                unsafe_allow_html=True,
                             )
 
                     # Key ratios + recent news
                     with c2:
                         pe_str = f'{r["pe"]:.1f}x' if r["pe"] else "—"
-                        st.markdown(
+                        st.html(
                             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;padding:14px;">'
                             f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">Key Ratios</div>'
                             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
@@ -478,7 +473,6 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                             f'<div style="color:{C_TEXT3};font-size:11px;">Mkt Cap</div><div style="color:{C_TEXT};font-weight:600;font-size:12px;">${r["mktcap"]:.2f}B</div>'
                             f'<div style="color:{C_TEXT3};font-size:11px;">Segment</div><div style="color:{_sub_color(r["sub"])};font-weight:600;font-size:11px;">{r["sub"].upper()}</div>'
                             f'</div></div>',
-                            unsafe_allow_html=True,
                         )
 
                     # Analyst consensus
@@ -496,7 +490,7 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                                 f'</tr>'
                             )
                         cs_h = f'padding:5px 10px;font-size:10px;color:{C_TEXT3};text-transform:uppercase;border-bottom:1px solid {C_BORDER};'
-                        st.markdown(
+                        st.html(
                             f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};letter-spacing:1px;'
                             f'text-transform:uppercase;margin:12px 0 6px;">Analyst Consensus</div>'
                             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;overflow:hidden;">'
@@ -507,7 +501,6 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                             f'</tr></thead>'
                             f'<tbody>{c_rows}</tbody>'
                             f'</table></div>',
-                            unsafe_allow_html=True,
                         )
 
                     # Recent news
@@ -518,12 +511,11 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                             f'color:{C_TEXT2};font-size:12px;">&#8250;&nbsp;{item}</div>'
                             for item in news_items
                         )
-                        st.markdown(
+                        st.html(
                             f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};letter-spacing:1px;'
                             f'text-transform:uppercase;margin:12px 0 6px;">Recent Newsflow</div>'
                             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;padding:10px 14px;">'
                             f'{news_html}</div>',
-                            unsafe_allow_html=True,
                         )
                 except Exception:
                     logger.exception(f"deep-dive for {tk} failed")
@@ -536,10 +528,9 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
 
 def _render_dividend_tracker(df: pd.DataFrame) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Dividend &amp; Yield Tracker</div>',
-            unsafe_allow_html=True,
         )
 
         rows_html = ""
@@ -574,7 +565,7 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
             )
 
         h = f'padding:7px 10px;font-size:10px;font-weight:600;letter-spacing:0.8px;color:{C_TEXT3};text-transform:uppercase;border-bottom:2px solid {C_BORDER};'
-        st.markdown(
+        st.html(
             f'<div style="overflow-x:auto;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:4px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
@@ -587,7 +578,6 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
             f'</tr></thead>'
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("dividend tracker render failed")
@@ -597,10 +587,9 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
 
 def _render_relative_value(df: pd.DataFrame) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Relative Value Heatmap</div>',
-            unsafe_allow_html=True,
         )
 
         metrics = ["p_nav", "ev_ebitda", "pe", "div"]
@@ -672,11 +661,10 @@ def _render_relative_value(df: pd.DataFrame) -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="rel_val_heatmap")
 
-        st.markdown(
+        st.html(
             f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:11px;color:{C_TEXT3};margin-top:4px;">'
             f'Green = relatively cheap vs peers &nbsp;|&nbsp; Red = relatively expensive vs peers &nbsp;|&nbsp; '
             f'For yield, green = high yield. For valuation multiples, green = low multiple.</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("relative value heatmap failed")
@@ -705,10 +693,9 @@ def render(stock_data: Any = None, insights: Any = None) -> None:
             except Exception:
                 logger.warning("Could not overlay live prices from stock_data")
 
-        st.markdown(
+        st.html(
             f'<style>div[data-testid="stExpander"]{{background:{C_CARD};border:1px solid {C_BORDER};'
             f'border-radius:8px;margin-bottom:6px;}}</style>',
-            unsafe_allow_html=True,
         )
 
         _render_header(df)

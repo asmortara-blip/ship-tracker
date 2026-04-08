@@ -249,7 +249,7 @@ def _render_signal_hero(signals: list) -> None:
             f"</div>"
         )
 
-        st.markdown(_card_wrap(inner, "24px 28px"), unsafe_allow_html=True)
+        st.html(_card_wrap(inner, "24px 28px"))
     except Exception as exc:
         logger.warning(f"signal hero error: {exc}")
         st.warning("Signal hero unavailable.")
@@ -322,7 +322,7 @@ def _render_signal_table(signals: list) -> None:
             f"{header}{body}"
             f"</table></div>"
         )
-        st.markdown(table, unsafe_allow_html=True)
+        st.html(table)
     except Exception as exc:
         logger.warning(f"signal table error: {exc}")
         st.warning("Signal table unavailable.")
@@ -463,7 +463,7 @@ def _render_freight_heatmap(freight_data) -> None:
             f"{header}{body}"
             f"</table></div>"
         )
-        st.markdown(table, unsafe_allow_html=True)
+        st.html(table)
     except Exception as exc:
         logger.warning(f"freight heatmap error: {exc}")
         st.warning("Freight heatmap unavailable.")
@@ -547,7 +547,7 @@ def _render_correlation_matrix() -> None:
             f"<div style='margin-top:10px;padding:0 4px'>{legend_html}</div>"
             f"</div>"
         )
-        st.markdown(table, unsafe_allow_html=True)
+        st.html(table)
     except Exception as exc:
         logger.warning(f"correlation matrix error: {exc}")
         st.warning("Correlation matrix unavailable.")
@@ -612,7 +612,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     """Institutional markets & signals dashboard -- WSJ editorial style."""
 
     # inject page-level CSS and Google Fonts
-    st.markdown(
+    st.html(
         f"<style>"
         f"@import url('https://fonts.googleapis.com/css2?"
         f"family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&"
@@ -621,7 +621,6 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
         f"[data-testid='stAppViewContainer'] {{background:{C_BG}}}"
         f"[data-testid='block-container'] {{padding-top:1rem}}"
         f"</style>",
-        unsafe_allow_html=True,
     )
 
     # resolve signals: prefer live insights, fallback to mock
@@ -650,7 +649,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
 
     # ── hero ────────────────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f"<div style='margin-bottom:24px;border-bottom:1px solid {C_RULE};"
             f"padding-bottom:16px'>"
             f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.08em;"
@@ -663,7 +662,6 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
             f"font-family:{_SANS};font-weight:400'>"
             f"Live signal monitoring across shipping indices, routes, and equities</div>"
             f"</div>",
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"page header error: {exc}")
@@ -676,12 +674,11 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
 
     # ── section 2: signal table ─────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             _section_title(
                 "Signal Intelligence Table",
                 f"{len(signals)} active signals \u00b7 sortable by conviction",
             ),
-            unsafe_allow_html=True,
         )
         _render_signal_table(signals)
     except Exception as exc:
@@ -689,21 +686,19 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
 
     # ── section 3: multi-index performance ──────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             _section_title(
                 "Multi-Index Performance",
                 "BDI, WCI, SCFI, CCFI \u00b7 indexed to 100 \u00b7 trailing 90 trading days",
             ),
-            unsafe_allow_html=True,
         )
         with st.container():
-            st.markdown(
+            st.html(
                 f"<div style='background:{C_CARD};border:1px solid {C_RULE};"
                 f"padding:16px 20px'>",
-                unsafe_allow_html=True,
             )
             _render_multi_index_chart()
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.html("</div>")
     except Exception as exc:
         logger.error(f"multi-index section failed: {exc}")
 
@@ -713,12 +708,11 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
 
         with col_heat:
             try:
-                st.markdown(
+                st.html(
                     _section_title(
                         "Freight Rate Heatmap",
                         "12 trade routes \u00b7 weekly rate change \u00b7 green = up, red = down",
                     ),
-                    unsafe_allow_html=True,
                 )
                 _render_freight_heatmap(freight_data)
             except Exception as exc:
@@ -726,12 +720,11 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
 
         with col_corr:
             try:
-                st.markdown(
+                st.html(
                     _section_title(
                         "Correlation Matrix",
                         "Shipping indices vs macro assets \u00b7 90-day rolling",
                     ),
-                    unsafe_allow_html=True,
                 )
                 _render_correlation_matrix()
             except Exception as exc:
@@ -744,27 +737,24 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
         col_conv, col_meta = st.columns([2, 3], gap="medium")
 
         with col_conv:
-            st.markdown(
+            st.html(
                 _section_title(
                     "Conviction Distribution",
                     "Signal count by confidence tier",
                 ),
-                unsafe_allow_html=True,
             )
             with st.container():
-                st.markdown(
+                st.html(
                     f"<div style='background:{C_CARD};border:1px solid {C_RULE};"
                     f"padding:16px 20px'>",
-                    unsafe_allow_html=True,
                 )
                 _render_conviction_chart(signals)
-                st.markdown("</div>", unsafe_allow_html=True)
+                st.html("</div>")
 
         with col_meta:
             try:
-                st.markdown(
+                st.html(
                     _section_title("Signal Type Breakdown", "Distribution by signal methodology"),
-                    unsafe_allow_html=True,
                 )
                 type_counts: dict[str, int] = {}
                 for sig in signals:
@@ -800,9 +790,8 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                         f"</div></div>"
                     )
 
-                st.markdown(
+                st.html(
                     _card_wrap(rows_html, "20px 24px"),
-                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.warning(f"signal type breakdown error: {exc}")
@@ -813,7 +802,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     # ── footer ──────────────────────────────────────────────────────────────────
     try:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        st.markdown(
+        st.html(
             f"<div style='margin-top:36px;padding:14px 0;border-top:1px solid {C_RULE};"
             f"display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
             f"<span style='font-size:11px;color:{C_TEXT3};font-family:{_SANS}'>"
@@ -821,7 +810,6 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
             f"<span style='font-size:11px;color:{C_TEXT3};font-family:{_MONO}'>"
             f"Last updated: {now}</span>"
             f"</div>",
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"footer error: {exc}")

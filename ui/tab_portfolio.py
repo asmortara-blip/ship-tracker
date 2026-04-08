@@ -138,7 +138,7 @@ def _init_positions() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_hero() -> None:
-    st.markdown("""
+    st.html("""
     <div style="padding:28px 0 18px 0;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
         <div style="width:44px;height:44px;background:linear-gradient(135deg,#3572b0,#1d4ed8);
@@ -153,7 +153,7 @@ def _render_hero() -> None:
         </div>
       </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def _build_snapshot(positions: list[dict], stock_data) -> pd.DataFrame:
@@ -205,7 +205,7 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
         day_color   = _color(day_pnl)
         ret_color   = _color(total_ret)
 
-        st.markdown(f"""
+        st.html(f"""
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
           <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                       padding:20px 22px;">
@@ -244,7 +244,7 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
             <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Weighted avg vs. SPY</div>
           </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
     except Exception as e:
         logger.warning(f"summary metrics error: {e}")
 
@@ -252,10 +252,10 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
 def _render_add_position_form() -> None:
     """Expander form to add a new position."""
     with st.expander("➕  Add / Edit Position", expanded=False):
-        st.markdown(f"""
+        st.html(f"""
         <div style="background:{C_SURFACE};border-radius:6px;padding:4px 0 8px 0;">
         </div>
-        """, unsafe_allow_html=True)
+        """)
         c1, c2, c3 = st.columns(3)
         with c1:
             ticker_in = st.text_input("Ticker Symbol", placeholder="e.g. ZIM", key="add_ticker").upper().strip()
@@ -272,7 +272,7 @@ def _render_add_position_form() -> None:
             beta_in = st.number_input("Beta", min_value=0.1, max_value=5.0, value=1.2,
                                        step=0.05, format="%.2f", key="add_beta")
         with c6:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.html("<div style='height:28px'></div>")
             add_btn = st.button("Add Position", type="primary", use_container_width=True)
 
         if add_btn:
@@ -304,7 +304,7 @@ def _render_add_position_form() -> None:
                 st.error(f"Error adding position: {e}")
 
         # Remove position
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+        st.html("<div style='margin-top:12px'></div>")
         positions = st.session_state.get("portfolio_positions", [])
         if positions:
             tickers_list = [p["ticker"] for p in positions]
@@ -319,7 +319,7 @@ def _render_add_position_form() -> None:
 
 def _render_holdings_table(df: pd.DataFrame) -> None:
     """Color-coded holdings table."""
-    st.markdown(section_header("Holdings", icon="📋"), unsafe_allow_html=True)
+    st.html(section_header("Holdings", icon="📋"))
     if df.empty:
         st.info("No positions in portfolio. Add one above.")
         return
@@ -428,7 +428,7 @@ def _render_holdings_table(df: pd.DataFrame) -> None:
             </table>
           </div>
         </div>
-        """, unsafe_allow_html=True)
+        """, )
     except Exception as e:
         logger.warning(f"holdings table error: {e}")
         st.error(f"Holdings table error: {e}")
@@ -583,7 +583,7 @@ def _render_risk_metrics(df: pd.DataFrame) -> None:
             </div>
           </div>
         </div>
-        """, unsafe_allow_html=True)
+        """, )
     except Exception as e:
         logger.warning(f"risk metrics error: {e}")
 
@@ -653,13 +653,13 @@ def _render_top_movers(df: pd.DataFrame) -> None:
         layout["yaxis"]["ticksuffix"] = "%"
         fig.update_layout(**layout)
 
-        st.markdown(section_header("Top Movers", icon="📈"), unsafe_allow_html=True)
-        st.markdown(f"""
+        st.html(section_header("Top Movers", icon="📈"))
+        st.html(f"""
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
           {best_block}
           {worst_block}
         </div>
-        """, unsafe_allow_html=True)
+        """)
         st.plotly_chart(fig, use_container_width=True, key="top_movers_bar")
     except Exception as e:
         logger.warning(f"top movers error: {e}")
@@ -670,7 +670,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
     try:
         if df.empty:
             return
-        st.markdown(section_header("Position Detail", icon="🔍"), unsafe_allow_html=True)
+        st.html(section_header("Position Detail", icon="🔍"))
 
         np.random.seed(0)
         dates = pd.date_range(end=datetime.date.today(), periods=60, freq="B")
@@ -767,7 +767,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
                     <div style="font-size:14px;font-weight:700;color:{pnl_color};">{_fmt_pct(row['P&L %'])}</div>
                   </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """, )
     except Exception as e:
         logger.warning(f"position detail error: {e}")
 
@@ -790,7 +790,7 @@ def render(stock_data, macro_data, insights) -> None:
 
         _render_add_position_form()
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        st.html(_HR)
 
         _render_holdings_table(df)
 
@@ -798,21 +798,21 @@ def render(stock_data, macro_data, insights) -> None:
         if not df.empty:
             col_left, col_right = st.columns([1, 1.6])
             with col_left:
-                st.markdown(section_header("Sector Allocation", icon="🥧"), unsafe_allow_html=True)
+                st.html(section_header("Sector Allocation", icon="🥧"))
                 _render_composition_chart(df)
             with col_right:
-                st.markdown(section_header("Performance", icon="📊"), unsafe_allow_html=True)
+                st.html(section_header("Performance", icon="📊"))
                 _render_performance_chart(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        st.html(_HR)
 
         _render_risk_metrics(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        st.html(_HR)
 
         _render_top_movers(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        st.html(_HR)
 
         _render_position_details(df)
 

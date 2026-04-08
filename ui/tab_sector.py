@@ -73,7 +73,7 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
     # ── 1. Sector Performance Comparison ─────────────────────────────────────
     sectors = compute_sector_performance(stock_data, freight_data)
 
-    st.markdown(f"""
+    st.html(f"""
     <div style="margin-bottom:24px">
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:16px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1.35rem;
@@ -84,15 +84,15 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
                 Data reflects latest available market prices and freight indices.</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # Sector comparison table
-    st.markdown(f"""
+    st.html(f"""
     <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:8px">
         <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                     font-weight:700;color:{C_TEXT}">Sector Performance</div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     headers = ["Sector", "1-Day", "5-Day", "30-Day", "Index", "Index Chg", "Momentum", "Outlook"]
     hdr_html = "<tr>"
@@ -150,22 +150,22 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
         </tr>
         """
 
-    st.markdown(f"""
+    st.html(f"""
     <table style="width:100%;border-collapse:collapse">
         <thead>{hdr_html}</thead>
         <tbody>{tbody}</tbody>
     </table>
-    """, unsafe_allow_html=True)
+    """)
 
     # ── 2. Sector Detail Cards ───────────────────────────────────────────────
-    st.markdown(f"""
+    st.html(f"""
     <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
         <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                     font-weight:700;color:{C_TEXT}">Sector Profiles</div>
         <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
                     color:{C_TEXT3};margin-top:2px">Key drivers and constituent equities</div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     cols = st.columns(len(sectors))
     for col, s in zip(cols, sectors):
@@ -189,7 +189,7 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
             if not price_rows:
                 price_rows = f'<div style="font-size:0.76rem;color:{C_TEXT3};padding:4px 0">No tracked equities</div>'
 
-            st.markdown(f"""
+            st.html(f"""
             <div style="border:1px solid {C_RULE};border-top:2px solid {olc};
                         border-radius:0 0 6px 6px;padding:16px;background:{C_CARD}">
                 <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:0.95rem;
@@ -216,29 +216,29 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
                         {s.get('outlook','N/A')}</span>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
     # ── 3. Global Trade Flow Summary ─────────────────────────────────────────
     if port_results:
         trade_summary = compute_trade_flow_summary(trade_data or {}, port_results)
 
-        st.markdown(f"""
+        st.html(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Global Trade Flows</div>
             <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
                         color:{C_TEXT3};margin-top:2px">Regional breakdown of tracked trade volumes</div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         # Narrative
         narrative = trade_summary.get("narrative", "")
         if narrative:
-            st.markdown(f"""
+            st.html(f"""
             <div style="font-family:'Libre Franklin',sans-serif;font-size:0.88rem;
                         color:{C_TEXT2};line-height:1.65;margin-bottom:16px;max-width:720px">
                 {narrative}</div>
-            """, unsafe_allow_html=True)
+            """)
 
         # Regional table
         regions = trade_summary.get("regions", {})
@@ -291,9 +291,9 @@ def render(stock_data=None, freight_data=None, trade_data=None, port_results=Non
                 </tr>
                 """
 
-            st.markdown(f"""
+            st.html(f"""
             <table style="width:100%;border-collapse:collapse">
                 <thead>{rhdr}</thead>
                 <tbody>{rtbody}</tbody>
             </table>
-            """, unsafe_allow_html=True)
+            """)

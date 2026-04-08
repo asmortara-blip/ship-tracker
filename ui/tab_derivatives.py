@@ -109,12 +109,11 @@ def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f'<div style="color:{C_TEXT2};font-size:13px;margin-top:4px;font-family:Libre Franklin, sans-serif;">{subtitle}</div>' if subtitle else ""
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 14px;">'
         f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;letter-spacing:.3px;font-family:Libre Baskerville, Georgia, serif;">{title}</div>'
         f'{sub_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -132,14 +131,14 @@ def _render_header() -> None:
 
         cols = st.columns(4)
         with cols[0]:
-            st.markdown(_kpi_card("FFA Open Interest", f"{total_oi:,}", "All active contracts", C_ACCENT), unsafe_allow_html=True)
+            st.html(_kpi_card("FFA Open Interest", f"{total_oi:,}", "All active contracts", C_ACCENT))
         with cols[1]:
-            st.markdown(_kpi_card("Daily FFA Volume", f"{total_vol:,}", "Lots traded today", C_MOD), unsafe_allow_html=True)
+            st.html(_kpi_card("Daily FFA Volume", f"{total_vol:,}", "Lots traded today", C_MOD))
         with cols[2]:
             basis_str = f"{'+' if basis > 0 else ''}{basis:,.0f}"
-            st.markdown(_kpi_card("C5TC Spot vs Q2 FFA", basis_str, structure, struct_color), unsafe_allow_html=True)
+            st.html(_kpi_card("C5TC Spot vs Q2 FFA", basis_str, structure, struct_color))
         with cols[3]:
-            st.markdown(_kpi_card("Active FFA Traders", "148", "Cleared via Baltic Exchange", C_TEAL), unsafe_allow_html=True)
+            st.html(_kpi_card("Active FFA Traders", "148", "Cleared via Baltic Exchange", C_TEAL))
     except Exception as exc:
         logger.warning(f"Derivatives header error: {exc}")
         st.warning("Header KPIs unavailable.")
@@ -230,13 +229,12 @@ def _render_forward_curve() -> None:
         s_color = C_HIGH if structure == "BACKWARDATION" else C_LOW
         s_desc = ("Spot above forward — bullish freight market. Carriers hold pricing power." if structure == "BACKWARDATION"
                   else "Spot below forward — bearish freight market. Shippers have advantage.")
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border-left:3px solid {s_color};border-radius:8px;'
             f'padding:12px 18px;margin-top:8px;display:flex;align-items:center;gap:14px;">'
             f'<span style="color:{s_color};font-size:13px;font-weight:700;">Market Structure: {structure}</span>'
             f'<span style="color:{C_TEXT2};font-size:12px;">{s_desc}</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Forward curve error: {exc}")
@@ -286,10 +284,9 @@ def _render_quote_board() -> None:
             header_html + rows_html +
             '</tbody></table></div>'
         )
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:16px 20px;">{table_html}</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Quote board error: {exc}")
@@ -334,9 +331,8 @@ def _render_options_table() -> None:
             )
 
         table_html = header_html + rows_html + '</tbody></table></div>'
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;">{table_html}</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Options table error: {exc}")
@@ -396,26 +392,24 @@ def _render_basis_analysis() -> None:
                 ("Min Basis", f"{min(_BASIS_HIST):+} pts", C_LOW),
             ]
             for lbl, val, col in cards:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
                     f'padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">'
                     f'<span style="color:{C_TEXT3};font-size:11px;">{lbl}</span>'
                     f'<span style="color:{col};font-size:13px;font-weight:700;">{val}</span>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
             # Opportunity signal
             if abs(bias_vs_avg) > 30:
                 signal = "SELL FFA" if current_basis > _BASIS_AVG + 30 else "BUY FFA"
                 s_color = C_LOW if signal == "SELL FFA" else C_HIGH
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border-left:3px solid {s_color};border-radius:8px;'
                     f'padding:10px 14px;margin-top:4px;">'
                     f'<div style="color:{s_color};font-size:11px;font-weight:700;">BASIS TRADE SIGNAL</div>'
                     f'<div style="color:{C_TEXT2};font-size:12px;margin-top:4px;">{signal}: basis vs 6M avg</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         logger.warning(f"Basis analysis error: {exc}")
@@ -434,7 +428,7 @@ def _render_hedging_strategies() -> None:
         col_a, col_b = st.columns(2)
 
         with col_a:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
                 f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">FREIGHT RECEIVER — Carrier (Sell FFA)</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;font-family:Libre Franklin, sans-serif;">'
@@ -450,11 +444,10 @@ def _render_hedging_strategies() -> None:
                 f'<span style="color:{C_HIGH};font-size:12px;font-weight:600;">FFA gain: $2,420/day × 92 days × vessel = +$222,640</span>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col_b:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
                 f'<div style="color:{C_LOW};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">FREIGHT PAYER — Shipper (Buy FFA)</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;font-family:Libre Franklin, sans-serif;">'
@@ -470,11 +463,10 @@ def _render_hedging_strategies() -> None:
                 f'<span style="color:{C_MOD};font-size:12px;font-weight:600;">Hedge cost: ~$1.38M/quarter | Breakeven protection above $18,500/day</span>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         # Spread trades
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-top:14px;">'
             f'<div style="color:{C_ACCENT};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">SPECULATIVE FFA SPREAD TRADES</div>'
             f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">'
@@ -498,7 +490,6 @@ def _render_hedging_strategies() -> None:
             f'</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Hedging strategies error: {exc}")
@@ -564,7 +555,7 @@ def _render_options_screen() -> None:
             )
 
             with cols[i]:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;">'
                     f'<div style="color:{C_TEXT};font-size:16px;font-weight:800;">{ticker}</div>'
                     f'<div style="color:{C_TEXT3};font-size:10px;margin-bottom:10px;">${prices[ticker]:.2f} underlying</div>'
@@ -586,7 +577,6 @@ def _render_options_screen() -> None:
                     f'</div>'
                     f'{unusual_badge}'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
     except Exception as exc:
@@ -661,13 +651,12 @@ def _render_vol_surface() -> None:
                 ("ATM IV (3M)", f"{surface[2][4]:.1f}% — near 12M low of {min(surface[-1]):.1f}%", C_TEXT2),
             ]
             for title, body, color in notes:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border-left:3px solid {color};border-radius:8px;'
                     f'padding:10px 12px;margin-bottom:8px;">'
                     f'<div style="color:{color};font-size:11px;font-weight:700;">{title}</div>'
                     f'<div style="color:{C_TEXT3};font-size:11px;margin-top:3px;line-height:1.5;">{body}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
     except Exception as exc:
@@ -680,7 +669,7 @@ def _render_vol_surface() -> None:
 def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Shipping Derivatives & FFA Dashboard."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,rgba(53,114,176,0.08) 100%);'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:22px 28px;margin-bottom:22px;">'
             f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;letter-spacing:.4px;font-family:Libre Baskerville, Georgia, serif;">Freight Derivatives Desk</div>'
@@ -688,7 +677,6 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
             f'FFA forward curves · Quote board · Options Greeks · Basis analysis · Hedging strategies · Vol surface'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Derivatives banner error: {exc}")

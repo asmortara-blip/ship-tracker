@@ -447,7 +447,7 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
         return
 
     # ── Hero KPIs ─────────────────────────────────────────────────────────────
-    st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:1rem;'></div>")
 
     tr_color = _C_WIN if results.total_return_pct >= 0 else _C_LOSS
     wr_color = _C_WIN if results.win_rate >= 55 else (_C_AMB if results.win_rate >= 45 else _C_LOSS)
@@ -462,9 +462,8 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
         _kpi_card("Max Drawdown", f"{results.max_drawdown:.1f}%", dd_color, "worst intraday"),
     ])
 
-    st.markdown(
+    st.html(
         f'<div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1.5rem;">{kpi_html}</div>',
-        unsafe_allow_html=True,
     )
 
     # ── Equity Curve ──────────────────────────────────────────────────────────
@@ -577,6 +576,6 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
     try:
         insight_list = _build_insights(results)
         for title, body, color in insight_list:
-            st.markdown(_insight_card(title, body, color), unsafe_allow_html=True)
+            st.html(_insight_card(title, body, color))
     except Exception as e:
         st.error(f"Insights error: {e}")

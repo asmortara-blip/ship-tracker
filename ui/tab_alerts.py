@@ -523,23 +523,22 @@ def _init_state():
 def render(port_results, route_results, insights, freight_data, macro_data, stock_data):
     """Render the Alert Center tab."""
     try:
-        st.markdown(_CSS, unsafe_allow_html=True)
+        st.html(_CSS)
         _init_state()
     except Exception:
         pass
 
     # ── Hero header ───────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             '<div class="alc-header-label">INTELLIGENCE PLATFORM</div>'
             '<div class="alc-hero-title">Alert <span style="color:#c0392b">Center</span></div>'
             '<div class="alc-hero-sub">Real-time threshold monitoring &amp; notifications</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         st.subheader("Alert Center")
 
-    st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:18px'></div>")
 
     # ── Derive active alerts ──────────────────────────────────────────────────
     try:
@@ -571,26 +570,24 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
 
         with col1:
             crit_color = C_LOW if active_count > 0 else C_HIGH
-            st.markdown(
+            st.html(
                 f'<div class="alc-stat-card">'
                 f'  <div class="alc-stat-num" style="color:{crit_color}">{active_count}</div>'
                 f'  <div class="alc-stat-lbl">Total Active Alerts</div>'
                 f'  <div class="alc-stat-sub">{"Requires attention" if active_count else "All clear"}</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
         with col2:
-            st.markdown(
+            st.html(
                 f'<div class="alc-stat-card">'
                 f'  <div class="alc-stat-num" style="color:{C_ACCENT}">{rules_count}</div>'
                 f'  <div class="alc-stat-lbl">Active Rules</div>'
                 f'  <div class="alc-stat-sub">of {len(rules)} configured</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
         with col3:
             last_ago = _time_ago(last_triggered) if last_triggered else "—"
-            st.markdown(
+            st.html(
                 f'<div class="alc-stat-card">'
                 f'  <div class="alc-stat-num" style="color:{C_MOD};font-size:1.35rem;padding-top:6px">'
                 f'    {last_ago}'
@@ -598,12 +595,11 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                 f'  <div class="alc-stat-lbl">Last Triggered</div>'
                 f'  <div class="alc-stat-sub">{_fmt_dt(last_triggered) if last_triggered else "No history yet"}</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception:
         pass
 
-    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:24px'></div>")
     st.divider()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -611,11 +607,10 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     # ─────────────────────────────────────────────────────────────────────────
     try:
         with st.expander("⚙️  Alert Configuration — Create New Rule", expanded=False):
-            st.markdown(
+            st.html(
                 '<div style="font-size:0.78rem;color:#9a968e;margin-bottom:14px">'
                 'Define a new threshold rule. Alerts are evaluated on each data refresh.'
                 '</div>',
-                unsafe_allow_html=True,
             )
             with st.form("create_alert_form", clear_on_submit=True):
                 fc1, fc2 = st.columns(2, gap="medium")
@@ -684,31 +679,29 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     except Exception:
         pass
 
-    st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:6px'></div>")
 
     # ─────────────────────────────────────────────────────────────────────────
     #  SECTION 2 — ACTIVE ALERTS PANEL
     # ─────────────────────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             '<div class="alc-section-label">📡 Active Alerts</div>',
-            unsafe_allow_html=True,
         )
 
         if not visible_alerts:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
                 f'border-radius:6px;padding:28px;text-align:center;'
                 f'color:{C_TEXT3};font-size:0.85rem">'
                 f'<span style="font-size:1.6rem">✅</span><br/>'
                 f'<strong style="color:{C_HIGH}">All clear.</strong> No alerts are currently active.'
                 f'</div>',
-                unsafe_allow_html=True,
             )
         else:
             for idx, alert in enumerate(visible_alerts):
                 try:
-                    st.markdown(_alert_card_html(alert), unsafe_allow_html=True)
+                    st.html(_alert_card_html(alert))
                     dcol, _ = st.columns([1, 5])
                     with dcol:
                         if st.button(
@@ -735,9 +728,8 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     #  SECTION 3 — ALERT HISTORY TABLE
     # ─────────────────────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             '<div class="alc-section-label">🗂️ Alert History (Last 20)</div>',
-            unsafe_allow_html=True,
         )
 
         history = st.session_state.get("alert_history", [])
@@ -778,12 +770,11 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
             f'border-radius:6px;padding:8px 14px">'
             f'{rows_html}'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         pass
@@ -822,13 +813,12 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                     key="notif_digest_toggle",
                     help="Bundle multiple alerts into a single email digest.",
                 )
-                st.markdown(
+                st.html(
                     f'<div style="font-size:0.78rem;color:{C_TEXT3};margin-top:10px;line-height:1.6">'
                     f'Digest emails summarise all triggered alerts into a single message '
                     f'at the configured frequency. Critical alerts are always sent immediately '
                     f'when <em>Immediate</em> is selected.'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
             save_notif = st.button(
@@ -847,15 +837,14 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     except Exception:
         pass
 
-    st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:6px'></div>")
 
     # ─────────────────────────────────────────────────────────────────────────
     #  SECTION 5 — RULES MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             '<div class="alc-section-label">📋 Rules Management</div>',
-            unsafe_allow_html=True,
         )
 
         rules = st.session_state.get("user_alerts", _default_rules())
@@ -864,7 +853,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
             st.session_state["user_alerts"] = rules
 
         # Header row
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:8px;padding:6px 10px;'
             f'font-size:0.65rem;font-weight:700;color:{C_TEXT3};'
             f'text-transform:uppercase;letter-spacing:0.08em;'
@@ -877,7 +866,6 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
             f'  <span style="width:90px;text-align:center">Email</span>'
             f'  <span style="width:80px;text-align:center">Enabled</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         for i, rule in enumerate(rules):
@@ -891,41 +879,35 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                 )
 
                 with r1:
-                    st.markdown(
+                    st.html(
                         f'<div style="font-size:0.83rem;font-weight:600;color:{C_TEXT};'
                         f'padding-top:6px">{rule.get("name","")}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r2:
-                    st.markdown(
+                    st.html(
                         f'<div style="font-size:0.75rem;color:{C_TEXT2};padding-top:6px">'
                         f'{m_icon} {rule.get("metric","")}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r3:
-                    st.markdown(
+                    st.html(
                         f'<div style="font-size:0.78rem;color:{C_TEXT};padding-top:6px;font-weight:600">'
                         f'{rule.get("threshold","—")}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r4:
-                    st.markdown(
+                    st.html(
                         f'<div style="font-size:0.75rem;color:{C_TEXT2};padding-top:6px">'
                         f'{rule.get("condition","")}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r5:
-                    st.markdown(
+                    st.html(
                         f'<div style="font-size:0.75rem;font-weight:700;color:{color};padding-top:6px">'
                         f'{sev}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r6:
                     email_icon = "✉️" if rule.get("email_notify") else "—"
-                    st.markdown(
+                    st.html(
                         f'<div style="text-align:center;font-size:0.8rem;padding-top:6px">'
                         f'{email_icon}</div>',
-                        unsafe_allow_html=True,
                     )
                 with r7:
                     enabled_new = st.toggle(
@@ -936,9 +918,8 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                     )
                     st.session_state["user_alerts"][i]["enabled"] = enabled_new
 
-                st.markdown(
+                st.html(
                     f'<div style="height:1px;background:{C_BORDER};margin:2px 0"></div>',
-                    unsafe_allow_html=True,
                 )
             except Exception:
                 pass

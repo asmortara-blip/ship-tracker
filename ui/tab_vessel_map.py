@@ -476,13 +476,12 @@ def _render_metrics_strip(vessel_map: dict[str, list[dict]]) -> None:
     )
 
     def _metric_card(col, value: str, label: str, color: str = _C_BLUE) -> None:
-        col.markdown(
+        col.html(
             f'<div style="{metric_style}">'
             f'<div style="font-size:1.5rem;font-weight:800;color:{color};line-height:1">{value}</div>'
             f'<div style="font-size:0.68rem;color:#6b6760;text-transform:uppercase;'
             f'letter-spacing:0.08em;margin-top:4px">{label}</div>'
-            f"</div>",
-            unsafe_allow_html=True,
+            f"</div>"
         )
 
     _metric_card(c1, str(total), "Vessels Tracked", _C_BLUE)
@@ -526,7 +525,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Metrics strip error: {e}")
 
-    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:24px'></div>")
 
     # ── A. Global map ─────────────────────────────────────────────────────────
     try:
@@ -534,7 +533,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Global map error: {e}")
 
-    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+    st.html("<div style='margin-top:28px'></div>")
 
     # ── B + C. Port table and donut side by side ──────────────────────────────
     col_left, col_right = st.columns([3, 2], gap="large")

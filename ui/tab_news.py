@@ -341,7 +341,7 @@ def _render_sentiment_pulse(articles: list[dict]) -> None:
         cols = st.columns(4, gap="small")
         for col, (label, value, sub, color) in zip(cols, kpis):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                     f'border-top:3px solid {color};border-radius:3px;padding:18px 20px;'
                     f'text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
@@ -353,7 +353,6 @@ def _render_sentiment_pulse(articles: list[dict]) -> None:
                     f'<div style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
                     f'margin-top:6px;">{sub}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         st.warning(f"Sentiment pulse error: {exc}")
@@ -419,7 +418,7 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
                 )
             rows_html += f"<tr>{topic_cell}{day_cells}</tr>"
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
             f'border-radius:3px;padding:20px;overflow-x:auto;'
             f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
@@ -427,7 +426,6 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
             f'<thead>{header}</thead>'
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         st.warning(f"Heatmap error: {exc}")
@@ -451,7 +449,7 @@ def _render_breaking_news(articles: list[dict]) -> None:
             sign          = "+" if a["sentiment_score"] > 0 else ""
             score_str     = f"{sign}{a['sentiment_score']:.2f}"
 
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-left:4px solid {urg_color};border-radius:3px;'
                 f'padding:18px 22px;margin-bottom:12px;'
@@ -480,7 +478,6 @@ def _render_breaking_news(articles: list[dict]) -> None:
                 f'font-family:{F_BODY};text-decoration:none;margin-left:auto;">Read full story \u2197</a>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception as exc:
         st.warning(f"Breaking news error: {exc}")
@@ -501,7 +498,7 @@ def _render_news_feed(articles: list[dict]) -> None:
             return
 
         # Column headers
-        st.markdown(
+        st.html(
             f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
             f'gap:10px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
             f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
@@ -510,7 +507,6 @@ def _render_news_feed(articles: list[dict]) -> None:
             f'<span style="text-align:center;">Score</span>'
             f'<span>Topic</span><span style="text-align:right;">Time</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         for idx, a in enumerate(filtered):
@@ -524,7 +520,7 @@ def _render_news_feed(articles: list[dict]) -> None:
 
             # Row — alternating warm tones
             row_bg = C_CARD if idx % 2 == 0 else C_SURFACE
-            st.markdown(
+            st.html(
                 f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
                 f'gap:10px;padding:10px 14px;background:{row_bg};'
                 f'border-radius:3px;align-items:center;margin-bottom:2px;">'
@@ -541,12 +537,11 @@ def _render_news_feed(articles: list[dict]) -> None:
                 f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
                 f'text-align:right;">{ago}</span>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
             with st.expander(f"Summary \u2014 {a['headline'][:60]}\u2026", expanded=False):
                 ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_SURFACE};border-radius:3px;padding:14px 18px;">'
                     f'<p style="color:{C_TEXT};font-size:13px;font-family:{F_BODY};'
                     f'line-height:1.7;margin:0 0 12px 0;">'
@@ -557,7 +552,6 @@ def _render_news_feed(articles: list[dict]) -> None:
                     f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;'
                     f'font-family:{F_BODY};">Read full article \u2197</a>'
                     f'</div></div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         st.warning(f"News feed error: {exc}")
@@ -594,7 +588,7 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
         rows.sort(key=lambda r: r[2], reverse=True)
 
         # Header
-        st.markdown(
+        st.html(
             f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
             f'gap:8px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
             f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
@@ -604,7 +598,6 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
             f'<span style="text-align:center;">Sentiment</span>'
             f'<span style="text-align:center;">Trend</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         for i, (name, etype, mentions, avg_sent, trend) in enumerate(rows[:15]):
@@ -615,7 +608,7 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
             trend_color   = C_HIGH if trend == "up" else (C_LOW if trend == "down" else C_TEXT3)
             row_bg        = C_CARD if i % 2 == 0 else C_SURFACE
 
-            st.markdown(
+            st.html(
                 f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
                 f'gap:8px;padding:9px 14px;background:{row_bg};'
                 f'border-radius:3px;align-items:center;margin-bottom:2px;">'
@@ -630,7 +623,6 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
                 f'<span style="color:{trend_color};font-size:14px;font-weight:700;'
                 f'text-align:center;display:block;">{trend_icon}</span>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception as exc:
         st.warning(f"Entity tracker error: {exc}")
@@ -753,7 +745,7 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
             f'font-family:{F_BODY};margin-left:10px;">DEMO DATA</span>'
             if using_mock else ""
         )
-        st.markdown(
+        st.html(
             f'<div style="display:flex;align-items:baseline;gap:12px;'
             f'margin-bottom:22px;flex-wrap:wrap;border-bottom:3px double {C_TEXT};'
             f'padding-bottom:12px;">'
@@ -763,89 +755,82 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
             f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
             f'margin-left:auto;">Last updated {updated_str}</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         st.subheader("Shipping News Intelligence")
 
     # ── 1. Sentiment Pulse ────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">01</span>&nbsp;&nbsp;Sentiment Pulse</div>',
-            unsafe_allow_html=True,
         )
         _render_sentiment_pulse(articles)
     except Exception as exc:
         st.warning(f"Section 1 error: {exc}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 2. Topic Heatmap ──────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">02</span>&nbsp;&nbsp;Topic Heatmap \u2014 '
             f'9 Topics \u00d7 5 Days</div>',
-            unsafe_allow_html=True,
         )
         _render_topic_heatmap(articles)
     except Exception as exc:
         st.warning(f"Section 2 error: {exc}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 3. Breaking News ──────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_LOW};">03</span>&nbsp;&nbsp;Breaking News \u2014 Top 5 Urgent</div>',
-            unsafe_allow_html=True,
         )
         _render_breaking_news(articles)
     except Exception as exc:
         st.warning(f"Section 3 error: {exc}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 4. Full News Feed ─────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">04</span>&nbsp;&nbsp;Full News Feed</div>',
-            unsafe_allow_html=True,
         )
         _render_news_feed(articles)
     except Exception as exc:
         st.warning(f"Section 4 error: {exc}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 5. Named Entity Tracker ───────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">05</span>&nbsp;&nbsp;Named Entity Tracker</div>',
-            unsafe_allow_html=True,
         )
         _render_entity_tracker(articles, _MOCK_ENTITIES)
     except Exception as exc:
         st.warning(f"Section 5 error: {exc}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 6. Geographic Sentiment Map ───────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
             f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">06</span>&nbsp;&nbsp;Geographic Sentiment Map</div>',
-            unsafe_allow_html=True,
         )
         _render_geo_map(articles)
     except Exception as exc:
@@ -853,7 +838,7 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
 
     # ── Footer ────────────────────────────────────────────────────────────────
     try:
-        st.markdown(
+        st.html(
             f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;'
             f'font-family:{F_BODY};margin-top:32px;padding-top:16px;'
             f'border-top:1px solid {C_BORDER};">'
@@ -861,7 +846,6 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
             f'{len(articles)} articles indexed &nbsp;|&nbsp; '
             f'Sentiment scored by NLP pipeline'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         pass

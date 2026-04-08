@@ -149,10 +149,10 @@ def _render_kpi_header(ports: list[dict]) -> None:
         normal   = sum(1 for p in ports if p["status"] == "NORMAL")
         global_teu = sum(p["teu_m"] for p in ports)
 
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Port Operations Intelligence",
             f"Real-time monitoring across {total} major global ports · Updated {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
-        ), unsafe_allow_html=True)
+        ))
 
         cols = st.columns(5)
         cards = [
@@ -163,7 +163,7 @@ def _render_kpi_header(ports: list[dict]) -> None:
             ("Global Throughput",     f"{global_teu:.0f}M", "TEU annual capacity",C_TEXT2),
         ]
         for col, (label, val, sub, color) in zip(cols, cards):
-            col.markdown(_kpi_card(label, val, sub, color), unsafe_allow_html=True)
+            col.html(_kpi_card(label, val, sub, color))
     except Exception:
         logger.exception("KPI header render failed")
         st.error("KPI header unavailable")
@@ -173,10 +173,10 @@ def _render_kpi_header(ports: list[dict]) -> None:
 
 def _render_rankings_table(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Top 20 Ports — Global Rankings",
             "Annual throughput, efficiency metrics, and operational status"
-        ), unsafe_allow_html=True)
+        ))
 
         headers = [
             "Rank", "Port", "Country", "TEU M/yr", "Growth",
@@ -217,7 +217,7 @@ def _render_rankings_table(ports: list[dict]) -> None:
             + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
             + '</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception:
         logger.exception("Rankings table render failed")
         st.error("Rankings table unavailable")
@@ -227,10 +227,10 @@ def _render_rankings_table(ports: list[dict]) -> None:
 
 def _render_efficiency_chart(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Port Efficiency Benchmarks",
             "Crane moves per hour — world leaders vs. laggards"
-        ), unsafe_allow_html=True)
+        ))
 
         data = sorted([p for p in ports if p["rank"] <= 20], key=lambda x: x["crane_moves"], reverse=True)
         names  = [p["port"] for p in data]
@@ -268,10 +268,10 @@ def _render_efficiency_chart(ports: list[dict]) -> None:
 
 def _render_port_map(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Global Port Status Map",
             "Bubble size = annual throughput · Color = congestion status"
-        ), unsafe_allow_html=True)
+        ))
 
         traces = []
         for status in ["NORMAL", "ELEVATED", "CRITICAL"]:
@@ -391,10 +391,10 @@ def _regional_highlight(region: str, region_ports: list[dict]) -> str:
 
 def _render_regional_dashboard(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Regional Port Dashboard",
             "Performance breakdown by geographic region"
-        ), unsafe_allow_html=True)
+        ))
 
         regions = ["Asia-Pacific", "Europe", "Americas", "Middle East/Africa"]
         tabs = st.tabs(regions)
@@ -405,8 +405,8 @@ def _render_regional_dashboard(ports: list[dict]) -> None:
                     if not region_ports:
                         st.info(f"No ports data for {region}")
                         continue
-                    st.markdown(_regional_highlight(region, region_ports), unsafe_allow_html=True)
-                    st.markdown(_regional_table(region_ports), unsafe_allow_html=True)
+                    st.html(_regional_highlight(region, region_ports))
+                    st.html(_regional_table(region_ports))
                 except Exception:
                     logger.exception(f"Regional tab render failed: {region}")
                     st.error(f"{region} data unavailable")
@@ -419,10 +419,10 @@ def _render_regional_dashboard(ports: list[dict]) -> None:
 
 def _render_events_feed(events: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Port Events Feed",
             "Upcoming events affecting port operations — strikes, maintenance, expansions"
-        ), unsafe_allow_html=True)
+        ))
 
         EVENT_COLOR = {
             "Labor Strike":      C_LOW,
@@ -470,7 +470,7 @@ def _render_events_feed(events: list[dict]) -> None:
             + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
             + '</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
     except Exception:
         logger.exception("Events feed render failed")
         st.error("Events feed unavailable")
@@ -480,10 +480,10 @@ def _render_events_feed(events: list[dict]) -> None:
 
 def _render_rate_cards(lanes: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        st.html(_section_header(
             "Port-to-Port Rate Cards",
             "Top 10 trade lanes — spot rates, transit times, weekly services"
-        ), unsafe_allow_html=True)
+        ))
 
         cards_html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;">'
         for lane in lanes:
@@ -510,7 +510,7 @@ def _render_rate_cards(lanes: list[dict]) -> None:
                 f'</div>'
             )
         cards_html += '</div>'
-        st.markdown(cards_html, unsafe_allow_html=True)
+        st.html(cards_html)
     except Exception:
         logger.exception("Rate cards render failed")
         st.error("Rate cards unavailable")
@@ -558,11 +558,10 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None
         _render_events_feed(PORT_EVENTS)
         _render_rate_cards(LANE_RATES)
 
-        st.markdown(
+        st.html(
             f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;padding:24px 0 8px 0;">'
             f'Port Operations Intelligence · {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}'
             f'</div>',
-            unsafe_allow_html=True
         )
         logger.success("Port monitor tab rendered successfully")
     except Exception:

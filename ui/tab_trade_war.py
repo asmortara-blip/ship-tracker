@@ -277,7 +277,7 @@ def _section_header(title: str, subtitle: str = "") -> str:
 def _render_hero(macro_data: dict | None) -> None:
     try:
         logger.debug("trade_war | rendering hero dashboard")
-        st.markdown(
+        st.html(
             f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">'
             f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;'
             f'letter-spacing:-0.5px;">Trade War Intelligence</div>'
@@ -286,13 +286,12 @@ def _render_hero(macro_data: dict | None) -> None:
             f'padding:4px 14px;font-size:11px;font-weight:800;'
             f'letter-spacing:1px;animation:pulse 2s infinite;">'
             f'&#9679; LIVE TARIFF SITUATION</div></div>',
-            unsafe_allow_html=True,
         )
 
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.markdown(
+            st.html(
                 f'<div style="background:linear-gradient(135deg,{C_LOW}22,{C_CARD});'
                 f'border:1px solid {C_LOW}55;border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
@@ -301,11 +300,10 @@ def _render_hero(macro_data: dict | None) -> None:
                 f'line-height:1.1;margin:8px 0;">145%</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;">All Chinese goods · Apr 2025</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col2:
-            st.markdown(
+            st.html(
                 f'<div style="background:linear-gradient(135deg,{C_MOD}22,{C_CARD});'
                 f'border:1px solid {C_MOD}55;border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
@@ -314,11 +312,10 @@ def _render_hero(macro_data: dict | None) -> None:
                 f'line-height:1.1;margin:8px 0;">125%</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;">All US goods · Apr 2025</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col3:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
@@ -327,11 +324,10 @@ def _render_hero(macro_data: dict | None) -> None:
                 f'line-height:1.1;margin:8px 0;">$582B</div>'
                 f'<div style="color:{C_LOW};font-size:12px;">&#8595; -38% from 2024 baseline</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col4:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
@@ -340,10 +336,9 @@ def _render_hero(macro_data: dict | None) -> None:
                 f'line-height:1.1;margin:8px 0;">214</div>'
                 f'<div style="color:{C_MOD};font-size:12px;">Last 30 days · transpacific</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
             f'border-radius:6px;padding:14px 20px;margin-top:4px;'
             f'display:flex;gap:32px;flex-wrap:wrap;">'
@@ -357,7 +352,6 @@ def _render_hero(macro_data: dict | None) -> None:
             f'<span style="color:{C_ACCENT};font-weight:700;">&#9679;</span> '
             f'Transpacific bookings down 28% month-over-month</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("trade_war | hero render failed")
@@ -368,12 +362,11 @@ def _render_hero(macro_data: dict | None) -> None:
 def _render_commodity_table() -> None:
     try:
         logger.debug("trade_war | rendering commodity table")
-        st.markdown(
+        st.html(
             _section_header(
                 "Tariff Impact by Commodity",
                 "Full spectrum of affected goods — US 145% and China 125% retaliatory tariffs",
             ),
-            unsafe_allow_html=True,
         )
 
         header_style = (
@@ -397,7 +390,7 @@ def _render_commodity_table() -> None:
             f'<div style="{header_style}">Alternative Sources</div>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
 
         rows_html = (
             f'<div style="border:1px solid {C_BORDER};border-top:none;'
@@ -428,9 +421,9 @@ def _render_commodity_table() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
 
-        st.markdown(
+        st.html(
             f'<div style="display:flex;gap:20px;margin-top:10px;flex-wrap:wrap;">'
             f'<div style="display:flex;align-items:center;gap:6px;">'
             f'{_impact_badge("HIGH")}'
@@ -442,7 +435,6 @@ def _render_commodity_table() -> None:
             f'{_impact_badge("LOW")}'
             f'<span style="color:{C_TEXT3};font-size:12px;">Limited impact, inelastic demand</span></div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("trade_war | commodity table failed")
@@ -453,12 +445,11 @@ def _render_commodity_table() -> None:
 def _render_diversion_map() -> None:
     try:
         logger.debug("trade_war | rendering diversion map")
-        st.markdown(
+        st.html(
             _section_header(
                 "Trade Flow Diversion Map",
                 "Tariffs causing diversion, not elimination — new shipping routes emerging",
             ),
-            unsafe_allow_html=True,
         )
 
         fig = go.Figure()
@@ -554,7 +545,7 @@ def _render_diversion_map() -> None:
 
         st.plotly_chart(fig, use_container_width=True, key="trade_diversion_map")
 
-        st.markdown(
+        st.html(
             f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:4px;">'
             f'<div style="background:{C_LOW}11;border:1px solid {C_LOW}33;'
             f'border-radius:8px;padding:12px 16px;">'
@@ -572,7 +563,6 @@ def _render_diversion_map() -> None:
             f'<div style="color:{C_TEXT};font-size:13px;margin-top:4px;">Brazil–China agricultural route</div>'
             f'<div style="color:{C_TEXT2};font-size:12px;">Brazil fills US soy gap</div></div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("trade_war | diversion map failed")
@@ -583,12 +573,11 @@ def _render_diversion_map() -> None:
 def _render_nearshoring() -> None:
     try:
         logger.debug("trade_war | rendering nearshoring section")
-        st.markdown(
+        st.html(
             _section_header(
                 "Nearshoring & Friendshoring",
                 "Manufacturing migrating from China — new shipping corridors forming",
             ),
-            unsafe_allow_html=True,
         )
 
         shifts = [
@@ -642,7 +631,7 @@ def _render_nearshoring() -> None:
         cols = st.columns(len(shifts))
         for col, s in zip(cols, shifts):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {s["color"]}33;'
                     f'border-radius:6px;padding:16px;height:100%;">'
                     f'<div style="font-size:24px;margin-bottom:6px;">{s["flag"]}</div>'
@@ -664,7 +653,6 @@ def _render_nearshoring() -> None:
                     f'<div style="color:{C_ACCENT};font-size:11px;font-weight:600;">'
                     f'&#9658; {s["lane"]}</div></div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("trade_war | nearshoring section failed")
@@ -675,12 +663,11 @@ def _render_nearshoring() -> None:
 def _render_volume_chart() -> None:
     try:
         logger.debug("trade_war | rendering volume chart")
-        st.markdown(
+        st.html(
             _section_header(
                 "Shipping Volume Impact — Transpacific",
                 "Monthly container volumes before and after tariff escalation (TEUs, thousands)",
             ),
-            unsafe_allow_html=True,
         )
 
         months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -750,7 +737,7 @@ def _render_volume_chart() -> None:
 
         carrier_col1, carrier_col2 = st.columns(2)
         with carrier_col1:
-            st.markdown(
+            st.html(
                 f'<div style="{_card_open()}">'
                 f'<div style="color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;">'
                 f'Carriers Cutting Transpacific Capacity</div>'
@@ -768,10 +755,9 @@ def _render_volume_chart() -> None:
                 f'<span style="color:{C_TEXT};font-size:13px;">Yang Ming</span>'
                 f'<span style="color:{C_MOD};font-weight:700;">-8 sailings</span></div>'
                 f'</div></div>',
-                unsafe_allow_html=True,
             )
         with carrier_col2:
-            st.markdown(
+            st.html(
                 f'<div style="{_card_open()}">'
                 f'<div style="color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;">'
                 f'Carriers Adding ASEAN Capacity</div>'
@@ -789,7 +775,6 @@ def _render_volume_chart() -> None:
                 f'<span style="color:{C_TEXT};font-size:13px;">ONE (Indonesia)</span>'
                 f'<span style="color:{C_MOD};font-weight:700;">+6 sailings</span></div>'
                 f'</div></div>',
-                unsafe_allow_html=True,
             )
     except Exception:
         logger.exception("trade_war | volume chart failed")
@@ -800,12 +785,11 @@ def _render_volume_chart() -> None:
 def _render_deal_tracker() -> None:
     try:
         logger.debug("trade_war | rendering deal tracker")
-        st.markdown(
+        st.html(
             _section_header(
                 "Trade Deal Tracker",
                 "Active negotiations and bilateral agreements — shipping impact if resolved",
             ),
-            unsafe_allow_html=True,
         )
 
         header_style = (
@@ -813,7 +797,7 @@ def _render_deal_tracker() -> None:
             f"font-weight:700;letter-spacing:1px;text-transform:uppercase;"
             f"padding:10px 14px;border-bottom:1px solid {C_BORDER};"
         )
-        st.markdown(
+        st.html(
             f'<div style="display:grid;grid-template-columns:1.8fr 1fr 2fr 1fr 2fr;'
             f'background:{C_SURFACE};border:1px solid {C_BORDER};'
             f'border-radius:6px 10px 0 0;">'
@@ -823,7 +807,6 @@ def _render_deal_tracker() -> None:
             f'<div style="{header_style}">Likelihood</div>'
             f'<div style="{header_style}">Shipping Impact if Resolved</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         rows = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;">'
@@ -849,7 +832,7 @@ def _render_deal_tracker() -> None:
                 f'</div>'
             )
         rows += "</div>"
-        st.markdown(rows, unsafe_allow_html=True)
+        st.html(rows)
     except Exception:
         logger.exception("trade_war | deal tracker failed")
         st.error("Trade deal tracker failed to render.")
@@ -859,19 +842,18 @@ def _render_deal_tracker() -> None:
 def _render_history() -> None:
     try:
         logger.debug("trade_war | rendering historical comparison")
-        st.markdown(
+        st.html(
             _section_header(
                 "Historical Tariff Wars",
                 "Shipping market behavior across tariff escalation episodes",
             ),
-            unsafe_allow_html=True,
         )
 
         cols = st.columns(len(_HISTORY))
         episode_colors = [C_ACCENT, C_MOD, C_LOW, C_LOW]
         for col, h, color in zip(cols, _HISTORY, episode_colors):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {color}33;'
                     f'border-radius:6px;padding:16px;">'
                     f'<div style="color:{color};font-size:11px;font-weight:700;'
@@ -902,7 +884,6 @@ def _render_history() -> None:
                     f'<div style="color:{C_TEXT2};font-size:12px;">{h["resolution"]}</div>'
                     f'</div>'
                     f'</div></div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("trade_war | history section failed")
@@ -913,15 +894,14 @@ def _render_history() -> None:
 def _render_scenario() -> None:
     try:
         logger.debug("trade_war | rendering de-escalation scenario")
-        st.markdown(
+        st.html(
             _section_header(
                 "Scenario: Trade De-Escalation",
                 "If US-China tariffs reduced to 50% by end of 2026 — modeled market recovery",
             ),
-            unsafe_allow_html=True,
         )
 
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_HIGH}11,{C_CARD});'
             f'border:1px solid {C_HIGH}33;border-radius:6px;padding:20px 24px;margin-bottom:16px;">'
             f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:12px;">'
@@ -932,7 +912,6 @@ def _render_scenario() -> None:
             f'some manufacturing has already relocated, supply chains have restructured. '
             f'But the volume recovery would be substantial and rapid.</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         mcol1, mcol2, mcol3, mcol4 = st.columns(4)
@@ -944,7 +923,7 @@ def _render_scenario() -> None:
         ]
         for col, (label, value, sub, color) in zip([mcol1, mcol2, mcol3, mcol4], metrics):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {color}33;'
                     f'border-radius:6px;padding:16px;text-align:center;">'
                     f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
@@ -953,10 +932,9 @@ def _render_scenario() -> None:
                     f'{value}</div>'
                     f'<div style="color:{C_TEXT3};font-size:12px;">{sub}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
-        st.markdown(
+        st.html(
             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">'
             f'<div style="{_card_open()}">'
             f'<div style="color:{C_HIGH};font-size:14px;font-weight:700;margin-bottom:12px;">'
@@ -993,10 +971,9 @@ def _render_scenario() -> None:
             f'<span style="color:{C_TEXT2};font-weight:600;">~80% retained</span></div>'
             f'</div></div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
             f'border-left:3px solid {C_ACCENT};border-radius:8px;'
             f'padding:14px 18px;margin-top:4px;">'
@@ -1007,7 +984,6 @@ def _render_scenario() -> None:
             f'permanently — the supply chain reconfiguration has already happened. '
             f'The de-escalation upside for shipping is real but structurally capped.</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("trade_war | scenario section failed")
@@ -1021,25 +997,25 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
         logger.info("trade_war | render start")
 
         _render_hero(macro_data)
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_commodity_table()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_diversion_map()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_nearshoring()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_volume_chart()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_deal_tracker()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_history()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
+        st.html("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>")
 
         _render_scenario()
 

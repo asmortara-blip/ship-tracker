@@ -74,11 +74,11 @@ padding:18px 20px;height:100%;">
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
-    st.markdown(f"""
+    st.html(f"""
 <div style="margin:28px 0 16px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER}">
   <div style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
   {sub_html}
-</div>""", unsafe_allow_html=True)
+</div>""")
 
 
 # ── Section 1: Booking Market Dashboard ───────────────────────────────────────
@@ -99,51 +99,51 @@ def _booking_market_dashboard(freight_data) -> None:
 
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            st.markdown(_kpi_card(
+            st.html(_kpi_card(
                 "Booking Volume (TEU)",
                 f"{volume:,}",
                 f"{'▲' if vol_delta >= 0 else '▼'} {abs(vol_delta)}% vs last week",
                 vol_delta >= 0,
                 "7-day rolling",
                 C_ACCENT
-            ), unsafe_allow_html=True)
+            ))
         with c2:
-            st.markdown(_kpi_card(
+            st.html(_kpi_card(
                 "Avg Booking Lead Time",
                 f"{lead_time:.1f} days",
                 f"{'▲' if lead_delta >= 0 else '▼'} {abs(lead_delta):.1f}d WoW",
                 lead_delta <= 0,
                 "Days before sailing",
                 C_MOD
-            ), unsafe_allow_html=True)
+            ))
         with c3:
-            st.markdown(_kpi_card(
+            st.html(_kpi_card(
                 "Space Availability",
                 f"{space_pct:.0f}% booked",
                 f"{'▲' if sp_delta >= 0 else '▼'} {abs(sp_delta):.1f}% WoW",
                 sp_delta <= 0,
                 f"{100 - space_pct:.0f}% remaining",
                 C_LOW if space_pct > 85 else C_HIGH
-            ), unsafe_allow_html=True)
+            ))
         with c4:
-            st.markdown(_kpi_card(
+            st.html(_kpi_card(
                 "RFQ vs Spot Differential",
                 f"+${rfq_spot:.0f}/TEU",
                 "RFQ premium over spot",
                 rfq_spot < 100,
                 "Neg = spot cheaper",
                 C_PURPLE
-            ), unsafe_allow_html=True)
+            ))
         with c5:
             sign = "+" if ctc_spot >= 0 else ""
-            st.markdown(_kpi_card(
+            st.html(_kpi_card(
                 "Contract vs Spot",
                 f"{sign}${ctc_spot:.0f}/TEU",
                 "Contract premium" if ctc_spot >= 0 else "Contract discount",
                 ctc_spot <= 0,
                 "LTC vs spot market",
                 C_CYAN
-            ), unsafe_allow_html=True)
+            ))
     except Exception as exc:
         logger.warning(f"Booking dashboard error: {exc}")
         st.info("Booking dashboard data unavailable.")
@@ -195,11 +195,11 @@ overflow:hidden;margin-top:12px">
     <span>Carrier</span><span>Rate / TEU</span><span>Transit</span>
     <span>On-Time %</span><span>Score</span><span>Verdict</span>
   </div>"""
-        st.markdown(header, unsafe_allow_html=True)
+        st.html(header)
 
         for r in rows:
             rec_color = C_HIGH if r["rec"] == "BEST VALUE" else (C_MOD if r["rec"] == "GOOD" else C_TEXT3)
-            st.markdown(f"""
+            st.html(f"""
 <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr;
 padding:12px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="font-weight:600;color:{r['color']}">{r['carrier']}</span>
@@ -208,9 +208,9 @@ padding:12px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="color:{C_TEXT2}">{r['on_time_pct']}%</span>
   <span style="color:{C_ACCENT}">{r['score']:.2f}</span>
   <span style="color:{rec_color};font-weight:600;font-size:12px">{r['rec']}</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.html("</div>")
         st.caption(f"Showing rates for {origin} → {dest} | Cargo: {cargo} | Score weights: reliability 50%, rate 30%, transit 20%")
     except Exception as exc:
         logger.warning(f"Rate comparison error: {exc}")
@@ -274,7 +274,7 @@ def _optimal_booking_window() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(f"""
+        st.html(f"""
 <div style="background:rgba(46,158,110,0.1);border:1px solid {C_HIGH};border-radius:6px;
 padding:14px 18px;margin-top:4px;display:flex;align-items:center;gap:12px">
   <span style="font-size:22px">&#128200;</span>
@@ -284,7 +284,7 @@ padding:14px 18px;margin-top:4px;display:flex;align-items:center;gap:12px">
     Late bookings (1-2 weeks out) carry a <b>18-30% premium</b>. Booking too early (9+ weeks)
     may incur an 8-12% premium due to uncertainty pricing.</span>
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
     except Exception as exc:
         logger.warning(f"Booking window error: {exc}")
         st.info("Booking window analysis unavailable.")
@@ -327,12 +327,12 @@ def _contract_vs_spot_analysis() -> None:
     <span>Route</span><span>LTC Rate</span><span>Spot Rate</span>
     <span>Spread</span><span>Volatility</span><span>Breakeven</span><span>Signal</span>
   </div>"""
-        st.markdown(header, unsafe_allow_html=True)
+        st.html(header)
 
         for r in rows:
             sp_color = C_HIGH if r["spread"] > 0 else C_LOW
             sp_sign  = "+" if r["spread"] >= 0 else ""
-            st.markdown(f"""
+            st.html(f"""
 <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;
 padding:12px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="color:{C_TEXT};font-weight:600;font-size:13px">{r['route']}</span>
@@ -343,9 +343,9 @@ padding:12px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="color:{C_TEXT3}">{r['brkevn']}x</span>
   <span style="background:rgba(232,230,225,0.04);border-radius:6px;padding:3px 8px;
   color:{r['rec_color']};font-size:11px;font-weight:700">{r['rec']}</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.html("</div>")
         st.caption("Spread = Spot minus LTC. Positive spread = spot more expensive = LTC advantageous. Breakeven = how many rounds of spot avg needed before LTC breaks even.")
     except Exception as exc:
         logger.warning(f"Contract vs spot error: {exc}")
@@ -388,18 +388,18 @@ padding:14px 10px;text-align:center;border-top:3px solid {color}">
   <div style="font-size:10px;color:{color};font-weight:600;margin-top:2px">{label}</div>
 </div>"""
 
-        st.markdown(f"""
+        st.html(f"""
 <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:8px">
   {cells_html}
-</div>""", unsafe_allow_html=True)
+</div>""")
 
-        st.markdown(f"""
+        st.html(f"""
 <div style="display:flex;gap:18px;margin-top:12px;font-size:12px;color:{C_TEXT2}">
   <span><span style="color:{C_HIGH}">&#9632;</span> OPEN (&lt;60% booked)</span>
   <span><span style="color:{C_MOD}">&#9632;</span> FILLING (60-80%)</span>
   <span><span style="color:{C_LOW}">&#9632;</span> TIGHT (80-92%)</span>
   <span><span style="color:#c0392b">&#9632;</span> FULL (&gt;92%)</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
     except Exception as exc:
         logger.warning(f"Booking calendar error: {exc}")
         st.info("Booking calendar unavailable.")
@@ -428,7 +428,7 @@ def _spot_rate_alert() -> None:
         status_label = "ALERT TRIGGERED" if triggered else "MONITORING"
         gap_label = f"${abs(diff):,}/TEU {'BELOW' if diff < 0 else 'above'} threshold"
 
-        st.markdown(f"""
+        st.html(f"""
 <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;align-items:center">
   <div>
@@ -442,7 +442,7 @@ padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;ali
     padding:8px 16px;color:{status_color};font-weight:700;font-size:13px">{status_label}</div>
     <div style="font-size:11px;color:{C_TEXT3};margin-top:6px">Threshold: ${threshold:,}/TEU</div>
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
         active_alerts = []
         for route in _ROUTES:
@@ -453,19 +453,19 @@ padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;ali
                 active_alerts.append((route, rt, thr))
 
         if active_alerts:
-            st.markdown(f"""
+            st.html(f"""
 <div style="margin-top:14px;padding:12px 16px;background:rgba(201,150,43,0.1);
 border:1px solid {C_MOD};border-radius:6px">
   <div style="font-size:12px;font-weight:700;color:{C_MOD};margin-bottom:8px">
     NEAR-THRESHOLD ROUTES
-  </div>""", unsafe_allow_html=True)
+  </div>""")
             for route, rt, thr in active_alerts[:3]:
-                st.markdown(f"""
+                st.html(f"""
   <div style="font-size:12px;color:{C_TEXT2};padding:3px 0">
     {route}: ${rt:,} vs threshold ${thr:,}
     <span style="color:{C_MOD}"> — within ${abs(rt-thr):,}</span>
-  </div>""", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+  </div>""")
+            st.html("</div>")
     except Exception as exc:
         logger.warning(f"Spot rate alert error: {exc}")
         st.info("Spot rate alert unavailable.")
@@ -499,20 +499,20 @@ def _space_availability_by_carrier() -> None:
 
         rows.sort(key=lambda x: x["space_pct"], reverse=True)
 
-        st.markdown(f"""
+        st.html(f"""
 <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden">
   <div style="display:grid;grid-template-columns:1.2fr 2fr 1fr 1fr 1.4fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
   color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.5px">
     <span>Carrier</span><span>Route</span><span>Space Left</span>
     <span>Sailing</span><span>Vessel</span>
-  </div>""", unsafe_allow_html=True)
+  </div>""")
 
         for r in rows:
             sp = r["space_pct"]
             bar_color = C_HIGH if sp > 25 else (C_MOD if sp > 10 else C_LOW)
             bar_pct   = min(sp * 2.2, 100)
-            st.markdown(f"""
+            st.html(f"""
 <div style="display:grid;grid-template-columns:1.2fr 2fr 1fr 1fr 1.4fr;
 padding:11px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="font-weight:600;color:{r['color']}">{r['carrier']}</span>
@@ -525,9 +525,9 @@ padding:11px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   </span>
   <span style="color:{C_TEXT2};font-size:12px">{r['sail_date']}</span>
   <span style="color:{C_TEXT3};font-size:12px">{r['vessel']}</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.html("</div>")
         st.caption(f"Space remaining as % of vessel TEU capacity. Updated: {datetime.now().strftime('%H:%M UTC')}")
     except Exception as exc:
         logger.warning(f"Space availability error: {exc}")
@@ -539,7 +539,7 @@ padding:11px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
 def render(route_results=None, freight_data=None, port_results=None) -> None:
     """Render the Booking Intelligence & Optimization tab."""
     try:
-        st.markdown(f"""
+        st.html(f"""
 <div style="background:linear-gradient(135deg,{C_ACCENT}18,{C_PURPLE}10);
 border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24px">
   <div style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:800;color:{C_TEXT}">
@@ -549,7 +549,7 @@ border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24
     Market-timed booking decisions · Rate comparison across carriers ·
     Contract vs spot analytics · Space availability tracker
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
     except Exception:
         st.subheader("Booking Intelligence & Optimization")
 

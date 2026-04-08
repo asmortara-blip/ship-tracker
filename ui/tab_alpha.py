@@ -142,19 +142,17 @@ def _badge(text: str, color: str) -> str:
     )
 
 def _hr() -> None:
-    st.markdown(
+    st.html(
         "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:28px 0'>",
-        unsafe_allow_html=True,
     )
 
 def _section_title(label: str, sub: str = "") -> None:
     sub_html = f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:3px;font-family:Libre Franklin,sans-serif">{sub}</div>' if sub else ""
-    st.markdown(
+    st.html(
         f'<div style="margin-bottom:16px">'
         f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT2};letter-spacing:0.08em;'
         f'text-transform:uppercase;font-family:Libre Baskerville,Georgia,serif">{label}</span>'
         f'{sub_html}</div>',
-        unsafe_allow_html=True,
     )
 
 def _card_open(extra_style: str = "") -> str:
@@ -200,7 +198,7 @@ def _render_hero(signals: list[dict]) -> None:
             for val, label, sub, col in kpis
         ])
 
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,#0d1826 0%,#111f35 50%,#0a1520 100%);'
             f'border:1px solid rgba(53,114,176,0.22);border-radius:3px;padding:32px 36px 28px;'
             f'margin-bottom:8px;position:relative;overflow:hidden">'
@@ -215,7 +213,6 @@ def _render_hero(signals: list[dict]) -> None:
             f'{kpi_html}'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"[tab_alpha] hero render failed: {exc}")
@@ -262,7 +259,7 @@ def _render_conviction_matrix() -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:160px {col_w};gap:8px;align-items:center">'
             f'<div></div>'
@@ -270,7 +267,6 @@ def _render_conviction_matrix() -> None:
             f'{rows_html}'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"[tab_alpha] conviction matrix failed: {exc}")
@@ -341,7 +337,7 @@ def _render_signals_table(signals: list[dict]) -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:{col_w};gap:2px;'
             f'border-bottom:1px solid rgba(232,230,225,0.05);margin-bottom:8px">'
@@ -351,7 +347,6 @@ def _render_signals_table(signals: list[dict]) -> None:
             f'{rows_html}'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"[tab_alpha] signals table failed: {exc}")
@@ -423,7 +418,7 @@ def _render_engine_diagram() -> None:
             for l in col_labels
         ])
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:1fr 60px 1fr 60px 1fr;gap:0;align-items:start">'
             f'<div>'
@@ -442,7 +437,6 @@ def _render_engine_diagram() -> None:
             f'{out_html}</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"[tab_alpha] engine diagram failed: {exc}")
@@ -499,7 +493,7 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
             ])
 
             with col_obj:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
                     f'padding:16px 18px;height:100%">'
                     f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
@@ -515,7 +509,6 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
                     f'<span style="font-size:0.78rem;font-weight:800;color:{C_HIGH};font-family:JetBrains Mono,monospace">{combined:.2f}</span>'
                     f'</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         logger.warning(f"[tab_alpha] factor breakdown failed: {exc}")
@@ -665,7 +658,7 @@ def _render_live_monitor(signals: list[dict]) -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden">'
             f'<div style="background:rgba(0,0,0,0.2);padding:12px 16px;'
             f'border-bottom:1px solid rgba(232,230,225,0.05);'
@@ -677,7 +670,6 @@ def _render_live_monitor(signals: list[dict]) -> None:
             f'</div>'
             f'{rows_html}'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"[tab_alpha] live monitor failed: {exc}")

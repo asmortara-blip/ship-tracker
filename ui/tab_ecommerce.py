@@ -214,10 +214,9 @@ def _month_color(idx: float) -> str:
 
 def _render_kpi_dashboard(macro_data: dict | None) -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">'
             f'&#128200; E-Commerce Demand Dashboard</div>',
-            unsafe_allow_html=True,
         )
 
         kpis = [
@@ -231,17 +230,16 @@ def _render_kpi_dashboard(macro_data: dict | None) -> None:
         cols = st.columns(5)
         for col, kpi in zip(cols, kpis):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="{_card_style(kpi["color"] + "44")}">'
                     f'<div style="font-size:11px;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">{kpi["label"]}</div>'
                     f'<div style="font-size:28px;font-weight:800;color:{kpi["color"]};line-height:1.1;">{kpi["value"]}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">{kpi["sub"]}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT3};margin-top:4px;">{kpi["delta"]}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
 
-        st.markdown(
+        st.html(
             f'<div style="{_card_style(C_ACCENT + "44")}">'
             f'<div style="font-size:13px;font-weight:600;color:{C_ACCENT};margin-bottom:8px;">Market Context</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};line-height:1.7;">'
@@ -254,7 +252,6 @@ def _render_kpi_dashboard(macro_data: dict | None) -> None:
             f'last-mile infrastructure across North America and Europe.'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("KPI dashboard render failed")
@@ -263,10 +260,9 @@ def _render_kpi_dashboard(macro_data: dict | None) -> None:
 
 def _render_platform_table() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128666; E-Commerce Giants: Shipping Impact</div>',
-            unsafe_allow_html=True,
         )
 
         header_style = (
@@ -294,7 +290,7 @@ def _render_platform_table() -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="{_card_style()};padding:0;overflow:hidden;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
@@ -308,7 +304,6 @@ def _render_platform_table() -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Platform table render failed")
@@ -317,15 +312,14 @@ def _render_platform_table() -> None:
 
 def _render_de_minimis() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#127464;&#127475; Chinese E-Commerce Export Effect: De Minimis Risk</div>',
-            unsafe_allow_html=True,
         )
 
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style(C_ACCENT + "55")}">'
                 f'<div style="font-size:13px;font-weight:700;color:{C_ACCENT};margin-bottom:12px;">What is De Minimis?</div>'
                 f'<div style="font-size:13px;color:{C_TEXT2};line-height:1.7;margin-bottom:12px;">'
@@ -343,10 +337,9 @@ def _render_de_minimis() -> None:
                 f'</div>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style(C_LOW + "44")}">'
                 f'<div style="font-size:13px;font-weight:700;color:{C_LOW};margin-bottom:10px;">&#9888; Trump Admin Proposal: Eliminate De Minimis</div>'
                 f'<div style="font-size:13px;color:{C_TEXT2};line-height:1.7;">'
@@ -359,11 +352,10 @@ def _render_de_minimis() -> None:
                 f'<div style="font-size:13px;color:{C_MOD};font-weight:600;">Executive order signed; legal challenges ongoing</div>'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col2:
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style(C_BORDER)}">'
                 f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:12px;">Current Volume</div>'
                 f'<div style="margin-bottom:14px;">'
@@ -377,7 +369,6 @@ def _render_de_minimis() -> None:
                 f'{_pct_bar(60, C_MOD)}'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
             impact_rows = [
@@ -395,7 +386,7 @@ def _render_de_minimis() -> None:
                     f'<td style="padding:8px 10px;font-size:12px;color:{color};font-weight:600;border-top:1px solid {C_BORDER};text-align:right;">{val}</td>'
                     f'</tr>'
                 )
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style()};padding:0;overflow:hidden;">'
                 f'<div style="padding:10px 12px;background:{C_SURFACE};font-size:11px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">'
                 f'If De Minimis is Eliminated — Projected Impacts</div>'
@@ -403,7 +394,6 @@ def _render_de_minimis() -> None:
                 f'<tbody>{rows_html}</tbody>'
                 f'</table>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception:
         logger.exception("De minimis section render failed")
@@ -412,10 +402,9 @@ def _render_de_minimis() -> None:
 
 def _render_peak_calendar() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128197; Peak Season Calendar — E-Commerce Shipping Demand Index</div>',
-            unsafe_allow_html=True,
         )
 
         bars_html = ""
@@ -433,7 +422,7 @@ def _render_peak_calendar() -> None:
                 f'</div>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="{_card_style()}">'
             f'<div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:16px;">{bars_html}</div>'
             f'<div style="display:flex;gap:16px;font-size:11px;">'
@@ -443,7 +432,6 @@ def _render_peak_calendar() -> None:
             f'<span><span style="color:{C_ACCENT};">&#9632;</span> Normal (&lt;70)</span>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
         key_events = [
@@ -456,12 +444,11 @@ def _render_peak_calendar() -> None:
         cols = st.columns(len(key_events))
         for col, (title, desc, color) in zip(cols, key_events):
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="{_card_style(color + "44")};padding:12px;">'
                     f'<div style="font-size:12px;font-weight:700;color:{color};margin-bottom:6px;">{title}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};line-height:1.5;">{desc}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("Peak calendar render failed")
@@ -470,10 +457,9 @@ def _render_peak_calendar() -> None:
 
 def _render_b2c_b2b_split() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128230; B2C vs B2B Freight Split by Route</div>',
-            unsafe_allow_html=True,
         )
 
         header_style = f"background:{C_SURFACE};padding:10px 12px;font-size:11px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;"
@@ -499,7 +485,7 @@ def _render_b2c_b2b_split() -> None:
                 f'</tr>'
             )
 
-        st.markdown(
+        st.html(
             f'<div style="{_card_style()};padding:0;overflow:hidden;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
@@ -513,10 +499,9 @@ def _render_b2c_b2b_split() -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table>'
             f'</div>',
-            unsafe_allow_html=True,
         )
 
-        st.markdown(
+        st.html(
             f'<div style="{_card_style(C_ACCENT + "33")};margin-top:4px;">'
             f'<div style="font-size:12px;color:{C_TEXT2};line-height:1.6;">'
             f'<strong style="color:{C_ACCENT};">Key Structural Shift:</strong> The transpacific route has seen B2C share grow from '
@@ -526,7 +511,6 @@ def _render_b2c_b2b_split() -> None:
             f'over traditional full-container-load (FCL) B2B flows.'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("B2C/B2B split render failed")
@@ -535,10 +519,9 @@ def _render_b2c_b2b_split() -> None:
 
 def _render_returns() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128260; Last Mile & Returns — Reverse Logistics Analysis</div>',
-            unsafe_allow_html=True,
         )
 
         col1, col2 = st.columns([3, 2])
@@ -563,7 +546,7 @@ def _render_returns() -> None:
                     f'</tr>'
                 )
 
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style()};padding:0;overflow:hidden;">'
                 f'<table style="width:100%;border-collapse:collapse;">'
                 f'<thead><tr>'
@@ -575,7 +558,6 @@ def _render_returns() -> None:
                 f'<tbody>{rows_html}</tbody>'
                 f'</table>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
 
         with col2:
@@ -587,7 +569,7 @@ def _render_returns() -> None:
                 ("Returns going back to China", "<5% of volume", C_HIGH, "Most landfilled, donated, or liquidated locally"),
             ]
             for label, val, color, note in metrics:
-                st.markdown(
+                st.html(
                     f'<div style="{_card_style()};padding:12px 16px;">'
                     f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
                     f'<div style="font-size:12px;color:{C_TEXT2};flex:1;padding-right:8px;">{label}</div>'
@@ -595,7 +577,6 @@ def _render_returns() -> None:
                     f'</div>'
                     f'<div style="font-size:11px;color:{C_TEXT3};margin-top:4px;">{note}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("Returns section render failed")
@@ -604,10 +585,9 @@ def _render_returns() -> None:
 
 def _render_rate_impact_chart() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128200; Rate Impact of E-Commerce Growth</div>',
-            unsafe_allow_html=True,
         )
 
         col1, col2 = st.columns([2, 1])
@@ -650,12 +630,11 @@ def _render_rate_impact_chart() -> None:
                 ("LCL vs FCL Rebalancing", "LCL market growing 2x FCL growth rate. Parcel consolidation hubs in Yiwu, Guangzhou becoming critical nodes.", C_HIGH),
             ]
             for title, text, color in insights:
-                st.markdown(
+                st.html(
                     f'<div style="{_card_style(color + "33")};padding:12px;">'
                     f'<div style="font-size:12px;font-weight:700;color:{color};margin-bottom:5px;">{title}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};line-height:1.5;">{text}</div>'
                     f'</div>',
-                    unsafe_allow_html=True,
                 )
     except Exception:
         logger.exception("Rate impact chart render failed")
@@ -664,10 +643,9 @@ def _render_rate_impact_chart() -> None:
 
 def _render_leading_indicators() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:24px 0 16px;">'
             f'&#128270; Key Metrics to Watch — Quarterly Leading Indicators</div>',
-            unsafe_allow_html=True,
         )
 
         for i, ind in enumerate(_LEADING_INDICATORS, start=1):
@@ -675,7 +653,7 @@ def _render_leading_indicators() -> None:
                 "BULLISH": C_HIGH, "BEARISH": C_LOW, "NEUTRAL": C_MOD, "RISK": C_LOW, "AT RISK": C_LOW
             }.get(ind["signal"].upper(), C_TEXT3)
 
-            st.markdown(
+            st.html(
                 f'<div style="{_card_style(signal_color + "33")}">'
                 f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
                 f'<div style="display:flex;align-items:center;gap:10px;">'
@@ -699,7 +677,6 @@ def _render_leading_indicators() -> None:
                 f'<strong style="color:{C_TEXT3};">Why it matters:</strong> {ind["why"]}'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True,
             )
     except Exception:
         logger.exception("Leading indicators render failed")
@@ -711,7 +688,7 @@ def _render_leading_indicators() -> None:
 def render(macro_data=None, freight_data=None, insights=None) -> None:
     """Render the E-Commerce Driven Shipping Demand Intelligence tab."""
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
@@ -730,7 +707,6 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
             f'</div>'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Header render failed")
@@ -745,7 +721,7 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
     _render_leading_indicators()
 
     try:
-        st.markdown(
+        st.html(
             f'<div style="{_card_style(C_BORDER)};margin-top:8px;">'
             f'<div style="font-size:11px;color:{C_TEXT3};line-height:1.6;">'
             f'<strong style="color:{C_TEXT2};">Sources & Methodology:</strong> '
@@ -754,7 +730,6 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
             f'Rate indices normalized to 2019=100 baseline. All figures approximate; verify before trading decisions.'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Footer render failed")

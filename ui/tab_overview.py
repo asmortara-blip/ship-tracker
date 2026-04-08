@@ -213,28 +213,28 @@ def _render_kpi_strip(
         with cols[0]:
             st.html(_kpi("Baltic Dry Index",
                 _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847")),
-                unsafe_allow_html=True)
+                )
         with cols[1]:
             st.html(_kpi("Container Index",
                 _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204")),
-                unsafe_allow_html=True)
+                )
         with cols[2]:
             demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
             st.html(_kpi("Avg Port Demand", demand_str,
                 f"{len(has_data)} ports", C_HIGH if avg_demand >= 0.6 else C_TEXT3),
-                unsafe_allow_html=True)
+                )
         with cols[3]:
             alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
             st.html(_kpi("Active Alerts", str(n_alerts), "", alert_color),
-                unsafe_allow_html=True)
+                )
         with cols[4]:
             st.html(_kpi("High Conviction", str(hi_conv),
                 f"of {len(insights)}", C_HIGH if hi_conv > 2 else C_TEXT3),
-                unsafe_allow_html=True)
+                )
         with cols[5]:
             st.html(_kpi("Strong Routes", str(strong_rts),
                 f"of {len(route_results)}", C_HIGH if strong_rts > 2 else C_TEXT3),
-                unsafe_allow_html=True)
+                )
 
     except Exception as exc:
         logger.warning(f"KPI strip render failed: {exc}")

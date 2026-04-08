@@ -100,11 +100,10 @@ def _card_css() -> str:
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f"<p style='color:{C_TEXT2};font-size:13px;margin:4px 0 0 0;'>{subtitle}</p>" if subtitle else ""
-    st.markdown(
+    st.html(
         f"<div style='border-left:3px solid {C_ACCENT};padding-left:14px;margin:28px 0 16px 0;'>"
         f"<h3 style='color:{C_TEXT};font-size:18px;font-weight:700;margin:0;'>{title}</h3>"
         f"{sub_html}</div>",
-        unsafe_allow_html=True,
     )
 
 def _kpi_card(label: str, value: str, delta: str = "", color: str = C_TEXT, icon: str = "") -> str:
@@ -147,7 +146,7 @@ def _render_hero_kpis() -> None:
         ]
         for col, label, value, delta, color, icon in kpis:
             with col:
-                st.markdown(_kpi_card(label, value, delta, color, icon), unsafe_allow_html=True)
+                st.html(_kpi_card(label, value, delta, color, icon))
     except Exception:
         logger.exception("Hero KPIs render error")
         st.error("Could not render sustainability dashboard KPIs.")
@@ -162,11 +161,10 @@ def _render_cii_tracker() -> None:
         header_cols = st.columns([2, 1, 1, 1, 1, 1, 3])
         headers = ["CARRIER", "CII RATING", "EEOI", "ECO SHIPS %", "LNG DUAL-FUEL %", "ON TRACK 2030?", "KEY ACTIONS"]
         for col, h in zip(header_cols, headers):
-            col.markdown(
+            col.html(
                 f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                unsafe_allow_html=True,
+                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
             )
         for row in _CARRIERS:
             cii_color = _CII_COLORS.get(row["cii"], C_TEXT2)
@@ -175,40 +173,33 @@ def _render_cii_tracker() -> None:
             eeoi_color  = C_HIGH if row["eeoi"] < 9.5 else (C_MOD if row["eeoi"] < 11.5 else C_LOW)
             eco_color   = C_HIGH if row["eco_pct"] >= 28 else (C_MOD if row["eco_pct"] >= 18 else C_LOW)
             r1, r2, r3, r4, r5, r6, r7 = st.columns([2, 1, 1, 1, 1, 1, 3])
-            r1.markdown(
+            r1.html(
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;"
-                f"padding:6px 0;'>{row['carrier']}</div>",
-                unsafe_allow_html=True,
+                f"padding:6px 0;'>{row['carrier']}</div>"
             )
-            r2.markdown(
+            r2.html(
                 f"<div style='padding:6px 0;'>"
                 f"<span style='background:{cii_color}33;color:{cii_color};border:1px solid {cii_color}66;"
                 f"border-radius:4px;padding:2px 10px;font-size:13px;font-weight:800;'>"
-                f"{row['cii']}</span></div>",
-                unsafe_allow_html=True,
+                f"{row['cii']}</span></div>"
             )
-            r3.markdown(
+            r3.html(
                 f"<div style='color:{eeoi_color};font-size:13px;font-weight:600;padding:6px 0;'>"
-                f"{row['eeoi']}</div>",
-                unsafe_allow_html=True,
+                f"{row['eeoi']}</div>"
             )
-            r4.markdown(
+            r4.html(
                 f"<div style='color:{eco_color};font-size:13px;font-weight:600;padding:6px 0;'>"
-                f"{row['eco_pct']}%</div>",
-                unsafe_allow_html=True,
+                f"{row['eco_pct']}%</div>"
             )
-            r5.markdown(
-                f"<div style='color:{C_TEXT2};font-size:13px;padding:6px 0;'>{row['lng_pct']}%</div>",
-                unsafe_allow_html=True,
+            r5.html(
+                f"<div style='color:{C_TEXT2};font-size:13px;padding:6px 0;'>{row['lng_pct']}%</div>"
             )
-            r6.markdown(
+            r6.html(
                 f"<div style='color:{track_color};font-size:12px;font-weight:700;padding:6px 0;'>"
-                f"{track_text}</div>",
-                unsafe_allow_html=True,
+                f"{track_text}</div>"
             )
-            r7.markdown(
-                f"<div style='color:{C_TEXT2};font-size:12px;padding:6px 0;'>{row['actions']}</div>",
-                unsafe_allow_html=True,
+            r7.html(
+                f"<div style='color:{C_TEXT2};font-size:12px;padding:6px 0;'>{row['actions']}</div>"
             )
     except Exception:
         logger.exception("CII tracker render error")
@@ -223,47 +214,40 @@ def _render_route_carbon() -> None:
         )
         hcols = st.columns([2.2, 2, 1.2, 1.2, 1.2, 1.2])
         for col, h in zip(hcols, ["ROUTE", "VESSEL CLASS", "CO₂/TEU-KM (g)", "VS 2008", "VS IMO TARGET", "TREND"]):
-            col.markdown(
+            col.html(
                 f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                unsafe_allow_html=True,
+                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
             )
         for row in _ROUTES:
             vs08_color  = C_HIGH if row["vs_2008"] <= -30 else (C_MOD if row["vs_2008"] <= -20 else C_LOW)
             vsimo_color = C_HIGH if row["vs_imo"] <= 0 else (C_MOD if row["vs_imo"] <= 10 else C_LOW)
             trend_color = C_HIGH if row["trend"] == "Improving" else (C_MOD if row["trend"] == "Stable" else C_LOW)
             r1, r2, r3, r4, r5, r6 = st.columns([2.2, 2, 1.2, 1.2, 1.2, 1.2])
-            r1.markdown(
+            r1.html(
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['route']}</div>",
-                unsafe_allow_html=True,
+                f"{row['route']}</div>"
             )
-            r2.markdown(
-                f"<div style='color:{C_TEXT2};font-size:12px;padding:5px 0;'>{row['vessel']}</div>",
-                unsafe_allow_html=True,
+            r2.html(
+                f"<div style='color:{C_TEXT2};font-size:12px;padding:5px 0;'>{row['vessel']}</div>"
             )
-            r3.markdown(
+            r3.html(
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['co2_teu_km']:.4f}</div>",
-                unsafe_allow_html=True,
+                f"{row['co2_teu_km']:.4f}</div>"
             )
             sign08  = "+" if row["vs_2008"] > 0 else ""
             signimo = "+" if row["vs_imo"] > 0 else ""
-            r4.markdown(
+            r4.html(
                 f"<div style='color:{vs08_color};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{sign08}{row['vs_2008']}%</div>",
-                unsafe_allow_html=True,
+                f"{sign08}{row['vs_2008']}%</div>"
             )
-            r5.markdown(
+            r5.html(
                 f"<div style='color:{vsimo_color};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{signimo}{row['vs_imo']}%</div>",
-                unsafe_allow_html=True,
+                f"{signimo}{row['vs_imo']}%</div>"
             )
-            r6.markdown(
+            r6.html(
                 f"<div style='color:{trend_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['trend']}</div>",
-                unsafe_allow_html=True,
+                f"{row['trend']}</div>"
             )
     except Exception:
         logger.exception("Route carbon render error")
@@ -331,7 +315,7 @@ def _render_green_fuel() -> None:
                 logger.exception("Fuel bar chart error")
                 st.warning("Newbuild orderbook chart unavailable.")
 
-        st.markdown(
+        st.html(
             f"<div style='{_card_css()}'>"
             f"<div style='color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;'>Green Fuel Cost Premium vs VLSFO (per TEU)</div>"
             f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;'>"
@@ -352,42 +336,36 @@ def _render_green_fuel() -> None:
             f"<div style='color:{C_LOW};font-size:20px;font-weight:800;'>+$110–180</div>"
             f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
             f"</div></div>",
-            unsafe_allow_html=True,
         )
 
-        st.markdown(
+        st.html(
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
             f"Port Green Fuel Infrastructure Readiness</div>",
-            unsafe_allow_html=True,
         )
         hcols = st.columns([1.8, 1, 1.4, 1.2, 1.4])
         for col, h in zip(hcols, ["PORT", "LNG STATIONS", "METHANOL TERMINALS", "AMMONIA READY", "GREEN SHORE POWER"]):
-            col.markdown(
+            col.html(
                 f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                unsafe_allow_html=True,
+                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
             )
         for row in _PORT_INFRA:
             lng_color = C_HIGH if row["lng_stations"] >= 7 else (C_MOD if row["lng_stations"] >= 4 else C_LOW)
             r1, r2, r3, r4, r5 = st.columns([1.8, 1, 1.4, 1.2, 1.4])
-            r1.markdown(
+            r1.html(
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['port']}</div>",
-                unsafe_allow_html=True,
+                f"{row['port']}</div>"
             )
-            r2.markdown(
+            r2.html(
                 f"<div style='color:{lng_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"{row['lng_stations']}</div>",
-                unsafe_allow_html=True,
+                f"{row['lng_stations']}</div>"
             )
-            r3.markdown(
+            r3.html(
                 f"<div style='color:{C_TEXT2};font-size:13px;padding:5px 0;'>"
-                f"{row['methanol_terminals']}</div>",
-                unsafe_allow_html=True,
+                f"{row['methanol_terminals']}</div>"
             )
-            r4.markdown(f"<div style='padding:5px 0;'>{_yn(row['ammonia_ready'])}</div>", unsafe_allow_html=True)
-            r5.markdown(f"<div style='padding:5px 0;'>{_yn(row['green_shore_power'])}</div>", unsafe_allow_html=True)
+            r4.html(f"<div style='padding:5px 0;'>{_yn(row['ammonia_ready'])}</div>")
+            r5.html(f"<div style='padding:5px 0;'>{_yn(row['green_shore_power'])}</div>")
     except Exception:
         logger.exception("Green fuel section render error")
         st.error("Could not render green fuel transition section.")
@@ -442,11 +420,10 @@ def _render_eu_ets() -> None:
                 st.warning("EU ETS price chart unavailable.")
 
         with col_calc:
-            st.markdown(
+            st.html(
                 f"<div style='{_card_css()}'>"
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>"
                 f"ETS Cost Estimator</div>",
-                unsafe_allow_html=True,
             )
             distance_nm  = st.number_input("Route distance (nm)", min_value=100, max_value=25000, value=11200, step=100)
             vessel_teu   = st.number_input("Vessel capacity (TEU)", min_value=500, max_value=24000, value=15000, step=500)
@@ -460,7 +437,7 @@ def _render_eu_ets() -> None:
                 ets_cost_eur   = ets_eligible * carbon_price
                 teu_carried    = vessel_teu * (load_factor / 100)
                 cost_per_teu   = ets_cost_eur / teu_carried if teu_carried else 0
-                st.markdown(
+                st.html(
                     f"<div style='margin-top:10px;'>"
                     f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
                     f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
@@ -476,49 +453,42 @@ def _render_eu_ets() -> None:
                     f"<div style='color:{C_TEXT3};font-size:10px;'>Cost per TEU</div>"
                     f"<div style='color:{C_ACCENT};font-size:16px;font-weight:700;'>€{cost_per_teu:.1f}</div></div>"
                     f"</div></div>",
-                    unsafe_allow_html=True,
                 )
             except Exception:
                 logger.exception("ETS calculator error")
                 st.warning("Calculation error.")
 
-        st.markdown(
+        st.html(
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
             f"Carrier EU ETS Exposure Ranking</div>",
-            unsafe_allow_html=True,
         )
         hcols = st.columns([2, 1.2, 1.4, 2])
         for col, h in zip(hcols, ["CARRIER", "EU REVENUE %", "CARBON INTENSITY", "EST. ANNUAL ETS COST"]):
-            col.markdown(
+            col.html(
                 f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                unsafe_allow_html=True,
+                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
             )
         sorted_ets = sorted(_EU_EXPOSURE, key=lambda r: r["est_ets_cost_mUSD"], reverse=True)
         for row in sorted_ets:
             rev_color  = C_LOW if row["eu_rev_pct"] >= 40 else (C_MOD if row["eu_rev_pct"] >= 28 else C_HIGH)
             cost_color = C_LOW if row["est_ets_cost_mUSD"] >= 400 else (C_MOD if row["est_ets_cost_mUSD"] >= 200 else C_HIGH)
             r1, r2, r3, r4 = st.columns([2, 1.2, 1.4, 2])
-            r1.markdown(
+            r1.html(
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['carrier']}</div>",
-                unsafe_allow_html=True,
+                f"{row['carrier']}</div>"
             )
-            r2.markdown(
+            r2.html(
                 f"<div style='color:{rev_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"{row['eu_rev_pct']}%</div>",
-                unsafe_allow_html=True,
+                f"{row['eu_rev_pct']}%</div>"
             )
-            r3.markdown(
+            r3.html(
                 f"<div style='color:{C_TEXT2};font-size:13px;padding:5px 0;'>"
-                f"{row['carbon_int']} gCO₂/t-nm</div>",
-                unsafe_allow_html=True,
+                f"{row['carbon_int']} gCO₂/t-nm</div>"
             )
-            r4.markdown(
+            r4.html(
                 f"<div style='color:{cost_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"${row['est_ets_cost_mUSD']}M USD equiv.</div>",
-                unsafe_allow_html=True,
+                f"${row['est_ets_cost_mUSD']}M USD equiv.</div>"
             )
     except Exception:
         logger.exception("EU ETS section render error")
@@ -533,53 +503,45 @@ def _render_esg_scores() -> None:
         )
         hcols = st.columns([2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1])
         for col, h in zip(hcols, ["COMPANY", "OVERALL", "ENV", "SOCIAL", "GOV", "CDP", "DJSI", "CARBON DISCLOSURE"]):
-            col.markdown(
+            col.html(
                 f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                unsafe_allow_html=True,
+                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
             )
         for row in sorted(_ESG_SCORES, key=lambda r: r["overall"], reverse=True):
             def score_color(s: int) -> str:
                 return C_HIGH if s >= 70 else (C_MOD if s >= 55 else C_LOW)
             r1, r2, r3, r4, r5, r6, r7, r8 = st.columns([2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1])
-            r1.markdown(
+            r1.html(
                 f"<div style='color:{C_TEXT};font-size:12px;font-weight:600;padding:5px 0;'>"
-                f"{row['company']}</div>",
-                unsafe_allow_html=True,
+                f"{row['company']}</div>"
             )
-            r2.markdown(
+            r2.html(
                 f"<div style='color:{score_color(row['overall'])};font-size:13px;"
-                f"font-weight:800;padding:5px 0;'>{row['overall']}</div>",
-                unsafe_allow_html=True,
+                f"font-weight:800;padding:5px 0;'>{row['overall']}</div>"
             )
-            r3.markdown(
+            r3.html(
                 f"<div style='color:{score_color(row['env'])};font-size:12px;padding:5px 0;'>"
-                f"{row['env']}</div>",
-                unsafe_allow_html=True,
+                f"{row['env']}</div>"
             )
-            r4.markdown(
+            r4.html(
                 f"<div style='color:{score_color(row['social'])};font-size:12px;padding:5px 0;'>"
-                f"{row['social']}</div>",
-                unsafe_allow_html=True,
+                f"{row['social']}</div>"
             )
-            r5.markdown(
+            r5.html(
                 f"<div style='color:{score_color(row['gov'])};font-size:12px;padding:5px 0;'>"
-                f"{row['gov']}</div>",
-                unsafe_allow_html=True,
+                f"{row['gov']}</div>"
             )
             cdp_color = C_HIGH if row["cdp"].startswith("A") else (C_MOD if row["cdp"].startswith("B") else C_LOW)
-            r6.markdown(
+            r6.html(
                 f"<div style='color:{cdp_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['cdp']}</div>",
-                unsafe_allow_html=True,
+                f"{row['cdp']}</div>"
             )
-            r7.markdown(f"<div style='padding:5px 0;'>{_yn(row['djsi'])}</div>", unsafe_allow_html=True)
+            r7.html(f"<div style='padding:5px 0;'>{_yn(row['djsi'])}</div>")
             cbds_color = C_HIGH if row["cbds"] >= 75 else (C_MOD if row["cbds"] >= 55 else C_LOW)
-            r8.markdown(
+            r8.html(
                 f"<div style='color:{cbds_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['cbds']}/100</div>",
-                unsafe_allow_html=True,
+                f"{row['cbds']}/100</div>"
             )
     except Exception:
         logger.exception("ESG scores render error")
@@ -598,41 +560,35 @@ def _render_speed_optimization() -> None:
         with col_tbl:
             hcols = st.columns([1, 1, 1.4, 1.2, 1])
             for col, h in zip(hcols, ["SPEED (kn)", "FUEL (t/day)", "OPEX ($/day)", "CAPACITY %", "CO₂ (t/day)"]):
-                col.markdown(
+                col.html(
                     f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
                     f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                    f"border-bottom:1px solid {C_BORDER};'>{h}</div>",
-                    unsafe_allow_html=True,
+                    f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
                 )
             base_fuel = _SPEED_TABLE[0]["fuel_tpd"]
             for row in _SPEED_TABLE:
                 pct_saving = (1 - row["fuel_tpd"] / base_fuel) * 100
                 spd_color  = C_HIGH if row["speed_kn"] <= 16 else (C_MOD if row["speed_kn"] <= 20 else C_LOW)
                 r1, r2, r3, r4, r5 = st.columns([1, 1, 1.4, 1.2, 1])
-                r1.markdown(
+                r1.html(
                     f"<div style='color:{spd_color};font-size:12px;font-weight:700;padding:4px 0;'>"
-                    f"{row['speed_kn']}</div>",
-                    unsafe_allow_html=True,
+                    f"{row['speed_kn']}</div>"
                 )
-                r2.markdown(
-                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['fuel_tpd']}</div>",
-                    unsafe_allow_html=True,
+                r2.html(
+                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['fuel_tpd']}</div>"
                 )
                 opex_color = C_HIGH if row["daily_opex_usd"] < 40000 else (C_MOD if row["daily_opex_usd"] < 70000 else C_LOW)
-                r3.markdown(
+                r3.html(
                     f"<div style='color:{opex_color};font-size:12px;font-weight:600;padding:4px 0;'>"
-                    f"${row['daily_opex_usd']:,}</div>",
-                    unsafe_allow_html=True,
+                    f"${row['daily_opex_usd']:,}</div>"
                 )
                 cap_color = C_HIGH if row["capacity_util_pct"] >= 90 else (C_MOD if row["capacity_util_pct"] >= 75 else C_LOW)
-                r4.markdown(
+                r4.html(
                     f"<div style='color:{cap_color};font-size:12px;padding:4px 0;'>"
-                    f"{row['capacity_util_pct']}%</div>",
-                    unsafe_allow_html=True,
+                    f"{row['capacity_util_pct']}%</div>"
                 )
-                r5.markdown(
-                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['co2_tpd']}</div>",
-                    unsafe_allow_html=True,
+                r5.html(
+                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['co2_tpd']}</div>"
                 )
 
         with col_chart:
@@ -679,7 +635,7 @@ def _render_speed_optimization() -> None:
                 logger.exception("Speed chart error")
                 st.warning("Speed optimization chart unavailable.")
 
-        st.markdown(
+        st.html(
             f"<div style='{_card_css()}'>"
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>Key Slow-Steaming Insights</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:12px;'>"
@@ -693,7 +649,6 @@ def _render_speed_optimization() -> None:
             f"<div style='color:{C_ACCENT};font-size:16px;font-weight:800;'>16–18 kn</div>"
             f"<div style='color:{C_TEXT2};font-size:12px;'>Optimal slow-steam band balancing cost and capacity</div></div>"
             f"</div></div>",
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Speed optimization render error")
@@ -705,7 +660,7 @@ def _render_speed_optimization() -> None:
 def render(port_results=None, insights=None) -> None:
     """Render the full Sustainability & ESG intelligence tab."""
     try:
-        st.markdown(
+        st.html(
             f"<div style='background:linear-gradient(135deg,{C_CARD} 0%,{C_BG} 100%);"
             f"border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:24px;'>"
             f"<h2 style='color:{C_TEXT};font-size:22px;font-weight:800;margin:0 0 6px 0;'>"
@@ -713,7 +668,6 @@ def render(port_results=None, insights=None) -> None:
             f"<p style='color:{C_TEXT2};font-size:13px;margin:0;'>"
             f"IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization"
             f"</p></div>",
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Tab header render error")

@@ -133,7 +133,7 @@ def render(stock_data, insights):
         return
 
     # ── 1. Hero header ─────────────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,{C_CARD} 100%);'
         f'border:1px solid {C_BORDER};border-radius:6px;padding:28px 32px;margin-bottom:24px;">'
         f'<div style="display:flex;align-items:center;gap:14px;margin-bottom:6px;">'
@@ -145,7 +145,6 @@ def render(stock_data, insights):
         f'<p style="margin:0;color:{C_TEXT2};font-size:1rem;letter-spacing:0.03em;">'
         f'Derivatives Flow &amp; Volatility Intelligence &nbsp;·&nbsp; '
         f'Shipping Equity Options &nbsp;·&nbsp; Mock Data</p></div>',
-        unsafe_allow_html=True,
     )
 
     # ── 2. Filter controls ─────────────────────────────────────────────────────
@@ -181,7 +180,7 @@ def render(stock_data, insights):
             key="opt_moneyness",
         )
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:8px'></div>")
 
     # ── Load data ──────────────────────────────────────────────────────────────
     try:
@@ -218,12 +217,11 @@ def render(stock_data, insights):
         return
 
     # ── 3. Unusual Activity ────────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:20px 0 12px;">'
         f'<span style="font-size:1.3rem;">⚡</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">Unusual Activity</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">Top flow by volume / OI ratio</span></div>',
-        unsafe_allow_html=True,
     )
 
     try:
@@ -239,7 +237,7 @@ def render(stock_data, insights):
             cp_color = C_HIGH if opt.call_put == "C" else C_LOW
             iv_str   = _iv_pct(opt.iv)
             with ua_cols[i]:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                     f'border-top:3px solid {cp_color};border-radius:6px;padding:14px 16px;">'
                     f'<div style="display:flex;justify-content:space-between;'
@@ -259,21 +257,19 @@ def render(stock_data, insights):
                     f'<div><div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;">IV</div>'
                     f'<div style="font-weight:700;color:{C_ACCENT};font-size:0.9rem;">{iv_str}</div></div>'
                     f'</div></div>',
-                    unsafe_allow_html=True,
                 )
     else:
         st.info("No unusual activity detected with current filters.")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:20px'></div>")
 
     # ── 4. Options Chain Table ─────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:0 0 12px;">'
         f'<span style="font-size:1.3rem;">📋</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">Options Chain</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">'
         f'{len(all_options)} contracts · scroll to explore</span></div>',
-        unsafe_allow_html=True,
     )
 
     try:
@@ -306,16 +302,15 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"Options table error: {e}")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:20px'></div>")
 
     # ── 5. IV Surface Heatmap ──────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:0 0 12px;">'
         f'<span style="font-size:1.3rem;">🌡️</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">IV Surface</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">'
         f'Implied volatility by strike and expiry</span></div>',
-        unsafe_allow_html=True,
     )
 
     surf_ticker = st.selectbox(
@@ -363,16 +358,15 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"IV surface error: {e}")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:20px'></div>")
 
     # ── 6. Max Pain Chart ──────────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:0 0 12px;">'
         f'<span style="font-size:1.3rem;">🎯</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">Max Pain Analysis</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">'
         f'Open interest by strike — calls vs puts</span></div>',
-        unsafe_allow_html=True,
     )
 
     pain_ticker = st.selectbox(
@@ -437,7 +431,7 @@ def render(stock_data, insights):
             spot      = ticker_opts[0].underlying_price
             diff_pct  = ((max_pain_strike - spot) / spot * 100) if spot else 0.0
             diff_color = C_HIGH if diff_pct >= 0 else C_LOW
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:6px;padding:14px 20px;display:flex;gap:40px;margin-top:8px;">'
                 f'<div><div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
@@ -450,23 +444,21 @@ def render(stock_data, insights):
                 f'margin-bottom:4px;">Pain vs Spot</div>'
                 f'<div style="font-size:1.5rem;font-weight:800;color:{diff_color};">'
                 f'{diff_pct:+.1f}%</div></div></div>',
-                unsafe_allow_html=True,
             )
         else:
             st.info(f"No options data for {pain_ticker} with current filters.")
     except Exception as e:
         st.error(f"Max pain error: {e}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 7. Put/Call Ratio ──────────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:0 0 12px;">'
         f'<span style="font-size:1.3rem;">⚖️</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">Put / Call Ratio</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">'
         f'Sentiment gauge and historical trend</span></div>',
-        unsafe_allow_html=True,
     )
 
     try:
@@ -521,13 +513,12 @@ def render(stock_data, insights):
             fig_gauge.update_layout(**dark_layout(), height=280)
             st.plotly_chart(fig_gauge, use_container_width=True)
 
-            st.markdown(
+            st.html(
                 f'<div style="text-align:center;margin-top:-12px;">'
                 f'<span style="font-size:1.1rem;font-weight:700;color:{gauge_color};">'
                 f'{sentiment_label}</span>'
                 f'<span style="color:{C_TEXT3};font-size:0.8rem;margin-left:8px;">'
                 f'OI ratio: {pcr_oi:.2f}</span></div>',
-                unsafe_allow_html=True,
             )
 
         with g2:
@@ -569,16 +560,15 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"P/C ratio error: {e}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:24px'></div>")
 
     # ── 8. Strategy Screener ───────────────────────────────────────────────────
-    st.markdown(
+    st.html(
         f'<div style="display:flex;align-items:center;gap:10px;margin:0 0 12px;">'
         f'<span style="font-size:1.3rem;">🧩</span>'
         f'<h2 style="margin:0;font-size:1.2rem;font-weight:700;color:{C_TEXT};">Strategy Screener</h2>'
         f'<span style="color:{C_TEXT3};font-size:0.85rem;">'
         f'Covered calls · Protective puts · Straddles</span></div>',
-        unsafe_allow_html=True,
     )
 
     try:
@@ -591,7 +581,7 @@ def render(stock_data, insights):
             for i, idea in enumerate(ideas):
                 c = idea["color"]
                 with cols[i % 3]:
-                    st.markdown(
+                    st.html(
                         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
                         f'border-left:4px solid {c};border-radius:6px;'
                         f'padding:14px 16px;margin-bottom:12px;">'
@@ -610,9 +600,8 @@ def render(stock_data, insights):
                         f'<span style="font-size:0.72rem;color:{c};font-weight:700;">'
                         f'IV {idea["iv_pct"]:.0f}%</span></div>'
                         f'</div>',
-                        unsafe_allow_html=True,
                     )
     except Exception as e:
         st.error(f"Strategy screener error: {e}")
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.html("<div style='height:16px'></div>")

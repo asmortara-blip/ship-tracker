@@ -124,7 +124,7 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
         if delta else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
@@ -132,7 +132,6 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="font-family:{_FONT_MONO};font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
         f'{delta_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -141,12 +140,11 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<div style="font-family:{_FONT_BODY};font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
         if subtitle else ""
     )
-    st.markdown(
+    st.html(
         f'<div style="margin:28px 0 12px;border-bottom:2px solid {C_TEXT};padding-bottom:6px;">'
         f'<div style="font-family:{_FONT_HEADLINE};font-size:1.05rem;font-weight:700;color:{C_TEXT};">{title}</div>'
         f'{sub}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -184,14 +182,13 @@ def _yoy_html(pct: float) -> str:
 # ---------------------------------------------------------------------------
 def _render_hero() -> None:
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};'
             f'border:1px solid {C_BORDER};border-radius:3px;padding:24px 28px;margin-bottom:20px;">'
             f'<div style="font-family:{_FONT_HEADLINE};font-size:1.4rem;font-weight:700;color:{C_TEXT};">Port Demand Forecasting</div>'
             f'<div style="font-family:{_FONT_BODY};font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'15 major ports · 3-month and 12-month forecasts · Demand shock scenarios</div>'
             f'</div>',
-            unsafe_allow_html=True,
         )
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -224,7 +221,7 @@ def _render_forecast_table() -> None:
             f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Key Driver</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (port, region, curr, f3, f12, util, cap, yoy, driver) in enumerate(_PORTS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -242,7 +239,7 @@ def _render_forecast_table() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        st.html(rows_html)
     except Exception:
         logger.exception("Forecast table render failed")
         st.error("Port forecast table unavailable.")
@@ -262,7 +259,7 @@ def _render_demand_drivers() -> None:
             f'<span style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Port Elast.</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (region, gdp_e, trade_e, port_e) in enumerate(_ELASTICITIES):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -276,12 +273,11 @@ def _render_demand_drivers() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
-        st.markdown(
+        st.html(rows_html)
+        st.html(
             f'<div style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_TEXT3};margin-top:6px;padding:0 2px;">'
             f'Elasticity = % change in output per 1% change in input. '
             f'E.g. port elasticity of 1.8x means a 1% GDP rise yields +1.8% TEU throughput growth.</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Demand drivers render failed")
@@ -413,11 +409,10 @@ def _render_shock_scenarios() -> None:
             height=320,
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.markdown(
+        st.html(
             f'<div style="font-family:{_FONT_BODY};font-size:0.78rem;color:{C_TEXT3};padding:0 2px;margin-top:2px;">'
             f'Scenario: <span style="color:{C_TEXT2};">{scenario}</span> — '
             f'estimated throughput impact on affected ports. Indirect effects not modelled.</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Shock scenarios render failed")
@@ -441,7 +436,7 @@ def _render_capacity_headroom() -> None:
             f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Overflow Risk</span>'
             f'</div>'
         )
-        st.markdown(header_html, unsafe_allow_html=True)
+        st.html(header_html)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (port, region, curr, f3, f12, util, cap, yoy, driver) in enumerate(_PORTS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -461,15 +456,14 @@ def _render_capacity_headroom() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
-        st.markdown(
+        st.html(rows_html)
+        st.html(
             f'<div style="display:flex;gap:20px;margin-top:8px;padding:0 4px;">'
             f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_LOW};">CRITICAL: 90%+</span>'
             f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_MOD};">ELEVATED: 80%+</span>'
             f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_ACCENT};">MODERATE: 70%+</span>'
             f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_HIGH};">LOW: &lt;70%</span>'
             f'</div>',
-            unsafe_allow_html=True,
         )
     except Exception:
         logger.exception("Capacity headroom render failed")
