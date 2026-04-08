@@ -613,8 +613,7 @@ def _render_red_sea_monitor() -> None:
                     f'</tbody>'
                     f'</table>'
                     f'</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
             except Exception as e:
                 logger.error(f"insurance tab render error: {e}")
                 st.error("Insurance data unavailable.")

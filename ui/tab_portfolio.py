@@ -428,7 +428,7 @@ def _render_holdings_table(df: pd.DataFrame) -> None:
             </table>
           </div>
         </div>
-        """, )
+        """, unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"holdings table error: {e}")
         st.error(f"Holdings table error: {e}")

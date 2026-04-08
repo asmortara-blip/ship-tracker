@@ -630,7 +630,7 @@ st.markdown(f"""
         </div>
     </div>
 </div>
-""", )
+""", unsafe_allow_html=True)
 
 
 # ── WSJ Market Ticker Tape ────────────────────────────────────────────────

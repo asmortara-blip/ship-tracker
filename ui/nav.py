@@ -349,8 +349,7 @@ def _inject_nav_css() -> None:
             display: none; /* WSJ uses top border instead */
         }
         </style>
-        """,
-    )
+        """, unsafe_allow_html=True)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

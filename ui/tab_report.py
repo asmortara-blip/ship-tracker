@@ -212,8 +212,7 @@ def _render_hero(last_generated: str | None) -> None:
             </div>
           </div>
         </div>
-        """,
-    )
+        """, unsafe_allow_html=True)
 
 
 def _render_config_panel(api_status: dict[str, bool]) -> dict:
