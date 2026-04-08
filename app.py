@@ -1007,8 +1007,8 @@ elif active_section == "carriers":
 
 # ── 5. Trade & Macro ─────────────────────────────────────────────────────
 elif active_section == "trade_macro":
-    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
-        "Macro", "Bellwethers", "Trade War", "Geopolitical",
+    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+        "Macro", "Bellwethers", "Trade Flows", "Trade War", "Geopolitical",
         "Chokepoints", "Trade Finance", "E-Commerce",
     ])
     with t0:
@@ -1025,29 +1025,36 @@ elif active_section == "trade_macro":
             st.error(f"Bellwethers error: {e}")
     with t2:
         try:
+            from ui.tab_trade_flows import render as _r
+            _r(trade_data=trade_data, route_results=route_results,
+               port_results=port_results, freight_data=freight_data, macro_data=macro_data)
+        except Exception as e:
+            st.error(f"Trade Flows error: {e}")
+    with t3:
+        try:
             from ui.tab_trade_war import render as _r
             _r(route_results, port_results, freight_data, macro_data, trade_data)
         except Exception as e:
             st.error(f"Trade War error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_geopolitical import render as _r
             _r(route_results, port_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Geopolitical error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_chokepoints import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Chokepoints error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_finance import render as _r
             _r(freight_data, macro_data, route_results, stock_data)
         except Exception as e:
             st.error(f"Trade Finance error: {e}")
-    with t6:
+    with t7:
         try:
             from ui.tab_ecommerce import render as _r
             _r(trade_data, freight_data, macro_data, route_results)
