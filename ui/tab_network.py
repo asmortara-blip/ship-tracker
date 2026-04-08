@@ -196,14 +196,13 @@ def _render_hero_stats() -> None:
         cols = st.columns(4)
         for col, (label, value, color, tip) in zip(cols, kpis):
             with col:
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
                     f'border-radius:6px;padding:18px 14px;text-align:center;">'
                     f'<div style="font-size:28px;font-weight:800;color:{color};">{value}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
                     f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"hero stats error: {exc}")
         st.info("Network stats unavailable.")
@@ -211,9 +210,8 @@ def _render_hero_stats() -> None:
 
 def _render_network_map() -> None:
     try:
-        st.html(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Global Network Map</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Global Network Map</div>', unsafe_allow_html=True)
 
         fig = go.Figure()
 
@@ -284,9 +282,8 @@ def _render_network_map() -> None:
 
 def _render_centrality() -> None:
     try:
-        st.html(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Centrality Analysis</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Centrality Analysis</div>', unsafe_allow_html=True)
 
         header = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
@@ -326,7 +323,7 @@ def _render_centrality() -> None:
                 f'</tr>'
             )
 
-        st.html(header + rows + "</tbody></table></div>")
+        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"centrality error: {exc}")
         st.info("Centrality data unavailable.")
@@ -334,9 +331,8 @@ def _render_centrality() -> None:
 
 def _render_hub_spoke() -> None:
     try:
-        st.html(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Hub-and-Spoke vs Direct Calls — Cost/Time Tradeoff</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Hub-and-Spoke vs Direct Calls — Cost/Time Tradeoff</div>', unsafe_allow_html=True)
 
         header = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
@@ -372,7 +368,7 @@ def _render_hub_spoke() -> None:
                 f'</tr>'
             )
 
-        st.html(header + rows + "</tbody></table></div>")
+        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"hub spoke error: {exc}")
         st.info("Hub-and-spoke data unavailable.")
@@ -380,9 +376,8 @@ def _render_hub_spoke() -> None:
 
 def _render_carrier_services() -> None:
     try:
-        st.html(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Alliance Service Network</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Alliance Service Network</div>', unsafe_allow_html=True)
 
         alliance_colors = {
             "Gemini": C_ACCENT,
@@ -423,7 +418,7 @@ def _render_carrier_services() -> None:
             )
 
         html += "</tbody></table></div>"
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"carrier services error: {exc}")
         st.info("Carrier service data unavailable.")
@@ -431,12 +426,11 @@ def _render_carrier_services() -> None:
 
 def _render_stress_test() -> None:
     try:
-        st.html(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Stress Test — Port Closure Scenarios (30-Day Simulation)</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Stress Test — Port Closure Scenarios (30-Day Simulation)</div>', unsafe_allow_html=True)
 
         for port, scenario, affected, alternative, rate_impact, add_days, recovery in _STRESS_TESTS:
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:4px solid {C_LOW};'
                 f'border-radius:6px;padding:16px 20px;margin-bottom:12px;">'
                 f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
@@ -464,8 +458,7 @@ def _render_stress_test() -> None:
                 f'<div style="font-size:10px;color:{C_TEXT3};">Recovery: {recovery}</div>'
                 f'</div>'
                 f'</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"stress test error: {exc}")
         st.info("Stress test data unavailable.")
@@ -532,24 +525,22 @@ def _render_centrality_chart() -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Shipping Network Topology & Resilience tab."""
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Shipping Network Topology & Resilience</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
             f'Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"header error: {exc}")
 
     _render_hero_stats()
     _render_network_map()
 
-    st.html(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-    )
+    st.markdown(
+        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
 
     col_left, col_right = st.columns([3, 2])
     with col_left:
@@ -560,32 +551,28 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         except Exception as exc:
             logger.warning(f"centrality chart col error: {exc}")
 
-    st.html(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-    )
+    st.markdown(
+        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
 
     _render_hub_spoke()
 
-    st.html(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-    )
+    st.markdown(
+        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
 
     _render_carrier_services()
 
-    st.html(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>',
-    )
+    st.markdown(
+        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
 
     _render_stress_test()
 
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
             f'Network topology derived from vessel scheduling data, AIS tracking, and carrier service announcements. '
             f'Centrality scores calculated using betweenness centrality weighted by TEU throughput. '
             f'Stress test scenarios are modelled simulations — actual outcomes depend on market conditions and carrier response.'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"footer error: {exc}")

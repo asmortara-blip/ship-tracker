@@ -566,7 +566,7 @@ def render_section_breadcrumb(section: dict, sub_page: str = "") -> None:
         f"linear-gradient(90deg, {color} 0%, {_hex_to_rgba(color, 0.0)} 100%)"
     )
 
-    st.html(
+    st.markdown(
         f"""
         <div class="nav-breadcrumb">
             <span class="nav-bc-icon">{icon}</span>
@@ -576,4 +576,5 @@ def render_section_breadcrumb(section: dict, sub_page: str = "") -> None:
             <div class="nav-bc-bar" style="background:{gradient};"></div>
         </div>
         """,
+        unsafe_allow_html=True,
     )

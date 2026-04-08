@@ -92,7 +92,7 @@ def _render_dashboard(macro_data, freight_data, insights):
         skew_label = "Upside" if upside_skew >= downside_skew else "Downside"
         skew_pct   = upside_skew if upside_skew >= downside_skew else downside_skew
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px 20px;margin-bottom:20px;">'
             f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;font-family:Libre Baskerville, Georgia, serif;">SCENARIO INTELLIGENCE DASHBOARD</div>'
             f'<div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">'
@@ -123,8 +123,7 @@ def _render_dashboard(macro_data, freight_data, insights):
             f'<div style="font-size:13px;color:{C_TEXT2};">World Container Index</div>'
             f'</div>'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("dashboard hero error")
         st.error(f"Dashboard error: {exc}")
@@ -215,7 +214,7 @@ def _render_three_scenarios(macro_data, freight_data):
                     f'</div>'
                     for a in sc["assumptions"]
                 )
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {sc["color"]}33;border-top:3px solid {sc["color"]};border-radius:6px;padding:20px;height:100%;">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
                     f'<span style="font-size:11px;font-weight:700;letter-spacing:2px;color:{sc["color"]};">{sc["label"]}</span>'
@@ -246,8 +245,7 @@ def _render_three_scenarios(macro_data, freight_data):
                     f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:3px;font-family:Libre Franklin, sans-serif;">EQUITY SECTOR IMPACT</div>'
                     f'<div style="font-size:12px;font-weight:600;color:{sc["equity_color"]};">{sc["equity"]}</div>'
                     f'</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("three-scenario render error")
         st.error(f"Three-scenario error: {exc}")
@@ -303,7 +301,7 @@ def _render_comparison_table():
                 + f'</tr>'
             )
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;margin-bottom:4px;">'
             f'<div style="padding:16px 20px 0;font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;font-family:Libre Baskerville, Georgia, serif;">SCENARIO COMPARISON MATRIX</div>'
             f'<div style="overflow-x:auto;padding:12px 0 4px;">'
@@ -312,8 +310,7 @@ def _render_comparison_table():
             f'<tbody>{rows_html}</tbody>'
             f'</table>'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("comparison table error")
         st.error(f"Comparison table error: {exc}")
@@ -326,12 +323,11 @@ def _render_scenario_builder():
         if "custom_scenarios" not in st.session_state:
             st.session_state.custom_scenarios = []
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px 4px;margin-bottom:8px;">'
             f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;font-family:Libre Baskerville, Georgia, serif;">INTERACTIVE SCENARIO BUILDER</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:16px;font-family:Libre Franklin, sans-serif;">Adjust macro parameters to estimate freight rate and BDI impact.</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         with st.form("scenario_builder_form"):
             c1, c2 = st.columns(2)
@@ -367,7 +363,7 @@ def _render_scenario_builder():
                 }
                 st.session_state.custom_scenarios.append(new_sc)
 
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {impact_color}44;border-radius:6px;padding:20px 24px;margin-top:12px;">'
                     f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:14px;font-family:Libre Baskerville, Georgia, serif;">Results: {scenario_name}</div>'
                     f'<div style="display:flex;gap:24px;flex-wrap:wrap;">'
@@ -385,17 +381,15 @@ def _render_scenario_builder():
                     f'</div>'
                     f'</div>'
                     f'<div style="font-size:11px;color:{C_TEXT3};margin-top:12px;">Scenario saved. {len(st.session_state.custom_scenarios)} custom scenario(s) stored this session.</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
             except Exception as calc_exc:
                 logger.exception("scenario builder calculation error")
                 st.error(f"Calculation error: {calc_exc}")
 
         saved = st.session_state.get("custom_scenarios", [])
         if len(saved) > 1:
-            st.html(
-                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:16px 0 8px;font-family:Libre Baskerville, Georgia, serif;">SAVED CUSTOM SCENARIOS</div>',
-            )
+            st.markdown(
+                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:16px 0 8px;font-family:Libre Baskerville, Georgia, serif;">SAVED CUSTOM SCENARIOS</div>', unsafe_allow_html=True)
             rows = "".join(
                 f'<tr style="background:{C_CARD if i%2==0 else C_SURFACE};">'
                 f'<td style="padding:8px 12px;font-size:12px;color:{C_TEXT};">{s["name"]}</td>'
@@ -412,12 +406,11 @@ def _render_scenario_builder():
                 f'<th style="padding:8px 12px;font-size:10px;font-weight:700;letter-spacing:1.2px;color:{C_TEXT3};text-transform:uppercase;text-align:left;border-bottom:1px solid {C_BORDER};">{h}</th>'
                 for h in ["Name", "GDP", "Oil", "Fleet Δ", "Demand Δ", "Rate Impact", "BDI Impact"]
             )
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow-x:auto;">'
                 f'<table style="width:100%;border-collapse:collapse;">'
                 f'<thead><tr>{hdr}</tr></thead><tbody>{rows}</tbody>'
-                f'</table></div>',
-            )
+                f'</table></div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("scenario builder error")
         st.error(f"Scenario builder error: {exc}")
@@ -514,7 +507,7 @@ def _render_event_tracker():
                 f'</tr>'
             )
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px 0;">'
             f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;font-family:Libre Baskerville, Georgia, serif;">EVENT PROBABILITY TRACKER</div>'
@@ -526,8 +519,7 @@ def _render_event_tracker():
             f'<tbody>{rows_html}</tbody>'
             f'</table>'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("event tracker error")
         st.error(f"Event tracker error: {exc}")
@@ -663,7 +655,7 @@ def _render_monte_carlo(macro_data):
         lo_chg  = (final_5th / bdi_start - 1) * 100
         hi_chg  = (final_95th / bdi_start - 1) * 100
 
-        st.html(
+        st.markdown(
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;">'
             f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px;">'
             f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">90-DAY MEDIAN</div>'
@@ -685,8 +677,7 @@ def _render_monte_carlo(macro_data):
             f'<div style="font-size:22px;font-weight:700;color:{C_TEXT};">500</div>'
             f'<div style="font-size:12px;color:{C_TEXT2};">GBM, σ={sigma:.1%}/day</div>'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.exception("Monte Carlo fan chart error")
         st.error(f"Monte Carlo error: {exc}")
@@ -697,40 +688,37 @@ def render(macro_data=None, freight_data=None, insights=None):
     """Render the Scenario Analysis & Stress Testing tab."""
     logger.info("tab_scenarios.render() called")
     try:
-        st.html(
-            f'<style>div[data-testid="stVerticalBlock"]>div{{gap:0rem;}}</style>',
-        )
+        st.markdown(
+            f'<style>div[data-testid="stVerticalBlock"]>div{{gap:0rem;}}</style>', unsafe_allow_html=True)
 
         # ── Section 1: Dashboard Hero
         _render_dashboard(macro_data, freight_data, insights)
 
         # ── Section 2: Three-Scenario Comparison
-        st.html(
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin:20px 0 10px;font-family:Libre Baskerville, Georgia, serif;">BASE / BULL / BEAR SCENARIO COMPARISON</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin:20px 0 10px;font-family:Libre Baskerville, Georgia, serif;">BASE / BULL / BEAR SCENARIO COMPARISON</div>', unsafe_allow_html=True)
         _render_three_scenarios(macro_data, freight_data)
 
-        st.html("<div style='height:24px;'></div>")
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
         # ── Section 3: Comparison Table
         _render_comparison_table()
 
-        st.html("<div style='height:24px;'></div>")
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
         # ── Section 4: Scenario Builder
         _render_scenario_builder()
 
-        st.html("<div style='height:24px;'></div>")
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
         # ── Section 5: Event Probability Tracker
         _render_event_tracker()
 
-        st.html("<div style='height:24px;'></div>")
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
         # ── Section 6: Monte Carlo Fan Chart
-        st.html(
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">MONTE CARLO BDI SIMULATION</div>',
-        )
+        st.markdown(
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">MONTE CARLO BDI SIMULATION</div>', unsafe_allow_html=True)
         _render_monte_carlo(macro_data)
 
     except Exception as exc:

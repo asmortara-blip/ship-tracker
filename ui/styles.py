@@ -1217,12 +1217,12 @@ def section_header(title: str, subtitle: str = "") -> None:
         f'<div class="wsj-section-subtitle">{subtitle}</div>'
         if subtitle else ""
     )
-    st.html(f"""
+    st.markdown(f"""
     <div class="wsj-section-header">
         <div class="wsj-section-title">{title}</div>
         {sub_html}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def render_kpi_row(metrics: list[dict]) -> None:
@@ -1230,15 +1230,14 @@ def render_kpi_row(metrics: list[dict]) -> None:
     cols = st.columns(len(metrics))
     for col, m in zip(cols, metrics):
         with col:
-            st.html(
+            st.markdown(
                 kpi_card(
                     label=m["label"],
                     value=m["value"],
                     delta=m.get("delta", ""),
                     delta_color=m.get("delta_color", C_TEXT2),
                     accent_color=m.get("accent", C_ACCENT),
-                ),
-            )
+                ), unsafe_allow_html=True)
 
 
 def ticker_tape_html(items: list[dict]) -> str:
@@ -1304,7 +1303,7 @@ def nav_section_button(icon: str, label: str, active: bool = False, key: str = "
         <span class="nav-label">{label}</span>
     </div>
     """
-    st.html(btn_html)
+    st.markdown(btn_html, unsafe_allow_html=True)
     btn_key = key if key else f"nav_{label.lower().replace(' ', '_')}"
     return st.button(label, key=btn_key, use_container_width=True)
 
@@ -1335,7 +1334,7 @@ def page_header(
         if subtitle else ""
     )
     icon_html = f'<span style="margin-right:8px;">{icon}</span>' if icon else ""
-    st.html(f"""
+    st.markdown(f"""
     <div class="page-enter" style="margin-bottom:24px;">
         <div style="border-top:2px solid var(--text);padding-top:12px;">
             <div style="display:flex;align-items:baseline;flex-wrap:wrap;">
@@ -1346,7 +1345,7 @@ def page_header(
             {sub_html}
         </div>
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
@@ -1369,14 +1368,14 @@ def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
                 f'<div style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
                 if sub else ""
             )
-            st.html(f"""
+            st.markdown(f"""
             <div class="kpi-card slide-in" style="border-top:2px solid {accent};">
                 <div class="kpi-label">{m.get("label","")}</div>
                 <div class="kpi-value">{m.get("value","")}</div>
                 {delta_html}
                 {sub_html}
             </div>
-            """)
+            """, unsafe_allow_html=True)
 
 
 def insight_card_html(
@@ -1460,36 +1459,36 @@ def status_badge(text: str, status: str = "info") -> str:
 def wsj_section(title: str, subtitle: str = "") -> None:
     """Render a WSJ section header with heavy top rule."""
     sub = f'<div class="wsj-section-subtitle">{subtitle}</div>' if subtitle else ""
-    st.html(f"""
+    st.markdown(f"""
     <div class="wsj-section-header">
         <div class="wsj-section-title">{title}</div>
         {sub}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def wsj_headline(text: str, subhead: str = "", byline: str = "") -> None:
     """Render a WSJ article headline."""
     sub = f'<div class="wsj-subhead">{subhead}</div>' if subhead else ""
     by = f'<div class="wsj-byline">{byline}</div>' if byline else ""
-    st.html(f"""
+    st.markdown(f"""
     <div style="margin-bottom:14px;">
         <div class="wsj-headline">{text}</div>
         {sub}
         {by}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def wsj_pullquote(text: str, attribution: str = "") -> None:
     """Render a WSJ-style pull quote."""
     attr = f'<div class="wsj-pullquote-attr">-- {attribution}</div>' if attribution else ""
-    st.html(f"""
+    st.markdown(f"""
     <div class="wsj-pullquote">
         <div class="wsj-pullquote-text">{text}</div>
         {attr}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def wsj_stat_box(number: str, label: str, context: str = "", accent: str = C_ACCENT) -> str:
@@ -1514,12 +1513,12 @@ def wsj_news_list(items: list[str]) -> None:
             <span class="wsj-news-text">{item}</span>
         </div>
         """
-    st.html(f"""
+    st.markdown(f"""
     <div class="wsj-whats-news">
         <div class="wsj-whats-news-title">What's News</div>
         {items_html}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
 
 def wsj_market_table(headers: list[str], rows: list[list[str]]) -> None:
@@ -1529,9 +1528,9 @@ def wsj_market_table(headers: list[str], rows: list[list[str]]) -> None:
     for row in rows:
         cells = "".join(f"<td>{c}</td>" for c in row)
         tbody += f"<tr>{cells}</tr>"
-    st.html(f"""
+    st.markdown(f"""
     <table class="wsj-market-table">
         <thead><tr>{thead}</tr></thead>
         <tbody>{tbody}</tbody>
     </table>
-    """)
+    """, unsafe_allow_html=True)

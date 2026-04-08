@@ -451,13 +451,12 @@ def _hex_rgba(hex_color: str, alpha: float) -> str:
 
 
 def _divider(label: str) -> None:
-    st.html(
+    st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
         f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
         f'<span style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.14em;font-weight:700">{label}</span>'
         f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
-        f'</div>',
-    )
+        f'</div>', unsafe_allow_html=True)
 
 
 def _card_open(extra_style: str = "") -> str:
@@ -532,17 +531,16 @@ def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
 
 def _render_selector() -> tuple[str, str]:
     """Section 1 — route + commodity dropdowns."""
-    st.html(
+    st.markdown(
         f'<div style="{_card_open()[5:]}">'
         f'<div style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;'
-        f'letter-spacing:0.12em;font-weight:700;margin-bottom:14px">Deep Dive Selector</div>',
-    )
+        f'letter-spacing:0.12em;font-weight:700;margin-bottom:14px">Deep Dive Selector</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         route = st.selectbox("Route", list(ROUTES.keys()), key="dd_route")
     with c2:
         commodity = st.selectbox("Commodity", list(COMMODITIES.keys()), key="dd_commodity")
-    st.html("</div>")
+    st.markdown("</div>", unsafe_allow_html=True)
     return route, commodity
 
 
@@ -557,7 +555,7 @@ def _render_route_card(route_name: str) -> None:
         _divider("Route Analysis")
 
         # Header row
-        st.html(
+        st.markdown(
             f'{_card_open()}'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">'
             f'<div>'
@@ -575,8 +573,7 @@ def _render_route_card(route_name: str) -> None:
             f'{pct}th percentile (12-mo)</div>'
             f'</div>'
             f'</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         # Carrier table
         header = (
@@ -596,9 +593,8 @@ def _render_route_card(route_name: str) -> None:
                 f'{share}%</div>'
                 f'</div>'
             )
-        st.html(
-            f'{_card_open()}{header}{rows}</div>',
-        )
+        st.markdown(
+            f'{_card_open()}{header}{rows}</div>', unsafe_allow_html=True)
 
         # Capacity changes
         changes_html = "".join(
@@ -608,12 +604,11 @@ def _render_route_card(route_name: str) -> None:
             f'</div>'
             for c in rd["capacity_changes"]
         )
-        st.html(
+        st.markdown(
             f'{_card_open()}'
             f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Upcoming Capacity Changes</div>'
-            f'{changes_html}</div>',
-        )
+            f'{changes_html}</div>', unsafe_allow_html=True)
 
         # Rate history chart
         fig = go.Figure()
@@ -701,18 +696,17 @@ def _render_commodity_flow(commodity: str) -> None:
                 f'</div>'
                 for tf in cd["trade_flows"]
             )
-            st.html(
+            st.markdown(
                 f'{_card_open()}'
                 f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
                 f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Top 5 Trade Flows</div>'
-                f'{rows_html}</div>',
-            )
+                f'{rows_html}</div>', unsafe_allow_html=True)
         with c2:
             el = cd["elasticity"]
             el_color = C_HIGH if el < 0.5 else (C_MOD if el < 0.8 else C_LOW)
             corr = cd["price_corr"]
             corr_color = C_HIGH if corr > 0.7 else (C_MOD if corr > 0.4 else C_TEXT3)
-            st.html(
+            st.markdown(
                 f'{_card_open()}'
                 f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
                 f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Shipping Metrics</div>'
@@ -731,8 +725,7 @@ def _render_commodity_flow(commodity: str) -> None:
                 f'<div style="font-size:1.1rem;font-weight:800;color:{C_TEXT}">${cd["avg_price"]:,}</div>'
                 f'<div style="font-size:0.67rem;color:{C_TEXT3}">/MT or unit</div>'
                 f'</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
         # Seasonal bar chart (HTML)
         sea = cd["seasonality"]
@@ -749,13 +742,12 @@ def _render_commodity_flow(commodity: str) -> None:
             f'</div>'
             for i, v in enumerate(sea)
         )
-        st.html(
+        st.markdown(
             f'{_card_open()}'
             f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Seasonal Volume Index</div>'
             f'<div style="display:flex;gap:6px;align-items:flex-end">{bars_html}</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
     except Exception:
         logger.exception("_render_commodity_flow failed")
@@ -777,15 +769,14 @@ def _render_pressure_points(route_name: str, commodity: str) -> None:
             bg = _hex_rgba(color, 0.10)
             border = _hex_rgba(color, 0.30)
             with col:
-                st.html(
+                st.markdown(
                     f'<div style="background:{bg};border:1px solid {border};'
                     f'border-radius:3px;padding:14px 12px;text-align:center">'
                     f'<div style="font-family:{FONT_HEADLINE};font-size:0.62rem;color:{C_TEXT2};text-transform:uppercase;'
                     f'letter-spacing:0.1em;font-weight:700;margin-bottom:8px">{label}</div>'
                     f'<div style="font-family:{FONT_HEADLINE};font-size:1rem;font-weight:700;color:{color};margin-bottom:6px">{rating}</div>'
                     f'<div style="font-family:{FONT_BODY};font-size:0.68rem;color:{C_TEXT2}">{metric}</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_pressure_points failed")
         st.warning("Pressure points unavailable.")
@@ -826,13 +817,12 @@ def _render_shipper_intel(route_name: str, commodity: str) -> None:
                 f'<div style="font-size:0.68rem;color:{C_TEXT3}">{b["strategy"]}</div>'
                 f'</div>'
             )
-        st.html(
+        st.markdown(
             f'{_card_open()}'
             f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">'
             f'Top 10 Beneficial Cargo Owners — {commodity} on {route_name}</div>'
-            f'{header_html}{rows_html}</div>',
-        )
+            f'{header_html}{rows_html}</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_shipper_intel failed")
         st.warning("Shipper intelligence unavailable.")
@@ -919,7 +909,7 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
             f'{_case_block("Key Watchpoints", C_MOD, watchpoints)}'
             f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception:
         logger.exception("_render_analyst_commentary failed")
@@ -976,12 +966,11 @@ def _render_similar_routes(route_name: str) -> None:
                 f'</div>'
             )
 
-        st.html(
+        st.markdown(
             f'{_card_open()}'
             f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Route Benchmarking</div>'
-            f'{header_html}{rows_html}</div>',
-        )
+            f'{header_html}{rows_html}</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_similar_routes failed")
         st.warning("Similar routes comparison unavailable.")
@@ -997,7 +986,7 @@ def render(
 ) -> None:
     """Render the Deep Dive research analyst tab."""
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};'
             f'border:1px solid {C_BORDER};border-bottom:2px solid {C_ACCENT};border-radius:3px;'
             f'padding:20px 26px;margin-bottom:24px">'
@@ -1006,8 +995,7 @@ def render(
             f'<div style="font-family:{FONT_HEADLINE};font-size:1.15rem;font-weight:700;color:{C_TEXT}">Deep Dive &mdash; Research Analyst View</div>'
             f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT3};margin-top:3px">'
             f'Select a route and commodity to generate comprehensive trade lane intelligence.</div>'
-            f'</div></div></div>',
-        )
+            f'</div></div></div>', unsafe_allow_html=True)
 
         # Section 1: selector
         route, commodity = _render_selector()

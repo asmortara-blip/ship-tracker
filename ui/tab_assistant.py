@@ -692,7 +692,7 @@ def render(
 ):
     """Render the AI Shipping Intelligence Assistant tab."""
 
-    st.html(_CHAT_CSS)
+    st.markdown(_CHAT_CSS, unsafe_allow_html=True)
 
     # ── Session state ────────────────────────────────────────────────────────
     if "asst_messages" not in st.session_state:
@@ -705,13 +705,12 @@ def render(
 
     with col_chat:
         # Hero
-        st.html(_hero_html())
+        st.markdown(_hero_html(), unsafe_allow_html=True)
 
         # Quick question chips (display only — buttons below handle interaction)
-        st.html(
+        st.markdown(
             '<div style="font-size:10px;font-weight:700;letter-spacing:2px;color:#6b6760;'
-            'text-transform:uppercase;margin-bottom:8px">&#9632; QUICK QUESTIONS</div>',
-        )
+            'text-transform:uppercase;margin-bottom:8px">&#9632; QUICK QUESTIONS</div>', unsafe_allow_html=True)
 
         chip_cols = st.columns(4)
         for i, q in enumerate(QUICK_QUESTIONS):
@@ -720,26 +719,24 @@ def render(
                              help="Click to ask this question"):
                     st.session_state.asst_input_val = q
 
-        st.html("<div style='height:10px'></div>")
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
         # ── Chat window ──────────────────────────────────────────────────────
         messages = st.session_state.asst_messages
 
         if not messages:
-            st.html(_empty_state_html())
+            st.markdown(_empty_state_html(), unsafe_allow_html=True)
         else:
             # Render all messages
             for i, msg in enumerate(messages):
-                st.html(
-                    _message_html(msg["role"], msg["content"], msg["ts"]),
-                )
+                st.markdown(
+                    _message_html(msg["role"], msg["content"], msg["ts"]), unsafe_allow_html=True)
                 # After last assistant message, show follow-ups
                 if (msg["role"] == "assistant"
                         and i == len(messages) - 1
                         and msg.get("followups")):
-                    st.html(
-                        _followup_html(msg["followups"]),
-                    )
+                    st.markdown(
+                        _followup_html(msg["followups"]), unsafe_allow_html=True)
                     fu_cols = st.columns(3)
                     for j, fu in enumerate(msg["followups"]):
                         with fu_cols[j]:
@@ -748,7 +745,7 @@ def render(
                                          help="Click to ask this follow-up"):
                                 st.session_state.asst_input_val = fu
 
-        st.html("<div style='height:6px'></div>")
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
         # ── Input row ────────────────────────────────────────────────────────
         inp_col, btn_col = st.columns([5, 1])
@@ -829,13 +826,12 @@ def render(
 
     # ── Right sidebar ────────────────────────────────────────────────────────
     with col_sidebar:
-        st.html(
+        st.markdown(
             _context_panel_html(freight_data, macro_data, stock_data,
-                                port_results, route_results),
-        )
+                                port_results, route_results), unsafe_allow_html=True)
 
         # Tips panel
-        st.html(
+        st.markdown(
             '<div class="ctx-panel" style="margin-top:0">'
             '<div class="ctx-title">&#9632; HOW TO USE</div>'
             '<div style="font-size:12px;color:#9a968e;line-height:1.7">'
@@ -845,8 +841,7 @@ def render(
             '&#8226; Follow-up with context chips<br>'
             '&#8226; Export your chat history'
             '</div>'
-            '</div>',
-        )
+            '</div>', unsafe_allow_html=True)
 
         # Signal summary mini-panel
         longs = _long_signals(stock_data)
@@ -856,9 +851,8 @@ def render(
                 f'&#8679; {t}</div>'
                 for t in longs[:6]
             )
-            st.html(
+            st.markdown(
                 f'<div class="ctx-panel" style="margin-top:0">'
                 f'<div class="ctx-title">&#9632; ACTIVE LONG SIGNALS</div>'
                 f'{long_items}'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)

@@ -106,17 +106,17 @@ def render(macro_data=None, **kwargs) -> None:
             </div>
         </div>
     </div>
-    """, )
+    """, unsafe_allow_html=True)
 
     # ── 2. Indicator Breakdown ───────────────────────────────────────────────
     indicators = bell.get("indicators", {})
     if indicators:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:24px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Indicator Breakdown</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         # WSJ table
         hdr = "<tr>"
@@ -161,17 +161,17 @@ def render(macro_data=None, **kwargs) -> None:
             </tr>
             """
 
-        st.html(f"""
+        st.markdown(f"""
         <table style="width:100%;border-collapse:collapse">
             <thead>{hdr}</thead>
             <tbody>{tbody}</tbody>
         </table>
-        """)
+        """, unsafe_allow_html=True)
 
     # ── 3. Yield Curve Analysis ──────────────────────────────────────────────
     yc = compute_yield_curve_analysis(macro_data)
     if yc.get("curve_points"):
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Treasury Yield Curve</div>
@@ -179,7 +179,7 @@ def render(macro_data=None, **kwargs) -> None:
                         color:{C_TEXT3};margin-top:2px">
                 Curve shape: <span style="font-weight:700;color:{C_TEXT}">{yc['shape']}</span></div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         # Render yield curve chart
         try:
@@ -222,7 +222,7 @@ def render(macro_data=None, **kwargs) -> None:
             logger.warning(f"Yield curve chart failed: {exc}")
 
         # Implication box
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};border-bottom:1px solid {C_RULE};
                     padding:14px 0;margin:12px 0 20px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:0.95rem;
@@ -232,7 +232,7 @@ def render(macro_data=None, **kwargs) -> None:
                         color:{C_TEXT3};margin-top:6px;text-transform:uppercase;
                         letter-spacing:0.06em">-- Yield Curve Analysis</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         # Spread table
         if yc.get("spreads"):
@@ -240,7 +240,7 @@ def render(macro_data=None, **kwargs) -> None:
             for col, (spread_name, spread_val) in zip(cols, yc["spreads"].items()):
                 with col:
                     sv_color = C_LOW if spread_val < 0 else (C_MOD if spread_val < 0.5 else C_HIGH)
-                    st.html(f"""
+                    st.markdown(f"""
                     <div style="border:1px solid {C_RULE};border-top:2px solid {sv_color};
                                 border-radius:0 0 6px 6px;padding:12px 14px;background:{C_CARD};text-align:center">
                         <div style="font-family:JetBrains Mono,monospace;font-size:1.3rem;
@@ -249,12 +249,12 @@ def render(macro_data=None, **kwargs) -> None:
                                     font-weight:700;color:{C_TEXT3};text-transform:uppercase;
                                     letter-spacing:0.06em;margin-top:3px">{spread_name}</div>
                     </div>
-                    """)
+                    """, unsafe_allow_html=True)
 
     # ── 4. Earnings Calendar ─────────────────────────────────────────────────
     calendar = compute_earnings_calendar()
     if calendar:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Shipping Earnings Calendar</div>
@@ -262,7 +262,7 @@ def render(macro_data=None, **kwargs) -> None:
                         color:{C_TEXT3};margin-top:2px">
                 Next {min(len(calendar), 10)} upcoming earnings reports from tracked shipping companies</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         # WSJ-style table
         hdr = "<tr>"
@@ -302,9 +302,9 @@ def render(macro_data=None, **kwargs) -> None:
             </tr>
             """
 
-        st.html(f"""
+        st.markdown(f"""
         <table style="width:100%;border-collapse:collapse">
             <thead>{hdr}</thead>
             <tbody>{tbody}</tbody>
         </table>
-        """)
+        """, unsafe_allow_html=True)

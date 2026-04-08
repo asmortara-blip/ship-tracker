@@ -180,11 +180,10 @@ def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str
 
 def _section_header(title: str, sub: str = "") -> None:
     sub_html = f'<div style="font-size:13px;color:{C_TEXT2};margin-top:2px;">{sub}</div>' if sub else ""
-    st.html(
+    st.markdown(
         f'<div style="margin:28px 0 12px;border-left:3px solid {C_ACCENT};padding-left:12px;">'
         f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};">{title}</div>'
-        f'{sub_html}</div>',
-    )
+        f'{sub_html}</div>', unsafe_allow_html=True)
 
 
 def _delay_color(hrs: int) -> str:
@@ -321,7 +320,7 @@ def _render_voyage_tracker() -> None:
                 f"</tr>"
             )
 
-        st.html(table_html + rows_final + "</tbody></table></div>")
+        st.markdown(table_html + rows_final + "</tbody></table></div>", unsafe_allow_html=True)
     except Exception:
         logger.exception("Voyage tracker render failed")
         st.error("Voyage tracker unavailable.")
@@ -397,7 +396,7 @@ def _render_eta_calculator() -> None:
                     f'</div>'
                     f'</div>'
                 )
-                st.html(result_html)
+                st.markdown(result_html, unsafe_allow_html=True)
             except Exception:
                 logger.exception("ETA calculation inner error")
                 st.error("Calculation failed.")
@@ -616,7 +615,7 @@ def _render_weather_forecast() -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>'
         )
-        st.html(table_html)
+        st.markdown(table_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Weather forecast render failed")
         st.error("Weather forecast unavailable.")
@@ -679,7 +678,7 @@ def _render_port_queue() -> None:
                 f'<tbody>{rows_html}</tbody>'
                 f'</table></div>'
             )
-            st.html(table_html)
+            st.markdown(table_html, unsafe_allow_html=True)
 
         with col2:
             ports_chart  = [p[0] for p in _PORT_QUEUES]
@@ -711,14 +710,13 @@ def _render_port_queue() -> None:
 
 def render(port_results=None, route_results=None) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="padding:20px 0 4px;">'
             f'<div style="font-size:26px;font-weight:800;color:{C_TEXT};letter-spacing:-.02em;">'
             f'ETA Intelligence &amp; Voyage Tracking</div>'
             f'<div style="font-size:14px;color:{C_TEXT2};margin-top:4px;">'
             f'Vessel ETA prediction, delay analysis, carrier reliability, and port queue monitoring</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         _section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
         _render_kpis()

@@ -100,17 +100,17 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
             </div>
         </div>
     </div>
-    """, )
+    """, unsafe_allow_html=True)
 
     # ── 2. Route-Level Regime Table ──────────────────────────────────────────
     routes = regime_data.get("routes", {})
     if routes:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Route-Level Rate Regimes</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         headers = ["Route", "Current", "Mean", "Z-Score", "Pctile", "Regime", "30d Trend", "Volatility"]
         hdr = "<tr>"
@@ -156,26 +156,26 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
             </tr>
             """
 
-        st.html(f"""
+        st.markdown(f"""
         <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;min-width:700px">
             <thead>{hdr}</thead>
             <tbody>{tbody}</tbody>
         </table>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
     # ── 3. Rate Spreads ──────────────────────────────────────────────────────
     spreads = compute_rate_spreads(freight_data)
     if spreads:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Rate Spread Analysis</div>
             <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
                         color:{C_TEXT3};margin-top:2px">Most dislocated route pairs by z-score</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         shdr = "<tr>"
         for h in ["Route Pair", "Spread", "Mean", "Z-Score", "Correlation", "Signal"]:
@@ -209,9 +209,9 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
             </tr>
             """
 
-        st.html(f"""
+        st.markdown(f"""
         <table style="width:100%;border-collapse:collapse">
             <thead>{shdr}</thead>
             <tbody>{stbody}</tbody>
         </table>
-        """)
+        """, unsafe_allow_html=True)

@@ -144,7 +144,7 @@ def _render_hero(stats: dict) -> None:
             f'</div>'
             f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_hero error: {}", exc)
 
@@ -152,10 +152,9 @@ def _render_hero(stats: dict) -> None:
 # ── Section 2: World Port Map ─────────────────────────────────────────────────
 def _render_map(ports: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:28px 0 16px 0;'
-            f'letter-spacing:0.5px;">World Port Congestion Map</div>',
-        )
+            f'letter-spacing:0.5px;">World Port Congestion Map</div>', unsafe_allow_html=True)
 
         lats = [p["lat"] for p in ports]
         lons = [p["lon"] for p in ports]
@@ -218,10 +217,9 @@ def _render_map(ports: list[dict]) -> None:
 # ── Section 3: Congestion Table ───────────────────────────────────────────────
 def _render_table(ports: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:28px 0 16px 0;'
-            f'letter-spacing:0.5px;">Port Congestion Intelligence Table</div>',
-        )
+            f'letter-spacing:0.5px;">Port Congestion Intelligence Table</div>', unsafe_allow_html=True)
 
         header_style = (
             f"background:{C_SURFACE};color:{C_TEXT3};font-size:11px;font-weight:600;"
@@ -279,7 +277,7 @@ def _render_table(ports: list[dict]) -> None:
             f'</table>'
             f'</div>'
         )
-        st.html(table_html)
+        st.markdown(table_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_table error: {}", exc)
 
@@ -287,10 +285,9 @@ def _render_table(ports: list[dict]) -> None:
 # ── Section 4: Congestion Timeline ───────────────────────────────────────────
 def _render_timeline(ports: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">90-Day Congestion Timeline — Top 5 Ports</div>',
-        )
+            f'letter-spacing:0.5px;">90-Day Congestion Timeline — Top 5 Ports</div>', unsafe_allow_html=True)
 
         top5 = sorted(ports, key=lambda p: p["score"], reverse=True)[:5]
         today = date.today()
@@ -338,10 +335,9 @@ def _render_timeline(ports: list[dict]) -> None:
 # ── Section 5: Wait Time Distribution ────────────────────────────────────────
 def _render_wait_dist(ports: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Vessel Wait Time Distribution</div>',
-        )
+            f'letter-spacing:0.5px;">Vessel Wait Time Distribution</div>', unsafe_allow_html=True)
 
         rng = random.Random(42)
         waits: list[float] = []
@@ -399,7 +395,7 @@ def _render_wait_dist(ports: list[dict]) -> None:
             f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{p90_w}d</div></div>'
             f'</div>'
         )
-        st.html(stats_html)
+        st.markdown(stats_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_wait_dist error: {}", exc)
 
@@ -407,10 +403,9 @@ def _render_wait_dist(ports: list[dict]) -> None:
 # ── Section 6: Congestion-to-Rate Correlation ─────────────────────────────────
 def _render_correlation(ports: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Congestion vs Freight Rate Change</div>',
-        )
+            f'letter-spacing:0.5px;">Congestion vs Freight Rate Change</div>', unsafe_allow_html=True)
 
         rng = random.Random(77)
         xs, ys, labels, cols = [], [], [], []
@@ -475,7 +470,7 @@ def _render_correlation(ports: list[dict]) -> None:
             f'Critical ports are driving the bulk of current rate pressure on Asia-Europe and Trans-Pacific lanes.'
             f'</div>'
         )
-        st.html(insight_html)
+        st.markdown(insight_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_correlation error: {}", exc)
 
@@ -483,10 +478,9 @@ def _render_correlation(ports: list[dict]) -> None:
 # ── Section 7: Port Efficiency Benchmarks ─────────────────────────────────────
 def _render_efficiency() -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Port Efficiency Benchmarks</div>',
-        )
+            f'letter-spacing:0.5px;">Port Efficiency Benchmarks</div>', unsafe_allow_html=True)
 
         header_style = (
             f"background:{C_SURFACE};color:{C_TEXT3};font-size:11px;font-weight:600;"
@@ -549,7 +543,7 @@ def _render_efficiency() -> None:
             f'</table>'
             f'</div>'
         )
-        st.html(table_html)
+        st.markdown(table_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_efficiency error: {}", exc)
 
@@ -593,15 +587,14 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
         _render_efficiency()
 
-        st.html(
+        st.markdown(
             f'<div style="margin-top:32px;padding:16px 20px;background:{C_SURFACE};'
             f'border-radius:6px;border:1px solid {C_BORDER};'
             f'font-size:12px;color:{C_TEXT3};display:flex;align-items:center;gap:8px;">'
             f'<span style="color:{C_ACCENT};">&#9432;</span>'
             f'Congestion data refreshed every 6 hours. Index scores are composite metrics derived from vessel AIS data, '
             f'berth utilization signals, and port authority reports. Rate impact estimates reflect 5-day rolling correlation.'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.error("tab_congestion render error: {}", exc)

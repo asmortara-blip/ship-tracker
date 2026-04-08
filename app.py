@@ -170,7 +170,7 @@ def get_fundamentals_data() -> dict:
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     # WSJ Brand header
-    st.html("""
+    st.markdown("""
     <div style="padding:10px 0 14px 0;border-bottom:2px solid rgba(232,230,225,0.1);margin-bottom:12px">
         <div style="font-family:'Libre Baskerville','Georgia',serif;font-size:1.2rem;
                     font-weight:700;color:#e8e6e1;letter-spacing:-0.01em;line-height:1.1">
@@ -181,7 +181,7 @@ with st.sidebar:
             Shipping Intelligence
         </div>
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
     lookback = st.slider("Lookback period (days)", 30, 180, 90, step=15)
 
@@ -208,15 +208,14 @@ with st.sidebar:
             else _age_label(_info.get("age_hours"))
         )
         _dot_color = "#2e9e6e" if _info["status"] == "fresh" else ("#c9962b" if _info["status"] == "stale" else "#c0392b")
-        st.html(
+        st.markdown(
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'padding:4px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">'
             f'<span style="display:flex;align-items:center;gap:6px;font-size:0.73rem;color:#e8e6e1;'
             f'font-family:Libre Franklin,sans-serif">'
             f'<span style="width:5px;height:5px;border-radius:50%;background:{_dot_color};flex-shrink:0"></span>'
             f'{_src_name}</span>'
-            f'<span style="font-size:0.68rem;color:#6b6760;font-family:JetBrains Mono,monospace">{_detail}</span></div>',
-        )
+            f'<span style="font-size:0.68rem;color:#6b6760;font-family:JetBrains Mono,monospace">{_detail}</span></div>', unsafe_allow_html=True)
 
     st.divider()
     st.caption("Free data sources only · All times UTC")
@@ -404,14 +403,13 @@ except Exception:
 with sidebar_signal_placeholder.container():
     st.divider()
     # WSJ-style Signal Pulse
-    st.html('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
-                'font-weight:700;color:#e8e6e1;margin-bottom:8px">Signal Pulse</div>',
-)
+    st.markdown('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
+                'font-weight:700;color:#e8e6e1;margin-bottom:8px">Signal Pulse</div>', unsafe_allow_html=True)
     if insights and go is not None:
         avg_score = sum(i.score for i in insights) / len(insights)
         gauge_color = "#2e9e6e" if avg_score >= 0.70 else ("#c9962b" if avg_score >= 0.55 else "#c0392b")
         # Compact health bar
-        st.html(f"""
+        st.markdown(f"""
         <div style="margin-bottom:8px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
                 <span style="font-size:0.68rem;font-weight:600;color:#6b6760;text-transform:uppercase;
@@ -423,18 +421,18 @@ with sidebar_signal_placeholder.container():
                 <div style="height:100%;width:{avg_score*100:.0f}%;background:{gauge_color};
                             border-radius:2px;transition:width 0.6s ease"></div>
             </div>
-        </div>""")
+        </div>""", unsafe_allow_html=True)
         # Top insights - WSJ editorial style
         for ins in insights[:3]:
             sc = "#2e9e6e" if ins.score >= 0.70 else ("#c9962b" if ins.score >= 0.55 else "#9a968e")
             title_short = ins.title[:44] + ("..." if len(ins.title) > 44 else "")
-            st.html(f"""
+            st.markdown(f"""
             <div style="padding:6px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">
                 <div style="font-family:Libre Franklin,sans-serif;font-size:0.74rem;
                             font-weight:600;color:#e8e6e1;line-height:1.3">{title_short}</div>
                 <div style="font-family:JetBrains Mono,monospace;font-size:0.66rem;
                             color:{sc};margin-top:2px;font-weight:600">{ins.score:.0%} · {ins.action}</div>
-            </div>""")
+            </div>""", unsafe_allow_html=True)
     elif insights:
         avg_score = sum(i.score for i in insights) / len(insights)
         st.caption(f"Health: {avg_score:.0%}")
@@ -446,13 +444,12 @@ with sidebar_signal_placeholder.container():
 with sidebar_watchlist_placeholder.container():
     st.divider()
     # WSJ-style Watchlist
-    st.html('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
-                'font-weight:700;color:#e8e6e1;margin-bottom:6px">Watchlist</div>',
-)
+    st.markdown('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
+                'font-weight:700;color:#e8e6e1;margin-bottom:6px">Watchlist</div>', unsafe_allow_html=True)
     shipping_tickers = cfg.get("shipping_stocks", [])[:5]
     if stock_data:
         # Table header
-        st.html("""
+        st.markdown("""
         <div style="display:flex;justify-content:space-between;padding:2px 0 4px;
                     border-bottom:1px solid rgba(232,230,225,0.1)">
             <span style="font-size:0.62rem;font-weight:700;color:#6b6760;text-transform:uppercase;
@@ -463,7 +460,7 @@ with sidebar_watchlist_placeholder.container():
                 <span style="font-size:0.62rem;font-weight:700;color:#6b6760;text-transform:uppercase;
                              letter-spacing:0.08em;font-family:Libre Franklin,sans-serif;width:50px;text-align:right">Chg</span>
             </div>
-        </div>""")
+        </div>""", unsafe_allow_html=True)
         for ticker in shipping_tickers:
             df = stock_data.get(ticker)
             if df is not None and not df.empty and "close" in df.columns:
@@ -473,7 +470,7 @@ with sidebar_watchlist_placeholder.container():
                 chg_pct = (current - prev) / prev if prev != 0 else 0
                 sign = "+" if chg_pct >= 0 else ""
                 color = "#2e9e6e" if chg_pct > 0 else ("#c0392b" if chg_pct < 0 else "#9a968e")
-                st.html(f"""
+                st.markdown(f"""
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:4px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">
                     <span style="font-size:0.76rem;font-weight:600;color:#e8e6e1;
@@ -485,7 +482,7 @@ with sidebar_watchlist_placeholder.container():
                                      font-family:JetBrains Mono,monospace;width:50px;text-align:right">
                             {sign}{chg_pct*100:.1f}%</span>
                     </div>
-                </div>""")
+                </div>""", unsafe_allow_html=True)
     else:
         for ticker in shipping_tickers:
             st.caption(f"-- {ticker}")
@@ -729,7 +726,7 @@ if "nav_section" not in st.session_state:
     st.session_state["nav_section"] = "dashboard"
 
 # Inject WSJ section nav CSS
-st.html("""<style>
+st.markdown("""<style>
 .sec-nav-btn > div > button {
     background: transparent !important;
     border: none !important;
@@ -754,7 +751,7 @@ st.html("""<style>
     color: #e8e6e1 !important;
     font-weight: 600 !important;
 }
-</style>""")
+</style>""", unsafe_allow_html=True)
 
 # Render nav in sidebar
 with st.sidebar:
@@ -763,7 +760,7 @@ with st.sidebar:
     for sec_key, sec_icon, sec_label, sec_desc in SECTIONS:
         active = st.session_state["nav_section"] == sec_key
         css_class = "sec-nav-active" if active else "sec-nav-btn"
-        st.html(f'<div class="{css_class}">')
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
         btn_label = f"{sec_icon}  {sec_label}"
         if alerts and sec_key == "risk":
             btn_label += f"  ({len(alerts)})"
@@ -772,14 +769,14 @@ with st.sidebar:
         if st.button(btn_label, key=f"nav_{sec_key}", use_container_width=True):
             st.session_state["nav_section"] = sec_key
             st.rerun()
-        st.html("</div>")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 active_section = st.session_state.get("nav_section", "dashboard")
 
 # WSJ Section breadcrumb
 sec_info = next((s for s in SECTIONS if s[0] == active_section), SECTIONS[0])
 sec_color = SECTION_COLORS.get(active_section, "#3572b0")
-st.html(f"""
+st.markdown(f"""
 <div style="border-top:2px solid #e8e6e1;padding-top:10px;margin-bottom:18px">
     <div style="display:flex;align-items:baseline;gap:10px">
         <span style="font-size:1.1rem">{sec_info[1]}</span>
@@ -789,7 +786,7 @@ st.html(f"""
     <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;color:#6b6760;
                 margin-top:3px">{sec_info[3]}</div>
 </div>
-""")
+""", unsafe_allow_html=True)
 
 
 # ── Section routing ───────────────────────────────────────────────────────
@@ -1189,7 +1186,7 @@ elif active_section == "reports":
 
 
 # ── WSJ Footer ────────────────────────────────────────────────────────────
-st.html("""
+st.markdown("""
 <div style="margin-top:48px;padding:16px 0 8px 0;border-top:2px solid rgba(232,230,225,0.1)">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;color:#6b6760">
@@ -1204,4 +1201,4 @@ st.html("""
     </div>
     <div style="height:1px;background:rgba(232,230,225,0.06);margin-top:12px"></div>
 </div>
-""")
+""", unsafe_allow_html=True)

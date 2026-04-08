@@ -66,7 +66,7 @@ def stat_counter(
     else:
         delta_html = ""
 
-    st.html(
+    st.markdown(
         f"""
         <div class="slide-in" style="
             background:{C_CARD};
@@ -92,8 +92,7 @@ def stat_counter(
           ">{label}</div>
           {delta_html}
         </div>
-        """,
-    )
+        """, unsafe_allow_html=True)
 
 
 # ── 2. mini_sparkline ────────────────────────────────────────────────────────
@@ -208,7 +207,7 @@ def alert_banner(
     border = _hex_to_rgba(color, 0.35)
     anim_class = "pulse-glow" if pulse else ""
 
-    st.html(
+    st.markdown(
         f"""
         <div class="{anim_class}" style="
             background:{bg};
@@ -225,8 +224,7 @@ def alert_banner(
           <span style="font-size:1.1rem; line-height:1.4">{icon}</span>
           <span style="color:{C_TEXT}; font-size:0.88rem; line-height:1.5">{message}</span>
         </div>
-        """,
-    )
+        """, unsafe_allow_html=True)
 
 
 # ── 5. kpi_row ───────────────────────────────────────────────────────────────
@@ -282,7 +280,7 @@ def kpi_row(metrics: list[dict]) -> None:
         </div>
         """
         with col:
-            st.html(card_html)
+            st.markdown(card_html, unsafe_allow_html=True)
 
 
 # ── 6. shipping_heat_bar ─────────────────────────────────────────────────────
@@ -320,7 +318,7 @@ def shipping_heat_bar(scores: dict[str, float], title: str = "") -> None:
         for k, v in scores.items()
     )
 
-    st.html(
+    st.markdown(
         f"""
         {title_html}
         <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; margin:8px 0">
@@ -329,8 +327,7 @@ def shipping_heat_bar(scores: dict[str, float], title: str = "") -> None:
         <div style="display:flex; flex-wrap:wrap; margin-top:4px">
           {legend_html}
         </div>
-        """,
-    )
+        """, unsafe_allow_html=True)
 
 
 # ── 7. route_card ────────────────────────────────────────────────────────────
@@ -417,7 +414,7 @@ def route_card(route, rank: int | None = None) -> None:
             f'</div>'
         )
 
-    st.html(
+    st.markdown(
         f"""
         <div class="slide-in" style="
             background:{C_CARD};
@@ -461,8 +458,7 @@ def route_card(route, rank: int | None = None) -> None:
           <div style="margin-top:8px">{sub_bars_html}</div>
           {rationale_html}
         </div>
-        """
-    )
+        """, unsafe_allow_html=True)
 
 
 # ── 8. section_divider ───────────────────────────────────────────────────────
@@ -475,12 +471,11 @@ def section_divider(label: str = "") -> None:
         if label
         else ""
     )
-    st.html(
+    st.markdown(
         f"""
         <div style="display:flex; align-items:center; gap:12px; margin:28px 0">
             <div style="flex:1; height:1px; background:rgba(232,230,225,0.05)"></div>
             {label_span}
             <div style="flex:1; height:1px; background:rgba(232,230,225,0.05)"></div>
         </div>
-        """,
-    )
+        """, unsafe_allow_html=True)

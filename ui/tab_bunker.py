@@ -93,11 +93,11 @@ padding:18px 20px;height:100%">
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
-    st.html(f"""
+    st.markdown(f"""
 <div style="margin:28px 0 16px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER}">
   <div style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
   {sub_html}
-</div>""")
+</div>""", unsafe_allow_html=True)
 
 
 # ── Section 1: Bunker Dashboard ────────────────────────────────────────────────
@@ -118,50 +118,50 @@ def _bunker_dashboard() -> None:
 
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "VLSFO (0.5% Sulfur)",
                 f"${vlsfo:.0f}/MT",
                 f"{'▲' if vlsfo_wow >= 0 else '▼'} ${abs(vlsfo_wow):.1f} WoW",
                 vlsfo_wow <= 0,
                 "Singapore benchmark",
                 C_ACCENT
-            ))
+            ), unsafe_allow_html=True)
         with c2:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "HFO (3.5% Sulfur)",
                 f"${hfo:.0f}/MT",
                 f"{'▲' if hfo_wow >= 0 else '▼'} ${abs(hfo_wow):.1f} WoW",
                 hfo_wow <= 0,
                 "Scrubber vessels only",
                 C_MOD
-            ))
+            ), unsafe_allow_html=True)
         with c3:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "MGO (0.1% Sulfur)",
                 f"${mgo:.0f}/MT",
                 f"{'▲' if mgo_wow >= 0 else '▼'} ${abs(mgo_wow):.1f} WoW",
                 mgo_wow <= 0,
                 "ECA zones / anchorage",
                 C_PURPLE
-            ))
+            ), unsafe_allow_html=True)
         with c4:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "LNG Equivalent",
                 f"${lng_eq:.0f}/MT",
                 f"vs VLSFO +${lng_eq - vlsfo:.0f}",
                 lng_eq <= vlsfo,
                 "Energy-equivalent price",
                 C_TEAL
-            ))
+            ), unsafe_allow_html=True)
         with c5:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "Bunker % Voyage Cost",
                 f"{bunker_pct:.1f}%",
                 "of total operating cost",
                 bunker_pct < 45,
                 "Container 15k TEU basis",
                 C_CYAN
-            ))
+            ), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker dashboard error: {exc}")
         st.info("Bunker dashboard unavailable.")
@@ -173,14 +173,14 @@ def _bunker_price_by_port() -> None:
     _section_header("Bunker Price by Port",
                     "10 major bunkering hubs — prices in $/MT and spread vs global average")
     try:
-        st.html(f"""
+        st.markdown(f"""
 <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden">
   <div style="display:grid;grid-template-columns:1.3fr 0.7fr 1fr 1fr 1fr 1fr 1.2fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
   color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.5px">
     <span>Port</span><span>Region</span><span>VLSFO</span><span>HFO</span>
     <span>MGO</span><span>Availability</span><span>vs Global Avg</span>
-  </div>""")
+  </div>""", unsafe_allow_html=True)
 
         for p in _PORTS:
             rng = random.Random(abs(hash(p["name"])) % 9999)
@@ -193,7 +193,7 @@ def _bunker_price_by_port() -> None:
             sp_color = C_LOW if spread > 15 else (C_HIGH if spread < -15 else C_TEXT3)
             sp_sign  = "+" if spread >= 0 else ""
 
-            st.html(f"""
+            st.markdown(f"""
 <div style="display:grid;grid-template-columns:1.3fr 0.7fr 1fr 1fr 1fr 1fr 1.2fr;
 padding:11px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="color:{C_TEXT};font-weight:600">{p['name']}</span>
@@ -204,9 +204,9 @@ padding:11px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="background:{avail_color}22;color:{avail_color};border-radius:5px;
   padding:2px 7px;font-size:10px;font-weight:700">{avail_lbl}</span>
   <span style="color:{sp_color};font-weight:600">{sp_sign}${spread:.0f}</span>
-</div>""")
+</div>""", unsafe_allow_html=True)
 
-        st.html("</div>")
+        st.markdown("</div>", unsafe_allow_html=True)
         st.caption(f"Global averages: VLSFO ${_GLOBAL_AVG['VLSFO']}/MT | HFO ${_GLOBAL_AVG['HFO']}/MT | MGO ${_GLOBAL_AVG['MGO']}/MT")
     except Exception as exc:
         logger.warning(f"Port price table error: {exc}")
@@ -316,32 +316,28 @@ def _bunker_optimization_calculator() -> None:
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.html(_kpi_card("Total Bunker Cost", f"${total_cost:,.0f}",
-                                  f"{total_mt:.0f} MT consumed", True, f"{travel_days:.1f} days", C_ACCENT),
-)
+            st.markdown(_kpi_card("Total Bunker Cost", f"${total_cost:,.0f}",
+                                  f"{total_mt:.0f} MT consumed", True, f"{travel_days:.1f} days", C_ACCENT), unsafe_allow_html=True)
         with c2:
-            st.html(_kpi_card("Consumption Rate", f"{mt_day:.1f} MT/day",
-                                  f"At {speed:.1f} kn", True, "Speed³ law", C_MOD),
-)
+            st.markdown(_kpi_card("Consumption Rate", f"{mt_day:.1f} MT/day",
+                                  f"At {speed:.1f} kn", True, "Speed³ law", C_MOD), unsafe_allow_html=True)
         with c3:
-            st.html(_kpi_card("Slow Steam Saving", f"${cost_save:,.0f}",
+            st.markdown(_kpi_card("Slow Steam Saving", f"${cost_save:,.0f}",
                                   f"−{fuel_save_pct:.0f}% fuel at {slow_speed:.1f} kn",
-                                  True, f"+{extra_days:.1f} days transit", C_HIGH),
-)
+                                  True, f"+{extra_days:.1f} days transit", C_HIGH), unsafe_allow_html=True)
         with c4:
-            st.html(_kpi_card("Cost per NM", f"${total_cost / distance:.2f}",
+            st.markdown(_kpi_card("Cost per NM", f"${total_cost / distance:.2f}",
                                   f"${slow_cost / distance:.2f} slow steam",
-                                  True, "Per nautical mile", C_TEAL),
-)
+                                  True, "Per nautical mile", C_TEAL), unsafe_allow_html=True)
 
-        st.html(f"""
+        st.markdown(f"""
 <div style="background:rgba(46,158,110,0.08);border:1px solid {C_HIGH};border-radius:6px;
 padding:13px 18px;margin-top:6px">
   <span style="color:{C_HIGH};font-weight:700">SLOW STEAMING RULE OF THUMB: </span>
   <span style="color:{C_TEXT};font-size:13px">Reducing speed by 10% cuts fuel consumption by
   approximately <b>27%</b> (cubic relationship). On this voyage, that saves
   <b>${cost_save:,.0f}</b> in bunker cost at the cost of <b>{extra_days:.1f} extra days</b> at sea.</span>
-</div>""")
+</div>""", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker calculator error: {exc}")
         st.info("Bunker calculator unavailable.")
@@ -389,7 +385,7 @@ def _fuel_spread_analysis() -> None:
         st.plotly_chart(fig, use_container_width=True)
 
         payback_color = C_HIGH if current_spread > 200 else C_MOD
-        st.html(f"""
+        st.markdown(f"""
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">
   <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center">
     <div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px">CURRENT SPREAD</div>
@@ -405,7 +401,7 @@ def _fuel_spread_analysis() -> None:
       {'MARGINAL — monitor spread' if current_spread < 200 else 'ECONOMIC — scrubber pays'}
     </div>
   </div>
-</div>""")
+</div>""", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Spread analysis error: {exc}")
         st.info("Spread analysis unavailable.")
@@ -465,7 +461,7 @@ def _alternative_fuels_comparison() -> None:
         for f in fuels:
             bar_width = min(f["avail_score"] * 10, 100)
             avail_color = C_HIGH if f["avail_score"] > 7 else (C_MOD if f["avail_score"] > 4 else C_LOW)
-            st.html(f"""
+            st.markdown(f"""
 <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:16px 20px;margin-bottom:10px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
@@ -487,7 +483,7 @@ padding:16px 20px;margin-bottom:10px">
     <div><span style="color:{C_HIGH}">+ </span><span style="color:{C_TEXT2}">{f['pros']}</span></div>
     <div><span style="color:{C_LOW}">− </span><span style="color:{C_TEXT2}">{f['cons']}</span></div>
   </div>
-</div>""")
+</div>""", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Alternative fuels error: {exc}")
         st.info("Alternative fuels comparison unavailable.")
@@ -507,32 +503,32 @@ def _bunker_hedging() -> None:
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "Brent–VLSFO Correlation",
                 f"{brent_corr:.2f}",
                 "90-day rolling R²",
                 True,
                 "High = Brent hedges bunker",
                 C_ACCENT
-            ))
+            ), unsafe_allow_html=True)
         with c2:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "VLSFO 30-day Volatility",
                 f"{vlsfo_vol:.1f}%",
                 "Annualized σ",
                 vlsfo_vol < 25,
                 "Higher vol = more hedging value",
                 C_MOD
-            ))
+            ), unsafe_allow_html=True)
         with c3:
-            st.html(_kpi_card(
+            st.markdown(_kpi_card(
                 "Bunker Swap Market",
                 f"${swap_bid:.0f} / ${swap_ask:.0f}",
                 f"Spread: ${swap_ask - swap_bid:.0f}/MT",
                 True,
                 "Bid / Ask (SIN delivery)",
                 C_TEAL
-            ))
+            ), unsafe_allow_html=True)
 
         strategies = [
             {
@@ -577,9 +573,9 @@ def _bunker_hedging() -> None:
             },
         ]
 
-        st.html(f'<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px">')
+        st.markdown(f'<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px">', unsafe_allow_html=True)
         for s in strategies:
-            st.html(f"""
+            st.markdown(f"""
 <div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {s['color']};
 border-radius:6px;padding:16px 18px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -588,10 +584,10 @@ border-radius:6px;padding:16px 18px">
     padding:2px 8px;font-size:10px;font-weight:700">{s['rating']}</span>
   </div>
   <div style="font-size:12px;color:{C_TEXT2};line-height:1.6">{s['desc']}</div>
-</div>""")
-        st.html("</div>")
+</div>""", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.html(f"""
+        st.markdown(f"""
 <div style="background:rgba(99,102,241,0.08);border:1px solid {C_PURPLE};border-radius:6px;
 padding:14px 18px;margin-top:12px;font-size:12px;color:{C_TEXT2};line-height:1.7">
   <span style="color:{C_PURPLE};font-weight:700">HEDGING RULE OF THUMB: </span>
@@ -599,7 +595,7 @@ padding:14px 18px;margin-top:12px;font-size:12px;color:{C_TEXT2};line-height:1.7
   50% in Brent futures (low cost, high liquidity) and 30% in direct bunker swaps (precision).
   Leave 20% unhedged to benefit from any price declines. Review hedge ratio monthly
   against consumption actuals.
-</div>""")
+</div>""", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker hedging error: {exc}")
         st.info("Bunker hedging section unavailable.")
@@ -610,7 +606,7 @@ padding:14px 18px;margin-top:12px;font-size:12px;color:{C_TEXT2};line-height:1.7
 def render(macro_data=None, freight_data=None) -> None:
     """Render the Bunker Fuel Intelligence tab."""
     try:
-        st.html(f"""
+        st.markdown(f"""
 <div style="background:linear-gradient(135deg,{C_MOD}18,{C_ACCENT}10);
 border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24px">
   <div style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:800;color:{C_TEXT}">
@@ -620,7 +616,7 @@ border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24
     Real-time bunker prices &amp; port comparison · Optimization calculator ·
     Scrubber spread economics · Alternative fuels · Hedging strategy
   </div>
-</div>""")
+</div>""", unsafe_allow_html=True)
     except Exception:
         st.subheader("Bunker Fuel Intelligence")
 

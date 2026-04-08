@@ -152,7 +152,7 @@ def _render_header(auto_refresh: bool, last_ts: float) -> None:
         elapsed = int(time.time() - last_ts)
         pulse_color = C_HIGH if auto_refresh else C_TEXT3
 
-        st.html(
+        st.markdown(
             f"""
             <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;
                         padding:18px 24px;margin-bottom:16px;display:flex;
@@ -172,8 +172,7 @@ def _render_header(auto_refresh: bool, last_ts: float) -> None:
                 </span>
               </div>
             </div>
-            """,
-        )
+            """, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_header error: {exc}")
 
@@ -211,7 +210,7 @@ def _render_ticker_strip() -> None:
         # duplicate for seamless loop
         double = ticker_html + ticker_html
 
-        st.html(
+        st.markdown(
             f"""
             <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;
                         overflow:hidden;padding:10px 0;margin-bottom:16px;">
@@ -228,8 +227,7 @@ def _render_ticker_strip() -> None:
                 100% {{ transform: translateX(-50%); }}
               }}
             </style>
-            """,
-        )
+            """, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_ticker_strip error: {exc}")
 
@@ -238,10 +236,9 @@ def _render_ticker_strip() -> None:
 
 def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">BREAKING ALERTS</div>',
-        )
+            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">BREAKING ALERTS</div>', unsafe_allow_html=True)
 
         alerts: list[str] = []
 
@@ -276,14 +273,13 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
         alerts = alerts[:3]
 
         if not alerts:
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:Libre Franklin,sans-serif;">No critical alerts at this time.</div>',
-            )
+                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:Libre Franklin,sans-serif;">No critical alerts at this time.</div>', unsafe_allow_html=True)
             return
 
         for alert in alerts:
-            st.html(
+            st.markdown(
                 f"""
                 <div style="background:{C_CARD};border:1px solid {C_LOW};border-left:4px solid {C_LOW};
                             border-radius:3px;padding:14px 18px;margin-bottom:8px;
@@ -292,8 +288,7 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
                                padding:2px 7px;border-radius:3px;letter-spacing:1px;">NEW</span>
                   <span style="color:{C_TEXT};font-size:13px;font-weight:500;font-family:Libre Franklin,sans-serif;">{alert}</span>
                 </div>
-                """,
-            )
+                """, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_breaking_alerts error: {exc}")
 
@@ -396,10 +391,9 @@ def _build_feed_rows() -> list[dict]:
 
 def _render_feed_table() -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">LIVE DATA FEED</div>',
-        )
+            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">LIVE DATA FEED</div>', unsafe_allow_html=True)
 
         rows = _build_feed_rows()
 
@@ -438,10 +432,9 @@ def _render_feed_table() -> None:
                 f'</div>'
             )
 
-        st.html(
+        st.markdown(
             f'<div style="border-radius:3px;overflow:hidden;max-height:480px;'
-            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>',
-        )
+            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_feed_table error: {exc}")
 
@@ -450,10 +443,9 @@ def _render_feed_table() -> None:
 
 def _render_signal_chart() -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">SIGNAL ACTIVITY — LAST 24H</div>',
-        )
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">SIGNAL ACTIVITY — LAST 24H</div>', unsafe_allow_html=True)
 
         rng = list(range(24))
         counts  = [random.randint(0, 8) for _ in rng]
@@ -495,13 +487,12 @@ def _render_signal_chart() -> None:
         st.plotly_chart(fig, use_container_width=True)
 
         # Legend
-        st.html(
+        st.markdown(
             f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;font-family:Libre Franklin,sans-serif;">'
             f'<span style="color:{C_HIGH};font-size:11px;">&#9632; High conviction (&ge;75%)</span>'
             f'<span style="color:{C_MOD};font-size:11px;">&#9632; Moderate (60–74%)</span>'
             f'<span style="color:{C_TEXT3};font-size:11px;">&#9632; Low (&lt;60%)</span>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_signal_chart error: {exc}")
 
@@ -510,10 +501,9 @@ def _render_signal_chart() -> None:
 
 def _render_freight_table(freight_data: Any) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">FREIGHT RATE CHANGES</div>',
-        )
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">FREIGHT RATE CHANGES</div>', unsafe_allow_html=True)
 
         base = _utc_now()
         rows = []
@@ -552,10 +542,9 @@ def _render_freight_table(freight_data: Any) -> None:
                 f'</div>'
             )
 
-        st.html(
+        st.markdown(
             f'<div style="border-radius:3px;overflow:hidden;max-height:340px;'
-            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>',
-        )
+            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_freight_table error: {exc}")
 
@@ -564,10 +553,9 @@ def _render_freight_table(freight_data: Any) -> None:
 
 def _render_sentiment_pulse(news_items: Any) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">NEWS SENTIMENT PULSE</div>',
-        )
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">NEWS SENTIMENT PULSE</div>', unsafe_allow_html=True)
 
         # Derive from news_items if available, else use static values
         s1h  = -0.18
@@ -665,7 +653,7 @@ def render(
         # ── 3. Breaking alerts ────────────────────────────────────────────────
         _render_breaking_alerts(insights, news_items)
 
-        st.html("<div style='margin:8px 0;'></div>")
+        st.markdown("<div style='margin:8px 0;'></div>", unsafe_allow_html=True)
 
         # ── 4. Multi-feed table ───────────────────────────────────────────────
         _render_feed_table()

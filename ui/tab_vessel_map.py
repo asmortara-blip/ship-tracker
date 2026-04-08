@@ -525,7 +525,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Metrics strip error: {e}")
 
-    st.html("<div style='margin-top:24px'></div>")
+    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
 
     # ── A. Global map ─────────────────────────────────────────────────────────
     try:
@@ -533,7 +533,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Global map error: {e}")
 
-    st.html("<div style='margin-top:28px'></div>")
+    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
 
     # ── B + C. Port table and donut side by side ──────────────────────────────
     col_left, col_right = st.columns([3, 2], gap="large")

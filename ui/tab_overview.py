@@ -150,7 +150,7 @@ def _render_status_bar(
                 <span style="font-size:0.64rem;color:{C_TEXT3}">{name}</span>
             </div>"""
 
-        st.html(f"""
+        st.markdown(f"""
         <div style="display:flex;justify-content:space-between;align-items:center;
                     padding:8px 16px;background:{C_SURFACE};border:1px solid {C_BORDER};
                     border-radius:8px;margin-bottom:16px;flex-wrap:wrap;gap:8px">
@@ -168,7 +168,7 @@ def _render_status_bar(
                              margin-left:4px">{_now_utc()}</span>
             </div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Status bar render failed: {exc}")
@@ -211,30 +211,24 @@ def _render_kpi_strip(
 
         cols = st.columns(6)
         with cols[0]:
-            st.html(_kpi("Baltic Dry Index",
-                _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847")),
-                )
+            st.markdown(_kpi("Baltic Dry Index",
+                _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847")), unsafe_allow_html=True)
         with cols[1]:
-            st.html(_kpi("Container Index",
-                _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204")),
-                )
+            st.markdown(_kpi("Container Index",
+                _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204")), unsafe_allow_html=True)
         with cols[2]:
             demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
-            st.html(_kpi("Avg Port Demand", demand_str,
-                f"{len(has_data)} ports", C_HIGH if avg_demand >= 0.6 else C_TEXT3),
-                )
+            st.markdown(_kpi("Avg Port Demand", demand_str,
+                f"{len(has_data)} ports", C_HIGH if avg_demand >= 0.6 else C_TEXT3), unsafe_allow_html=True)
         with cols[3]:
             alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
-            st.html(_kpi("Active Alerts", str(n_alerts), "", alert_color),
-                )
+            st.markdown(_kpi("Active Alerts", str(n_alerts), "", alert_color), unsafe_allow_html=True)
         with cols[4]:
-            st.html(_kpi("High Conviction", str(hi_conv),
-                f"of {len(insights)}", C_HIGH if hi_conv > 2 else C_TEXT3),
-                )
+            st.markdown(_kpi("High Conviction", str(hi_conv),
+                f"of {len(insights)}", C_HIGH if hi_conv > 2 else C_TEXT3), unsafe_allow_html=True)
         with cols[5]:
-            st.html(_kpi("Strong Routes", str(strong_rts),
-                f"of {len(route_results)}", C_HIGH if strong_rts > 2 else C_TEXT3),
-                )
+            st.markdown(_kpi("Strong Routes", str(strong_rts),
+                f"of {len(route_results)}", C_HIGH if strong_rts > 2 else C_TEXT3), unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"KPI strip render failed: {exc}")
@@ -274,7 +268,7 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
             </div>"""
 
         html = _card_open("Market Pulse", "Key indices and rates") + rows_html + _card_close()
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Market pulse render failed: {exc}")
@@ -348,7 +342,7 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
         </table>"""
 
         html = _card_open("Signal Conviction", "Corridor x commodity scores") + table + _card_close()
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Signal matrix render failed: {exc}")
@@ -364,7 +358,7 @@ def _render_top_signals(insights: list) -> None:
             html = _card_open("Top Signals", "Highest conviction opportunities")
             html += f'<div style="font-family:{_SANS};font-size:0.8rem;color:{C_TEXT3};padding:8px 0">No signals generated</div>'
             html += _card_close()
-            st.html(html)
+            st.markdown(html, unsafe_allow_html=True)
             return
 
         ACTION_COLOR = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
@@ -398,7 +392,7 @@ def _render_top_signals(insights: list) -> None:
             </div>"""
 
         html = _card_open("Top Signals", f"{len(insights)} active signals") + items_html + _card_close()
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Top signals render failed: {exc}")
@@ -448,7 +442,7 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
 
         html = (_card_open("Risk & Alerts", f"{len(alert_items)} active", accent=C_LOW)
                 + items_html + _card_close())
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Risk alerts render failed: {exc}")
@@ -494,7 +488,7 @@ def _render_route_opps(route_results: list) -> None:
 
         html = (_card_open("Route Opportunities", f"{len(strong)} strong routes", accent=C_HIGH)
                 + items_html + _card_close())
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Route opps render failed: {exc}")
@@ -538,7 +532,7 @@ def _render_data_status(
         ok_count = sum(1 for _, ok in sources if ok)
         html = (_card_open("Data Sources", f"{ok_count}/{len(sources)} active")
                 + items_html + _card_close())
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Data status render failed: {exc}")
@@ -639,7 +633,7 @@ def _render_sparklines(
 
 def _render_cold_start() -> None:
     try:
-        st.html(f"""
+        st.markdown(f"""
         <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
                     padding:40px;margin:24px 0;text-align:center">
             <div style="font-family:{_SANS};font-size:1.2rem;font-weight:700;
@@ -663,7 +657,7 @@ def _render_cold_start() -> None:
                     <span style="color:{C_MOD};font-weight:700">3</span>&ensp;Data loads in ~30-60s</div>
             </div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Cold start splash failed: {exc}")
         st.info("Dashboard loading -- configure API credentials to enable live data.")

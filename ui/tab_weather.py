@@ -142,11 +142,10 @@ def _kpi_card(label: str, value: str, sub: str, color: str) -> str:
 
 def _section_header(title: str, sub: str = "") -> None:
     sub_html = f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-top:2px;">{sub}</div>' if sub else ""
-    st.html(
+    st.markdown(
         f'<div style="margin:28px 0 12px 0;">'
         f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:18px;font-weight:700;">{title}</span>'
-        f'{sub_html}</div>',
-    )
+        f'{sub_html}</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Section renderers
@@ -156,13 +155,13 @@ def _render_kpis() -> None:
     try:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.html(_kpi_card("High-Risk Weather Events", "6", "routes currently affected", C_LOW))
+            st.markdown(_kpi_card("High-Risk Weather Events", "6", "routes currently affected", C_LOW), unsafe_allow_html=True)
         with c2:
-            st.html(_kpi_card("Avg Vessel Delay (30d)", "14.2 h", "weather-attributed, all routes", C_MOD))
+            st.markdown(_kpi_card("Avg Vessel Delay (30d)", "14.2 h", "weather-attributed, all routes", C_MOD), unsafe_allow_html=True)
         with c3:
-            st.html(_kpi_card("Typhoon Season", "ACTIVE", "Western Pacific — Jun–Nov", C_LOW))
+            st.markdown(_kpi_card("Typhoon Season", "ACTIVE", "Western Pacific — Jun–Nov", C_LOW), unsafe_allow_html=True)
         with c4:
-            st.html(_kpi_card("N. Atlantic Storm Activity", "ELEVATED", "3 systems tracked, above seasonal avg", C_MOD))
+            st.markdown(_kpi_card("N. Atlantic Storm Activity", "ELEVATED", "3 systems tracked, above seasonal avg", C_MOD), unsafe_allow_html=True)
     except Exception:
         logger.exception("KPI render failed")
         st.warning("KPI cards unavailable.")
@@ -183,7 +182,7 @@ def _render_active_events() -> None:
             f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;text-transform:uppercase;">Duration</span>'
             '</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
 
         for i, ev in enumerate(_ACTIVE_EVENTS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -201,7 +200,7 @@ def _render_active_events() -> None:
                 f'<span style="color:{C_TEXT3};font-size:12px;">{ev["duration"]}</span>'
                 '</div>'
             )
-            st.html(row_html)
+            st.markdown(row_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Active events table failed")
         st.warning("Active weather events unavailable.")
@@ -261,7 +260,7 @@ def _render_risk_map() -> None:
             f'<span style="color:{C_TEXT3};font-size:12px;margin-left:12px;">Markers: T=Typhoon  L=Low pressure  C=Cyclone  S=Storm</span>'
             '</div>'
         )
-        st.html(legend_html)
+        st.markdown(legend_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Risk map render failed")
         st.warning("Route weather risk map unavailable.")
@@ -282,7 +281,7 @@ def _render_forecast_table() -> None:
             f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;text-transform:uppercase;">Recommended Action</span>'
             '</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
 
         for i, row in enumerate(_FORECAST_TABLE):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -300,7 +299,7 @@ def _render_forecast_table() -> None:
                 f'<span style="color:{C_TEXT2};font-size:12px;">{row["action"]}</span>'
                 '</div>'
             )
-            st.html(row_html)
+            st.markdown(row_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Forecast table failed")
         st.warning("14-day forecast table unavailable.")
@@ -349,7 +348,7 @@ def _render_historical_delays() -> None:
             'Apr–Jun Bay of Bengal cyclone risk | Year-round fog delays at LA, Rotterdam'
             '</div>'
         )
-        st.html(note_html)
+        st.markdown(note_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Historical delays chart failed")
         st.warning("Historical delay chart unavailable.")
@@ -368,7 +367,7 @@ def _render_port_closures() -> None:
             f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;text-transform:uppercase;">Est. Reopening</span>'
             '</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
 
         for i, port in enumerate(_PORT_CLOSURES):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -386,7 +385,7 @@ def _render_port_closures() -> None:
                 f'<span style="color:{C_TEXT3};font-size:12px;">{port["reopening"]}</span>'
                 '</div>'
             )
-            st.html(row_html)
+            st.markdown(row_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Port closures table failed")
         st.warning("Port weather closures unavailable.")
@@ -406,7 +405,7 @@ def _render_routing_recs() -> None:
             f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;text-transform:uppercase;text-align:right;">Delay Avoided (h)</span>'
             '</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
 
         for i, rec in enumerate(_ROUTING_RECS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -424,7 +423,7 @@ def _render_routing_recs() -> None:
                 f'<span style="color:{da_color};font-size:13px;font-weight:700;text-align:right;">{rec["delay_avoided"] if rec["delay_avoided"] else "—"}</span>'
                 '</div>'
             )
-            st.html(row_html)
+            st.markdown(row_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Routing recs table failed")
         st.warning("Optimal routing recommendations unavailable.")
@@ -453,7 +452,7 @@ def _render_ice_route() -> None:
                 f'<div style="color:{C_TEXT2};font-size:12px;">Rosatom escort ~$180k</div></div>'
                 f'</div></div>'
             )
-            st.html(ice_html)
+            st.markdown(ice_html, unsafe_allow_html=True)
 
         with c_stats:
             routes_comp = [
@@ -491,7 +490,7 @@ def _render_ice_route() -> None:
             'limited rescue infrastructure, and narrow seasonal window. Fuel premium offset partly by shorter distance (10 800 nm vs 12 400 nm Suez).'
             '</span></div>'
         )
-        st.html(note_html)
+        st.markdown(note_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Ice route panel failed")
         st.warning("Seasonal ice route panel unavailable.")
@@ -505,14 +504,13 @@ def render(port_results=None, route_results=None) -> None:
     try:
         logger.info("Rendering weather risk tab")
 
-        st.html(
+        st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_LOW}18,{C_MOD}12);'
             f'border:1px solid {C_LOW}44;border-radius:6px;padding:14px 20px;margin-bottom:18px;">'
             f'<span style="color:{C_LOW};font-family:\'Libre Baskerville\',serif;font-size:14px;font-weight:700;">LIVE WEATHER ALERT</span>'
             f'<span style="color:{C_TEXT};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-left:12px;">'
             'Typhoon MAWAR-3 active in South China Sea — 34 vessels at risk — rerouting recommended for Intra-Asia and Asia-NA West Coast departures'
-            '</span></div>',
-        )
+            '</span></div>', unsafe_allow_html=True)
 
         # 1. KPIs
         _section_header("Weather Risk Dashboard", "Current conditions and seasonal status — updated hourly")

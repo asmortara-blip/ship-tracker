@@ -338,7 +338,7 @@ def _render_route_breakdown() -> None:
             + rows_html
             + "</div>"
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Route breakdown render failed: {exc}")
@@ -473,7 +473,7 @@ def _render_commodity_cards() -> None:
 
             target = col1 if i < mid else col2
             with target:
-                st.html(card)
+                st.markdown(card, unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"Commodity cards render failed: {exc}")
@@ -494,14 +494,14 @@ def render(
     """Global Trade Flows dashboard."""
     try:
         # Section header
-        st.html(f"""
+        st.markdown(f"""
         <div style="margin-bottom:16px">
             <div style="font-family:{_SANS};font-size:0.92rem;font-weight:700;color:{C_TEXT};
                         letter-spacing:-0.02em">Global Trade Flows</div>
             <div style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT3};margin-top:2px">
                 Mapping what the world ships — commodity flows by route, region, and vessel type</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         # 1. Flow map
         _render_flow_map()
@@ -509,20 +509,20 @@ def render(
         # 2. Sankey + Route breakdown side by side
         left, right = st.columns([3, 2])
         with left:
-            st.html(_card_html("Commodity Flow Sankey", "Origin region → commodity → destination region"))
+            st.markdown(_card_html("Commodity Flow Sankey", "Origin region → commodity → destination region"), unsafe_allow_html=True)
             _render_sankey()
         with right:
             _render_route_breakdown()
 
         # 3. Commodity deep dive
-        st.html(f"""
+        st.markdown(f"""
         <div style="margin:20px 0 12px">
             <div style="font-family:{_SANS};font-size:0.82rem;font-weight:700;color:{C_TEXT}">
                 Commodity Intelligence</div>
             <div style="font-family:{_SANS};font-size:0.68rem;color:{C_TEXT3};margin-top:2px">
                 Demand signals, seasonal patterns, and key routes by cargo type</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
         _render_commodity_cards()
 
     except Exception as exc:

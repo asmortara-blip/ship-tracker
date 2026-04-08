@@ -100,11 +100,10 @@ def _card_css() -> str:
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f"<p style='color:{C_TEXT2};font-size:13px;margin:4px 0 0 0;'>{subtitle}</p>" if subtitle else ""
-    st.html(
+    st.markdown(
         f"<div style='border-left:3px solid {C_ACCENT};padding-left:14px;margin:28px 0 16px 0;'>"
         f"<h3 style='color:{C_TEXT};font-size:18px;font-weight:700;margin:0;'>{title}</h3>"
-        f"{sub_html}</div>",
-    )
+        f"{sub_html}</div>", unsafe_allow_html=True)
 
 def _kpi_card(label: str, value: str, delta: str = "", color: str = C_TEXT, icon: str = "") -> str:
     delta_html = (
@@ -146,7 +145,7 @@ def _render_hero_kpis() -> None:
         ]
         for col, label, value, delta, color, icon in kpis:
             with col:
-                st.html(_kpi_card(label, value, delta, color, icon))
+                st.markdown(_kpi_card(label, value, delta, color, icon), unsafe_allow_html=True)
     except Exception:
         logger.exception("Hero KPIs render error")
         st.error("Could not render sustainability dashboard KPIs.")
@@ -315,7 +314,7 @@ def _render_green_fuel() -> None:
                 logger.exception("Fuel bar chart error")
                 st.warning("Newbuild orderbook chart unavailable.")
 
-        st.html(
+        st.markdown(
             f"<div style='{_card_css()}'>"
             f"<div style='color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;'>Green Fuel Cost Premium vs VLSFO (per TEU)</div>"
             f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;'>"
@@ -335,13 +334,11 @@ def _render_green_fuel() -> None:
             f"<div style='color:{C_TEXT3};font-size:11px;text-transform:uppercase;'>Green H₂</div>"
             f"<div style='color:{C_LOW};font-size:20px;font-weight:800;'>+$110–180</div>"
             f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
-            f"</div></div>",
-        )
+            f"</div></div>", unsafe_allow_html=True)
 
-        st.html(
+        st.markdown(
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
-            f"Port Green Fuel Infrastructure Readiness</div>",
-        )
+            f"Port Green Fuel Infrastructure Readiness</div>", unsafe_allow_html=True)
         hcols = st.columns([1.8, 1, 1.4, 1.2, 1.4])
         for col, h in zip(hcols, ["PORT", "LNG STATIONS", "METHANOL TERMINALS", "AMMONIA READY", "GREEN SHORE POWER"]):
             col.html(
@@ -420,11 +417,10 @@ def _render_eu_ets() -> None:
                 st.warning("EU ETS price chart unavailable.")
 
         with col_calc:
-            st.html(
+            st.markdown(
                 f"<div style='{_card_css()}'>"
                 f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>"
-                f"ETS Cost Estimator</div>",
-            )
+                f"ETS Cost Estimator</div>", unsafe_allow_html=True)
             distance_nm  = st.number_input("Route distance (nm)", min_value=100, max_value=25000, value=11200, step=100)
             vessel_teu   = st.number_input("Vessel capacity (TEU)", min_value=500, max_value=24000, value=15000, step=500)
             load_factor  = st.slider("Load factor (%)", min_value=50, max_value=100, value=85)
@@ -437,7 +433,7 @@ def _render_eu_ets() -> None:
                 ets_cost_eur   = ets_eligible * carbon_price
                 teu_carried    = vessel_teu * (load_factor / 100)
                 cost_per_teu   = ets_cost_eur / teu_carried if teu_carried else 0
-                st.html(
+                st.markdown(
                     f"<div style='margin-top:10px;'>"
                     f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
                     f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
@@ -452,16 +448,14 @@ def _render_eu_ets() -> None:
                     f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
                     f"<div style='color:{C_TEXT3};font-size:10px;'>Cost per TEU</div>"
                     f"<div style='color:{C_ACCENT};font-size:16px;font-weight:700;'>€{cost_per_teu:.1f}</div></div>"
-                    f"</div></div>",
-                )
+                    f"</div></div>", unsafe_allow_html=True)
             except Exception:
                 logger.exception("ETS calculator error")
                 st.warning("Calculation error.")
 
-        st.html(
+        st.markdown(
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
-            f"Carrier EU ETS Exposure Ranking</div>",
-        )
+            f"Carrier EU ETS Exposure Ranking</div>", unsafe_allow_html=True)
         hcols = st.columns([2, 1.2, 1.4, 2])
         for col, h in zip(hcols, ["CARRIER", "EU REVENUE %", "CARBON INTENSITY", "EST. ANNUAL ETS COST"]):
             col.html(
@@ -635,7 +629,7 @@ def _render_speed_optimization() -> None:
                 logger.exception("Speed chart error")
                 st.warning("Speed optimization chart unavailable.")
 
-        st.html(
+        st.markdown(
             f"<div style='{_card_css()}'>"
             f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>Key Slow-Steaming Insights</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:12px;'>"
@@ -648,8 +642,7 @@ def _render_speed_optimization() -> None:
             f"<div style='background:{C_SURFACE};border-radius:8px;padding:12px;border-left:3px solid {C_ACCENT};'>"
             f"<div style='color:{C_ACCENT};font-size:16px;font-weight:800;'>16–18 kn</div>"
             f"<div style='color:{C_TEXT2};font-size:12px;'>Optimal slow-steam band balancing cost and capacity</div></div>"
-            f"</div></div>",
-        )
+            f"</div></div>", unsafe_allow_html=True)
     except Exception:
         logger.exception("Speed optimization render error")
         st.error("Could not render speed optimization section.")
@@ -660,15 +653,14 @@ def _render_speed_optimization() -> None:
 def render(port_results=None, insights=None) -> None:
     """Render the full Sustainability & ESG intelligence tab."""
     try:
-        st.html(
+        st.markdown(
             f"<div style='background:linear-gradient(135deg,{C_CARD} 0%,{C_BG} 100%);"
             f"border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:24px;'>"
             f"<h2 style='color:{C_TEXT};font-size:22px;font-weight:800;margin:0 0 6px 0;'>"
             f"Shipping ESG &amp; Sustainability Intelligence</h2>"
             f"<p style='color:{C_TEXT2};font-size:13px;margin:0;'>"
             f"IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization"
-            f"</p></div>",
-        )
+            f"</p></div>", unsafe_allow_html=True)
     except Exception:
         logger.exception("Tab header render error")
 

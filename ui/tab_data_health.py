@@ -305,7 +305,7 @@ def _render_overview(source_rows: list[dict]) -> None:
     failing = sum(1 for r in source_rows if r["status"] in ("EXPIRED", "UNAVAILABLE", "NOT CONFIGURED"))
     coverage = round(100 * healthy / total) if total else 0
 
-    st.html(
+    st.markdown(
         f"""<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">
         <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;">Data Health Overview</div>
         <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px;">
@@ -330,14 +330,12 @@ def _render_overview(source_rows: list[dict]) -> None:
             <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Data Coverage</div>
           </div>
         </div>
-        </div>""",
-    )
+        </div>""", unsafe_allow_html=True)
 
 
 def _render_source_table(source_rows: list[dict]) -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:24px 0 10px;">Data Source Status</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:24px 0 10px;">Data Source Status</div>""", unsafe_allow_html=True)
     header = f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Source</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Type</span>
@@ -364,13 +362,12 @@ def _render_source_table(source_rows: list[dict]) -> None:
             <span style="font-size:11px;color:{C_TEXT2};">{r["next_refresh"]}</span>
             <span style="font-size:10px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{r["endpoint"]}">{r["endpoint"]}</span>
         </div>"""
-    st.html(header + rows_html)
+    st.markdown(header + rows_html, unsafe_allow_html=True)
 
 
 def _render_cache_performance(source_rows: list[dict]) -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Cache Size &amp; Performance</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Cache Size &amp; Performance</div>""", unsafe_allow_html=True)
     header = f"""<div style="display:grid;grid-template-columns:2.5fr 1fr 1.2fr 1.2fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Data Source</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Cache Size</span>
@@ -395,13 +392,12 @@ def _render_cache_performance(source_rows: list[dict]) -> None:
             <span style="font-size:11px;color:{C_TEXT2};">{avg_ms:,} ms</span>
             <span style="font-size:11px;color:{hit_col};font-weight:700;">{hit_pct}%</span>
         </div>"""
-    st.html(header + rows_html)
+    st.markdown(header + rows_html, unsafe_allow_html=True)
 
 
 def _render_api_keys() -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">API Key Configuration</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">API Key Configuration</div>""", unsafe_allow_html=True)
     header = f"""<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr 1fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">API Service</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Key Configured</span>
@@ -428,13 +424,12 @@ def _render_api_keys() -> None:
             <span style="font-size:11px;color:{C_TEXT2};">{usage}</span>
             <span style="font-size:11px;color:{pct_col};font-weight:700;">{pct}%</span>
         </div>"""
-    st.html(header + rows_html)
+    st.markdown(header + rows_html, unsafe_allow_html=True)
 
 
 def _render_staleness_heatmap(source_rows: list[dict]) -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Staleness Heatmap — Sources × Hour of Day (UTC)</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Staleness Heatmap — Sources × Hour of Day (UTC)</div>""", unsafe_allow_html=True)
     try:
         names = [r["name"] for r in source_rows]
         hours = list(range(24))
@@ -488,9 +483,8 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
 
 
 def _render_error_log() -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Error Log — Last 24 Hours</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Error Log — Last 24 Hours</div>""", unsafe_allow_html=True)
     mock_errors = [
         {"ts": _now_utc() - timedelta(minutes=12),  "source": "AIS Feed",        "type": "ConnectionTimeout", "msg": "aisstream.io timeout after 10s",              "resolved": False},
         {"ts": _now_utc() - timedelta(minutes=47),  "source": "Freightos FBX",   "type": "HTTP 429",          "msg": "Rate limit exceeded — retry after 3600s",    "resolved": True},
@@ -517,16 +511,14 @@ def _render_error_log() -> None:
             <span style="font-size:11px;color:{C_TEXT2};">{e["msg"]}</span>
             <span style="font-size:12px;">{resolved_html}</span>
         </div>"""
-    st.html(header + rows_html)
+    st.markdown(header + rows_html, unsafe_allow_html=True)
 
 
 def _render_manual_refresh(source_rows: list[dict]) -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Manual Refresh — Cache Invalidation</div>""",
-    )
-    st.html(
-        f"""<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Click a source button to invalidate its cache and queue a fresh fetch on next data load. Stale sources are highlighted.</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Manual Refresh — Cache Invalidation</div>""", unsafe_allow_html=True)
+    st.markdown(
+        f"""<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Click a source button to invalidate its cache and queue a fresh fetch on next data load. Stale sources are highlighted.</div>""", unsafe_allow_html=True)
     cols_per_row = 4
     chunks = [source_rows[i:i+cols_per_row] for i in range(0, len(source_rows), cols_per_row)]
     for chunk in chunks:
@@ -564,9 +556,8 @@ def _render_data_quality(
     freight_data: Any,
     news_items: Any,
 ) -> None:
-    st.html(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Quality Metrics</div>""",
-    )
+    st.markdown(
+        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Quality Metrics</div>""", unsafe_allow_html=True)
 
     datasets: list[tuple[str, Any]] = [
         ("Port Results",    port_results),
@@ -635,7 +626,7 @@ def _render_data_quality(
             <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{mx_str}</span>
             <span style="font-size:11px;color:{anom_col};">{anom_txt}</span>
         </div>"""
-    st.html(header + rows_html)
+    st.markdown(header + rows_html, unsafe_allow_html=True)
 
 
 # ── Build source rows ─────────────────────────────────────────────────────────
@@ -698,15 +689,14 @@ def render(
     """Render the Data Health & Freshness Monitoring tab."""
     try:
         # Page header
-        st.html(
+        st.markdown(
             f"""<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
             <div>
               <div style="font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:-0.5px;">Data Source Health &amp; Freshness</div>
               <div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">Real-time monitoring of all data sources, cache status, API keys, and data quality.</div>
             </div>
             <div style="font-size:11px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;">Last scan: {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}</div>
-            </div>""",
-        )
+            </div>""", unsafe_allow_html=True)
 
         source_rows = _build_source_rows()
 

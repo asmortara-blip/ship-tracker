@@ -174,7 +174,7 @@ def _render_kpis(kpis: dict) -> None:
             + _kpi_card("Tail Events 30D", str(kpis["tail_events"]), "moves exceeding ±2σ", C_MOD, "🔔")
             + '</div>'
         )
-        st.html(cards_html)
+        st.markdown(cards_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"_render_kpis: {exc}")
         st.warning("KPI cards unavailable.")
@@ -315,7 +315,7 @@ def _render_risk_factor_matrix() -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>'
         )
-        st.html(table_html)
+        st.markdown(table_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"_render_risk_factor_matrix: {exc}")
         st.warning("Risk factor matrix unavailable.")
@@ -549,7 +549,7 @@ def _render_stress_test() -> None:
             f'<tbody>{rows_html}</tbody>'
             f'</table></div>'
         )
-        st.html(table_html)
+        st.markdown(table_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"_render_stress_test: {exc}")
         st.warning("Stress test table unavailable.")
@@ -628,7 +628,7 @@ def _render_alert_queue(alerts: list[dict]) -> None:
             + items_html
             + '</div>'
         )
-        st.html(queue_html)
+        st.markdown(queue_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"_render_alert_queue: {exc}")
         st.warning("Alert queue unavailable.")
@@ -643,24 +643,23 @@ def render(stock_data, macro_data, insights, freight_data=None):
         rng = random.Random(seed)
 
         # ── Page header ──────────────────────────────────────────────────────
-        st.html(
+        st.markdown(
             f'<div style="padding:4px 0 18px 0;">'
             f'<div style="color:{C_TEXT};font-family:{FONT_HEADLINE};font-size:22px;font-weight:700;letter-spacing:-.01em;">Risk Management Dashboard</div>'
             f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:13px;margin-top:4px;">Institutional risk intelligence — shipping & macro factors</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         # ── Section 1: KPI Hero ───────────────────────────────────────────────
-        st.html(_section_header("Risk Dashboard", "Live risk KPIs across volatility, drawdown, and tail exposure"))
+        st.markdown(_section_header("Risk Dashboard", "Live risk KPIs across volatility, drawdown, and tail exposure"), unsafe_allow_html=True)
         kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
         _render_kpis(kpis)
 
         # ── Section 2: Risk Factor Matrix ─────────────────────────────────────
-        st.html(_section_header("Risk Factor Matrix", "Exposure level, recent trend, and mitigation for 10 core risk factors"))
+        st.markdown(_section_header("Risk Factor Matrix", "Exposure level, recent trend, and mitigation for 10 core risk factors"), unsafe_allow_html=True)
         _render_risk_factor_matrix()
 
         # ── Section 3 & 4: Heatmap + Drawdown side by side ───────────────────
-        st.html(_section_header("Correlation Heatmap & Historical Drawdowns", "Cross-asset correlations and largest shipping market drawdowns"))
+        st.markdown(_section_header("Correlation Heatmap & Historical Drawdowns", "Cross-asset correlations and largest shipping market drawdowns"), unsafe_allow_html=True)
         col_left, col_right = st.columns(2)
         with col_left:
             _render_correlation_heatmap(rng)
@@ -668,19 +667,18 @@ def render(stock_data, macro_data, insights, freight_data=None):
             _render_drawdown_waterfall()
 
         # ── Section 5: Stress Test ────────────────────────────────────────────
-        st.html(_section_header("Scenario Stress Test", "Probability-weighted impact across 6 macro and shipping shock scenarios"))
+        st.markdown(_section_header("Scenario Stress Test", "Probability-weighted impact across 6 macro and shipping shock scenarios"), unsafe_allow_html=True)
         _render_stress_test()
 
         # ── Section 6: Alert Queue ────────────────────────────────────────────
-        st.html(_section_header("Risk Alert Queue", "Current alerts ranked by severity"))
+        st.markdown(_section_header("Risk Alert Queue", "Current alerts ranked by severity"), unsafe_allow_html=True)
         alerts = _build_alerts(insights, macro_data, freight_data, rng)
         _render_alert_queue(alerts)
 
         # Footer timestamp
         now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        st.html(
-            f'<div style="text-align:right;color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;margin-top:24px;padding-top:10px;border-top:1px solid {C_BORDER};">Last updated: {now}</div>',
-        )
+        st.markdown(
+            f'<div style="text-align:right;color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;margin-top:24px;padding-top:10px;border-top:1px solid {C_BORDER};">Last updated: {now}</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.error(f"tab_risk_matrix render error: {exc}")

@@ -61,7 +61,7 @@ def render(stock_data=None, freight_data=None, macro_data=None,
     tc = _tone_color(wrap["market_tone"])
 
     # ── 1. WSJ Editorial Header ──────────────────────────────────────────────
-    st.html(f"""
+    st.markdown(f"""
     <div style="margin-bottom:24px">
         <div style="border-top:2px solid {C_TEXT};padding-top:12px;margin-bottom:6px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
@@ -91,17 +91,17 @@ def render(stock_data=None, freight_data=None, macro_data=None,
         <!-- Body paragraphs -->
         {''.join(f'<p style="font-family:Libre Franklin,sans-serif;font-size:0.88rem;color:{C_TEXT2};line-height:1.7;margin-bottom:12px">{p}</p>' for p in wrap.get('body', []))}
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
     # ── 2. Key Movers ────────────────────────────────────────────────────────
     movers = wrap.get("key_movers", [])
     if movers:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Key Movers</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         cols = st.columns(min(len(movers), 5))
         for col, m in zip(cols, movers):
@@ -109,7 +109,7 @@ def render(stock_data=None, freight_data=None, macro_data=None,
                 chg = m["change_pct"]
                 c = C_HIGH if chg > 0 else C_LOW
                 sign = "+" if chg >= 0 else ""
-                st.html(f"""
+                st.markdown(f"""
                 <div style="border:1px solid {C_RULE};border-top:2px solid {c};
                             border-radius:0 0 6px 6px;padding:12px 14px;background:{C_CARD};text-align:center">
                     <div style="font-family:'Libre Franklin',sans-serif;font-size:0.78rem;
@@ -119,18 +119,18 @@ def render(stock_data=None, freight_data=None, macro_data=None,
                     <div style="font-family:JetBrains Mono,monospace;font-size:0.82rem;
                                 font-weight:600;color:{c}">{sign}{chg:.1f}%</div>
                 </div>
-                """)
+                """, unsafe_allow_html=True)
 
     # ── 3. Shipping Indices ──────────────────────────────────────────────────
     if indices:
-        st.html(f"""
+        st.markdown(f"""
         <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:24px">
             <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                         font-weight:700;color:{C_TEXT}">Shipping Indices</div>
             <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
                         color:{C_TEXT3};margin-top:2px">Key freight benchmarks with historical context</div>
         </div>
-        """)
+        """, unsafe_allow_html=True)
 
         for idx in indices:
             current = idx.get("current")
@@ -151,7 +151,7 @@ def render(stock_data=None, freight_data=None, macro_data=None,
 
             commentary = idx.get("commentary", "")
 
-            st.html(f"""
+            st.markdown(f"""
             <div style="background:{C_CARD};border:1px solid {C_RULE};border-radius:6px;
                         padding:16px 20px;margin-bottom:12px">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
@@ -189,59 +189,59 @@ def render(stock_data=None, freight_data=None, macro_data=None,
                 <!-- 52-week range bar -->
                 {'<div style="margin-top:10px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-family:JetBrains Mono,monospace;font-size:0.68rem;color:' + C_TEXT3 + '">' + f'{low_52:,.0f}' + '</span><span style="font-family:Libre Franklin,sans-serif;font-size:0.6rem;color:' + C_TEXT3 + ';text-transform:uppercase">52-Week Range</span><span style="font-family:JetBrains Mono,monospace;font-size:0.68rem;color:' + C_TEXT3 + '">' + f'{high_52:,.0f}' + '</span></div><div style="height:4px;background:' + _rgba(C_TEXT, 0.06) + ';border-radius:2px;position:relative"><div style="position:absolute;left:' + f'{range_pos:.0f}' + '%;top:-2px;width:8px;height:8px;border-radius:50%;background:' + C_ACCENT + ';transform:translateX(-50%)"></div></div></div>' if high_52 and low_52 else ''}
             </div>
-            """)
+            """, unsafe_allow_html=True)
 
     # ── 4. Forward Outlook ───────────────────────────────────────────────────
-    st.html(f"""
+    st.markdown(f"""
     <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:24px">
         <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
                     font-weight:700;color:{C_TEXT}">Forward Outlook</div>
     </div>
-    """)
+    """, unsafe_allow_html=True)
 
     # Narrative
-    st.html(f"""
+    st.markdown(f"""
     <div style="font-family:'Libre Franklin',sans-serif;font-size:0.88rem;color:{C_TEXT2};
                 line-height:1.65;margin-bottom:16px">{outlook.get('narrative', '')}</div>
-    """)
+    """, unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
     with c1:
         opps = outlook.get("opportunities", [])
         if opps:
-            st.html(f"""
+            st.markdown(f"""
             <div style="border-top:2px solid {C_HIGH};padding-top:8px">
                 <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;font-weight:700;
                             color:{C_HIGH};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">
                     Opportunities</div>
-            """)
+            """, unsafe_allow_html=True)
             for o in opps:
-                st.html(f"""
+                st.markdown(f"""
                 <div style="padding:6px 0;border-bottom:1px dotted {_rgba(C_TEXT,0.04)}">
                     <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:0.82rem;
                                 font-weight:700;color:{C_TEXT};line-height:1.3">{o['title'][:80]}</div>
                     <div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;
                                 color:{C_HIGH};margin-top:2px">{o['score']:.0%} conviction</div>
                 </div>
-                """)
-            st.html("</div>")
+                """, unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
     with c2:
         risks = outlook.get("risks", [])
         if risks:
-            st.html(f"""
+            st.markdown(f"""
             <div style="border-top:2px solid {C_LOW};padding-top:8px">
                 <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;font-weight:700;
                             color:{C_LOW};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">
                     Key Risks</div>
-            """)
+            """, unsafe_allow_html=True)
             for r in risks:
-                st.html(f"""
+                st.markdown(f"""
                 <div style="padding:6px 0;border-bottom:1px dotted {_rgba(C_TEXT,0.04)}">
                     <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:0.82rem;
                                 font-weight:700;color:{C_TEXT};line-height:1.3">{r['title'][:80]}</div>
                     <div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;
                                 color:{C_LOW};margin-top:2px">{r.get('category','').lower().replace('_',' ')}</div>
                 </div>
-                """)
-            st.html("</div>")
+                """, unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)

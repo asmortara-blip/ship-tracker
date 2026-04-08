@@ -36,9 +36,8 @@ _LAYOUT = dict(
 # ══════════════════════════════════════════════════════════════════════════
 
 def _divider() -> None:
-    st.html(
-        f'<hr style="border:none; border-top:1px solid {C_BORDER}; margin:28px 0 22px 0;">',
-    )
+    st.markdown(
+        f'<hr style="border:none; border-top:1px solid {C_BORDER}; margin:28px 0 22px 0;">', unsafe_allow_html=True)
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
@@ -46,11 +45,10 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<div style="color:{C_TEXT2}; font-size:0.82rem; margin-top:4px; font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>'
         if subtitle else ""
     )
-    st.html(
+    st.markdown(
         f'<div style="margin-bottom:16px;">'
         f'<span style="font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:\'Libre Baskerville\',serif;">{title}</span>'
-        f'{sub}</div>',
-    )
+        f'{sub}</div>', unsafe_allow_html=True)
 
 
 def _score_color(v: float) -> str:
@@ -125,7 +123,7 @@ def _render_health_index(rng: random.Random) -> None:
             gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", font=dict(color=C_TEXT), height=220, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(gauge, use_container_width=True, key="schi_gauge")
 
-            st.html(
+            st.markdown(
                 f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;">'
                 f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:8px; padding:8px 14px; flex:1; min-width:110px;">'
                 f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Prior Mo.</div>'
@@ -135,8 +133,7 @@ def _render_health_index(rng: random.Random) -> None:
                 f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Pre-COVID</div>'
                 f'<div style="color:{"#2e9e6e" if delta_precovid>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_precovid>=0 else ""}{delta_precovid:.1f}</div>'
                 f'</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
         with col_subs:
             sub_scores = [
@@ -162,11 +159,10 @@ def _render_health_index(rng: random.Random) -> None:
                     f'<div style="color:{C_TEXT3}; font-size:0.73rem; margin-top:3px;">{desc}</div>'
                     f'</div>'
                 )
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:18px 20px;">'
                 f'{rows_html}'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"SCHI render error: {exc}")
         st.warning("Supply Chain Health Index unavailable.")
@@ -261,7 +257,7 @@ def _render_disruption_monitor() -> None:
                 f'</div>'
             )
 
-        st.html(header_html + rows_html)
+        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Disruption monitor error: {exc}")
         st.warning("Disruption monitor unavailable.")
@@ -317,18 +313,16 @@ def _render_inventory_sales(rng: random.Random) -> None:
             (c3, "Shipping Demand Signal", "BULLISH" if current_is < 1.22 else "NEUTRAL", "Next 3–6 months"),
         ]:
             with col:
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
                     f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
                     f'<div style="color:{C_TEXT}; font-size:1.1rem; font-weight:700;">{val}</div>'
                     f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
-                    f'</div>',
-                )
-        st.html(
+                    f'</div>', unsafe_allow_html=True)
+        st.markdown(
             f'<div style="background:{C_ACCENT}11; border-left:3px solid {C_ACCENT}; border-radius:0 8px 8px 0;'
             f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
-            f'<strong style="color:{C_TEXT};">Implication:</strong> {implication}</div>',
-        )
+            f'<strong style="color:{C_TEXT};">Implication:</strong> {implication}</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"I/S ratio render error: {exc}")
         st.warning("Inventory-to-Sales chart unavailable.")
@@ -422,7 +416,7 @@ def _render_nearshoring() -> None:
                 f'</div>'
             )
 
-        st.html(header_html + rows_html)
+        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Nearshoring tracker error: {exc}")
         st.warning("Nearshoring tracker unavailable.")
@@ -483,7 +477,7 @@ def _render_lead_times() -> None:
                 f'</div>'
             )
 
-        st.html(header_html + rows_html)
+        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Lead time tracker error: {exc}")
         st.warning("Lead time tracker unavailable.")
@@ -564,7 +558,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
                 f'<div style="color:{rc}; font-size:0.90rem; font-weight:700;">{res}</div>'
                 f'</div>'
             )
-        st.html(header_html + rows_html)
+        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Resilience scorecard error: {exc}")
         st.warning("Resilience scorecard unavailable.")
@@ -620,23 +614,21 @@ def _render_jit_vs_jic() -> None:
         ]
         for col, label, val, sub in cards:
             with col:
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
                     f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
                     f'<div style="color:{C_ACCENT}; font-size:1.1rem; font-weight:700;">{val}</div>'
                     f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_HIGH}11; border-left:3px solid {C_HIGH}; border-radius:0 8px 8px 0;'
             f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
             f'<strong style="color:{C_TEXT};">Structural Tailwind:</strong> The JIT-to-JIC shift represents '
             f'a permanent increase in safety-stock requirements across most industrial sectors. This elevates '
             f'baseline container shipping demand by an estimated 8–12% above pre-COVID trend, independent of '
             f'cyclical economic conditions. Pharma and automotive show the most durable increases.'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"JIT/JIC render error: {exc}")
         st.warning("JIT vs JIC analysis unavailable.")
@@ -742,14 +734,13 @@ def render(port_results=None, route_results=None, insights=None, macro_data=None
         seed_val = len(port_results) * 17 + len(route_results) * 31
         rng = random.Random(seed_val + 42)
 
-        st.html(
+        st.markdown(
             f'<div style="padding:18px 0 6px 0;">'
             f'<div style="font-size:1.45rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.01em; font-family:\'Libre Baskerville\',serif;">'
             f'Supply Chain Resilience &amp; Visibility</div>'
             f'<div style="color:{C_TEXT2}; font-size:0.87rem; margin-top:5px; font-family:\'Libre Franklin\',sans-serif;">'
             f'End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         _divider()
         _render_health_index(rng)

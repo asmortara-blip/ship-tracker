@@ -209,7 +209,7 @@ def _render_hero(contributions: Dict[str, float]) -> None:
             f'</div>'
             f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         st.warning(f"Attribution hero unavailable: {exc}")
 
@@ -278,7 +278,7 @@ def _render_factor_table(df: pd.DataFrame) -> None:
             f'</table>'
             f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         st.warning(f"Factor table unavailable: {exc}")
 
@@ -347,7 +347,7 @@ def _render_bhb(df: pd.DataFrame) -> None:
             f'</table>'
             f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         st.warning(f"BHB table unavailable: {exc}")
 
@@ -444,7 +444,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 f'<tbody>{rows_html}</tbody>'
                 f'</table></div>'
             )
-            st.html(html)
+            st.markdown(html, unsafe_allow_html=True)
 
         with col_r:
             rows_html = ""
@@ -471,7 +471,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 f'<tbody>{rows_html}</tbody>'
                 f'</table></div>'
             )
-            st.html(html)
+            st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         st.warning(f"Best/worst decisions unavailable: {exc}")
 
@@ -553,13 +553,12 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'{subtitle}</span>'
         if subtitle else ""
     )
-    st.html(
+    st.markdown(
         f'<div style="margin:24px 0 10px;padding-bottom:8px;'
         f'border-bottom:1px solid {C_BORDER};">'
         f'<span style="color:{C_TEXT};font-size:14px;font-weight:700;'
         f'text-transform:uppercase;letter-spacing:1px;">{title}</span>'
-        f'{sub}</div>',
-    )
+        f'{sub}</div>', unsafe_allow_html=True)
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
@@ -567,14 +566,13 @@ def _section_header(title: str, subtitle: str = "") -> None:
 def render(stock_data=None, insights=None, freight_data=None):
     """Render the Performance Attribution Analysis tab."""
     try:
-        st.html(
+        st.markdown(
             f'<div style="padding:4px 0 18px;">'
             f'<span style="color:{C_TEXT};font-size:18px;font-weight:800;'
             f'letter-spacing:0.5px;">Performance Attribution</span>'
             f'<span style="color:{C_TEXT3};font-size:12px;margin-left:12px;">'
             f'Factor decomposition &amp; alpha analysis</span>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception:
         st.subheader("Performance Attribution")
 

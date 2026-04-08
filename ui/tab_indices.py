@@ -236,11 +236,10 @@ def _kpi_card_html(idx: dict, stats: dict) -> str:
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px">{subtitle}</div>' if subtitle else ""
-    st.html(
+    st.markdown(
         f'<div style="margin:28px 0 12px">'
         f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;letter-spacing:0.3px">{title}</div>'
-        f'{sub_html}</div>',
-    )
+        f'{sub_html}</div>', unsafe_allow_html=True)
 
 
 # ── Section 1: Index Dashboard ─────────────────────────────────────────────────
@@ -346,7 +345,7 @@ def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
             f'<div style="color:{C_TEXT3};font-size:10px">Weight: {comp["weight"]}</div></div>'
         )
 
-    st.html("<div style='margin-top:16px'></div>")
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
 
     # BDI historical context
     try:
@@ -354,14 +353,13 @@ def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
         current = float(bdi.iloc[-1]) if len(bdi) > 0 else 1000
         pct_vs_avg = _pct(current, avg_5y)
         avg_color = C_HIGH if pct_vs_avg > 0 else C_LOW
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px 16px;'
             f'margin-bottom:16px;display:flex;align-items:center;gap:16px">'
             f'<div><span style="color:{C_TEXT2};font-size:12px">BDI Historical Context: </span>'
             f'<span style="color:{avg_color};font-size:13px;font-weight:600">'
             f'Currently {pct_vs_avg:+.1f}% {"above" if pct_vs_avg >= 0 else "below"} 5-year average</span>'
-            f' &nbsp;<span style="color:{C_TEXT3};font-size:11px">(5Y avg: {avg_5y:,.0f} pts)</span></div></div>',
-        )
+            f' &nbsp;<span style="color:{C_TEXT3};font-size:11px">(5Y avg: {avg_5y:,.0f} pts)</span></div></div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.debug("BDI context error: {}", exc)
 
@@ -471,7 +469,7 @@ def _render_spread_analysis(all_series: dict[str, pd.Series]) -> None:
     header_cols = st.columns([2, 2.5, 1, 1, 1.5])
     for col, h in zip(header_cols, ["Spread", "Description", "Current", "5Y Avg", "Percentile"]):
         col.html(f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;font-weight:600">{h}</div>')
-    st.html(f'<hr style="border-color:{C_BORDER};margin:4px 0 8px">')
+    st.markdown(f'<hr style="border-color:{C_BORDER};margin:4px 0 8px">', unsafe_allow_html=True)
     for row in rows:
         try:
             p = row["Percentile"]
@@ -515,12 +513,11 @@ def _render_forward_curve(all_series: dict[str, pd.Series]) -> None:
             curve = [spot * (1 + rng.normal(0, 0.007)) for _ in months]
             scenario_label = "Flat Curve (market neutral)"
         scenario_color = C_MOD if scenario == "contango" else (C_LOW if scenario == "backwardation" else C_TEXT2)
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:10px 14px;'
             f'margin-bottom:12px;color:{scenario_color};font-size:12px">'
             f'Scenario: <b>{scenario_label}</b> &nbsp; '
-            f'<span style="color:{C_TEXT3}">(Spot: {spot:,.0f} pts)</span></div>',
-        )
+            f'<span style="color:{C_TEXT3}">(Spot: {spot:,.0f} pts)</span></div>', unsafe_allow_html=True)
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=labels, y=[spot] * len(labels), name="Spot",
@@ -544,10 +541,9 @@ def _render_forward_curve(all_series: dict[str, pd.Series]) -> None:
             barmode="overlay",
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT3};font-size:10px;text-align:right;margin-top:-8px">'
-            f'Source: Mock FFA curve based on current spot. Live FFA data requires subscription API.</div>',
-        )
+            f'Source: Mock FFA curve based on current spot. Live FFA data requires subscription API.</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.error("Forward curve error: {}", exc)
         st.error(f"Forward curve error: {exc}")
@@ -620,10 +616,9 @@ def _render_cross_asset(all_series: dict[str, pd.Series]) -> None:
             if axis.startswith("xaxis") or axis.startswith("yaxis"):
                 fig.layout[axis].update(gridcolor=C_BORDER, zerolinecolor=C_BORDER)
         st.plotly_chart(fig, use_container_width=True)
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT3};font-size:10px;text-align:right;margin-top:-8px">'
-            f'Blue = shipping index (left axis) &nbsp;|&nbsp; Amber dashed = macro indicator (right axis)</div>',
-        )
+            f'Blue = shipping index (left axis) &nbsp;|&nbsp; Amber dashed = macro indicator (right axis)</div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.error("Cross-asset dashboard error: {}", exc)
         st.error(f"Cross-asset error: {exc}")
@@ -639,7 +634,7 @@ def _render_methodology() -> None:
             col.html(
                 f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;font-weight:600">{h}</div>'
             )
-        st.html(f'<hr style="border-color:{C_BORDER};margin:4px 0 6px">')
+        st.markdown(f'<hr style="border-color:{C_BORDER};margin:4px 0 6px">', unsafe_allow_html=True)
         for entry in _METHODOLOGY:
             try:
                 accent = _INDEX_COLORS.get(entry["index"], C_TEXT3)
@@ -674,7 +669,7 @@ def _render_methodology() -> None:
 def render(freight_data=None, macro_data=None, stock_data=None) -> None:
     """Render Bloomberg-style shipping indices dashboard."""
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE},{C_BG});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px">'
             f'<div style="display:flex;align-items:center;gap:12px">'
@@ -683,8 +678,7 @@ def render(freight_data=None, macro_data=None, stock_data=None) -> None:
             f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;letter-spacing:0.5px">Shipping Indices</div>'
             f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px">'
             f'Baltic Exchange · Drewry · Freightos · Shanghai Shipping Exchange</div>'
-            f'</div></div></div>',
-        )
+            f'</div></div></div>', unsafe_allow_html=True)
     except Exception as exc:
         logger.debug("Header render error: {}", exc)
 

@@ -237,7 +237,7 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
         bar_pct = overall
         bar_color = rag_color
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
             f'padding:32px 36px 28px;margin-bottom:20px;">'
             f'<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:20px;">'
@@ -263,8 +263,7 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
             f'</div>'
             f'<div style="margin-top:20px;font-family:{_SANS};font-size:14px;line-height:1.75;'
             f'color:{C_TEXT2};max-width:900px;">{summary}</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
         logger.debug("Executive summary rendered — overall={}", overall)
     except Exception as exc:
         logger.error("_render_executive_summary: {}", exc)
@@ -335,10 +334,9 @@ def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[
 
 def _render_scorecard_matrix(rows: list[dict]) -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Scorecard Matrix — 30 Metrics</div>',
-        )
+            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Scorecard Matrix — 30 Metrics</div>', unsafe_allow_html=True)
 
         header = (
             f'<div style="display:grid;grid-template-columns:160px 200px 70px 90px 90px 60px 1fr;'
@@ -353,7 +351,7 @@ def _render_scorecard_matrix(rows: list[dict]) -> None:
             f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;font-weight:600;">NOTES</div>'
             f'</div>'
         )
-        st.html(header)
+        st.markdown(header, unsafe_allow_html=True)
 
         cat_colors = {
             "Freight Markets": C_ACCENT,
@@ -402,7 +400,7 @@ def _render_scorecard_matrix(rows: list[dict]) -> None:
                     f'{row["notes"]}</div>'
                     f'</div>'
                 )
-                st.html(row_html)
+                st.markdown(row_html, unsafe_allow_html=True)
             except Exception as exc:
                 logger.debug("matrix row {}: {}", i, exc)
 
@@ -477,12 +475,11 @@ def _render_score_history(overall: int) -> None:
             showlegend=False,
         )
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'padding:20px 20px 8px;margin:24px 0 20px;">',
-        )
+            f'padding:20px 20px 8px;margin:24px 0 20px;">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.html("</div>")
+        st.markdown("</div>", unsafe_allow_html=True)
         logger.debug("Score history chart rendered")
     except Exception as exc:
         logger.error("_render_score_history: {}", exc)
@@ -570,12 +567,11 @@ def _render_quadrant(rows: list[dict]) -> None:
                         bordercolor=C_BORDER, borderwidth=1),
         )
 
-        st.html(
+        st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'padding:20px 20px 8px;margin-bottom:20px;">',
-        )
+            f'padding:20px 20px 8px;margin-bottom:20px;">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.html("</div>")
+        st.markdown("</div>", unsafe_allow_html=True)
         logger.debug("Quadrant chart rendered — cur=({:.0f},{:.0f})", cur_x, cur_y)
     except Exception as exc:
         logger.error("_render_quadrant: {}", exc)
@@ -635,7 +631,7 @@ def _render_winner_loser(rows: list[dict]) -> None:
                       biggest["score"], biggest["prior_score"], C_MOD, surp_note)
             + f'</div>'
         )
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
         logger.debug("Winner/loser section rendered")
     except Exception as exc:
         logger.error("_render_winner_loser: {}", exc)
@@ -704,10 +700,9 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
             },
         ]
 
-        st.html(
+        st.markdown(
             f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Forward 30-Day Outlook</div>',
-        )
+            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Forward 30-Day Outlook</div>', unsafe_allow_html=True)
 
         for i, pred in enumerate(predictions):
             try:
@@ -715,7 +710,7 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
                 conf_color = C_HIGH if conf >= 70 else (C_MOD if conf >= 55 else C_LOW)
                 conf_bg = f"rgba({','.join(str(int(conf_color.lstrip('#')[j:j+2], 16)) for j in (0,2,4))},0.12)"
 
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
                     f'padding:18px 22px;margin-bottom:10px;display:flex;gap:20px;align-items:flex-start;">'
                     f'<div style="min-width:56px;text-align:center;padding-top:2px;">'
@@ -735,8 +730,7 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
                     f'<span style="font-family:{_SANS};font-size:11px;color:{conf_color};">{pred["key_risk"]}</span>'
                     f'</div>'
                     f'</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
             except Exception as exc:
                 logger.debug("outlook prediction {}: {}", i, exc)
 
@@ -782,12 +776,11 @@ def _render_category_bar(rows: list[dict]) -> None:
                 f'</div>'
             )
 
-        st.html(
+        st.markdown(
             f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
             f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Category Averages</div>'
             f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">'
-            + cards_html + f'</div>',
-        )
+            + cards_html + f'</div>', unsafe_allow_html=True)
         logger.debug("Category summary bar rendered")
     except Exception as exc:
         logger.error("_render_category_bar: {}", exc)
@@ -818,13 +811,12 @@ def render(
         logger.info("Scorecard: {} metrics, overall={}", len(rows), overall)
 
         # Global CSS injection (once)
-        st.html(
+        st.markdown(
             f'<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Libre+Franklin:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">'
             f'<style>'
             f'[data-testid="stAppViewContainer"] {{background:{C_BG};}}'
             f'[data-testid="block-container"] {{padding-top:1rem;}}'
-            f'</style>',
-        )
+            f'</style>', unsafe_allow_html=True)
 
         # ── Section 1 ─────────────────────────────────────────────────────────
         _render_executive_summary(overall, rows)

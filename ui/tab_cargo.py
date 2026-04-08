@@ -105,15 +105,14 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         f'<div style="font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
         if delta else ""
     )
-    st.html(
+    st.markdown(
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
         f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
         f'<div style="font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
         f'{delta_html}'
-        f'</div>',
-    )
+        f'</div>', unsafe_allow_html=True)
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
@@ -121,12 +120,11 @@ def _section_header(title: str, subtitle: str = "") -> None:
         f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
         if subtitle else ""
     )
-    st.html(
+    st.markdown(
         f'<div style="margin:28px 0 12px;">'
         f'<div style="font-size:1.05rem;font-weight:600;color:{C_TEXT};">{title}</div>'
         f'{sub}'
-        f'</div>',
-    )
+        f'</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +132,13 @@ def _section_header(title: str, subtitle: str = "") -> None:
 # ---------------------------------------------------------------------------
 def _render_hero() -> None:
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
             f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Cargo Intelligence Hub</div>'
             f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'Global commodity flows · Equipment balance · Specialised cargo monitoring</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             _kpi_card("Global Container Throughput", "842M TEU", "▲ 3.1% YoY", C_HIGH)
@@ -221,7 +218,7 @@ def _render_commodity_table() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Rate $/MT</span>'
             f'</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
         rows_html = (
             f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         )
@@ -239,7 +236,7 @@ def _render_commodity_table() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.html(rows_html)
+        st.markdown(rows_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Commodity table render failed")
         st.error("Commodity routing table unavailable.")
@@ -260,7 +257,7 @@ def _render_hazmat() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Restriction</span>'
             f'</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
         risk_color = {"High": C_LOW, "Medium": C_MOD, "Low": C_HIGH}
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, (cargo, cls, port, risk, carriers, restriction) in enumerate(_HAZMAT):
@@ -278,7 +275,7 @@ def _render_hazmat() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.html(rows_html)
+        st.markdown(rows_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Hazmat tracker render failed")
         st.error("Dangerous goods tracker unavailable.")
@@ -294,7 +291,7 @@ def _render_reefer() -> None:
             _kpi_card("Avg Reefer Rate Premium", "+31%", "vs standard dry rate", C_MOD)
         with c3:
             _kpi_card("Reefer Fleet Utilisation", "87%", "▲ 3 pts vs LY", C_HIGH)
-        st.html("<div style='height:12px;'></div>")
+        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.8fr 1.2fr 0.8fr 0.7fr 0.8fr 0.7fr;'
             f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
@@ -307,7 +304,7 @@ def _render_reefer() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Premium</span>'
             f'</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, (route, cargo, temp, transit, rate, prem) in enumerate(_REEFER_ROUTES):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
@@ -323,7 +320,7 @@ def _render_reefer() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.html(rows_html)
+        st.markdown(rows_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Reefer monitor render failed")
         st.error("Reefer monitor unavailable.")
@@ -361,7 +358,7 @@ def _render_lcl_fcl_optimizer() -> None:
                 rec_reason = f"At {cbm} CBM, a 40ft FCL gives best per-CBM rate at ${fcl40_cost/67:.0f}/CBM."
 
             with c2:
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {rec_color};border-radius:6px;padding:20px 24px;">'
                     f'<div style="font-size:0.75rem;color:{C_TEXT3};text-transform:uppercase;margin-bottom:6px;">Recommendation</div>'
                     f'<div style="font-size:1.8rem;font-weight:700;color:{rec_color};">{rec}</div>'
@@ -376,8 +373,7 @@ def _render_lcl_fcl_optimizer() -> None:
                     f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
                     f'<div style="font-size:0.7rem;color:{C_TEXT3};">40ft FCL</div>'
                     f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl40_cost:,}</div></div>'
-                    f'</div></div>',
-                )
+                    f'</div></div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("LCL/FCL optimizer render failed")
         st.error("LCL/FCL optimizer unavailable.")
@@ -393,7 +389,7 @@ def _render_theft_tracker() -> None:
             _kpi_card("Avg Loss per Incident", "$148K", "▲ 12% vs 2024", C_MOD)
         with c3:
             _kpi_card("Insurance Rate Impact", "+0.3–0.8%", "High-risk route surcharge", C_TEXT2)
-        st.html("<div style='height:12px;'></div>")
+        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 0.8fr 0.6fr 1.2fr;'
             f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
@@ -405,7 +401,7 @@ def _render_theft_tracker() -> None:
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Insurance Add-on</span>'
             f'</div>'
         )
-        st.html(header_html)
+        st.markdown(header_html, unsafe_allow_html=True)
         risk_color = {"Very High": C_LOW, "High": "#f97316", "Medium": C_MOD, "Low": C_HIGH}
         rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
         for i, (route, cargo, risk, incidents, insur) in enumerate(_THEFT_ROUTES):
@@ -422,7 +418,7 @@ def _render_theft_tracker() -> None:
                 f'</div>'
             )
         rows_html += "</div>"
-        st.html(rows_html)
+        st.markdown(rows_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Theft tracker render failed")
         st.error("Cargo theft tracker unavailable.")
@@ -467,7 +463,7 @@ def _render_equipment_balance() -> None:
             f'<span style="font-size:0.78rem;color:{C_MOD};">&#9646; Balanced — within ±2,500 TEU tolerance</span>'
             f'</div>'
         )
-        st.html(legend_html)
+        st.markdown(legend_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Equipment balance render failed")
         st.error("Equipment balance chart unavailable.")

@@ -370,11 +370,10 @@ def _section_title(text: str, subtitle: str = "") -> None:
         f'<div style="color:{C_TEXT2};font-size:0.83rem;margin-top:3px">{subtitle}</div>'
         if subtitle else ""
     )
-    st.html(
+    st.markdown(
         f'<div style="margin:6px 0 16px">'
         f'<div style="font-size:1.08rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.01em">{text}</div>'
-        + sub + "</div>",
-    )
+        + sub + "</div>", unsafe_allow_html=True)
 
 
 def _badge(text: str, color: str) -> str:
@@ -417,7 +416,7 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
 
         cols = st.columns([1.5, 1, 1, 1])
         with cols[0]:
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_LOW}44;border-radius:6px;'
                 f'padding:24px 22px;text-align:center">'
                 f'<div style="font-size:0.78rem;color:{C_TEXT2};font-weight:600;letter-spacing:0.08em;'
@@ -427,13 +426,12 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
                 f'<div style="margin-top:10px;font-size:0.9rem;color:{delta_color};font-weight:700">'
                 f'{delta_str} vs prior month</div>'
                 f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:4px">Prior month: {prior_month}/100</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
         for i, (region, score, level) in enumerate(top_regions):
             lvl_color = _LEVEL_COLOR.get(level, C_TEXT2)
             with cols[i + 1]:
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {lvl_color}44;'
                     f'border-radius:6px;padding:20px 16px;height:100%">'
                     f'<div style="font-size:0.72rem;color:{C_TEXT3};font-weight:600;'
@@ -441,15 +439,13 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
                     f'<div style="font-size:0.92rem;font-weight:700;color:{C_TEXT};margin-bottom:8px">{region}</div>'
                     f'<div style="font-size:2rem;font-weight:800;color:{lvl_color}">{score}</div>'
                     f'<div style="margin-top:8px">{_badge(level, lvl_color)}</div>'
-                    f'</div>',
-                )
+                    f'</div>', unsafe_allow_html=True)
 
         if insights:
             for ins in insights[:2]:
                 try:
-                    st.html(
-                        _card(f'<div style="font-size:0.85rem;color:{C_TEXT2}">📌 {ins}</div>'),
-                    )
+                    st.markdown(
+                        _card(f'<div style="font-size:0.85rem;color:{C_TEXT2}">📌 {ins}</div>'), unsafe_allow_html=True)
                 except Exception:
                     pass
 
@@ -593,14 +589,13 @@ def _render_risk_map() -> None:
 
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
+        st.markdown(
             f'<div style="display:flex;gap:20px;margin-top:6px;margin-bottom:16px;flex-wrap:wrap">'
             f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_LOW}">Red</span> = Critical risk (80–100)</span>'
             f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_MOD}">Amber</span> = Moderate risk (40–69)</span>'
             f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_HIGH}">Green</span> = Lower risk (0–39)</span>'
             f'<span style="font-size:0.75rem;color:{C_TEXT3}">— Lines = key shipping lanes</span>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] risk_map: {exc}")
@@ -638,7 +633,7 @@ def _render_hotspot_monitor() -> None:
                         f'</div>'
                     )
 
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {lvl_color}33;border-radius:6px;'
                 f'padding:20px 22px;margin-bottom:14px">'
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
@@ -649,8 +644,7 @@ def _render_hotspot_monitor() -> None:
                 f'<div style="font-size:0.83rem;color:{C_TEXT2};line-height:1.55;margin-bottom:4px">'
                 f'{hs["situation"]}</div>'
                 + fields_html +
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] hotspot_monitor: {exc}")
@@ -676,10 +670,10 @@ def _render_sanctions_tracker() -> None:
             f'<div>Ships Affected</div><div>Effective</div><div>Compliance Notes</div>'
             f'</div>'
         )
-        st.html(header)
+        st.markdown(header, unsafe_allow_html=True)
 
         for row in _SANCTIONS:
-            st.html(
+            st.markdown(
                 f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1fr 0.9fr 2fr;'
                 f'gap:8px;padding:12px 14px;background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:8px;margin-bottom:6px;font-size:0.8rem">'
@@ -689,8 +683,7 @@ def _render_sanctions_tracker() -> None:
                 f'<div style="color:{C_LOW};font-weight:600">{row["ships_affected"]}</div>'
                 f'<div style="color:{C_TEXT3}">{row["effective"]}</div>'
                 f'<div style="color:{C_TEXT2};font-size:0.76rem">{row["notes"]}</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] sanctions_tracker: {exc}")
@@ -716,12 +709,12 @@ def _render_trade_war_monitor() -> None:
             f'<div>Volume Impact</div><div>Shipping Impact</div><div>Severity</div>'
             f'</div>'
         )
-        st.html(header)
+        st.markdown(header, unsafe_allow_html=True)
 
         for row in _TARIFFS:
             sev = row["severity"]
             sev_color = _LEVEL_COLOR.get(sev, C_TEXT2)
-            st.html(
+            st.markdown(
                 f'<div style="display:grid;grid-template-columns:1.2fr 1fr 1.4fr 1.4fr 2fr 0.8fr;'
                 f'gap:8px;padding:12px 14px;background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:8px;margin-bottom:6px;font-size:0.8rem">'
@@ -731,10 +724,9 @@ def _render_trade_war_monitor() -> None:
                 f'<div style="color:{C_MOD}">{row["volume_impact"]}</div>'
                 f'<div style="color:{C_TEXT2};font-size:0.76rem">{row["shipping_impact"]}</div>'
                 f'<div>{_badge(sev, sev_color)}</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
-        st.html(
+        st.markdown(
             _card(
                 f'<div style="font-size:0.82rem;color:{C_TEXT2}">'
                 f'<b style="color:{C_MOD}">Key insight:</b> US-China tariff escalation to 145%/125% is the primary '
@@ -742,8 +734,7 @@ def _render_trade_war_monitor() -> None:
                 f'but transshipment via Vietnam and Mexico is surging, creating secondary port congestion. '
                 f'Carriers are deploying blank sailings to manage capacity utilisation.'
                 f'</div>'
-            ),
-        )
+            ), unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] trade_war_monitor: {exc}")
@@ -770,11 +761,11 @@ def _render_rerouting_impact() -> None:
             f'<div>Rate Premium</div><div>Status</div>'
             f'</div>'
         )
-        st.html(header)
+        st.markdown(header, unsafe_allow_html=True)
 
         for row in _REROUTING:
             status_color = C_LOW if row["status"] == "Active reroute" else C_MOD
-            st.html(
+            st.markdown(
                 f'<div style="display:grid;grid-template-columns:1.3fr 1fr 1.2fr 0.9fr 0.9fr 1.2fr 1.2fr 0.9fr;'
                 f'gap:6px;padding:12px 14px;background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:8px;margin-bottom:6px;font-size:0.78rem">'
@@ -786,8 +777,7 @@ def _render_rerouting_impact() -> None:
                 f'<div style="color:{C_TEXT2};font-size:0.73rem">{row["extra_bunker"]}</div>'
                 f'<div style="color:{C_ACCENT};font-weight:600">{row["rate_premium"]}</div>'
                 f'<div>{_badge(row["status"], status_color)}</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
         # Mini bar chart of extra days
         try:
@@ -854,12 +844,12 @@ def _render_war_risk_premiums() -> None:
             f'<div>Annual Equiv.</div><div>K&R Coverage</div><div>Trend</div><div>Notes</div>'
             f'</div>'
         )
-        st.html(header)
+        st.markdown(header, unsafe_allow_html=True)
 
         for row in _WAR_RISK:
             jwc_color = C_LOW if row["jwc_listed"] == "Yes" else C_MOD if "Partial" in row["jwc_listed"] else C_HIGH
             trend_html = _trend_arrow(row["trend"])
-            st.html(
+            st.markdown(
                 f'<div style="display:grid;grid-template-columns:1.5fr 1.4fr 0.9fr 1.2fr 1.2fr 0.7fr 2fr;'
                 f'gap:6px;padding:12px 14px;background:{C_CARD};border:1px solid {C_BORDER};'
                 f'border-radius:8px;margin-bottom:6px;font-size:0.78rem">'
@@ -870,10 +860,9 @@ def _render_war_risk_premiums() -> None:
                 f'<div style="color:{C_TEXT2};font-size:0.73rem">{row["kidnap_ransom"]}</div>'
                 f'<div>{trend_html}</div>'
                 f'<div style="color:{C_TEXT3};font-size:0.73rem">{row["notes"]}</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
 
-        st.html(
+        st.markdown(
             _card(
                 f'<div style="font-size:0.82rem;color:{C_TEXT2}">'
                 f'<b style="color:{C_ACCENT}">JWC Note:</b> The Joint War Committee (Lloyd\'s Market Association) '
@@ -881,8 +870,7 @@ def _render_war_risk_premiums() -> None:
                 f'underwriter and may face additional premium calls of 0.025–0.75% of vessel value per breach. '
                 f'Red Sea and Black Sea areas currently attract highest additional premium calls.'
                 f'</div>'
-            ),
-        )
+            ), unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] war_risk_premiums: {exc}")
@@ -894,51 +882,48 @@ def _render_war_risk_premiums() -> None:
 
 def render(macro_data=None, insights=None, news_items=None) -> None:
     try:
-        st.html(
+        st.markdown(
             '<style>'
             f'[data-testid="stAppViewContainer"] {{ background:{C_BG}; }}'
             f'[data-testid="stSidebar"] {{ background:{C_SURFACE}; }}'
             '.stPlotlyChart { border-radius: 6px; overflow: hidden; }'
-            '</style>',
-        )
+            '</style>', unsafe_allow_html=True)
 
-        st.html(
+        st.markdown(
             f'<div style="margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid {C_BORDER}">'
             f'<div style="font-size:1.6rem;font-weight:800;color:{C_TEXT};letter-spacing:-0.02em">'
             f'Geopolitical Risk Intelligence</div>'
             f'<div style="font-size:0.88rem;color:{C_TEXT2};margin-top:6px">'
             f'Institutional-grade geopolitical risk monitoring for global shipping operations — '
             f'hotspots, sanctions, trade wars, rerouting, and war risk insurance</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
         _render_global_risk_heat(macro_data, insights)
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_risk_map()
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_hotspot_monitor()
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_sanctions_tracker()
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_trade_war_monitor()
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_rerouting_impact()
-        st.html(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>')
+        st.markdown(f'<div style="margin:28px 0 0;border-top:1px solid {C_BORDER}"></div>', unsafe_allow_html=True)
 
         _render_war_risk_premiums()
 
-        st.html(
+        st.markdown(
             f'<div style="margin-top:32px;padding-top:16px;border-top:1px solid {C_BORDER};'
             f'font-size:0.73rem;color:{C_TEXT3};text-align:center">'
             f'Data: IMO, Lloyd\'s MIU, BIMCO, US OFAC, EU Sanctions Map, Joint War Committee — '
             f'Updated 2026-03-22 | For institutional use only. Not financial advice.'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
 
     except Exception as exc:
         logger.error(f"[tab_geopolitical] render: {exc}")

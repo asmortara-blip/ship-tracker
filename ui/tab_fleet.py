@@ -54,11 +54,10 @@ def _dark_layout(height: int = 360, l: int = 52, r: int = 24, t: int = 36, b: in
 
 def _section(title: str, subtitle: str = "") -> None:
     sub_html = f'<span style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-left:10px;">{subtitle}</span>' if subtitle else ""
-    st.html(
+    st.markdown(
         f'<div style="border-left:3px solid {C_ACCENT};padding:6px 0 6px 12px;margin:24px 0 12px 0;">'
         f'<span style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:15px;font-weight:700;letter-spacing:0.3px;">{title}</span>'
-        f'{sub_html}</div>',
-    )
+        f'{sub_html}</div>', unsafe_allow_html=True)
 
 
 def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> str:
@@ -90,7 +89,7 @@ def _render_kpis(insights: Optional[dict]) -> None:
         ]
         for col, (label, value, delta, color) in zip(cols, kpis):
             with col:
-                st.html(_kpi_card(label, value, delta, color))
+                st.markdown(_kpi_card(label, value, delta, color), unsafe_allow_html=True)
     except Exception:
         logger.exception("Fleet KPIs render failed")
 
@@ -250,11 +249,10 @@ def _render_orderbook() -> None:
             ])
         )
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.html(
+        st.markdown(
             f'<div style="color:{C_PURPLE};font-size:12px;margin-top:6px;">'
             f'Trend: LNG dual-fuel vessels now represent the largest single category in the global orderbook, '
-            f'driven by IMO 2030 carbon-intensity targets and EU ETS compliance pressure.</div>',
-        )
+            f'driven by IMO 2030 carbon-intensity targets and EU ETS compliance pressure.</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("Order book section failed")
 
@@ -278,14 +276,13 @@ def _render_scrapping() -> None:
                 df_s = pd.DataFrame(scrap_data)
                 st.dataframe(df_s, use_container_width=True, hide_index=True)
                 avg_age = 26
-                st.html(
+                st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid rgba(192,57,43,0.3);border-radius:6px;'
                     f'padding:10px 14px;margin-top:10px;">'
                     f'<span style="color:{C_LOW};font-weight:700;">Avg Scrapping Age:</span> '
                     f'<span style="color:{C_TEXT};font-size:20px;font-weight:700;">{avg_age} years</span><br>'
                     f'<span style="color:{C_TEXT3};font-size:11px;">Vessels 20+ years face accelerating scrapping pressure '
-                    f'under CII ratings and EU ETS compliance costs.</span></div>',
-                )
+                    f'under CII ratings and EU ETS compliance costs.</span></div>', unsafe_allow_html=True)
             except Exception:
                 logger.exception("Scrapping table failed")
 
@@ -393,11 +390,10 @@ def _render_utilization_map() -> None:
             geo=dict(bgcolor=C_BG),
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:-6px;">'
             f'Red Sea (38°E, 20°N) shows sharp vessel density drop due to Houthi disruptions rerouting traffic via Cape of Good Hope. '
-            f'This has added ~10–14 days to Asia-Europe voyages and effectively tightened global capacity 8–12%.</div>',
-        )
+            f'This has added ~10–14 days to Asia-Europe voyages and effectively tightened global capacity 8–12%.</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("Utilization map failed")
 
@@ -594,11 +590,10 @@ def _render_age_risk() -> None:
             ])
         )
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.html(
+        st.markdown(
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:8px;">'
             f'IMO 2030 targets require 40% carbon intensity reduction vs 2008 baseline. '
-            f'Vessels rated CII D/E for two consecutive years face trading restrictions from 2026.</div>',
-        )
+            f'Vessels rated CII D/E for two consecutive years face trading restrictions from 2026.</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("Age profile risk section failed")
 
@@ -642,7 +637,7 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
             util_val = int(r["Utilization Rate"].replace("%", ""))
             util_color = C_HIGH if util_val >= 90 else C_MOD if util_val >= 80 else C_LOW
             trend_color = C_HIGH if "+" in r["Trend"] else C_LOW
-            st.html(
+            st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
                 f'padding:16px 20px;margin-bottom:12px;">'
                 f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
@@ -660,8 +655,7 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
                 f'<div style="color:{C_TEXT};font-size:14px;font-weight:600;">{r["Avg Vessel Size (TEU)"]} TEU</div></div>'
                 f'</div>'
                 f'<div style="margin-top:10px;color:{C_TEXT3};font-size:11px;">Note: {r["Disruption Note"]}</div>'
-                f'</div>',
-            )
+                f'</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("Route metrics section failed")
 
@@ -671,15 +665,14 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Global Fleet Analytics tab."""
     try:
-        st.html(
+        st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,rgba(10,15,26,0.8) 100%);'
             f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:20px;font-weight:800;letter-spacing:0.3px;">Global Fleet Analytics</div>'
             f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
             f'Comprehensive supply-side analysis — fleet composition, orderbook, scrapping dynamics, '
             f'capacity vs demand, and trade lane deployment. Data as of Q1 2026.</div>'
-            f'</div>',
-        )
+            f'</div>', unsafe_allow_html=True)
     except Exception:
         logger.exception("Fleet header failed")
 
