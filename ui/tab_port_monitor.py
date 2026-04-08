@@ -22,17 +22,17 @@ import streamlit as st
 from loguru import logger
 
 # ── Color palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Master port dataset ───────────────────────────────────────────────────────
 TOP_PORTS = [
@@ -107,7 +107,7 @@ def _growth_cell(v: float) -> str:
 
 def _kpi_card(label: str, value: str, sub: str, color: str) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:20px 24px;border-top:3px solid {color};">'
         f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">{label}</div>'
         f'<div style="color:{color};font-size:32px;font-weight:800;line-height:1;">{value}</div>'
@@ -131,10 +131,10 @@ def _dark_table_style() -> str:
     return (
         "<style>"
         "table.portmon{width:100%;border-collapse:collapse;font-size:13px;}"
-        "table.portmon th{background:#0d1525;color:#64748b;font-size:10px;font-weight:700;"
-        "letter-spacing:1px;text-transform:uppercase;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);text-align:left;}"
-        "table.portmon td{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:#f1f5f9;vertical-align:middle;}"
-        "table.portmon tr:hover td{background:rgba(59,130,246,0.06);}"
+        "table.portmon th{background:#0d1525;color:#6b6760;font-size:10px;font-weight:700;"
+        "letter-spacing:1px;text-transform:uppercase;padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.06);text-align:left;}"
+        "table.portmon td{padding:9px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:#e8e6e1;vertical-align:middle;}"
+        "table.portmon tr:hover td{background:rgba(53,114,176,0.06);}"
         "</style>"
     )
 
@@ -213,7 +213,7 @@ def _render_rankings_table(ports: list[dict]) -> None:
 
         html = (
             _dark_table_style()
-            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;padding:0;">'
+            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;padding:0;">'
             + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
             + '</div>'
         )
@@ -251,7 +251,7 @@ def _render_efficiency_chart(ports: list[dict]) -> None:
                       annotation_position="top right")
         fig.update_layout(
             plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
-            font=dict(color=C_TEXT, family="Inter, sans-serif"),
+            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
             xaxis=dict(showgrid=False, tickfont=dict(size=11), tickangle=-30),
             yaxis=dict(showgrid=True, gridcolor=C_BORDER, title="Crane Moves / Hour", range=[0, max(moves) + 5]),
             margin=dict(l=20, r=20, t=20, b=60),
@@ -304,7 +304,7 @@ def _render_port_map(ports: list[dict]) -> None:
         fig.update_layout(
             geo=dict(
                 bgcolor=C_BG,
-                showland=True, landcolor="#1a2235",
+                showland=True, landcolor="#181c28",
                 showocean=True, oceancolor=C_BG,
                 showcoastlines=True, coastlinecolor="rgba(255,255,255,0.12)",
                 showframe=False,
@@ -349,7 +349,7 @@ def _regional_table(region_ports: list[dict]) -> str:
         )
     return (
         _dark_table_style()
-        + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
+        + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
         + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
         + '</div>'
     )
@@ -466,7 +466,7 @@ def _render_events_feed(events: list[dict]) -> None:
 
         html = (
             _dark_table_style()
-            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
             + '</div>'
         )
@@ -490,7 +490,7 @@ def _render_rate_cards(lanes: list[dict]) -> None:
             rate = lane["spot_rate"]
             rate_color = C_LOW if rate > 4000 else (C_MOD if rate > 2500 else C_HIGH)
             cards_html += (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:18px;">'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px;">'
                 f'<div style="font-weight:700;font-size:14px;color:{C_TEXT};margin-bottom:12px;">'
                 f'{lane["from_port"]} <span style="color:{C_TEXT3};">→</span> {lane["to_port"]}'
                 f'</div>'

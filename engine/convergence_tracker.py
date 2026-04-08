@@ -13,15 +13,15 @@ from loguru import logger
 
 
 # ── Color palette (mirrors ui/components.py) ────────────────────────────────
-_C_HIGH   = "#10b981"
-_C_MOD    = "#f59e0b"
-_C_LOW    = "#ef4444"
-_C_CARD   = "#1a2235"
-_C_TEXT   = "#f1f5f9"
-_C_TEXT2  = "#94a3b8"
-_C_ACCENT = "#3b82f6"
-_C_CONV   = "#8b5cf6"
-_C_MACRO  = "#06b6d4"
+_C_HIGH   = "#2e9e6e"
+_C_MOD    = "#c9962b"
+_C_LOW    = "#c0392b"
+_C_CARD   = "#181c28"
+_C_TEXT   = "#e8e6e1"
+_C_TEXT2  = "#9a968e"
+_C_ACCENT = "#3572b0"
+_C_CONV   = "#7c6eaf"
+_C_MACRO  = "#4a90a4"
 
 # Direction threshold defaults
 _BULLISH_THRESHOLD = 0.60
@@ -403,29 +403,29 @@ def render_convergence_dashboard(events: list[ConvergenceEvent]) -> None:
         """
         <style>
         @keyframes pulse-border {
-            0%   { box-shadow: 0 0 0 0   rgba(239,68,68,0.6); }
-            70%  { box-shadow: 0 0 0 10px rgba(239,68,68,0);   }
-            100% { box-shadow: 0 0 0 0   rgba(239,68,68,0);   }
+            0%   { box-shadow: 0 0 0 0   rgba(192,57,43,0.6); }
+            70%  { box-shadow: 0 0 0 10px rgba(192,57,43,0);   }
+            100% { box-shadow: 0 0 0 0   rgba(192,57,43,0);   }
         }
         .conv-card {
-            background: #1a2235;
-            border-radius: 12px;
+            background: #181c28;
+            border-radius: 6px;
             padding: 20px 24px;
             margin-bottom: 18px;
-            border: 1px solid rgba(255,255,255,0.08);
+            border: 1px solid rgba(232,230,225,0.06);
         }
         .conv-card-immediate {
-            border: 2px solid #ef4444;
+            border: 2px solid #c0392b;
             animation: pulse-border 2s ease-in-out infinite;
         }
         .conv-header {
             font-size: 0.65rem; font-weight: 800;
-            letter-spacing: 0.14em; color: #8b5cf6;
+            letter-spacing: 0.14em; color: #7c6eaf;
             margin-bottom: 6px;
         }
         .conv-title {
             font-size: 1.15rem; font-weight: 700;
-            color: #f1f5f9; margin-bottom: 10px;
+            color: #e8e6e1; margin-bottom: 10px;
         }
         .conv-badge {
             display:inline-block; font-size:0.65rem; font-weight:700;
@@ -437,11 +437,11 @@ def render_convergence_dashboard(events: list[ConvergenceEvent]) -> None:
         }
         .conv-signal-chip {
             font-size:0.68rem; padding:3px 8px; border-radius:6px;
-            background:rgba(255,255,255,0.06); color:#94a3b8;
+            background:rgba(232,230,225,0.05); color:#9a968e;
         }
         .conv-desc {
-            font-size:0.82rem; color:#94a3b8; line-height:1.55;
-            margin-top:10px; border-top:1px solid rgba(255,255,255,0.06);
+            font-size:0.82rem; color:#9a968e; line-height:1.55;
+            margin-top:10px; border-top:1px solid rgba(232,230,225,0.05);
             padding-top:10px;
         }
         </style>
@@ -454,10 +454,10 @@ def render_convergence_dashboard(events: list[ConvergenceEvent]) -> None:
         st.markdown(
             '<div class="conv-card" style="text-align:center;padding:36px;">'
             '<div style="font-size:2rem;margin-bottom:12px;">📡</div>'
-            '<div style="font-size:1rem;font-weight:600;color:#f1f5f9;margin-bottom:8px;">'
+            '<div style="font-size:1rem;font-weight:600;color:#e8e6e1;margin-bottom:8px;">'
             'No convergence signals detected.'
             '</div>'
-            '<div style="font-size:0.85rem;color:#94a3b8;">'
+            '<div style="font-size:0.85rem;color:#9a968e;">'
             'Markets are mixed — wait for clearer directional signals.'
             '</div>'
             '</div>',
@@ -545,7 +545,7 @@ def render_convergence_dashboard(events: list[ConvergenceEvent]) -> None:
             f'      {tta_label}'
             f'    </span>'
             f'    <span class="conv-badge" '
-            f'          style="background:rgba(255,255,255,0.05);color:#94a3b8;">'
+            f'          style="background:rgba(232,230,225,0.04);color:#9a968e;">'
             f'      Score: {score_pct} &nbsp;|&nbsp; Avg strength: {strength_pct}'
             f'    </span>'
             f'  </div>'

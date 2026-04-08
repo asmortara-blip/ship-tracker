@@ -10,19 +10,19 @@ from typing import Any
 
 
 # ── Color palette (mirrors ui/styles.py) ────────────────────────────────────
-_C_BG      = "#0a0f1a"
-_C_SURFACE = "#111827"
-_C_CARD    = "#1a2235"
-_C_BORDER  = "rgba(255,255,255,0.08)"
-_C_HIGH    = "#10b981"
-_C_MOD     = "#f59e0b"
-_C_LOW     = "#ef4444"
-_C_ACCENT  = "#3b82f6"
-_C_CONV    = "#8b5cf6"
-_C_MACRO   = "#06b6d4"
-_C_TEXT    = "#f1f5f9"
-_C_TEXT2   = "#94a3b8"
-_C_TEXT3   = "#64748b"
+_C_BG      = "#0c0e14"
+_C_SURFACE = "#12151e"
+_C_CARD    = "#181c28"
+_C_BORDER  = "rgba(232,230,225,0.06)"
+_C_HIGH    = "#2e9e6e"
+_C_MOD     = "#c9962b"
+_C_LOW     = "#c0392b"
+_C_ACCENT  = "#3572b0"
+_C_CONV    = "#7c6eaf"
+_C_MACRO   = "#4a90a4"
+_C_TEXT    = "#e8e6e1"
+_C_TEXT2   = "#9a968e"
+_C_TEXT3   = "#6b6760"
 
 _CATEGORY_COLORS = {
     "CONVERGENCE": _C_CONV,
@@ -79,7 +79,7 @@ def _score_bar(score: float, color: str = _C_ACCENT, width: int = 120) -> str:
     pct = f"{score * 100:.0f}%"
     return (
         f'<div style="display:inline-flex;align-items:center;gap:6px">'
-        f'<div style="width:{width}px;height:8px;background:rgba(255,255,255,0.08);'
+        f'<div style="width:{width}px;height:8px;background:rgba(232,230,225,0.06);'
         f'border-radius:4px;overflow:hidden">'
         f'<div style="width:{fill_w}px;height:100%;background:{color};'
         f'border-radius:4px"></div></div>'
@@ -92,7 +92,7 @@ def _badge(text: str, color: str) -> str:
     bg = _hex_to_rgba(color, 0.15)
     border = _hex_to_rgba(color, 0.30)
     return (
-        f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;'
+        f'<span style="display:inline-block;padding:2px 10px;border-radius:3px;'
         f'font-size:0.7rem;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:0.05em;background:{bg};color:{color};'
         f'border:1px solid {border}">{text}</span>'
@@ -195,8 +195,8 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
 
 /* ── Hero ── */
 .hero {{
-    background: linear-gradient(135deg, #0a0f1a 0%, #0f1d35 40%, #0d1829 70%, #070d18 100%);
-    border: 1px solid rgba(59,130,246,0.20);
+    background: linear-gradient(135deg, #0c0e14 0%, #0f1d35 40%, #0d1829 70%, #070d18 100%);
+    border: 1px solid rgba(53,114,176,0.20);
     border-radius: 16px;
     padding: 48px 52px;
     margin-bottom: 32px;
@@ -208,7 +208,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     position: absolute;
     top: -60px; right: -60px;
     width: 320px; height: 320px;
-    background: radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 65%);
+    background: radial-gradient(circle, rgba(53,114,176,0.12) 0%, transparent 65%);
     pointer-events: none;
 }}
 .hero::after {{
@@ -216,7 +216,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     position: absolute;
     bottom: -40px; left: 20%;
     width: 200px; height: 200px;
-    background: radial-gradient(circle, rgba(139,92,246,0.08) 0%, transparent 65%);
+    background: radial-gradient(circle, rgba(124,110,175,0.08) 0%, transparent 65%);
     pointer-events: none;
 }}
 .hero-eyebrow {{
@@ -246,9 +246,9 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     flex-wrap: wrap;
 }}
 .stat-box {{
-    background: rgba(255,255,255,0.04);
+    background: rgba(232,230,225,0.04);
     border: 1px solid rgba(255,255,255,0.09);
-    border-radius: 10px;
+    border-radius: 6px;
     padding: 16px 22px;
     min-width: 130px;
     flex: 1;
@@ -288,7 +288,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
 .card {{
     background: {_C_CARD};
     border: 1px solid {_C_BORDER};
-    border-radius: 12px;
+    border-radius: 6px;
     padding: 20px 24px;
     margin-bottom: 12px;
 }}
@@ -299,8 +299,8 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
 /* ── Exec summary ── */
 .exec-summary {{
     background: linear-gradient(135deg, {_C_CARD}, #141e30);
-    border: 1px solid rgba(59,130,246,0.18);
-    border-radius: 14px;
+    border: 1px solid rgba(53,114,176,0.18);
+    border-radius: 6px;
     padding: 28px 32px;
     margin-bottom: 12px;
 }}
@@ -322,7 +322,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     display: flex;
     gap: 10px;
     padding: 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(232,230,225,0.04);
     font-size: 0.85rem;
     color: {_C_TEXT2};
     line-height: 1.5;
@@ -339,7 +339,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
 .insight-card {{
     background: {_C_CARD};
     border: 1px solid {_C_BORDER};
-    border-radius: 12px;
+    border-radius: 6px;
     padding: 20px 24px;
     margin-bottom: 12px;
     border-left: 4px solid {_C_ACCENT};
@@ -396,12 +396,12 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     font-size: 0.66rem;
     text-align: left;
     padding: 4px 8px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(232,230,225,0.05);
 }}
 .signal-table td {{
     padding: 5px 8px;
     color: {_C_TEXT2};
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(232,230,225,0.03);
 }}
 .signal-table tr:last-child td {{ border-bottom: none; }}
 
@@ -412,7 +412,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     font-size: 0.82rem;
 }}
 .data-table th {{
-    background: rgba(59,130,246,0.15);
+    background: rgba(53,114,176,0.15);
     color: {_C_ACCENT};
     font-weight: 700;
     text-transform: uppercase;
@@ -420,19 +420,19 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
     font-size: 0.68rem;
     padding: 10px 14px;
     text-align: left;
-    border-bottom: 1px solid rgba(59,130,246,0.25);
+    border-bottom: 1px solid rgba(53,114,176,0.25);
 }}
 .data-table td {{
     padding: 10px 14px;
     color: {_C_TEXT2};
-    border-bottom: 1px solid rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(232,230,225,0.04);
     vertical-align: middle;
 }}
 .data-table tr:nth-child(even) td {{
     background: rgba(255,255,255,0.018);
 }}
 .data-table tr:hover td {{
-    background: rgba(59,130,246,0.06);
+    background: rgba(53,114,176,0.06);
     color: {_C_TEXT};
 }}
 .data-table .rank-cell {{
@@ -467,7 +467,7 @@ a {{ color: {_C_ACCENT}; text-decoration: none; }}
 .macro-table td {{
     padding: 10px 14px;
     color: {_C_TEXT2};
-    border-bottom: 1px solid rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(232,230,225,0.04);
 }}
 .macro-table tr:nth-child(even) td {{
     background: rgba(255,255,255,0.018);
@@ -682,7 +682,7 @@ def _build_port_table(port_results: list) -> str:
             cong_col = _C_LOW if cong_val >= 0.6 else (_C_MOD if cong_val >= 0.35 else _C_HIGH)
             cong_html = (
                 f'<div style="display:inline-flex;align-items:center;gap:6px">'
-                f'<div style="width:60px;height:6px;background:rgba(255,255,255,0.08);'
+                f'<div style="width:60px;height:6px;background:rgba(232,230,225,0.06);'
                 f'border-radius:3px;overflow:hidden">'
                 f'<div style="width:{int(cong_val*60)}px;height:100%;'
                 f'background:{cong_col};border-radius:3px"></div></div>'
@@ -761,7 +761,7 @@ def _build_route_table(route_results: list) -> str:
 
         rate_html = _fmt_rate(float(rate)) if rate is not None else "—"
         chg_html  = (
-            f'<span style="color:{"#10b981" if float(chg_30d) >= 0 else "#ef4444"};'
+            f'<span style="color:{"#2e9e6e" if float(chg_30d) >= 0 else "#c0392b"};'
             f'font-weight:600">'
             f'{"&#9650;" if float(chg_30d) >= 0 else "&#9660;"} '
             f'{_fmt_pct(float(chg_30d))}</span>'
@@ -832,16 +832,16 @@ def _build_freight_table(freight_data: dict | list | None) -> str:
 
         rate_html = _fmt_rate(float(rate)) if rate is not None else "—"
         chg30_html = (
-            f'<span style="color:{"#10b981" if float(chg30) >= 0 else "#ef4444"};'
+            f'<span style="color:{"#2e9e6e" if float(chg30) >= 0 else "#c0392b"};'
             f'font-weight:600">'
             f'{"&#9650;" if float(chg30) >= 0 else "&#9660;"} {_fmt_pct(float(chg30))}</span>'
-            if chg30 is not None else '<span style="color:#64748b">—</span>'
+            if chg30 is not None else '<span style="color:#6b6760">—</span>'
         )
         chg90_html = (
-            f'<span style="color:{"#10b981" if float(chg90) >= 0 else "#ef4444"};'
+            f'<span style="color:{"#2e9e6e" if float(chg90) >= 0 else "#c0392b"};'
             f'font-weight:600">'
             f'{"&#9650;" if float(chg90) >= 0 else "&#9660;"} {_fmt_pct(float(chg90))}</span>'
-            if chg90 is not None else '<span style="color:#64748b">—</span>'
+            if chg90 is not None else '<span style="color:#6b6760">—</span>'
         )
 
         rows_html += f"""
@@ -977,13 +977,13 @@ def _build_stock_section(stock_data: dict | list | None) -> str:
             if price is not None else "—"
         )
         chg1d_html = (
-            f'<span style="color:{"#10b981" if float(chg1d) >= 0 else "#ef4444"};'
+            f'<span style="color:{"#2e9e6e" if float(chg1d) >= 0 else "#c0392b"};'
             f'font-weight:600">{"&#9650;" if float(chg1d) >= 0 else "&#9660;"} '
             f'{_fmt_pct(float(chg1d))}</span>'
             if chg1d is not None else "—"
         )
         chg30d_html = (
-            f'<span style="color:{"#10b981" if float(chg30d) >= 0 else "#ef4444"};'
+            f'<span style="color:{"#2e9e6e" if float(chg30d) >= 0 else "#c0392b"};'
             f'font-weight:600">{"&#9650;" if float(chg30d) >= 0 else "&#9660;"} '
             f'{_fmt_pct(float(chg30d))}</span>'
             if chg30d is not None else "—"

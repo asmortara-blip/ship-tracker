@@ -25,16 +25,16 @@ from ui.styles import (
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 
-_C_BLUE    = "#3b82f6"
+_C_BLUE    = "#3572b0"
 _C_ORANGE  = "#f97316"
-_C_RED     = "#ef4444"
-_C_AMBER   = "#f59e0b"
-_C_GREEN   = "#10b981"
-_C_PURPLE  = "#8b5cf6"
-_C_CYAN    = "#06b6d4"
+_C_RED     = "#c0392b"
+_C_AMBER   = "#c9962b"
+_C_GREEN   = "#2e9e6e"
+_C_PURPLE  = "#7c6eaf"
+_C_CYAN    = "#4a90a4"
 _C_GRAY    = "#475569"
 _C_INDIGO  = "#6366f1"
-_C_BG_SURF = "#111827"
+_C_BG_SURF = "#12151e"
 
 _TYPE_COLOR: dict[str, str] = {
     "Container":   _C_BLUE,
@@ -208,7 +208,7 @@ def _render_global_map(
         ),
         text=port_names,
         textposition="top center",
-        textfont=dict(color="#94a3b8", size=9),
+        textfont=dict(color="#9a968e", size=9),
         name="Ports",
         hovertext=port_hover,
         hoverinfo="text",
@@ -288,9 +288,9 @@ def _render_global_map(
         showlegend=True,
         legend=dict(
             bgcolor="rgba(17,24,39,0.85)",
-            bordercolor="rgba(255,255,255,0.08)",
+            bordercolor="rgba(232,230,225,0.06)",
             borderwidth=1,
-            font=dict(color="#94a3b8", size=11),
+            font=dict(color="#9a968e", size=11),
             x=0.01, y=0.01,
             xanchor="left", yanchor="bottom",
         ),
@@ -405,7 +405,7 @@ def _render_fleet_donut(vessel_map: dict[str, list[dict]], selected_locode: str)
                 line=dict(color="rgba(10,15,26,1)", width=2),
             ),
             textinfo="label+percent",
-            textfont=dict(color="#f1f5f9", size=11),
+            textfont=dict(color="#e8e6e1", size=11),
             hovertemplate="<b>%{label}</b><br>%{value} vessels (%{percent})<extra></extra>",
         ))
 
@@ -416,13 +416,13 @@ def _render_fleet_donut(vessel_map: dict[str, list[dict]], selected_locode: str)
             annotations=[dict(
                 text=f"<b>{total}</b><br><span style='font-size:10px'>vessels</span>",
                 x=0.5, y=0.5,
-                font=dict(size=20, color="#f1f5f9"),
+                font=dict(size=20, color="#e8e6e1"),
                 showarrow=False,
             )],
             showlegend=True,
             legend=dict(
                 bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8", size=11),
+                font=dict(color="#9a968e", size=11),
                 orientation="v",
                 x=1.02, y=0.5,
             ),
@@ -471,7 +471,7 @@ def _render_metrics_strip(vessel_map: dict[str, list[dict]]) -> None:
 
     c1, c2, c3, c4, c5 = st.columns(5)
     metric_style = (
-        "background:#1a2235;border:1px solid rgba(255,255,255,0.07);border-radius:10px;"
+        "background:#181c28;border:1px solid rgba(232,230,225,0.06);border-radius:6px;"
         "padding:14px 16px;text-align:center;"
     )
 
@@ -479,7 +479,7 @@ def _render_metrics_strip(vessel_map: dict[str, list[dict]]) -> None:
         col.markdown(
             f'<div style="{metric_style}">'
             f'<div style="font-size:1.5rem;font-weight:800;color:{color};line-height:1">{value}</div>'
-            f'<div style="font-size:0.68rem;color:#64748b;text-transform:uppercase;'
+            f'<div style="font-size:0.68rem;color:#6b6760;text-transform:uppercase;'
             f'letter-spacing:0.08em;margin-top:4px">{label}</div>'
             f"</div>",
             unsafe_allow_html=True,

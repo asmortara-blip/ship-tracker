@@ -690,16 +690,16 @@ _MOCK_INSIGHT_OBJECTS = [
 
 # Mock trending topics for sentiment.trending_topics
 _MOCK_TRENDING_TOPICS = [
-    {"topic": "Trans-Pacific Rates",      "count": 28, "sentiment": "BULLISH", "color": "#10b981"},
-    {"topic": "Red Sea Disruption",       "count": 24, "sentiment": "BEARISH", "color": "#ef4444"},
-    {"topic": "Baltic Dry Index",         "count": 21, "sentiment": "BULLISH", "color": "#10b981"},
-    {"topic": "Container Orderbook",      "count": 18, "sentiment": "BEARISH", "color": "#ef4444"},
-    {"topic": "VLCC Rates",               "count": 16, "sentiment": "NEUTRAL", "color": "#64748b"},
-    {"topic": "Chinese Stimulus",         "count": 14, "sentiment": "BULLISH", "color": "#10b981"},
-    {"topic": "Bunker Fuel Costs",        "count": 12, "sentiment": "BEARISH", "color": "#ef4444"},
-    {"topic": "LNG Shipping Tightness",   "count": 11, "sentiment": "BULLISH", "color": "#10b981"},
-    {"topic": "Port Congestion",          "count": 9,  "sentiment": "NEUTRAL", "color": "#64748b"},
-    {"topic": "Tariff Front-Loading",     "count": 8,  "sentiment": "BULLISH", "color": "#10b981"},
+    {"topic": "Trans-Pacific Rates",      "count": 28, "sentiment": "BULLISH", "color": "#2e9e6e"},
+    {"topic": "Red Sea Disruption",       "count": 24, "sentiment": "BEARISH", "color": "#c0392b"},
+    {"topic": "Baltic Dry Index",         "count": 21, "sentiment": "BULLISH", "color": "#2e9e6e"},
+    {"topic": "Container Orderbook",      "count": 18, "sentiment": "BEARISH", "color": "#c0392b"},
+    {"topic": "VLCC Rates",               "count": 16, "sentiment": "NEUTRAL", "color": "#6b6760"},
+    {"topic": "Chinese Stimulus",         "count": 14, "sentiment": "BULLISH", "color": "#2e9e6e"},
+    {"topic": "Bunker Fuel Costs",        "count": 12, "sentiment": "BEARISH", "color": "#c0392b"},
+    {"topic": "LNG Shipping Tightness",   "count": 11, "sentiment": "BULLISH", "color": "#2e9e6e"},
+    {"topic": "Port Congestion",          "count": 9,  "sentiment": "NEUTRAL", "color": "#6b6760"},
+    {"topic": "Tariff Front-Loading",     "count": 8,  "sentiment": "BULLISH", "color": "#2e9e6e"},
 ]
 
 
@@ -1839,7 +1839,7 @@ def _build_investor_report_inner(
             ]
             ent_sentiment_score = float(np.mean(ent_scores)) if ent_scores else 0.0
             ent_label = "BULLISH" if ent_sentiment_score > 0.05 else ("BEARISH" if ent_sentiment_score < -0.05 else "NEUTRAL")
-            color = {"BULLISH": "#10b981", "BEARISH": "#ef4444", "NEUTRAL": "#64748b"}.get(ent_label, "#64748b")
+            color = {"BULLISH": "#2e9e6e", "BEARISH": "#c0392b", "NEUTRAL": "#6b6760"}.get(ent_label, "#6b6760")
             trending_topics.append({
                 "topic": ent,
                 "count": count,

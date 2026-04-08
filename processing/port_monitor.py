@@ -20,9 +20,9 @@ from loguru import logger
 # ── Status colour palette ─────────────────────────────────────────────────────
 
 STATUS_COLORS = {
-    "NORMAL":    "#10b981",
-    "DEGRADED":  "#f59e0b",
-    "DISRUPTED": "#ef4444",
+    "NORMAL":    "#2e9e6e",
+    "DEGRADED":  "#c9962b",
+    "DISRUPTED": "#c0392b",
 }
 
 

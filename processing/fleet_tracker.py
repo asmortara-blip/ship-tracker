@@ -49,7 +49,7 @@ FLEET_2025 = FleetSnapshot(
     demand_growth_estimate_pct=3.5,
     supply_demand_balance=-6.6,   # negative = oversupplied
     market_tightness="LOOSE",
-    tightness_color="#ef4444",
+    tightness_color="#c0392b",
     implications=[
         "Record orderbook at 28.8% of fleet signals structural oversupply through 2026-2027",
         "Net supply growth ~10% vs demand growth ~3.5% = bearish for long-term freight rates",

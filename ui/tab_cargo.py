@@ -10,19 +10,19 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Colour palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -106,7 +106,7 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         if delta else ""
     )
     st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
         f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
@@ -138,7 +138,7 @@ def _render_hero() -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:14px;padding:24px 28px;margin-bottom:20px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
             f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Cargo Intelligence Hub</div>'
             f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'Global commodity flows · Equipment balance · Specialised cargo monitoring</div>'
@@ -214,7 +214,7 @@ def _render_commodity_table() -> None:
         _section_header("Commodity-to-Shipping Routing", "20 key commodities with vessel type, transit time, and freight rate")
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 1fr 0.7fr 0.8fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Commodity</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Origin</span>'
@@ -253,7 +253,7 @@ def _render_hazmat() -> None:
         _section_header("Dangerous Goods Tracker", "Hazmat cargo restrictions by port and carrier")
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.4fr 0.8fr 0.7fr 0.7fr 1.1fr 1.4fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Class</span>'
@@ -300,7 +300,7 @@ def _render_reefer() -> None:
         st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.8fr 1.2fr 0.8fr 0.7fr 0.8fr 0.7fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo</span>'
@@ -319,7 +319,7 @@ def _render_reefer() -> None:
                 f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
                 f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{route}</span>'
                 f'<span style="font-size:0.82rem;color:{C_TEXT2};">{cargo}</span>'
-                f'<span style="font-size:0.78rem;color:{C_CYAN};font-family:monospace;">{temp}</span>'
+                f'<span style="font-size:0.78rem;color:{C_CYAN};font-family:JetBrains Mono,monospace;">{temp}</span>'
                 f'<span style="font-size:0.82rem;color:{C_TEXT};">{transit}</span>'
                 f'<span style="font-size:0.82rem;font-weight:600;color:{C_HIGH};">${rate:,}</span>'
                 f'<span style="font-size:0.82rem;font-weight:700;color:{C_MOD};">{prem}</span>'
@@ -365,7 +365,7 @@ def _render_lcl_fcl_optimizer() -> None:
 
             with c2:
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {rec_color};border-radius:12px;padding:20px 24px;">'
+                    f'<div style="background:{C_CARD};border:1px solid {rec_color};border-radius:6px;padding:20px 24px;">'
                     f'<div style="font-size:0.75rem;color:{C_TEXT3};text-transform:uppercase;margin-bottom:6px;">Recommendation</div>'
                     f'<div style="font-size:1.8rem;font-weight:700;color:{rec_color};">{rec}</div>'
                     f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:8px;">{rec_reason}</div>'
@@ -400,7 +400,7 @@ def _render_theft_tracker() -> None:
         st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 0.8fr 0.6fr 1.2fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo at Risk</span>'
@@ -450,10 +450,10 @@ def _render_equipment_balance() -> None:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font_color=C_TEXT,
-            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(255,255,255,0.04)"),
+            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(232,230,225,0.04)"),
             yaxis=dict(
                 tickfont_color=C_TEXT2,
-                gridcolor="rgba(255,255,255,0.04)",
+                gridcolor="rgba(232,230,225,0.04)",
                 title="TEU Surplus / Deficit",
                 title_font_color=C_TEXT3,
                 zeroline=True,

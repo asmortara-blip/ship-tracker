@@ -449,17 +449,17 @@ def build_digest(
 # ---------------------------------------------------------------------------
 
 _SENTIMENT_COLORS = {
-    "BULLISH":  ("#10b981", "#052e16"),
-    "BEARISH":  ("#ef4444", "#2d0a0a"),
-    "NEUTRAL":  ("#64748b", "#0f172a"),
-    "MIXED":    ("#f59e0b", "#1c1408"),
+    "BULLISH":  ("#2e9e6e", "#052e16"),
+    "BEARISH":  ("#c0392b", "#2d0a0a"),
+    "NEUTRAL":  ("#6b6760", "#0f172a"),
+    "MIXED":    ("#c9962b", "#1c1408"),
 }
 
 
 def render_as_html(digest: DailyDigest) -> str:
     """Render the digest as a complete, standalone dark-theme HTML email."""
 
-    sent_fg, sent_bg = _SENTIMENT_COLORS.get(digest.market_sentiment, ("#64748b", "#0f172a"))
+    sent_fg, sent_bg = _SENTIMENT_COLORS.get(digest.market_sentiment, ("#6b6760", "#0f172a"))
 
     # --- Opportunity cards ---
     opp_cards_html = ""
@@ -470,30 +470,30 @@ def render_as_html(digest: DailyDigest) -> str:
         rationale = opp.get("rationale", "")[:220]
         routes_str = ", ".join(opp.get("routes", [])) or "N/A"
         action_color = {
-            "Prioritize": "#10b981",
-            "Monitor": "#3b82f6",
-            "Watch": "#94a3b8",
-            "Caution": "#f59e0b",
-            "Avoid": "#ef4444",
-        }.get(action, "#94a3b8")
+            "Prioritize": "#2e9e6e",
+            "Monitor": "#3572b0",
+            "Watch": "#9a968e",
+            "Caution": "#c9962b",
+            "Avoid": "#c0392b",
+        }.get(action, "#9a968e")
         opp_cards_html += (
-            "<div style='background:#1a2235; border:1px solid rgba(255,255,255,0.10);"
-            " border-left:4px solid " + action_color + "; border-radius:12px;"
+            "<div style='background:#181c28; border:1px solid rgba(255,255,255,0.10);"
+            " border-left:4px solid " + action_color + "; border-radius:6px;"
             " padding:20px 22px; margin-bottom:14px'>"
             "<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px'>"
-            "<span style='background:rgba(255,255,255,0.07); color:#94a3b8; font-size:11px;"
-            " font-weight:700; padding:3px 10px; border-radius:999px; letter-spacing:0.06em'>"
+            "<span style='background:rgba(232,230,225,0.06); color:#9a968e; font-size:11px;"
+            " font-weight:700; padding:3px 10px; border-radius:3px; letter-spacing:0.06em'>"
             "OPPORTUNITY " + str(idx + 1) + "</span>"
             "<span style='font-size:22px; font-weight:900; color:" + action_color + "'>" + score_pct + "</span>"
             "</div>"
-            "<div style='font-size:16px; font-weight:700; color:#f1f5f9; margin-bottom:8px; line-height:1.4'>"
+            "<div style='font-size:16px; font-weight:700; color:#e8e6e1; margin-bottom:8px; line-height:1.4'>"
             + title + "</div>"
-            "<div style='font-size:13px; color:#94a3b8; line-height:1.6; margin-bottom:10px'>" + rationale + "</div>"
-            "<div style='font-size:11px; color:#64748b'>Routes: " + routes_str + "</div>"
+            "<div style='font-size:13px; color:#9a968e; line-height:1.6; margin-bottom:10px'>" + rationale + "</div>"
+            "<div style='font-size:11px; color:#6b6760'>Routes: " + routes_str + "</div>"
             "<div style='margin-top:10px'>"
-            "<span style='background:rgba(255,255,255,0.06); color:" + action_color + ";"
+            "<span style='background:rgba(232,230,225,0.05); color:" + action_color + ";"
             " border:1px solid rgba(255,255,255,0.12); padding:3px 12px;"
-            " border-radius:999px; font-size:12px; font-weight:700'>" + action + "</span>"
+            " border-radius:3px; font-size:12px; font-weight:700'>" + action + "</span>"
             "</div>"
             "</div>"
         )
@@ -502,16 +502,16 @@ def render_as_html(digest: DailyDigest) -> str:
     rate_rows_html = ""
     for rm in digest.freight_rate_moves[:8]:
         chg = rm["change_pct"]
-        dir_color = "#10b981" if rm["direction"] == "up" else ("#ef4444" if rm["direction"] == "down" else "#64748b")
+        dir_color = "#2e9e6e" if rm["direction"] == "up" else ("#c0392b" if rm["direction"] == "down" else "#6b6760")
         arrow = "&#9650;" if rm["direction"] == "up" else ("&#9660;" if rm["direction"] == "down" else "&#9654;")
         rate_rows_html += (
             "<tr>"
-            "<td style='padding:9px 14px; color:#f1f5f9; font-size:13px; border-bottom:1px solid rgba(255,255,255,0.06)'>"
+            "<td style='padding:9px 14px; color:#e8e6e1; font-size:13px; border-bottom:1px solid rgba(232,230,225,0.05)'>"
             + rm["route"] + "</td>"
-            "<td style='padding:9px 14px; color:#94a3b8; font-size:13px; border-bottom:1px solid rgba(255,255,255,0.06)'>"
+            "<td style='padding:9px 14px; color:#9a968e; font-size:13px; border-bottom:1px solid rgba(232,230,225,0.05)'>"
             + rm["currency"] + " " + str(rm["rate"]) + "</td>"
             "<td style='padding:9px 14px; font-size:13px; font-weight:700; color:" + dir_color + ";"
-            " border-bottom:1px solid rgba(255,255,255,0.06)'>"
+            " border-bottom:1px solid rgba(232,230,225,0.05)'>"
             + arrow + " " + ("+" if chg > 0 else "") + str(chg) + "%</td>"
             "</tr>"
         )
@@ -520,8 +520,8 @@ def render_as_html(digest: DailyDigest) -> str:
     risks_html = ""
     for risk in digest.key_risks:
         risks_html += (
-            "<li style='margin-bottom:10px; color:#94a3b8; font-size:14px; line-height:1.6'>"
-            "<span style='color:#ef4444; font-weight:700; margin-right:6px'>&#9888;</span>"
+            "<li style='margin-bottom:10px; color:#9a968e; font-size:14px; line-height:1.6'>"
+            "<span style='color:#c0392b; font-weight:700; margin-right:6px'>&#9888;</span>"
             + risk + "</li>"
         )
 
@@ -531,12 +531,12 @@ def render_as_html(digest: DailyDigest) -> str:
         score_pct = str(round(ph["demand_score"] * 100)) + "%"
         port_html += (
             "<div style='display:flex; justify-content:space-between; align-items:center;"
-            " padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06)'>"
+            " padding:10px 0; border-bottom:1px solid rgba(232,230,225,0.05)'>"
             "<div>"
-            "<div style='font-size:14px; font-weight:700; color:#f1f5f9'>" + ph["port"] + "</div>"
-            "<div style='font-size:12px; color:#64748b; margin-top:2px'>" + ph["trend"] + "</div>"
+            "<div style='font-size:14px; font-weight:700; color:#e8e6e1'>" + ph["port"] + "</div>"
+            "<div style='font-size:12px; color:#6b6760; margin-top:2px'>" + ph["trend"] + "</div>"
             "</div>"
-            "<span style='font-size:18px; font-weight:800; color:#10b981'>" + score_pct + "</span>"
+            "<span style='font-size:18px; font-weight:800; color:#2e9e6e'>" + score_pct + "</span>"
             "</div>"
         )
 
@@ -544,17 +544,17 @@ def render_as_html(digest: DailyDigest) -> str:
     stock_html = ""
     for sm in digest.stock_movers[:6]:
         chg = sm["change_pct"]
-        s_color = "#10b981" if sm["direction"] == "up" else ("#ef4444" if sm["direction"] == "down" else "#64748b")
+        s_color = "#2e9e6e" if sm["direction"] == "up" else ("#c0392b" if sm["direction"] == "down" else "#6b6760")
         stock_html += (
             "<div style='display:flex; justify-content:space-between; align-items:center;"
-            " padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.06)'>"
+            " padding:8px 0; border-bottom:1px solid rgba(232,230,225,0.05)'>"
             "<div>"
-            "<span style='font-size:13px; font-weight:700; color:#f1f5f9; font-family:monospace'>"
+            "<span style='font-size:13px; font-weight:700; color:#e8e6e1; font-family:monospace'>"
             + sm["ticker"] + "</span>"
-            "<span style='font-size:12px; color:#64748b; margin-left:8px'>" + sm["name"] + "</span>"
+            "<span style='font-size:12px; color:#6b6760; margin-left:8px'>" + sm["name"] + "</span>"
             "</div>"
             "<div style='text-align:right'>"
-            "<div style='font-size:13px; color:#94a3b8'>$" + str(sm["price"]) + "</div>"
+            "<div style='font-size:13px; color:#9a968e'>$" + str(sm["price"]) + "</div>"
             "<div style='font-size:13px; font-weight:700; color:" + s_color + "'>"
             + ("+" if chg > 0 else "") + str(chg) + "%</div>"
             "</div>"
@@ -575,9 +575,9 @@ def render_as_html(digest: DailyDigest) -> str:
     for k, v in digest.macro_snapshot.items():
         macro_html += (
             "<div style='display:flex; justify-content:space-between; padding:7px 0;"
-            " border-bottom:1px solid rgba(255,255,255,0.06)'>"
-            "<span style='font-size:12px; color:#64748b'>" + label_map.get(k, k) + "</span>"
-            "<span style='font-size:13px; font-weight:700; color:#f1f5f9'>" + str(v) + "</span>"
+            " border-bottom:1px solid rgba(232,230,225,0.05)'>"
+            "<span style='font-size:12px; color:#6b6760'>" + label_map.get(k, k) + "</span>"
+            "<span style='font-size:13px; font-weight:700; color:#e8e6e1'>" + str(v) + "</span>"
             "</div>"
         )
 
@@ -586,11 +586,11 @@ def render_as_html(digest: DailyDigest) -> str:
     exec_html = ""
     for para in paras:
         exec_html += (
-            "<p style='font-size:14px; color:#94a3b8; line-height:1.8; margin:0 0 14px 0'>"
+            "<p style='font-size:14px; color:#9a968e; line-height:1.8; margin:0 0 14px 0'>"
             + para.strip() + "</p>"
         )
 
-    dq_color = {"FULL": "#10b981", "PARTIAL": "#f59e0b", "DEGRADED": "#ef4444"}.get(digest.data_quality, "#64748b")
+    dq_color = {"FULL": "#2e9e6e", "PARTIAL": "#c9962b", "DEGRADED": "#c0392b"}.get(digest.data_quality, "#6b6760")
 
     html = (
         "<!DOCTYPE html>"
@@ -609,19 +609,19 @@ def render_as_html(digest: DailyDigest) -> str:
 
         # Header
         "<tr><td style='"
-        "background:linear-gradient(135deg,#1a2235 0%,#0f1b2d 100%);"
-        "border-radius:14px 14px 0 0; padding:32px 36px;"
-        "border:1px solid rgba(255,255,255,0.08); border-bottom:none'>"
-        "<div style='font-size:12px; font-weight:700; color:#3b82f6; text-transform:uppercase;"
+        "background:linear-gradient(135deg,#181c28 0%,#0f1b2d 100%);"
+        "border-radius:6px 14px 0 0; padding:32px 36px;"
+        "border:1px solid rgba(232,230,225,0.06); border-bottom:none'>"
+        "<div style='font-size:12px; font-weight:700; color:#3572b0; text-transform:uppercase;"
         " letter-spacing:0.10em; margin-bottom:10px'>&#128674; Shipping Intelligence Daily</div>"
-        "<div style='font-size:26px; font-weight:800; color:#f1f5f9; line-height:1.3; margin-bottom:8px'>"
+        "<div style='font-size:26px; font-weight:800; color:#e8e6e1; line-height:1.3; margin-bottom:8px'>"
         + digest.headline + "</div>"
-        "<div style='font-size:12px; color:#64748b'>" + digest.date + "</div>"
+        "<div style='font-size:12px; color:#6b6760'>" + digest.date + "</div>"
         "</td></tr>"
 
         # Sentiment banner
         "<tr><td style='background:" + sent_bg + "; padding:16px 36px;"
-        " border-left:1px solid rgba(255,255,255,0.08); border-right:1px solid rgba(255,255,255,0.08)'>"
+        " border-left:1px solid rgba(232,230,225,0.06); border-right:1px solid rgba(232,230,225,0.06)'>"
         "<div style='display:flex; align-items:center; gap:12px'>"
         "<span style='font-size:28px; font-weight:900; color:" + sent_fg + ";"
         " letter-spacing:0.04em'>" + digest.market_sentiment + "</span>"
@@ -631,32 +631,32 @@ def render_as_html(digest: DailyDigest) -> str:
         "</td></tr>"
 
         # Body
-        "<tr><td style='background:#111827; padding:28px 36px;"
-        " border:1px solid rgba(255,255,255,0.08); border-top:none; border-bottom:none'>"
+        "<tr><td style='background:#12151e; padding:28px 36px;"
+        " border:1px solid rgba(232,230,225,0.06); border-top:none; border-bottom:none'>"
 
         # Executive summary
-        "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin-bottom:14px'>Executive Summary</div>"
         + exec_html
 
         # Top Opportunities
-        + "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        + "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin:24px 0 14px 0'>Top Opportunities</div>"
         + opp_cards_html
 
         # Freight Rate Moves
-        + "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        + "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin:24px 0 14px 0'>Freight Rate Moves</div>"
         "<table width='100%' cellpadding='0' cellspacing='0' style='border-collapse:collapse;"
-        " background:#1a2235; border-radius:10px; overflow:hidden;"
-        " border:1px solid rgba(255,255,255,0.08)'>"
+        " background:#181c28; border-radius:6px; overflow:hidden;"
+        " border:1px solid rgba(232,230,225,0.06)'>"
         "<thead><tr>"
         "<th style='padding:10px 14px; text-align:left; font-size:11px; font-weight:700;"
-        " color:#64748b; text-transform:uppercase; letter-spacing:0.06em'>Route</th>"
+        " color:#6b6760; text-transform:uppercase; letter-spacing:0.06em'>Route</th>"
         "<th style='padding:10px 14px; text-align:left; font-size:11px; font-weight:700;"
-        " color:#64748b; text-transform:uppercase; letter-spacing:0.06em'>Rate</th>"
+        " color:#6b6760; text-transform:uppercase; letter-spacing:0.06em'>Rate</th>"
         "<th style='padding:10px 14px; text-align:left; font-size:11px; font-weight:700;"
-        " color:#64748b; text-transform:uppercase; letter-spacing:0.06em'>Change</th>"
+        " color:#6b6760; text-transform:uppercase; letter-spacing:0.06em'>Change</th>"
         "</tr></thead>"
         "<tbody>" + rate_rows_html + "</tbody>"
         "</table>"
@@ -665,13 +665,13 @@ def render_as_html(digest: DailyDigest) -> str:
         + "<table width='100%' cellpadding='0' cellspacing='0' style='margin-top:24px'>"
         "<tr valign='top'>"
         "<td width='48%' style='padding-right:14px'>"
-        "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin-bottom:12px'>Port Demand Highlights</div>"
         + port_html
         + "</td>"
         "<td width='4%'></td>"
         "<td width='48%'>"
-        "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin-bottom:12px'>Shipping Stocks</div>"
         + stock_html
         + "</td>"
@@ -679,15 +679,15 @@ def render_as_html(digest: DailyDigest) -> str:
         "</table>"
 
         # Macro snapshot
-        + "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        + "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin:24px 0 12px 0'>Macro Snapshot</div>"
-        "<div style='background:#1a2235; border:1px solid rgba(255,255,255,0.08);"
-        " border-radius:10px; padding:12px 16px'>"
+        "<div style='background:#181c28; border:1px solid rgba(232,230,225,0.06);"
+        " border-radius:6px; padding:12px 16px'>"
         + macro_html
         + "</div>"
 
         # Key risks
-        + "<div style='font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;"
+        + "<div style='font-size:10px; font-weight:700; color:#6b6760; text-transform:uppercase;"
         " letter-spacing:0.09em; margin:24px 0 12px 0'>Key Risks</div>"
         "<ul style='margin:0; padding-left:18px'>"
         + risks_html
@@ -697,13 +697,13 @@ def render_as_html(digest: DailyDigest) -> str:
 
         # Footer
         "<tr><td style='background:#0f1b2d; border-radius:0 0 14px 14px; padding:20px 36px;"
-        " border:1px solid rgba(255,255,255,0.08); border-top:none; text-align:center'>"
-        "<div style='font-size:11px; color:#64748b'>Generated by Ship Tracker | Data as of "
+        " border:1px solid rgba(232,230,225,0.06); border-top:none; text-align:center'>"
+        "<div style='font-size:11px; color:#6b6760'>Generated by Ship Tracker | Data as of "
         + digest.generated_at
         + "</div>"
         "<div style='margin-top:6px'>"
-        "<span style='font-size:10px; padding:2px 10px; border-radius:999px;"
-        " background:rgba(255,255,255,0.05); color:" + dq_color + ";"
+        "<span style='font-size:10px; padding:2px 10px; border-radius:3px;"
+        " background:rgba(232,230,225,0.04); color:" + dq_color + ";"
         " border:1px solid " + dq_color + "; font-weight:700'>"
         "Data Quality: " + digest.data_quality + "</span>"
         "</div>"

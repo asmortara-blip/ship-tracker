@@ -531,19 +531,19 @@ def run_backtest(
 
 def get_backtest_summary_html(results: BacktestResults) -> str:
     """Return a styled HTML summary card for embedding in Streamlit."""
-    wr_color = "#10b981" if results.win_rate >= 55 else ("#f59e0b" if results.win_rate >= 45 else "#ef4444")
-    ret_color = "#10b981" if results.avg_return_pct >= 0 else "#ef4444"
-    sharpe_color = "#10b981" if results.sharpe_ratio >= 1.0 else ("#f59e0b" if results.sharpe_ratio >= 0 else "#ef4444")
+    wr_color = "#2e9e6e" if results.win_rate >= 55 else ("#c9962b" if results.win_rate >= 45 else "#c0392b")
+    ret_color = "#2e9e6e" if results.avg_return_pct >= 0 else "#c0392b"
+    sharpe_color = "#2e9e6e" if results.sharpe_ratio >= 1.0 else ("#c9962b" if results.sharpe_ratio >= 0 else "#c0392b")
 
     return f"""
     <div style="
-        background: #1a2235;
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 10px;
+        background: #181c28;
+        border: 1px solid rgba(232,230,225,0.06);
+        border-radius: 6px;
         padding: 1.2rem 1.5rem;
         margin-bottom: 1rem;
     ">
-        <div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;
+        <div style="font-size:0.7rem;color:#6b6760;text-transform:uppercase;
                     letter-spacing:0.1em;margin-bottom:0.8rem;">
             Backtest Summary — {results.total_trades} Simulated Trades
         </div>
@@ -552,25 +552,25 @@ def get_backtest_summary_html(results: BacktestResults) -> str:
                 <div style="font-size:1.5rem;font-weight:700;color:{wr_color};">
                     {results.win_rate:.1f}%
                 </div>
-                <div style="font-size:0.72rem;color:#94a3b8;">Win Rate</div>
+                <div style="font-size:0.72rem;color:#9a968e;">Win Rate</div>
             </div>
             <div>
                 <div style="font-size:1.5rem;font-weight:700;color:{ret_color};">
                     {results.avg_return_pct:+.2f}%
                 </div>
-                <div style="font-size:0.72rem;color:#94a3b8;">Avg Return</div>
+                <div style="font-size:0.72rem;color:#9a968e;">Avg Return</div>
             </div>
             <div>
                 <div style="font-size:1.5rem;font-weight:700;color:{sharpe_color};">
                     {results.sharpe_ratio:.2f}
                 </div>
-                <div style="font-size:0.72rem;color:#94a3b8;">Sharpe</div>
+                <div style="font-size:0.72rem;color:#9a968e;">Sharpe</div>
             </div>
             <div>
-                <div style="font-size:1.5rem;font-weight:700;color:#ef4444;">
+                <div style="font-size:1.5rem;font-weight:700;color:#c0392b;">
                     {results.max_drawdown:.1f}%
                 </div>
-                <div style="font-size:0.72rem;color:#94a3b8;">Max Drawdown</div>
+                <div style="font-size:0.72rem;color:#9a968e;">Max Drawdown</div>
             </div>
         </div>
     </div>

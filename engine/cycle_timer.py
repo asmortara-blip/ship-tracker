@@ -76,7 +76,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 60,   # % of fleet on order — peak ordering binge
             "scrapping_high": False,
-            "color": "#ef4444",
+            "color": "#c0392b",
         },
         {
             "period": "2010-11",
@@ -93,7 +93,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 45,
             "scrapping_high": False,
-            "color": "#3b82f6",
+            "color": "#3572b0",
         },
         {
             "period": "2012-15",
@@ -111,7 +111,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 25,
             "scrapping_high": True,
-            "color": "#ef4444",
+            "color": "#c0392b",
         },
         {
             "period": "2016",
@@ -129,7 +129,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 12,
             "scrapping_high": True,
-            "color": "#3b82f6",
+            "color": "#3572b0",
         },
         {
             "period": "2017-19",
@@ -147,7 +147,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 10,
             "scrapping_high": False,
-            "color": "#3b82f6",
+            "color": "#3572b0",
         },
         {
             "period": "2020",
@@ -165,7 +165,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 8,
             "scrapping_high": False,
-            "color": "#ef4444",
+            "color": "#c0392b",
         },
         {
             "period": "2021-22",
@@ -183,7 +183,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 28,
             "scrapping_high": False,
-            "color": "#f59e0b",
+            "color": "#c9962b",
         },
         {
             "period": "2022-23",
@@ -220,7 +220,7 @@ def get_historical_cycle_data() -> list[dict]:
             ),
             "orderbook_pct": 22,
             "scrapping_high": False,
-            "color": "#3b82f6",
+            "color": "#3572b0",
         },
     ]
 

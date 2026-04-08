@@ -49,14 +49,14 @@ from ui.styles import (
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────
-_C_BG      = "#0a0f1a"
-_C_SURFACE = "#111827"
-_C_GREEN   = "#10b981"
-_C_RED     = "#ef4444"
-_C_AMBER   = "#f59e0b"
-_C_BLUE    = "#3b82f6"
-_C_PURPLE  = "#8b5cf6"
-_C_CYAN    = "#06b6d4"
+_C_BG      = "#0c0e14"
+_C_SURFACE = "#12151e"
+_C_GREEN   = "#2e9e6e"
+_C_RED     = "#c0392b"
+_C_AMBER   = "#c9962b"
+_C_BLUE    = "#3572b0"
+_C_PURPLE  = "#7c6eaf"
+_C_CYAN    = "#4a90a4"
 _C_TEAL    = "#14b8a6"
 _C_INDIGO  = "#6366f1"
 _C_ROSE    = "#f43f5e"
@@ -65,17 +65,17 @@ _C_ORANGE  = "#f97316"
 # Heatmap color scale: green (surplus) → amber → red (critical)
 _UTIL_COLORSCALE = [
     [0.00, "#064e3b"],
-    [0.40, "#10b981"],
-    [0.60, "#f59e0b"],
-    [0.80, "#ef4444"],
+    [0.40, "#2e9e6e"],
+    [0.60, "#c9962b"],
+    [0.80, "#c0392b"],
     [1.00, "#7f1d1d"],
 ]
 
 _RISK_COLOR: Dict[str, str] = {
     "CRITICAL": "#b91c1c",
-    "HIGH":     "#ef4444",
-    "MODERATE": "#f59e0b",
-    "LOW":      "#10b981",
+    "HIGH":     "#c0392b",
+    "MODERATE": "#c9962b",
+    "LOW":      "#2e9e6e",
 }
 
 _TYPE_LABELS: Dict[str, str] = {
@@ -244,7 +244,7 @@ def _risk_badge(risk: str) -> str:
     color = _RISK_COLOR.get(risk, C_TEXT2)
     rgb = _hex_to_rgb(color)
     return (
-        f"<span style='display:inline-block;padding:2px 9px;border-radius:999px;"
+        f"<span style='display:inline-block;padding:2px 9px;border-radius:3px;"
         f"font-size:0.65rem;font-weight:700;text-transform:uppercase;"
         f"letter-spacing:0.05em;"
         f"background:rgba({rgb},0.18);color:{color};"
@@ -261,7 +261,7 @@ def _trend_badge(trend: str) -> str:
     arrow, color = cfg.get(trend, ("–", C_TEXT3))
     rgb = _hex_to_rgb(color)
     return (
-        f"<span style='display:inline-block;padding:2px 8px;border-radius:999px;"
+        f"<span style='display:inline-block;padding:2px 8px;border-radius:3px;"
         f"font-size:0.65rem;font-weight:700;"
         f"background:rgba({rgb},0.15);color:{color};"
         f"border:1px solid rgba({rgb},0.35);'>{arrow} {trend.title()}</span>"
@@ -273,21 +273,21 @@ def _kpi_card(label: str, value: str, subtitle: str, color: str, icon: str = "")
     icon_html = f"<div style='font-size:1.4rem;margin-bottom:6px;'>{icon}</div>" if icon else ""
     return (
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-top:3px solid {color};border-radius:12px;"
+        f"border-top:3px solid {color};border-radius:6px;"
         f"padding:20px 16px;text-align:center;height:100%;'>"
         f"{icon_html}"
-        f"<div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
+        f"<div style='font-family:Libre Franklin,sans-serif;font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.08em;margin-bottom:8px;'>{label}</div>"
-        f"<div style='font-size:1.9rem;font-weight:800;color:{C_TEXT};"
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:1.9rem;font-weight:800;color:{C_TEXT};"
         f"line-height:1.1;'>{value}</div>"
-        f"<div style='font-size:0.72rem;color:{C_TEXT3};margin-top:6px;'>{subtitle}</div>"
+        f"<div style='font-family:Libre Franklin,sans-serif;font-size:0.72rem;color:{C_TEXT3};margin-top:6px;'>{subtitle}</div>"
         f"</div>"
     )
 
 
 def _section_divider() -> None:
     st.markdown(
-        "<div style='margin:28px 0;border-top:1px solid rgba(255,255,255,0.06);'></div>",
+        "<div style='margin:28px 0;border-top:1px solid rgba(232,230,225,0.05);'></div>",
         unsafe_allow_html=True,
     )
 
@@ -458,7 +458,7 @@ def _render_enhanced_equipment_overview() -> None:
         text=[g["region"] for g in _GEO_BALANCE],
         mode="markers+text",
         textposition="top center",
-        textfont=dict(color=C_TEXT, size=11, family="Inter, sans-serif"),
+        textfont=dict(color=C_TEXT, size=11, family="Libre Franklin, sans-serif"),
         marker=dict(
             size=geo_sizes,
             color=geo_colors,
@@ -470,16 +470,16 @@ def _render_enhanced_equipment_overview() -> None:
     ))
     fig_geo.update_layout(
         geo=dict(
-            showland=True, landcolor="#111827",
-            showocean=True, oceancolor="#0a0f1a",
+            showland=True, landcolor="#12151e",
+            showocean=True, oceancolor="#0c0e14",
             showlakes=False,
-            showcountries=True, countrycolor="rgba(255,255,255,0.06)",
+            showcountries=True, countrycolor="rgba(232,230,225,0.05)",
             showframe=False,
             bgcolor=_C_BG,
             projection_type="natural earth",
         ),
         paper_bgcolor=_C_BG,
-        font=dict(color=C_TEXT, family="Inter, sans-serif"),
+        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         height=380,
         margin=dict(l=0, r=0, t=10, b=0),
     )
@@ -595,7 +595,7 @@ def _render_enhanced_equipment_overview() -> None:
             rgb = _hex_to_rgb(rc)
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {rc};border-radius:8px;"
+                f"border-left:3px solid {rc};border-radius:6px;"
                 f"padding:8px 12px;margin-bottom:5px;'>"
                 f"<div style='display:flex;justify-content:space-between;'>"
                 f"<span style='font-size:0.80rem;font-weight:700;color:{C_TEXT}'>{p['port']}</span>"
@@ -637,7 +637,7 @@ def _render_enhanced_equipment_overview() -> None:
         with col:
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:4px solid {rc};border-radius:10px;"
+                f"border-left:4px solid {rc};border-radius:6px;"
                 f"padding:14px 16px;margin-bottom:10px;'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>"
                 f"<span style='font-size:0.88rem;font-weight:700;color:{C_TEXT}'>{alert['route']}</span>"
@@ -800,7 +800,7 @@ def _render_global_pool_overview() -> None:
     # ── Fleet growth strip ─────────────────────────────────────────────
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:10px;padding:14px 20px;display:flex;gap:48px;flex-wrap:wrap;'>"
+        f"border-radius:6px;padding:14px 20px;display:flex;gap:48px;flex-wrap:wrap;'>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>YoY Fleet Growth"
         f"<div style='font-size:1.15rem;font-weight:700;color:{_C_GREEN};margin-top:4px;'>"
@@ -821,7 +821,7 @@ def _render_global_pool_overview() -> None:
         f"letter-spacing:0.07em;'>Global Utilization Index"
         f"<div style='font-size:1.15rem;font-weight:700;color:{idx_color};margin-top:4px;'>"
         f"{global_idx}% &nbsp;"
-        f"<span style='display:inline-block;padding:1px 8px;border-radius:999px;"
+        f"<span style='display:inline-block;padding:1px 8px;border-radius:3px;"
         f"font-size:0.65rem;font-weight:700;"
         f"background:rgba({_hex_to_rgb(idx_color)},0.18);color:{idx_color};"
         f"border:1px solid rgba({_hex_to_rgb(idx_color)},0.38);'>{idx_label}</span>"
@@ -881,7 +881,7 @@ def _render_shortage_surplus_map() -> None:
             zmax=100,
             text=z_text,
             texttemplate="%{text}",
-            textfont={"size": 11, "color": "#f1f5f9"},
+            textfont={"size": 11, "color": "#e8e6e1"},
             hovertemplate=(
                 "<b>%{y}</b><br>"
                 "Type: %{x}<br>"
@@ -930,7 +930,7 @@ def _render_shortage_surplus_map() -> None:
 
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:8px;"
+                f"border-left:3px solid {color};border-radius:6px;"
                 f"padding:10px 14px;margin-bottom:6px;'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
                 f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{region}</span>"
@@ -1034,12 +1034,12 @@ def _render_repositioning_costs() -> None:
         node_labels = ["Asia Pacific","North America","Europe","South America","Middle East","Africa"]
         node_idx    = {lbl: i for i, lbl in enumerate(node_labels)}
         node_colors = [
-            "rgba(59,130,246,0.85)",
-            "rgba(16,185,129,0.85)",
-            "rgba(139,92,246,0.85)",
-            "rgba(245,158,11,0.85)",
+            "rgba(53,114,176,0.85)",
+            "rgba(46,158,110,0.85)",
+            "rgba(124,110,175,0.85)",
+            "rgba(201,150,43,0.85)",
             "rgba(6,182,212,0.85)",
-            "rgba(239,68,68,0.85)",
+            "rgba(192,57,43,0.85)",
         ]
         imb_idx = {m.route_id: m for m in TRADE_IMBALANCE_DATA}
         sources, targets, values, link_colors, link_labels = [], [], [], [], []
@@ -1054,7 +1054,7 @@ def _render_repositioning_costs() -> None:
                 continue
             if is_loaded:
                 vol   = max(m.imbalance_ratio * 10, 5)
-                color = "rgba(59,130,246,0.55)"
+                color = "rgba(53,114,176,0.55)"
                 label = (f"Loaded — ${m.empty_container_repositioning_cost_per_feu:,}/FEU "
                          f"reposition cost | IR: {m.imbalance_ratio:.2f}")
             else:
@@ -1094,7 +1094,7 @@ def _render_repositioning_costs() -> None:
 
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:10px;padding:14px 20px;display:flex;gap:40px;flex-wrap:wrap;margin-top:8px;'>"
+        f"border-radius:6px;padding:14px 20px;display:flex;gap:40px;flex-wrap:wrap;margin-top:8px;'>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
         f"Avg Repositioning Cost</div>"
         f"<div style='font-size:1.1rem;font-weight:700;color:{_C_AMBER};margin-top:4px;'>${avg_cost:,.0f}/FEU</div></div>"
@@ -1232,7 +1232,7 @@ def _render_dwell_times() -> None:
 
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {dcolor};border-radius:8px;"
+                f"border-left:3px solid {dcolor};border-radius:6px;"
                 f"padding:9px 13px;margin-bottom:5px;'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
                 f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{p['port']}</span>"
@@ -1253,7 +1253,7 @@ def _render_dwell_times() -> None:
         best_p  = min(filtered, key=lambda p: p["dwell_days"])
         st.markdown(
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-radius:10px;padding:12px 20px;display:flex;gap:36px;flex-wrap:wrap;margin-top:6px;'>"
+            f"border-radius:6px;padding:12px 20px;display:flex;gap:36px;flex-wrap:wrap;margin-top:6px;'>"
             f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
             f"Selection Average</div><div style='font-size:1.05rem;font-weight:700;color:{_C_BLUE};margin-top:3px;'>"
             f"{avg_d:.1f} days</div></div>"
@@ -1349,7 +1349,7 @@ def _render_reefer_section() -> None:
 
         # Danger threshold line
         fig.add_hline(
-            y=90, line={"color": "rgba(239,68,68,0.5)", "dash": "dash", "width": 1.5},
+            y=90, line={"color": "rgba(192,57,43,0.5)", "dash": "dash", "width": 1.5},
             annotation_text="90% danger zone",
             annotation_font={"color": _C_RED, "size": 10},
             secondary_y=False,
@@ -1418,7 +1418,7 @@ def _render_reefer_section() -> None:
             bar_w = min(int(comm["share_pct"] * 4.2), 100)
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:8px;"
+                f"border-left:3px solid {color};border-radius:6px;"
                 f"padding:10px 13px;margin-bottom:6px;'>"
                 f"<div style='display:flex;justify-content:space-between;"
                 f"align-items:center;margin-bottom:5px;'>"
@@ -1511,7 +1511,7 @@ def _render_shortage_alerts() -> None:
 
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-left:4px solid {_C_RED};border-radius:10px;"
+        f"border-left:4px solid {_C_RED};border-radius:6px;"
         f"padding:14px 20px;display:flex;gap:32px;flex-wrap:wrap;margin-bottom:16px;'>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Active Alerts</div>"
@@ -1551,7 +1551,7 @@ def _render_shortage_alerts() -> None:
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
                 f"border-left:4px solid {risk_color};"
-                f"border-radius:10px;padding:14px 16px;margin-bottom:10px;'>"
+                f"border-radius:6px;padding:14px 16px;margin-bottom:10px;'>"
                 f"<div style='display:flex;justify-content:space-between;"
                 f"align-items:flex-start;margin-bottom:8px;'>"
                 f"<div>"
@@ -1611,7 +1611,7 @@ def _render_age_distribution() -> None:
             marker_colors=colors,
             marker_line={"color": _C_BG, "width": 2},
             textinfo="percent",
-            textfont={"color": "#f1f5f9", "size": 11},
+            textfont={"color": "#e8e6e1", "size": 11},
             hovertemplate="%{label}<br>%{value}% of fleet<extra></extra>",
         ))
         fig.add_annotation(
@@ -1639,7 +1639,7 @@ def _render_age_distribution() -> None:
             teu_m = global_fleet * b["pct"] / 100
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:8px;"
+                f"border-left:3px solid {color};border-radius:6px;"
                 f"padding:10px 14px;margin-bottom:6px;'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
                 f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{b['bracket']}</span>"
@@ -1701,7 +1701,7 @@ def _render_age_distribution() -> None:
         eol_teu = _GLOBAL_TEU_POOL["total_teu_m"] * eol_pct / 100
         st.markdown(
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {_C_ORANGE};border-radius:8px;"
+            f"border-left:4px solid {_C_ORANGE};border-radius:6px;"
             f"padding:12px 16px;margin-top:8px;'>"
             f"<span style='font-size:0.80rem;font-weight:700;color:{_C_ORANGE};'>"
             f"Fleet Replacement Pipeline: </span>"
@@ -1803,7 +1803,7 @@ def _render_lease_vs_own() -> None:
             hovertemplate="%{x}: break-even in %{y}yr<extra></extra>",
         ))
         fig_be.add_hline(
-            y=5, line={"color": "rgba(16,185,129,0.4)", "dash": "dash", "width": 1.5},
+            y=5, line={"color": "rgba(46,158,110,0.4)", "dash": "dash", "width": 1.5},
             annotation_text="5yr threshold",
             annotation_font={"color": _C_GREEN, "size": 10},
         )
@@ -1834,7 +1834,7 @@ def _render_lease_vs_own() -> None:
 
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-radius:10px;padding:13px 15px;margin-bottom:8px;'>"
+                f"border-radius:6px;padding:13px 15px;margin-bottom:8px;'>"
                 f"<div style='font-size:0.88rem;font-weight:700;color:{C_TEXT};"
                 f"margin-bottom:8px;'>{r['type']}</div>"
                 f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
@@ -1869,7 +1869,7 @@ def _render_lease_vs_own() -> None:
         # Fleet strategy callout
         st.markdown(
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {_C_CYAN};border-radius:8px;"
+            f"border-left:4px solid {_C_CYAN};border-radius:6px;"
             f"padding:12px 14px;margin-top:6px;'>"
             f"<div style='font-size:0.72rem;font-weight:700;color:{_C_CYAN};"
             f"text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;'>"
@@ -1983,7 +1983,7 @@ def _render_cost_calculator(route_results: Any) -> None:
     # Detail card
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:10px;padding:18px 22px;'>"
+        f"border-radius:6px;padding:18px 22px;'>"
         f"<div style='display:flex;gap:36px;flex-wrap:wrap;'>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Trade Imbalance Ratio</div>"
@@ -2092,13 +2092,13 @@ def _render_balance_timeline() -> None:
         ))
 
     # Zone bands
-    fig.add_hrect(y0=0,   y1=35,  fillcolor="rgba(239,68,68,0.05)",   line_width=0,
+    fig.add_hrect(y0=0,   y1=35,  fillcolor="rgba(192,57,43,0.05)",   line_width=0,
                   annotation_text="Shortage zone",  annotation_position="left",
                   annotation_font={"color": _C_RED,   "size": 10})
-    fig.add_hrect(y0=35,  y1=65,  fillcolor="rgba(245,158,11,0.04)",  line_width=0,
+    fig.add_hrect(y0=35,  y1=65,  fillcolor="rgba(201,150,43,0.04)",  line_width=0,
                   annotation_text="Transition",     annotation_position="left",
                   annotation_font={"color": _C_AMBER, "size": 10})
-    fig.add_hrect(y0=65,  y1=100, fillcolor="rgba(16,185,129,0.04)",  line_width=0,
+    fig.add_hrect(y0=65,  y1=100, fillcolor="rgba(46,158,110,0.04)",  line_width=0,
                   annotation_text="Surplus zone",  annotation_position="left",
                   annotation_font={"color": _C_GREEN, "size": 10})
 
@@ -2146,13 +2146,13 @@ def _render_balance_timeline() -> None:
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
         f"border-left:4px solid {idx_color};"
-        f"border-radius:8px;padding:14px 18px;margin-top:8px;'>"
+        f"border-radius:6px;padding:14px 18px;margin-top:8px;'>"
         f"<span style='font-size:0.80rem;font-weight:700;color:{C_TEXT2};"
         f"text-transform:uppercase;letter-spacing:0.06em;'>"
         f"Current Global Equipment Index: </span>"
         f"<span style='font-size:1.15rem;font-weight:800;color:{idx_color};'>"
         f"{global_idx:.1f}% &nbsp;</span>"
-        f"<span style='display:inline-block;padding:2px 10px;border-radius:999px;"
+        f"<span style='display:inline-block;padding:2px 10px;border-radius:3px;"
         f"font-size:0.72rem;font-weight:700;"
         f"background:rgba({_hex_to_rgb(idx_color)},0.15);color:{idx_color};"
         f"border:1px solid rgba({_hex_to_rgb(idx_color)},0.38);'>{idx_label}</span>"

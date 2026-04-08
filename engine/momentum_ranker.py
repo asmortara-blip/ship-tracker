@@ -15,15 +15,15 @@ if TYPE_CHECKING:
     pass
 
 # ── Color palette (mirrors ui/components.py) ────────────────────────────────
-_C_HIGH   = "#10b981"
-_C_MOD    = "#f59e0b"
-_C_LOW    = "#ef4444"
-_C_CARD   = "#1a2235"
-_C_TEXT   = "#f1f5f9"
-_C_TEXT2  = "#94a3b8"
-_C_ACCENT = "#3b82f6"
-_C_CONV   = "#8b5cf6"
-_C_MACRO  = "#06b6d4"
+_C_HIGH   = "#2e9e6e"
+_C_MOD    = "#c9962b"
+_C_LOW    = "#c0392b"
+_C_CARD   = "#181c28"
+_C_TEXT   = "#e8e6e1"
+_C_TEXT2  = "#9a968e"
+_C_ACCENT = "#3572b0"
+_C_CONV   = "#7c6eaf"
+_C_MACRO  = "#4a90a4"
 
 
 # ── Dataclass ────────────────────────────────────────────────────────────────
@@ -297,17 +297,17 @@ def render_momentum_leaderboard(ranks: list[MomentumRank]) -> None:
         <style>
         .mom-row {
             display:flex; align-items:center; gap:12px;
-            background:#1a2235; border-radius:8px; padding:10px 14px;
-            margin-bottom:6px; border:1px solid rgba(255,255,255,0.06);
+            background:#181c28; border-radius:8px; padding:10px 14px;
+            margin-bottom:6px; border:1px solid rgba(232,230,225,0.05);
         }
         .mom-rank  { font-size:1.1rem; font-weight:700; min-width:36px; text-align:center; }
-        .mom-name  { flex:1; font-size:0.9rem; color:#f1f5f9; }
+        .mom-name  { flex:1; font-size:0.9rem; color:#e8e6e1; }
         .mom-badge {
             font-size:0.65rem; font-weight:700; padding:2px 7px;
             border-radius:99px; letter-spacing:0.05em;
         }
         .mom-pct   { font-size:0.8rem; font-weight:600; min-width:52px; text-align:right; }
-        .mom-bar-wrap { width:80px; background:rgba(255,255,255,0.06);
+        .mom-bar-wrap { width:80px; background:rgba(232,230,225,0.05);
                         border-radius:4px; height:8px; overflow:hidden; }
         .mom-bar   { height:100%; border-radius:4px; }
         </style>
@@ -316,7 +316,7 @@ def render_momentum_leaderboard(ranks: list[MomentumRank]) -> None:
     )
 
     # ── Helper: render one row ────────────────────────────────────────────────
-    rank_badges = {1: ("🥇", "#fbbf24"), 2: ("🥈", "#94a3b8"), 3: ("🥉", "#d97706")}
+    rank_badges = {1: ("🥇", "#fbbf24"), 2: ("🥈", "#9a968e"), 3: ("🥉", "#d97706")}
 
     def _pct_color(v: float) -> str:
         if v > 0.02:
@@ -378,7 +378,7 @@ def render_momentum_leaderboard(ranks: list[MomentumRank]) -> None:
     # ── Header row ────────────────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;gap:12px;padding:4px 14px;'
-        'font-size:0.7rem;color:#64748b;font-weight:600;letter-spacing:0.08em;">'
+        'font-size:0.7rem;color:#6b6760;font-weight:600;letter-spacing:0.08em;">'
         '<span style="min-width:36px">RANK</span>'
         '<span style="flex:1">ENTITY</span>'
         '<span style="min-width:48px">TYPE</span>'
@@ -397,7 +397,7 @@ def render_momentum_leaderboard(ranks: list[MomentumRank]) -> None:
         if not group:
             continue
         st.markdown(
-            f'<div style="font-size:0.75rem;font-weight:700;color:#64748b;'
+            f'<div style="font-size:0.75rem;font-weight:700;color:#6b6760;'
             f'letter-spacing:0.1em;margin:14px 0 6px 4px;">'
             f'{label.upper()}</div>',
             unsafe_allow_html=True,

@@ -8,25 +8,25 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # ── Theme constants (mirrors ui/styles.py) ───────────────────────────────────
-_C_BG      = "#0a0f1a"
-_C_SURFACE = "#111827"
-_C_CARD    = "#1a2235"
-_C_TEXT    = "#f1f5f9"
-_C_TEXT2   = "#94a3b8"
-_C_TEXT3   = "#64748b"
-_C_ACCENT  = "#3b82f6"
-_C_HIGH    = "#10b981"
-_C_MOD     = "#f59e0b"
-_C_LOW     = "#ef4444"
+_C_BG      = "#0c0e14"
+_C_SURFACE = "#12151e"
+_C_CARD    = "#181c28"
+_C_TEXT    = "#e8e6e1"
+_C_TEXT2   = "#9a968e"
+_C_TEXT3   = "#6b6760"
+_C_ACCENT  = "#3572b0"
+_C_HIGH    = "#2e9e6e"
+_C_MOD     = "#c9962b"
+_C_LOW     = "#c0392b"
 
 _MA_COLORS = {
     7:  "#60a5fa",   # light blue
-    30: "#f59e0b",   # amber
-    90: "#8b5cf6",   # purple
+    30: "#c9962b",   # amber
+    90: "#7c6eaf",   # purple
 }
 
-_BB_FILL_COLOR = "rgba(59,130,246,0.08)"
-_BB_LINE_COLOR = "rgba(59,130,246,0.45)"
+_BB_FILL_COLOR = "rgba(53,114,176,0.08)"
+_BB_LINE_COLOR = "rgba(53,114,176,0.45)"
 
 
 def make_dark_figure(height: int = 400, title: str = "") -> go.Figure:
@@ -51,8 +51,8 @@ def make_dark_figure(height: int = 400, title: str = "") -> go.Figure:
         "height":        height,
         "margin":        margin,
         "font": {
-            "color":  _C_TEXT,
-            "family": "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            "color":  _C_TEXT2,
+            "family": "Libre Franklin, Inter, system-ui, sans-serif",
             "size":   12,
         },
         "showlegend": True,
@@ -67,14 +67,14 @@ def make_dark_figure(height: int = 400, title: str = "") -> go.Figure:
             "x":           1,
         },
         "xaxis": {
-            "gridcolor":      "rgba(255,255,255,0.05)",
+            "gridcolor":      "rgba(232,230,225,0.04)",
             "zerolinecolor":  "rgba(255,255,255,0.10)",
             "tickfont":       {"color": _C_TEXT3, "size": 11},
             "linecolor":      "rgba(255,255,255,0.10)",
             "showgrid":       True,
         },
         "yaxis": {
-            "gridcolor":      "rgba(255,255,255,0.05)",
+            "gridcolor":      "rgba(232,230,225,0.04)",
             "zerolinecolor":  "rgba(255,255,255,0.10)",
             "tickfont":       {"color": _C_TEXT3, "size": 11},
             "linecolor":      "rgba(255,255,255,0.10)",

@@ -19,17 +19,17 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 # Theme
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ---------------------------------------------------------------------------
 # Mock data helpers
@@ -305,7 +305,7 @@ def _kpi_card(label: str, value: str, prior: str, delta: float,
     delta_html = _delta_html(delta, unit)
     badge = _status_badge(status)
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:14px 16px;min-width:140px;">'
         f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;letter-spacing:0.06em;'
         f'text-transform:uppercase;margin-bottom:6px;">{label}</div>'
@@ -416,7 +416,7 @@ def _render_demand_drivers(drivers: list[dict]) -> None:
                 f'<div style="display:grid;grid-template-columns:1.8fr 1fr 1fr 0.7fr 0.7fr 2fr;">'
                 f'<div style="{rs}color:{C_TEXT};font-size:13px;font-weight:600;">{d["factor"]}</div>'
                 f'<div style="{rs}color:{C_ACCENT};font-size:12px;">{d["segment"]}</div>'
-                f'<div style="{rs}color:{C_TEXT2};font-size:12px;font-family:monospace;">{d["current"]}</div>'
+                f'<div style="{rs}color:{C_TEXT2};font-size:12px;font-family:JetBrains Mono,monospace;">{d["current"]}</div>'
                 f'<div style="{rs}">{trend_badge}</div>'
                 f'<div style="{rs}">{impact_badge}</div>'
                 f'<div style="{rs}color:{C_TEXT2};font-size:12px;">{d["assessment"]}</div>'
@@ -447,14 +447,14 @@ def _render_leading_indicators(indicators: list[dict]) -> None:
                 arrow   = "▲" if trend == "UP" else ("▼" if trend == "DOWN" else "▬")
                 card_html = (
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-radius:10px;padding:14px;margin-bottom:12px;">'
+                    f'border-radius:6px;padding:14px;margin-bottom:12px;">'
                     f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
                     f'<div style="color:{C_TEXT};font-size:13px;font-weight:600;line-height:1.3;'
                     f'max-width:75%;">{ind["indicator"]}</div>'
                     f'<span style="color:{c_trend};font-size:18px;">{arrow}</span>'
                     f'</div>'
                     f'<div style="color:{C_ACCENT};font-size:20px;font-weight:700;margin:8px 0 4px 0;'
-                    f'font-family:monospace;">{ind["value"]}</div>'
+                    f'font-family:JetBrains Mono,monospace;">{ind["value"]}</div>'
                     f'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">'
                     f'<span style="color:{C_TEXT3};font-size:11px;background:{C_SURFACE};'
                     f'padding:2px 6px;border-radius:4px;">Lead: {ind["lead_time"]}</span>'
@@ -638,7 +638,7 @@ def _render_rates_credit(data: dict) -> None:
                         f'<div style="background:{bg};display:flex;justify-content:space-between;'
                         f'align-items:center;padding:9px 14px;border-bottom:1px solid {C_BORDER};">'
                         f'<span style="color:{C_TEXT};font-size:13px;">{name}</span>'
-                        f'<span style="color:{C_ACCENT};font-size:14px;font-weight:700;font-family:monospace;">{val:.2f}%</span>'
+                        f'<span style="color:{C_ACCENT};font-size:14px;font-weight:700;font-family:JetBrains Mono,monospace;">{val:.2f}%</span>'
                         f'</div>'
                     )
                 rate_html += "</div>"
@@ -668,7 +668,7 @@ def _render_rates_credit(data: dict) -> None:
                         f'<div style="background:{bg};display:flex;justify-content:space-between;'
                         f'align-items:center;padding:9px 14px;border-bottom:1px solid {C_BORDER};">'
                         f'<span style="color:{C_TEXT};font-size:13px;">{name}</span>'
-                        f'<span style="color:{val_color};font-size:14px;font-weight:700;font-family:monospace;">{val_str}</span>'
+                        f'<span style="color:{val_color};font-size:14px;font-weight:700;font-family:JetBrains Mono,monospace;">{val_str}</span>'
                         f'</div>'
                     )
                 hy_html += "</div>"
@@ -699,8 +699,8 @@ def _render_rates_credit(data: dict) -> None:
                     vtbl += (
                         f'<tr style="background:{bg};">'
                         f'<td style="color:{C_TEXT};font-size:13px;padding:9px 10px;">{v["type"]}</td>'
-                        f'<td style="color:{C_TEXT2};font-size:13px;text-align:right;font-family:monospace;padding:9px 10px;">{v["spread_bps"]} bps</td>'
-                        f'<td style="color:{C_MOD};font-size:13px;font-weight:700;text-align:right;font-family:monospace;padding:9px 10px;">{v["all_in_pct"]:.2f}%</td>'
+                        f'<td style="color:{C_TEXT2};font-size:13px;text-align:right;font-family:JetBrains Mono,monospace;padding:9px 10px;">{v["spread_bps"]} bps</td>'
+                        f'<td style="color:{C_MOD};font-size:13px;font-weight:700;text-align:right;font-family:JetBrains Mono,monospace;padding:9px 10px;">{v["all_in_pct"]:.2f}%</td>'
                         f'<td style="color:{C_TEXT2};font-size:13px;text-align:right;padding:9px 10px;">{v["ltv_pct"]}%</td>'
                         f'</tr>'
                     )
@@ -730,7 +730,7 @@ def _render_rates_credit(data: dict) -> None:
                         f'align-items:center;padding:9px 14px;border-bottom:1px solid {C_BORDER};">'
                         f'<span style="color:{C_TEXT};font-size:13px;">{row["rate_scenario"]}</span>'
                         f'<div style="display:flex;gap:10px;align-items:center;">'
-                        f'<span style="color:{C_TEXT2};font-size:13px;font-family:monospace;">{row["new_orders_delta"]}</span>'
+                        f'<span style="color:{C_TEXT2};font-size:13px;font-family:JetBrains Mono,monospace;">{row["new_orders_delta"]}</span>'
                         f'{_status_badge(snt)}'
                         f'</div>'
                         f'</div>'
@@ -779,14 +779,14 @@ def _render_commodities(rows: list[dict]) -> None:
                 def _pct_cell(v: float) -> str:
                     c   = C_HIGH if v > 0 else (C_LOW if v < 0 else C_TEXT3)
                     sgn = "+" if v > 0 else ""
-                    return f'<td style="color:{c};font-size:13px;font-weight:600;text-align:right;padding:10px 14px;font-family:monospace;">{sgn}{v:.1f}%</td>'
+                    return f'<td style="color:{c};font-size:13px;font-weight:600;text-align:right;padding:10px 14px;font-family:JetBrains Mono,monospace;">{sgn}{v:.1f}%</td>'
 
                 price_str = f"{price:,.1f}" if price < 1000 else f"{price:,.0f}"
                 tbl += (
                     f'<tr style="background:{bg};">'
                     f'<td style="color:{C_TEXT};font-size:13px;font-weight:600;padding:10px 14px;">{r["commodity"]}</td>'
                     f'<td style="color:{C_ACCENT};font-size:14px;font-weight:700;text-align:right;'
-                    f'padding:10px 14px;font-family:monospace;">{price_str} <span style="color:{C_TEXT3};'
+                    f'padding:10px 14px;font-family:JetBrains Mono,monospace;">{price_str} <span style="color:{C_TEXT3};'
                     f'font-size:11px;font-weight:400;">{unit}</span></td>'
                     + _pct_cell(wow)
                     + _pct_cell(mom)
@@ -798,7 +798,7 @@ def _render_commodities(rows: list[dict]) -> None:
                 logger.warning(f"Commodity row {i} error: {exc}")
         tbl += "</tbody></table>"
         st.markdown(
-            f'<div style="border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">{tbl}</div>',
+            f'<div style="border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">{tbl}</div>',
             unsafe_allow_html=True,
         )
     except Exception as exc:

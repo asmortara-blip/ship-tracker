@@ -822,7 +822,7 @@ def render_backtest_panel(results: list[BacktestResult]) -> None:
         hit_pct = res.hit_rate * 100
         bar_html = (
             f"<div style='display:flex;align-items:center;gap:8px;'>"
-            f"<div style='width:80px;background:rgba(255,255,255,0.07);border-radius:3px;height:8px;'>"
+            f"<div style='width:80px;background:rgba(232,230,225,0.06);border-radius:3px;height:8px;'>"
             f"<div style='width:{hit_pct:.0f}%;background:{bar_color};height:100%;border-radius:3px;'></div>"
             f"</div>"
             f"<span style='color:{bar_color};font-size:12px;font-weight:600;'>{hit_pct:.0f}%</span>"
@@ -835,7 +835,7 @@ def render_backtest_panel(results: list[BacktestResult]) -> None:
         bear_c = C_LOW  if res.avg_return_when_bearish <= 0 else C_HIGH
 
         rows_html += (
-            f"<tr style='border-bottom:1px solid rgba(255,255,255,0.04);'>"
+            f"<tr style='border-bottom:1px solid rgba(232,230,225,0.04);'>"
             f"<td style='padding:10px 12px;color:{C_TEXT};font-size:13px;font-weight:600;'>{res.signal_name}</td>"
             f"<td style='padding:10px 12px;'>{bar_html}</td>"
             f"<td style='padding:10px 12px;color:{bull_c};font-size:12px;'>{bull_s}</td>"
@@ -927,17 +927,17 @@ def render_backtest_panel(results: list[BacktestResult]) -> None:
     layout_kwargs = dict(
         plot_bgcolor=C_SURFACE,
         paper_bgcolor=C_BG,
-        font=dict(family="Inter, sans-serif", color=C_TEXT2, size=11),
+        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2, size=11),
         xaxis=dict(
             title="Trading Days",
-            gridcolor="rgba(255,255,255,0.05)",
+            gridcolor="rgba(232,230,225,0.04)",
             showgrid=True,
             zeroline=False,
             color=C_TEXT3,
         ),
         yaxis=dict(
             title="Portfolio Value ($)",
-            gridcolor="rgba(255,255,255,0.05)",
+            gridcolor="rgba(232,230,225,0.04)",
             showgrid=True,
             zeroline=False,
             tickprefix="$",

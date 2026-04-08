@@ -17,17 +17,17 @@ import streamlit as st
 from loguru import logger
 
 # ── Color palette ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Commodity data ─────────────────────────────────────────────────────────────
 _COMMODITIES = [
@@ -255,7 +255,7 @@ def _impact_badge(impact: str) -> str:
 def _card_open(border_color: str = C_BORDER, extra_style: str = "") -> str:
     return (
         f'<div style="background:{C_CARD};border:1px solid {border_color};'
-        f'border-radius:12px;padding:20px 24px;margin-bottom:16px;{extra_style}">'
+        f'border-radius:6px;padding:20px 24px;margin-bottom:16px;{extra_style}">'
     )
 
 
@@ -294,7 +294,7 @@ def _render_hero(macro_data: dict | None) -> None:
         with col1:
             st.markdown(
                 f'<div style="background:linear-gradient(135deg,{C_LOW}22,{C_CARD});'
-                f'border:1px solid {C_LOW}55;border-radius:12px;padding:20px;text-align:center;">'
+                f'border:1px solid {C_LOW}55;border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
                 f'letter-spacing:1px;text-transform:uppercase;">US Tariff on China</div>'
                 f'<div style="color:{C_LOW};font-size:52px;font-weight:900;'
@@ -307,7 +307,7 @@ def _render_hero(macro_data: dict | None) -> None:
         with col2:
             st.markdown(
                 f'<div style="background:linear-gradient(135deg,{C_MOD}22,{C_CARD});'
-                f'border:1px solid {C_MOD}55;border-radius:12px;padding:20px;text-align:center;">'
+                f'border:1px solid {C_MOD}55;border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
                 f'letter-spacing:1px;text-transform:uppercase;">China Retaliation</div>'
                 f'<div style="color:{C_MOD};font-size:52px;font-weight:900;'
@@ -320,7 +320,7 @@ def _render_hero(macro_data: dict | None) -> None:
         with col3:
             st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-radius:12px;padding:20px;text-align:center;">'
+                f'border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
                 f'letter-spacing:1px;text-transform:uppercase;">Est. Annual Trade Impact</div>'
                 f'<div style="color:{C_TEXT};font-size:40px;font-weight:800;'
@@ -333,7 +333,7 @@ def _render_hero(macro_data: dict | None) -> None:
         with col4:
             st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-radius:12px;padding:20px;text-align:center;">'
+                f'border-radius:6px;padding:20px;text-align:center;">'
                 f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
                 f'letter-spacing:1px;text-transform:uppercase;">Ships Rerouted / Cancelled</div>'
                 f'<div style="color:{C_TEXT};font-size:40px;font-weight:800;'
@@ -345,7 +345,7 @@ def _render_hero(macro_data: dict | None) -> None:
 
         st.markdown(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;padding:14px 20px;margin-top:4px;'
+            f'border-radius:6px;padding:14px 20px;margin-top:4px;'
             f'display:flex;gap:32px;flex-wrap:wrap;">'
             f'<div style="color:{C_TEXT2};font-size:13px;">'
             f'<span style="color:{C_LOW};font-weight:700;">&#9650;</span> '
@@ -387,7 +387,7 @@ def _render_commodity_table() -> None:
             f'<div style="display:grid;grid-template-columns:'
             f'2fr 1.2fr 1.2fr 1.2fr 1.2fr 1.2fr 2fr;'
             f'background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px 10px 0 0;overflow:hidden;">'
+            f'border-radius:6px 10px 0 0;overflow:hidden;">'
             f'<div style="{header_style}">Commodity</div>'
             f'<div style="{header_style}">US Tariff on CN</div>'
             f'<div style="{header_style}">CN Tariff on US</div>'
@@ -478,12 +478,12 @@ def _render_diversion_map() -> None:
         # Route lines: (origin, dest, color, width, dash, label)
         routes = [
             ("China", "USA", C_LOW, 4, "solid", "China→US (severely impacted)"),
-            ("China", "Vietnam", "#3b82f6", 3, "dot", "China→Vietnam (components)"),
+            ("China", "Vietnam", "#3572b0", 3, "dot", "China→Vietnam (components)"),
             ("Vietnam", "USA", C_HIGH, 3, "solid", "Vietnam→US (rerouted)"),
-            ("China", "Mexico", "#8b5cf6", 2, "dot", "China→Mexico (nearshoring)"),
+            ("China", "Mexico", "#7c6eaf", 2, "dot", "China→Mexico (nearshoring)"),
             ("Mexico", "USA", C_HIGH, 2, "solid", "Mexico→US (friendshored)"),
             ("Brazil", "China", C_MOD, 3, "solid", "Brazil→China soy (replacing US)"),
-            ("India", "USA", "#06b6d4", 2, "dot", "India→US (emerging)"),
+            ("India", "USA", "#4a90a4", 2, "dot", "India→US (emerging)"),
         ]
 
         for origin, dest, color, width, dash, label in routes:
@@ -530,11 +530,11 @@ def _render_diversion_map() -> None:
                 "showcoastlines": True,
                 "coastlinecolor": "rgba(255,255,255,0.1)",
                 "showland": True,
-                "landcolor": "#1a2235",
+                "landcolor": "#181c28",
                 "showocean": True,
-                "oceancolor": "#0a0f1a",
+                "oceancolor": "#0c0e14",
                 "showcountries": True,
-                "countrycolor": "rgba(255,255,255,0.06)",
+                "countrycolor": "rgba(232,230,225,0.05)",
                 "projection_type": "natural earth",
                 "bgcolor": C_BG,
             },
@@ -644,7 +644,7 @@ def _render_nearshoring() -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {s["color"]}33;'
-                    f'border-radius:10px;padding:16px;height:100%;">'
+                    f'border-radius:6px;padding:16px;height:100%;">'
                     f'<div style="font-size:24px;margin-bottom:6px;">{s["flag"]}</div>'
                     f'<div style="color:{C_TEXT};font-size:14px;font-weight:700;">'
                     f'{s["country"]}</div>'
@@ -722,7 +722,7 @@ def _render_volume_chart() -> None:
         fig.add_trace(go.Scatter(
             x=months, y=mexico_us_2025,
             name="Mexico→US 2025 (Nearshored)",
-            line={"color": "#8b5cf6", "width": 2},
+            line={"color": "#7c6eaf", "width": 2},
             mode="lines+markers",
             marker={"size": 5},
             hovertemplate="%{y}K TEUs<extra>Mexico→US 2025</extra>",
@@ -816,7 +816,7 @@ def _render_deal_tracker() -> None:
         st.markdown(
             f'<div style="display:grid;grid-template-columns:1.8fr 1fr 2fr 1fr 2fr;'
             f'background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px 10px 0 0;">'
+            f'border-radius:6px 10px 0 0;">'
             f'<div style="{header_style}">Parties</div>'
             f'<div style="{header_style}">Status</div>'
             f'<div style="{header_style}">Key Issues</div>'
@@ -873,7 +873,7 @@ def _render_history() -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {color}33;'
-                    f'border-radius:10px;padding:16px;">'
+                    f'border-radius:6px;padding:16px;">'
                     f'<div style="color:{color};font-size:11px;font-weight:700;'
                     f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">'
                     f'{h["period"]}</div>'
@@ -923,7 +923,7 @@ def _render_scenario() -> None:
 
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_HIGH}11,{C_CARD});'
-            f'border:1px solid {C_HIGH}33;border-radius:12px;padding:20px 24px;margin-bottom:16px;">'
+            f'border:1px solid {C_HIGH}33;border-radius:6px;padding:20px 24px;margin-bottom:16px;">'
             f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:12px;">'
             f'&#9654; Base Scenario: Tariffs fall from 145% → 50% by Q4 2026</div>'
             f'<div style="color:{C_TEXT2};font-size:13px;line-height:1.7;">'
@@ -946,7 +946,7 @@ def _render_scenario() -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {color}33;'
-                    f'border-radius:10px;padding:16px;text-align:center;">'
+                    f'border-radius:6px;padding:16px;text-align:center;">'
                     f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;'
                     f'text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
                     f'<div style="color:{color};font-size:28px;font-weight:800;margin:8px 0;">'
@@ -1021,25 +1021,25 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
         logger.info("trade_war | render start")
 
         _render_hero(macro_data)
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_commodity_table()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_diversion_map()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_nearshoring()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_volume_chart()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_deal_tracker()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_history()
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
 
         _render_scenario()
 

@@ -15,19 +15,19 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Colour palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 # ---------------------------------------------------------------------------
 # Static network data
@@ -198,7 +198,7 @@ def _render_hero_stats() -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
-                    f'border-radius:10px;padding:18px 14px;text-align:center;">'
+                    f'border-radius:6px;padding:18px 14px;text-align:center;">'
                     f'<div style="font-size:28px;font-weight:800;color:{color};">{value}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
                     f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
@@ -213,7 +213,7 @@ def _render_hero_stats() -> None:
 def _render_network_map() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Global Network Map</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Global Network Map</div>',
             unsafe_allow_html=True,
         )
 
@@ -265,10 +265,10 @@ def _render_network_map() -> None:
 
         fig.update_geos(
             projection_type="natural earth",
-            showland=True, landcolor="#1a2235",
-            showocean=True, oceancolor="#0a0f1a",
+            showland=True, landcolor="#181c28",
+            showocean=True, oceancolor="#0c0e14",
             showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
-            showcountries=True, countrycolor="rgba(255,255,255,0.05)",
+            showcountries=True, countrycolor="rgba(232,230,225,0.04)",
             showframe=False,
             bgcolor=C_BG,
         )
@@ -287,13 +287,13 @@ def _render_network_map() -> None:
 def _render_centrality() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Network Centrality Analysis</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Centrality Analysis</div>',
             unsafe_allow_html=True,
         )
 
         header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">#</th>'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Port</th>'
@@ -338,13 +338,13 @@ def _render_centrality() -> None:
 def _render_hub_spoke() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Hub-and-Spoke vs Direct Calls — Cost/Time Tradeoff</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Hub-and-Spoke vs Direct Calls — Cost/Time Tradeoff</div>',
             unsafe_allow_html=True,
         )
 
         header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Route / Hub</th>'
             f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Type</th>'
@@ -385,7 +385,7 @@ def _render_hub_spoke() -> None:
 def _render_carrier_services() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Carrier Alliance Service Network</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Alliance Service Network</div>',
             unsafe_allow_html=True,
         )
 
@@ -399,9 +399,9 @@ def _render_carrier_services() -> None:
             "Wan Hai": C_TEXT3,
         }
 
-        html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
+        html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
         html += (
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Alliance / Carrier</th>'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Members</th>'
@@ -437,14 +437,14 @@ def _render_carrier_services() -> None:
 def _render_stress_test() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Network Stress Test — Port Closure Scenarios (30-Day Simulation)</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Stress Test — Port Closure Scenarios (30-Day Simulation)</div>',
             unsafe_allow_html=True,
         )
 
         for port, scenario, affected, alternative, rate_impact, add_days, recovery in _STRESS_TESTS:
             st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:4px solid {C_LOW};'
-                f'border-radius:10px;padding:16px 20px;margin-bottom:12px;">'
+                f'border-radius:6px;padding:16px 20px;margin-bottom:12px;">'
                 f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
                 f'<div>'
                 f'<span style="font-size:14px;font-weight:800;color:{C_LOW};">{port} Closure</span>'
@@ -541,9 +541,9 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};">Shipping Network Topology & Resilience</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
+            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Shipping Network Topology & Resilience</div>'
+            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
             f'Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing'
             f'</div>'
             f'</div>',
@@ -592,8 +592,8 @@ def render(port_results=None, route_results=None, insights=None) -> None:
 
     try:
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
             f'Network topology derived from vessel scheduling data, AIS tracking, and carrier service announcements. '
             f'Centrality scores calculated using betweenness centrality weighted by TEU throughput. '
             f'Stress test scenarios are modelled simulations — actual outcomes depend on market conditions and carrier response.'

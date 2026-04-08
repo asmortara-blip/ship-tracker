@@ -8,21 +8,26 @@ import streamlit as st
 from loguru import logger
 
 # ---------------------------------------------------------------------------
-# Colour palette
+# Colour palette — WSJ editorial
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#fffcf5"
+C_SURFACE = "#f7f4ed"
+C_CARD    = "#ffffff"
+C_BORDER  = "rgba(60,55,48,0.12)"
+C_HIGH    = "#2e7d32"
+C_MOD     = "#b8860b"
+C_LOW     = "#c62828"
+C_ACCENT  = "#1a5276"
+C_TEXT    = "#1c1917"
+C_TEXT2   = "#57534e"
+C_TEXT3   = "#78716c"
+C_PURPLE  = "#5b4a8a"
+C_CYAN    = "#2e6b7a"
+
+# Typography tokens
+_FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
+_FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', Arial, sans-serif"
+_FONT_MONO     = "'JetBrains Mono', 'Consolas', monospace"
 
 _REGION_COLORS = {
     "Asia-Pacific": C_ACCENT,
@@ -116,15 +121,15 @@ _ELASTICITIES = [
 # ---------------------------------------------------------------------------
 def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> None:
     delta_html = (
-        f'<div style="font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
+        f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
         if delta else ""
     )
     st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
         f'padding:16px 18px;text-align:center;">'
-        f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
+        f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
         f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
+        f'<div style="font-family:{_FONT_MONO};font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
         f'{delta_html}'
         f'</div>',
         unsafe_allow_html=True,
@@ -133,12 +138,12 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub = (
-        f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
+        f'<div style="font-family:{_FONT_BODY};font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
         if subtitle else ""
     )
     st.markdown(
-        f'<div style="margin:28px 0 12px;">'
-        f'<div style="font-size:1.05rem;font-weight:600;color:{C_TEXT};">{title}</div>'
+        f'<div style="margin:28px 0 12px;border-bottom:2px solid {C_TEXT};padding-bottom:6px;">'
+        f'<div style="font-family:{_FONT_HEADLINE};font-size:1.05rem;font-weight:700;color:{C_TEXT};">{title}</div>'
         f'{sub}'
         f'</div>',
         unsafe_allow_html=True,
@@ -163,15 +168,15 @@ def _overflow_badge(pct: int) -> str:
     else:
         label, color = "LOW", C_HIGH
     return (
-        f'<span style="background:{color}22;color:{color};font-size:0.7rem;'
-        f'font-weight:700;padding:2px 8px;border-radius:4px;">{label}</span>'
+        f'<span style="font-family:{_FONT_BODY};background:{color}18;color:{color};font-size:0.7rem;'
+        f'font-weight:700;padding:2px 8px;border-radius:3px;">{label}</span>'
     )
 
 
 def _yoy_html(pct: float) -> str:
     color = C_HIGH if pct > 0 else C_LOW
-    arrow = "▲" if pct > 0 else "▼"
-    return f'<span style="color:{color};font-weight:600;">{arrow} {abs(pct):.1f}%</span>'
+    arrow = "+" if pct > 0 else "-"
+    return f'<span style="font-family:{_FONT_MONO};color:{color};font-weight:600;">{arrow}{abs(pct):.1f}%</span>'
 
 
 # ---------------------------------------------------------------------------
@@ -180,19 +185,19 @@ def _yoy_html(pct: float) -> str:
 def _render_hero() -> None:
     try:
         st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:14px;padding:24px 28px;margin-bottom:20px;">'
-            f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Port Demand Forecasting</div>'
-            f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
+            f'<div style="background:{C_CARD};'
+            f'border:1px solid {C_BORDER};border-radius:3px;padding:24px 28px;margin-bottom:20px;">'
+            f'<div style="font-family:{_FONT_HEADLINE};font-size:1.4rem;font-weight:700;color:{C_TEXT};">Port Demand Forecasting</div>'
+            f'<div style="font-family:{_FONT_BODY};font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'15 major ports · 3-month and 12-month forecasts · Demand shock scenarios</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            _kpi_card("Global Container Throughput", "842M TEU", "▲ 3.1% YoY", C_HIGH)
+            _kpi_card("Global Container Throughput", "842M TEU", "+3.1% YoY", C_HIGH)
         with c2:
-            _kpi_card("Demand Index", "108.4", "▲ 2.7 pts vs Jan 2026", C_ACCENT)
+            _kpi_card("Demand Index", "108.4", "+2.7 pts vs Jan 2026", C_ACCENT)
         with c3:
             _kpi_card("12M Forecast Growth", "+4.2%", "Confidence: 78%", C_MOD)
         with c4:
@@ -208,32 +213,32 @@ def _render_forecast_table() -> None:
         cols = "1.4fr 1fr 0.8fr 0.8fr 0.8fr 0.7fr 1.8fr"
         header_html = (
             f'<div style="display:grid;grid-template-columns:{cols};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px 3px 0 0;'
             f'padding:10px 14px;">'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Port</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Region</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Current (M TEU)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">3M Fcst</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">12M Fcst</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">YoY %</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Key Driver</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Port</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Region</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Current (M TEU)</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">3M Fcst</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">12M Fcst</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">YoY %</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Key Driver</span>'
             f'</div>'
         )
         st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
+        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (port, region, curr, f3, f12, util, cap, yoy, driver) in enumerate(_PORTS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
             rc = _REGION_COLORS.get(region, C_TEXT3)
             rows_html += (
                 f'<div style="display:grid;grid-template-columns:{cols};'
                 f'gap:0;background:{bg};padding:9px 14px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{port}</span>'
-                f'<span style="font-size:0.75rem;color:{rc};">{region}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT};">{curr:.1f}</span>'
-                f'<span style="font-size:0.82rem;color:{C_HIGH};">{f3:.1f}</span>'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_HIGH};">{f12:.1f}</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.82rem;font-weight:600;color:{C_TEXT};">{port}</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{rc};">{region}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_TEXT};">{curr:.1f}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_HIGH};">{f3:.1f}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;font-weight:600;color:{C_HIGH};">{f12:.1f}</span>'
                 f'<span style="font-size:0.82rem;">{_yoy_html(yoy)}</span>'
-                f'<span style="font-size:0.75rem;color:{C_TEXT3};">{driver}</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_TEXT3};">{driver}</span>'
                 f'</div>'
             )
         rows_html += "</div>"
@@ -245,35 +250,35 @@ def _render_forecast_table() -> None:
 
 def _render_demand_drivers() -> None:
     try:
-        _section_header("Demand Driver Analysis", "GDP growth → trade volume → port throughput elasticity chain")
+        _section_header("Demand Driver Analysis", "GDP growth - trade volume - port throughput elasticity chain")
         cols_label = "1.4fr 0.8fr 0.8fr 0.8fr"
         header_html = (
             f'<div style="display:grid;grid-template-columns:{cols_label};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px 3px 0 0;'
             f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Region</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">GDP Elast.</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Trade Elast.</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Port Elast.</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Region</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">GDP Elast.</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Trade Elast.</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Port Elast.</span>'
             f'</div>'
         )
         st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
+        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (region, gdp_e, trade_e, port_e) in enumerate(_ELASTICITIES):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
             rows_html += (
                 f'<div style="display:grid;grid-template-columns:{cols_label};'
                 f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{region}</span>'
-                f'<span style="font-size:0.82rem;color:{C_ACCENT};">{gdp_e:.1f}x</span>'
-                f'<span style="font-size:0.82rem;color:{C_MOD};">{trade_e:.1f}x</span>'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_HIGH};">{port_e:.1f}x</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.82rem;font-weight:600;color:{C_TEXT};">{region}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_ACCENT};">{gdp_e:.1f}x</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_MOD};">{trade_e:.1f}x</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;font-weight:600;color:{C_HIGH};">{port_e:.1f}x</span>'
                 f'</div>'
             )
         rows_html += "</div>"
         st.markdown(rows_html, unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:6px;padding:0 2px;">'
+            f'<div style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_TEXT3};margin-top:6px;padding:0 2px;">'
             f'Elasticity = % change in output per 1% change in input. '
             f'E.g. port elasticity of 1.8x means a 1% GDP rise yields +1.8% TEU throughput growth.</div>',
             unsafe_allow_html=True,
@@ -319,11 +324,11 @@ def _render_regional_comparison() -> None:
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color=C_TEXT,
+            font=dict(color=C_TEXT, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
             barmode="group",
-            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(255,255,255,0.04)"),
+            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)"),
             yaxis=dict(
-                tickfont_color=C_TEXT2, gridcolor="rgba(255,255,255,0.04)",
+                tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)",
                 title="M TEU", title_font_color=C_TEXT3,
             ),
             legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)"),
@@ -346,8 +351,8 @@ def _render_seasonal_heatmap() -> None:
             x=_MONTHS,
             y=ports_sel,
             colorscale=[
-                [0.0, "#1e3a5f"],
-                [0.5, C_ACCENT],
+                [0.0, "#d4e6f1"],
+                [0.5, "#5b9bd5"],
                 [0.75, C_MOD],
                 [1.0, C_HIGH],
             ],
@@ -363,7 +368,7 @@ def _render_seasonal_heatmap() -> None:
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color=C_TEXT,
+            font=dict(color=C_TEXT, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
             xaxis=dict(tickfont_color=C_TEXT2),
             yaxis=dict(tickfont_color=C_TEXT2),
             margin=dict(t=10, b=10, l=10, r=10),
@@ -397,11 +402,11 @@ def _render_shock_scenarios() -> None:
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color=C_TEXT,
-            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(255,255,255,0.04)"),
+            font=dict(color=C_TEXT, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
+            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)"),
             yaxis=dict(
-                tickfont_color=C_TEXT2, gridcolor="rgba(255,255,255,0.04)",
-                title="Throughput Δ%", title_font_color=C_TEXT3,
+                tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)",
+                title="Throughput %", title_font_color=C_TEXT3,
                 zeroline=True, zerolinecolor=C_BORDER, zerolinewidth=1,
             ),
             margin=dict(t=20, b=10, l=10, r=10),
@@ -409,7 +414,7 @@ def _render_shock_scenarios() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.markdown(
-            f'<div style="font-size:0.78rem;color:{C_TEXT3};padding:0 2px;margin-top:2px;">'
+            f'<div style="font-family:{_FONT_BODY};font-size:0.78rem;color:{C_TEXT3};padding:0 2px;margin-top:2px;">'
             f'Scenario: <span style="color:{C_TEXT2};">{scenario}</span> — '
             f'estimated throughput impact on affected ports. Indirect effects not modelled.</div>',
             unsafe_allow_html=True,
@@ -425,19 +430,19 @@ def _render_capacity_headroom() -> None:
         cols = "1.4fr 1fr 0.8fr 0.8fr 0.8fr 0.9fr 1fr"
         header_html = (
             f'<div style="display:grid;grid-template-columns:{cols};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px 3px 0 0;'
             f'padding:10px 14px;">'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Port</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Region</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Current (M)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Capacity (M)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Utilisation</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Headroom (M)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Overflow Risk</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Port</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Region</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Current (M)</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Capacity (M)</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Utilisation</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Headroom (M)</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Overflow Risk</span>'
             f'</div>'
         )
         st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
+        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
         for i, (port, region, curr, f3, f12, util, cap, yoy, driver) in enumerate(_PORTS):
             bg = C_CARD if i % 2 == 0 else C_SURFACE
             headroom = round(cap - curr, 1)
@@ -446,12 +451,12 @@ def _render_capacity_headroom() -> None:
             rows_html += (
                 f'<div style="display:grid;grid-template-columns:{cols};'
                 f'gap:0;background:{bg};padding:9px 14px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{port}</span>'
-                f'<span style="font-size:0.75rem;color:{_REGION_COLORS.get(region, C_TEXT3)};">{region}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT};">{curr:.1f}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT2};">{cap:.1f}</span>'
-                f'<span style="font-size:0.82rem;font-weight:700;color:{uc};">{util}%</span>'
-                f'<span style="font-size:0.82rem;color:{C_HIGH if headroom > 5 else C_MOD};">{headroom:.1f}</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.82rem;font-weight:600;color:{C_TEXT};">{port}</span>'
+                f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{_REGION_COLORS.get(region, C_TEXT3)};">{region}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_TEXT};">{curr:.1f}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_TEXT2};">{cap:.1f}</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;font-weight:700;color:{uc};">{util}%</span>'
+                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_HIGH if headroom > 5 else C_MOD};">{headroom:.1f}</span>'
                 f'<span>{badge}</span>'
                 f'</div>'
             )
@@ -459,10 +464,10 @@ def _render_capacity_headroom() -> None:
         st.markdown(rows_html, unsafe_allow_html=True)
         st.markdown(
             f'<div style="display:flex;gap:20px;margin-top:8px;padding:0 4px;">'
-            f'<span style="font-size:0.75rem;color:{C_LOW};">CRITICAL ≥90%</span>'
-            f'<span style="font-size:0.75rem;color:{C_MOD};">ELEVATED ≥80%</span>'
-            f'<span style="font-size:0.75rem;color:{C_ACCENT};">MODERATE ≥70%</span>'
-            f'<span style="font-size:0.75rem;color:{C_HIGH};">LOW &lt;70%</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_LOW};">CRITICAL: 90%+</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_MOD};">ELEVATED: 80%+</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_ACCENT};">MODERATE: 70%+</span>'
+            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_HIGH};">LOW: &lt;70%</span>'
             f'</div>',
             unsafe_allow_html=True,
         )

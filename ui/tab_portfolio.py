@@ -28,11 +28,11 @@ _C_SHORT   = C_LOW
 _C_NEUTRAL = C_TEXT2
 
 _SECTOR_COLORS = {
-    "Container":      "#3b82f6",
-    "Dry Bulk":       "#10b981",
-    "Tanker":         "#f59e0b",
-    "LNG":            "#8b5cf6",
-    "Port Operator":  "#06b6d4",
+    "Container":      "#3572b0",
+    "Dry Bulk":       "#2e9e6e",
+    "Tanker":         "#c9962b",
+    "LNG":            "#7c6eaf",
+    "Port Operator":  "#4a90a4",
 }
 
 _SECTORS = list(_SECTOR_COLORS.keys())
@@ -73,7 +73,7 @@ _MOCK_DAY_CHANGE = {
     "HAFNI": +2.88,
 }
 
-_HR = "<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:20px 0'>"
+_HR = "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:20px 0'>"
 
 
 # ---------------------------------------------------------------------------
@@ -141,13 +141,13 @@ def _render_hero() -> None:
     st.markdown("""
     <div style="padding:28px 0 18px 0;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
-        <div style="width:44px;height:44px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
-                    border-radius:10px;display:flex;align-items:center;justify-content:center;
+        <div style="width:44px;height:44px;background:linear-gradient(135deg,#3572b0,#1d4ed8);
+                    border-radius:6px;display:flex;align-items:center;justify-content:center;
                     font-size:22px;">💼</div>
         <div>
-          <div style="font-size:26px;font-weight:800;color:#f1f5f9;letter-spacing:-0.5px;
-                      font-family:'Inter',sans-serif;">Portfolio Tracker</div>
-          <div style="font-size:13px;color:#94a3b8;font-weight:500;margin-top:1px;">
+          <div style="font-size:26px;font-weight:800;color:#e8e6e1;letter-spacing:-0.5px;
+                      font-family:'Libre Franklin',sans-serif;">Portfolio Tracker</div>
+          <div style="font-size:13px;color:#9a968e;font-weight:500;margin-top:1px;">
             Shipping Sector Position Management
           </div>
         </div>
@@ -207,38 +207,38 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
 
         st.markdown(f"""
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                       padding:20px 22px;">
             <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
                         letter-spacing:0.08em;margin-bottom:6px;">Total Portfolio Value</div>
-            <div style="font-size:26px;font-weight:800;color:{C_TEXT};font-family:'Inter',sans-serif;">
+            <div style="font-size:26px;font-weight:800;color:{C_TEXT};font-family:'Libre Franklin',sans-serif;">
               {_fmt_dollar_abs(total_val)}
             </div>
             <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Shipping Sector Exposure</div>
           </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                       padding:20px 22px;">
             <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
                         letter-spacing:0.08em;margin-bottom:6px;">Day P&amp;L</div>
-            <div style="font-size:26px;font-weight:800;color:{day_color};font-family:'Inter',sans-serif;">
+            <div style="font-size:26px;font-weight:800;color:{day_color};font-family:'Libre Franklin',sans-serif;">
               {_fmt_dollar(day_pnl)}
             </div>
             <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Today's unrealized change</div>
           </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                       padding:20px 22px;">
             <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
                         letter-spacing:0.08em;margin-bottom:6px;">Total Return</div>
-            <div style="font-size:26px;font-weight:800;color:{ret_color};font-family:'Inter',sans-serif;">
+            <div style="font-size:26px;font-weight:800;color:{ret_color};font-family:'Libre Franklin',sans-serif;">
               {_fmt_pct(total_ret)}
             </div>
             <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">{_fmt_dollar(total_pnl)} unrealized P&amp;L</div>
           </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                       padding:20px 22px;">
             <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
                         letter-spacing:0.08em;margin-bottom:6px;">Portfolio Beta</div>
-            <div style="font-size:26px;font-weight:800;color:{C_ACCENT};font-family:'Inter',sans-serif;">
+            <div style="font-size:26px;font-weight:800;color:{C_ACCENT};font-family:'Libre Franklin',sans-serif;">
               {port_beta:.2f}
             </div>
             <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Weighted avg vs. SPY</div>
@@ -253,7 +253,7 @@ def _render_add_position_form() -> None:
     """Expander form to add a new position."""
     with st.expander("➕  Add / Edit Position", expanded=False):
         st.markdown(f"""
-        <div style="background:{C_SURFACE};border-radius:10px;padding:4px 0 8px 0;">
+        <div style="background:{C_SURFACE};border-radius:6px;padding:4px 0 8px 0;">
         </div>
         """, unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
@@ -332,7 +332,7 @@ def _render_holdings_table(df: pd.DataFrame) -> None:
             sector_col  = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
 
             rows_html += f"""
-            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+            <tr style="border-bottom:1px solid rgba(232,230,225,0.04);">
               <td style="padding:12px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
                 {row['Ticker']}
               </td>
@@ -375,12 +375,12 @@ def _render_holdings_table(df: pd.DataFrame) -> None:
         day_color2 = _color(total_day)
 
         st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     overflow:hidden;margin-bottom:24px;">
           <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-family:'Inter',sans-serif;">
+            <table style="width:100%;border-collapse:collapse;font-family:'Libre Franklin',sans-serif;">
               <thead>
-                <tr style="background:rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.1);">
+                <tr style="background:rgba(232,230,225,0.03);border-bottom:1px solid rgba(255,255,255,0.1);">
                   <th style="padding:11px 14px;text-align:left;font-size:11px;color:{C_TEXT3};
                               font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
                   <th style="padding:11px 8px;text-align:left;font-size:11px;color:{C_TEXT3};
@@ -407,7 +407,7 @@ def _render_holdings_table(df: pd.DataFrame) -> None:
                 {rows_html}
               </tbody>
               <tfoot>
-                <tr style="background:rgba(59,130,246,0.06);border-top:1px solid rgba(255,255,255,0.1);">
+                <tr style="background:rgba(53,114,176,0.06);border-top:1px solid rgba(255,255,255,0.1);">
                   <td colspan="5" style="padding:11px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
                     TOTAL
                   </td>
@@ -446,9 +446,9 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
             labels=sector_grp["Sector"],
             values=sector_grp["Market Value"],
             hole=0.6,
-            marker=dict(colors=colors, line=dict(color="#0a0f1a", width=2)),
+            marker=dict(colors=colors, line=dict(color="#0c0e14", width=2)),
             textinfo="label+percent",
-            textfont=dict(color="#f1f5f9", size=12),
+            textfont=dict(color="#e8e6e1", size=12),
             hovertemplate="<b>%{label}</b><br>Value: $%{value:,.0f}<br>Share: %{percent}<extra></extra>",
         ))
 
@@ -457,7 +457,7 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
             text=f"<b>{_fmt_dollar_abs(total_val)}</b><br><span style='font-size:10px'>AUM</span>",
             x=0.5, y=0.5, xref="paper", yref="paper",
             showarrow=False,
-            font=dict(size=15, color="#f1f5f9"),
+            font=dict(size=15, color="#e8e6e1"),
         )
 
         fig.update_layout(**dark_layout(title="Sector Allocation", height=360))
@@ -491,7 +491,7 @@ def _render_performance_chart(df: pd.DataFrame) -> None:
             name="Portfolio",
             line=dict(color=C_ACCENT, width=2.5),
             fill="tozeroy",
-            fillcolor="rgba(59,130,246,0.06)",
+            fillcolor="rgba(53,114,176,0.06)",
             hovertemplate="<b>Portfolio</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
         ))
 
@@ -542,7 +542,7 @@ def _render_risk_metrics(df: pd.DataFrame) -> None:
         corr_color   = C_ACCENT
 
         st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:20px 24px;margin-bottom:24px;">
           <div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:16px;
                       text-transform:uppercase;letter-spacing:0.06em;">Risk Metrics</div>
@@ -602,7 +602,7 @@ def _render_top_movers(df: pd.DataFrame) -> None:
             chg_color = _color(chg)
             sector_col = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
             return f"""
-            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;
+            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;
                         padding:16px 18px;">
               <div style="font-size:10px;font-weight:700;color:{label_color};text-transform:uppercase;
                           letter-spacing:0.08em;margin-bottom:8px;">{label}</div>
@@ -646,7 +646,7 @@ def _render_top_movers(df: pd.DataFrame) -> None:
             marker_color=bar_colors,
             text=[f"{v:+.2f}%" for v in df["Day Chg %"]],
             textposition="outside",
-            textfont=dict(size=11, color="#f1f5f9"),
+            textfont=dict(size=11, color="#e8e6e1"),
             hovertemplate="<b>%{x}</b><br>Day Change: %{y:+.2f}%<extra></extra>",
         ))
         layout = dark_layout(title="Today's Returns by Position", height=280, showlegend=False)

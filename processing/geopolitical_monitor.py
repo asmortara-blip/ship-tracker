@@ -347,16 +347,16 @@ _RISK_LEVEL_SCORE: dict[str, float] = {
 }
 
 _RISK_LEVEL_COLOR: dict[str, str] = {
-    "CRITICAL": "#ef4444",
+    "CRITICAL": "#c0392b",
     "HIGH":     "#f97316",
-    "MODERATE": "#f59e0b",
-    "LOW":      "#10b981",
+    "MODERATE": "#c9962b",
+    "LOW":      "#2e9e6e",
 }
 
 
 def get_risk_color(risk_level: str) -> str:
     """Return the hex color associated with a risk level string."""
-    return _RISK_LEVEL_COLOR.get(risk_level, "#94a3b8")
+    return _RISK_LEVEL_COLOR.get(risk_level, "#9a968e")
 
 
 # ---------------------------------------------------------------------------

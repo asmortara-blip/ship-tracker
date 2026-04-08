@@ -19,13 +19,13 @@ from engine.alert_engine import ShippingAlert, get_alert_summary, group_alerts_b
 
 # ── Color constants (mirrors components.py palette) ──────────────────────────
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 SEVERITY_ORDER = ["CRITICAL", "WARNING", "INFO"]
 
@@ -83,7 +83,7 @@ def _alert_card_html(alert: ShippingAlert, compact: bool = False) -> str:
                 background:{badge_bg};
                 color:{color};
                 border:1px solid {border_bg};
-                border-radius:999px;
+                border-radius:3px;
                 font-size:0.65rem;
                 font-weight:700;
                 padding:2px 8px;
@@ -101,7 +101,7 @@ def _alert_card_html(alert: ShippingAlert, compact: bool = False) -> str:
         background:{bg};
         border:1px solid {border_bg};
         border-left:4px solid {color};
-        border-radius:10px;
+        border-radius:6px;
         padding:16px 20px;
         margin-bottom:10px;
     ">
@@ -115,13 +115,13 @@ def _alert_card_html(alert: ShippingAlert, compact: bool = False) -> str:
                 background:{badge_bg};
                 color:{color};
                 border:1px solid {_hex_rgba(color, 0.3)};
-                border-radius:999px;
+                border-radius:3px;
                 font-size:0.65rem;
                 font-weight:700;
                 padding:2px 8px;
             ">{alert.entity_name}</span>
             <span style="
-                background:rgba(255,255,255,0.05);
+                background:rgba(232,230,225,0.04);
                 color:{C_TEXT3};
                 border-radius:4px;
                 font-size:0.62rem;
@@ -138,7 +138,7 @@ def _alert_card_html(alert: ShippingAlert, compact: bool = False) -> str:
       <div style="
           display:flex;
           gap:20px;
-          background:rgba(255,255,255,0.03);
+          background:rgba(232,230,225,0.03);
           border-radius:6px;
           padding:8px 12px;
           margin:8px 0;
@@ -192,9 +192,9 @@ def _alert_card_html(alert: ShippingAlert, compact: bool = False) -> str:
 
 def _summary_header_html(summary: dict) -> str:
     """Return HTML for the summary banner line."""
-    critical_color = "#ef4444"
-    warning_color  = "#f59e0b"
-    info_color     = "#3b82f6"
+    critical_color = "#c0392b"
+    warning_color  = "#c9962b"
+    info_color     = "#3572b0"
 
     parts = []
     if summary["critical"]:
@@ -215,7 +215,7 @@ def _summary_header_html(summary: dict) -> str:
 
     if not parts:
         return (
-            '<div style="font-size:0.85rem; color:#64748b; padding:4px 0">'
+            '<div style="font-size:0.85rem; color:#6b6760; padding:4px 0">'
             'No active alerts.'
             '</div>'
         )
@@ -244,7 +244,7 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
     if not alerts:
         if not compact:
             st.markdown(
-                '<div style="font-size:0.85rem; color:#64748b; padding:8px 0">'
+                '<div style="font-size:0.85rem; color:#6b6760; padding:8px 0">'
                 'No active alerts at this time.'
                 '</div>',
                 unsafe_allow_html=True,
@@ -295,8 +295,8 @@ def render_alert_panel(alerts: list[ShippingAlert], compact: bool = False) -> No
         if not group:
             continue
 
-        color = {"CRITICAL": "#ef4444", "WARNING": "#f59e0b", "INFO": "#3b82f6"}.get(
-            severity, "#94a3b8"
+        color = {"CRITICAL": "#c0392b", "WARNING": "#c9962b", "INFO": "#3572b0"}.get(
+            severity, "#9a968e"
         )
         icon  = {"CRITICAL": "🚨", "WARNING": "⚠️", "INFO": "ℹ️"}.get(severity, "")
         label = f"{icon} {severity.title()} ({len(group)})"

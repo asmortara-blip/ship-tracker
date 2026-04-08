@@ -85,12 +85,12 @@ def render_regime_banner(regime: MacroRegime) -> str:
     background: rgba(15,23,42,0.85);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid rgba(232,230,225,0.06);
     border-left: 4px solid {color};
-    border-radius: 10px;
+    border-radius: 6px;
     padding: 16px 20px;
     margin-bottom: 16px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Libre Franklin', sans-serif;
 ">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <span style="
@@ -100,8 +100,8 @@ def render_regime_banner(regime: MacroRegime) -> str:
         letter-spacing:-0.5px;
     ">{label}</span>
     <span style="
-        background:rgba(255,255,255,0.07);
-        color:#94a3b8;
+        background:rgba(232,230,225,0.06);
+        color:#9a968e;
         font-size:0.72rem;
         font-weight:600;
         letter-spacing:0.08em;
@@ -111,7 +111,7 @@ def render_regime_banner(regime: MacroRegime) -> str:
     ">{regime_name}</span>
   </div>
 
-  <div style="margin-top:6px;color:#64748b;font-size:0.78rem;">
+  <div style="margin-top:6px;color:#6b6760;font-size:0.78rem;">
     Confidence: <span style="color:#cbd5e1;font-weight:600;">{confidence_pct}%</span>
     {bar_html}
   </div>
@@ -123,13 +123,13 @@ def render_regime_banner(regime: MacroRegime) -> str:
       flex-wrap:wrap;
   ">
     <div>
-      <span style="color:#64748b;font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em;">
+      <span style="color:#6b6760;font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em;">
         Best routes this regime
       </span><br>
       <span style="color:#e2e8f0;font-size:0.88rem;font-weight:500;">{best_routes_str}</span>
     </div>
     <div>
-      <span style="color:#64748b;font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em;">
+      <span style="color:#6b6760;font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em;">
         Watch
       </span><br>
       <span style="color:#e2e8f0;font-size:0.88rem;font-weight:500;">{best_stocks_str}</span>
@@ -137,12 +137,12 @@ def render_regime_banner(regime: MacroRegime) -> str:
   </div>
 
   <p style="
-      color:#94a3b8;
+      color:#9a968e;
       font-size:0.82rem;
       margin-top:12px;
       margin-bottom:0;
       line-height:1.55;
-      border-top:1px solid rgba(255,255,255,0.05);
+      border-top:1px solid rgba(232,230,225,0.04);
       padding-top:10px;
   ">{description}</p>
 </div>

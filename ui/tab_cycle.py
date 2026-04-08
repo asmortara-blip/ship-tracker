@@ -21,24 +21,24 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ── Design constants ─────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # Phase palette
 _PHASE_COLOR = {
-    "TROUGH":      "#ef4444",
-    "RECOVERY":    "#3b82f6",
-    "EXPANSION":   "#10b981",
-    "PEAK":        "#f59e0b",
+    "TROUGH":      "#c0392b",
+    "RECOVERY":    "#3572b0",
+    "EXPANSION":   "#2e9e6e",
+    "PEAK":        "#c9962b",
     "CONTRACTION": "#f97316",
 }
 
@@ -133,18 +133,18 @@ def _build_bdi_history() -> pd.DataFrame:
 
 _CYCLE_PHASES_HIST = [
     # (start, end, phase_label, color_key)
-    ("2000-01", "2003-12", "RECOVERY",    "rgba(59,130,246,0.15)"),
-    ("2004-01", "2008-09", "EXPANSION",   "rgba(16,185,129,0.15)"),
+    ("2000-01", "2003-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
+    ("2004-01", "2008-09", "EXPANSION",   "rgba(46,158,110,0.15)"),
     ("2008-10", "2009-06", "CONTRACTION", "rgba(249,115,22,0.18)"),
-    ("2009-07", "2010-12", "RECOVERY",    "rgba(59,130,246,0.15)"),
+    ("2009-07", "2010-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
     ("2011-01", "2016-02", "CONTRACTION", "rgba(249,115,22,0.18)"),
-    ("2016-03", "2016-12", "TROUGH",      "rgba(239,68,68,0.18)"),
-    ("2017-01", "2019-12", "RECOVERY",    "rgba(59,130,246,0.15)"),
-    ("2020-01", "2020-05", "TROUGH",      "rgba(239,68,68,0.18)"),
-    ("2020-06", "2021-10", "EXPANSION",   "rgba(16,185,129,0.15)"),
-    ("2021-11", "2021-12", "PEAK",        "rgba(245,158,11,0.18)"),
+    ("2016-03", "2016-12", "TROUGH",      "rgba(192,57,43,0.18)"),
+    ("2017-01", "2019-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
+    ("2020-01", "2020-05", "TROUGH",      "rgba(192,57,43,0.18)"),
+    ("2020-06", "2021-10", "EXPANSION",   "rgba(46,158,110,0.15)"),
+    ("2021-11", "2021-12", "PEAK",        "rgba(201,150,43,0.18)"),
     ("2022-01", "2023-06", "CONTRACTION", "rgba(249,115,22,0.18)"),
-    ("2023-07", "2025-12", "RECOVERY",    "rgba(59,130,246,0.15)"),
+    ("2023-07", "2025-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
 ]
 
 
@@ -152,14 +152,14 @@ _CYCLE_PHASES_HIST = [
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub = (
-        f'<span style="color:{C_TEXT3};font-size:11px;margin-left:10px;">'
+        f'<span style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;margin-left:10px;">'
         f'{subtitle}</span>'
         if subtitle else ""
     )
     st.markdown(
         f'<div style="margin:24px 0 10px;padding-bottom:8px;'
         f'border-bottom:1px solid {C_BORDER};">'
-        f'<span style="color:{C_TEXT};font-size:14px;font-weight:700;'
+        f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:14px;font-weight:700;'
         f'text-transform:uppercase;letter-spacing:1px;">{title}</span>'
         f'{sub}</div>',
         unsafe_allow_html=True,
@@ -183,20 +183,20 @@ def _render_cycle_dashboard(phase: str) -> None:
             fw     = "700" if active else "400"
             pills_html += (
                 f'<span style="background:{bg};border:1px solid {border};'
-                f'color:{pc};padding:4px 14px;border-radius:20px;font-size:11px;'
+                f'color:{pc};padding:4px 14px;border-radius:4px;font-size:11px;'
                 f'font-weight:{fw};letter-spacing:1px;white-space:nowrap;">'
                 f'{p}</span>'
             )
 
         html = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-left:5px solid {color};border-radius:10px;padding:24px 28px;'
+            f'border-left:5px solid {color};border-radius:6px;padding:24px 28px;'
             f'margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;'
+            f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;text-transform:uppercase;'
             f'letter-spacing:2px;margin-bottom:8px;">Current Cycle Phase</div>'
             f'<div style="color:{color};font-size:52px;font-weight:900;'
-            f'font-family:monospace;letter-spacing:2px;line-height:1;">{phase}</div>'
-            f'<div style="color:{C_TEXT2};font-size:13px;margin-top:12px;'
+            f'font-family:JetBrains Mono,monospace;letter-spacing:2px;line-height:1;">{phase}</div>'
+            f'<div style="color:{C_TEXT2};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-top:12px;'
             f'max-width:600px;">{desc}</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:8px;">'
             f'{hist}</div>'
@@ -226,10 +226,10 @@ def _render_cycle_clock(phase: str, position_score: float) -> None:
         # Phase label positions (outer ring, radius ~96)
         label_radius = 96
         phase_labels = {
-            "PEAK":        (0,   "#f59e0b"),
+            "PEAK":        (0,   "#c9962b"),
             "CONTRACTION": (90,  "#f97316"),
-            "TROUGH":      (180, "#ef4444"),
-            "RECOVERY":    (270, "#3b82f6"),
+            "TROUGH":      (180, "#c0392b"),
+            "RECOVERY":    (270, "#3572b0"),
         }
         labels_html = ""
         for lbl, (ang, lc) in phase_labels.items():
@@ -297,15 +297,15 @@ def _render_cycle_clock(phase: str, position_score: float) -> None:
             f'</div>'
             # Legend text
             f'<div>'
-            f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;'
+            f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;text-transform:uppercase;'
             f'letter-spacing:1.5px;margin-bottom:8px;">Cycle Clock</div>'
             f'<div style="color:{color};font-size:26px;font-weight:800;'
-            f'font-family:monospace;">{phase}</div>'
+            f'font-family:JetBrains Mono,monospace;">{phase}</div>'
             f'<div style="color:{C_TEXT3};font-size:12px;margin-top:6px;">'
             f'12 o\'clock = PEAK &nbsp;|&nbsp; 6 o\'clock = TROUGH</div>'
             f'<div style="color:{C_TEXT3};font-size:12px;margin-top:4px;">'
             f'Cycle position score: '
-            f'<span style="color:{C_TEXT2};font-family:monospace;">'
+            f'<span style="color:{C_TEXT2};font-family:JetBrains Mono,monospace;">'
             f'{position_score:.0%}</span> of peak</div>'
             f'<div style="margin-top:14px;background:{C_CARD};border-radius:6px;'
             f'height:8px;width:180px;overflow:hidden;">'
@@ -344,7 +344,7 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
                 f'width:60px;overflow:hidden;">'
                 f'<div style="background:{color};width:{pct:.0f}%;height:100%;'
                 f'border-radius:4px;"></div></div>'
-                f'<span style="color:{C_TEXT2};font-size:11px;font-family:monospace;">'
+                f'<span style="color:{C_TEXT2};font-size:11px;font-family:JetBrains Mono,monospace;">'
                 f'{pct:.0f}</span>'
                 f'</div>'
             )
@@ -357,10 +357,10 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
                 f'<td style="padding:10px 12px;color:{C_TEXT};font-size:12px;">'
                 f'{row["Indicator"]}</td>'
                 f'<td style="padding:10px 12px;color:{C_TEXT2};font-size:12px;'
-                f'font-family:monospace;">{row["Current Reading"]}</td>'
+                f'font-family:JetBrains Mono,monospace;">{row["Current Reading"]}</td>'
                 f'<td style="padding:10px 12px;">{sig_badge(row["Cycle Signal"])}</td>'
                 f'<td style="padding:10px 12px;color:{C_TEXT3};font-size:11px;'
-                f'font-family:monospace;text-align:right;">'
+                f'font-family:JetBrains Mono,monospace;text-align:right;">'
                 f'{row["Weight"]*100:.0f}%</td>'
                 f'<td style="padding:10px 12px;">{score_bar(row["Score"])}</td>'
                 f'</tr>'
@@ -375,14 +375,14 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
 
         html = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;overflow:hidden;margin-bottom:20px;">'
+            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
             f'<div style="padding:12px 16px;background:{C_CARD};'
             f'border-bottom:1px solid {C_BORDER};display:flex;'
             f'justify-content:space-between;align-items:center;">'
-            f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">'
+            f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:600;">'
             f'Cycle Indicator Scorecard</span>'
             f'<span style="color:{C_TEXT3};font-size:11px;">'
-            f'Composite score: <span style="color:{comp_color};font-family:monospace;'
+            f'Composite score: <span style="color:{comp_color};font-family:JetBrains Mono,monospace;'
             f'font-weight:700;">{composite:.1f}</span>/100</span>'
             f'</div>'
             f'<table style="width:100%;border-collapse:collapse;">'
@@ -505,7 +505,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
             },
             "EXPANSION": {
                 "action":  "HOLD / ADD",
-                "color":   "#10b981",
+                "color":   "#2e9e6e",
                 "summary": "Maximum long exposure. Rates running, earnings being upgraded.",
                 "buys": [
                     ("ZIM",  "Container", "Maximize position size"),
@@ -572,7 +572,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
             opacity = "1" if is_current else "0.6"
             badge = (
                 f'<span style="background:{color}33;color:{color};padding:2px 10px;'
-                f'border-radius:12px;font-size:10px;font-weight:700;margin-left:10px;">'
+                f'border-radius:6px;font-size:10px;font-weight:700;margin-left:10px;">'
                 f'CURRENT</span>'
                 if is_current else ""
             )
@@ -586,7 +586,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
                     f'padding:2px 8px;border-radius:4px;font-size:11px;'
                     f'font-weight:700;min-width:44px;text-align:center;">BUY</span>'
                     f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:monospace;min-width:44px;">{ticker}</span>'
+                    f'font-family:JetBrains Mono,monospace;min-width:44px;">{ticker}</span>'
                     f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
                     f'{sector}</span>'
                     f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
@@ -602,7 +602,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
                     f'padding:2px 8px;border-radius:4px;font-size:11px;'
                     f'font-weight:700;min-width:44px;text-align:center;">SELL</span>'
                     f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:monospace;min-width:44px;">{ticker}</span>'
+                    f'font-family:JetBrains Mono,monospace;min-width:44px;">{ticker}</span>'
                     f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
                     f'{sector}</span>'
                     f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
@@ -624,7 +624,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
             summary      = rec.get("summary", "")
 
             html = (
-                f'<div style="{border_style}border-radius:10px;padding:16px 18px;'
+                f'<div style="{border_style}border-radius:6px;padding:16px 18px;'
                 f'margin-bottom:14px;background:{C_SURFACE};opacity:{opacity};">'
                 f'<div style="display:flex;align-items:center;gap:8px;'
                 f'margin-bottom:10px;">'
@@ -635,7 +635,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
                 f'padding:3px 12px;border-radius:6px;font-size:11px;font-weight:700;">'
                 f'{action_label}</span>'
                 f'</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;margin-bottom:12px;">'
+                f'<div style="color:{C_TEXT2};font-family:\'Libre Franklin\',sans-serif;font-size:12px;margin-bottom:12px;">'
                 f'{summary}</div>'
                 f'{buys_html}'
                 f'{sells_html}'
@@ -654,9 +654,9 @@ def render(macro_data=None, freight_data=None, insights=None, stock_data=None):
     try:
         st.markdown(
             f'<div style="padding:4px 0 18px;">'
-            f'<span style="color:{C_TEXT};font-size:18px;font-weight:800;'
+            f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:18px;font-weight:800;'
             f'letter-spacing:0.5px;">Shipping Cycle Positioning</span>'
-            f'<span style="color:{C_TEXT3};font-size:12px;margin-left:12px;">'
+            f'<span style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:12px;margin-left:12px;">'
             f'~7-year cycle analysis &amp; trade recommendations</span>'
             f'</div>',
             unsafe_allow_html=True,

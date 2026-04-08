@@ -97,12 +97,12 @@ class SupplyChainHealthReport:
 def _label_and_color(score: float) -> tuple[str, str]:
     """Return (label, hex_color) for a composite score."""
     if score >= 0.70:
-        return "Healthy",    "#10b981"   # green
+        return "Healthy",    "#2e9e6e"   # green
     if score >= 0.50:
-        return "Recovering", "#3b82f6"   # blue
+        return "Recovering", "#3572b0"   # blue
     if score >= 0.35:
-        return "Stressed",   "#f59e0b"   # yellow / amber
-    return     "Critical",   "#ef4444"   # red
+        return "Stressed",   "#c9962b"   # yellow / amber
+    return     "Critical",   "#c0392b"   # red
 
 
 def _dimension_label(score: float) -> str:

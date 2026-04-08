@@ -14,18 +14,23 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+# ── WSJ Editorial Palette ────────────────────────────────────────────────────
+C_BG      = "#f7f5f0"
+C_SURFACE = "#eeece6"
+C_CARD    = "#ffffff"
+C_BORDER  = "rgba(51,51,51,0.12)"
+C_HIGH    = "#1a7a3a"
+C_MOD     = "#b8860b"
+C_LOW     = "#a3241a"
+C_ACCENT  = "#0274b6"
+C_TEXT    = "#222222"
+C_TEXT2   = "#555555"
+C_TEXT3   = "#888888"
+
+# ── Typography ────────────────────────────────────────────────────────────────
+F_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
+F_BODY     = "'Libre Franklin', 'Helvetica Neue', Arial, sans-serif"
+F_MONO     = "'JetBrains Mono', 'Consolas', monospace"
 
 # ── Mock data ─────────────────────────────────────────────────────────────────
 _ROUTES: list[dict] = [
@@ -97,7 +102,7 @@ def _divider(label: str) -> None:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,transparent,{C_BORDER})"></div>'
-        f'<span style="font-size:0.60rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.14em;white-space:nowrap">{label}</span>'
+        f'<span style="font-family:{F_BODY};font-size:0.60rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.14em;white-space:nowrap">{label}</span>'
         f'<div style="flex:1;height:1px;background:linear-gradient(90deg,{C_BORDER},transparent)"></div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -105,9 +110,9 @@ def _divider(label: str) -> None:
 
 def _pill(text: str, color: str) -> str:
     return (
-        f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;'
-        f'background:{color}22;color:{color};font-size:0.72rem;font-weight:600;'
-        f'border:1px solid {color}44;margin:2px 3px">{text}</span>'
+        f'<span style="display:inline-block;padding:2px 10px;border-radius:3px;'
+        f'background:{color}15;color:{color};font-family:{F_BODY};font-size:0.72rem;font-weight:600;'
+        f'border:1px solid {color}33;margin:2px 3px">{text}</span>'
     )
 
 def _get_routes(freight_data, route_results) -> list[dict]:
@@ -142,17 +147,17 @@ def _section_pulse(routes: list[dict]) -> None:
         wc = _chg_color(avg_w); mc = _chg_color(avg_m); yc = _chg_color(avg_y)
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:16px;padding:28px 32px;margin-bottom:20px">'
-            f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px">Global Freight Rate Index (avg /TEU)</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:28px 32px;margin-bottom:20px">'
+            f'<div style="font-family:{F_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px">Global Freight Rate Index (avg /TEU)</div>'
             f'<div style="display:flex;align-items:flex-end;gap:32px;flex-wrap:wrap">'
-            f'<div style="font-size:3.2rem;font-weight:800;color:{C_TEXT};letter-spacing:-1px">{_usd(avg_rate)}</div>'
+            f'<div style="font-family:{F_HEADLINE};font-size:3.2rem;font-weight:700;color:{C_TEXT};letter-spacing:-1px">{_usd(avg_rate)}</div>'
             f'<div style="display:flex;gap:24px;padding-bottom:8px;flex-wrap:wrap">'
-            f'<div style="text-align:center"><div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">WoW</div>'
-            f'<div style="font-size:1.1rem;font-weight:700;color:{wc}">{_chg_arrow(avg_w)} {_pct(avg_w)}</div></div>'
-            f'<div style="text-align:center"><div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">MoM</div>'
-            f'<div style="font-size:1.1rem;font-weight:700;color:{mc}">{_chg_arrow(avg_m)} {_pct(avg_m)}</div></div>'
-            f'<div style="text-align:center"><div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">YoY</div>'
-            f'<div style="font-size:1.1rem;font-weight:700;color:{yc}">{_chg_arrow(avg_y)} {_pct(avg_y)}</div></div>'
+            f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">WoW</div>'
+            f'<div style="font-family:{F_MONO};font-size:1.1rem;font-weight:700;color:{wc}">{_chg_arrow(avg_w)} {_pct(avg_w)}</div></div>'
+            f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">MoM</div>'
+            f'<div style="font-family:{F_MONO};font-size:1.1rem;font-weight:700;color:{mc}">{_chg_arrow(avg_m)} {_pct(avg_m)}</div></div>'
+            f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:2px">YoY</div>'
+            f'<div style="font-family:{F_MONO};font-size:1.1rem;font-weight:700;color:{yc}">{_chg_arrow(avg_y)} {_pct(avg_y)}</div></div>'
             f'</div></div></div>',
             unsafe_allow_html=True,
         )
@@ -166,11 +171,11 @@ def _section_pulse(routes: list[dict]) -> None:
 
         st.markdown(
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">'
-            f'<div style="background:{C_CARD};border:1px solid {C_HIGH}33;border-radius:12px;padding:14px 18px;flex:1;min-width:280px">'
-            f'<div style="font-size:0.68rem;color:{C_HIGH};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Gainers (WoW)</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_HIGH}22;border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
+            f'<div style="font-family:{F_BODY};font-size:0.68rem;color:{C_HIGH};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Gainers (WoW)</div>'
             f'<div>{pills_gain}</div></div>'
-            f'<div style="background:{C_CARD};border:1px solid {C_LOW}33;border-radius:12px;padding:14px 18px;flex:1;min-width:280px">'
-            f'<div style="font-size:0.68rem;color:{C_LOW};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Losers (WoW)</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_LOW}22;border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
+            f'<div style="font-family:{F_BODY};font-size:0.68rem;color:{C_LOW};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Top Losers (WoW)</div>'
             f'<div>{pills_loss}</div></div></div>',
             unsafe_allow_html=True,
         )
@@ -185,7 +190,7 @@ def _section_league_table(routes: list[dict]) -> None:
     _divider("RATE LEAGUE TABLE")
     try:
         header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-size:0.65rem;"
+            f"background:{C_SURFACE};color:{C_TEXT3};font-family:{F_BODY};font-size:0.65rem;"
             f"text-transform:uppercase;letter-spacing:0.10em;padding:8px 12px;text-align:right"
         )
         header_left = header_style.replace("text-align:right", "text-align:left")
@@ -208,8 +213,8 @@ def _section_league_table(routes: list[dict]) -> None:
             dir_c   = C_HIGH if direction == "UP" else (C_LOW if direction == "DOWN" else C_TEXT3)
             conf    = min(95, max(55, 75 + abs(m_v) * 1.2))
 
-            cell = f"padding:9px 12px;font-size:0.78rem;text-align:right;border-bottom:1px solid {C_BORDER}"
-            cell_l = cell.replace("text-align:right", "text-align:left")
+            cell = f"padding:9px 12px;font-family:{F_MONO};font-size:0.78rem;text-align:right;border-bottom:1px solid {C_BORDER}"
+            cell_l = cell.replace("text-align:right", "text-align:left").replace(f"font-family:{F_MONO}", f"font-family:{F_BODY}")
 
             rows_html += (
                 f'<tr style="background:{bg}">'
@@ -226,7 +231,7 @@ def _section_league_table(routes: list[dict]) -> None:
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;overflow:hidden;margin-bottom:8px">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;margin-bottom:8px">'
             f'<table style="width:100%;border-collapse:collapse">'
             f'<thead><tr>'
             f'<th style="{header_left}">Route</th>'
@@ -276,18 +281,18 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
             ])
 
             cards_html += (
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:12px;padding:16px 18px;flex:1;min-width:220px">'
-                f'<div style="font-size:0.72rem;font-weight:700;color:{C_TEXT};margin-bottom:4px">{name}</div>'
-                f'<div style="font-size:1.4rem;font-weight:800;color:{C_ACCENT};margin-bottom:10px">{_usd(cur)}</div>'
+                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;padding:16px 18px;flex:1;min-width:220px">'
+                f'<div style="font-family:{F_HEADLINE};font-size:0.78rem;font-weight:700;color:{C_TEXT};margin-bottom:4px">{name}</div>'
+                f'<div style="font-family:{F_MONO};font-size:1.4rem;font-weight:800;color:{C_ACCENT};margin-bottom:10px">{_usd(cur)}</div>'
                 f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">'
-                f'<div style="text-align:center"><div style="font-size:0.60rem;color:{C_TEXT3}">7D</div>'
-                f'<div style="font-size:0.85rem;font-weight:700;color:{_chg_color(d7p)}">{_chg_arrow(d7p)} {_pct(d7p)}</div></div>'
-                f'<div style="text-align:center"><div style="font-size:0.60rem;color:{C_TEXT3}">30D</div>'
-                f'<div style="font-size:0.85rem;font-weight:700;color:{_chg_color(d30p)}">{_chg_arrow(d30p)} {_pct(d30p)}</div></div>'
-                f'<div style="text-align:center"><div style="font-size:0.60rem;color:{C_TEXT3}">90D</div>'
-                f'<div style="font-size:0.85rem;font-weight:700;color:{_chg_color(d90p)}">{_chg_arrow(d90p)} {_pct(d90p)}</div></div>'
+                f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.60rem;color:{C_TEXT3}">7D</div>'
+                f'<div style="font-family:{F_MONO};font-size:0.85rem;font-weight:700;color:{_chg_color(d7p)}">{_chg_arrow(d7p)} {_pct(d7p)}</div></div>'
+                f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.60rem;color:{C_TEXT3}">30D</div>'
+                f'<div style="font-family:{F_MONO};font-size:0.85rem;font-weight:700;color:{_chg_color(d30p)}">{_chg_arrow(d30p)} {_pct(d30p)}</div></div>'
+                f'<div style="text-align:center"><div style="font-family:{F_BODY};font-size:0.60rem;color:{C_TEXT3}">90D</div>'
+                f'<div style="font-family:{F_MONO};font-size:0.85rem;font-weight:700;color:{_chg_color(d90p)}">{_chg_arrow(d90p)} {_pct(d90p)}</div></div>'
                 f'</div>'
-                f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:6px">CI 30D: {_usd(ci_lo)} – {_usd(ci_hi)} &nbsp;|&nbsp; Conf {conf:.0f}%</div>'
+                f'<div style="font-family:{F_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:6px">CI 30D: {_usd(ci_lo)} – {_usd(ci_hi)} &nbsp;|&nbsp; Conf {conf:.0f}%</div>'
                 f'<div style="margin-top:6px">{drivers_chips}</div>'
                 f'</div>'
             )
@@ -312,7 +317,7 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
             fig.update_layout(
                 barmode="group",
                 paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-                font=dict(color=C_TEXT2, size=11),
+                font=dict(family="Libre Franklin, Helvetica Neue, Arial, sans-serif", color=C_TEXT2, size=11),
                 height=320,
                 margin=dict(l=10, r=10, t=30, b=80),
                 legend=dict(orientation="h", y=1.08, font=dict(size=11)),
@@ -335,19 +340,19 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
             ]
             for model, r2_train, r2_val, dir_acc in model_data:
                 r2c = C_HIGH if r2_val > 0.85 else (C_MOD if r2_val > 0.75 else C_LOW)
-                cell = f"padding:8px 14px;font-size:0.77rem;border-bottom:1px solid {C_BORDER}"
+                cell = f"padding:8px 14px;font-family:{F_MONO};font-size:0.77rem;border-bottom:1px solid {C_BORDER}"
                 quality_rows += (
                     f'<tr>'
-                    f'<td style="{cell};color:{C_TEXT};font-weight:600">{model}</td>'
+                    f'<td style="{cell};color:{C_TEXT};font-family:{F_BODY};font-weight:600">{model}</td>'
                     f'<td style="{cell};text-align:right;color:{C_TEXT2}">{r2_train:.3f}</td>'
                     f'<td style="{cell};text-align:right;color:{r2c};font-weight:700">{r2_val:.3f}</td>'
                     f'<td style="{cell};text-align:right;color:{_chg_color(dir_acc-65)}">{dir_acc:.1f}%</td>'
                     f'</tr>'
                 )
-            h = f"padding:8px 14px;font-size:0.62rem;text-transform:uppercase;letter-spacing:0.10em;color:{C_TEXT3};background:{C_SURFACE}"
+            h = f"padding:8px 14px;font-family:{F_BODY};font-size:0.62rem;text-transform:uppercase;letter-spacing:0.10em;color:{C_TEXT3};background:{C_SURFACE}"
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;margin-top:8px">'
-                f'<div style="padding:12px 16px;font-size:0.72rem;font-weight:700;color:{C_TEXT}">Model Quality</div>'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;margin-top:8px">'
+                f'<div style="padding:12px 16px;font-family:{F_HEADLINE};font-size:0.78rem;font-weight:700;color:{C_TEXT}">Model Quality</div>'
                 f'<table style="width:100%;border-collapse:collapse">'
                 f'<thead><tr>'
                 f'<th style="{h};text-align:left">Model</th>'
@@ -393,7 +398,7 @@ def _section_volatility(routes: list[dict]) -> None:
         ))
         fig.update_layout(
             paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-            font=dict(color=C_TEXT2, size=11),
+            font=dict(family="Libre Franklin, Helvetica Neue, Arial, sans-serif", color=C_TEXT2, size=11),
             height=480,
             margin=dict(l=160, r=60, t=30, b=20),
             xaxis=dict(title="Annualized Volatility (%)", gridcolor=C_BORDER, ticksuffix="%"),
@@ -402,7 +407,7 @@ def _section_volatility(routes: list[dict]) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px 18px;font-size:0.76rem;color:{C_TEXT2}">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:12px 18px;font-family:{F_BODY};font-size:0.76rem;color:{C_TEXT2}">'
             f'Rolling 30-day annualized volatility. '
             f'<span style="color:{C_LOW};font-weight:600">Red (&gt;30%)</span> = high disruption risk &nbsp;|&nbsp; '
             f'<span style="color:{C_MOD};font-weight:600">Amber (18–30%)</span> = elevated &nbsp;|&nbsp; '
@@ -441,7 +446,7 @@ def _section_seasonal() -> None:
             text=text, texttemplate="%{text}",
             textfont=dict(size=9),
             colorscale=[
-                [0.0, "#0a0f1a"], [0.25, "#1e3a5f"],
+                [0.0, "#e8e4db"], [0.25, "#c9dae8"],
                 [0.5, C_ACCENT],  [0.75, C_MOD],
                 [1.0, C_LOW],
             ],
@@ -453,7 +458,7 @@ def _section_seasonal() -> None:
         ))
         fig.update_layout(
             paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-            font=dict(color=C_TEXT2, size=11),
+            font=dict(family="Libre Franklin, Helvetica Neue, Arial, sans-serif", color=C_TEXT2, size=11),
             height=320,
             margin=dict(l=50, r=80, t=20, b=40),
             xaxis=dict(side="top"),
@@ -493,16 +498,16 @@ def _section_rate_drivers() -> None:
                 rows += (
                     f'<div style="display:flex;justify-content:space-between;align-items:center;'
                     f'padding:9px 0;border-bottom:1px solid {C_BORDER}">'
-                    f'<span style="color:{C_TEXT};font-size:0.78rem">{item["factor"]}</span>'
+                    f'<span style="font-family:{F_BODY};color:{C_TEXT};font-size:0.78rem">{item["factor"]}</span>'
                     f'<span style="display:flex;align-items:center;gap:6px">'
-                    f'<span style="font-size:0.75rem;color:{C_TEXT2}">{item["impact"]}</span>'
+                    f'<span style="font-family:{F_MONO};font-size:0.75rem;color:{C_TEXT2}">{item["impact"]}</span>'
                     f'<span style="font-size:0.80rem;font-weight:700;color:{ac}">{arrow}</span>'
                     f'</span></div>'
                 )
             return (
-                f'<div style="background:{C_CARD};border:1px solid {color}44;border-radius:12px;'
+                f'<div style="background:{C_CARD};border:1px solid {color}33;border-radius:3px;'
                 f'padding:16px 18px;flex:1;min-width:240px">'
-                f'<div style="font-size:0.68rem;font-weight:700;color:{color};text-transform:uppercase;'
+                f'<div style="font-family:{F_HEADLINE};font-size:0.72rem;font-weight:700;color:{color};text-transform:uppercase;'
                 f'letter-spacing:0.10em;margin-bottom:10px">{title}</div>'
                 f'{rows}</div>'
             )
@@ -557,8 +562,8 @@ def _section_route_profiles(routes: list[dict]) -> None:
                                 name="Rate/TEU",
                             )
                             fig.update_layout(
-                                paper_bgcolor=C_SURFACE, plot_bgcolor=C_SURFACE,
-                                font=dict(color=C_TEXT2, size=10),
+                                paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
+                                font=dict(family="Libre Franklin, Helvetica Neue, Arial, sans-serif", color=C_TEXT2, size=10),
                                 height=200,
                                 margin=dict(l=10, r=10, t=10, b=30),
                                 showlegend=False,
@@ -577,18 +582,18 @@ def _section_route_profiles(routes: list[dict]) -> None:
                         carrier_pills = " ".join(_pill(c, C_ACCENT) for c in carriers)
 
                         st.markdown(
-                            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px 16px">'
+                            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:14px 16px">'
                             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-                            f'<div><div style="font-size:0.62rem;color:{C_TEXT3}">52W High</div>'
-                            f'<div style="font-size:0.88rem;font-weight:700;color:{C_HIGH}">{_usd(hi_52)}</div></div>'
-                            f'<div><div style="font-size:0.62rem;color:{C_TEXT3}">52W Low</div>'
-                            f'<div style="font-size:0.88rem;font-weight:700;color:{C_LOW}">{_usd(lo_52)}</div></div>'
-                            f'<div><div style="font-size:0.62rem;color:{C_TEXT3}">Transit Time</div>'
-                            f'<div style="font-size:0.88rem;font-weight:700;color:{C_TEXT}">{transit} days</div></div>'
-                            f'<div><div style="font-size:0.62rem;color:{C_TEXT3}">3M Change</div>'
-                            f'<div style="font-size:0.88rem;font-weight:700;color:{_chg_color(r.get("q",0))}">{_pct(r.get("q",0))}</div></div>'
+                            f'<div><div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3}">52W High</div>'
+                            f'<div style="font-family:{F_MONO};font-size:0.88rem;font-weight:700;color:{C_HIGH}">{_usd(hi_52)}</div></div>'
+                            f'<div><div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3}">52W Low</div>'
+                            f'<div style="font-family:{F_MONO};font-size:0.88rem;font-weight:700;color:{C_LOW}">{_usd(lo_52)}</div></div>'
+                            f'<div><div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3}">Transit Time</div>'
+                            f'<div style="font-family:{F_MONO};font-size:0.88rem;font-weight:700;color:{C_TEXT}">{transit} days</div></div>'
+                            f'<div><div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3}">3M Change</div>'
+                            f'<div style="font-family:{F_MONO};font-size:0.88rem;font-weight:700;color:{_chg_color(r.get("q",0))}">{_pct(r.get("q",0))}</div></div>'
                             f'</div>'
-                            f'<div style="font-size:0.62rem;color:{C_TEXT3};margin-bottom:6px">Top Carriers</div>'
+                            f'<div style="font-family:{F_BODY};font-size:0.62rem;color:{C_TEXT3};margin-bottom:6px">Top Carriers</div>'
                             f'<div>{carrier_pills}</div>'
                             f'</div>',
                             unsafe_allow_html=True,
@@ -605,8 +610,8 @@ def _section_route_profiles(routes: list[dict]) -> None:
                                 showlegend=False,
                             ))
                             fig2.update_layout(
-                                paper_bgcolor=C_SURFACE, plot_bgcolor=C_SURFACE,
-                                font=dict(color=C_TEXT2, size=9),
+                                paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
+                                font=dict(family="Libre Franklin, Helvetica Neue, Arial, sans-serif", color=C_TEXT2, size=9),
                                 height=110,
                                 margin=dict(l=5, r=5, t=20, b=20),
                                 title=dict(text="Seasonal Index", font=dict(size=10, color=C_TEXT3), x=0.5),
@@ -632,9 +637,9 @@ def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> 
     try:
         st.markdown(
             f'<div style="padding:4px 0 8px">'
-            f'<h2 style="margin:0;font-size:1.45rem;font-weight:800;color:{C_TEXT};letter-spacing:-0.5px">'
+            f'<h2 style="margin:0;font-family:{F_HEADLINE};font-size:1.45rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.5px">'
             f'Freight Rate Analytics</h2>'
-            f'<p style="margin:4px 0 0;font-size:0.80rem;color:{C_TEXT3}">'
+            f'<p style="margin:4px 0 0;font-family:{F_BODY};font-size:0.80rem;color:{C_TEXT3}">'
             f'Real-time rates · ML forecasting · Volatility · Seasonal patterns · Route profiles'
             f'</p></div>',
             unsafe_allow_html=True,

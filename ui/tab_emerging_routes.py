@@ -10,19 +10,19 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Colour palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 C_ARCTIC  = "#38bdf8"
 C_ORANGE  = "#f97316"
 
@@ -269,7 +269,7 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         if delta else ""
     )
     st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
         f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
@@ -317,7 +317,7 @@ def _render_hero() -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:14px;padding:24px 28px;margin-bottom:20px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
             f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Emerging Routes Intelligence</div>'
             f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
             f'12 new corridors identified · Strategic macro drivers · Real-time carrier adoption tracking</div>'
@@ -344,7 +344,7 @@ def _render_route_discovery_table() -> None:
         cols = "1.8fr 0.8fr 0.7fr 0.8fr 0.9fr 0.8fr 1.2fr 0.9fr"
         header_html = (
             f'<div style="display:grid;grid-template-columns:{cols};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 14px;">'
             f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
             f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Dist (nm)</span>'
@@ -439,7 +439,7 @@ def _render_route_map() -> None:
                 bgcolor="rgba(0,0,0,0)",
                 showland=True, landcolor="#1e293b",
                 showocean=True, oceancolor="#0f172a",
-                showcountries=True, countrycolor="rgba(255,255,255,0.06)",
+                showcountries=True, countrycolor="rgba(232,230,225,0.05)",
                 showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
                 projection_type="natural earth",
             ),
@@ -459,7 +459,7 @@ def _render_carrier_adoption() -> None:
         adoption_color = {"HIGH": C_HIGH, "MEDIUM": C_MOD, "ESTABLISHED": C_ACCENT}
         header_html = (
             f'<div style="display:grid;grid-template-columns:1fr 1.8fr 1.4fr 0.8fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Carrier</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Routes</span>'
@@ -493,7 +493,7 @@ def _render_risk_assessment() -> None:
         _section_header("Risk Assessment per Route", "Political · Infrastructure · Seasonal weather risks")
         header_html = (
             f'<div style="display:grid;grid-template-columns:1.6fr 0.8fr 0.8fr 0.8fr 2fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;'
+            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
             f'padding:10px 16px;">'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
             f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Political</span>'

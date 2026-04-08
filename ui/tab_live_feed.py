@@ -1,4 +1,4 @@
-"""Live Market Feed tab — Bloomberg-style real-time data ticker and feed dashboard."""
+"""Live Market Feed tab — WSJ editorial-style real-time data ticker and feed dashboard."""
 from __future__ import annotations
 
 import random
@@ -13,17 +13,17 @@ from loguru import logger
 
 # ── Palette ────────────────────────────────────────────────────────────────────
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Static feed data ───────────────────────────────────────────────────────────
 
@@ -154,32 +154,24 @@ def _render_header(auto_refresh: bool, last_ts: float) -> None:
 
         st.markdown(
             f"""
-            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;
+            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;
                         padding:18px 24px;margin-bottom:16px;display:flex;
                         align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
               <div style="display:flex;align-items:center;gap:14px;">
-                <span style="display:inline-block;width:12px;height:12px;border-radius:50%;
-                             background:{pulse_color};
-                             box-shadow:0 0 8px {pulse_color};
-                             animation:pulse 1.4s ease-in-out infinite;"></span>
+                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                             background:{pulse_color};"></span>
                 <span style="color:{C_TEXT};font-size:22px;font-weight:700;
-                             letter-spacing:2px;font-family:monospace;">LIVE MARKET FEED</span>
+                             letter-spacing:2px;font-family:Libre Baskerville,Georgia,serif;">LIVE MARKET FEED</span>
               </div>
               <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
-                <span style="color:{C_TEXT2};font-size:13px;font-family:monospace;">
+                <span style="color:{C_TEXT2};font-size:13px;font-family:JetBrains Mono,monospace;">
                   UTC {now.strftime("%Y-%m-%d %H:%M:%S")}
                 </span>
-                <span style="color:{C_TEXT3};font-size:12px;">
+                <span style="color:{C_TEXT3};font-size:12px;font-family:Libre Franklin,sans-serif;">
                   Last updated <span style="color:{C_MOD};font-weight:600;">{elapsed}s ago</span>
                 </span>
               </div>
             </div>
-            <style>
-              @keyframes pulse {{
-                0%,100% {{ opacity:1; transform:scale(1); }}
-                50%      {{ opacity:0.4; transform:scale(0.85); }}
-              }}
-            </style>
             """,
             unsafe_allow_html=True,
         )
@@ -222,11 +214,11 @@ def _render_ticker_strip() -> None:
 
         st.markdown(
             f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;
+            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;
                         overflow:hidden;padding:10px 0;margin-bottom:16px;">
               <div style="overflow:hidden;white-space:nowrap;position:relative;">
                 <div style="display:inline-block;animation:scroll-left 45s linear infinite;
-                            font-family:monospace;">
+                            font-family:JetBrains Mono,monospace;">
                   {double}
                 </div>
               </div>
@@ -250,7 +242,7 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
     try:
         st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;">BREAKING ALERTS</div>',
+            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">BREAKING ALERTS</div>',
             unsafe_allow_html=True,
         )
 
@@ -288,8 +280,8 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
 
         if not alerts:
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;">No critical alerts at this time.</div>',
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
+                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:Libre Franklin,sans-serif;">No critical alerts at this time.</div>',
                 unsafe_allow_html=True,
             )
             return
@@ -298,16 +290,12 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
             st.markdown(
                 f"""
                 <div style="background:{C_CARD};border:1px solid {C_LOW};border-left:4px solid {C_LOW};
-                            border-radius:8px;padding:14px 18px;margin-bottom:8px;
+                            border-radius:3px;padding:14px 18px;margin-bottom:8px;
                             display:flex;align-items:center;gap:14px;">
                   <span style="background:{C_LOW};color:#fff;font-size:10px;font-weight:800;
-                               padding:2px 7px;border-radius:4px;letter-spacing:1px;
-                               animation:blink 1.2s step-start infinite;">NEW</span>
-                  <span style="color:{C_TEXT};font-size:13px;font-weight:500;">{alert}</span>
+                               padding:2px 7px;border-radius:3px;letter-spacing:1px;">NEW</span>
+                  <span style="color:{C_TEXT};font-size:13px;font-weight:500;font-family:Libre Franklin,sans-serif;">{alert}</span>
                 </div>
-                <style>
-                  @keyframes blink {{ 0%,100%{{opacity:1}} 50%{{opacity:0}} }}
-                </style>
                 """,
                 unsafe_allow_html=True,
             )
@@ -322,7 +310,7 @@ _FEED_TYPE_STYLE: dict[str, tuple[str, str]] = {
     "NEWS":        (C_TEXT3,  C_SURFACE),
     "RATE CHANGE": (C_HIGH,   "#0d2b1e"),
     "ALERT":       (C_LOW,    "#2d0f0f"),
-    "DATA UPDATE": (C_TEXT,   "#1a2235"),
+    "DATA UPDATE": (C_TEXT,   "#181c28"),
 }
 
 
@@ -415,7 +403,7 @@ def _render_feed_table() -> None:
     try:
         st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;">LIVE DATA FEED</div>',
+            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">LIVE DATA FEED</div>',
             unsafe_allow_html=True,
         )
 
@@ -424,12 +412,12 @@ def _render_feed_table() -> None:
         header = (
             f'<div style="display:grid;grid-template-columns:70px 110px 1fr 220px 60px;'
             f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:8px 8px 0 0;padding:8px 12px;">'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">TIME</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">FEED TYPE</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">ITEM</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">VALUE / CHANGE</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">SEV</span>'
+            f'border-radius:3px 3px 0 0;padding:8px 12px;">'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">TIME</span>'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">FEED TYPE</span>'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">ITEM</span>'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">VALUE / CHANGE</span>'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">SEV</span>'
             f'</div>'
         )
 
@@ -445,19 +433,19 @@ def _render_feed_table() -> None:
             body_parts.append(
                 f'<div style="display:grid;grid-template-columns:70px 110px 1fr 220px 60px;'
                 f'gap:0;background:{row_bg};{border_bot}padding:7px 12px;align-items:center;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:monospace;">{row["ts"]}</span>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-family:JetBrains Mono,monospace;">{row["ts"]}</span>'
                 f'<span style="background:{label_col}22;color:{label_col};font-size:10px;'
-                f'font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:0.5px;'
-                f'white-space:nowrap;">{ftype}</span>'
+                f'font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;'
+                f'white-space:nowrap;font-family:Libre Franklin,sans-serif;">{ftype}</span>'
                 f'<span style="color:{C_TEXT2};font-size:12px;padding:0 8px;'
-                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{row["item"]}</span>'
-                f'<span style="font-size:12px;">{row["value"]}</span>'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Libre Franklin,sans-serif;">{row["item"]}</span>'
+                f'<span style="font-size:12px;font-family:Libre Franklin,sans-serif;">{row["value"]}</span>'
                 f'<span style="color:{sev_color};font-size:10px;font-weight:700;">{sev}</span>'
                 f'</div>'
             )
 
         st.markdown(
-            f'<div style="border-radius:8px;overflow:hidden;max-height:480px;'
+            f'<div style="border-radius:3px;overflow:hidden;max-height:480px;'
             f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>',
             unsafe_allow_html=True,
         )
@@ -471,7 +459,7 @@ def _render_signal_chart() -> None:
     try:
         st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;">SIGNAL ACTIVITY — LAST 24H</div>',
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">SIGNAL ACTIVITY — LAST 24H</div>',
             unsafe_allow_html=True,
         )
 
@@ -516,7 +504,7 @@ def _render_signal_chart() -> None:
 
         # Legend
         st.markdown(
-            f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;">'
+            f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;font-family:Libre Franklin,sans-serif;">'
             f'<span style="color:{C_HIGH};font-size:11px;">&#9632; High conviction (&ge;75%)</span>'
             f'<span style="color:{C_MOD};font-size:11px;">&#9632; Moderate (60–74%)</span>'
             f'<span style="color:{C_TEXT3};font-size:11px;">&#9632; Low (&lt;60%)</span>'
@@ -533,7 +521,7 @@ def _render_freight_table(freight_data: Any) -> None:
     try:
         st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;">FREIGHT RATE CHANGES</div>',
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">FREIGHT RATE CHANGES</div>',
             unsafe_allow_html=True,
         )
 
@@ -550,9 +538,9 @@ def _render_freight_table(freight_data: Any) -> None:
         header = (
             f'<div style="display:grid;grid-template-columns:80px 1fr 90px 90px 90px 70px;'
             f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:8px 8px 0 0;padding:8px 12px;">'
+            f'border-radius:3px 3px 0 0;padding:8px 12px;">'
             + "".join(
-                f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;">{h}</span>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">{h}</span>'
                 for h in ["TIME", "ROUTE", "OLD", "NEW", "CHANGE", "PCT"]
             )
             + "</div>"
@@ -565,8 +553,8 @@ def _render_freight_table(freight_data: Any) -> None:
                 f'<div style="display:grid;grid-template-columns:80px 1fr 90px 90px 90px 70px;'
                 f'gap:0;background:{row_bg};border-bottom:1px solid {C_BORDER};'
                 f'padding:7px 12px;align-items:center;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:monospace;">{ts_str}</span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;">{route}</span>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-family:JetBrains Mono,monospace;">{ts_str}</span>'
+                f'<span style="color:{C_TEXT2};font-size:12px;font-family:Libre Franklin,sans-serif;">{route}</span>'
                 f'<span style="color:{C_TEXT3};font-size:12px;">{old_s}</span>'
                 f'<span style="color:{C_TEXT};font-size:12px;font-weight:600;">{new_s}</span>'
                 f'<span style="color:{chg_col};font-size:12px;font-weight:700;">{chg_s}</span>'
@@ -575,7 +563,7 @@ def _render_freight_table(freight_data: Any) -> None:
             )
 
         st.markdown(
-            f'<div style="border-radius:8px;overflow:hidden;max-height:340px;'
+            f'<div style="border-radius:3px;overflow:hidden;max-height:340px;'
             f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>',
             unsafe_allow_html=True,
         )
@@ -589,7 +577,7 @@ def _render_sentiment_pulse(news_items: Any) -> None:
     try:
         st.markdown(
             f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;">NEWS SENTIMENT PULSE</div>',
+            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">NEWS SENTIMENT PULSE</div>',
             unsafe_allow_html=True,
         )
 
@@ -623,12 +611,12 @@ def _render_sentiment_pulse(news_items: Any) -> None:
             ("24-Hour Average", s24h, "Rolling 24h"),
         ]):
             col.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
                 f'padding:18px;text-align:center;">'
-                f'<div style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;margin-bottom:6px;">{label}</div>'
+                f'<div style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;margin-bottom:6px;font-family:Libre Franklin,sans-serif;">{label}</div>'
                 f'<div style="color:{_score_color(val)};font-size:32px;font-weight:800;'
-                f'font-family:monospace;">{_fmt_score(val)}</div>'
-                f'<div style="color:{C_TEXT3};font-size:11px;margin-top:6px;">{window}</div>'
+                f'font-family:JetBrains Mono,monospace;">{_fmt_score(val)}</div>'
+                f'<div style="color:{C_TEXT3};font-size:11px;margin-top:6px;font-family:Libre Franklin,sans-serif;">{window}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -665,7 +653,7 @@ def render(
     macro_data:    Any = None,
     news_items:    Any = None,
 ) -> None:
-    """Render the Bloomberg-style Live Market Feed tab."""
+    """Render the WSJ editorial-style Live Market Feed tab."""
     try:
         logger.debug("Rendering tab_live_feed")
 

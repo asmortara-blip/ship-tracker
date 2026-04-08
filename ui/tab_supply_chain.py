@@ -8,26 +8,26 @@ import streamlit as st
 from loguru import logger
 
 # ── Color palette ──────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Plotly base layout ─────────────────────────────────────────────────────
 _LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color=C_TEXT, family="Inter, sans-serif"),
+    font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
     margin=dict(l=40, r=20, t=30, b=40),
-    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", linecolor=C_BORDER),
-    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", linecolor=C_BORDER),
+    xaxis=dict(gridcolor="rgba(232,230,225,0.04)", linecolor=C_BORDER),
+    yaxis=dict(gridcolor="rgba(232,230,225,0.04)", linecolor=C_BORDER),
 )
 
 
@@ -44,12 +44,12 @@ def _divider() -> None:
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub = (
-        f'<div style="color:{C_TEXT2}; font-size:0.82rem; margin-top:4px;">{subtitle}</div>'
+        f'<div style="color:{C_TEXT2}; font-size:0.82rem; margin-top:4px; font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>'
         if subtitle else ""
     )
     st.markdown(
         f'<div style="margin-bottom:16px;">'
-        f'<span style="font-size:1.05rem; font-weight:700; color:{C_TEXT};">{title}</span>'
+        f'<span style="font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:\'Libre Baskerville\',serif;">{title}</span>'
         f'{sub}</div>',
         unsafe_allow_html=True,
     )
@@ -113,12 +113,12 @@ def _render_health_index(rng: random.Random) -> None:
                 gauge=dict(
                     axis=dict(range=[0, 100], tickfont=dict(color=C_TEXT3)),
                     bar=dict(color=arc_color, thickness=0.3),
-                    bgcolor="rgba(255,255,255,0.03)",
+                    bgcolor="rgba(232,230,225,0.03)",
                     bordercolor=C_BORDER,
                     steps=[
-                        dict(range=[0, 45],  color="rgba(239,68,68,0.12)"),
-                        dict(range=[45, 70], color="rgba(245,158,11,0.12)"),
-                        dict(range=[70, 100], color="rgba(16,185,129,0.12)"),
+                        dict(range=[0, 45],  color="rgba(192,57,43,0.12)"),
+                        dict(range=[45, 70], color="rgba(201,150,43,0.12)"),
+                        dict(range=[70, 100], color="rgba(46,158,110,0.12)"),
                     ],
                     threshold=dict(line=dict(color=C_TEXT2, width=2), thickness=0.75, value=pre_covid),
                 ),
@@ -131,11 +131,11 @@ def _render_health_index(rng: random.Random) -> None:
                 f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;">'
                 f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:8px; padding:8px 14px; flex:1; min-width:110px;">'
                 f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Prior Mo.</div>'
-                f'<div style="color:{"#10b981" if delta_month>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_month>=0 else ""}{delta_month:.1f}</div>'
+                f'<div style="color:{"#2e9e6e" if delta_month>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_month>=0 else ""}{delta_month:.1f}</div>'
                 f'</div>'
                 f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:8px; padding:8px 14px; flex:1; min-width:110px;">'
                 f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Pre-COVID</div>'
-                f'<div style="color:{"#10b981" if delta_precovid>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_precovid>=0 else ""}{delta_precovid:.1f}</div>'
+                f'<div style="color:{"#2e9e6e" if delta_precovid>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_precovid>=0 else ""}{delta_precovid:.1f}</div>'
                 f'</div>'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -159,14 +159,14 @@ def _render_health_index(rng: random.Random) -> None:
                     f'<span style="color:{C_TEXT}; font-size:0.88rem; font-weight:600;">{label}</span>'
                     f'<span style="color:{bar_color}; font-weight:700; font-size:0.88rem;">{val:.1f} / {cap}</span>'
                     f'</div>'
-                    f'<div style="background:rgba(255,255,255,0.06); border-radius:4px; height:7px;">'
+                    f'<div style="background:rgba(232,230,225,0.05); border-radius:4px; height:7px;">'
                     f'<div style="width:{bar_w}%; background:{bar_color}; border-radius:4px; height:7px;"></div>'
                     f'</div>'
                     f'<div style="color:{C_TEXT3}; font-size:0.73rem; margin-top:3px;">{desc}</div>'
                     f'</div>'
                 )
             st.markdown(
-                f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:12px; padding:18px 20px;">'
+                f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:18px 20px;">'
                 f'{rows_html}'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -240,7 +240,7 @@ def _render_disruption_monitor() -> None:
             f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
             f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
             + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{h}</div>'
+                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
                 for h in ["Disruption", "Cause", "Severity", "Affected Routes", "Duration", "Est. Resolution", "Rate Impact"]
             )
             + "</div>"
@@ -300,7 +300,7 @@ def _render_inventory_sales(rng: random.Random) -> None:
         fig.update_layout(
             **_LAYOUT,
             height=280,
-            yaxis=dict(title="I/S Ratio", color=C_MOD, gridcolor="rgba(255,255,255,0.05)"),
+            yaxis=dict(title="I/S Ratio", color=C_MOD, gridcolor="rgba(232,230,225,0.04)"),
             yaxis2=dict(title="Volume Index", color=C_ACCENT, overlaying="y", side="right", gridcolor="rgba(0,0,0,0)"),
             legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
         )
@@ -322,7 +322,7 @@ def _render_inventory_sales(rng: random.Random) -> None:
         ]:
             with col:
                 st.markdown(
-                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:10px; padding:14px 16px;">'
+                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
                     f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
                     f'<div style="color:{C_TEXT}; font-size:1.1rem; font-weight:700;">{val}</div>'
                     f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
@@ -404,7 +404,7 @@ def _render_nearshoring() -> None:
             f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
             f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
             + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{h}</div>'
+                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
                 for h in ["Company", "Current Production", "New / Additional", "Timeline", "TEU Volume Shift", "Route Gains", "Route Loses"]
             )
             + "</div>"
@@ -461,7 +461,7 @@ def _render_lead_times() -> None:
             f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
             f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
             + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{h}</div>'
+                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
                 for h in ["Commodity", "2019 Baseline", "2021 Peak", "2023 Normalized", "Current (wks)", "Trend"]
             )
             + "</div>"
@@ -518,7 +518,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
         dims = ["Geo Diversification", "Single-Source Risk", "Inventory Buffer", "Carrier Diversity"]
 
         fig = go.Figure()
-        colors_list = [C_ACCENT, C_HIGH, "#8b5cf6", C_MOD, "#06b6d4", "#f97316"]
+        colors_list = [C_ACCENT, C_HIGH, "#7c6eaf", C_MOD, "#4a90a4", "#f97316"]
         for (name, g, s, inv, cd, res), clr in zip(industries, colors_list):
             fig.add_trace(go.Scatterpolar(
                 r=[g, s, inv, cd, g],
@@ -548,7 +548,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
             f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
             f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
             + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{h}</div>'
+                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
                 for h in ["Industry", "Geo Divers.", "Single-Src Risk", "Inventory Buffer", "Carrier Diversity", "Score"]
             )
             + "</div>"
@@ -609,7 +609,7 @@ def _render_jit_vs_jic() -> None:
             **_LAYOUT,
             height=300,
             barmode="group",
-            yaxis=dict(title="Months of Stock", gridcolor="rgba(255,255,255,0.05)"),
+            yaxis=dict(title="Months of Stock", gridcolor="rgba(232,230,225,0.04)"),
             legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
         )
         st.plotly_chart(fig, use_container_width=True, key="jit_jic_chart")
@@ -627,7 +627,7 @@ def _render_jit_vs_jic() -> None:
         for col, label, val, sub in cards:
             with col:
                 st.markdown(
-                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:10px; padding:14px 16px;">'
+                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
                     f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
                     f'<div style="color:{C_ACCENT}; font-size:1.1rem; font-weight:700;">{val}</div>'
                     f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
@@ -722,7 +722,7 @@ def _render_forecast() -> None:
                 )
             container.markdown(
                 f'<div style="background:{C_SURFACE}; border:1px solid {color}44; border-top:3px solid {color};'
-                f' border-radius:0 0 10px 10px; padding:14px 16px;">'
+                f' border-radius:0 0 6px 6px; padding:14px 16px;">'
                 f'<div style="color:{color}; font-size:0.80rem; font-weight:700; text-transform:uppercase;'
                 f' letter-spacing:0.06em; margin-bottom:10px;">{title}</div>'
                 f'{rows}'
@@ -753,9 +753,9 @@ def render(port_results=None, route_results=None, insights=None, macro_data=None
 
         st.markdown(
             f'<div style="padding:18px 0 6px 0;">'
-            f'<div style="font-size:1.45rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.01em;">'
+            f'<div style="font-size:1.45rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.01em; font-family:\'Libre Baskerville\',serif;">'
             f'Supply Chain Resilience &amp; Visibility</div>'
-            f'<div style="color:{C_TEXT2}; font-size:0.87rem; margin-top:5px;">'
+            f'<div style="color:{C_TEXT2}; font-size:0.87rem; margin-top:5px; font-family:\'Libre Franklin\',sans-serif;">'
             f'End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times</div>'
             f'</div>',
             unsafe_allow_html=True,

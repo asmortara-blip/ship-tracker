@@ -54,7 +54,7 @@ from ui.styles import (
 C_WARN   = C_MOD
 C_DANGER = C_LOW
 C_BULL   = C_HIGH
-C_PURPLE = "#8b5cf6"
+C_PURPLE = "#7c6eaf"
 C_CYAN   = C_MACRO
 
 _SIGNAL_COLOR: Dict[str, str] = {
@@ -70,10 +70,10 @@ _SIGNAL_ARROW: Dict[str, str] = {
 }
 
 _SEVERITY_COLOR: dict[str, str] = {
-    "CRITICAL": "#ef4444",
+    "CRITICAL": "#c0392b",
     "HIGH":     "#f97316",
-    "MODERATE": "#f59e0b",
-    "LOW":      "#64748b",
+    "MODERATE": "#c9962b",
+    "LOW":      "#6b6760",
 }
 
 
@@ -83,7 +83,7 @@ _SEVERITY_COLOR: dict[str, str] = {
 
 def _hr() -> None:
     st.markdown(
-        "<hr style='border:none; border-top:1px solid rgba(255,255,255,0.07);"
+        "<hr style='border:none; border-top:1px solid rgba(232,230,225,0.06);"
         " margin:32px 0'>",
         unsafe_allow_html=True,
     )
@@ -110,7 +110,7 @@ def _kpi_card(
     width_style = "width:100%;" if full_width else ""
     st.markdown(
         f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-        f' border-top:2px solid {acc}; border-radius:10px; padding:16px 18px;'
+        f' border-top:2px solid {acc}; border-radius:6px; padding:16px 18px;'
         f' text-align:center; {width_style}">'
         f'<div style="font-size:0.62rem; font-weight:700; color:{C_TEXT3};'
         f' text-transform:uppercase; letter-spacing:0.07em; margin-bottom:4px">{label}</div>'
@@ -151,9 +151,9 @@ def _plotly_defaults(fig: go.Figure, height: int = 340) -> go.Figure:
         paper_bgcolor=C_CARD,
         plot_bgcolor=C_CARD,
         margin=dict(t=24, b=24, l=10, r=10),
-        font=dict(family="Inter, sans-serif", color=C_TEXT2),
+        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2),
         hoverlabel=dict(
-            bgcolor="#1a2235",
+            bgcolor="#181c28",
             bordercolor="rgba(255,255,255,0.15)",
             font=dict(color=C_TEXT, size=12),
         ),
@@ -165,8 +165,8 @@ def _plotly_defaults(fig: go.Figure, height: int = 340) -> go.Figure:
             bgcolor="rgba(0,0,0,0)",
         ),
     )
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color=C_TEXT2, size=11))
-    fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color=C_TEXT2, size=11))
+    fig.update_xaxes(gridcolor="rgba(232,230,225,0.04)", tickfont=dict(color=C_TEXT2, size=11))
+    fig.update_yaxes(gridcolor="rgba(232,230,225,0.04)", tickfont=dict(color=C_TEXT2, size=11))
     return fig
 
 
@@ -356,13 +356,13 @@ def _render_finance_banner(macro_data: dict) -> None:
 
     # ── Page header ──────────────────────────────────────────────────────────
     st.markdown("""
-    <div style="padding: 16px 0 24px 0; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 24px">
+    <div style="padding: 16px 0 24px 0; border-bottom: 1px solid rgba(232,230,225,0.05); margin-bottom: 24px">
         <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.15em;
                     color:#475569; margin-bottom:6px">TRADE FINANCE INTELLIGENCE</div>
-        <div style="font-size:1.6rem; font-weight:900; color:#f1f5f9; letter-spacing:-0.03em; line-height:1.1">
+        <div style="font-size:1.6rem; font-weight:900; color:#e8e6e1; letter-spacing:-0.03em; line-height:1.1">
             Trade Finance Dashboard
         </div>
-        <div style="font-size:0.85rem; color:#64748b; margin-top:6px">
+        <div style="font-size:0.85rem; color:#6b6760; margin-top:6px">
             Letter of credit volumes, financing costs, FX hedging, credit availability — and their impact on global shipping demand
         </div>
     </div>
@@ -371,7 +371,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     # ── KPI Row 1: headline metrics ───────────────────────────────────────────
     st.markdown(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#64748b; margin-bottom:10px; font-weight:700'>Key Trade Finance Metrics</div>",
+        " color:#6b6760; margin-bottom:10px; font-weight:700'>Key Trade Finance Metrics</div>",
         unsafe_allow_html=True,
     )
 
@@ -414,7 +414,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     # ── Financing cost by route — compact bar chart ───────────────────────────
     st.markdown(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#64748b; margin-bottom:10px; font-weight:700'>"
+        " color:#6b6760; margin-bottom:10px; font-weight:700'>"
         "Financing Cost by Route (bps over SOFR) vs Cargo Value Cost (%)</div>",
         unsafe_allow_html=True,
     )
@@ -438,7 +438,7 @@ def _render_finance_banner(macro_data: dict) -> None:
         marker_line_width=0,
         text=[f"{v} bps" for v in cost_vals],
         textposition="outside",
-        textfont=dict(size=9, color="#94a3b8"),
+        textfont=dict(size=9, color="#9a968e"),
         hovertemplate="<b>%{y}</b><br>Cost: %{x} bps<extra></extra>",
         showlegend=False,
     ), row=1, col=1)
@@ -451,7 +451,7 @@ def _render_finance_banner(macro_data: dict) -> None:
         marker_line_width=0,
         text=[f"{v:.2f}%" for v in cargo_pct],
         textposition="outside",
-        textfont=dict(size=9, color="#94a3b8"),
+        textfont=dict(size=9, color="#9a968e"),
         hovertemplate="<b>%{y}</b><br>Cost: %{x:.2f}% of cargo value<extra></extra>",
         showlegend=False,
     ), row=1, col=2)
@@ -467,7 +467,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     # ── Interest rate impact over time ────────────────────────────────────────
     st.markdown(
         "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#64748b; margin-bottom:10px; font-weight:700'>"
+        " color:#6b6760; margin-bottom:10px; font-weight:700'>"
         "Interest Rate Impact on Trade Finance Costs (2019–2026)</div>",
         unsafe_allow_html=True,
     )
@@ -503,7 +503,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     fig_rate_ts = _plotly_defaults(fig_rate_ts, height=300)
     fig_rate_ts.update_yaxes(
         title_text="10Y Treasury (%)", secondary_y=False,
-        ticksuffix="%", gridcolor="rgba(255,255,255,0.05)",
+        ticksuffix="%", gridcolor="rgba(232,230,225,0.04)",
     )
     fig_rate_ts.update_yaxes(
         title_text="Added LC Cost ($B) / All-In (bps)", secondary_y=True,
@@ -520,7 +520,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     with col_lc:
         st.markdown(
             "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-            " color:#64748b; margin-bottom:10px; font-weight:700'>"
+            " color:#6b6760; margin-bottom:10px; font-weight:700'>"
             "Documentary Credit vs Open Account (2015–2026)</div>",
             unsafe_allow_html=True,
         )
@@ -561,7 +561,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     with col_fx:
         st.markdown(
             "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-            " color:#64748b; margin-bottom:10px; font-weight:700'>"
+            " color:#6b6760; margin-bottom:10px; font-weight:700'>"
             "FX Hedging Cost — Forward vs Spot (Major Trade Currencies)</div>",
             unsafe_allow_html=True,
         )
@@ -570,13 +570,13 @@ def _render_finance_banner(macro_data: dict) -> None:
         # Table header
         st.markdown(
             "<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
-            " gap:4px; padding:4px 6px; background:rgba(255,255,255,0.04);"
+            " gap:4px; padding:4px 6px; background:rgba(232,230,225,0.04);"
             " border-radius:6px; margin-bottom:6px'>"
-            "<span style='font-size:0.60rem; color:#64748b; font-weight:700'>PAIR</span>"
-            "<span style='font-size:0.60rem; color:#64748b; font-weight:700'>SPOT</span>"
-            "<span style='font-size:0.60rem; color:#64748b; font-weight:700'>3M FWD</span>"
-            "<span style='font-size:0.60rem; color:#64748b; font-weight:700'>COST%</span>"
-            "<span style='font-size:0.60rem; color:#64748b; font-weight:700'>TREND</span>"
+            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>PAIR</span>"
+            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>SPOT</span>"
+            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>3M FWD</span>"
+            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>COST%</span>"
+            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>TREND</span>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -589,7 +589,7 @@ def _render_finance_banner(macro_data: dict) -> None:
             fwd_str  = f"{h['fwd_3m']}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 10 else f"{h['fwd_3m']:.1f}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 200 else f"{h['fwd_3m']:.0f}"
             st.markdown(
                 f"<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
-                f" gap:4px; padding:6px 6px; border-bottom:1px solid rgba(255,255,255,0.04)'>"
+                f" gap:4px; padding:6px 6px; border-bottom:1px solid rgba(232,230,225,0.04)'>"
                 f"<span style='font-size:0.73rem; font-weight:700; color:{C_TEXT}'>{h['pair']}</span>"
                 f"<span style='font-size:0.72rem; color:{C_TEXT2}'>{spot_str}</span>"
                 f"<span style='font-size:0.72rem; color:{C_TEXT2}'>{fwd_str}</span>"
@@ -647,7 +647,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
 
         st.markdown(
             f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-            f' border-radius:10px; padding:14px 20px; display:flex;'
+            f' border-radius:6px; padding:14px 20px; display:flex;'
             f' align-items:center; gap:24px; margin-bottom:4px">'
             f'<div style="flex:0 0 auto; min-width:140px">'
             f'<div style="font-size:0.60rem; font-weight:700; color:{C_TEXT3};'
@@ -663,7 +663,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
             f'&nbsp;&nbsp;Bearish: <strong style="color:{C_LOW}">{composite["bearish_count"]}</strong>'
             f'&nbsp;&nbsp;Neutral: <strong style="color:{C_TEXT3}">{composite["neutral_count"]}</strong>'
             f'</div>'
-            f'<div style="background:rgba(255,255,255,0.07); border-radius:6px;'
+            f'<div style="background:rgba(232,230,225,0.06); border-radius:6px;'
             f' height:10px; overflow:hidden">'
             f'<div style="width:{pct_bar}%; height:100%; background:linear-gradient(90deg,'
             f' {_rgba(dom_color,0.5)},{dom_color}); border-radius:6px"></div>'
@@ -719,7 +719,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
             st.markdown(
                 f'<div style="display:flex; justify-content:space-between;'
                 f' align-items:center; padding:7px 0;'
-                f' border-bottom:1px solid rgba(255,255,255,0.05)">'
+                f' border-bottom:1px solid rgba(232,230,225,0.04)">'
                 f'<span style="font-size:0.73rem; color:{C_TEXT2}">{lbl}</span>'
                 f'<span style="font-size:0.73rem; font-weight:700; color:{c}">{val}</span>'
                 f'</div>',
@@ -828,13 +828,13 @@ def _render_route_financing() -> None:
         c4.markdown(
             f'<div style="padding:4px 0"><span style="background:{_rgba(rc,0.15)};'
             f' color:{rc}; border:1px solid {_rgba(rc,0.3)}; padding:2px 8px;'
-            f' border-radius:999px; font-size:0.60rem; font-weight:700">'
+            f' border-radius:3px; font-size:0.60rem; font-weight:700">'
             f'{r["risk"]}</span></div>', unsafe_allow_html=True)
         c5.markdown(
             f'<div style="font-size:0.75rem; color:{C_TEXT2}; padding:4px 0">'
             f'{r["lc_share_pct"]}%</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div style="border-bottom:1px solid rgba(255,255,255,0.04)"></div>',
+            f'<div style="border-bottom:1px solid rgba(232,230,225,0.04)"></div>',
             unsafe_allow_html=True)
 
     _insight_box(
@@ -914,7 +914,7 @@ def _render_rate_impact(macro_data: dict) -> None:
     fig_hist = _plotly_defaults(fig_hist, height=300)
     fig_hist.update_yaxes(
         title_text="10Y Treasury (%)", secondary_y=False,
-        ticksuffix="%", gridcolor="rgba(255,255,255,0.05)",
+        ticksuffix="%", gridcolor="rgba(232,230,225,0.04)",
     )
     fig_hist.update_yaxes(
         title_text="Added Annual LC Cost ($B)", secondary_y=True,
@@ -1195,7 +1195,7 @@ def _render_lc_oa_trend() -> None:
             st.markdown(
                 f'<div style="display:flex; justify-content:space-between;'
                 f' align-items:center; padding:8px 0;'
-                f' border-bottom:1px solid rgba(255,255,255,0.05)">'
+                f' border-bottom:1px solid rgba(232,230,225,0.04)">'
                 f'<span style="font-size:0.72rem; color:{C_TEXT2}">{lbl}</span>'
                 f'<span style="font-size:0.72rem; font-weight:700; color:{c}">{val}</span>'
                 f'</div>',
@@ -1319,7 +1319,7 @@ def _render_finance_gap() -> None:
                 f'<div style="font-size:1.2rem; font-weight:800; color:{col_c}">{access_pct}%</div>'
                 f'<div style="font-size:0.62rem; color:{C_TEXT3}; margin-bottom:5px">'
                 f'access · {rej_pct}% rejected</div>'
-                f'<div style="background:rgba(255,255,255,0.06); border-radius:4px;'
+                f'<div style="background:rgba(232,230,225,0.05); border-radius:4px;'
                 f' height:4px; overflow:hidden">'
                 f'<div style="width:{fill_pct}%; height:100%; background:{col_c};'
                 f' border-radius:4px"></div>'
@@ -1518,7 +1518,7 @@ def _render_scf_programs() -> None:
             saving_c = C_HIGH if prog["saving_bps"] > 70 else C_MOD
             st.markdown(
                 f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-                f' border-top:2px solid {saving_c}; border-radius:10px;'
+                f' border-top:2px solid {saving_c}; border-radius:6px;'
                 f' padding:12px 14px; margin-bottom:10px">'
                 f'<div style="font-size:0.78rem; font-weight:700; color:{C_TEXT};'
                 f' margin-bottom:4px">{prog["program"]}</div>'
@@ -1593,10 +1593,10 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
         locations=iso_codes,
         z=scores,
         colorscale=[
-            [0.0,  "#10b981"],
-            [0.4,  "#f59e0b"],
+            [0.0,  "#2e9e6e"],
+            [0.4,  "#c9962b"],
             [0.7,  "#f97316"],
-            [1.0,  "#ef4444"],
+            [1.0,  "#c0392b"],
         ],
         zmin=0.0, zmax=1.0,
         colorbar=dict(
@@ -1608,16 +1608,16 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
             bordercolor="rgba(255,255,255,0.1)",
             len=0.7, y=0.5,
         ),
-        marker_line_color="rgba(255,255,255,0.08)",
+        marker_line_color="rgba(232,230,225,0.06)",
         marker_line_width=0.5,
         hovertemplate="<b>%{location}</b><br>Credit Risk Score: %{z:.2f}<extra></extra>",
     ))
 
     for ann in [
-        dict(lat=61.5, lon=105.3, text="Russia (SWIFT exc.)", color="#ef4444"),
-        dict(lat=32.4, lon=53.7,  text="Iran (sanctions)",    color="#ef4444"),
+        dict(lat=61.5, lon=105.3, text="Russia (SWIFT exc.)", color="#c0392b"),
+        dict(lat=32.4, lon=53.7,  text="Iran (sanctions)",    color="#c0392b"),
         dict(lat=-34.0, lon=-64.0, text="Argentina (FX ctrl)", color="#f97316"),
-        dict(lat=6.4, lon=-66.6,  text="Venezuela (OFAC)",    color="#ef4444"),
+        dict(lat=6.4, lon=-66.6,  text="Venezuela (OFAC)",    color="#c0392b"),
     ]:
         fig_map.add_trace(go.Scattergeo(
             lat=[ann["lat"]], lon=[ann["lon"]],
@@ -1632,18 +1632,18 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
 
     fig_map.update_geos(
         showcoastlines=True, coastlinecolor="rgba(255,255,255,0.15)",
-        showland=True, landcolor="#111827",
-        showocean=True, oceancolor="#0a0f1a",
+        showland=True, landcolor="#12151e",
+        showocean=True, oceancolor="#0c0e14",
         showlakes=False,
-        showcountries=True, countrycolor="rgba(255,255,255,0.06)",
-        projection_type="natural earth", bgcolor="#0a0f1a",
+        showcountries=True, countrycolor="rgba(232,230,225,0.05)",
+        projection_type="natural earth", bgcolor="#0c0e14",
     )
     fig_map.update_layout(
         template="plotly_dark", height=420,
         paper_bgcolor=C_CARD,
         margin=dict(t=10, b=10, l=0, r=0),
-        geo_bgcolor="#0a0f1a",
-        font=dict(family="Inter, sans-serif"),
+        geo_bgcolor="#0c0e14",
+        font=dict(family="Libre Franklin, sans-serif"),
     )
     st.plotly_chart(fig_map, use_container_width=True, key="finance_credit_map")
 
@@ -1689,10 +1689,10 @@ def _render_dedollarization() -> None:
     )
 
     for y_vals, name, color in [
-        (usd,   "USD",   "#3b82f6"),
-        (eur,   "EUR",   "#10b981"),
-        (cny,   "CNY",   "#f59e0b"),
-        (other, "Other", "#64748b"),
+        (usd,   "USD",   "#3572b0"),
+        (eur,   "EUR",   "#2e9e6e"),
+        (cny,   "CNY",   "#c9962b"),
+        (other, "Other", "#6b6760"),
     ]:
         fig.add_trace(go.Scatter(
             x=years, y=y_vals, name=name,
@@ -1703,7 +1703,7 @@ def _render_dedollarization() -> None:
         ), row=1, col=1)
 
     latest    = [usd[-1], eur[-1], cny[-1], other[-1]]
-    colors_pie = ["#3b82f6", "#10b981", "#f59e0b", "#64748b"]
+    colors_pie = ["#3572b0", "#2e9e6e", "#c9962b", "#6b6760"]
     fig.add_trace(go.Pie(
         values=latest,
         labels=["USD", "EUR", "CNY", "Other"],
@@ -1717,15 +1717,15 @@ def _render_dedollarization() -> None:
     fig.add_annotation(
         x=2026, y=cny[-1],
         text=f"CNY {cny[-1]}%",
-        showarrow=True, arrowhead=2, arrowcolor="#f59e0b",
+        showarrow=True, arrowhead=2, arrowcolor="#c9962b",
         ax=-55, ay=-25,
-        font=dict(size=10, color="#f59e0b"),
+        font=dict(size=10, color="#c9962b"),
         bgcolor=_rgba(C_CARD, 0.9), borderpad=4,
         row=1, col=1,
     )
 
     fig = _plotly_defaults(fig, height=360)
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
+    fig.update_xaxes(gridcolor="rgba(232,230,225,0.04)", row=1, col=1)
     fig.update_yaxes(title="Share (%)", ticksuffix="%", row=1, col=1)
     fig.update_layout(margin=dict(t=40, b=20, l=10, r=10))
     st.plotly_chart(fig, use_container_width=True, key="finance_dedollarization")
@@ -1778,7 +1778,7 @@ def _render_sanctions_tracker() -> None:
         routes_str = " · ".join(sanction["affected_routes"])
         st.markdown(
             f'<div style="background:{C_CARD}; border:1px solid {_rgba(sev_color, 0.25)};'
-            f' border-left:4px solid {sev_color}; border-radius:10px;'
+            f' border-left:4px solid {sev_color}; border-radius:6px;'
             f' padding:14px 16px; margin-bottom:10px">'
             f'<div style="display:flex; justify-content:space-between;'
             f' align-items:flex-start; margin-bottom:8px">'
@@ -1787,7 +1787,7 @@ def _render_sanctions_tracker() -> None:
             f'{sanction["jurisdiction"]}</span>&nbsp;&nbsp;'
             f'<span style="background:{_rgba(sev_color, 0.15)}; color:{sev_color};'
             f' border:1px solid {_rgba(sev_color, 0.3)}; padding:2px 8px;'
-            f' border-radius:999px; font-size:0.65rem; font-weight:700">{sev}</span>'
+            f' border-radius:3px; font-size:0.65rem; font-weight:700">{sev}</span>'
             f'</div>'
             f'<div style="font-size:0.68rem; color:{C_TEXT3}">Since {sanction["in_force_since"]}</div>'
             f'</div>'

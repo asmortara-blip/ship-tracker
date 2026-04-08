@@ -18,17 +18,17 @@ import plotly.graph_objects as go
 from loguru import logger
 
 # ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -93,32 +93,32 @@ def _render_dashboard(macro_data, freight_data, insights):
         skew_pct   = upside_skew if upside_skew >= downside_skew else downside_skew
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;padding:24px 28px 20px;margin-bottom:20px;">'
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;">SCENARIO INTELLIGENCE DASHBOARD</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px 20px;margin-bottom:20px;">'
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;font-family:Libre Baskerville, Georgia, serif;">SCENARIO INTELLIGENCE DASHBOARD</div>'
             f'<div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">'
             f'<div style="flex:1;min-width:140px;">'
             f'<div style="font-size:42px;font-weight:800;color:{C_ACCENT};line-height:1;">{active}</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">Active Scenarios Tracked</div>'
+            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:Libre Franklin, sans-serif;">Active Scenarios Tracked</div>'
             f'</div>'
             f'<div style="flex:1;min-width:140px;border-left:1px solid {C_BORDER};padding-left:28px;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;">BASE CASE PROBABILITY</div>'
+            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">BASE CASE PROBABILITY</div>'
             f'<div style="font-size:36px;font-weight:700;color:{C_TEXT};">{base_prob}%</div>'
             f'<div style="background:{C_SURFACE};border-radius:4px;height:6px;margin-top:8px;">'
             f'<div style="background:{C_ACCENT};width:{base_prob}%;height:100%;border-radius:4px;"></div>'
             f'</div>'
             f'</div>'
             f'<div style="flex:1;min-width:140px;border-left:1px solid {C_BORDER};padding-left:28px;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;">RISK SKEW</div>'
+            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">RISK SKEW</div>'
             f'<div style="font-size:36px;font-weight:700;color:{skew_color};">{skew_label}</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};">{skew_pct}% probability weight</div>'
             f'</div>'
             f'<div style="flex:1;min-width:140px;border-left:1px solid {C_BORDER};padding-left:28px;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;">CURRENT BDI</div>'
+            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">CURRENT BDI</div>'
             f'<div style="font-size:36px;font-weight:700;color:{C_TEXT};">{int(bdi_val):,}</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};">Baltic Dry Index</div>'
             f'</div>'
             f'<div style="flex:1;min-width:140px;border-left:1px solid {C_BORDER};padding-left:28px;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;">CURRENT WCI</div>'
+            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">CURRENT WCI</div>'
             f'<div style="font-size:36px;font-weight:700;color:{C_TEXT};">${int(wci_val):,}</div>'
             f'<div style="font-size:13px;color:{C_TEXT2};">World Container Index</div>'
             f'</div>'
@@ -217,34 +217,34 @@ def _render_three_scenarios(macro_data, freight_data):
                     for a in sc["assumptions"]
                 )
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {sc["color"]}33;border-top:3px solid {sc["color"]};border-radius:12px;padding:20px;height:100%;">'
+                    f'<div style="background:{C_CARD};border:1px solid {sc["color"]}33;border-top:3px solid {sc["color"]};border-radius:6px;padding:20px;height:100%;">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
                     f'<span style="font-size:11px;font-weight:700;letter-spacing:2px;color:{sc["color"]};">{sc["label"]}</span>'
-                    f'<span style="background:{sc["color"]}22;color:{sc["color"]};font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;">{sc["prob"]}%</span>'
+                    f'<span style="background:{sc["color"]}22;color:{sc["color"]};font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;">{sc["prob"]}%</span>'
                     f'</div>'
                     f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:16px;font-style:italic;">{sc["headline"]}</div>'
                     f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">'
                     f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;">BDI</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;font-family:Libre Franklin, sans-serif;">BDI</div>'
                     f'<div style="font-size:20px;font-weight:700;color:{C_TEXT};">{sc["bdi"]:,}</div>'
                     f'</div>'
                     f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;">WCI ($/FEU)</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;font-family:Libre Franklin, sans-serif;">WCI ($/FEU)</div>'
                     f'<div style="font-size:20px;font-weight:700;color:{C_TEXT};">${sc["wci"]:,}</div>'
                     f'</div>'
                     f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;">Fleet Utilization</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;font-family:Libre Franklin, sans-serif;">Fleet Utilization</div>'
                     f'<div style="font-size:20px;font-weight:700;color:{C_TEXT};">{sc["util"]}%</div>'
                     f'</div>'
                     f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;">Rate Impact</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:2px;font-family:Libre Franklin, sans-serif;">Rate Impact</div>'
                     f'<div style="font-size:18px;font-weight:700;color:{sc["fr_color"]};">{sc["fr_impact"]}</div>'
                     f'</div>'
                     f'</div>'
-                    f'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:{C_TEXT3};margin-bottom:8px;">KEY ASSUMPTIONS</div>'
+                    f'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:{C_TEXT3};margin-bottom:8px;font-family:Libre Baskerville, Georgia, serif;">KEY ASSUMPTIONS</div>'
                     f'{assumptions_html}'
                     f'<div style="margin-top:14px;padding:10px;background:{sc["color"]}11;border-radius:8px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:3px;">EQUITY SECTOR IMPACT</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:3px;font-family:Libre Franklin, sans-serif;">EQUITY SECTOR IMPACT</div>'
                     f'<div style="font-size:12px;font-weight:600;color:{sc["equity_color"]};">{sc["equity"]}</div>'
                     f'</div>'
                     f'</div>',
@@ -306,8 +306,8 @@ def _render_comparison_table():
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;margin-bottom:4px;">'
-            f'<div style="padding:16px 20px 0;font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;">SCENARIO COMPARISON MATRIX</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;margin-bottom:4px;">'
+            f'<div style="padding:16px 20px 0;font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;font-family:Libre Baskerville, Georgia, serif;">SCENARIO COMPARISON MATRIX</div>'
             f'<div style="overflow-x:auto;padding:12px 0 4px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>{header_cells}</tr></thead>'
@@ -330,9 +330,9 @@ def _render_scenario_builder():
             st.session_state.custom_scenarios = []
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px 4px;margin-bottom:8px;">'
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;">INTERACTIVE SCENARIO BUILDER</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:16px;">Adjust macro parameters to estimate freight rate and BDI impact.</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px 4px;margin-bottom:8px;">'
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;font-family:Libre Baskerville, Georgia, serif;">INTERACTIVE SCENARIO BUILDER</div>'
+            f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:16px;font-family:Libre Franklin, sans-serif;">Adjust macro parameters to estimate freight rate and BDI impact.</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -372,19 +372,19 @@ def _render_scenario_builder():
                 st.session_state.custom_scenarios.append(new_sc)
 
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {impact_color}44;border-radius:12px;padding:20px 24px;margin-top:12px;">'
-                    f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:14px;">Results: {scenario_name}</div>'
+                    f'<div style="background:{C_CARD};border:1px solid {impact_color}44;border-radius:6px;padding:20px 24px;margin-top:12px;">'
+                    f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:14px;font-family:Libre Baskerville, Georgia, serif;">Results: {scenario_name}</div>'
                     f'<div style="display:flex;gap:24px;flex-wrap:wrap;">'
                     f'<div style="flex:1;min-width:120px;background:{C_SURFACE};border-radius:8px;padding:14px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">FREIGHT RATE IMPACT</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">FREIGHT RATE IMPACT</div>'
                     f'<div style="font-size:28px;font-weight:800;color:{impact_color};">{fr_impact:+.1f}%</div>'
                     f'</div>'
                     f'<div style="flex:1;min-width:120px;background:{C_SURFACE};border-radius:8px;padding:14px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">BDI IMPACT</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">BDI IMPACT</div>'
                     f'<div style="font-size:28px;font-weight:800;color:{bdi_color};">{bdi_impact:+.1f}%</div>'
                     f'</div>'
                     f'<div style="flex:1;min-width:120px;background:{C_SURFACE};border-radius:8px;padding:14px;">'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">SUPPLY/DEMAND GAP</div>'
+                    f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">SUPPLY/DEMAND GAP</div>'
                     f'<div style="font-size:28px;font-weight:800;color:{C_TEXT};">{supply_demand_gap:+.1f}pp</div>'
                     f'</div>'
                     f'</div>'
@@ -399,7 +399,7 @@ def _render_scenario_builder():
         saved = st.session_state.get("custom_scenarios", [])
         if len(saved) > 1:
             st.markdown(
-                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:16px 0 8px;">SAVED CUSTOM SCENARIOS</div>',
+                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:16px 0 8px;font-family:Libre Baskerville, Georgia, serif;">SAVED CUSTOM SCENARIOS</div>',
                 unsafe_allow_html=True
             )
             rows = "".join(
@@ -419,7 +419,7 @@ def _render_scenario_builder():
                 for h in ["Name", "GDP", "Oil", "Fleet Δ", "Demand Δ", "Rate Impact", "BDI Impact"]
             )
             st.markdown(
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow-x:auto;">'
+                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow-x:auto;">'
                 f'<table style="width:100%;border-collapse:collapse;">'
                 f'<thead><tr>{hdr}</tr></thead><tbody>{rows}</tbody>'
                 f'</table></div>',
@@ -515,17 +515,17 @@ def _render_event_tracker():
                 f'<span style="background:{ic}22;color:{ic};font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;letter-spacing:1px;">{ev["impact"]}</span>'
                 f'</td>'
                 f'<td style="padding:10px 14px;">'
-                f'<span style="background:{ev["dir_color"]}22;color:{ev["dir_color"]};font-size:11px;font-weight:600;padding:3px 10px;border-radius:10px;">{ev["direction"]}</span>'
+                f'<span style="background:{ev["dir_color"]}22;color:{ev["dir_color"]};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;">{ev["direction"]}</span>'
                 f'</td>'
                 f'<td style="padding:10px 14px;font-size:11px;color:{C_TEXT3};max-width:220px;">{ev["indicator"]}</td>'
                 f'</tr>'
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px 0;">'
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;">EVENT PROBABILITY TRACKER</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:12px;">Estimated probability of key market-moving events with impact assessment and monitoring indicators.</div>'
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:4px;font-family:Libre Baskerville, Georgia, serif;">EVENT PROBABILITY TRACKER</div>'
+            f'<div style="font-size:13px;color:{C_TEXT2};margin-bottom:12px;font-family:Libre Franklin, sans-serif;">Estimated probability of key market-moving events with impact assessment and monitoring indicators.</div>'
             f'</div>'
             f'<div style="overflow-x:auto;padding-bottom:8px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
@@ -575,7 +575,7 @@ def _render_monte_carlo(macro_data):
             y=np.concatenate([[bdi_start], bands[5]]),
             mode="lines", line=dict(width=0),
             fill="tonexty",
-            fillcolor="rgba(59,130,246,0.08)",
+            fillcolor="rgba(53,114,176,0.08)",
             name="90% CI",
             hovertemplate="Day %{x}<br>5–95th: %{y:.0f}<extra></extra>",
         ))
@@ -591,7 +591,7 @@ def _render_monte_carlo(macro_data):
             y=np.concatenate([[bdi_start], bands[25]]),
             mode="lines", line=dict(width=0),
             fill="tonexty",
-            fillcolor="rgba(59,130,246,0.15)",
+            fillcolor="rgba(53,114,176,0.15)",
             name="50% CI",
             hovertemplate="Day %{x}<br>25–75th: %{y:.0f}<extra></extra>",
         ))
@@ -609,7 +609,7 @@ def _render_monte_carlo(macro_data):
             fig.add_trace(go.Scatter(
                 x=days, y=path,
                 mode="lines",
-                line=dict(color="rgba(59,130,246,0.06)", width=1),
+                line=dict(color="rgba(53,114,176,0.06)", width=1),
                 showlegend=False,
                 hoverinfo="skip",
             ))
@@ -627,7 +627,7 @@ def _render_monte_carlo(macro_data):
             template="plotly_dark",
             paper_bgcolor=C_CARD,
             plot_bgcolor=C_SURFACE,
-            font=dict(family="Inter, sans-serif", color=C_TEXT2),
+            font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2),
             title=dict(
                 text=f"BDI Monte Carlo Simulation — 500 Paths, 90-Day Horizon",
                 font=dict(size=14, color=C_TEXT),
@@ -673,23 +673,23 @@ def _render_monte_carlo(macro_data):
 
         st.markdown(
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;">'
-            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px;">'
-            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">90-DAY MEDIAN</div>'
+            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px;">'
+            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">90-DAY MEDIAN</div>'
             f'<div style="font-size:22px;font-weight:700;color:{C_TEXT};">{int(final_median):,}</div>'
             f'<div style="font-size:12px;color:{C_HIGH if med_chg>=0 else C_LOW};">{med_chg:+.1f}% vs today</div>'
             f'</div>'
-            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px;">'
-            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">5TH PERCENTILE (BEAR)</div>'
+            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px;">'
+            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">5TH PERCENTILE (BEAR)</div>'
             f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{int(final_5th):,}</div>'
             f'<div style="font-size:12px;color:{C_LOW};">{lo_chg:+.1f}% vs today</div>'
             f'</div>'
-            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px;">'
-            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">95TH PERCENTILE (BULL)</div>'
+            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px;">'
+            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">95TH PERCENTILE (BULL)</div>'
             f'<div style="font-size:22px;font-weight:700;color:{C_HIGH};">{int(final_95th):,}</div>'
             f'<div style="font-size:12px;color:{C_HIGH};">{hi_chg:+.1f}% vs today</div>'
             f'</div>'
-            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px;">'
-            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;">SIMULATED PATHS</div>'
+            f'<div style="flex:1;min-width:130px;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px;">'
+            f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:4px;font-family:Libre Franklin, sans-serif;">SIMULATED PATHS</div>'
             f'<div style="font-size:22px;font-weight:700;color:{C_TEXT};">500</div>'
             f'<div style="font-size:12px;color:{C_TEXT2};">GBM, σ={sigma:.1%}/day</div>'
             f'</div>'
@@ -716,7 +716,7 @@ def render(macro_data=None, freight_data=None, insights=None):
 
         # ── Section 2: Three-Scenario Comparison
         st.markdown(
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin:20px 0 10px;">BASE / BULL / BEAR SCENARIO COMPARISON</div>',
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin:20px 0 10px;font-family:Libre Baskerville, Georgia, serif;">BASE / BULL / BEAR SCENARIO COMPARISON</div>',
             unsafe_allow_html=True
         )
         _render_three_scenarios(macro_data, freight_data)
@@ -740,7 +740,7 @@ def render(macro_data=None, freight_data=None, insights=None):
 
         # ── Section 6: Monte Carlo Fan Chart
         st.markdown(
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:10px;">MONTE CARLO BDI SIMULATION</div>',
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:2px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">MONTE CARLO BDI SIMULATION</div>',
             unsafe_allow_html=True
         )
         _render_monte_carlo(macro_data)

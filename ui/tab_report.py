@@ -30,17 +30,17 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 try:
     from ui.styles import apply_dark_layout
@@ -169,12 +169,12 @@ def _render_hero(last_generated: str | None) -> None:
               <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
                 <span style="background:{C_ACCENT};color:#fff;font-size:10px;font-weight:800;
                              letter-spacing:2px;padding:3px 10px;border-radius:4px;">INSTITUTIONAL GRADE</span>
-                <span style="background:rgba(16,185,129,0.15);color:{C_HIGH};font-size:10px;
+                <span style="background:rgba(46,158,110,0.15);color:{C_HIGH};font-size:10px;
                              font-weight:700;letter-spacing:1.5px;padding:3px 10px;border-radius:4px;
-                             border:1px solid rgba(16,185,129,0.3);">MULTI-FACTOR ANALYSIS</span>
+                             border:1px solid rgba(46,158,110,0.3);">MULTI-FACTOR ANALYSIS</span>
               </div>
               <div style="font-size:30px;font-weight:900;letter-spacing:3px;color:{C_TEXT};
-                          font-family:monospace;line-height:1.1;">INVESTOR REPORT GENERATOR</div>
+                          font-family:JetBrains Mono,monospace;line-height:1.1;">INVESTOR REPORT GENERATOR</div>
               <div style="font-size:13px;color:{C_TEXT2};margin-top:6px;letter-spacing:1px;">
                 Global Shipping Market Intelligence &nbsp;|&nbsp; Quantitative &amp; Sentiment Driven
               </div>
@@ -188,25 +188,25 @@ def _render_hero(last_generated: str | None) -> None:
             </div>
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:24px;">
-            <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);
+            <div style="background:rgba(53,114,176,0.08);border:1px solid rgba(53,114,176,0.2);
                         border-radius:8px;padding:12px 16px;">
               <div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;">REPORT TYPE</div>
               <div style="font-size:14px;font-weight:700;color:{C_ACCENT};margin-top:2px;">Institutional</div>
             </div>
-            <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);
+            <div style="background:rgba(46,158,110,0.08);border:1px solid rgba(46,158,110,0.2);
                         border-radius:8px;padding:12px 16px;">
               <div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;">SECTIONS</div>
               <div style="font-size:14px;font-weight:700;color:{C_HIGH};margin-top:2px;">10 Modules</div>
             </div>
-            <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+            <div style="background:rgba(201,150,43,0.08);border:1px solid rgba(201,150,43,0.2);
                         border-radius:8px;padding:12px 16px;">
               <div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;">FORMATS</div>
               <div style="font-size:14px;font-weight:700;color:{C_MOD};margin-top:2px;">PDF / HTML / XLS</div>
             </div>
-            <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.2);
+            <div style="background:rgba(124,110,175,0.08);border:1px solid rgba(124,110,175,0.2);
                         border-radius:8px;padding:12px 16px;">
               <div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;">ENGINE</div>
-              <div style="font-size:14px;font-weight:700;color:#8b5cf6;margin-top:2px;">
+              <div style="font-size:14px;font-weight:700;color:#7c6eaf;margin-top:2px;">
                 {"READY" if _ENGINE_OK else "OFFLINE"}
               </div>
             </div>
@@ -226,7 +226,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
 
     st.markdown(
         f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:24px 28px 8px;margin-bottom:20px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
             <div style="font-size:13px;font-weight:700;letter-spacing:2px;color:{C_TEXT};">
@@ -293,7 +293,7 @@ def _render_generate_button(
 ) -> None:
     st.markdown(
         f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:24px 28px;margin-bottom:20px;">
           <div style="font-size:13px;font-weight:700;letter-spacing:2px;color:{C_TEXT};margin-bottom:4px;">
             GENERATE REPORT
@@ -308,7 +308,7 @@ def _render_generate_button(
 
     if not _ENGINE_OK:
         st.markdown(
-            f'<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);'
+            f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.3);'
             f'border-radius:8px;padding:14px 18px;color:{C_LOW};font-size:13px;margin-bottom:16px;">'
             f'<strong>Engine unavailable.</strong> The report engine could not be loaded. '
             f'Check that <code>processing.investor_report_engine</code> is installed.</div>',
@@ -363,7 +363,7 @@ def _render_generate_button(
             status_box.empty()
             logger.error(f"Report generation failed: {exc}")
             st.markdown(
-                f'<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.35);'
+                f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.35);'
                 f'border-radius:8px;padding:16px 20px;margin-top:12px;">'
                 f'<div style="color:{C_LOW};font-weight:700;font-size:13px;margin-bottom:4px;">Generation Failed</div>'
                 f'<div style="color:{C_TEXT2};font-size:12px;">{exc}</div></div>',
@@ -374,7 +374,7 @@ def _render_generate_button(
 def _render_report_preview(report: Any, ts: str) -> None:
     if report is None:
         st.markdown(
-            f'<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);'
+            f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
             f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;">'
             f'<strong>No report data.</strong> The report object is None — generation may have failed silently.</div>',
             unsafe_allow_html=True,
@@ -402,8 +402,8 @@ def _render_report_preview(report: Any, ts: str) -> None:
 
     st.markdown(
         f"""
-        <div style="background:linear-gradient(135deg,rgba(16,185,129,0.08),rgba(59,130,246,0.04));
-                    border:1px solid rgba(16,185,129,0.3);border-radius:12px;padding:20px 24px;margin-bottom:20px;">
+        <div style="background:linear-gradient(135deg,rgba(46,158,110,0.08),rgba(53,114,176,0.04));
+                    border:1px solid rgba(46,158,110,0.3);border-radius:6px;padding:20px 24px;margin-bottom:20px;">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
             <div style="width:10px;height:10px;border-radius:50%;background:{C_HIGH};box-shadow:0 0 8px {C_HIGH};"></div>
             <span style="font-size:13px;font-weight:800;letter-spacing:2px;color:{C_HIGH};">REPORT GENERATED</span>
@@ -445,12 +445,12 @@ def _render_report_preview(report: Any, ts: str) -> None:
         "Recommendations", "Data Appendix", "Methodology",
     ]
     pills_html = "".join(
-        f'<span style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);'
+        f'<span style="background:rgba(53,114,176,0.12);border:1px solid rgba(53,114,176,0.25);'
         f'color:{C_TEXT2};font-size:11px;padding:4px 10px;border-radius:20px;">{s}</span>'
         for s in section_names
     )
     st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 20px;margin-bottom:20px;">'
         f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">REPORT SECTIONS</div>'
         f'<div style="display:flex;flex-wrap:wrap;gap:6px;">{pills_html}</div></div>',
@@ -461,7 +461,7 @@ def _render_report_preview(report: Any, ts: str) -> None:
     if exec_summary:
         preview = exec_summary[:300] + ("…" if len(exec_summary) > 300 else "")
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:18px 22px;margin-bottom:20px;">'
             f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">EXECUTIVE SUMMARY — PREVIEW</div>'
             f'<div style="font-size:13px;color:{C_TEXT};line-height:1.7;font-style:italic;">{preview}</div></div>',
@@ -497,7 +497,7 @@ def _render_downloads(report: Any) -> None:
             except Exception as exc:
                 logger.error(f"PDF render failed: {exc}")
                 st.markdown(
-                    f'<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);'
+                    f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.3);'
                     f'border-radius:8px;padding:12px 16px;color:{C_LOW};font-size:12px;">'
                     f'<strong>PDF generation failed:</strong> {exc}</div>',
                     unsafe_allow_html=True,
@@ -626,7 +626,7 @@ def _render_history() -> None:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
                     f'padding:12px 16px;display:flex;align-items:center;gap:16px;">'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:monospace;">{rep_date}</span>'
+                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{rep_date}</span>'
                     f'<span style="font-size:11px;font-weight:700;color:{sent_color};">{rep_sent}</span>'
                     f'<span style="font-size:11px;color:{C_TEXT3};">Quality: {rep_qual}</span>'
                     f'<span style="font-size:11px;color:{C_TEXT3};margin-left:auto;">{rep_size} KB</span>'
@@ -675,7 +675,7 @@ def _render_data_sources(api_status: dict[str, bool]) -> None:
 
     st.markdown(
         f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
                     padding:22px 26px;margin-top:28px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
             <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:{C_TEXT};">
@@ -790,7 +790,7 @@ def render(
 
     # 4 — Report preview (only if report exists)
     if report is not None:
-        st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
         try:
             _render_report_preview(report, last_ts or _now_utc())
         except Exception as exc:
@@ -799,7 +799,7 @@ def render(
 
         # 5 — Downloads
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:22px 26px;margin-bottom:20px;">',
             unsafe_allow_html=True,
         )
@@ -813,7 +813,7 @@ def render(
     elif report is None and last_ts is not None:
         # Report was generated but came back None
         st.markdown(
-            f'<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);'
+            f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
             f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;margin-top:16px;">'
             f'<strong>Report data is None.</strong> The engine ran but returned no data. '
             f'Check logs for details.</div>',
@@ -822,7 +822,7 @@ def render(
     else:
         # Not yet generated — show download placeholders
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:22px 26px;margin-top:8px;margin-bottom:20px;">',
             unsafe_allow_html=True,
         )
@@ -833,7 +833,7 @@ def render(
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 6 — Report History
-    st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:24px 0;'>", unsafe_allow_html=True)
+    st.markdown("<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:24px 0;'>", unsafe_allow_html=True)
     try:
         _render_history()
     except Exception as exc:

@@ -15,19 +15,19 @@ import streamlit as st
 from loguru import logger
 
 # ── Design tokens ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 C_TEAL    = "#14b8a6"
 
 # ── Port & fuel data ───────────────────────────────────────────────────────────
@@ -79,23 +79,23 @@ def _avail_label(val: float) -> tuple[str, str]:
 def _kpi_card(label: str, value: str, delta: str, delta_good: bool,
               sub: str = "", accent: str = C_ACCENT) -> str:
     delta_color = C_HIGH if delta_good else C_LOW
-    sub_html = f'<div style="font-size:11px;color:{C_TEXT3};margin-top:4px">{sub}</div>' if sub else ""
+    sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:11px;color:{C_TEXT3};margin-top:4px">{sub}</div>' if sub else ""
     return f"""
-<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:18px 20px;height:100%">
-  <div style="font-size:11px;color:{C_TEXT2};letter-spacing:0.5px;text-transform:uppercase;
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:11px;color:{C_TEXT2};letter-spacing:0.5px;text-transform:uppercase;
   margin-bottom:8px">{label}</div>
-  <div style="font-size:26px;font-weight:700;color:{C_TEXT};line-height:1">{value}</div>
-  <div style="font-size:12px;color:{delta_color};margin-top:6px;font-weight:600">{delta}</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:{C_TEXT};line-height:1">{value}</div>
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:12px;color:{delta_color};margin-top:6px;font-weight:600">{delta}</div>
   {sub_html}
 </div>"""
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
-    sub_html = f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
 <div style="margin:28px 0 16px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER}">
-  <div style="font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
+  <div style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
   {sub_html}
 </div>""", unsafe_allow_html=True)
 
@@ -174,7 +174,7 @@ def _bunker_price_by_port() -> None:
                     "10 major bunkering hubs — prices in $/MT and spread vs global average")
     try:
         st.markdown(f"""
-<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:14px;overflow:hidden">
+<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden">
   <div style="display:grid;grid-template-columns:1.3fr 0.7fr 1fr 1fr 1fr 1fr 1.2fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
   color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.5px">
@@ -256,7 +256,7 @@ def _bunker_price_chart() -> None:
         ))
         fig.add_vrect(
             x0=x_labels[0], x1=x_labels[2],
-            fillcolor="rgba(239,68,68,0.08)", line_width=0,
+            fillcolor="rgba(192,57,43,0.08)", line_width=0,
             annotation_text="IMO 2020 Spike",
             annotation_position="top left",
             annotation_font_color=C_LOW,
@@ -335,7 +335,7 @@ def _bunker_optimization_calculator() -> None:
                         unsafe_allow_html=True)
 
         st.markdown(f"""
-<div style="background:rgba(16,185,129,0.08);border:1px solid {C_HIGH};border-radius:10px;
+<div style="background:rgba(46,158,110,0.08);border:1px solid {C_HIGH};border-radius:6px;
 padding:13px 18px;margin-top:6px">
   <span style="color:{C_HIGH};font-weight:700">SLOW STEAMING RULE OF THUMB: </span>
   <span style="color:{C_TEXT};font-size:13px">Reducing speed by 10% cuts fuel consumption by
@@ -372,7 +372,7 @@ def _fuel_spread_analysis() -> None:
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=x_labels, y=spreads, name="VLSFO-HFO Spread",
-            fill="tozeroy", fillcolor="rgba(59,130,246,0.10)",
+            fill="tozeroy", fillcolor="rgba(53,114,176,0.10)",
             line=dict(color=C_ACCENT, width=2.5),
             hovertemplate="Spread: $%{y}/MT<extra></extra>",
         ))
@@ -391,15 +391,15 @@ def _fuel_spread_analysis() -> None:
         payback_color = C_HIGH if current_spread > 200 else C_MOD
         st.markdown(f"""
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">
-  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px 16px;text-align:center">
+  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center">
     <div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px">CURRENT SPREAD</div>
     <div style="font-size:24px;font-weight:700;color:{C_ACCENT}">${current_spread}/MT</div>
   </div>
-  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px 16px;text-align:center">
+  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center">
     <div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px">SCRUBBER PAYBACK</div>
     <div style="font-size:24px;font-weight:700;color:{payback_color}">{voyages_to_payback:.0f} voyages</div>
   </div>
-  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px 16px;text-align:center">
+  <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center">
     <div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px">SCRUBBER VERDICT</div>
     <div style="font-size:16px;font-weight:700;color:{payback_color}">
       {'MARGINAL — monitor spread' if current_spread < 200 else 'ECONOMIC — scrubber pays'}
@@ -466,7 +466,7 @@ def _alternative_fuels_comparison() -> None:
             bar_width = min(f["avail_score"] * 10, 100)
             avail_color = C_HIGH if f["avail_score"] > 7 else (C_MOD if f["avail_score"] > 4 else C_LOW)
             st.markdown(f"""
-<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:16px 20px;margin-bottom:10px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
     <div>
@@ -581,7 +581,7 @@ def _bunker_hedging() -> None:
         for s in strategies:
             st.markdown(f"""
 <div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {s['color']};
-border-radius:12px;padding:16px 18px">
+border-radius:6px;padding:16px 18px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span style="font-size:14px;font-weight:700;color:{s['color']}">{s['name']}</span>
     <span style="background:{s['rating_color']}22;color:{s['rating_color']};border-radius:5px;
@@ -592,7 +592,7 @@ border-radius:12px;padding:16px 18px">
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown(f"""
-<div style="background:rgba(99,102,241,0.08);border:1px solid {C_PURPLE};border-radius:10px;
+<div style="background:rgba(99,102,241,0.08);border:1px solid {C_PURPLE};border-radius:6px;
 padding:14px 18px;margin-top:12px;font-size:12px;color:{C_TEXT2};line-height:1.7">
   <span style="color:{C_PURPLE};font-weight:700">HEDGING RULE OF THUMB: </span>
   Hedge 50-80% of expected bunker consumption 3-6 months forward using a blended strategy:
@@ -612,11 +612,11 @@ def render(macro_data=None, freight_data=None) -> None:
     try:
         st.markdown(f"""
 <div style="background:linear-gradient(135deg,{C_MOD}18,{C_ACCENT}10);
-border:1px solid {C_BORDER};border-radius:16px;padding:22px 26px;margin-bottom:24px">
-  <div style="font-size:22px;font-weight:800;color:{C_TEXT}">
+border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24px">
+  <div style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:800;color:{C_TEXT}">
     Bunker Fuel Intelligence
   </div>
-  <div style="font-size:13px;color:{C_TEXT2};margin-top:6px">
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:6px">
     Real-time bunker prices &amp; port comparison · Optimization calculator ·
     Scrubber spread economics · Alternative fuels · Hedging strategy
   </div>

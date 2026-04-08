@@ -914,15 +914,15 @@ def get_top_stories(news_items: list[NewsArticle], n: int = 10) -> list[NewsArti
 # ── Streamlit render panel ────────────────────────────────────────────────────
 
 # Dark-theme colour constants (matching ui/components.py)
-_C_BG      = "#0a0f1a"
-_C_CARD    = "#1a2235"
-_C_BORDER  = "rgba(255,255,255,0.08)"
-_C_TEXT    = "#f1f5f9"
-_C_TEXT2   = "#94a3b8"
-_C_TEXT3   = "#64748b"
-_C_BULL    = "#10b981"   # green
-_C_BEAR    = "#ef4444"   # red
-_C_NEUT    = "#64748b"   # slate
+_C_BG      = "#0c0e14"
+_C_CARD    = "#181c28"
+_C_BORDER  = "rgba(232,230,225,0.06)"
+_C_TEXT    = "#e8e6e1"
+_C_TEXT2   = "#9a968e"
+_C_TEXT3   = "#6b6760"
+_C_BULL    = "#2e9e6e"   # green
+_C_BEAR    = "#c0392b"   # red
+_C_NEUT    = "#6b6760"   # slate
 
 
 def _sentiment_color(label: str) -> str:
@@ -955,7 +955,7 @@ def _gauge_bar_html(score: float) -> str:
         '<span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>'
         '</div>'
         '<div style="position:relative; height:10px; border-radius:5px;'
-        ' background:linear-gradient(to right, #ef4444, #64748b 50%, #10b981);">'
+        ' background:linear-gradient(to right, #c0392b, #6b6760 50%, #2e9e6e);">'
         '<div style="position:absolute; left:' + str(needle_left) + '%;'
         ' top:-3px; transform:translateX(-50%);'
         ' width:4px; height:16px; background:white; border-radius:2px;'
@@ -974,10 +974,10 @@ def _source_badge_html(source: str) -> str:
     """Return a small pill badge showing the source name."""
     return (
         '<span style="'
-        'background:rgba(59,130,246,0.15);'
-        'color:#3b82f6;'
-        'border:1px solid rgba(59,130,246,0.3);'
-        'border-radius:999px;'
+        'background:rgba(53,114,176,0.15);'
+        'color:#3572b0;'
+        'border:1px solid rgba(53,114,176,0.3);'
+        'border-radius:3px;'
         'font-size:0.60rem;'
         'font-weight:600;'
         'padding:2px 7px;'
@@ -992,10 +992,10 @@ def _entity_tags_html(entities: list[str]) -> str:
         return ""
     tags = "".join(
         '<span style="'
-        'background:rgba(16,185,129,0.10);'
-        'color:#10b981;'
-        'border:1px solid rgba(16,185,129,0.25);'
-        'border-radius:999px;'
+        'background:rgba(46,158,110,0.10);'
+        'color:#2e9e6e;'
+        'border:1px solid rgba(46,158,110,0.25);'
+        'border-radius:3px;'
         'font-size:0.58rem;'
         'padding:2px 6px;'
         'margin-right:4px;'
@@ -1029,7 +1029,7 @@ def _article_card_html(article: NewsArticle) -> str:
         'background:' + _C_CARD + ';'
         'border:1px solid ' + _C_BORDER + ';'
         'border-left:4px solid ' + border_color + ';'
-        'border-radius:10px;'
+        'border-radius:6px;'
         'padding:14px 16px;'
         'margin-bottom:8px;'
         '">'
@@ -1148,10 +1148,10 @@ def render_news_panel(articles: list[NewsArticle], max_items: int = 8) -> None:
     if trending:
         tags_html = "".join(
             '<span style="'
-            'background:rgba(139,92,246,0.12);'
-            'color:#8b5cf6;'
-            'border:1px solid rgba(139,92,246,0.25);'
-            'border-radius:999px;'
+            'background:rgba(124,110,175,0.12);'
+            'color:#7c6eaf;'
+            'border:1px solid rgba(124,110,175,0.25);'
+            'border-radius:3px;'
             'font-size:0.62rem;'
             'padding:3px 9px;'
             'margin:3px 3px 0 0;'

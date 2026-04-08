@@ -16,19 +16,19 @@ import streamlit as st
 from loguru import logger
 
 # ── Design tokens ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 # ── Mock data ──────────────────────────────────────────────────────────────────
 _ORIGINS = ["Shanghai", "Ningbo", "Shenzhen", "Singapore", "Rotterdam",
@@ -60,23 +60,23 @@ def _seed_for(key: str) -> int:
 def _kpi_card(label: str, value: str, delta: str, delta_good: bool,
               sub: str = "", accent: str = C_ACCENT) -> str:
     delta_color = C_HIGH if delta_good else C_LOW
-    sub_html = f'<div style="font-size:11px;color:{C_TEXT3};margin-top:4px">{sub}</div>' if sub else ""
+    sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:11px;color:{C_TEXT3};margin-top:4px">{sub}</div>' if sub else ""
     return f"""
-<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:18px 20px;height:100%;">
-  <div style="font-size:12px;color:{C_TEXT2};letter-spacing:0.5px;text-transform:uppercase;
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:12px;color:{C_TEXT2};letter-spacing:0.5px;text-transform:uppercase;
   margin-bottom:8px">{label}</div>
-  <div style="font-size:26px;font-weight:700;color:{C_TEXT};line-height:1">{value}</div>
-  <div style="font-size:12px;color:{delta_color};margin-top:6px;font-weight:600">{delta}</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:{C_TEXT};line-height:1">{value}</div>
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:12px;color:{delta_color};margin-top:6px;font-weight:600">{delta}</div>
   {sub_html}
 </div>"""
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
-    sub_html = f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:4px">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
 <div style="margin:28px 0 16px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER}">
-  <div style="font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
+  <div style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:{C_TEXT}">{title}</div>
   {sub_html}
 </div>""", unsafe_allow_html=True)
 
@@ -187,7 +187,7 @@ def _rate_comparison_tool() -> None:
         rows.sort(key=lambda x: -x["score"])
 
         header = f"""
-<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:14px;
+<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;
 overflow:hidden;margin-top:12px">
   <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
@@ -262,7 +262,7 @@ def _optimal_booking_window() -> None:
             hovertemplate="<b>%{x} before sailing</b><br>Rate: $%{y:,}/TEU<extra></extra>",
         ))
         fig.add_hrect(y0=min(premiums) * 0.98, y1=max(p for w, p in zip(weeks, premiums) if 4 <= w <= 6) * 1.02,
-                      fillcolor="rgba(16,185,129,0.08)", line_width=0,
+                      fillcolor="rgba(46,158,110,0.08)", line_width=0,
                       annotation_text="Sweet Spot", annotation_position="top left",
                       annotation_font_color=C_HIGH)
         fig.update_layout(
@@ -275,7 +275,7 @@ def _optimal_booking_window() -> None:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"""
-<div style="background:rgba(16,185,129,0.1);border:1px solid {C_HIGH};border-radius:10px;
+<div style="background:rgba(46,158,110,0.1);border:1px solid {C_HIGH};border-radius:6px;
 padding:14px 18px;margin-top:4px;display:flex;align-items:center;gap:12px">
   <span style="font-size:22px">&#128200;</span>
   <div>
@@ -320,7 +320,7 @@ def _contract_vs_spot_analysis() -> None:
             })
 
         header = f"""
-<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:14px;overflow:hidden">
+<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden">
   <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
   color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.5px">
@@ -341,7 +341,7 @@ padding:12px 16px;border-bottom:1px solid {C_BORDER};align-items:center">
   <span style="color:{sp_color};font-weight:600">{sp_sign}${r['spread']:,}</span>
   <span style="color:{C_TEXT2}">{r['vol']:.1f}%</span>
   <span style="color:{C_TEXT3}">{r['brkevn']}x</span>
-  <span style="background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 8px;
+  <span style="background:rgba(232,230,225,0.04);border-radius:6px;padding:3px 8px;
   color:{r['rec_color']};font-size:11px;font-weight:700">{r['rec']}</span>
 </div>""", unsafe_allow_html=True)
 
@@ -373,7 +373,7 @@ def _booking_calendar() -> None:
             elif pct < 92:
                 return C_LOW, "TIGHT"
             else:
-                return "#ef4444", "FULL"
+                return "#c0392b", "FULL"
 
         cells_html = ""
         for w in weeks:
@@ -381,7 +381,7 @@ def _booking_calendar() -> None:
             color, label = avail_color(booked)
             wk_label = w.strftime("%b %d")
             cells_html += f"""
-<div style="background:{C_CARD};border:1px solid {color}33;border-radius:10px;
+<div style="background:{C_CARD};border:1px solid {color}33;border-radius:6px;
 padding:14px 10px;text-align:center;border-top:3px solid {color}">
   <div style="font-size:11px;color:{C_TEXT3};margin-bottom:4px">{wk_label}</div>
   <div style="font-size:18px;font-weight:700;color:{color}">{booked:.0f}%</div>
@@ -398,7 +398,7 @@ padding:14px 10px;text-align:center;border-top:3px solid {color}">
   <span><span style="color:{C_HIGH}">&#9632;</span> OPEN (&lt;60% booked)</span>
   <span><span style="color:{C_MOD}">&#9632;</span> FILLING (60-80%)</span>
   <span><span style="color:{C_LOW}">&#9632;</span> TIGHT (80-92%)</span>
-  <span><span style="color:#ef4444">&#9632;</span> FULL (&gt;92%)</span>
+  <span><span style="color:#c0392b">&#9632;</span> FULL (&gt;92%)</span>
 </div>""", unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking calendar error: {exc}")
@@ -429,7 +429,7 @@ def _spot_rate_alert() -> None:
         gap_label = f"${abs(diff):,}/TEU {'BELOW' if diff < 0 else 'above'} threshold"
 
         st.markdown(f"""
-<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;
+<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
 padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;align-items:center">
   <div>
     <div style="font-size:12px;color:{C_TEXT3};margin-bottom:4px">Current Rate — {alert_route}</div>
@@ -438,7 +438,7 @@ padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;ali
   </div>
   <div style="text-align:right">
     <div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px">Status</div>
-    <div style="background:{status_color}22;border:1px solid {status_color};border-radius:8px;
+    <div style="background:{status_color}22;border:1px solid {status_color};border-radius:6px;
     padding:8px 16px;color:{status_color};font-weight:700;font-size:13px">{status_label}</div>
     <div style="font-size:11px;color:{C_TEXT3};margin-top:6px">Threshold: ${threshold:,}/TEU</div>
   </div>
@@ -454,8 +454,8 @@ padding:18px 22px;margin-top:10px;display:flex;justify-content:space-between;ali
 
         if active_alerts:
             st.markdown(f"""
-<div style="margin-top:14px;padding:12px 16px;background:rgba(245,158,11,0.1);
-border:1px solid {C_MOD};border-radius:10px">
+<div style="margin-top:14px;padding:12px 16px;background:rgba(201,150,43,0.1);
+border:1px solid {C_MOD};border-radius:6px">
   <div style="font-size:12px;font-weight:700;color:{C_MOD};margin-bottom:8px">
     NEAR-THRESHOLD ROUTES
   </div>""", unsafe_allow_html=True)
@@ -500,7 +500,7 @@ def _space_availability_by_carrier() -> None:
         rows.sort(key=lambda x: x["space_pct"], reverse=True)
 
         st.markdown(f"""
-<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:14px;overflow:hidden">
+<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden">
   <div style="display:grid;grid-template-columns:1.2fr 2fr 1fr 1fr 1.4fr;
   padding:10px 16px;border-bottom:1px solid {C_BORDER};font-size:11px;
   color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.5px">
@@ -541,11 +541,11 @@ def render(route_results=None, freight_data=None, port_results=None) -> None:
     try:
         st.markdown(f"""
 <div style="background:linear-gradient(135deg,{C_ACCENT}18,{C_PURPLE}10);
-border:1px solid {C_BORDER};border-radius:16px;padding:22px 26px;margin-bottom:24px">
-  <div style="font-size:22px;font-weight:800;color:{C_TEXT}">
+border:1px solid {C_BORDER};border-radius:6px;padding:22px 26px;margin-bottom:24px">
+  <div style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:800;color:{C_TEXT}">
     Booking Intelligence &amp; Optimization
   </div>
-  <div style="font-size:13px;color:{C_TEXT2};margin-top:6px">
+  <div style="font-family:'Libre Franklin',sans-serif;font-size:13px;color:{C_TEXT2};margin-top:6px">
     Market-timed booking decisions · Rate comparison across carriers ·
     Contract vs spot analytics · Space availability tracker
   </div>

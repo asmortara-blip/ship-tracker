@@ -23,17 +23,17 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -59,7 +59,7 @@ _FORECAST_TABLE = [
     {"route": "Australia → Asia",              "d1": "CALM",     "d3": "CALM",     "d7": "CALM",     "d14": "MODERATE", "overall": "LOW",      "action": "No action required"},
 ]
 
-_FCST_COLOR = {"SEVERE": C_LOW, "ROUGH": C_MOD, "MODERATE": "#f59e0b88", "CALM": C_HIGH, "ELEVATED": C_MOD, "HIGH": C_LOW, "NORMAL": C_HIGH, "LOW": C_HIGH}
+_FCST_COLOR = {"SEVERE": C_LOW, "ROUGH": C_MOD, "MODERATE": "#c9962b88", "CALM": C_HIGH, "ELEVATED": C_MOD, "HIGH": C_LOW, "NORMAL": C_HIGH, "LOW": C_HIGH}
 
 _PORT_CLOSURES = [
     {"port": "Kaohsiung (Taiwan)",    "current": "RESTRICTED — typhoon alert",  "d3": "OPEN",       "vessels_delayed": 12, "reopening": "~36 h"},
@@ -132,8 +132,8 @@ def _cond_badge(cond: str) -> str:
 
 def _kpi_card(label: str, value: str, sub: str, color: str) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
-        f'padding:18px 20px;text-align:center;">'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+        f'padding:18px 20px;text-align:center;font-family:\'Libre Franklin\',sans-serif;">'
         f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">{label}</div>'
         f'<div style="color:{color};font-size:28px;font-weight:800;line-height:1;">{value}</div>'
         f'<div style="color:{C_TEXT2};font-size:12px;margin-top:6px;">{sub}</div>'
@@ -141,10 +141,10 @@ def _kpi_card(label: str, value: str, sub: str, color: str) -> str:
     )
 
 def _section_header(title: str, sub: str = "") -> None:
-    sub_html = f'<div style="color:{C_TEXT3};font-size:13px;margin-top:2px;">{sub}</div>' if sub else ""
+    sub_html = f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-top:2px;">{sub}</div>' if sub else ""
     st.markdown(
         f'<div style="margin:28px 0 12px 0;">'
-        f'<span style="color:{C_TEXT};font-size:18px;font-weight:700;">{title}</span>'
+        f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:18px;font-weight:700;">{title}</span>'
         f'{sub_html}</div>',
         unsafe_allow_html=True,
     )
@@ -310,7 +310,7 @@ def _render_forecast_table() -> None:
 def _render_historical_delays() -> None:
     try:
         fig = go.Figure()
-        colors = [C_ACCENT, C_MOD, C_LOW, "#8b5cf6", "#06b6d4"]
+        colors = [C_ACCENT, C_MOD, C_LOW, "#7c6eaf", "#4a90a4"]
         for idx, (route, delays) in enumerate(_HIST_DELAY.items()):
             fig.add_trace(go.Bar(
                 x=_MONTHS,
@@ -437,8 +437,8 @@ def _render_ice_route() -> None:
 
         with c_info:
             ice_html = (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:20px 22px;">'
-                f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;margin-bottom:14px;">Northern Sea Route (NSR) — Arctic Corridor</div>'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 22px;">'
+                f'<div style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:16px;font-weight:700;margin-bottom:14px;">Northern Sea Route (NSR) — Arctic Corridor</div>'
                 f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
                 f'<div><div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;">Current Ice Extent</div>'
                 f'<div style="color:{C_ACCENT};font-size:20px;font-weight:700;">4.2M km²</div>'
@@ -508,9 +508,9 @@ def render(port_results=None, route_results=None) -> None:
 
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_LOW}18,{C_MOD}12);'
-            f'border:1px solid {C_LOW}44;border-radius:10px;padding:14px 20px;margin-bottom:18px;">'
-            f'<span style="color:{C_LOW};font-size:14px;font-weight:700;">LIVE WEATHER ALERT</span>'
-            f'<span style="color:{C_TEXT};font-size:13px;margin-left:12px;">'
+            f'border:1px solid {C_LOW}44;border-radius:6px;padding:14px 20px;margin-bottom:18px;">'
+            f'<span style="color:{C_LOW};font-family:\'Libre Baskerville\',serif;font-size:14px;font-weight:700;">LIVE WEATHER ALERT</span>'
+            f'<span style="color:{C_TEXT};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-left:12px;">'
             'Typhoon MAWAR-3 active in South China Sea — 34 vessels at risk — rerouting recommended for Intra-Asia and Asia-NA West Coast departures'
             '</span></div>',
             unsafe_allow_html=True,

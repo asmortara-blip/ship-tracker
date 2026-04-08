@@ -20,19 +20,19 @@ from loguru import logger
 # Colour palette
 # ---------------------------------------------------------------------------
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 C_ORANGE  = "#f97316"
-C_PURPLE  = "#8b5cf6"
+C_PURPLE  = "#7c6eaf"
 
 _LEVEL_COLOR: dict[str, str] = {
     "CRITICAL": C_LOW,
@@ -360,7 +360,7 @@ _COUNTRY_RISK: dict[str, int] = {
 def _card(content: str, border_color: str = C_BORDER, extra_style: str = "") -> str:
     return (
         f'<div style="background:{C_CARD};border:1px solid {border_color};'
-        f'border-radius:14px;padding:20px 22px;margin-bottom:14px;{extra_style}">'
+        f'border-radius:6px;padding:20px 22px;margin-bottom:14px;{extra_style}">'
         + content + "</div>"
     )
 
@@ -419,7 +419,7 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
         cols = st.columns([1.5, 1, 1, 1])
         with cols[0]:
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_LOW}44;border-radius:14px;'
+                f'<div style="background:{C_CARD};border:1px solid {C_LOW}44;border-radius:6px;'
                 f'padding:24px 22px;text-align:center">'
                 f'<div style="font-size:0.78rem;color:{C_TEXT2};font-weight:600;letter-spacing:0.08em;'
                 f'text-transform:uppercase;margin-bottom:6px">Global Geopolitical Risk Index</div>'
@@ -437,7 +437,7 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
             with cols[i + 1]:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {lvl_color}44;'
-                    f'border-radius:14px;padding:20px 16px;height:100%">'
+                    f'border-radius:6px;padding:20px 16px;height:100%">'
                     f'<div style="font-size:0.72rem;color:{C_TEXT3};font-weight:600;'
                     f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Top Risk Region #{i+1}</div>'
                     f'<div style="font-size:0.92rem;font-weight:700;color:{C_TEXT};margin-bottom:8px">{region}</div>'
@@ -505,11 +505,11 @@ def _render_risk_map() -> None:
             text=hover_text,
             hovertemplate="%{text}<extra></extra>",
             colorscale=[
-                [0.0,  "#10b981"],
-                [0.35, "#10b981"],
-                [0.50, "#f59e0b"],
+                [0.0,  "#2e9e6e"],
+                [0.35, "#2e9e6e"],
+                [0.50, "#c9962b"],
                 [0.70, "#f97316"],
-                [1.0,  "#ef4444"],
+                [1.0,  "#c0392b"],
             ],
             zmin=0,
             zmax=100,
@@ -644,7 +644,7 @@ def _render_hotspot_monitor() -> None:
                     )
 
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {lvl_color}33;border-radius:14px;'
+                f'<div style="background:{C_CARD};border:1px solid {lvl_color}33;border-radius:6px;'
                 f'padding:20px 22px;margin-bottom:14px">'
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
                 f'<span style="font-size:1.3rem">{hs["icon"]}</span>'
@@ -910,7 +910,7 @@ def render(macro_data=None, insights=None, news_items=None) -> None:
             '<style>'
             f'[data-testid="stAppViewContainer"] {{ background:{C_BG}; }}'
             f'[data-testid="stSidebar"] {{ background:{C_SURFACE}; }}'
-            '.stPlotlyChart { border-radius: 12px; overflow: hidden; }'
+            '.stPlotlyChart { border-radius: 6px; overflow: hidden; }'
             '</style>',
             unsafe_allow_html=True,
         )

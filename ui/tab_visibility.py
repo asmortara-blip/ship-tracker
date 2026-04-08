@@ -15,19 +15,19 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Colour palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 # ---------------------------------------------------------------------------
 # Static data helpers
@@ -166,7 +166,7 @@ def _render_hero_kpis() -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
-                    f'border-radius:10px;padding:18px 14px;text-align:center;">'
+                    f'border-radius:6px;padding:18px 14px;text-align:center;">'
                     f'<div style="font-size:26px;font-weight:800;color:{color};">{value}</div>'
                     f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
                     f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
@@ -181,7 +181,7 @@ def _render_hero_kpis() -> None:
 def _render_pipeline() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Shipment Pipeline</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Shipment Pipeline</div>',
             unsafe_allow_html=True,
         )
 
@@ -209,7 +209,7 @@ def _render_pipeline() -> None:
                 )
             with col:
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px;">'
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px;">'
                     f'<div style="font-size:10px;font-weight:800;color:{color};letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
                     f'<div style="font-size:20px;font-weight:800;color:{C_TEXT};margin-bottom:10px;">{len(shipments)}</div>'
                     f'{cards_html}'
@@ -224,13 +224,13 @@ def _render_pipeline() -> None:
 def _render_visibility_scores() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Visibility Score by Trade Lane</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Visibility Score by Trade Lane</div>',
             unsafe_allow_html=True,
         )
 
         header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Trade Lane</th>'
             f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">AIS Coverage %</th>'
@@ -271,13 +271,13 @@ def _render_visibility_scores() -> None:
 def _render_exception_management() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Exception Management</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Exception Management</div>',
             unsafe_allow_html=True,
         )
 
         header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Booking Ref</th>'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Vessel</th>'
@@ -313,7 +313,7 @@ def _render_exception_management() -> None:
 def _render_milestone_tracking() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 4px;">Milestone Tracking</div>'
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 4px;font-family:\'Libre Baskerville\',serif;">Milestone Tracking</div>'
             f'<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Sample shipment MAEU-2847561 — Shanghai → Rotterdam (MV Maersk Edmonton, Voy. 026W)</div>',
             unsafe_allow_html=True,
         )
@@ -324,7 +324,7 @@ def _render_milestone_tracking() -> None:
 
         # Progress bar
         st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;padding:16px 20px;margin-bottom:14px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-bottom:14px;">'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
             f'<span style="font-size:12px;color:{C_TEXT2};">Journey Progress</span>'
             f'<span style="font-size:12px;color:{C_HIGH};font-weight:700;">{completed_count}/{total} milestones complete ({pct}%)</span>'
@@ -337,7 +337,7 @@ def _render_milestone_tracking() -> None:
         )
 
         # Timeline
-        timeline_html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;padding:20px 24px;">'
+        timeline_html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;">'
         for i, (name, ts, done, color, note) in enumerate(_MILESTONE_STEPS):
             is_last = i == len(_MILESTONE_STEPS) - 1
             connector = "" if is_last else (
@@ -377,13 +377,13 @@ def _render_milestone_tracking() -> None:
 def _render_carrier_rankings() -> None:
     try:
         st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;">Carrier Digital Visibility Rankings</div>',
+            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Digital Visibility Rankings</div>',
             unsafe_allow_html=True,
         )
 
         header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
             f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">#</th>'
             f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Carrier</th>'
@@ -456,9 +456,9 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};">Supply Chain Visibility & Tracking</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
+            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Supply Chain Visibility & Tracking</div>'
+            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
             f'Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking'
             f'</div>'
             f'</div>',
@@ -504,8 +504,8 @@ def render(port_results=None, route_results=None, insights=None) -> None:
 
     try:
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
             f'Data refreshed every 15 minutes from AIS feeds, carrier APIs, and port EDI streams. '
             f'Visibility scores calculated as rolling 30-day averages. '
             f'Exception alerts generated when deviations exceed configured thresholds.'

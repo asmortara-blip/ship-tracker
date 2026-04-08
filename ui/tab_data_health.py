@@ -33,17 +33,17 @@ except Exception:
     _CM_OK = False
 
 # ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 C_GRAY    = "#374151"
 
 _CACHE_DIR = Path(__file__).parent.parent / "cache"
@@ -258,10 +258,10 @@ def _status_color(status: str) -> str:
 
 def _status_bg(status: str) -> str:
     return {
-        "LIVE": "rgba(16,185,129,0.12)",
-        "STALE": "rgba(245,158,11,0.12)",
-        "EXPIRED": "rgba(239,68,68,0.12)",
-        "UNAVAILABLE": "rgba(239,68,68,0.12)",
+        "LIVE": "rgba(46,158,110,0.12)",
+        "STALE": "rgba(201,150,43,0.12)",
+        "EXPIRED": "rgba(192,57,43,0.12)",
+        "UNAVAILABLE": "rgba(192,57,43,0.12)",
         "NOT CONFIGURED": "rgba(100,116,139,0.12)",
     }.get(status, "rgba(100,116,139,0.12)")
 
@@ -306,7 +306,7 @@ def _render_overview(source_rows: list[dict]) -> None:
     coverage = round(100 * healthy / total) if total else 0
 
     st.markdown(
-        f"""<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px;">
+        f"""<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">
         <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;">Data Health Overview</div>
         <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px;">
           <div style="text-align:center;">
@@ -340,7 +340,7 @@ def _render_source_table(source_rows: list[dict]) -> None:
         f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:24px 0 10px;">Data Source Status</div>""",
         unsafe_allow_html=True,
     )
-    header = f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;padding:8px 14px;">
+    header = f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Source</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Type</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Last Updated</span>
@@ -359,12 +359,12 @@ def _render_source_table(source_rows: list[dict]) -> None:
         rows_html += f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
             <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{r["name"]}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{r["type"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:monospace;">{ts}</span>
+            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{ts}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{_fmt_age(r["age_h"]) if r["age_h"] < 9000 else "—"}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{f'{r["records"]:,}' if r["records"] else "—"}</span>
             <span style="display:inline-block;font-size:10px;font-weight:700;color:{sc};background:{sbg};border:1px solid {sc}33;border-radius:4px;padding:2px 7px;">{r["status"]}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{r["next_refresh"]}</span>
-            <span style="font-size:10px;color:{C_TEXT3};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{r["endpoint"]}">{r["endpoint"]}</span>
+            <span style="font-size:10px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{r["endpoint"]}">{r["endpoint"]}</span>
         </div>"""
     st.markdown(header + rows_html, unsafe_allow_html=True)
 
@@ -374,7 +374,7 @@ def _render_cache_performance(source_rows: list[dict]) -> None:
         f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Cache Size &amp; Performance</div>""",
         unsafe_allow_html=True,
     )
-    header = f"""<div style="display:grid;grid-template-columns:2.5fr 1fr 1.2fr 1.2fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;padding:8px 14px;">
+    header = f"""<div style="display:grid;grid-template-columns:2.5fr 1fr 1.2fr 1.2fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Data Source</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Cache Size</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Fetches (7d)</span>
@@ -406,7 +406,7 @@ def _render_api_keys() -> None:
         f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">API Key Configuration</div>""",
         unsafe_allow_html=True,
     )
-    header = f"""<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr 1fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;padding:8px 14px;">
+    header = f"""<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr 1fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">API Service</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Key Configured</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Plan / Tier</span>
@@ -428,7 +428,7 @@ def _render_api_keys() -> None:
             <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{k["service"]}</span>
             <span style="font-size:12px;">{key_icon}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{k["plan"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:monospace;">{k["rate_limit"]}</span>
+            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{k["rate_limit"]}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{usage}</span>
             <span style="font-size:11px;color:{pct_col};font-weight:700;">{pct}%</span>
         </div>"""
@@ -504,7 +504,7 @@ def _render_error_log() -> None:
         {"ts": _now_utc() - timedelta(hours=4),     "source": "ACS Panama",      "type": "ParseError",        "msg": "Table schema changed at source website",     "resolved": False},
         {"ts": _now_utc() - timedelta(hours=7, minutes=33), "source": "FRED",    "type": "HTTP 503",          "msg": "Service unavailable — upstream maintenance",  "resolved": True},
     ]
-    header = f"""<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 3fr 0.9fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;padding:8px 14px;">
+    header = f"""<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 3fr 0.9fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Timestamp (UTC)</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Source</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Error Type</span>
@@ -517,7 +517,7 @@ def _render_error_log() -> None:
         resolved_html = f'<span style="color:{C_HIGH};font-weight:700;">Resolved</span>' if e["resolved"] else f'<span style="color:{C_LOW};font-weight:700;">Open</span>'
         ts_str = e["ts"].strftime("%Y-%m-%d %H:%M")
         rows_html += f"""<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 3fr 0.9fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:11px;color:{C_TEXT2};font-family:monospace;">{ts_str}</span>
+            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{ts_str}</span>
             <span style="font-size:11px;color:{C_TEXT};font-weight:600;">{e["source"]}</span>
             <span style="font-size:11px;color:{C_MOD};">{e["type"]}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{e["msg"]}</span>
@@ -586,7 +586,7 @@ def _render_data_quality(
         ("News Items",      news_items),
     ]
 
-    header = f"""<div style="display:grid;grid-template-columns:1.5fr 0.8fr 0.9fr 1.1fr 1.1fr 2fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px 10px 0 0;padding:8px 14px;">
+    header = f"""<div style="display:grid;grid-template-columns:1.5fr 0.8fr 0.9fr 1.1fr 1.1fr 2fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Dataset</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Records</span>
         <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Null %</span>
@@ -640,8 +640,8 @@ def _render_data_quality(
             <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{label}</span>
             <span style="font-size:11px;color:{C_TEXT2};">{records:,}</span>
             <span style="font-size:11px;color:{null_col};font-weight:700;">{null_pct}%</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:monospace;">{mn_str}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:monospace;">{mx_str}</span>
+            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{mn_str}</span>
+            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{mx_str}</span>
             <span style="font-size:11px;color:{anom_col};">{anom_txt}</span>
         </div>"""
     st.markdown(header + rows_html, unsafe_allow_html=True)
@@ -713,7 +713,7 @@ def render(
               <div style="font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:-0.5px;">Data Source Health &amp; Freshness</div>
               <div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">Real-time monitoring of all data sources, cache status, API keys, and data quality.</div>
             </div>
-            <div style="font-size:11px;color:{C_TEXT3};font-family:monospace;">Last scan: {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}</div>
+            <div style="font-size:11px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;">Last scan: {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}</div>
             </div>""",
             unsafe_allow_html=True,
         )

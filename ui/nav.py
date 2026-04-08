@@ -7,93 +7,93 @@ from __future__ import annotations
 
 import streamlit as st
 
-# ── Color constants (mirrors ui/styles.py) ───────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_CONV    = "#8b5cf6"
-C_MACRO   = "#06b6d4"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+# ── Color constants (mirrors ui/styles.py — WSJ dark palette) ────────────────
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_CONV    = "#7c6eaf"
+C_MACRO   = "#4a90a4"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Section definitions ───────────────────────────────────────────────────────
 SECTIONS: list[dict] = [
     {
         "key": "dashboard",
-        "icon": "🏠",
+        "icon": "//",
         "label": "Dashboard",
         "description": "Overview & live data",
-        "color": "#3b82f6",
-        "sub_pages": ["Overview", "Scorecard", "Live Feed", "Data Health"],
+        "color": "#3572b0",
+        "sub_pages": ["Overview", "Market Commentary", "Scorecard", "Live Feed", "Data Health"],
     },
     {
         "key": "markets",
-        "icon": "📈",
+        "icon": "//",
         "label": "Markets & Signals",
         "description": "Signals, alpha & correlations",
-        "color": "#10b981",
-        "sub_pages": ["Markets", "Alpha Signals", "Results", "Indices", "Derivatives", "Scenarios", "Monte Carlo", "Backtesting", "Portfolio", "Options & Flow"],
+        "color": "#2e9e6e",
+        "sub_pages": ["Markets", "Sector Dashboard", "Alpha Signals", "Results", "Indices", "Derivatives", "Scenarios", "Monte Carlo", "Backtesting", "Portfolio", "Options & Flow"],
     },
     {
         "key": "ports_routes",
-        "icon": "🚢",
+        "icon": "//",
         "label": "Ports & Routes",
         "description": "Port demand, routes & congestion",
-        "color": "#06b6d4",
-        "sub_pages": ["Port Demand", "Port Monitor", "Routes", "ETA Predictor", "Congestion", "Emerging Routes", "Vessel Map"],
+        "color": "#4a90a4",
+        "sub_pages": ["Port Demand", "Port Monitor", "Routes", "Rate Analytics", "ETA Predictor", "Congestion", "Emerging Routes", "Vessel Map"],
     },
     {
         "key": "carriers",
-        "icon": "🏢",
+        "icon": "//",
         "label": "Carriers & Ops",
         "description": "Fleet, cargo & operations",
-        "color": "#8b5cf6",
+        "color": "#7c6eaf",
         "sub_pages": ["Carriers", "Fleet", "Equipment", "Cargo", "Booking", "Bunker Fuel"],
     },
     {
         "key": "trade_macro",
-        "icon": "🌍",
+        "icon": "//",
         "label": "Trade & Macro",
-        "description": "Macro, trade wars & geopolitics",
-        "color": "#f59e0b",
-        "sub_pages": ["Macro", "Trade War", "Geopolitical", "Chokepoints", "Trade Finance", "E-Commerce"],
+        "description": "Macro, bellwethers & geopolitics",
+        "color": "#c9962b",
+        "sub_pages": ["Macro", "Bellwethers", "Trade War", "Geopolitical", "Chokepoints", "Trade Finance", "E-Commerce"],
     },
     {
         "key": "supply_chain",
-        "icon": "🔗",
+        "icon": "//",
         "label": "Supply Chain",
         "description": "Visibility, network & intermodal",
-        "color": "#ec4899",
+        "color": "#8a6ea0",
         "sub_pages": ["Supply Chain", "Visibility", "Intermodal", "Network", "Attribution"],
     },
     {
         "key": "risk",
-        "icon": "⚠️",
+        "icon": "//",
         "label": "Risk & Compliance",
         "description": "Risk, weather & regulatory",
-        "color": "#ef4444",
+        "color": "#c0392b",
         "sub_pages": ["Risk Matrix", "Weather Risk", "Compliance", "Market Cycle", "Fundamentals"],
     },
     {
         "key": "intelligence",
-        "icon": "🤖",
+        "icon": "//",
         "label": "Intelligence",
         "description": "News, AI assistant & insights",
-        "color": "#a78bfa",
+        "color": "#7c6eaf",
         "sub_pages": ["News & Sentiment", "Deep Dive", "AI Assistant", "Sustainability", "Alerts"],
     },
     {
         "key": "reports",
-        "icon": "📋",
+        "icon": "//",
         "label": "Reports",
         "description": "Investor & summary reports",
-        "color": "#64748b",
+        "color": "#6b6760",
         "sub_pages": ["Investor Report"],
     },
 ]
@@ -139,54 +139,58 @@ def _inject_nav_css() -> None:
     st.markdown(
         """
         <style>
-        /* ── Sidebar chrome ─────────────────────────────────────────────── */
+        /* ── Sidebar chrome (WSJ) ──────────────────────────────────────── */
         section[data-testid="stSidebar"] {
-            background: #0a0f1a !important;
-            border-right: 1px solid rgba(255,255,255,0.07) !important;
+            background: #12151e !important;
+            border-right: 1px solid rgba(232,230,225,0.08) !important;
         }
         section[data-testid="stSidebar"] > div:first-child {
             padding-top: 0 !important;
         }
 
-        /* ── Brand block ─────────────────────────────────────────────────── */
+        /* ── Brand block (WSJ editorial) ─────────────────────────────────── */
         .nav-brand {
-            padding: 1.1rem 0.8rem 0.7rem;
-            border-bottom: 1px solid rgba(255,255,255,0.07);
+            padding: 1rem 0.8rem 0.7rem;
+            border-bottom: 2px solid rgba(232,230,225,0.1);
             margin-bottom: 0.5rem;
         }
         .nav-brand-title {
-            font-size: 1.2rem;
+            font-family: 'Libre Baskerville', 'Georgia', serif;
+            font-size: 1.1rem;
             font-weight: 700;
-            color: #f1f5f9;
-            letter-spacing: 0.04em;
+            color: #e8e6e1;
+            letter-spacing: -0.01em;
             line-height: 1.2;
         }
         .nav-brand-sub {
-            font-size: 0.68rem;
-            color: #64748b;
-            letter-spacing: 0.08em;
+            font-family: 'Libre Franklin', sans-serif;
+            font-size: 0.62rem;
+            color: #6b6760;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
-            margin-top: 0.15rem;
+            margin-top: 0.2rem;
+            font-weight: 600;
         }
         .nav-brand-dot {
             display: inline-block;
-            width: 7px;
-            height: 7px;
+            width: 5px;
+            height: 5px;
             border-radius: 50%;
-            background: #10b981;
+            background: #2e9e6e;
             margin-right: 5px;
-            animation: pulse 2s infinite;
+            animation: pulse 2.5s infinite;
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
-            50%       { opacity: 0.4; }
+            50%       { opacity: 0.35; }
         }
 
         /* ── Section group label ─────────────────────────────────────────── */
         .nav-section-label {
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: #475569;
+            font-family: 'Libre Franklin', sans-serif;
+            font-size: 0.58rem;
+            font-weight: 700;
+            color: #6b6760;
             letter-spacing: 0.12em;
             text-transform: uppercase;
             padding: 0.9rem 0.9rem 0.2rem;
@@ -194,34 +198,36 @@ def _inject_nav_css() -> None:
 
         /* ── Nav button wrappers ─────────────────────────────────────────── */
         .nav-btn-wrap {
-            padding: 0 0.45rem 0.15rem;
+            padding: 0 0.45rem 0.1rem;
         }
 
-        /* Active nav button */
+        /* Active nav button (WSJ) */
         .nav-btn-active > div > button {
-            background: var(--nav-btn-bg, rgba(59,130,246,0.15)) !important;
-            border: 1px solid var(--nav-btn-border, rgba(59,130,246,0.45)) !important;
-            border-left: 3px solid var(--nav-btn-accent, #3b82f6) !important;
-            color: #f1f5f9 !important;
+            background: var(--nav-btn-bg, rgba(53,114,176,0.08)) !important;
+            border: none !important;
+            border-left: 2px solid var(--nav-btn-accent, #3572b0) !important;
+            color: #e8e6e1 !important;
             text-align: left !important;
-            border-radius: 6px !important;
+            border-radius: 0 !important;
             font-weight: 600 !important;
+            font-family: 'Libre Franklin', sans-serif !important;
         }
 
-        /* Inactive nav button */
+        /* Inactive nav button (WSJ) */
         .nav-btn-inactive > div > button {
             background: transparent !important;
-            border: 1px solid transparent !important;
-            border-left: 3px solid transparent !important;
-            color: #94a3b8 !important;
+            border: none !important;
+            border-left: 2px solid transparent !important;
+            color: #9a968e !important;
             text-align: left !important;
-            border-radius: 6px !important;
-            font-weight: 400 !important;
+            border-radius: 0 !important;
+            font-weight: 500 !important;
+            font-family: 'Libre Franklin', sans-serif !important;
         }
         .nav-btn-inactive > div > button:hover {
-            background: rgba(255,255,255,0.04) !important;
-            border-left-color: rgba(255,255,255,0.2) !important;
-            color: #f1f5f9 !important;
+            background: rgba(53,114,176,0.04) !important;
+            border-left-color: rgba(53,114,176,0.3) !important;
+            color: #e8e6e1 !important;
         }
 
         /* Shared button chrome */
@@ -236,7 +242,7 @@ def _inject_nav_css() -> None:
         /* ── Alert badge ─────────────────────────────────────────────────── */
         .nav-alert-badge {
             display: inline-block;
-            background: #ef4444;
+            background: #c0392b;
             color: #fff;
             font-size: 0.6rem;
             font-weight: 700;
@@ -247,15 +253,14 @@ def _inject_nav_css() -> None:
             line-height: 1.5;
         }
 
-        /* ── Mini stats bar ──────────────────────────────────────────────── */
+        /* ── Mini stats bar (WSJ) ────────────────────────────────────────── */
         .mini-stats {
             display: flex;
             justify-content: space-around;
-            padding: 0.55rem 0.5rem;
+            padding: 0.5rem 0.4rem;
             margin: 0.4rem 0.45rem 0;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 8px;
+            border-top: 1px solid rgba(232,230,225,0.08);
+            border-bottom: 1px solid rgba(232,230,225,0.08);
         }
         .mini-stat-item {
             display: flex;
@@ -264,80 +269,84 @@ def _inject_nav_css() -> None:
             gap: 1px;
         }
         .mini-stat-value {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.8rem;
             font-weight: 700;
-            color: #f1f5f9;
+            color: #e8e6e1;
             line-height: 1;
         }
         .mini-stat-label {
-            font-size: 0.55rem;
-            color: #64748b;
+            font-family: 'Libre Franklin', sans-serif;
+            font-size: 0.52rem;
+            color: #6b6760;
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
         .mini-stat-high {
-            color: #10b981 !important;
+            color: #2e9e6e !important;
         }
 
-        /* ── Health indicator ────────────────────────────────────────────── */
+        /* ── Health indicator (WSJ) ──────────────────────────────────────── */
         .nav-health {
             display: flex;
             align-items: center;
             gap: 6px;
             padding: 0.45rem 0.9rem;
+            font-family: 'Libre Franklin', sans-serif;
             font-size: 0.68rem;
-            color: #64748b;
-            border-top: 1px solid rgba(255,255,255,0.06);
+            color: #6b6760;
+            border-top: 1px solid rgba(232,230,225,0.06);
             margin-top: 0.5rem;
         }
         .health-dot {
-            width: 6px;
-            height: 6px;
+            width: 5px;
+            height: 5px;
             border-radius: 50%;
             flex-shrink: 0;
         }
-        .health-ok   { background: #10b981; }
-        .health-warn { background: #f59e0b; }
-        .health-err  { background: #ef4444; }
+        .health-ok   { background: #2e9e6e; }
+        .health-warn { background: #c9962b; }
+        .health-err  { background: #c0392b; }
 
-        /* ── Breadcrumb header ───────────────────────────────────────────── */
+        /* ── Breadcrumb header (WSJ) ─────────────────────────────────────── */
         .nav-breadcrumb {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             gap: 0.5rem;
             padding: 0.6rem 0;
             margin-bottom: 0.5rem;
-            border-bottom: 1px solid rgba(255,255,255,0.07);
+            border-top: 2px solid #e8e6e1;
+            padding-top: 0.6rem;
             flex-wrap: wrap;
         }
         .nav-bc-icon {
-            font-size: 1.3rem;
+            font-size: 1rem;
             line-height: 1;
         }
         .nav-bc-section {
-            font-size: 1.05rem;
+            font-family: 'Libre Baskerville', 'Georgia', serif;
+            font-size: 1rem;
             font-weight: 700;
-            color: #f1f5f9;
+            color: #e8e6e1;
         }
         .nav-bc-sep {
-            color: #475569;
-            font-size: 0.85rem;
+            color: #6b6760;
+            font-size: 0.8rem;
         }
         .nav-bc-sub {
-            font-size: 0.85rem;
-            color: #94a3b8;
+            font-family: 'Libre Franklin', sans-serif;
+            font-size: 0.82rem;
+            color: #9a968e;
         }
         .nav-bc-desc {
-            font-size: 0.72rem;
-            color: #64748b;
+            font-family: 'Libre Franklin', sans-serif;
+            font-size: 0.7rem;
+            color: #6b6760;
             margin-left: auto;
             font-style: italic;
         }
         .nav-bc-bar {
-            height: 3px;
-            border-radius: 2px;
-            width: 100%;
-            margin-top: 0.3rem;
+            display: none; /* WSJ uses top border instead */
         }
         </style>
         """,

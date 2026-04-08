@@ -12,18 +12,18 @@ import math
 from typing import Optional
 
 # ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_CONV    = "#8b5cf6"
-C_MACRO   = "#06b6d4"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_CONV    = "#7c6eaf"
+C_MACRO   = "#4a90a4"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 _ACCENT_CYCLE = [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_MACRO, "#f472b6", "#fb923c"]
 
@@ -493,7 +493,7 @@ def horizontal_bar_chart(labels: list, values: list, max_val: float = None,
         if i % 2 == 0:
             elems.append(
                 f'<rect x="0" y="{row_y}" width="{width}" height="{row_h}" '
-                f'fill="rgba(255,255,255,0.03)" rx="0"/>'
+                f'fill="rgba(232,230,225,0.03)" rx="0"/>'
             )
 
         # Row center y
@@ -563,7 +563,7 @@ def signal_strength_chart(signals: list, width: int = 400, height: int = 200) ->
 
     # Conviction band backgrounds
     band_h = plot_h / 3
-    band_colors = ["rgba(239,68,68,0.05)", "rgba(245,158,11,0.05)", "rgba(16,185,129,0.05)"]
+    band_colors = ["rgba(192,57,43,0.05)", "rgba(201,150,43,0.05)", "rgba(46,158,110,0.05)"]
     band_labels = ["LOW", "MEDIUM", "HIGH"]
     for bi in range(3):
         by = pad_t + (2 - bi) * band_h
@@ -582,7 +582,7 @@ def signal_strength_chart(signals: list, width: int = 400, height: int = 200) ->
         gy = pad_t + bi * band_h
         elems.append(
             f'<line x1="{pad_l}" y1="{gy:.2f}" x2="{pad_l + plot_w}" y2="{gy:.2f}" '
-            f'stroke="rgba(255,255,255,0.07)" stroke-width="1"/>'
+            f'stroke="rgba(232,230,225,0.06)" stroke-width="1"/>'
         )
 
     # X-axis ticks
@@ -590,7 +590,7 @@ def signal_strength_chart(signals: list, width: int = 400, height: int = 200) ->
         gx = pad_l + xv * plot_w
         elems.append(
             f'<line x1="{gx:.2f}" y1="{pad_t}" x2="{gx:.2f}" y2="{pad_t + plot_h}" '
-            f'stroke="rgba(255,255,255,0.05)" stroke-width="1"/>'
+            f'stroke="rgba(232,230,225,0.04)" stroke-width="1"/>'
         )
         elems.append(
             f'<text x="{gx:.2f}" y="{pad_t + plot_h + 12}" fill="{C_TEXT3}" '

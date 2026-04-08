@@ -1,8 +1,8 @@
 """investor_report_html.py — Institutional-grade HTML investor report builder.
 
-Produces a fully self-contained HTML document styled after Bloomberg Intelligence
-/ Goldman Sachs research notes. White/off-white background, navy headers, dense
-data tables, print-ready layout.
+Produces a fully self-contained HTML document styled after Wall Street Journal
+research reports. White/off-white background, navy headers, clean serif typography,
+editorial data tables, print-ready layout.
 
 Usage:
     from utils.investor_report_html import render_investor_report_html
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, List
 
 # ---------------------------------------------------------------------------
-# Color palette — Bloomberg/GS institutional light theme
+# Color palette — WSJ institutional light theme
 # ---------------------------------------------------------------------------
 C_BODY          = "#ffffff"
 C_SURFACE       = "#f8f9fa"
@@ -312,7 +312,7 @@ a:hover { text-decoration: underline; }
     text-transform: uppercase;
     border: 1px solid rgba(255,255,255,0.25);
     color: #c8d8ea;
-    background: rgba(255,255,255,0.08);
+    background: rgba(232,230,225,0.06);
 }
 
 /* ── Horizontal nav ── */
@@ -337,7 +337,7 @@ a:hover { text-decoration: underline; }
     text-transform: uppercase;
     color: #a8bcd4;
     white-space: nowrap;
-    border-right: 1px solid rgba(255,255,255,0.08);
+    border-right: 1px solid rgba(232,230,225,0.06);
     transition: background .15s, color .15s;
 }
 .ir-nav a:hover {

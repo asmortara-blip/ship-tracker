@@ -79,7 +79,7 @@ _SEVERITY_COLORS = {
     "CRITICAL": "#b91c1c",
     "HIGH":     "#ea580c",
     "MEDIUM":   "#d97706",
-    "LOW":      "#64748b",
+    "LOW":      "#6b6760",
 }
 
 _SEVERITY_ICONS = {
@@ -96,26 +96,26 @@ _BASE_HTML = """\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body {{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-           background:#0a0f1a;color:#f1f5f9;margin:0;padding:0}}
+    body {{font-family:'Libre Franklin','Inter',system-ui,sans-serif;
+           background:#0c0e14;color:#e8e6e1;margin:0;padding:0}}
     .wrapper {{max-width:640px;margin:0 auto;padding:24px 16px}}
-    .brand {{font-size:1.25rem;font-weight:800;color:#f1f5f9;
-             border-bottom:2px solid #3b82f6;padding-bottom:12px;margin-bottom:20px}}
-    .brand span {{color:#3b82f6}}
+    .brand {{font-size:1.25rem;font-weight:800;color:#e8e6e1;
+             border-bottom:2px solid #3572b0;padding-bottom:12px;margin-bottom:20px}}
+    .brand span {{color:#3572b0}}
     .metric-row {{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}}
-    .metric {{background:#1a2235;border:1px solid rgba(255,255,255,0.08);
+    .metric {{background:#181c28;border:1px solid rgba(232,230,225,0.06);
               border-radius:8px;padding:12px 16px;flex:1;min-width:120px}}
     .metric-val {{font-size:1.4rem;font-weight:700;line-height:1}}
-    .metric-lbl {{font-size:0.72rem;color:#64748b;margin-top:4px;text-transform:uppercase;
+    .metric-lbl {{font-size:0.72rem;color:#6b6760;margin-top:4px;text-transform:uppercase;
                   letter-spacing:0.06em}}
-    .section {{background:#111827;border-radius:10px;padding:18px;margin-bottom:16px;
-               border:1px solid rgba(255,255,255,0.07)}}
-    .section-title {{font-size:0.8rem;font-weight:700;color:#94a3b8;
+    .section {{background:#12151e;border-radius:6px;padding:18px;margin-bottom:16px;
+               border:1px solid rgba(232,230,225,0.06)}}
+    .section-title {{font-size:0.8rem;font-weight:700;color:#9a968e;
                      text-transform:uppercase;letter-spacing:0.1em;margin-bottom:10px}}
-    .pill {{display:inline-block;padding:3px 10px;border-radius:999px;
+    .pill {{display:inline-block;padding:3px 10px;border-radius:3px;
             font-size:0.72rem;font-weight:700}}
     .footer {{font-size:0.68rem;color:#334155;margin-top:24px;
-              border-top:1px solid rgba(255,255,255,0.06);padding-top:14px}}
+              border-top:1px solid rgba(232,230,225,0.05);padding-top:14px}}
   </style>
 </head>
 <body>
@@ -161,28 +161,28 @@ def send_report_email(
     subject = f"Ship Tracker Intelligence Report — {report_date} — {sentiment_label}"
 
     risk_color = {
-        "LOW": "#10b981",
-        "MODERATE": "#f59e0b",
-        "HIGH": "#ef4444",
+        "LOW": "#2e9e6e",
+        "MODERATE": "#c9962b",
+        "HIGH": "#c0392b",
         "CRITICAL": "#b91c1c",
-    }.get(risk_level.upper(), "#94a3b8")
+    }.get(risk_level.upper(), "#9a968e")
 
     top_rec_html = ""
     if top_recommendation:
         top_rec_html = f"""
         <div class="section">
           <div class="section-title">Top Recommendation</div>
-          <div style="font-size:0.88rem;color:#f1f5f9">{top_recommendation}</div>
+          <div style="font-size:0.88rem;color:#e8e6e1">{top_recommendation}</div>
         </div>"""
 
     body_content = f"""
     <div class="metric-row">
       <div class="metric">
-        <div class="metric-val" style="color:#3b82f6">{sentiment_label}</div>
+        <div class="metric-val" style="color:#3572b0">{sentiment_label}</div>
         <div class="metric-lbl">Market Sentiment</div>
       </div>
       <div class="metric">
-        <div class="metric-val" style="color:#10b981">{signal_count}</div>
+        <div class="metric-val" style="color:#2e9e6e">{signal_count}</div>
         <div class="metric-lbl">Active Signals</div>
       </div>
       <div class="metric">
@@ -192,7 +192,7 @@ def send_report_email(
     </div>
     <div class="section">
       <div class="section-title">Report Summary — {report_date}</div>
-      <p style="font-size:0.85rem;color:#94a3b8;margin:0">
+      <p style="font-size:0.85rem;color:#9a968e;margin:0">
         The full intelligence report is attached as a PDF. It covers port demand analysis,
         freight rate trends, alpha signals, macro indicators, and route optimization for all
         tracked lanes.
@@ -233,21 +233,21 @@ def send_alert_email(alert: "ShippingAlert") -> bool:
 
     from_addr = cfg["from_addr"] or cfg["user"]
     sev_icon = _SEVERITY_ICONS.get(alert.severity, "⚠️")
-    sev_color = _SEVERITY_COLORS.get(alert.severity, "#64748b")
+    sev_color = _SEVERITY_COLORS.get(alert.severity, "#6b6760")
     subject = f"{sev_icon} Ship Tracker Alert [{alert.severity}]: {alert.title}"
 
     ts = alert.created_at[:19].replace("T", " ") + " UTC"
     entity_rows = ""
     if alert.ticker:
-        entity_rows += f"<tr><td style='color:#64748b'>Ticker</td><td style='font-weight:600'>{alert.ticker}</td></tr>"
+        entity_rows += f"<tr><td style='color:#6b6760'>Ticker</td><td style='font-weight:600'>{alert.ticker}</td></tr>"
     if alert.route_id:
-        entity_rows += f"<tr><td style='color:#64748b'>Route</td><td style='font-weight:600'>{alert.route_id}</td></tr>"
+        entity_rows += f"<tr><td style='color:#6b6760'>Route</td><td style='font-weight:600'>{alert.route_id}</td></tr>"
     if alert.port_locode:
-        entity_rows += f"<tr><td style='color:#64748b'>Port</td><td style='font-weight:600'>{alert.port_locode}</td></tr>"
+        entity_rows += f"<tr><td style='color:#6b6760'>Port</td><td style='font-weight:600'>{alert.port_locode}</td></tr>"
     if alert.value:
-        entity_rows += f"<tr><td style='color:#64748b'>Value</td><td style='font-weight:600'>{alert.value:,.2f}</td></tr>"
+        entity_rows += f"<tr><td style='color:#6b6760'>Value</td><td style='font-weight:600'>{alert.value:,.2f}</td></tr>"
     if alert.change_pct:
-        entity_rows += f"<tr><td style='color:#64748b'>Change</td><td style='font-weight:600;color:{sev_color}'>{alert.change_pct:+.2f}%</td></tr>"
+        entity_rows += f"<tr><td style='color:#6b6760'>Change</td><td style='font-weight:600;color:{sev_color}'>{alert.change_pct:+.2f}%</td></tr>"
 
     body_content = f"""
     <div class="section" style="border-left:4px solid {sev_color}">
@@ -255,12 +255,12 @@ def send_alert_email(alert: "ShippingAlert") -> bool:
         <span style="font-size:1.5rem">{sev_icon}</span>
         <div>
           <div style="font-size:1rem;font-weight:700;color:{sev_color}">{alert.title}</div>
-          <div style="font-size:0.72rem;color:#64748b">{ts} &nbsp;·&nbsp; {alert.alert_type}</div>
+          <div style="font-size:0.72rem;color:#6b6760">{ts} &nbsp;·&nbsp; {alert.alert_type}</div>
         </div>
         <span class="pill" style="background:{sev_color}20;color:{sev_color};
               border:1px solid {sev_color}50;margin-left:auto">{alert.severity}</span>
       </div>
-      <p style="font-size:0.85rem;color:#f1f5f9;margin:0 0 12px 0">{alert.body}</p>
+      <p style="font-size:0.85rem;color:#e8e6e1;margin:0 0 12px 0">{alert.body}</p>
       <table style="width:100%;font-size:0.8rem;border-collapse:collapse">
         {entity_rows}
       </table>
@@ -285,12 +285,12 @@ def send_test_email() -> bool:
     from_addr = cfg["from_addr"] or cfg["user"]
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     body_content = f"""
-    <div class="section" style="border-left:4px solid #10b981">
+    <div class="section" style="border-left:4px solid #2e9e6e">
       <div class="section-title">Test Email</div>
-      <p style="font-size:0.88rem;color:#f1f5f9;margin:0">
+      <p style="font-size:0.88rem;color:#e8e6e1;margin:0">
         SMTP configuration is working correctly. Sent at {ts}.
       </p>
-      <p style="font-size:0.8rem;color:#64748b;margin:10px 0 0 0">
+      <p style="font-size:0.8rem;color:#6b6760;margin:10px 0 0 0">
         Host: {cfg['host']} &nbsp;·&nbsp; Port: {cfg['port']} &nbsp;·&nbsp;
         From: {from_addr} &nbsp;·&nbsp; To: {cfg['to_addr']}
       </p>

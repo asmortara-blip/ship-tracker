@@ -605,7 +605,7 @@ def _trend_badge_html(trend: str) -> str:
     bg, fg = colors.get(trend, ("#f3f4f6", "#374151"))
     return (
         f"<span style='background:{bg};color:{fg};padding:2px 8px;"
-        f"border-radius:12px;font-size:0.75rem;font-weight:600'>{trend}</span>"
+        f"border-radius:6px;font-size:0.75rem;font-weight:600'>{trend}</span>"
     )
 
 
@@ -618,7 +618,7 @@ def _type_badge_html(ship_type: str) -> str:
     bg, fg = colors.get(ship_type, ("#f3f4f6", "#374151"))
     return (
         f"<span style='background:{bg};color:{fg};padding:2px 8px;"
-        f"border-radius:12px;font-size:0.7rem;font-weight:500'>{ship_type}</span>"
+        f"border-radius:6px;font-size:0.7rem;font-weight:500'>{ship_type}</span>"
     )
 
 
@@ -631,7 +631,7 @@ def _direction_badge_html(direction: str, conviction: str) -> str:
     bg, fg = colors.get(direction, ("#f3f4f6", "#374151"))
     return (
         f"<span style='background:{bg};color:{fg};padding:2px 8px;"
-        f"border-radius:12px;font-size:0.75rem;font-weight:600'>"
+        f"border-radius:6px;font-size:0.75rem;font-weight:600'>"
         f"{direction} ({conviction})</span>"
     )
 
@@ -691,7 +691,7 @@ def format_stock_card_html(metrics: StockMetrics, signals: list | None = None) -
     html = f"""
 <div style='
   border:1px solid #e5e7eb;
-  border-radius:12px;
+  border-radius:6px;
   padding:16px;
   background:#ffffff;
   box-shadow:0 1px 3px rgba(0,0,0,0.06);
@@ -700,14 +700,14 @@ def format_stock_card_html(metrics: StockMetrics, signals: list | None = None) -
 '>
   <!-- Header -->
   <div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>
-    <span style='font-size:1.2rem;font-weight:700;color:#111827'>{metrics.ticker}</span>
+    <span style='font-size:1.2rem;font-weight:700;color:#12151e'>{metrics.ticker}</span>
     {type_badge}
   </div>
   <div style='font-size:0.8rem;color:#6b7280;margin-bottom:12px'>{metrics.name}</div>
 
   <!-- Price row -->
   <div style='display:flex;align-items:baseline;gap:10px;margin-bottom:4px'>
-    <span style='font-size:1.5rem;font-weight:700;color:#111827'>{price_str}</span>
+    <span style='font-size:1.5rem;font-weight:700;color:#12151e'>{price_str}</span>
     <span style='color:{chg_1d_col};font-weight:600'>{chg_1d_str} 1d</span>
     <span style='color:{chg_30d_col};font-weight:600'>{chg_30d_str} 30d</span>
   </div>
@@ -755,7 +755,7 @@ def format_comparison_table_html(comparison: StockComparison) -> str:
         "color:#374151;background:#f9fafb;border-bottom:2px solid #e5e7eb;"
     )
     cell_style = (
-        "padding:8px 12px;font-size:0.82rem;color:#111827;"
+        "padding:8px 12px;font-size:0.82rem;color:#12151e;"
         "border-bottom:1px solid #f3f4f6;white-space:nowrap;"
     )
 
@@ -794,7 +794,7 @@ def format_comparison_table_html(comparison: StockComparison) -> str:
         type_badge  = _type_badge_html(m.type)
         ticker_cell = (
             f"<td style='{cell_style}'>"
-            f"<b style='color:#111827'>{ticker}</b><br>"
+            f"<b style='color:#12151e'>{ticker}</b><br>"
             f"{type_badge}"
             f"</td>"
         )
@@ -825,7 +825,7 @@ def format_comparison_table_html(comparison: StockComparison) -> str:
   width:100%;
   font-family:sans-serif;
   background:#ffffff;
-  border-radius:10px;
+  border-radius:6px;
   box-shadow:0 1px 3px rgba(0,0,0,0.07);
   overflow:hidden;
 '>

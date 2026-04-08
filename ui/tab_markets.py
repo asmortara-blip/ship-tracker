@@ -8,19 +8,22 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── colour palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-_MONO     = "'SF Mono','Menlo','Courier New',Courier,monospace"
+# ── WSJ editorial colour palette ──────────────────────────────────────────────
+C_BG      = "#121620"
+C_SURFACE = "#151a26"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.08)"
+C_RULE    = "rgba(232,230,225,0.12)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+_MONO     = "'JetBrains Mono','JetBrains Mono','Menlo','Courier New',monospace"
+_SERIF    = "'Libre Baskerville','Georgia','Times New Roman',serif"
+_SANS     = "'Libre Franklin','Helvetica Neue','Arial',sans-serif"
 
 # ── mock signal data ────────────────────────────────────────────────────────────
 _MOCK_SIGNALS = [
@@ -54,18 +57,18 @@ _MOCK_SIGNALS = [
 ]
 
 _ROUTES = [
-    "Shanghai → LA",
-    "Shanghai → Rotterdam",
-    "Rotterdam → NY",
-    "Singapore → Rotterdam",
-    "Houston → Rotterdam",
-    "Dubai → Shanghai",
-    "Santos → Rotterdam",
-    "Dampier → Qingdao",
-    "Richards Bay → Qingdao",
-    "New Orleans → Yokohama",
-    "Durban → Rotterdam",
-    "Corpus Christi → Rotterdam",
+    "Shanghai \u2192 LA",
+    "Shanghai \u2192 Rotterdam",
+    "Rotterdam \u2192 NY",
+    "Singapore \u2192 Rotterdam",
+    "Houston \u2192 Rotterdam",
+    "Dubai \u2192 Shanghai",
+    "Santos \u2192 Rotterdam",
+    "Dampier \u2192 Qingdao",
+    "Richards Bay \u2192 Qingdao",
+    "New Orleans \u2192 Yokohama",
+    "Durban \u2192 Rotterdam",
+    "Corpus Christi \u2192 Rotterdam",
 ]
 
 _INDICES = ["BDI", "WCI", "SCFI", "CCFI"]
@@ -95,18 +98,19 @@ def _conviction_badge(level: str) -> str:
     else:
         color = C_TEXT3
     return (
-        f"<span style='color:{color};font-weight:700;font-size:11px;"
-        f"letter-spacing:0.08em'>{level}</span>"
+        f"<span style='color:{color};font-weight:600;font-size:11px;"
+        f"font-family:{_SANS};letter-spacing:0.04em'>{level}</span>"
     )
 
 
 def _direction_cell(direction: str) -> str:
     if direction == "LONG":
-        arrow, color = "↑", C_HIGH
+        arrow, color = "\u2191", C_HIGH
     else:
-        arrow, color = "↓", C_LOW
+        arrow, color = "\u2193", C_LOW
     return (
-        f"<span style='color:{color};font-weight:700;font-size:12px'>"
+        f"<span style='color:{color};font-weight:600;font-size:12px;"
+        f"font-family:{_SANS}'>"
         f"{arrow} {direction}</span>"
     )
 
@@ -132,52 +136,54 @@ def _posture_from_signals(signals: list) -> tuple[str, str]:
 
 
 def _cell_bg(val: float) -> str:
-    """Interpolate between deep-red and deep-green for heatmap cells."""
+    """Muted WSJ-style heatmap: subtle green/red tints on dark card."""
     clamped = max(-0.15, min(0.15, val))
     if clamped >= 0:
         t = clamped / 0.15
-        r = int(26  + t * (16  - 26))
-        g = int(34  + t * (185 - 34))
-        b = int(53  + t * (129 - 53))
+        r = int(24  + t * (30  - 24))
+        g = int(28  + t * (70  - 28))
+        b = int(40  + t * (50  - 40))
     else:
         t = abs(clamped) / 0.15
-        r = int(26  + t * (239 - 26))
-        g = int(34  + t * (68  - 34))
-        b = int(53  + t * (68  - 53))
+        r = int(24  + t * (70  - 24))
+        g = int(28  + t * (28  - 28))
+        b = int(40  + t * (35  - 40))
     return f"rgb({r},{g},{b})"
 
 
 def _corr_bg(val: float) -> str:
-    """Interpolate between deep-red (−1) through neutral (0) to deep-green (+1)."""
+    """Muted WSJ-style correlation heatmap."""
     if val >= 0:
         t = val
-        r = int(26  + t * (16  - 26))
-        g = int(34  + t * (185 - 34))
-        b = int(53  + t * (129 - 53))
+        r = int(24  + t * (30  - 24))
+        g = int(28  + t * (70  - 28))
+        b = int(40  + t * (50  - 40))
     else:
         t = abs(val)
-        r = int(26  + t * (239 - 26))
-        g = int(34  + t * (68  - 34))
-        b = int(53  + t * (68  - 53))
+        r = int(24  + t * (70  - 24))
+        g = int(28  + t * (28  - 28))
+        b = int(40  + t * (35  - 40))
     return f"rgb({r},{g},{b})"
 
 
 def _section_title(text: str, subtitle: str = "") -> str:
     sub_html = (
-        f"<div style='font-size:12px;color:{C_TEXT3};margin-top:2px'>{subtitle}</div>"
+        f"<div style='font-size:13px;color:{C_TEXT3};margin-top:4px;"
+        f"font-family:{_SANS};font-weight:400'>{subtitle}</div>"
         if subtitle else ""
     )
     return (
-        f"<div style='margin:28px 0 14px'>"
-        f"<div style='font-size:15px;font-weight:700;color:{C_TEXT};letter-spacing:0.04em'>"
+        f"<div style='margin:32px 0 16px;border-top:2px solid {C_TEXT};padding-top:12px'>"
+        f"<div style='font-size:17px;font-weight:700;color:{C_TEXT};"
+        f"font-family:{_SERIF};line-height:1.3'>"
         f"{text}</div>{sub_html}</div>"
     )
 
 
 def _card_wrap(inner: str, padding: str = "20px 24px") -> str:
     return (
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:12px;padding:{padding};margin-bottom:4px'>"
+        f"<div style='background:{C_CARD};border:1px solid {C_RULE};"
+        f"padding:{padding};margin-bottom:4px'>"
         f"{inner}</div>"
     )
 
@@ -196,12 +202,13 @@ def _render_signal_hero(signals: list) -> None:
         # mock trend
         rng = random.Random(42)
         new_today = rng.randint(3, 18)
-        trend_sign = "↑" if new_today > 8 else "↓"
+        trend_sign = "\u2191" if new_today > 8 else "\u2193"
         trend_color = C_HIGH if new_today > 8 else C_LOW
 
-        pill_style_base = (
-            "display:inline-block;padding:4px 14px;border-radius:20px;"
-            "font-size:12px;font-weight:700;letter-spacing:0.08em;margin-right:8px"
+        tag_style_base = (
+            "display:inline-block;padding:4px 12px;"
+            "font-size:11px;font-weight:600;letter-spacing:0.04em;margin-right:8px;"
+            f"font-family:{_SANS};border-bottom:2px solid"
         )
 
         inner = (
@@ -210,28 +217,33 @@ def _render_signal_hero(signals: list) -> None:
 
             # left: posture
             f"<div>"
-            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.12em;"
-            f"text-transform:uppercase;margin-bottom:6px'>Market Posture</div>"
-            f"<div style='font-size:36px;font-weight:800;color:{posture_color};"
-            f"letter-spacing:0.06em;line-height:1'>{posture}</div>"
-            f"<div style='font-size:13px;color:{trend_color};margin-top:8px'>"
+            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.08em;"
+            f"text-transform:uppercase;margin-bottom:6px;font-family:{_SANS};"
+            f"font-weight:600'>Market Posture</div>"
+            f"<div style='font-size:34px;font-weight:700;color:{posture_color};"
+            f"font-family:{_SERIF};letter-spacing:0.02em;line-height:1'>{posture}</div>"
+            f"<div style='font-size:13px;color:{trend_color};margin-top:10px;"
+            f"font-family:{_SANS}'>"
             f"{trend_sign} {new_today} new signals vs yesterday</div>"
             f"</div>"
 
-            # right: pills + total
+            # right: tags + total
             f"<div style='text-align:right'>"
-            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.12em;"
-            f"text-transform:uppercase;margin-bottom:10px'>Signal Breakdown</div>"
-            f"<div style='margin-bottom:10px'>"
-            f"<span style='{pill_style_base};background:rgba(16,185,129,0.15);"
-            f"color:{C_HIGH};border:1px solid rgba(16,185,129,0.35)'>HIGH {high_n}</span>"
-            f"<span style='{pill_style_base};background:rgba(245,158,11,0.15);"
-            f"color:{C_MOD};border:1px solid rgba(245,158,11,0.35)'>MOD {mod_n}</span>"
-            f"<span style='{pill_style_base};background:rgba(100,116,139,0.15);"
-            f"color:{C_TEXT2};border:1px solid rgba(100,116,139,0.3)'>LOW {low_n}</span>"
+            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.08em;"
+            f"text-transform:uppercase;margin-bottom:12px;font-family:{_SANS};"
+            f"font-weight:600'>Signal Breakdown</div>"
+            f"<div style='margin-bottom:12px'>"
+            f"<span style='{tag_style_base} {C_HIGH};"
+            f"color:{C_HIGH}'>HIGH {high_n}</span>"
+            f"<span style='{tag_style_base} {C_MOD};"
+            f"color:{C_MOD}'>MOD {mod_n}</span>"
+            f"<span style='{tag_style_base} {C_TEXT3};"
+            f"color:{C_TEXT2}'>LOW {low_n}</span>"
             f"</div>"
-            f"<div style='font-size:28px;font-weight:700;color:{C_TEXT}'>{total}"
-            f"<span style='font-size:13px;color:{C_TEXT3};margin-left:6px'>total signals</span>"
+            f"<div style='font-size:28px;font-weight:700;color:{C_TEXT};"
+            f"font-family:{_MONO}'>{total}"
+            f"<span style='font-size:13px;color:{C_TEXT3};margin-left:6px;"
+            f"font-family:{_SANS};font-weight:400'>total signals</span>"
             f"</div></div>"
 
             f"</div>"
@@ -248,13 +260,15 @@ def _render_signal_hero(signals: list) -> None:
 def _render_signal_table(signals: list) -> None:
     try:
         th_style = (
-            f"padding:10px 14px;text-align:left;font-size:10px;font-weight:700;"
-            f"letter-spacing:0.1em;color:{C_TEXT3};text-transform:uppercase;"
-            f"border-bottom:1px solid {C_BORDER};white-space:nowrap"
+            f"padding:10px 14px;text-align:left;font-size:10px;font-weight:600;"
+            f"letter-spacing:0.06em;color:{C_TEXT3};text-transform:uppercase;"
+            f"border-bottom:2px solid {C_RULE};white-space:nowrap;"
+            f"font-family:{_SANS}"
         )
         td_style = (
             f"padding:10px 14px;font-size:12px;color:{C_TEXT2};"
-            f"border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:middle"
+            f"border-bottom:1px solid {C_RULE};vertical-align:middle;"
+            f"font-family:{_SANS}"
         )
 
         header = (
@@ -278,13 +292,15 @@ def _render_signal_table(signals: list) -> None:
             )
             sig_html = (
                 f"<span style='font-size:11px;color:{C_ACCENT};font-weight:600;"
-                f"letter-spacing:0.05em'>{signal_type}</span>"
+                f"letter-spacing:0.03em;font-family:{_SANS}'>{signal_type}</span>"
             )
             time_html = (
-                f"<span style='font-size:11px;color:{C_TEXT3}'>{time_ago}</span>"
+                f"<span style='font-size:11px;color:{C_TEXT3};"
+                f"font-family:{_SANS}'>{time_ago}</span>"
             )
             basis_html = (
-                f"<span style='font-size:11px;color:{C_TEXT3}'>{basis}</span>"
+                f"<span style='font-size:11px;color:{C_TEXT3};"
+                f"font-family:{_SANS}'>{basis}</span>"
             )
             rows.append(
                 f"<tr>"
@@ -302,7 +318,7 @@ def _render_signal_table(signals: list) -> None:
         table = (
             f"<div style='overflow-x:auto'>"
             f"<table style='width:100%;border-collapse:collapse;background:{C_CARD};"
-            f"border-radius:10px;overflow:hidden'>"
+            f"overflow:hidden'>"
             f"{header}{body}"
             f"</table></div>"
         )
@@ -327,9 +343,9 @@ def _render_multi_index_chart() -> None:
 
         series = {
             "BDI":  (_gen_index(1.0, 0.018), C_ACCENT),
-            "WCI":  (_gen_index(1.0, 0.014), "#10b981"),
-            "SCFI": (_gen_index(1.0, 0.012), "#f59e0b"),
-            "CCFI": (_gen_index(1.0, 0.010), "#8b5cf6"),
+            "WCI":  (_gen_index(1.0, 0.014), C_HIGH),
+            "SCFI": (_gen_index(1.0, 0.012), C_MOD),
+            "CCFI": (_gen_index(1.0, 0.010), "#7a6e9b"),
         }
 
         fig = go.Figure()
@@ -338,12 +354,12 @@ def _render_multi_index_chart() -> None:
                 x=list(days),
                 y=vals,
                 name=name,
-                line=dict(color=color, width=2),
+                line=dict(color=color, width=1.5),
                 hovertemplate=f"<b>{name}</b>: %{{y:.1f}}<extra></extra>",
             ))
 
         fig.add_hline(
-            y=100, line_dash="dot", line_color="rgba(255,255,255,0.15)", line_width=1
+            y=100, line_dash="dot", line_color=C_RULE, line_width=1
         )
 
         fig.update_layout(
@@ -352,22 +368,26 @@ def _render_multi_index_chart() -> None:
             plot_bgcolor=C_CARD,
             height=320,
             margin=dict(l=0, r=0, t=10, b=0),
+            font=dict(family=_SANS.replace("'", "")),
             legend=dict(
                 orientation="h",
                 yanchor="bottom", y=1.02,
                 xanchor="right",  x=1,
-                font=dict(size=11, color=C_TEXT2),
+                font=dict(size=11, color=C_TEXT2,
+                          family=_SANS.replace("'", "")),
                 bgcolor="rgba(0,0,0,0)",
             ),
             xaxis=dict(
                 showgrid=False,
-                tickfont=dict(color=C_TEXT3, size=10),
+                tickfont=dict(color=C_TEXT3, size=10,
+                              family=_SANS.replace("'", "")),
                 tickformat="%b %d",
             ),
             yaxis=dict(
                 showgrid=True,
-                gridcolor="rgba(255,255,255,0.05)",
-                tickfont=dict(color=C_TEXT3, size=10),
+                gridcolor=C_RULE,
+                tickfont=dict(color=C_TEXT3, size=10,
+                              family=_MONO.replace("'", "")),
                 ticksuffix="",
             ),
             hovermode="x unified",
@@ -397,13 +417,14 @@ def _render_freight_heatmap(freight_data) -> None:
             changes.append(row)
 
         th_style = (
-            f"padding:8px 12px;font-size:10px;font-weight:700;letter-spacing:0.08em;"
+            f"padding:8px 12px;font-size:10px;font-weight:600;letter-spacing:0.04em;"
             f"color:{C_TEXT3};text-transform:uppercase;text-align:center;"
-            f"border-bottom:1px solid {C_BORDER}"
+            f"border-bottom:2px solid {C_RULE};font-family:{_SANS}"
         )
         route_td = (
             f"padding:8px 12px;font-size:11px;color:{C_TEXT2};font-weight:600;"
-            f"white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.04)"
+            f"white-space:nowrap;border-bottom:1px solid {C_RULE};"
+            f"font-family:{_SANS}"
         )
 
         header_cells = "".join(
@@ -426,7 +447,7 @@ def _render_freight_heatmap(freight_data) -> None:
                 cells += (
                     f"<td style='padding:8px 10px;text-align:center;background:{bg};"
                     f"font-family:{_MONO};font-size:11px;color:{txt_color};"
-                    f"border-bottom:1px solid rgba(255,255,255,0.04)'>{pct}</td>"
+                    f"border-bottom:1px solid {C_RULE}'>{pct}</td>"
                 )
             rows.append(
                 f"<tr>"
@@ -438,7 +459,7 @@ def _render_freight_heatmap(freight_data) -> None:
         table = (
             f"<div style='overflow-x:auto'>"
             f"<table style='width:100%;border-collapse:collapse;background:{C_CARD};"
-            f"border-radius:10px;overflow:hidden'>"
+            f"overflow:hidden'>"
             f"{header}{body}"
             f"</table></div>"
         )
@@ -467,13 +488,13 @@ def _render_correlation_matrix() -> None:
         corr_mock = np.clip(corr_mock + rng.normal(0, 0.04, corr_mock.shape), -1, 1)
 
         th_style = (
-            f"padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:0.08em;"
+            f"padding:10px 14px;font-size:10px;font-weight:600;letter-spacing:0.04em;"
             f"color:{C_TEXT3};text-transform:uppercase;text-align:center;"
-            f"border-bottom:1px solid {C_BORDER}"
+            f"border-bottom:2px solid {C_RULE};font-family:{_SANS}"
         )
         row_header_style = (
             f"padding:10px 14px;font-size:11px;font-weight:700;color:{C_TEXT2};"
-            f"font-family:{_MONO};border-bottom:1px solid rgba(255,255,255,0.04);"
+            f"font-family:{_MONO};border-bottom:1px solid {C_RULE};"
             f"white-space:nowrap"
         )
 
@@ -497,7 +518,7 @@ def _render_correlation_matrix() -> None:
                 cells += (
                     f"<td style='padding:10px 14px;text-align:center;background:{bg};"
                     f"font-family:{_MONO};font-size:12px;color:{txt_color};"
-                    f"font-weight:600;border-bottom:1px solid rgba(255,255,255,0.04)'>"
+                    f"font-weight:600;border-bottom:1px solid {C_RULE}'>"
                     f"{v:+.2f}</td>"
                 )
             rows.append(
@@ -510,16 +531,17 @@ def _render_correlation_matrix() -> None:
         legend_items = [
             (C_HIGH,  "+1.0 = perfect positive"),
             (C_TEXT3, " 0.0 = no correlation"),
-            (C_LOW,   "-1.0 = perfect negative"),
+            (C_LOW,   "\u22121.0 = perfect negative"),
         ]
         legend_html = "".join(
-            f"<span style='margin-right:16px;font-size:11px;color:{c}'>{l}</span>"
+            f"<span style='margin-right:16px;font-size:11px;color:{c};"
+            f"font-family:{_SANS}'>{l}</span>"
             for c, l in legend_items
         )
         table = (
             f"<div style='overflow-x:auto'>"
             f"<table style='width:100%;border-collapse:collapse;background:{C_CARD};"
-            f"border-radius:10px;overflow:hidden'>"
+            f"overflow:hidden'>"
             f"{header}<tbody>{''.join(rows)}</tbody>"
             f"</table>"
             f"<div style='margin-top:10px;padding:0 4px'>{legend_html}</div>"
@@ -551,7 +573,8 @@ def _render_conviction_chart(signals: list) -> None:
             marker=dict(color=colors, line=dict(width=0)),
             text=[str(v) for v in values],
             textposition="outside",
-            textfont=dict(color=C_TEXT2, size=12),
+            textfont=dict(color=C_TEXT2, size=12,
+                          family=_MONO.replace("'", "")),
             hovertemplate="<b>%{y}</b>: %{x} signals<extra></extra>",
         ))
 
@@ -561,14 +584,17 @@ def _render_conviction_chart(signals: list) -> None:
             plot_bgcolor=C_CARD,
             height=180,
             margin=dict(l=0, r=40, t=10, b=0),
+            font=dict(family=_SANS.replace("'", "")),
             xaxis=dict(
                 showgrid=True,
-                gridcolor="rgba(255,255,255,0.05)",
-                tickfont=dict(color=C_TEXT3, size=10),
+                gridcolor=C_RULE,
+                tickfont=dict(color=C_TEXT3, size=10,
+                              family=_MONO.replace("'", "")),
                 range=[0, max(values) * 1.25],
             ),
             yaxis=dict(
-                tickfont=dict(color=C_TEXT2, size=12, family=_MONO),
+                tickfont=dict(color=C_TEXT2, size=12,
+                              family=_SANS.replace("'", "")),
                 showgrid=False,
             ),
             showlegend=False,
@@ -583,11 +609,15 @@ def _render_conviction_chart(signals: list) -> None:
 # ── main entry point ─────────────────────────────────────────────────────────────
 
 def render(stock_data, macro_data, insights, freight_data=None) -> None:
-    """Institutional markets & signals dashboard."""
+    """Institutional markets & signals dashboard -- WSJ editorial style."""
 
-    # inject page-level CSS once
+    # inject page-level CSS and Google Fonts
     st.markdown(
         f"<style>"
+        f"@import url('https://fonts.googleapis.com/css2?"
+        f"family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&"
+        f"family=Libre+Franklin:wght@300;400;500;600;700&"
+        f"family=JetBrains+Mono:wght@400;500;600;700&display=swap');"
         f"[data-testid='stAppViewContainer'] {{background:{C_BG}}}"
         f"[data-testid='block-container'] {{padding-top:1rem}}"
         f"</style>",
@@ -606,9 +636,9 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                         str(getattr(item, "signal",    item.get("signal",    "MOMENTUM"))),
                         str(getattr(item, "conviction",item.get("conviction","MODERATE"))).upper(),
                         str(getattr(item, "direction", item.get("direction", "LONG"))).upper(),
-                        str(getattr(item, "change",    item.get("change",    "—"))),
-                        str(getattr(item, "time_ago",  item.get("time_ago",  "—"))),
-                        str(getattr(item, "basis",     item.get("basis",     "—"))),
+                        str(getattr(item, "change",    item.get("change",    "\u2014"))),
+                        str(getattr(item, "time_ago",  item.get("time_ago",  "\u2014"))),
+                        str(getattr(item, "basis",     item.get("basis",     "\u2014"))),
                     )
                     live.append(sig)
                 except Exception:
@@ -621,12 +651,16 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     # ── hero ────────────────────────────────────────────────────────────────────
     try:
         st.markdown(
-            f"<div style='margin-bottom:20px'>"
-            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.14em;"
-            f"text-transform:uppercase;margin-bottom:4px'>Signal Intelligence</div>"
-            f"<div style='font-size:22px;font-weight:800;color:{C_TEXT}'>"
+            f"<div style='margin-bottom:24px;border-bottom:1px solid {C_RULE};"
+            f"padding-bottom:16px'>"
+            f"<div style='font-size:11px;color:{C_TEXT3};letter-spacing:0.08em;"
+            f"text-transform:uppercase;margin-bottom:6px;font-family:{_SANS};"
+            f"font-weight:600'>Signal Intelligence</div>"
+            f"<div style='font-size:26px;font-weight:700;color:{C_TEXT};"
+            f"font-family:{_SERIF};line-height:1.2'>"
             f"Markets &amp; Signals Dashboard</div>"
-            f"<div style='font-size:12px;color:{C_TEXT3};margin-top:2px'>"
+            f"<div style='font-size:13px;color:{C_TEXT3};margin-top:4px;"
+            f"font-family:{_SANS};font-weight:400'>"
             f"Live signal monitoring across shipping indices, routes, and equities</div>"
             f"</div>",
             unsafe_allow_html=True,
@@ -645,7 +679,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
         st.markdown(
             _section_title(
                 "Signal Intelligence Table",
-                f"{len(signals)} active signals · sortable by conviction",
+                f"{len(signals)} active signals \u00b7 sortable by conviction",
             ),
             unsafe_allow_html=True,
         )
@@ -658,14 +692,14 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
         st.markdown(
             _section_title(
                 "Multi-Index Performance",
-                "BDI, WCI, SCFI, CCFI · indexed to 100 · trailing 90 trading days",
+                "BDI, WCI, SCFI, CCFI \u00b7 indexed to 100 \u00b7 trailing 90 trading days",
             ),
             unsafe_allow_html=True,
         )
         with st.container():
             st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-radius:12px;padding:16px 20px'>",
+                f"<div style='background:{C_CARD};border:1px solid {C_RULE};"
+                f"padding:16px 20px'>",
                 unsafe_allow_html=True,
             )
             _render_multi_index_chart()
@@ -682,7 +716,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                 st.markdown(
                     _section_title(
                         "Freight Rate Heatmap",
-                        "12 trade routes · weekly rate change · deep green = up, deep red = down",
+                        "12 trade routes \u00b7 weekly rate change \u00b7 green = up, red = down",
                     ),
                     unsafe_allow_html=True,
                 )
@@ -695,7 +729,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                 st.markdown(
                     _section_title(
                         "Correlation Matrix",
-                        "Shipping indices vs macro assets · 90-day rolling",
+                        "Shipping indices vs macro assets \u00b7 90-day rolling",
                     ),
                     unsafe_allow_html=True,
                 )
@@ -719,8 +753,8 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
             )
             with st.container():
                 st.markdown(
-                    f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                    f"border-radius:12px;padding:16px 20px'>",
+                    f"<div style='background:{C_CARD};border:1px solid {C_RULE};"
+                    f"padding:16px 20px'>",
                     unsafe_allow_html=True,
                 )
                 _render_conviction_chart(signals)
@@ -741,7 +775,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                     "MOMENTUM":       C_ACCENT,
                     "MEAN REVERSION": C_HIGH,
                     "BDI DIVERGENCE": C_MOD,
-                    "MACRO OVERLAY":  "#8b5cf6",
+                    "MACRO OVERLAY":  "#7a6e9b",
                 }
 
                 rows_html = ""
@@ -753,15 +787,16 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
                         f"<div style='margin-bottom:14px'>"
                         f"<div style='display:flex;justify-content:space-between;"
                         f"margin-bottom:5px'>"
-                        f"<span style='font-size:12px;color:{C_TEXT2};font-weight:600'>"
+                        f"<span style='font-size:12px;color:{C_TEXT2};font-weight:600;"
+                        f"font-family:{_SANS}'>"
                         f"{stype}</span>"
                         f"<span style='font-size:12px;color:{C_TEXT3};font-family:{_MONO}'>"
                         f"{count} ({pct:.0f}%)</span>"
                         f"</div>"
-                        f"<div style='height:6px;background:rgba(255,255,255,0.06);"
-                        f"border-radius:3px;overflow:hidden'>"
+                        f"<div style='height:4px;background:{C_RULE};"
+                        f"overflow:hidden'>"
                         f"<div style='height:100%;width:{pct:.1f}%;background:{bar_c};"
-                        f"border-radius:3px;transition:width 0.4s ease'></div>"
+                        f"transition:width 0.4s ease'></div>"
                         f"</div></div>"
                     )
 
@@ -779,10 +814,10 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     try:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         st.markdown(
-            f"<div style='margin-top:32px;padding:16px 0;border-top:1px solid {C_BORDER};"
+            f"<div style='margin-top:36px;padding:14px 0;border-top:1px solid {C_RULE};"
             f"display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
-            f"<span style='font-size:11px;color:{C_TEXT3}'>Markets &amp; Signals · "
-            f"Institutional Dashboard</span>"
+            f"<span style='font-size:11px;color:{C_TEXT3};font-family:{_SANS}'>"
+            f"Markets &amp; Signals \u00b7 Institutional Dashboard</span>"
             f"<span style='font-size:11px;color:{C_TEXT3};font-family:{_MONO}'>"
             f"Last updated: {now}</span>"
             f"</div>",

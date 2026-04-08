@@ -135,12 +135,12 @@ _REGION_DOMINANT_CARGO: dict[str, list[str]] = {
 def _demand_signal(yoy_growth: float) -> tuple[str, str]:
     """Return (signal_label, signal_color) based on YoY growth."""
     if yoy_growth > 5.0:
-        return "SURGING", "#10b981"
+        return "SURGING", "#2e9e6e"
     if yoy_growth > 2.0:
-        return "GROWING", "#3b82f6"
+        return "GROWING", "#3572b0"
     if yoy_growth > -1.0:
-        return "STABLE", "#64748b"
-    return "DECLINING", "#ef4444"
+        return "STABLE", "#6b6760"
+    return "DECLINING", "#c0392b"
 
 
 def _key_insight(category: str, yoy_growth: float, signal: str) -> str:

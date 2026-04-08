@@ -28,12 +28,12 @@ from ui.styles import (
 # Constants
 # ---------------------------------------------------------------------------
 
-C_SURFACE = "#111827"
+C_SURFACE = "#12151e"
 
 _C_USER_BG  = "#1d4ed8"
-_C_ASST_BG  = "#1a2235"
+_C_ASST_BG  = "#181c28"
 _C_USER_TXT = "#ffffff"
-_C_ASST_TXT = "#f1f5f9"
+_C_ASST_TXT = "#e8e6e1"
 
 QUICK_QUESTIONS = [
     "What are current Asia-Europe freight rates?",
@@ -61,8 +61,8 @@ _CHAT_CSS = """
     40%            { opacity: 1;   transform: scale(1.1); }
 }
 .assistant-hero {
-    background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 40%, #111827 100%);
-    border: 1px solid rgba(59,130,246,0.25);
+    background: linear-gradient(135deg, #0c0e14 0%, #0f172a 40%, #12151e 100%);
+    border: 1px solid rgba(53,114,176,0.25);
     border-radius: 16px;
     padding: 32px 36px 28px;
     margin-bottom: 20px;
@@ -74,27 +74,27 @@ _CHAT_CSS = """
     position: absolute;
     top: -60px; right: -60px;
     width: 220px; height: 220px;
-    background: radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(53,114,176,0.12) 0%, transparent 70%);
     pointer-events: none;
 }
 .assistant-hero-label {
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 3px;
-    color: #3b82f6;
+    color: #3572b0;
     text-transform: uppercase;
     margin-bottom: 6px;
 }
 .assistant-hero-title {
     font-size: 22px;
     font-weight: 800;
-    color: #f1f5f9;
+    color: #e8e6e1;
     letter-spacing: 1px;
     margin-bottom: 6px;
 }
 .assistant-hero-sub {
     font-size: 13px;
-    color: #64748b;
+    color: #6b6760;
     line-height: 1.5;
 }
 .chip-row {
@@ -104,25 +104,25 @@ _CHAT_CSS = """
     margin-bottom: 20px;
 }
 .chip {
-    background: #1a2235;
-    border: 1px solid rgba(59,130,246,0.3);
+    background: #181c28;
+    border: 1px solid rgba(53,114,176,0.3);
     border-radius: 20px;
     padding: 5px 13px;
     font-size: 11px;
-    color: #94a3b8;
+    color: #9a968e;
     cursor: pointer;
     transition: all 0.15s ease;
     white-space: nowrap;
 }
 .chip:hover {
-    background: rgba(59,130,246,0.15);
-    border-color: #3b82f6;
-    color: #f1f5f9;
+    background: rgba(53,114,176,0.15);
+    border-color: #3572b0;
+    color: #e8e6e1;
 }
 .chat-window {
-    background: #0a0f1a;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 12px;
+    background: #0c0e14;
+    border: 1px solid rgba(232,230,225,0.06);
+    border-radius: 6px;
     padding: 20px;
     min-height: 320px;
     max-height: 520px;
@@ -147,7 +147,7 @@ _CHAT_CSS = """
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+    background: linear-gradient(135deg, #1d4ed8, #3572b0);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -167,9 +167,9 @@ _CHAT_CSS = """
     line-height: 1.55;
 }
 .msg-bubble-asst {
-    background: #1a2235;
-    color: #f1f5f9;
-    border: 1px solid rgba(255,255,255,0.07);
+    background: #181c28;
+    color: #e8e6e1;
+    border: 1px solid rgba(232,230,225,0.06);
     border-radius: 4px 16px 16px 16px;
     padding: 12px 16px;
     max-width: 82%;
@@ -178,13 +178,13 @@ _CHAT_CSS = """
 }
 .msg-meta {
     font-size: 10px;
-    color: #64748b;
+    color: #6b6760;
     margin-top: 4px;
     text-align: right;
 }
 .msg-meta-left {
     font-size: 10px;
-    color: #64748b;
+    color: #6b6760;
     margin-top: 4px;
 }
 .followup-row {
@@ -193,21 +193,21 @@ _CHAT_CSS = """
     gap: 6px;
     margin-top: 10px;
     padding-top: 10px;
-    border-top: 1px solid rgba(255,255,255,0.06);
+    border-top: 1px solid rgba(232,230,225,0.05);
 }
 .followup-chip {
-    background: rgba(59,130,246,0.08);
-    border: 1px solid rgba(59,130,246,0.2);
-    border-radius: 12px;
+    background: rgba(53,114,176,0.08);
+    border: 1px solid rgba(53,114,176,0.2);
+    border-radius: 6px;
     padding: 4px 10px;
     font-size: 11px;
-    color: #3b82f6;
+    color: #3572b0;
     cursor: pointer;
 }
 .ctx-panel {
-    background: #111827;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 12px;
+    background: #12151e;
+    border: 1px solid rgba(232,230,225,0.06);
+    border-radius: 6px;
     padding: 18px;
     margin-bottom: 14px;
 }
@@ -215,7 +215,7 @@ _CHAT_CSS = """
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 2.5px;
-    color: #64748b;
+    color: #6b6760;
     text-transform: uppercase;
     margin-bottom: 12px;
 }
@@ -224,7 +224,7 @@ _CHAT_CSS = """
     align-items: center;
     justify-content: space-between;
     padding: 7px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(232,230,225,0.04);
 }
 .ctx-row:last-child { border-bottom: none; }
 .ctx-dot {
@@ -235,15 +235,15 @@ _CHAT_CSS = """
 }
 .ctx-label {
     font-size: 12px;
-    color: #94a3b8;
+    color: #9a968e;
     display: flex;
     align-items: center;
     gap: 6px;
 }
 .ctx-fresh {
     font-size: 10px;
-    color: #64748b;
-    background: rgba(255,255,255,0.04);
+    color: #6b6760;
+    background: rgba(232,230,225,0.04);
     border-radius: 6px;
     padding: 2px 7px;
 }
@@ -261,7 +261,7 @@ _CHAT_CSS = """
 }
 .empty-text {
     font-size: 13px;
-    color: #64748b;
+    color: #6b6760;
     text-align: center;
     line-height: 1.6;
 }
@@ -339,14 +339,14 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
                                "container rate", "shipping rate")):
         summary = _extract_freight_summary(freight_data)
         answer = (
-            f"<b>Current Freight Rate Snapshot</b> <span style='color:#64748b;font-size:11px'>as of {now}</span><br><br>"
-            f"<span style='color:#10b981'>{summary}</span><br><br>"
+            f"<b>Current Freight Rate Snapshot</b> <span style='color:#6b6760;font-size:11px'>as of {now}</span><br><br>"
+            f"<span style='color:#2e9e6e'>{summary}</span><br><br>"
             "Asia-Europe SCFI rates have shown significant volatility over the past 12 months, driven by Red Sea rerouting, "
             "capacity discipline by the major carriers, and fluctuating demand out of China. "
             "Spot rates on the Asia–North Europe lane currently trade at a premium to contract rates as shippers scramble "
             "for space on extended voyages around the Cape of Good Hope. "
             "Transpacific rates remain relatively firm heading into the traditional peak season prep window. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: SCFI, Drewry WCI, internal freight engine</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: SCFI, Drewry WCI, internal freight engine</span>"
         )
         followups = [
             "Which carriers are benefiting most from elevated rates?",
@@ -360,14 +360,14 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
         bdi = _extract_bdi(macro_data)
         bdi_str = f"{bdi:,.0f}" if bdi else "~1,850"
         answer = (
-            f"<b>Baltic Dry Index (BDI) Analysis</b> <span style='color:#64748b;font-size:11px'>as of {now}</span><br><br>"
-            f"BDI currently reads <span style='color:#f59e0b;font-size:15px;font-weight:700'>{bdi_str}</span>, "
+            f"<b>Baltic Dry Index (BDI) Analysis</b> <span style='color:#6b6760;font-size:11px'>as of {now}</span><br><br>"
+            f"BDI currently reads <span style='color:#c9962b;font-size:15px;font-weight:700'>{bdi_str}</span>, "
             "reflecting a broadly neutral-to-bullish signal for dry bulk demand. "
             "The BDI is a composite of Capesize, Panamax, Supramax, and Handysize rates weighted by vessel count. "
             "A BDI above 2,000 historically correlates with positive earnings momentum for dry bulk equities — "
             "names like GOGL, SBLK, and NMM tend to show the highest beta to BDI moves. "
             "Watch Capesize rates specifically: they drive ~40% of the index and are the leading indicator for iron ore trade volumes out of Australia and Brazil. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Baltic Exchange, Clarksons, macro engine</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Baltic Exchange, Clarksons, macro engine</span>"
         )
         followups = [
             "Which dry bulk stocks have the highest BDI beta?",
@@ -379,17 +379,17 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Red Sea / Houthi ────────────────────────────────────────────────────
     if any(kw in q for kw in ("red sea", "houthi", "suez reroute", "cape of good hope")):
         answer = (
-            f"<b>Red Sea Disruption — Geopolitical Impact Analysis</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
+            f"<b>Red Sea Disruption — Geopolitical Impact Analysis</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
             "Houthi attacks in the Red Sea and Gulf of Aden have forced the majority of container carriers to reroute "
             "vessels around the Cape of Good Hope since December 2023. "
-            "This adds approximately <span style='color:#f59e0b;font-weight:600'>10–14 days</span> and "
-            "<span style='color:#f59e0b;font-weight:600'>$500–900K</span> in additional bunker costs per round trip. "
-            "The effective reduction in global container capacity is estimated at <span style='color:#ef4444;font-weight:600'>15–20%</span> "
+            "This adds approximately <span style='color:#c9962b;font-weight:600'>10–14 days</span> and "
+            "<span style='color:#c9962b;font-weight:600'>$500–900K</span> in additional bunker costs per round trip. "
+            "The effective reduction in global container capacity is estimated at <span style='color:#c0392b;font-weight:600'>15–20%</span> "
             "as the same number of vessels cover more miles. "
             "Winners: carriers with Cape-capable fleets (Maersk, MSC, COSCO) and owners of large tankers "
             "that benefit from tonne-mile expansion. "
             "Losers: shippers with Just-In-Time supply chains and European importers facing inventory build costs. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Clarksons Research, Kpler, geopolitical intelligence feed</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Clarksons Research, Kpler, geopolitical intelligence feed</span>"
         )
         followups = [
             "How long is the Red Sea disruption expected to last?",
@@ -401,16 +401,16 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Panama Canal ────────────────────────────────────────────────────────
     if any(kw in q for kw in ("panama", "canal", "drought", "locks")):
         answer = (
-            f"<b>Panama Canal — Drought & Transit Restrictions</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
+            f"<b>Panama Canal — Drought & Transit Restrictions</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
             "Unprecedented drought conditions driven by the 2023–24 El Niño reduced Gatun Lake water levels to historic lows, "
             "forcing the Panama Canal Authority (ACP) to cut daily transits from 36–38 to as few as "
-            "<span style='color:#ef4444;font-weight:600'>22–24 vessels</span> at peak restriction. "
+            "<span style='color:#c0392b;font-weight:600'>22–24 vessels</span> at peak restriction. "
             "Draft restrictions limited vessel sizes, pushing Neo-Panamax boxships and LNG carriers to seek Suez Canal alternatives. "
-            "Auction slot prices for priority transits spiked above <span style='color:#f59e0b;font-weight:600'>$4M</span>. "
+            "Auction slot prices for priority transits spiked above <span style='color:#c9962b;font-weight:600'>$4M</span>. "
             "Water levels have partially recovered but ACP continues conservative management. "
             "Long-term, this event accelerated discussions around an alternate canal route and fleet design changes favoring "
             "Suezmax-capable vessels over ultra-large post-Panamax designs. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Panama Canal Authority, Kpler, Bloomberg shipping desk</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Panama Canal Authority, Kpler, Bloomberg shipping desk</span>"
         )
         followups = [
             "What is the current daily transit count at Panama Canal?",
@@ -426,17 +426,17 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
         price_str = f"${zim_info['price']:.2f}" if zim_info and zim_info["price"] else "~$17.50"
         sig_str = zim_info["signal"] if zim_info else "NEUTRAL"
         answer = (
-            f"<b>ZIM Integrated Shipping — Earnings Leverage Analysis</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
-            f"ZIM trades at <span style='color:#f59e0b;font-weight:700'>{price_str}</span> with a current signal of "
-            f"<span style='color:#10b981;font-weight:700'>{sig_str}</span>. "
+            f"<b>ZIM Integrated Shipping — Earnings Leverage Analysis</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
+            f"ZIM trades at <span style='color:#c9962b;font-weight:700'>{price_str}</span> with a current signal of "
+            f"<span style='color:#2e9e6e;font-weight:700'>{sig_str}</span>. "
             "ZIM has among the highest spot-rate leverage of any listed carrier — approximately "
-            "<span style='color:#10b981;font-weight:600'>70–80%</span> of contracts reset annually, "
+            "<span style='color:#2e9e6e;font-weight:600'>70–80%</span> of contracts reset annually, "
             "giving it outsized earnings sensitivity vs. Maersk or Hapag-Lloyd. "
             "A $100/TEU increase in average realized rates translates to roughly $200–250M in incremental EBITDA. "
             "The company's high dividend payout policy (historically 30–50% of net income) amplifies shareholder returns "
             "in up-cycles but creates risk in troughs. "
             "ZIM's Israel domicile and concentrated trade-lane exposure (Transpacific, intra-Asia) add idiosyncratic risk. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: ZIM filings, internal signal engine, Bloomberg consensus</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: ZIM filings, internal signal engine, Bloomberg consensus</span>"
         )
         followups = [
             "How does ZIM's contract mix compare to Maersk?",
@@ -454,16 +454,16 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
         info = next((s for s in signals if s["ticker"] == found_ticker), None)
         price_str = f"${info['price']:.2f}" if info and info["price"] else "N/A"
         sig_str = info["signal"] if info else "—"
-        sig_color = "#10b981" if str(sig_str).upper() in ("LONG", "BUY") else "#ef4444" if str(sig_str).upper() in ("SHORT", "SELL") else "#f59e0b"
+        sig_color = "#2e9e6e" if str(sig_str).upper() in ("LONG", "BUY") else "#c0392b" if str(sig_str).upper() in ("SHORT", "SELL") else "#c9962b"
         answer = (
-            f"<b>{found_ticker} — Shipping Equity Analysis</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
-            f"Current price: <span style='color:#f1f5f9;font-weight:700'>{price_str}</span> &nbsp;|&nbsp; "
+            f"<b>{found_ticker} — Shipping Equity Analysis</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
+            f"Current price: <span style='color:#e8e6e1;font-weight:700'>{price_str}</span> &nbsp;|&nbsp; "
             f"Signal: <span style='color:{sig_color};font-weight:700'>{sig_str}</span><br><br>"
             f"{found_ticker} is tracked within our shipping intelligence universe. "
             "The signal is generated by our multi-factor model incorporating freight rate momentum, "
             "earnings revision trends, technical structure, and macro shipping indicators. "
             "Always cross-reference with latest earnings release and sector positioning before acting. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Internal signal engine, Bloomberg, company filings</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal signal engine, Bloomberg, company filings</span>"
         )
         followups = [
             f"What is the earnings calendar for {found_ticker}?",
@@ -477,14 +477,14 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
         longs = _long_signals(stock_data)
         longs_str = ", ".join(longs) if longs else "ZIM, GOGL, DAC"
         answer = (
-            f"<b>Shipping Stocks — Current LONG Signals</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
-            f"Tickers with active LONG signals: <span style='color:#10b981;font-weight:700'>{longs_str}</span><br><br>"
+            f"<b>Shipping Stocks — Current LONG Signals</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
+            f"Tickers with active LONG signals: <span style='color:#2e9e6e;font-weight:700'>{longs_str}</span><br><br>"
             "These signals are generated by a quantitative model combining: (1) freight rate momentum, "
             "(2) earnings revision direction, (3) technical breakout structure, and (4) macro shipping cycle indicators. "
             "Shipping equities tend to lead freight rate moves by 4–6 weeks as the market prices in contract renewals. "
             "Risk management note: shipping stocks carry high beta to global trade volumes and carry outsized "
             "drawdown risk during demand shocks (COVID-2020, GFC-2008). Position sizing accordingly. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Internal multi-factor signal engine, updated daily</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal multi-factor signal engine, updated daily</span>"
         )
         followups = [
             "What criteria trigger a LONG signal in your model?",
@@ -496,7 +496,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Q2 2026 outlook ──────────────────────────────────────────────────────
     if any(kw in q for kw in ("q2 2026", "outlook", "forecast", "q2")):
         answer = (
-            f"<b>Container Rate Outlook — Q2 2026</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
+            f"<b>Container Rate Outlook — Q2 2026</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
             "Q2 2026 rate outlook is cautiously constructive. Key bull factors: "
             "(1) Red Sea rerouting continues to absorb effective capacity, "
             "(2) carrier capacity discipline has improved vs. 2022–2023 post-COVID flush, "
@@ -504,8 +504,8 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Bear risks: (1) potential Red Sea normalization could release 15–18% effective capacity, "
             "(2) new vessel deliveries (the 2021 ordering cohort) peak in 2025–2026, "
             "(3) global trade policy uncertainty weighing on forward booking visibility. "
-            "Drewry consensus puts WCI on Asia–Europe at <span style='color:#f59e0b;font-weight:600'>$2,800–3,400/FEU</span> for Q2. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Drewry, Alphaliner, Clarksons Research, internal model</span>"
+            "Drewry consensus puts WCI on Asia–Europe at <span style='color:#c9962b;font-weight:600'>$2,800–3,400/FEU</span> for Q2. "
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Drewry, Alphaliner, Clarksons Research, internal model</span>"
         )
         followups = [
             "What is the new vessel delivery schedule for 2026?",
@@ -517,17 +517,17 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Carrier reliability ──────────────────────────────────────────────────
     if any(kw in q for kw in ("carrier", "reliability", "schedule", "on-time")):
         answer = (
-            f"<b>Carrier Schedule Reliability Rankings</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
+            f"<b>Carrier Schedule Reliability Rankings</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
             "Based on Sea-Intelligence Global Liner Performance data:<br><br>"
-            "<span style='color:#10b981'>1. Hapag-Lloyd</span> — 58.2% on-time performance (industry leader)<br>"
-            "<span style='color:#10b981'>2. Maersk</span> — 55.7%<br>"
-            "<span style='color:#f59e0b'>3. CMA CGM</span> — 51.3%<br>"
-            "<span style='color:#f59e0b'>4. ONE (Ocean Network Express)</span> — 49.8%<br>"
-            "<span style='color:#ef4444'>5. Evergreen</span> — 44.1%<br><br>"
+            "<span style='color:#2e9e6e'>1. Hapag-Lloyd</span> — 58.2% on-time performance (industry leader)<br>"
+            "<span style='color:#2e9e6e'>2. Maersk</span> — 55.7%<br>"
+            "<span style='color:#c9962b'>3. CMA CGM</span> — 51.3%<br>"
+            "<span style='color:#c9962b'>4. ONE (Ocean Network Express)</span> — 49.8%<br>"
+            "<span style='color:#c0392b'>5. Evergreen</span> — 44.1%<br><br>"
             "Note: Red Sea rerouting has structurally degraded schedule reliability across all carriers "
             "by 8–12 percentage points vs. pre-disruption norms. "
             "Schedule reliability correlates strongly with shipper contract retention and premium pricing power. "
-            "<br><br><span style='color:#64748b;font-size:11px'>Source: Sea-Intelligence Global Liner Performance, Q1 2026</span>"
+            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Sea-Intelligence Global Liner Performance, Q1 2026</span>"
         )
         followups = [
             "How does reliability affect contract pricing negotiations?",
@@ -543,16 +543,16 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     longs = _long_signals(stock_data)
     longs_str = ", ".join(longs[:4]) if longs else "ZIM, GOGL"
     answer = (
-        f"<b>Shipping Market Intelligence — Overview</b> <span style='color:#64748b;font-size:11px'>{now}</span><br><br>"
+        f"<b>Shipping Market Intelligence — Overview</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
         f"<b>Freight Rates:</b> {freight_summary}<br>"
-        f"<b>Baltic Dry Index:</b> <span style='color:#f59e0b'>{bdi_str}</span> — neutral-to-bullish dry bulk signal<br>"
-        f"<b>Top LONG Signals:</b> <span style='color:#10b981'>{longs_str}</span><br><br>"
+        f"<b>Baltic Dry Index:</b> <span style='color:#c9962b'>{bdi_str}</span> — neutral-to-bullish dry bulk signal<br>"
+        f"<b>Top LONG Signals:</b> <span style='color:#2e9e6e'>{longs_str}</span><br><br>"
         "The global shipping market remains in a structurally disrupted state driven by Red Sea rerouting, "
         "sustained container demand out of Asia, and tightening carrier capacity discipline. "
         "Dry bulk markets are tracking iron ore and coal flows closely — watch Brazil–China Capesize routes "
         "as the leading demand indicator. "
         "For specific analysis, ask about freight rates, BDI trends, individual tickers, or geopolitical disruptions. "
-        "<br><br><span style='color:#64748b;font-size:11px'>Source: Internal shipping intelligence engine — all data as of market close</span>"
+        "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal shipping intelligence engine — all data as of market close</span>"
     )
     followups = [
         "What are the key risks to shipping rates in 2026?",
@@ -643,15 +643,15 @@ def _context_panel_html(freight_data, macro_data, stock_data,
     macro_ok = bool(macro_data)
 
     rows = (
-        _row("#10b981" if freight_ok else "#64748b", "Freight Data",
+        _row("#2e9e6e" if freight_ok else "#6b6760", "Freight Data",
              f"Live {now_str}" if freight_ok else "Unavailable")
-        + _row("#10b981" if port_ok else "#64748b", "Port Data",
+        + _row("#2e9e6e" if port_ok else "#6b6760", "Port Data",
                f"Live {now_str}" if port_ok else "Unavailable")
-        + _row("#10b981" if signal_ok else "#64748b", "Signal Data",
+        + _row("#2e9e6e" if signal_ok else "#6b6760", "Signal Data",
                f"Live {now_str}" if signal_ok else "Unavailable")
-        + _row("#10b981" if macro_ok else "#64748b", "Macro Data",
+        + _row("#2e9e6e" if macro_ok else "#6b6760", "Macro Data",
                f"Live {now_str}" if macro_ok else "Unavailable")
-        + _row("#f59e0b", "News Data", "~15 min delay")
+        + _row("#c9962b", "News Data", "~15 min delay")
     )
 
     return (
@@ -709,7 +709,7 @@ def render(
 
         # Quick question chips (display only — buttons below handle interaction)
         st.markdown(
-            '<div style="font-size:10px;font-weight:700;letter-spacing:2px;color:#64748b;'
+            '<div style="font-size:10px;font-weight:700;letter-spacing:2px;color:#6b6760;'
             'text-transform:uppercase;margin-bottom:8px">&#9632; QUICK QUESTIONS</div>',
             unsafe_allow_html=True,
         )
@@ -842,7 +842,7 @@ def render(
         st.markdown(
             '<div class="ctx-panel" style="margin-top:0">'
             '<div class="ctx-title">&#9632; HOW TO USE</div>'
-            '<div style="font-size:12px;color:#94a3b8;line-height:1.7">'
+            '<div style="font-size:12px;color:#9a968e;line-height:1.7">'
             '&#8226; Click any quick question chip<br>'
             '&#8226; Ask about specific tickers<br>'
             '&#8226; Ask about freight routes<br>'
@@ -857,7 +857,7 @@ def render(
         longs = _long_signals(stock_data)
         if longs:
             long_items = "".join(
-                f'<div style="color:#10b981;font-size:12px;font-weight:600;padding:3px 0">'
+                f'<div style="color:#2e9e6e;font-size:12px;font-weight:600;padding:3px 0">'
                 f'&#8679; {t}</div>'
                 for t in longs[:6]
             )

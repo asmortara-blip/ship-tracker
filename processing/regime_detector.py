@@ -150,7 +150,7 @@ def classify_macro_regime(macro_data: dict[str, pd.DataFrame]) -> MacroRegime:
             pmi_direction="flat",
             fuel_environment="moderate",
             shipping_regime_label="Moderating Growth",
-            regime_color="#3b82f6",
+            regime_color="#3572b0",
             best_routes_in_regime=["intra_asia_china_sea"],
             best_stocks_in_regime=["CMRE", "SBLK"],
             regime_description=(
@@ -176,7 +176,7 @@ def classify_macro_regime(macro_data: dict[str, pd.DataFrame]) -> MacroRegime:
             pmi_direction=pmi_direction,
             fuel_environment=fuel_env,
             shipping_regime_label="Bull Freight Market",
-            regime_color="#10b981",
+            regime_color="#2e9e6e",
             best_routes_in_regime=["transpacific_eb", "asia_europe"],
             best_stocks_in_regime=["ZIM", "MATX", "DAC"],
             regime_description=(
@@ -200,7 +200,7 @@ def classify_macro_regime(macro_data: dict[str, pd.DataFrame]) -> MacroRegime:
             pmi_direction=pmi_direction,
             fuel_environment=fuel_env,
             shipping_regime_label="Bear Freight Cycle",
-            regime_color="#ef4444",
+            regime_color="#c0392b",
             best_routes_in_regime=[],
             best_stocks_in_regime=[],
             regime_description=(
@@ -225,7 +225,7 @@ def classify_macro_regime(macro_data: dict[str, pd.DataFrame]) -> MacroRegime:
             pmi_direction=pmi_direction,
             fuel_environment=fuel_env,
             shipping_regime_label="Early Recovery",
-            regime_color="#f59e0b",
+            regime_color="#c9962b",
             best_routes_in_regime=["transpacific_eb", "asia_europe"],
             best_stocks_in_regime=["ZIM", "MATX"],
             regime_description=(
@@ -248,7 +248,7 @@ def classify_macro_regime(macro_data: dict[str, pd.DataFrame]) -> MacroRegime:
         pmi_direction=pmi_direction,
         fuel_environment=fuel_env,
         shipping_regime_label="Moderating Growth",
-        regime_color="#3b82f6",
+        regime_color="#3572b0",
         best_routes_in_regime=["intra_asia_china_sea"],
         best_stocks_in_regime=["CMRE", "SBLK"],
         regime_description=(

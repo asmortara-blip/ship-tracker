@@ -169,14 +169,16 @@ def get_fundamentals_data() -> dict:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
-    # Brand header
+    # WSJ Brand header
     st.markdown("""
-    <div style="padding:12px 0 16px 0; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:12px">
-        <div style="font-size:1.45rem; font-weight:900; color:#f1f5f9; letter-spacing:-0.03em; line-height:1">
-            🚢 Ship Tracker
+    <div style="padding:10px 0 14px 0;border-bottom:2px solid rgba(232,230,225,0.1);margin-bottom:12px">
+        <div style="font-family:'Libre Baskerville','Georgia',serif;font-size:1.2rem;
+                    font-weight:700;color:#e8e6e1;letter-spacing:-0.01em;line-height:1.1">
+            The Ship Tracker
         </div>
-        <div style="font-size:0.7rem; color:#475569; margin-top:4px; text-transform:uppercase; letter-spacing:0.1em">
-            Global Shipping Intelligence
+        <div style="font-family:'Libre Franklin',sans-serif;font-size:0.62rem;color:#6b6760;
+                    margin-top:4px;text-transform:uppercase;letter-spacing:0.12em;font-weight:600">
+            Shipping Intelligence
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -205,11 +207,15 @@ with st.sidebar:
             else ("Stale: " + _age_label(_info.get("age_hours"))) if _info["status"] == "stale"
             else _age_label(_info.get("age_hours"))
         )
+        _dot_color = "#2e9e6e" if _info["status"] == "fresh" else ("#c9962b" if _info["status"] == "stale" else "#c0392b")
         st.markdown(
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04)">'
-            f'<span style="font-size:0.73rem;color:#f1f5f9">{_info["icon"]} {_src_name}</span>'
-            f'<span style="font-size:0.68rem;color:#64748b">{_detail}</span></div>',
+            f'padding:4px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">'
+            f'<span style="display:flex;align-items:center;gap:6px;font-size:0.73rem;color:#e8e6e1;'
+            f'font-family:Libre Franklin,sans-serif">'
+            f'<span style="width:5px;height:5px;border-radius:50%;background:{_dot_color};flex-shrink:0"></span>'
+            f'{_src_name}</span>'
+            f'<span style="font-size:0.68rem;color:#6b6760;font-family:JetBrains Mono,monospace">{_detail}</span></div>',
             unsafe_allow_html=True,
         )
 
@@ -339,6 +345,42 @@ except Exception as exc:
     logger.warning(f"Leading indicators unavailable: {exc}")
     leading_score = {}
 
+# Trade bellwether indicators (new WSJ-style enrichment)
+try:
+    from processing.trade_bellwethers import compute_bellwether_score, compute_earnings_calendar, compute_yield_curve_analysis
+    bellwether_score = compute_bellwether_score(macro_data)
+    earnings_calendar = compute_earnings_calendar()
+    yield_curve_analysis = compute_yield_curve_analysis(macro_data)
+except Exception as exc:
+    logger.warning(f"Trade bellwethers unavailable: {exc}")
+    bellwether_score = {}
+    earnings_calendar = []
+    yield_curve_analysis = {}
+
+# Supply chain composite risk score
+try:
+    from processing.supply_chain_risk import compute_supply_chain_risk_score
+    sc_risk_data = compute_supply_chain_risk_score(port_results, freight_data, macro_data, route_results)
+except Exception as exc:
+    logger.warning(f"Supply chain risk unavailable: {exc}")
+    sc_risk_data = {}
+
+# Rate regime analytics
+try:
+    from processing.rate_analytics import compute_rate_regime
+    rate_regime_data = compute_rate_regime(freight_data)
+except Exception as exc:
+    logger.warning(f"Rate regime unavailable: {exc}")
+    rate_regime_data = {}
+
+# Company profiles
+try:
+    from processing.company_profiler import compute_company_profiles
+    company_profiles = compute_company_profiles(stock_data)
+except Exception as exc:
+    logger.warning(f"Company profiler unavailable: {exc}")
+    company_profiles = []
+
 try:
     from processing.eta_predictor import predict_all_routes as predict_all_etas
     etas = predict_all_etas(port_results, freight_data, macro_data)
@@ -362,45 +404,37 @@ except Exception:
 
 with sidebar_signal_placeholder.container():
     st.divider()
-    st.caption("**Signal Pulse**")
+    # WSJ-style Signal Pulse
+    st.markdown('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
+                'font-weight:700;color:#e8e6e1;margin-bottom:8px">Signal Pulse</div>',
+                unsafe_allow_html=True)
     if insights and go is not None:
         avg_score = sum(i.score for i in insights) / len(insights)
-        gauge_color = "#10b981" if avg_score >= 0.70 else ("#f59e0b" if avg_score >= 0.55 else "#ef4444")
-        fig_gauge = go.Figure(go.Pie(
-            values=[avg_score, 1 - avg_score], hole=0.7,
-            marker_colors=[gauge_color, "rgba(255,255,255,0.05)"],
-            textinfo="none", hoverinfo="skip",
-        ))
-        fig_gauge.update_layout(
-            showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=110,
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            annotations=[dict(
-                text=f"<b>{avg_score:.0%}</b><br><span style='font-size:9px'>Health</span>",
-                x=0.5, y=0.5, font=dict(size=15, color=gauge_color), showarrow=False,
-            )],
-        )
-        st.plotly_chart(fig_gauge, use_container_width=True, config={"displayModeBar": False})
-        scores_sorted = sorted([i.score for i in insights], reverse=True)
-        fig_spark = go.Figure(go.Scatter(
-            y=scores_sorted, mode="lines",
-            line=dict(color="#3b82f6", width=2),
-            fill="tozeroy", fillcolor="rgba(59,130,246,0.12)",
-        ))
-        fig_spark.update_layout(
-            height=70, margin=dict(l=0, r=0, t=4, b=0),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(visible=False), yaxis=dict(visible=False, range=[0, 1]),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_spark, use_container_width=True, config={"displayModeBar": False})
+        gauge_color = "#2e9e6e" if avg_score >= 0.70 else ("#c9962b" if avg_score >= 0.55 else "#c0392b")
+        # Compact health bar
+        st.markdown(f"""
+        <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+                <span style="font-size:0.68rem;font-weight:600;color:#6b6760;text-transform:uppercase;
+                             letter-spacing:0.06em;font-family:Libre Franklin,sans-serif">Market Health</span>
+                <span style="font-family:JetBrains Mono,monospace;font-size:0.88rem;
+                             font-weight:700;color:{gauge_color}">{avg_score:.0%}</span>
+            </div>
+            <div style="height:3px;background:rgba(232,230,225,0.06);border-radius:2px;overflow:hidden">
+                <div style="height:100%;width:{avg_score*100:.0f}%;background:{gauge_color};
+                            border-radius:2px;transition:width 0.6s ease"></div>
+            </div>
+        </div>""", unsafe_allow_html=True)
+        # Top insights - WSJ editorial style
         for ins in insights[:3]:
-            sc = "#10b981" if ins.score >= 0.70 else ("#f59e0b" if ins.score >= 0.55 else "#94a3b8")
-            title_short = ins.title[:44] + ("…" if len(ins.title) > 44 else "")
+            sc = "#2e9e6e" if ins.score >= 0.70 else ("#c9962b" if ins.score >= 0.55 else "#9a968e")
+            title_short = ins.title[:44] + ("..." if len(ins.title) > 44 else "")
             st.markdown(f"""
-            <div style="background:#1a2235;border-left:3px solid {sc};
-                        border-radius:6px;padding:7px 10px;margin-bottom:6px">
-                <div style="font-size:0.74rem;font-weight:600;color:#f1f5f9;line-height:1.3">{title_short}</div>
-                <div style="font-size:0.67rem;color:{sc};margin-top:2px;font-weight:700">{ins.score:.0%} · {ins.action}</div>
+            <div style="padding:6px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">
+                <div style="font-family:Libre Franklin,sans-serif;font-size:0.74rem;
+                            font-weight:600;color:#e8e6e1;line-height:1.3">{title_short}</div>
+                <div style="font-family:JetBrains Mono,monospace;font-size:0.66rem;
+                            color:{sc};margin-top:2px;font-weight:600">{ins.score:.0%} · {ins.action}</div>
             </div>""", unsafe_allow_html=True)
     elif insights:
         avg_score = sum(i.score for i in insights) / len(insights)
@@ -412,9 +446,25 @@ with sidebar_signal_placeholder.container():
 
 with sidebar_watchlist_placeholder.container():
     st.divider()
-    st.caption("**Watchlist**")
+    # WSJ-style Watchlist
+    st.markdown('<div style="font-family:Libre Baskerville,Georgia,serif;font-size:0.82rem;'
+                'font-weight:700;color:#e8e6e1;margin-bottom:6px">Watchlist</div>',
+                unsafe_allow_html=True)
     shipping_tickers = cfg.get("shipping_stocks", [])[:5]
     if stock_data:
+        # Table header
+        st.markdown("""
+        <div style="display:flex;justify-content:space-between;padding:2px 0 4px;
+                    border-bottom:1px solid rgba(232,230,225,0.1)">
+            <span style="font-size:0.62rem;font-weight:700;color:#6b6760;text-transform:uppercase;
+                         letter-spacing:0.08em;font-family:Libre Franklin,sans-serif">Ticker</span>
+            <div style="display:flex;gap:16px">
+                <span style="font-size:0.62rem;font-weight:700;color:#6b6760;text-transform:uppercase;
+                             letter-spacing:0.08em;font-family:Libre Franklin,sans-serif;width:50px;text-align:right">Price</span>
+                <span style="font-size:0.62rem;font-weight:700;color:#6b6760;text-transform:uppercase;
+                             letter-spacing:0.08em;font-family:Libre Franklin,sans-serif;width:50px;text-align:right">Chg</span>
+            </div>
+        </div>""", unsafe_allow_html=True)
         for ticker in shipping_tickers:
             df = stock_data.get(ticker)
             if df is not None and not df.empty and "close" in df.columns:
@@ -422,17 +472,24 @@ with sidebar_watchlist_placeholder.container():
                 current = float(close.iloc[-1])
                 prev = float(close.iloc[-2]) if len(close) > 1 else current
                 chg_pct = (current - prev) / prev if prev != 0 else 0
-                arrow = "▲" if chg_pct > 0 else ("▼" if chg_pct < 0 else "—")
-                color = "#10b981" if chg_pct > 0 else ("#ef4444" if chg_pct < 0 else "#94a3b8")
+                sign = "+" if chg_pct >= 0 else ""
+                color = "#2e9e6e" if chg_pct > 0 else ("#c0392b" if chg_pct < 0 else "#9a968e")
                 st.markdown(f"""
                 <div style="display:flex;justify-content:space-between;align-items:center;
-                            padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
-                    <span style="font-size:0.75rem;font-weight:600;color:#f1f5f9;font-family:monospace">{ticker}</span>
-                    <span style="font-size:0.75rem;color:{color};font-weight:700">{arrow} {chg_pct:+.1%}</span>
+                            padding:4px 0;border-bottom:1px dotted rgba(232,230,225,0.06)">
+                    <span style="font-size:0.76rem;font-weight:600;color:#e8e6e1;
+                                 font-family:Libre Franklin,sans-serif">{ticker}</span>
+                    <div style="display:flex;gap:16px">
+                        <span style="font-size:0.76rem;color:#e8e6e1;font-family:JetBrains Mono,monospace;
+                                     width:50px;text-align:right">{current:.2f}</span>
+                        <span style="font-size:0.76rem;color:{color};font-weight:600;
+                                     font-family:JetBrains Mono,monospace;width:50px;text-align:right">
+                            {sign}{chg_pct*100:.1f}%</span>
+                    </div>
                 </div>""", unsafe_allow_html=True)
     else:
         for ticker in shipping_tickers:
-            st.caption(f"— {ticker}")
+            st.caption(f"-- {ticker}")
 
 with sidebar_bottom_placeholder.container():
     st.divider()
@@ -500,78 +557,87 @@ alert_cnt = len(alerts) if alerts else 0
 refresh_ts = now_iso()[:19].replace("T", " ") + " UTC"
 
 
-# ── Hero header ───────────────────────────────────────────────────────────
+# ── WSJ Editorial Masthead ────────────────────────────────────────────────
+import datetime as _dt
+_edition_date = _dt.datetime.now(_dt.timezone.utc).strftime("%A, %B %-d, %Y")
+_edition_vol = _dt.datetime.now(_dt.timezone.utc).strftime("Vol. %j")
+
 st.markdown(f"""
 <style>
-@keyframes pulse-live {{ 0%,100%{{opacity:1}} 50%{{opacity:.4}} }}
-@keyframes hero-line {{ 0%{{background-position:0% 50%}} 50%{{background-position:100% 50%}} 100%{{background-position:0% 50%}} }}
-.live-badge {{ animation: pulse-live 2s ease-in-out infinite; }}
-.hero-rule {{ height:2px; border-radius:2px;
-    background: linear-gradient(90deg,#3b82f6,#10b981,#8b5cf6,#3b82f6);
-    background-size:300% 300%;
-    animation: hero-line 5s ease infinite; }}
+@keyframes pulse-live {{ 0%,100%{{opacity:1}} 50%{{opacity:.35}} }}
+.wsj-live {{ animation: pulse-live 2.5s ease-in-out infinite; }}
 </style>
 
-<div style="padding:20px 0 20px 0; margin-bottom:4px">
-    <!-- Title row -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-        <div>
-            <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.18em;
-                        color:#475569;margin-bottom:6px">
-                🚢 GLOBAL SHIPPING INTELLIGENCE PLATFORM
-            </div>
-            <div style="font-size:2.1rem;font-weight:900;color:#f1f5f9;
-                        letter-spacing:-0.045em;line-height:1.05">
-                Container Market<br>
-                <span style="background:linear-gradient(135deg,#3b82f6,#10b981);
-                             -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                             background-clip:text;">Intelligence</span>
-            </div>
-            <div style="font-size:0.8rem;color:#64748b;margin-top:6px">
-                {port_count} ports &nbsp;·&nbsp; {route_count} routes &nbsp;·&nbsp;
-                {insight_count} active signals &nbsp;·&nbsp; {high_count} high-conviction
-            </div>
+<div style="padding:12px 0 0 0; margin-bottom:0">
+    <!-- WSJ Masthead -->
+    <div style="text-align:center;padding-bottom:14px;border-bottom:3px double rgba(232,230,225,0.12)">
+        <div style="font-family:'Libre Franklin',system-ui,sans-serif;font-size:0.62rem;
+                    font-weight:700;color:#6b6760;text-transform:uppercase;letter-spacing:0.2em;
+                    margin-bottom:6px">
+            Global Shipping Intelligence
         </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
-            <span class="live-badge" style="
-                background:rgba({live_rgb},0.14);color:rgb({live_rgb});
-                border:1px solid rgba({live_rgb},0.35);
-                padding:4px 14px;border-radius:999px;font-size:0.73rem;font-weight:700;
-                letter-spacing:0.06em">{live_lbl}</span>
-            <span style="font-size:0.66rem;color:#475569;font-family:monospace">{refresh_ts}</span>
+        <div style="font-family:'Libre Baskerville','Georgia',serif;font-size:2.3rem;
+                    font-weight:700;color:#e8e6e1;letter-spacing:-0.02em;line-height:1.05">
+            The Ship Tracker
+        </div>
+        <div style="display:flex;justify-content:center;align-items:center;gap:16px;margin-top:8px">
+            <span style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;
+                         color:#6b6760;letter-spacing:0.04em">{_edition_date}</span>
+            <span style="color:rgba(232,230,225,0.15)">|</span>
+            <span style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;
+                         color:#6b6760">{_edition_vol}</span>
+            <span style="color:rgba(232,230,225,0.15)">|</span>
+            <span class="wsj-live" style="display:inline-flex;align-items:center;gap:4px;
+                         font-size:0.66rem;font-weight:700;color:#2e9e6e;letter-spacing:0.06em">
+                <span style="display:inline-block;width:5px;height:5px;border-radius:50%;
+                             background:#2e9e6e"></span>
+                {'LIVE' if stock_data else 'OFFLINE'}
+            </span>
         </div>
     </div>
-    <!-- Animated rule -->
-    <div class="hero-rule" style="margin-bottom:12px"></div>
-    <!-- Stat pills -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <span style="background:rgba({top_rgb},0.1);color:rgb({top_rgb});
-                     border:1px solid rgba({top_rgb},0.25);
-                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
-            Top Signal: {top_score:.0%}
-        </span>
-        <span style="background:rgba({dem_rgb},0.1);color:rgb({dem_rgb});
-                     border:1px solid rgba({dem_rgb},0.25);
-                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
-            Avg Port Demand: {avg_demand:.0%}
-        </span>
-        <span style="background:rgba({frt_rgb},0.1);color:rgb({frt_rgb});
-                     border:1px solid rgba({frt_rgb},0.25);
-                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
-            Freight Trend: {freight_trend}
-        </span>
-        <span style="background:rgba({sc_rgb},0.1);color:rgb({sc_rgb});
-                     border:1px solid rgba({sc_rgb},0.25);
-                     padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:600">
-            SC Health: {sc_health}
-        </span>
-        {'<span style="background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.3);padding:4px 13px;border-radius:999px;font-size:0.71rem;font-weight:700">⚠ ' + str(alert_cnt) + ' Alerts</span>' if alert_cnt else ''}
+
+    <!-- Summary line -->
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                padding:10px 0;border-bottom:1px solid rgba(232,230,225,0.08);
+                margin-bottom:4px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;gap:20px;flex-wrap:wrap">
+            <span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#9a968e">
+                <span style="font-weight:600;color:#e8e6e1">{port_count}</span> Ports
+            </span>
+            <span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#9a968e">
+                <span style="font-weight:600;color:#e8e6e1">{route_count}</span> Routes
+            </span>
+            <span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#9a968e">
+                <span style="font-weight:600;color:#e8e6e1">{insight_count}</span> Signals
+            </span>
+            <span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;
+                         color:{'#2e9e6e' if high_count > 0 else '#9a968e'}">
+                <span style="font-weight:600">{high_count}</span> High-Conviction
+            </span>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <span style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
+                         font-weight:600;color:{'#2e9e6e' if top_score >= 0.70 else ('#c9962b' if top_score >= 0.55 else '#c0392b')}">
+                Top Signal {top_score:.0%}
+            </span>
+            <span style="color:rgba(232,230,225,0.12)">|</span>
+            <span style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
+                         font-weight:600;color:{'#2e9e6e' if freight_trend == 'Rising' else ('#c9962b' if freight_trend == 'Stable' else '#c0392b')}">
+                Freight {freight_trend}
+            </span>
+            <span style="color:rgba(232,230,225,0.12)">|</span>
+            <span style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
+                         font-weight:600;color:{'#2e9e6e' if sc_health == 'Healthy' else '#c0392b'}">
+                SC {sc_health}
+            </span>
+            {'<span style="color:rgba(232,230,225,0.12)">|</span><span style="font-family:Libre Franklin,sans-serif;font-size:0.72rem;font-weight:600;color:#c0392b">' + str(alert_cnt) + ' Alerts</span>' if alert_cnt else ''}
+        </div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ── Market ticker tape ────────────────────────────────────────────────────
+# ── WSJ Market Ticker Tape ────────────────────────────────────────────────
 ticker_items = []
 if stock_data:
     for ticker, df in stock_data.items():
@@ -579,10 +645,20 @@ if stock_data:
             close = df["close"]
             cur = float(close.iloc[-1])
             prv = float(close.iloc[-2]) if len(close) > 1 else cur
-            chg = (cur - prv) / prv if prv != 0 else 0
-            arrow = "▲" if chg > 0 else "▼"
-            clr = "#10b981" if chg > 0 else "#ef4444"
-            ticker_items.append(f'<span style="color:{clr};margin:0 8px">{ticker} {arrow} {chg:+.1%}</span>')
+            chg = (cur - prv) / prv * 100 if prv != 0 else 0
+            sign = "+" if chg >= 0 else ""
+            clr = "#2e9e6e" if chg > 0 else "#c0392b"
+            ticker_items.append(
+                f'<span style="display:inline-flex;align-items:center;gap:5px;padding:0 16px;'
+                f'white-space:nowrap;font-size:0.78rem">'
+                f'<span style="color:#6b6760;font-weight:600;font-size:0.7rem;'
+                f'text-transform:uppercase;letter-spacing:0.03em">{ticker}</span>'
+                f'<span style="color:#e8e6e1;font-weight:600;font-family:JetBrains Mono,monospace;'
+                f'font-size:0.8rem">${cur:.2f}</span>'
+                f'<span style="color:{clr};font-family:JetBrains Mono,monospace;'
+                f'font-size:0.72rem">{sign}{chg:.1f}%</span>'
+                f'</span>'
+            )
 if freight_data:
     try:
         import pandas as pd
@@ -590,23 +666,39 @@ if freight_data:
             if isinstance(df, pd.DataFrame) and not df.empty:
                 vals = df[df.columns[0]].dropna()
                 if len(vals) >= 2:
-                    chg = (float(vals.iloc[-1]) - float(vals.iloc[-2])) / float(vals.iloc[-2]) if float(vals.iloc[-2]) != 0 else 0
-                    arrow = "▲" if chg > 0 else "▼"
-                    clr = "#10b981" if chg > 0 else "#ef4444"
-                    ticker_items.append(f'<span style="color:{clr};margin:0 8px">{str(route_name)[:12]} {arrow} {chg:+.1%}</span>')
+                    chg = (float(vals.iloc[-1]) - float(vals.iloc[-2])) / float(vals.iloc[-2]) * 100 if float(vals.iloc[-2]) != 0 else 0
+                    sign = "+" if chg >= 0 else ""
+                    clr = "#2e9e6e" if chg > 0 else "#c0392b"
+                    ticker_items.append(
+                        f'<span style="display:inline-flex;align-items:center;gap:5px;padding:0 16px;'
+                        f'white-space:nowrap;font-size:0.78rem">'
+                        f'<span style="color:#6b6760;font-weight:600;font-size:0.7rem;'
+                        f'letter-spacing:0.03em">{str(route_name)[:14]}</span>'
+                        f'<span style="color:{clr};font-family:JetBrains Mono,monospace;'
+                        f'font-size:0.72rem">{sign}{chg:.1f}%</span>'
+                        f'</span>'
+                    )
     except Exception:
         pass
 
-ticker_html = "  ·  ".join(ticker_items) if ticker_items else "Loading market data..."
+_ticker_inner = "".join(ticker_items) if ticker_items else '<span style="color:#6b6760">Loading market data...</span>'
+_ticker_duration = max(16, len(ticker_items) * 3)
 components.html(f"""
-<div style="background:#0d1117;border:1px solid rgba(255,255,255,0.07);
-            border-radius:8px;padding:8px 16px;overflow:hidden;white-space:nowrap;
-            font-family:'SF Mono',monospace;font-size:11.5px;margin-bottom:2px">
-    <span style="color:#334155;margin-right:12px;font-weight:700;font-size:10px;
-                 text-transform:uppercase;letter-spacing:0.1em">MARKET</span>
-    {ticker_html}
+<div style="overflow:hidden;background:#12151e;border-top:1px solid rgba(232,230,225,0.06);
+            border-bottom:1px solid rgba(232,230,225,0.06);padding:6px 0;white-space:nowrap;
+            font-family:'Libre Franklin','Inter',system-ui,sans-serif;position:relative">
+    <div style="position:absolute;left:0;top:0;bottom:0;width:40px;
+                background:linear-gradient(90deg,#0c0e14,transparent);z-index:1"></div>
+    <div style="position:absolute;right:0;top:0;bottom:0;width:40px;
+                background:linear-gradient(90deg,transparent,#0c0e14);z-index:1"></div>
+    <div style="display:inline-flex;animation:ticker {_ticker_duration}s linear infinite">
+        {_ticker_inner}{_ticker_inner}
+    </div>
 </div>
-""", height=36)
+<style>
+@keyframes ticker {{ 0%{{transform:translateX(0)}} 100%{{transform:translateX(-50%)}} }}
+</style>
+""", height=34)
 
 
 # ── Section navigation helpers ────────────────────────────────────────────
@@ -637,30 +729,30 @@ SECTION_COLORS = {
 if "nav_section" not in st.session_state:
     st.session_state["nav_section"] = "dashboard"
 
-# Inject section nav CSS
+# Inject WSJ section nav CSS
 st.markdown("""<style>
 .sec-nav-btn > div > button {
-    background: rgba(255,255,255,0.03) !important;
-    border: 1px solid rgba(255,255,255,0.07) !important;
-    border-radius: 8px !important;
-    color: #94a3b8 !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px dotted rgba(232,230,225,0.06) !important;
+    border-radius: 0 !important;
+    color: #9a968e !important;
     font-size: 0.82rem !important;
     font-weight: 500 !important;
+    font-family: 'Libre Franklin', sans-serif !important;
     text-align: left !important;
     transition: all 0.15s ease !important;
-    padding: 8px 12px !important;
-    margin-bottom: 3px !important;
+    padding: 8px 10px !important;
+    margin-bottom: 0 !important;
 }
 .sec-nav-btn > div > button:hover {
-    background: rgba(255,255,255,0.07) !important;
-    color: #f1f5f9 !important;
-    border-color: rgba(255,255,255,0.14) !important;
+    background: rgba(53,114,176,0.04) !important;
+    color: #e8e6e1 !important;
 }
 .sec-nav-active > div > button {
-    background: rgba(59,130,246,0.15) !important;
-    border-color: rgba(59,130,246,0.4) !important;
-    border-left: 3px solid #3b82f6 !important;
-    color: #f1f5f9 !important;
+    background: rgba(53,114,176,0.06) !important;
+    border-left: 2px solid #3572b0 !important;
+    color: #e8e6e1 !important;
     font-weight: 600 !important;
 }
 </style>""", unsafe_allow_html=True)
@@ -685,19 +777,18 @@ with st.sidebar:
 
 active_section = st.session_state.get("nav_section", "dashboard")
 
-# Section breadcrumb
+# WSJ Section breadcrumb
 sec_info = next((s for s in SECTIONS if s[0] == active_section), SECTIONS[0])
-sec_color = SECTION_COLORS.get(active_section, "#3b82f6")
+sec_color = SECTION_COLORS.get(active_section, "#3572b0")
 st.markdown(f"""
-<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;
-            padding:10px 16px;background:rgba(26,34,53,0.6);
-            border:1px solid rgba(255,255,255,0.07);border-radius:10px;
-            border-left:3px solid {sec_color}">
-    <span style="font-size:1.3rem">{sec_info[1]}</span>
-    <div>
-        <div style="font-size:0.88rem;font-weight:700;color:#f1f5f9">{sec_info[2]}</div>
-        <div style="font-size:0.72rem;color:#64748b">{sec_info[3]}</div>
+<div style="border-top:2px solid #e8e6e1;padding-top:10px;margin-bottom:18px">
+    <div style="display:flex;align-items:baseline;gap:10px">
+        <span style="font-size:1.1rem">{sec_info[1]}</span>
+        <span style="font-family:'Libre Baskerville',Georgia,serif;font-size:1.05rem;
+                     font-weight:700;color:#e8e6e1">{sec_info[2]}</span>
     </div>
+    <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;color:#6b6760;
+                margin-top:3px">{sec_info[3]}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -706,26 +797,35 @@ st.markdown(f"""
 
 # ── 1. Dashboard ──────────────────────────────────────────────────────────
 if active_section == "dashboard":
-    t0, t1, t2, t3 = st.tabs(["🌍 Overview", "📊 Scorecard", "📡 Live Feed", "🩺 Data Health"])
+    t0, t1, t2, t3, t4 = st.tabs(["Overview", "Market Commentary", "Scorecard", "Live Feed", "Data Health"])
     with t0:
         try:
             from ui.tab_overview import render as _r
-            _r(port_results, route_results, insights)
+            _r(port_results, route_results, insights,
+               freight_data=freight_data, macro_data=macro_data,
+               stock_data=stock_data, alerts=alerts)
         except Exception as e:
             st.error(f"Overview error: {e}")
     with t1:
+        try:
+            from ui.tab_commentary import render as _r
+            _r(stock_data=stock_data, freight_data=freight_data, macro_data=macro_data,
+               port_results=port_results, insights=insights)
+        except Exception as e:
+            st.error(f"Market Commentary error: {e}")
+    with t2:
         try:
             from ui.tab_scorecard import render as _r
             _r(port_results, route_results, insights, freight_data, macro_data, stock_data)
         except Exception as e:
             st.error(f"Scorecard error: {e}")
-    with t2:
+    with t3:
         try:
             from ui.tab_live_feed import render as _r
             _r(port_results, route_results, insights, freight_data, stock_data, macro_data)
         except Exception as e:
             st.error(f"Live Feed error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_data_health import render as _r
             _r(port_results, route_results, freight_data, macro_data, stock_data, trade_data, ais_data)
@@ -734,10 +834,10 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
-        "📈 Markets", "⚡ Alpha", "🔥 Results",
-        "📊 Indices", "📜 Derivatives", "🎭 Scenarios", "🔮 Monte Carlo",
-        "📈 Backtesting", "💼 Portfolio", "⚡ Options & Flow",
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
+        "Markets", "Sector Dashboard", "Alpha Signals", "Results",
+        "Indices", "Derivatives", "Scenarios", "Monte Carlo",
+        "Backtesting", "Portfolio", "Options & Flow",
     ])
     with t0:
         try:
@@ -747,53 +847,59 @@ elif active_section == "markets":
             st.error(f"Markets error: {e}")
     with t1:
         try:
+            from ui.tab_sector import render as _r
+            _r(stock_data=stock_data, freight_data=freight_data, port_results=port_results)
+        except Exception as e:
+            st.error(f"Sector Dashboard error: {e}")
+    with t2:
+        try:
             from ui.tab_alpha import render as _r
             _r(route_results, port_results, freight_data, macro_data, stock_data, insights)
         except Exception as e:
             st.error(f"Alpha error: {e}")
-    with t2:
+    with t3:
         try:
             from ui.tab_results import render as _r
             _r(insights)
         except Exception as e:
             st.error(f"Results error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_indices import render as _r
             _r(macro_data=macro_data, freight_data=freight_data, stock_data=stock_data, lookback_days=lookback)
         except Exception as e:
             st.error(f"Indices error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_derivatives import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Derivatives error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_scenarios import render as _r
             _r(port_results, route_results, macro_data)
         except Exception as e:
             st.error(f"Scenarios error: {e}")
-    with t6:
+    with t7:
         try:
             from ui.tab_monte_carlo import render as _r
             _r(freight_data, route_results)
         except Exception as e:
             st.error(f"Monte Carlo error: {e}")
-    with t7:
+    with t8:
         try:
             from ui import tab_backtest
             tab_backtest.render(stock_data, macro_data, insights)
         except Exception as e:
             st.error(f"Tab error: {e}")
-    with t8:
+    with t9:
         try:
             from ui import tab_portfolio
             tab_portfolio.render(stock_data, macro_data, insights)
         except Exception as e:
             st.error(f"Tab error: {e}")
-    with t9:
+    with t10:
         try:
             from ui import tab_options
             tab_options.render(stock_data, insights, signals=insights)
@@ -802,10 +908,10 @@ elif active_section == "markets":
 
 # ── 3. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
-        "🏗️ Port Demand", "🏭 Port Monitor", "🚢 Routes",
-        "⏱️ ETA Predictor", "🚧 Congestion", "🛤️ Emerging Routes",
-        "🗺️ Vessel Map",
+    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+        "Port Demand", "Port Monitor", "Routes", "Rate Analytics",
+        "ETA Predictor", "Congestion", "Emerging Routes",
+        "Vessel Map",
     ])
     with t0:
         try:
@@ -827,23 +933,29 @@ elif active_section == "ports_routes":
             st.error(f"Routes error: {e}")
     with t3:
         try:
+            from ui.tab_rate_analytics import render as _r
+            _r(freight_data=freight_data, route_results=route_results)
+        except Exception as e:
+            st.error(f"Rate Analytics error: {e}")
+    with t4:
+        try:
             from ui.tab_eta import render as _r
             _r(port_results, route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"ETA Predictor error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_congestion import render as _r
             _r(port_results, ais_data, freight_data, macro_data)
         except Exception as e:
             st.error(f"Congestion error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_emerging_routes import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Emerging Routes error: {e}")
-    with t6:
+    with t7:
         try:
             from ui.tab_vessel_map import render as _r
             _r(port_results, route_results, freight_data)
@@ -853,8 +965,8 @@ elif active_section == "ports_routes":
 # ── 4. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":
     t0, t1, t2, t3, t4, t5 = st.tabs([
-        "🏢 Carriers", "⚓ Fleet", "📦 Equipment",
-        "📦 Cargo", "📋 Booking", "⛽ Bunker Fuel",
+        "Carriers", "Fleet", "Equipment",
+        "Cargo", "Booking", "Bunker Fuel",
     ])
     with t0:
         try:
@@ -895,9 +1007,9 @@ elif active_section == "carriers":
 
 # ── 5. Trade & Macro ─────────────────────────────────────────────────────
 elif active_section == "trade_macro":
-    t0, t1, t2, t3, t4, t5 = st.tabs([
-        "📉 Macro", "⚔️ Trade War", "🌍 Geopolitical",
-        "🚧 Chokepoints", "💰 Trade Finance", "🛒 E-Commerce",
+    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
+        "Macro", "Bellwethers", "Trade War", "Geopolitical",
+        "Chokepoints", "Trade Finance", "E-Commerce",
     ])
     with t0:
         try:
@@ -907,29 +1019,35 @@ elif active_section == "trade_macro":
             st.error(f"Macro error: {e}")
     with t1:
         try:
+            from ui.tab_bellwethers import render as _r
+            _r(macro_data=macro_data)
+        except Exception as e:
+            st.error(f"Bellwethers error: {e}")
+    with t2:
+        try:
             from ui.tab_trade_war import render as _r
             _r(route_results, port_results, freight_data, macro_data, trade_data)
         except Exception as e:
             st.error(f"Trade War error: {e}")
-    with t2:
+    with t3:
         try:
             from ui.tab_geopolitical import render as _r
             _r(route_results, port_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Geopolitical error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_chokepoints import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Chokepoints error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_finance import render as _r
             _r(freight_data, macro_data, route_results, stock_data)
         except Exception as e:
             st.error(f"Trade Finance error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_ecommerce import render as _r
             _r(trade_data, freight_data, macro_data, route_results)
@@ -939,8 +1057,8 @@ elif active_section == "trade_macro":
 # ── 6. Supply Chain ───────────────────────────────────────────────────────
 elif active_section == "supply_chain":
     t0, t1, t2, t3, t4 = st.tabs([
-        "🏥 Supply Chain", "👁️ Visibility", "🔄 Intermodal",
-        "🌐 Network", "🧩 Attribution",
+        "Supply Chain", "Visibility", "Intermodal",
+        "Network", "Attribution",
     ])
     with t0:
         try:
@@ -976,8 +1094,8 @@ elif active_section == "supply_chain":
 # ── 7. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
     t0, t1, t2, t3, t4 = st.tabs([
-        "⚠️ Risk Matrix", "🌩️ Weather", "🛡️ Compliance",
-        "🔄 Market Cycle", "📋 Fundamentals",
+        "Risk Matrix", "Weather", "Compliance",
+        "Market Cycle", "Fundamentals",
     ])
     with t0:
         try:
@@ -1013,9 +1131,9 @@ elif active_section == "risk":
 # ── 8. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":
     t0, t1, t2, t3, t4 = st.tabs([
-        "📰 News & Sentiment", "🔬 Deep Dive",
-        "🤖 AI Assistant", "🌿 Sustainability",
-        "🔔 Alerts",
+        "News & Sentiment", "Deep Dive",
+        "AI Assistant", "Sustainability",
+        "Alerts",
     ])
     with t0:
         try:
@@ -1056,7 +1174,7 @@ elif active_section == "intelligence":
 elif active_section == "reports":
     from ui import tab_report
     fundamentals_data = get_fundamentals_data()
-    (t0,) = st.tabs(["📋 Investor Report"])
+    (t0,) = st.tabs(["Investor Report"])
     with t0:
         try:
             tab_report.render(port_results, route_results, insights, freight_data, macro_data, stock_data, fundamentals_data=fundamentals_data)
@@ -1064,17 +1182,20 @@ elif active_section == "reports":
             st.error(f"Investor Report error: {e}")
 
 
-# ── Footer ────────────────────────────────────────────────────────────────
+# ── WSJ Footer ────────────────────────────────────────────────────────────
 st.markdown("""
-<div style="margin-top:40px;padding:20px 0 8px 0;
-            border-top:1px solid rgba(255,255,255,0.06);
-            display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-    <div style="font-size:0.68rem;color:#334155">
-        <span style="font-weight:700;color:#475569">🚢 Ship Tracker</span>
-        &nbsp;·&nbsp; Data: UN Comtrade · FRED · World Bank · yfinance · Freightos FBX
+<div style="margin-top:48px;padding:16px 0 8px 0;border-top:2px solid rgba(232,230,225,0.1)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;color:#6b6760">
+            <span style="font-family:'Libre Baskerville',Georgia,serif;font-weight:700;
+                         color:#9a968e">The Ship Tracker</span>
+            &nbsp;&middot;&nbsp; Data: UN Comtrade &middot; FRED &middot; World Bank &middot;
+            yfinance &middot; Freightos FBX
+        </div>
+        <div style="font-family:'Libre Franklin',sans-serif;font-size:0.66rem;color:#6b6760">
+            Free public APIs only &nbsp;&middot;&nbsp; Not financial advice
+        </div>
     </div>
-    <div style="font-size:0.66rem;color:#334155">
-        Built with Streamlit &nbsp;·&nbsp; Free public APIs only &nbsp;·&nbsp; Not financial advice
-    </div>
+    <div style="height:1px;background:rgba(232,230,225,0.06);margin-top:12px"></div>
 </div>
 """, unsafe_allow_html=True)

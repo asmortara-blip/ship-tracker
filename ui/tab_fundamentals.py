@@ -28,17 +28,17 @@ import streamlit as st
 from loguru import logger
 
 # ── Colour palette ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Static universe data ────────────────────────────────────────────────────────
 # Columns: ticker, company, price, day_pct, wtd_pct, mtd_pct, ytd_pct,
@@ -206,9 +206,9 @@ def _consensus_badge(rating: str) -> str:
 
 def _card(title: str, content: str) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:20px;margin-bottom:16px;">'
-        f'<div style="font-size:11px;font-weight:600;letter-spacing:1.5px;color:{C_TEXT3};'
+        f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:11px;font-weight:600;letter-spacing:1.5px;color:{C_TEXT3};'
         f'text-transform:uppercase;margin-bottom:14px;">{title}</div>'
         f'{content}</div>'
     )
@@ -232,11 +232,11 @@ def _render_header(df: pd.DataFrame) -> None:
 
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE},{C_CARD});'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:28px 32px;margin-bottom:20px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:28px 32px;margin-bottom:20px;">'
             f'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;">'
             f'<div>'
-            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:1px;">SHIPPING EQUITY COVERAGE</div>'
-            f'<div style="font-size:12px;color:{C_TEXT3};margin-top:4px;letter-spacing:0.5px;">Goldman Sachs Equity Research &nbsp;|&nbsp; Global Shipping Coverage Universe</div>'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:1px;">SHIPPING EQUITY COVERAGE</div>'
+            f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:12px;color:{C_TEXT3};margin-top:4px;letter-spacing:0.5px;">Goldman Sachs Equity Research &nbsp;|&nbsp; Global Shipping Coverage Universe</div>'
             f'</div>'
             f'<div style="display:flex;gap:24px;flex-wrap:wrap;">'
             f'<div style="text-align:center;">'
@@ -278,7 +278,7 @@ def _render_header(df: pd.DataFrame) -> None:
 def _render_screening_table(df: pd.DataFrame) -> None:
     try:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin-bottom:10px;">Stock Screening — Coverage Universe</div>',
             unsafe_allow_html=True,
         )
@@ -308,7 +308,7 @@ def _render_screening_table(df: pd.DataFrame) -> None:
 
         hdr_style = f'padding:8px 10px;font-size:10px;font-weight:600;letter-spacing:0.8px;color:{C_TEXT3};text-transform:uppercase;border-bottom:2px solid {C_BORDER};'
         html = (
-            f'<div style="overflow-x:auto;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:4px;">'
+            f'<div style="overflow-x:auto;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:4px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
             f'<th style="{hdr_style}">TICKER</th><th style="{hdr_style}">COMPANY</th>'
@@ -332,7 +332,7 @@ def _render_screening_table(df: pd.DataFrame) -> None:
 def _render_valuation_matrix(df: pd.DataFrame) -> None:
     try:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Valuation Matrix</div>',
             unsafe_allow_html=True,
         )
@@ -420,7 +420,7 @@ def _render_valuation_matrix(df: pd.DataFrame) -> None:
 def _render_deep_dive(df: pd.DataFrame) -> None:
     try:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Stock Deep-Dive</div>',
             unsafe_allow_html=True,
         )
@@ -537,7 +537,7 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
 def _render_dividend_tracker(df: pd.DataFrame) -> None:
     try:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Dividend &amp; Yield Tracker</div>',
             unsafe_allow_html=True,
         )
@@ -575,7 +575,7 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
 
         h = f'padding:7px 10px;font-size:10px;font-weight:600;letter-spacing:0.8px;color:{C_TEXT3};text-transform:uppercase;border-bottom:2px solid {C_BORDER};'
         st.markdown(
-            f'<div style="overflow-x:auto;background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:4px;">'
+            f'<div style="overflow-x:auto;background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:4px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
             f'<th style="{h}">TICKER</th>'
@@ -598,7 +598,7 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
 def _render_relative_value(df: pd.DataFrame) -> None:
     try:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:700;color:{C_TEXT};letter-spacing:1px;'
             f'text-transform:uppercase;margin:20px 0 10px;">Relative Value Heatmap</div>',
             unsafe_allow_html=True,
         )
@@ -673,7 +673,7 @@ def _render_relative_value(df: pd.DataFrame) -> None:
         st.plotly_chart(fig, use_container_width=True, key="rel_val_heatmap")
 
         st.markdown(
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:4px;">'
+            f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:11px;color:{C_TEXT3};margin-top:4px;">'
             f'Green = relatively cheap vs peers &nbsp;|&nbsp; Red = relatively expensive vs peers &nbsp;|&nbsp; '
             f'For yield, green = high yield. For valuation multiples, green = low multiple.</div>',
             unsafe_allow_html=True,

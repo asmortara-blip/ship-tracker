@@ -111,7 +111,7 @@ def _equity_curve_chart(equity_curve: list[dict], stock_data: dict) -> go.Figure
         name="Alpha Signals",
         line=dict(color=_C_WIN, width=2.5),
         fill="tozeroy",
-        fillcolor=f"rgba(16,185,129,0.08)",
+        fillcolor=f"rgba(46,158,110,0.08)",
         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Cumulative Return: %{y:.1f}%<extra></extra>",
     ))
 
@@ -182,7 +182,7 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
         name="Avg Return (%)",
         x=convictions,
         y=avg_returns,
-        marker_color=[f"rgba(59,130,246,0.7)"] * len(convictions),
+        marker_color=[f"rgba(53,114,176,0.7)"] * len(convictions),
         text=[f"{v:+.2f}%" for v in avg_returns],
         textposition="outside",
         textfont=dict(size=11, color=C_TEXT),
@@ -198,7 +198,7 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
         "overlaying": "y",
         "side": "right",
         "ticksuffix": "%",
-        "gridcolor": "rgba(255,255,255,0.03)",
+        "gridcolor": "rgba(232,230,225,0.03)",
         "tickfont": {"color": C_TEXT3, "size": 11},
     }
     fig.update_layout(**layout)
@@ -282,11 +282,11 @@ def _monthly_heatmap(monthly_returns: list[dict]) -> go.Figure:
         text=text,
         texttemplate="%{text}",
         colorscale=[
-            [0.0, "#ef4444"],
-            [0.4, "#111827"],
-            [0.5, "#1a2235"],
-            [0.6, "#111827"],
-            [1.0, "#10b981"],
+            [0.0, "#c0392b"],
+            [0.4, "#12151e"],
+            [0.5, "#181c28"],
+            [0.6, "#12151e"],
+            [1.0, "#2e9e6e"],
         ],
         zmid=0,
         showscale=True,
@@ -510,7 +510,7 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
 
             def _color_ret(val):
                 if isinstance(val, float):
-                    color = "#10b981" if val > 0 else "#ef4444"
+                    color = "#2e9e6e" if val > 0 else "#c0392b"
                     return f"color: {color}"
                 return ""
 
@@ -540,14 +540,14 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
         if not trade_df.empty:
             def _color_return(val):
                 if isinstance(val, (int, float)):
-                    return f"color: {'#10b981' if val > 0 else '#ef4444'}"
+                    return f"color: {'#2e9e6e' if val > 0 else '#c0392b'}"
                 return ""
 
             def _color_hit(val):
                 if val == "✓":
-                    return "color: #10b981"
+                    return "color: #2e9e6e"
                 if val == "✗":
-                    return "color: #ef4444"
+                    return "color: #c0392b"
                 return ""
 
             styled_trades = trade_df.style.applymap(

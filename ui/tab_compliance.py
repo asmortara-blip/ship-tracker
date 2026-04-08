@@ -27,19 +27,19 @@ from loguru import logger
 # Colour palette
 # ---------------------------------------------------------------------------
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
-_CII_COLOR = {"A": "#065f46", "B": "#10b981", "C": "#f59e0b", "D": "#ef4444", "E": "#7f1d1d"}
+_CII_COLOR = {"A": "#065f46", "B": "#2e9e6e", "C": "#c9962b", "D": "#c0392b", "E": "#7f1d1d"}
 _CII_BG    = {"A": "#022c22", "B": "#052e1c", "C": "#451a03", "D": "#450a0a", "E": "#3b0808"}
 
 # ---------------------------------------------------------------------------
@@ -392,26 +392,26 @@ _CARGO_RISK: dict[str, int] = {
 _CSS = f"""
 <style>
 .comp-card {{
-    background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
+    background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
     padding:18px 20px;margin-bottom:14px;
 }}
 .comp-kpi {{
-    background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
+    background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
     padding:16px 18px;text-align:center;
 }}
 .comp-kpi-val {{font-size:2rem;font-weight:700;line-height:1.1;}}
-.comp-kpi-lbl {{font-size:0.75rem;color:{C_TEXT2};margin-top:4px;}}
+.comp-kpi-lbl {{font-family:'Libre Franklin',sans-serif;font-size:0.75rem;color:{C_TEXT2};margin-top:4px;}}
 .comp-th {{
     background:{C_SURFACE};color:{C_TEXT2};font-size:0.7rem;font-weight:600;
     text-transform:uppercase;letter-spacing:.06em;padding:8px 10px;
     border-bottom:1px solid {C_BORDER};
 }}
 .comp-td {{
-    color:{C_TEXT};font-size:0.78rem;padding:8px 10px;
+    font-family:'Libre Franklin',sans-serif;color:{C_TEXT};font-size:0.78rem;padding:8px 10px;
     border-bottom:1px solid {C_BORDER};vertical-align:top;
 }}
-.comp-td2 {{color:{C_TEXT2};font-size:0.78rem;padding:8px 10px;border-bottom:1px solid {C_BORDER};vertical-align:top;}}
-.badge {{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.68rem;font-weight:600;}}
+.comp-td2 {{font-family:'Libre Franklin',sans-serif;color:{C_TEXT2};font-size:0.78rem;padding:8px 10px;border-bottom:1px solid {C_BORDER};vertical-align:top;}}
+.badge {{display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.68rem;font-weight:600;}}
 .badge-critical {{background:#7f1d1d;color:#fca5a5;}}
 .badge-high {{background:#431407;color:#fdba74;}}
 .badge-moderate {{background:#451a03;color:#fcd34d;}}
@@ -421,7 +421,7 @@ _CSS = f"""
 .badge-detained {{background:#7f1d1d;color:#fca5a5;}}
 .badge-released {{background:#1e3a2f;color:{C_HIGH};}}
 .section-hdr {{
-    font-size:1.05rem;font-weight:700;color:{C_TEXT};
+    font-family:'Libre Baskerville',serif;font-size:1.05rem;font-weight:700;color:{C_TEXT};
     border-left:3px solid {C_ACCENT};padding-left:10px;margin-bottom:14px;
 }}
 </style>
@@ -616,10 +616,10 @@ def _section_4_cii_tracker() -> None:
                 f'<tr>'
                 f'<td class="comp-td" style="font-weight:600;">{r["carrier"]}</td>'
                 f'<td class="comp-td">'
-                f'<span style="background:{_CII_BG.get(r24,"#1a2235")};color:{_CII_COLOR.get(r24,C_TEXT)};'
+                f'<span style="background:{_CII_BG.get(r24,"#181c28")};color:{_CII_COLOR.get(r24,C_TEXT)};'
                 f'padding:3px 10px;border-radius:6px;font-weight:700;">{r24}</span></td>'
                 f'<td class="comp-td">'
-                f'<span style="background:{_CII_BG.get(r25,"#1a2235")};color:{_CII_COLOR.get(r25,C_TEXT)};'
+                f'<span style="background:{_CII_BG.get(r25,"#181c28")};color:{_CII_COLOR.get(r25,C_TEXT)};'
                 f'padding:3px 10px;border-radius:6px;font-weight:700;">{r25}</span></td>'
                 f'<td class="comp-td" style="color:{pct_color};font-weight:600;">{pct}%</td>'
                 f'<td class="comp-td2">{r["actions"]}</td>'
@@ -762,8 +762,8 @@ def _section_6_dark_fleet() -> None:
             ))
             fig.update_layout(
                 geo=dict(
-                    showland=True, landcolor="#111827",
-                    showocean=True, oceancolor="#0a0f1a",
+                    showland=True, landcolor="#12151e",
+                    showocean=True, oceancolor="#0c0e14",
                     showlakes=False,
                     showcountries=True, countrycolor="rgba(255,255,255,0.1)",
                     showcoastlines=True, coastlinecolor="rgba(255,255,255,0.15)",
@@ -970,8 +970,8 @@ def render(port_results=None, insights=None) -> None:
     """Render the full Compliance & Sanctions Intelligence tab."""
     try:
         st.markdown(
-            f'<div style="font-size:1.35rem;font-weight:700;color:{C_TEXT};margin-bottom:4px;">Regulatory Compliance & Sanctions Intelligence</div>'
-            f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-bottom:20px;">Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement</div>',
+            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:1.35rem;font-weight:700;color:{C_TEXT};margin-bottom:4px;">Regulatory Compliance & Sanctions Intelligence</div>'
+            f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:0.82rem;color:{C_TEXT3};margin-bottom:20px;">Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement</div>',
             unsafe_allow_html=True,
         )
     except Exception:

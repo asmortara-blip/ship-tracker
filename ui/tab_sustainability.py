@@ -6,19 +6,19 @@ import streamlit as st
 from loguru import logger
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
-_CII_COLORS = {"A": "#10b981", "B": "#34d399", "C": "#f59e0b", "D": "#f97316", "E": "#ef4444"}
+_CII_COLORS = {"A": "#2e9e6e", "B": "#34d399", "C": "#c9962b", "D": "#f97316", "E": "#c0392b"}
 
 # ── Static datasets ───────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ _SPEED_TABLE = [
 
 def _card_css() -> str:
     return (
-        f"background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;"
+        f"background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;"
         f"padding:20px 24px;margin-bottom:16px;"
     )
 
@@ -282,7 +282,7 @@ def _render_green_fuel() -> None:
             try:
                 labels  = ["VLSFO", "LNG", "Biodiesel", "Methanol", "Ammonia"]
                 values  = [92.6, 4.5, 2.0, 0.8, 0.1]
-                colors  = ["#64748b", "#3b82f6", "#10b981", "#8b5cf6", "#06b6d4"]
+                colors  = ["#6b6760", "#3572b0", "#2e9e6e", "#7c6eaf", "#4a90a4"]
                 fig_pie = go.Figure(go.Pie(
                     labels=labels, values=values, hole=0.55,
                     marker=dict(colors=colors, line=dict(color=C_BG, width=2)),
@@ -310,7 +310,7 @@ def _render_green_fuel() -> None:
                 fig_bar = go.Figure()
                 fig_bar.add_trace(go.Bar(
                     name="Conventional Fuel", x=vessel_classes, y=conv,
-                    marker_color="#64748b",
+                    marker_color="#6b6760",
                     hovertemplate="<b>%{x}</b> — Conventional: %{y}%<extra></extra>",
                 ))
                 fig_bar.add_trace(go.Bar(
@@ -417,7 +417,7 @@ def _render_eu_ets() -> None:
                     line=dict(color=C_ACCENT, width=2),
                     marker=dict(size=5, color=C_ACCENT),
                     fill="tozeroy",
-                    fillcolor=f"rgba(59,130,246,0.1)",
+                    fillcolor=f"rgba(53,114,176,0.1)",
                     hovertemplate="<b>%{x}</b><br>€%{y}/tonne CO₂<extra></extra>",
                     name="EU ETS Price",
                 ))
@@ -707,7 +707,7 @@ def render(port_results=None, insights=None) -> None:
     try:
         st.markdown(
             f"<div style='background:linear-gradient(135deg,{C_CARD} 0%,{C_BG} 100%);"
-            f"border:1px solid {C_BORDER};border-radius:14px;padding:24px 28px;margin-bottom:24px;'>"
+            f"border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:24px;'>"
             f"<h2 style='color:{C_TEXT};font-size:22px;font-weight:800;margin:0 0 6px 0;'>"
             f"Shipping ESG &amp; Sustainability Intelligence</h2>"
             f"<p style='color:{C_TEXT2};font-size:13px;margin:0;'>"

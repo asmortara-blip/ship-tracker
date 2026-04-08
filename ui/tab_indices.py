@@ -25,17 +25,17 @@ from loguru import logger
 from plotly.subplots import make_subplots
 
 # ── Design tokens ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 _PLOT_LAYOUT = dict(
     paper_bgcolor=C_CARD,
@@ -69,7 +69,7 @@ _INDICES: list[dict] = [
 ]
 
 _INDEX_COLORS: dict[str, str] = {
-    "BDI": C_ACCENT, "BCI": "#06b6d4", "BPI": "#8b5cf6", "BSI": "#f59e0b", "BHSI": "#f97316",
+    "BDI": C_ACCENT, "BCI": "#4a90a4", "BPI": "#7c6eaf", "BSI": "#c9962b", "BHSI": "#f97316",
     "WCI": C_HIGH,   "SCFI": "#34d399","CCFI": "#a7f3d0","FBX": "#fbbf24", "HARPEX": "#fb923c",
     "BDTI": C_LOW,   "BCTI": "#f87171","BLNG": "#c084fc","BLPG": "#e879f9",
 }
@@ -196,7 +196,7 @@ def _pct_badge(pct: float) -> str:
 def _kpi_card_html(idx: dict, stats: dict) -> str:
     if not stats:
         return (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:14px;min-height:130px;">'
             f'<div style="color:{C_TEXT2};font-size:11px;text-transform:uppercase;letter-spacing:1px">'
             f'{idx["label"]}</div>'
@@ -216,7 +216,7 @@ def _kpi_card_html(idx: dict, stats: dict) -> str:
     above_str = f'{stats["above_avg_pct"]:+.1f}% vs 5Y avg'
     above_color = C_HIGH if stats["above_avg_pct"] > 0 else C_LOW
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:14px 16px;border-top:3px solid {accent}">'
         f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:4px">'
         f'{idx["group"]}</div>'
@@ -263,7 +263,7 @@ def _render_index_dashboard(all_series: dict[str, pd.Series]) -> None:
             except Exception as exc:
                 logger.warning("Card render error {}: {}", idx["id"], exc)
                 col.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px">'
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px">'
                     f'<div style="color:{C_TEXT2}">{idx["label"]}</div>'
                     f'<div style="color:{C_LOW};font-size:11px">Error</div></div>',
                     unsafe_allow_html=True,
@@ -334,14 +334,14 @@ def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
     # Component rates card row
     components = [
         dict(name="Capesize (BCI)", weight="40%", value=bci.iloc[-1] if len(bci) else 1800, color=C_ACCENT),
-        dict(name="Panamax (BPI)", weight="30%", value=bpi.iloc[-1] if len(bpi) else 1200, color="#8b5cf6"),
+        dict(name="Panamax (BPI)", weight="30%", value=bpi.iloc[-1] if len(bpi) else 1200, color="#7c6eaf"),
         dict(name="Supramax (BSI)", weight="15%", value=bsi.iloc[-1] if len(bsi) else 900, color=C_MOD),
         dict(name="Handysize (BHSI)", weight="15%", value=bhsi.iloc[-1] if len(bhsi) else 600, color="#f97316"),
     ]
     cols = st.columns(4)
     for col, comp in zip(cols, components):
         col.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px 14px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px 14px;'
             f'border-left:4px solid {comp["color"]}">'
             f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase">{comp["name"]}</div>'
             f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;margin-top:4px">{comp["value"]:,.0f}</div>'
@@ -358,7 +358,7 @@ def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
         pct_vs_avg = _pct(current, avg_5y)
         avg_color = C_HIGH if pct_vs_avg > 0 else C_LOW
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:12px 16px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px 16px;'
             f'margin-bottom:16px;display:flex;align-items:center;gap:16px">'
             f'<div><span style="color:{C_TEXT2};font-size:12px">BDI Historical Context: </span>'
             f'<span style="color:{avg_color};font-size:13px;font-weight:600">'
@@ -380,7 +380,7 @@ def _render_bdi_deep_dive(all_series: dict[str, pd.Series]) -> None:
                 fig.add_trace(go.Scatter(
                     x=s.index, y=s.values, name="BDI",
                     line=dict(color=C_ACCENT, width=2),
-                    fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                    fill="tozeroy", fillcolor="rgba(53,114,176,0.08)",
                 ))
                 fig.add_trace(go.Scatter(
                     x=s.index, y=avg_line, name="5Y Average",
@@ -690,7 +690,7 @@ def render(freight_data=None, macro_data=None, stock_data=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE},{C_BG});'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px">'
             f'<div style="display:flex;align-items:center;gap:12px">'
             f'<div style="background:{C_ACCENT};width:4px;height:40px;border-radius:2px"></div>'
             f'<div>'

@@ -4,20 +4,20 @@ from __future__ import annotations
 import streamlit as st
 import plotly.graph_objects as go
 
-# ── Color constants (self-contained; mirrors ui/styles.py) ──────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_CONV    = "#8b5cf6"
-C_MACRO   = "#06b6d4"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+# ── Color constants (self-contained; mirrors ui/styles.py — WSJ dark) ────────
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_CONV    = "#7c6eaf"
+C_MACRO   = "#4a90a4"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ def stat_counter(
     value,
     prefix: str = "",
     suffix: str = "",
-    color: str = "#10b981",
+    color: str = "#2e9e6e",
     delta: float | None = None,
     delta_label: str = "",
 ) -> None:
@@ -70,7 +70,7 @@ def stat_counter(
         f"""
         <div class="slide-in" style="
             background:{C_CARD};
-            border-radius:12px;
+            border-radius:6px;
             padding:20px;
             text-align:center;
             border-top:3px solid {color};
@@ -101,7 +101,7 @@ def stat_counter(
 
 def mini_sparkline(
     data: list[float],
-    color: str = "#3b82f6",
+    color: str = "#3572b0",
     height: int = 60,
     show_area: bool = True,
 ) -> go.Figure:
@@ -144,7 +144,7 @@ def mini_sparkline(
 def gauge_ring(
     value: float,
     label: str,
-    color: str = "#10b981",
+    color: str = "#2e9e6e",
     size: int = 180,
 ) -> go.Figure:
     """Return a clean circular gauge (donut) figure."""
@@ -188,10 +188,10 @@ def gauge_ring(
 # ── 4. alert_banner ──────────────────────────────────────────────────────────
 
 _ALERT_CONFIG: dict[str, dict] = {
-    "info":     {"color": "#3b82f6", "icon": "ℹ️",  "pulse": False},
-    "success":  {"color": "#10b981", "icon": "✅",  "pulse": False},
+    "info":     {"color": "#3572b0", "icon": "ℹ️",  "pulse": False},
+    "success":  {"color": "#2e9e6e", "icon": "✅",  "pulse": False},
     "warning":  {"color": "#f59e0b", "icon": "⚠️",  "pulse": False},
-    "critical": {"color": "#ef4444", "icon": "🚨",  "pulse": True},
+    "critical": {"color": "#c0392b", "icon": "🚨",  "pulse": True},
 }
 
 
@@ -260,7 +260,7 @@ def kpi_row(metrics: list[dict]) -> None:
             background:{C_CARD};
             border:1px solid {C_BORDER};
             border-top:3px solid {color};
-            border-radius:12px;
+            border-radius:6px;
             padding:18px 16px;
             text-align:center;
             box-shadow:0 0 16px {shadow};
@@ -352,7 +352,7 @@ def route_card(route, rank: int | None = None) -> None:
             f'background:{_hex_to_rgba(color, 0.15)};'
             f'color:{color};'
             f'border:1px solid {_hex_to_rgba(color, 0.3)};'
-            f'border-radius:999px;'
+            f'border-radius:3px;'
             f'font-size:0.68rem;'
             f'font-weight:700;'
             f'padding:2px 8px;'
@@ -399,7 +399,7 @@ def route_card(route, rank: int | None = None) -> None:
             f'<div style="display:flex; align-items:center; gap:6px; margin-top:4px">'
             f'<span style="font-size:0.65rem; color:{C_TEXT3}; width:90px; flex-shrink:0">'
             f'{sub_label}</span>'
-            f'<div style="background:rgba(255,255,255,0.05); border-radius:3px; '
+            f'<div style="background:rgba(232,230,225,0.04); border-radius:3px; '
             f'flex:1; height:4px; overflow:hidden">'
             f'<div style="background:{sub_color}; height:4px; width:{bar_width}px; '
             f'border-radius:3px"></div>'
@@ -415,7 +415,7 @@ def route_card(route, rank: int | None = None) -> None:
         rationale_html = (
             f'<div style="font-size:0.75rem; color:{C_TEXT3}; '
             f'margin-top:10px; line-height:1.5; '
-            f'border-top:1px solid rgba(255,255,255,0.05); padding-top:8px">'
+            f'border-top:1px solid rgba(232,230,225,0.04); padding-top:8px">'
             f'{rationale}'
             f'</div>'
         )
@@ -426,7 +426,7 @@ def route_card(route, rank: int | None = None) -> None:
             background:{C_CARD};
             border:1px solid {bg_border};
             border-left:4px solid {color};
-            border-radius:12px;
+            border-radius:6px;
             padding:18px 20px;
             margin-bottom:10px;
         ">
@@ -444,7 +444,7 @@ def route_card(route, rank: int | None = None) -> None:
             <div style="
                 background:{score_bg};
                 border:1px solid {_hex_to_rgba(color, 0.3)};
-                border-radius:10px;
+                border-radius:6px;
                 padding:8px 14px;
                 text-align:center;
                 min-width:64px;
@@ -482,9 +482,9 @@ def section_divider(label: str = "") -> None:
     st.markdown(
         f"""
         <div style="display:flex; align-items:center; gap:12px; margin:28px 0">
-            <div style="flex:1; height:1px; background:rgba(255,255,255,0.06)"></div>
+            <div style="flex:1; height:1px; background:rgba(232,230,225,0.05)"></div>
             {label_span}
-            <div style="flex:1; height:1px; background:rgba(255,255,255,0.06)"></div>
+            <div style="flex:1; height:1px; background:rgba(232,230,225,0.05)"></div>
         </div>
         """,
         unsafe_allow_html=True,

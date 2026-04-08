@@ -22,19 +22,19 @@ import streamlit as st
 from loguru import logger
 
 # ── Color palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 C_ORANGE  = "#f97316"
 
 
@@ -45,7 +45,7 @@ def _dark_layout(height: int = 360, l: int = 52, r: int = 24, t: int = 36, b: in
         template="plotly_dark",
         paper_bgcolor=C_BG,
         plot_bgcolor=C_BG,
-        font=dict(family="Inter, sans-serif", color=C_TEXT2, size=11),
+        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2, size=11),
         margin=dict(l=l, r=r, t=t, b=b),
         height=height,
         hoverlabel=dict(bgcolor=C_CARD, font_color=C_TEXT, bordercolor=C_BORDER),
@@ -53,10 +53,10 @@ def _dark_layout(height: int = 360, l: int = 52, r: int = 24, t: int = 36, b: in
 
 
 def _section(title: str, subtitle: str = "") -> None:
-    sub_html = f'<span style="color:{C_TEXT3};font-size:12px;margin-left:10px;">{subtitle}</span>' if subtitle else ""
+    sub_html = f'<span style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-left:10px;">{subtitle}</span>' if subtitle else ""
     st.markdown(
         f'<div style="border-left:3px solid {C_ACCENT};padding:6px 0 6px 12px;margin:24px 0 12px 0;">'
-        f'<span style="color:{C_TEXT};font-size:15px;font-weight:700;letter-spacing:0.3px;">{title}</span>'
+        f'<span style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:15px;font-weight:700;letter-spacing:0.3px;">{title}</span>'
         f'{sub_html}</div>',
         unsafe_allow_html=True,
     )
@@ -64,14 +64,14 @@ def _section(title: str, subtitle: str = "") -> None:
 
 def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> str:
     delta_html = (
-        f'<div style="color:{color};font-size:11px;margin-top:4px;">{delta}</div>'
+        f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{color};font-size:11px;margin-top:4px;">{delta}</div>'
         if delta else ""
     )
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 20px;text-align:center;">'
-        f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">{label}</div>'
-        f'<div style="color:{C_TEXT};font-size:24px;font-weight:700;">{value}</div>'
+        f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">{label}</div>'
+        f'<div style="font-family:\'JetBrains Mono\',monospace;color:{C_TEXT};font-size:24px;font-weight:700;">{value}</div>'
         f'{delta_html}</div>'
     )
 
@@ -133,7 +133,7 @@ def _render_composition() -> None:
             try:
                 brackets = ["0–5y", "6–10y", "11–15y", "16–20y", "21+y"]
                 counts   = [1820, 2140, 1650, 980, 652]
-                bar_colors = [C_HIGH, C_ACCENT, C_MOD, C_LOW, "#ef4444"]
+                bar_colors = [C_HIGH, C_ACCENT, C_MOD, C_LOW, "#c0392b"]
                 fig2 = go.Figure(go.Bar(
                     x=brackets,
                     y=counts,
@@ -146,8 +146,8 @@ def _render_composition() -> None:
                 fig2.update_layout(
                     **_dark_layout(height=340, l=52, r=16, t=30, b=40),
                     title=dict(text="Fleet by Age Bracket — Ageing Fleet Narrative", font=dict(color=C_TEXT, size=13), x=0.5),
-                    xaxis=dict(title="Age Bracket", color=C_TEXT3, gridcolor="rgba(255,255,255,0.04)"),
-                    yaxis=dict(title="Vessel Count", color=C_TEXT3, gridcolor="rgba(255,255,255,0.04)"),
+                    xaxis=dict(title="Age Bracket", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
+                    yaxis=dict(title="Vessel Count", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
                 )
                 # annotation for "ageing fleet" note
                 fig2.add_annotation(
@@ -222,7 +222,7 @@ def _render_orderbook() -> None:
         # Highlight dual-fuel row
         def _row_style(row: pd.Series) -> list:
             if "Dual-Fuel" in row["Vessel Type"] or "LNG Carrier" in row["Vessel Type"]:
-                return [f"background-color:rgba(139,92,246,0.12);color:{C_TEXT}"] * len(row)
+                return [f"background-color:rgba(124,110,175,0.12);color:{C_TEXT}"] * len(row)
             return [f"color:{C_TEXT}"] * len(row)
 
         styled = (
@@ -245,7 +245,7 @@ def _render_orderbook() -> None:
                 ]},
                 {"selector": "table", "props": [
                     ("background-color", C_SURFACE),
-                    ("border-radius", "8px"),
+                    ("border-radius", "6px"),
                     ("width", "100%"),
                 ]},
             ])
@@ -281,7 +281,7 @@ def _render_scrapping() -> None:
                 st.dataframe(df_s, use_container_width=True, hide_index=True)
                 avg_age = 26
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid rgba(239,68,68,0.3);border-radius:8px;'
+                    f'<div style="background:{C_CARD};border:1px solid rgba(192,57,43,0.3);border-radius:6px;'
                     f'padding:10px 14px;margin-top:10px;">'
                     f'<span style="color:{C_LOW};font-weight:700;">Avg Scrapping Age:</span> '
                     f'<span style="color:{C_TEXT};font-size:20px;font-weight:700;">{avg_age} years</span><br>'
@@ -307,7 +307,7 @@ def _render_scrapping() -> None:
                 fig.add_trace(go.Bar(
                     name="Full Year Forecast",
                     x=types, y=forecast,
-                    marker_color="rgba(239,68,68,0.35)",
+                    marker_color="rgba(192,57,43,0.35)",
                     hovertemplate="<b>%{x}</b><br>Forecast: %{y}<extra></extra>",
                 ))
                 fig.update_layout(
@@ -315,7 +315,7 @@ def _render_scrapping() -> None:
                     title=dict(text="Scrapping by Vessel Type — YTD vs Forecast", font=dict(color=C_TEXT, size=12), x=0.5),
                     barmode="group",
                     xaxis=dict(color=C_TEXT3),
-                    yaxis=dict(title="Vessels Scrapped", color=C_TEXT3, gridcolor="rgba(255,255,255,0.04)"),
+                    yaxis=dict(title="Vessels Scrapped", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
                     legend=dict(font=dict(color=C_TEXT2, size=10)),
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -362,7 +362,7 @@ def _render_utilization_map() -> None:
             marker=dict(
                 size=[s / 60 for s in sizes],
                 color=sizes,
-                colorscale=[[0, "rgba(59,130,246,0.3)"], [0.5, C_ACCENT], [1, C_HIGH]],
+                colorscale=[[0, "rgba(53,114,176,0.3)"], [0.5, C_ACCENT], [1, C_HIGH]],
                 cmin=100,
                 cmax=1900,
                 colorbar=dict(
@@ -424,7 +424,7 @@ def _render_capacity_vs_demand() -> None:
             x=years + years[::-1],
             y=supply_over + demand_under[::-1],
             fill="toself",
-            fillcolor="rgba(239,68,68,0.10)",
+            fillcolor="rgba(192,57,43,0.10)",
             line=dict(color="rgba(0,0,0,0)"),
             hoverinfo="skip",
             name="Oversupply zone",
@@ -438,7 +438,7 @@ def _render_capacity_vs_demand() -> None:
             x=years + years[::-1],
             y=demand_over + supply_under[::-1],
             fill="toself",
-            fillcolor="rgba(16,185,129,0.10)",
+            fillcolor="rgba(46,158,110,0.10)",
             line=dict(color="rgba(0,0,0,0)"),
             hoverinfo="skip",
             name="Tight market zone",
@@ -481,8 +481,8 @@ def _render_capacity_vs_demand() -> None:
         fig.update_layout(
             **_dark_layout(height=360, l=52, r=24, t=36, b=48),
             title=dict(text="Fleet Capacity vs Trade Volume Growth (2020–2025)", font=dict(color=C_TEXT, size=13), x=0.5),
-            xaxis=dict(title="Year", color=C_TEXT3, tickvals=years, gridcolor="rgba(255,255,255,0.04)"),
-            yaxis=dict(title="YoY Growth %", color=C_TEXT3, gridcolor="rgba(255,255,255,0.04)"),
+            xaxis=dict(title="Year", color=C_TEXT3, tickvals=years, gridcolor="rgba(232,230,225,0.04)"),
+            yaxis=dict(title="YoY Growth %", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
             legend=dict(font=dict(color=C_TEXT2, size=10), x=0.01, y=0.99),
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -592,7 +592,7 @@ def _render_age_risk() -> None:
                 ]},
                 {"selector": "table", "props": [
                     ("background-color", C_SURFACE),
-                    ("border-radius", "8px"),
+                    ("border-radius", "6px"),
                     ("width", "100%"),
                 ]},
             ])
@@ -648,7 +648,7 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
             util_color = C_HIGH if util_val >= 90 else C_MOD if util_val >= 80 else C_LOW
             trend_color = C_HIGH if "+" in r["Trend"] else C_LOW
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
                 f'padding:16px 20px;margin-bottom:12px;">'
                 f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
                 f'<span style="color:{C_TEXT};font-size:14px;font-weight:700;">{r["Trade Lane"]}</span>'
@@ -679,9 +679,9 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,rgba(10,15,26,0.8) 100%);'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT};font-size:20px;font-weight:800;letter-spacing:0.3px;">Global Fleet Analytics</div>'
-            f'<div style="color:{C_TEXT3};font-size:12px;margin-top:4px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
+            f'<div style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:20px;font-weight:800;letter-spacing:0.3px;">Global Fleet Analytics</div>'
+            f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
             f'Comprehensive supply-side analysis — fleet composition, orderbook, scrapping dynamics, '
             f'capacity vs demand, and trade lane deployment. Data as of Q1 2026.</div>'
             f'</div>',

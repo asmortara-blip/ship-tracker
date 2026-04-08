@@ -23,11 +23,11 @@ from ui.styles import (
 # Local color aliases
 # ---------------------------------------------------------------------------
 
-C_LONG    = C_HIGH       # "#10b981"
-C_SHORT   = C_LOW        # "#ef4444"
-C_NEUTRAL = C_TEXT2      # "#94a3b8"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_LONG    = C_HIGH       # "#2e9e6e"
+C_SHORT   = C_LOW        # "#c0392b"
+C_NEUTRAL = C_TEXT2      # "#9a968e"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 # ---------------------------------------------------------------------------
 # Mock / fallback data
@@ -143,16 +143,16 @@ def _badge(text: str, color: str) -> str:
 
 def _hr() -> None:
     st.markdown(
-        "<hr style='border:none;border-top:1px solid rgba(255,255,255,0.06);margin:28px 0'>",
+        "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:28px 0'>",
         unsafe_allow_html=True,
     )
 
 def _section_title(label: str, sub: str = "") -> None:
-    sub_html = f'<div style="font-size:0.7rem;color:{C_TEXT3};margin-top:3px">{sub}</div>' if sub else ""
+    sub_html = f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:3px;font-family:Libre Franklin,sans-serif">{sub}</div>' if sub else ""
     st.markdown(
         f'<div style="margin-bottom:16px">'
-        f'<span style="font-size:0.65rem;font-weight:900;color:{C_TEXT2};letter-spacing:0.15em;'
-        f'text-transform:uppercase;font-family:monospace">{label}</span>'
+        f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT2};letter-spacing:0.08em;'
+        f'text-transform:uppercase;font-family:Libre Baskerville,Georgia,serif">{label}</span>'
         f'{sub_html}</div>',
         unsafe_allow_html=True,
     )
@@ -160,7 +160,7 @@ def _section_title(label: str, sub: str = "") -> None:
 def _card_open(extra_style: str = "") -> str:
     return (
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-radius:14px;padding:20px 22px;{extra_style}">'
+        f'border-radius:3px;padding:20px 22px;{extra_style}">'
     )
 
 def _card_close() -> str:
@@ -189,30 +189,26 @@ def _render_hero(signals: list[dict]) -> None:
         ]
 
         kpi_html = "".join([
-            f'<div style="background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.07);'
-            f'border-radius:14px;padding:22px 18px;text-align:center">'
+            f'<div style="background:rgba(0,0,0,0.28);border:1px solid rgba(232,230,225,0.06);'
+            f'border-radius:3px;padding:22px 18px;text-align:center">'
             f'<div style="font-size:2.4rem;font-weight:900;color:{col};line-height:1;'
-            f'font-variant-numeric:tabular-nums;font-family:monospace">{val}</div>'
+            f'font-variant-numeric:tabular-nums;font-family:JetBrains Mono,monospace">{val}</div>'
             f'<div style="font-size:0.6rem;font-weight:800;color:{col};opacity:0.8;'
-            f'text-transform:uppercase;letter-spacing:0.12em;margin-top:8px">{label}</div>'
-            f'<div style="font-size:0.63rem;color:{C_TEXT3};margin-top:3px">{sub}</div>'
+            f'text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;font-family:Libre Franklin,sans-serif">{label}</div>'
+            f'<div style="font-size:0.63rem;color:{C_TEXT3};margin-top:3px;font-family:Libre Franklin,sans-serif">{sub}</div>'
             f'</div>'
             for val, label, sub, col in kpis
         ])
 
         st.markdown(
             f'<div style="background:linear-gradient(135deg,#0d1826 0%,#111f35 50%,#0a1520 100%);'
-            f'border:1px solid rgba(59,130,246,0.22);border-radius:20px;padding:32px 36px 28px;'
+            f'border:1px solid rgba(53,114,176,0.22);border-radius:3px;padding:32px 36px 28px;'
             f'margin-bottom:8px;position:relative;overflow:hidden">'
-            f'<div style="position:absolute;top:-50px;right:-50px;width:200px;height:200px;'
-            f'border-radius:50%;background:radial-gradient(circle,rgba(59,130,246,0.10) 0%,transparent 70%);'
-            f'pointer-events:none"></div>'
             f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:24px">'
-            f'<div style="width:9px;height:9px;border-radius:50%;background:{C_HIGH};'
-            f'box-shadow:0 0 10px rgba(16,185,129,0.7)"></div>'
-            f'<span style="font-size:0.72rem;font-weight:900;color:{C_TEXT};letter-spacing:0.18em;'
-            f'text-transform:uppercase;font-family:monospace">ALPHA SIGNAL GENERATOR</span>'
-            f'<span style="margin-left:auto;font-size:0.65rem;color:{C_TEXT3};font-family:monospace">'
+            f'<div style="width:9px;height:9px;border-radius:3px;background:{C_HIGH}"></div>'
+            f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT};letter-spacing:0.10em;'
+            f'text-transform:uppercase;font-family:Libre Baskerville,Georgia,serif">Alpha Signal Generator</span>'
+            f'<span style="margin-left:auto;font-size:0.65rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">'
             f'{today_str}</span>'
             f'</div>'
             f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">'
@@ -237,7 +233,7 @@ def _render_conviction_matrix() -> None:
         header_cells = "".join([
             f'<div style="font-size:0.6rem;font-weight:700;color:{C_TEXT2};'
             f'text-transform:uppercase;letter-spacing:0.1em;text-align:center;'
-            f'padding:8px 4px;background:rgba(0,0,0,0.2);border-radius:6px">{t}</div>'
+            f'padding:8px 4px;background:rgba(0,0,0,0.2);border-radius:3px;font-family:Libre Franklin,sans-serif">{t}</div>'
             for t in _SIG_TYPES
         ])
 
@@ -251,13 +247,13 @@ def _render_conviction_matrix() -> None:
                     text_color = C_TEXT3
                 row_cells += (
                     f'<div style="background:{color}33;border:1px solid {color}55;'
-                    f'border-radius:8px;text-align:center;padding:10px 4px;'
+                    f'border-radius:3px;text-align:center;padding:10px 4px;'
                     f'font-size:0.62rem;font-weight:800;color:{color};'
-                    f'letter-spacing:0.06em">{label}</div>'
+                    f'letter-spacing:0.06em;font-family:Libre Franklin,sans-serif">{label}</div>'
                 )
             cat_label = (
                 f'<div style="font-size:0.65rem;font-weight:700;color:{C_TEXT};'
-                f'padding:10px 0;white-space:nowrap">{cat}</div>'
+                f'padding:10px 0;white-space:nowrap;font-family:Libre Franklin,sans-serif">{cat}</div>'
             )
             rows_html += (
                 f'<div style="display:contents">'
@@ -267,7 +263,7 @@ def _render_conviction_matrix() -> None:
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;padding:20px 22px">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:160px {col_w};gap:8px;align-items:center">'
             f'<div></div>'
             f'{header_cells}'
@@ -294,7 +290,7 @@ def _render_signals_table(signals: list[dict]) -> None:
 
         header_html = "".join([
             f'<div style="font-size:0.58rem;font-weight:700;color:{C_TEXT3};'
-            f'text-transform:uppercase;letter-spacing:0.09em;padding:6px 8px">{h}</div>'
+            f'text-transform:uppercase;letter-spacing:0.09em;padding:6px 8px;font-family:Libre Franklin,sans-serif">{h}</div>'
             for h in headers
         ])
 
@@ -320,33 +316,35 @@ def _render_signals_table(signals: list[dict]) -> None:
 
             rows_html += (
                 f'<div style="display:contents">'
-                f'<div style="padding:10px 8px;background:{row_bg};border-radius:6px 0 0 6px;'
-                f'font-size:0.75rem;font-weight:800;color:{C_TEXT};font-family:monospace">{ticker}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.72rem;font-weight:700;color:{d_col}">'
+                f'<div style="padding:10px 8px;background:{row_bg};border-radius:3px 0 0 3px;'
+                f'font-size:0.75rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace">{ticker}</div>'
+                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.72rem;font-weight:700;color:{d_col};'
+                f'font-family:Libre Franklin,sans-serif">'
                 f'{_dir_arrow(direction)}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg}">{_badge(conv, c_col)}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.72rem;font-weight:700;'
-                f'color:{C_TEXT};font-family:monospace">{strength:.2f}</div>'
+                f'color:{C_TEXT};font-family:JetBrains Mono,monospace">{strength:.2f}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.65rem;color:{C_ACCENT};'
-                f'font-weight:600">{sig_type}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.63rem;color:{C_TEXT2}">{basis}</div>'
+                f'font-weight:600;font-family:Libre Franklin,sans-serif">{sig_type}</div>'
+                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.63rem;color:{C_TEXT2};'
+                f'font-family:Libre Franklin,sans-serif">{basis}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_TEXT};'
-                f'font-family:monospace">${entry:.2f}</div>'
+                f'font-family:JetBrains Mono,monospace">${entry:.2f}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_SHORT};'
-                f'font-family:monospace">${stop:.2f}</div>'
+                f'font-family:JetBrains Mono,monospace">${stop:.2f}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_HIGH};'
-                f'font-family:monospace">${target:.2f}</div>'
+                f'font-family:JetBrains Mono,monospace">${target:.2f}</div>'
                 f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_MOD};'
-                f'font-family:monospace">{rr:.1f}x</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};border-radius:0 6px 6px 0;'
-                f'font-size:0.63rem;color:{C_TEXT3}">{age_str}</div>'
+                f'font-family:JetBrains Mono,monospace">{rr:.1f}x</div>'
+                f'<div style="padding:10px 8px;background:{row_bg};border-radius:0 3px 3px 0;'
+                f'font-size:0.63rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">{age_str}</div>'
                 f'</div>'
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;padding:20px 22px">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:{col_w};gap:2px;'
-            f'border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:8px">'
+            f'border-bottom:1px solid rgba(232,230,225,0.05);margin-bottom:8px">'
             f'{header_html}'
             f'</div>'
             f'<div style="display:grid;grid-template-columns:{col_w};gap:2px">'
@@ -393,22 +391,22 @@ def _render_engine_diagram() -> None:
 
         inp_html = "".join([
             f'<div style="background:rgba(0,0,0,0.25);border-left:3px solid {col};'
-            f'border-radius:0 6px 6px 0;padding:7px 12px;margin-bottom:6px;'
-            f'font-size:0.65rem;color:{C_TEXT}">{label}</div>'
+            f'border-radius:0 3px 3px 0;padding:7px 12px;margin-bottom:6px;'
+            f'font-size:0.65rem;color:{C_TEXT};font-family:Libre Franklin,sans-serif">{label}</div>'
             for label, col in inputs
         ])
         eng_html = "".join([
-            f'<div style="background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.25);'
-            f'border-radius:8px;padding:8px 12px;margin-bottom:6px">'
-            f'<div style="font-size:0.66rem;font-weight:700;color:{C_ACCENT}">{step}</div>'
-            f'<div style="font-size:0.60rem;color:{C_TEXT3};margin-top:2px">{desc}</div>'
+            f'<div style="background:rgba(53,114,176,0.10);border:1px solid rgba(53,114,176,0.25);'
+            f'border-radius:3px;padding:8px 12px;margin-bottom:6px">'
+            f'<div style="font-size:0.66rem;font-weight:700;color:{C_ACCENT};font-family:Libre Franklin,sans-serif">{step}</div>'
+            f'<div style="font-size:0.60rem;color:{C_TEXT3};margin-top:2px;font-family:Libre Franklin,sans-serif">{desc}</div>'
             f'</div>'
             for step, desc in engine_steps
         ])
         out_html = "".join([
             f'<div style="background:rgba(0,0,0,0.25);border-left:3px solid {col};'
-            f'border-radius:0 6px 6px 0;padding:7px 12px;margin-bottom:6px;'
-            f'font-size:0.65rem;color:{C_TEXT}">{label}</div>'
+            f'border-radius:0 3px 3px 0;padding:7px 12px;margin-bottom:6px;'
+            f'font-size:0.65rem;color:{C_TEXT};font-family:Libre Franklin,sans-serif">{label}</div>'
             for label, col in outputs
         ])
 
@@ -426,21 +424,21 @@ def _render_engine_diagram() -> None:
         ])
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;padding:20px 22px">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
             f'<div style="display:grid;grid-template-columns:1fr 60px 1fr 60px 1fr;gap:0;align-items:start">'
             f'<div>'
             f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center">DATA INPUTS</div>'
+            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">DATA INPUTS</div>'
             f'{inp_html}</div>'
             f'{arrow}'
             f'<div>'
             f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center">SIGNAL ENGINE</div>'
+            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">SIGNAL ENGINE</div>'
             f'{eng_html}</div>'
             f'{arrow}'
             f'<div>'
             f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center">OUTPUT</div>'
+            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">OUTPUT</div>'
             f'{out_html}</div>'
             f'</div>'
             f'</div>',
@@ -466,10 +464,10 @@ def _factor_bar(score: float) -> str:
     col = C_HIGH if score >= 0.75 else (C_MOD if score >= 0.55 else C_LOW)
     return (
         f'<div style="display:flex;align-items:center;gap:8px">'
-        f'<div style="flex:1;background:rgba(255,255,255,0.06);border-radius:4px;height:6px">'
+        f'<div style="flex:1;background:rgba(232,230,225,0.05);border-radius:4px;height:6px">'
         f'<div style="width:{pct}%;height:6px;border-radius:4px;background:{col}"></div>'
         f'</div>'
-        f'<span style="font-size:0.63rem;color:{col};font-family:monospace;width:32px">{score:.2f}</span>'
+        f'<span style="font-size:0.63rem;color:{col};font-family:JetBrains Mono,monospace;width:32px">{score:.2f}</span>'
         f'</div>'
     )
 
@@ -494,7 +492,7 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
 
             rows = "".join([
                 f'<tr>'
-                f'<td style="font-size:0.63rem;color:{C_TEXT2};padding:6px 0;white-space:nowrap">{f}</td>'
+                f'<td style="font-size:0.63rem;color:{C_TEXT2};padding:6px 0;white-space:nowrap;font-family:Libre Franklin,sans-serif">{f}</td>'
                 f'<td style="padding:6px 0 6px 10px;width:120px">{_factor_bar(scores[f])}</td>'
                 f'</tr>'
                 for f in factors
@@ -502,19 +500,19 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
 
             with col_obj:
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;'
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
                     f'padding:16px 18px;height:100%">'
                     f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
-                    f'<span style="font-size:0.8rem;font-weight:800;color:{C_TEXT};font-family:monospace">{ticker}</span>'
+                    f'<span style="font-size:0.8rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace">{ticker}</span>'
                     f'<span style="font-size:0.65rem;font-weight:700;color:{d_col}">{dir_lbl}</span>'
                     f'</div>'
                     f'<table style="width:100%;border-collapse:collapse">'
                     f'{rows}'
                     f'</table>'
-                    f'<div style="border-top:1px solid rgba(255,255,255,0.07);margin-top:10px;padding-top:10px;'
+                    f'<div style="border-top:1px solid rgba(232,230,225,0.06);margin-top:10px;padding-top:10px;'
                     f'display:flex;justify-content:space-between;align-items:center">'
                     f'<span style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.1em">Combined</span>'
-                    f'<span style="font-size:0.78rem;font-weight:800;color:{C_HIGH};font-family:monospace">{combined:.2f}</span>'
+                    f'<span style="font-size:0.78rem;font-weight:800;color:{C_HIGH};font-family:JetBrains Mono,monospace">{combined:.2f}</span>'
                     f'</div>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -577,7 +575,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                         x=x_vals, y=y_vals, name="Price",
                         line=dict(color=C_ACCENT, width=1.8),
                         fill="tozeroy",
-                        fillcolor="rgba(59,130,246,0.05)",
+                        fillcolor="rgba(53,114,176,0.05)",
                     ))
                     if long_x:
                         fig.add_trace(go.Scatter(
@@ -654,30 +652,28 @@ def _render_live_monitor(signals: list[dict]) -> None:
 
             rows_html += (
                 f'<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;'
-                f'border-bottom:1px solid rgba(255,255,255,0.04);'
-                f'background:{"rgba(16,185,129,0.04)" if mins_ago < 15 else "transparent"}">'
-                f'<div style="width:7px;height:7px;border-radius:50%;background:{dot_col};flex-shrink:0;'
-                f'box-shadow:0 0 6px {dot_col}88"></div>'
-                f'<span style="font-size:0.72rem;font-weight:800;color:{C_TEXT};font-family:monospace;width:48px">{ticker}</span>'
-                f'<span style="font-size:0.7rem;font-weight:700;color:{d_col};width:72px">{_dir_arrow(direction)}</span>'
+                f'border-bottom:1px solid rgba(232,230,225,0.04);'
+                f'background:{"rgba(46,158,110,0.04)" if mins_ago < 15 else "transparent"}">'
+                f'<div style="width:7px;height:7px;border-radius:3px;background:{dot_col};flex-shrink:0"></div>'
+                f'<span style="font-size:0.72rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace;width:48px">{ticker}</span>'
+                f'<span style="font-size:0.7rem;font-weight:700;color:{d_col};width:72px;font-family:Libre Franklin,sans-serif">{_dir_arrow(direction)}</span>'
                 f'<span style="width:80px">{_badge(conv, c_col)}</span>'
-                f'<span style="font-size:0.65rem;color:{C_ACCENT};width:110px">{sig_type}</span>'
-                f'<span style="font-size:0.63rem;color:{C_TEXT2};flex:1">{basis}</span>'
-                f'<span style="font-size:0.65rem;color:{C_TEXT};font-family:monospace;width:38px">{strength:.2f}</span>'
-                f'<span style="font-size:0.62rem;color:{C_TEXT3};width:72px;text-align:right">{age_str}</span>'
+                f'<span style="font-size:0.65rem;color:{C_ACCENT};width:110px;font-family:Libre Franklin,sans-serif">{sig_type}</span>'
+                f'<span style="font-size:0.63rem;color:{C_TEXT2};flex:1;font-family:Libre Franklin,sans-serif">{basis}</span>'
+                f'<span style="font-size:0.65rem;color:{C_TEXT};font-family:JetBrains Mono,monospace;width:38px">{strength:.2f}</span>'
+                f'<span style="font-size:0.62rem;color:{C_TEXT3};width:72px;text-align:right;font-family:Libre Franklin,sans-serif">{age_str}</span>'
                 f'</div>'
             )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:14px;overflow:hidden">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden">'
             f'<div style="background:rgba(0,0,0,0.2);padding:12px 16px;'
-            f'border-bottom:1px solid rgba(255,255,255,0.06);'
+            f'border-bottom:1px solid rgba(232,230,225,0.05);'
             f'display:flex;align-items:center;gap:8px">'
-            f'<div style="width:7px;height:7px;border-radius:50%;background:{C_HIGH};'
-            f'box-shadow:0 0 8px rgba(16,185,129,0.8);animation:pulse 2s infinite"></div>'
+            f'<div style="width:7px;height:7px;border-radius:3px;background:{C_HIGH}"></div>'
             f'<span style="font-size:0.62rem;font-weight:700;color:{C_TEXT2};'
-            f'text-transform:uppercase;letter-spacing:0.12em">LIVE — {len(live_24h)} signals / 24 h</span>'
-            f'<span style="margin-left:auto;font-size:0.60rem;color:{C_TEXT3}">Cache: 60 s</span>'
+            f'text-transform:uppercase;letter-spacing:0.12em;font-family:Libre Baskerville,Georgia,serif">LIVE — {len(live_24h)} signals / 24 h</span>'
+            f'<span style="margin-left:auto;font-size:0.60rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">Cache: 60 s</span>'
             f'</div>'
             f'{rows_html}'
             f'</div>',

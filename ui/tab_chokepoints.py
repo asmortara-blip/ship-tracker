@@ -26,17 +26,17 @@ except Exception as _ce:
 # Palette
 # ---------------------------------------------------------------------------
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ---------------------------------------------------------------------------
 # Static Data
@@ -206,7 +206,7 @@ def _dark_layout(**kwargs) -> dict:
     base = dict(
         paper_bgcolor=C_BG,
         plot_bgcolor=C_SURFACE,
-        font=dict(family="Inter, sans-serif", color=C_TEXT2, size=12),
+        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2, size=12),
         margin=dict(l=16, r=16, t=32, b=16),
         showlegend=True,
         legend=dict(
@@ -246,7 +246,7 @@ def _render_status_board() -> None:
             )
 
         st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:12px;'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
             f'overflow:hidden;margin-bottom:24px;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
             f'<span style="font-size:15px;font-weight:700;color:{C_TEXT};">Global Chokepoint Status</span>'
@@ -357,7 +357,7 @@ def _render_panama_card() -> None:
         )
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:20px;height:100%;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px;height:100%;">'
             f'<div style="font-size:14px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">'
             f'Panama Canal — Deep Dive</div>'
             f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">'
@@ -413,7 +413,7 @@ def _render_suez_card() -> None:
         revenue_impact  = suez_data.get("revenue_loss_usd_m_monthly", 700)
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:20px;height:100%;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px;height:100%;">'
             f'<div style="font-size:14px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">'
             f'Suez Canal — Deep Dive</div>'
             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">'
@@ -482,7 +482,7 @@ def _render_canal_deep_dives() -> None:
 def _render_red_sea_monitor() -> None:
     try:
         st.markdown(
-            f'<div style="background:{C_LOW}0d;border:1px solid {C_LOW}44;border-radius:12px;'
+            f'<div style="background:{C_LOW}0d;border:1px solid {C_LOW}44;border-radius:6px;'
             f'padding:20px;margin-bottom:24px;">'
             f'<div style="font-size:15px;font-weight:700;color:{C_LOW};margin-bottom:4px;">'
             f'Red Sea Crisis Monitor</div>'
@@ -515,7 +515,7 @@ def _render_red_sea_monitor() -> None:
                         f'<span style="font-size:11px;color:{C_TEXT3};">{inc["date"]}</span>'
                         f'</div>'
                         f'<div style="display:flex;gap:8px;margin-bottom:4px;">'
-                        f'<span style="background:{C_MOD}22;color:{C_MOD};padding:2px 8px;border-radius:10px;'
+                        f'<span style="background:{C_MOD}22;color:{C_MOD};padding:2px 8px;border-radius:6px;'
                         f'font-size:10px;font-weight:600;">{inc["type"]}</span>'
                         f'</div>'
                         f'<div style="font-size:12px;color:{C_TEXT2};">{inc["outcome"]}</div>'
@@ -524,7 +524,7 @@ def _render_red_sea_monitor() -> None:
                     )
 
                 st.markdown(
-                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;'
+                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
                     f'padding:20px;max-height:480px;overflow-y:auto;">{timeline_rows}</div>',
                     unsafe_allow_html=True,
                 )
@@ -550,7 +550,7 @@ def _render_red_sea_monitor() -> None:
                     )
 
                 st.markdown(
-                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;overflow:hidden;">'
+                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
                     f'<table style="width:100%;border-collapse:collapse;">'
                     f'<thead><tr style="background:{C_CARD};">'
                     f'<th style="padding:10px 14px;text-align:left;font-size:11px;color:{C_TEXT3};'
@@ -574,7 +574,7 @@ def _render_red_sea_monitor() -> None:
         with tab_insurance:
             try:
                 st.markdown(
-                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:10px;padding:20px;">'
+                    f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:20px;">'
                     f'<div style="font-size:13px;font-weight:600;color:{C_TEXT};margin-bottom:16px;">War Risk Insurance Premiums — Red Sea Transit</div>'
                     f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">'
                     f'<div style="background:{C_CARD};border-radius:8px;padding:14px;text-align:center;">'
@@ -753,7 +753,7 @@ def _render_rate_premiums() -> None:
             )
 
         st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
             f'<span style="font-size:14px;font-weight:700;color:{C_TEXT};">Rate Premium by Route — Chokepoint Attribution</span>'
             f'<span style="margin-left:10px;font-size:12px;color:{C_TEXT3};">Estimated surcharges attributable to active disruptions</span>'
@@ -805,7 +805,7 @@ def _render_historical_comparison() -> None:
             )
 
         st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
             f'<div style="padding:16px 20px;border-bottom:1px solid {C_BORDER};">'
             f'<span style="font-size:14px;font-weight:700;color:{C_TEXT};">Historical Major Disruptions — Impact Comparison</span>'
             f'</div>'
@@ -893,7 +893,7 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
     try:
         # Page header
         st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:12px;'
+            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:20px 24px;margin-bottom:24px;">'
             f'<div style="font-size:20px;font-weight:700;color:{C_TEXT};margin-bottom:4px;">'
             f'Strategic Waterway & Chokepoint Intelligence</div>'

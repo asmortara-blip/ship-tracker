@@ -20,20 +20,25 @@ from typing import Any
 import plotly.graph_objects as go
 import streamlit as st
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+# ── WSJ Editorial Palette ─────────────────────────────────────────────────────
+C_BG      = "#f7f5f0"
+C_SURFACE = "#efefea"
+C_CARD    = "#ffffff"
+C_BORDER  = "rgba(34,34,34,0.12)"
+C_HIGH    = "#2e7d32"
+C_MOD     = "#b8860b"
+C_LOW     = "#b71c1c"
+C_ACCENT  = "#0274b6"
+C_TEXT    = "#222222"
+C_TEXT2   = "#555555"
+C_TEXT3   = "#888888"
+C_PURPLE  = "#6a4c93"
+C_CYAN    = "#2a7886"
+
+# ── Font stacks ───────────────────────────────────────────────────────────────
+F_SERIF = "'Libre Baskerville', 'Georgia', 'Times New Roman', serif"
+F_BODY  = "'Libre Franklin', 'Helvetica Neue', Arial, sans-serif"
+F_MONO  = "'JetBrains Mono', 'Consolas', monospace"
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
 TOPICS = [
@@ -48,20 +53,20 @@ _TOPIC_COLOR = {
     "Carrier Capacity": C_CYAN,
     "Geopolitics":      C_LOW,
     "Fuel/Bunker":      C_PURPLE,
-    "Trade Policy":     "#f97316",
-    "Vessel Finance":   "#14b8a6",
+    "Trade Policy":     "#c65102",
+    "Vessel Finance":   "#0e8a7a",
     "Sustainability":   C_HIGH,
-    "M&A":              "#ec4899",
+    "M&A":              "#b5317f",
 }
 
 _SOURCE_COLOR = {
     "Reuters":       C_ACCENT,
-    "Bloomberg":     "#f59e0b",
+    "Bloomberg":     "#b8860b",
     "Lloyd's List":  C_HIGH,
     "TradeWinds":    C_CYAN,
     "Splash247":     C_PURPLE,
-    "Hellenic Shipping News": "#f97316",
-    "The Loadstar":  "#14b8a6",
+    "Hellenic Shipping News": "#c65102",
+    "The Loadstar":  "#0e8a7a",
 }
 
 # ── Mock data ──────────────────────────────────────────────────────────────────
@@ -146,7 +151,7 @@ _MOCK_ARTICLES: list[dict] = [
     {"headline": "EU shipping ETS costs hit $420M in Q1 2026 — operators pass costs to shippers",
      "source": "Reuters", "sentiment_score": -0.33, "topic": "Sustainability",
      "published_at": _now() - timedelta(hours=20), "urgency": 0.63,
-     "summary": "European shipping companies faced a combined €390 million in EU Emissions Trading System charges in Q1 2026, with most passing the costs directly to shippers via BAF surcharges.",
+     "summary": "European shipping companies faced a combined \u20ac390 million in EU Emissions Trading System charges in Q1 2026, with most passing the costs directly to shippers via BAF surcharges.",
      "url": "#", "entities": ["EU ETS", "Maersk", "MSC", "BAF surcharge"]},
 
     {"headline": "Evergreen orders 20 methanol-powered 24,000 TEU vessels in $6B newbuild spree",
@@ -173,7 +178,7 @@ _MOCK_ARTICLES: list[dict] = [
      "summary": "With FuelEU Maritime regulation now in force, container lines are racing to sign long-term green methanol supply agreements with producers in Chile, Iceland and Morocco.",
      "url": "#", "entities": ["FuelEU", "Methanol", "Chile", "Iceland", "Morocco"]},
 
-    {"headline": "Cosco Shipping acquires 30% stake in Port of Hamburg for €1.8B",
+    {"headline": "Cosco Shipping acquires 30% stake in Port of Hamburg for \u20ac1.8B",
      "source": "Reuters", "sentiment_score": 0.15, "topic": "M&A",
      "published_at": _now() - timedelta(hours=33), "urgency": 0.67,
      "summary": "COSCO Shipping Ports secured a 30% stake in the Port of Hamburg's HHLA terminal operator after the EU approved the deal with conditions, ending a two-year regulatory review.",
@@ -272,7 +277,7 @@ def _time_ago(dt: datetime) -> str:
             return f"{s // 3600}h ago"
         return f"{s // 86400}d ago"
     except Exception:
-        return "—"
+        return "\u2014"
 
 
 def _sentiment_label(score: float) -> tuple[str, str]:
@@ -286,9 +291,9 @@ def _sentiment_label(score: float) -> tuple[str, str]:
 def _topic_chip(topic: str) -> str:
     color = _TOPIC_COLOR.get(topic, C_ACCENT)
     return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-        f'border-radius:4px;padding:1px 7px;font-size:10px;font-weight:600;'
-        f'letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
+        f'<span style="background:{color}15;color:{color};border:1px solid {color}33;'
+        f'border-radius:3px;padding:1px 7px;font-size:10px;font-weight:600;'
+        f'font-family:{F_BODY};letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
     )
 
 
@@ -296,7 +301,7 @@ def _source_badge(source: str) -> str:
     color = _SOURCE_COLOR.get(source, C_TEXT2)
     return (
         f'<span style="color:{color};font-size:10px;font-weight:700;'
-        f'letter-spacing:0.8px;white-space:nowrap;">{source.upper()}</span>'
+        f'font-family:{F_BODY};letter-spacing:0.8px;white-space:nowrap;">{source.upper()}</span>'
     )
 
 
@@ -304,8 +309,8 @@ def _score_pill(score: float) -> str:
     color = C_HIGH if score >= 0.15 else (C_LOW if score <= -0.15 else C_TEXT3)
     sign  = "+" if score > 0 else ""
     return (
-        f'<code style="background:{color}22;color:{color};border-radius:4px;'
-        f'padding:2px 6px;font-size:11px;">{sign}{score:.2f}</code>'
+        f'<code style="background:{color}15;color:{color};border-radius:3px;'
+        f'padding:2px 6px;font-size:11px;font-family:{F_MONO};">{sign}{score:.2f}</code>'
     )
 
 # ── Section 1: Sentiment Pulse ─────────────────────────────────────────────────
@@ -327,7 +332,7 @@ def _render_sentiment_pulse(articles: list[dict]) -> None:
         sign = "+" if avg_score > 0 else ""
 
         kpis = [
-            ("Overall Sentiment", f"{sign}{avg_score:.2f}", "Score  –1 → +1", score_color),
+            ("Overall Sentiment", f"{sign}{avg_score:.2f}", "Score  \u20131 \u2192 +1", score_color),
             ("Bullish Articles",  f"{bull_pct:.0f}%",       f"{bullish_n} articles",  C_HIGH),
             ("Bearish Articles",  f"{bear_pct:.0f}%",       f"{bearish_n} articles",  C_LOW),
             ("News Volume",       f"{volume_24h}",           "articles last 24 h",     C_ACCENT),
@@ -338,13 +343,15 @@ def _render_sentiment_pulse(articles: list[dict]) -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-top:3px solid {color};border-radius:10px;padding:18px 20px;'
-                    f'text-align:center;">'
+                    f'border-top:3px solid {color};border-radius:3px;padding:18px 20px;'
+                    f'text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
                     f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;'
-                    f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">{label}</div>'
+                    f'font-family:{F_BODY};letter-spacing:1px;text-transform:uppercase;'
+                    f'margin-bottom:8px;">{label}</div>'
                     f'<div style="color:{color};font-size:34px;font-weight:800;'
-                    f'line-height:1;font-family:monospace;">{value}</div>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;margin-top:6px;">{sub}</div>'
+                    f'line-height:1;font-family:{F_MONO};">{value}</div>'
+                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
+                    f'margin-top:6px;">{sub}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -371,13 +378,13 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
         # header row
         header_cells = "".join(
             f'<th style="padding:6px 10px;text-align:center;color:{C_TEXT2};'
-            f'font-size:11px;font-weight:600;letter-spacing:0.5px;'
+            f'font-size:11px;font-weight:600;font-family:{F_BODY};letter-spacing:0.5px;'
             f'border-bottom:1px solid {C_BORDER};">{d}</th>'
             for d in day_labels
         )
         header = (
             f'<tr><th style="padding:6px 12px;text-align:left;color:{C_TEXT3};'
-            f'font-size:11px;">Topic</th>{header_cells}</tr>'
+            f'font-size:11px;font-family:{F_BODY};">Topic</th>{header_cells}</tr>'
         )
 
         rows_html = ""
@@ -385,7 +392,8 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
             tc = _TOPIC_COLOR.get(topic, C_ACCENT)
             topic_cell = (
                 f'<td style="padding:8px 12px;white-space:nowrap;">'
-                f'<span style="color:{tc};font-size:12px;font-weight:600;">{topic}</span></td>'
+                f'<span style="color:{tc};font-size:12px;font-weight:600;'
+                f'font-family:{F_BODY};">{topic}</span></td>'
             )
             day_cells = ""
             for day in day_labels:
@@ -396,23 +404,25 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
                     bg   = C_HIGH if avg >= 0.2 else (C_LOW if avg <= -0.2 else C_MOD)
                     sign = "+" if avg > 0 else ""
                     cell_inner = (
-                        f'<div style="font-size:11px;font-weight:700;color:{bg};">'
+                        f'<div style="font-size:11px;font-weight:700;color:{bg};'
+                        f'font-family:{F_MONO};">'
                         f'{sign}{avg:.1f}</div>'
-                        f'<div style="font-size:9px;color:{C_TEXT3};">{cnt}art</div>'
+                        f'<div style="font-size:9px;color:{C_TEXT3};font-family:{F_BODY};">{cnt}art</div>'
                     )
-                    cell_bg = f"{bg}1a"
+                    cell_bg = f"{bg}12"
                 else:
-                    cell_inner = f'<div style="color:{C_TEXT3};font-size:11px;">—</div>'
+                    cell_inner = f'<div style="color:{C_TEXT3};font-size:11px;">\u2014</div>'
                     cell_bg    = "transparent"
                 day_cells += (
                     f'<td style="padding:6px 8px;text-align:center;'
-                    f'background:{cell_bg};border-radius:6px;">{cell_inner}</td>'
+                    f'background:{cell_bg};border-radius:3px;">{cell_inner}</td>'
                 )
             rows_html += f"<tr>{topic_cell}{day_cells}</tr>"
 
         st.markdown(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:12px;padding:20px;overflow-x:auto;">'
+            f'border-radius:3px;padding:20px;overflow-x:auto;'
+            f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
             f'<table style="width:100%;border-collapse:separate;border-spacing:4px;">'
             f'<thead>{header}</thead>'
             f'<tbody>{rows_html}</tbody>'
@@ -443,26 +453,31 @@ def _render_breaking_news(articles: list[dict]) -> None:
 
             st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-left:4px solid {urg_color};border-radius:10px;'
-                f'padding:18px 22px;margin-bottom:12px;">'
+                f'border-left:4px solid {urg_color};border-radius:3px;'
+                f'padding:18px 22px;margin-bottom:12px;'
+                f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
-                f'<span style="color:{sc};font-size:10px;font-weight:700;letter-spacing:1px;">{a["source"].upper()}</span>'
-                f'<span style="background:{lcolor}22;color:{lcolor};border:1px solid {lcolor}44;'
-                f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:700;">{label}</span>'
-                f'<span style="background:{tc}22;color:{tc};border:1px solid {tc}44;'
-                f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:600;">{a["topic"]}</span>'
-                f'<span style="margin-left:auto;color:{urg_color};font-size:10px;font-weight:700;">'
-                f'URGENCY {urgency_pct}</span>'
+                f'<span style="color:{sc};font-size:10px;font-weight:700;font-family:{F_BODY};'
+                f'letter-spacing:1px;">{a["source"].upper()}</span>'
+                f'<span style="background:{lcolor}15;color:{lcolor};border:1px solid {lcolor}33;'
+                f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:700;'
+                f'font-family:{F_BODY};">{label}</span>'
+                f'<span style="background:{tc}15;color:{tc};border:1px solid {tc}33;'
+                f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:600;'
+                f'font-family:{F_BODY};">{a["topic"]}</span>'
+                f'<span style="margin-left:auto;color:{urg_color};font-size:10px;font-weight:700;'
+                f'font-family:{F_BODY};">URGENCY {urgency_pct}</span>'
                 f'</div>'
                 f'<div style="color:{C_TEXT};font-size:17px;font-weight:700;line-height:1.4;'
-                f'margin-bottom:8px;">{a["headline"]}</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.6;margin-bottom:10px;">{a["summary"][:200]}…</div>'
+                f'font-family:{F_SERIF};margin-bottom:8px;">{a["headline"]}</div>'
+                f'<div style="color:{C_TEXT2};font-size:13px;font-family:{F_BODY};'
+                f'line-height:1.7;margin-bottom:10px;">{a["summary"][:200]}\u2026</div>'
                 f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;">{ago}</span>'
-                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
-                f'padding:1px 6px;font-size:11px;">{score_str}</code>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};">{ago}</span>'
+                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
+                f'padding:1px 6px;font-size:11px;font-family:{F_MONO};">{score_str}</code>'
                 f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:11px;'
-                f'text-decoration:none;margin-left:auto;">Read full story ↗</a>'
+                f'font-family:{F_BODY};text-decoration:none;margin-left:auto;">Read full story \u2197</a>'
                 f'</div>'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -488,9 +503,9 @@ def _render_news_feed(articles: list[dict]) -> None:
         # Column headers
         st.markdown(
             f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
-            f'gap:10px;padding:6px 14px;border-bottom:1px solid {C_BORDER};'
-            f'color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:0.8px;'
-            f'text-transform:uppercase;">'
+            f'gap:10px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
+            f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:0.8px;text-transform:uppercase;">'
             f'<span>Source</span><span>Headline</span>'
             f'<span style="text-align:center;">Score</span>'
             f'<span>Topic</span><span style="text-align:right;">Time</span>'
@@ -505,36 +520,42 @@ def _render_news_feed(articles: list[dict]) -> None:
             ago   = _time_ago(a["published_at"])
             sign  = "+" if a["sentiment_score"] > 0 else ""
             score_str = f"{sign}{a['sentiment_score']:.2f}"
-            hl_short  = a["headline"][:90] + ("…" if len(a["headline"]) > 90 else "")
+            hl_short  = a["headline"][:90] + ("\u2026" if len(a["headline"]) > 90 else "")
 
-            # Row
+            # Row — alternating warm tones
             row_bg = C_CARD if idx % 2 == 0 else C_SURFACE
             st.markdown(
                 f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
                 f'gap:10px;padding:10px 14px;background:{row_bg};'
-                f'border-radius:6px;align-items:center;margin-bottom:2px;">'
+                f'border-radius:3px;align-items:center;margin-bottom:2px;">'
                 f'<span style="color:{sc};font-size:10px;font-weight:700;'
-                f'letter-spacing:0.5px;">{a["source"]}</span>'
-                f'<span style="color:{C_TEXT};font-size:13px;" title="{a["headline"]}">{hl_short}</span>'
-                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
-                f'padding:1px 5px;font-size:11px;text-align:center;">{score_str}</code>'
-                f'<span style="background:{tc}22;color:{tc};border-radius:4px;'
-                f'padding:1px 7px;font-size:10px;font-weight:600;">{a["topic"]}</span>'
-                f'<span style="color:{C_TEXT3};font-size:11px;text-align:right;">{ago}</span>'
+                f'font-family:{F_BODY};letter-spacing:0.5px;">{a["source"]}</span>'
+                f'<span style="color:{C_TEXT};font-size:13px;font-family:{F_SERIF};"'
+                f' title="{a["headline"]}">{hl_short}</span>'
+                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
+                f'padding:1px 5px;font-size:11px;font-family:{F_MONO};'
+                f'text-align:center;">{score_str}</code>'
+                f'<span style="background:{tc}15;color:{tc};border-radius:3px;'
+                f'padding:1px 7px;font-size:10px;font-weight:600;'
+                f'font-family:{F_BODY};">{a["topic"]}</span>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
+                f'text-align:right;">{ago}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
 
-            with st.expander(f"Summary — {a['headline'][:60]}…", expanded=False):
+            with st.expander(f"Summary \u2014 {a['headline'][:60]}\u2026", expanded=False):
                 ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
                 st.markdown(
-                    f'<div style="background:{C_BG};border-radius:8px;padding:14px 18px;">'
-                    f'<p style="color:{C_TEXT};font-size:13px;line-height:1.7;margin:0 0 12px 0;">'
+                    f'<div style="background:{C_SURFACE};border-radius:3px;padding:14px 18px;">'
+                    f'<p style="color:{C_TEXT};font-size:13px;font-family:{F_BODY};'
+                    f'line-height:1.7;margin:0 0 12px 0;">'
                     f'{a["summary"]}</p>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;">'
+                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};">'
                     f'<strong style="color:{C_TEXT2};">Entities mentioned:</strong> {ent_str}</div>'
                     f'<div style="margin-top:10px;">'
-                    f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;">Read full article ↗</a>'
+                    f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;'
+                    f'font-family:{F_BODY};">Read full article \u2197</a>'
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
@@ -568,16 +589,16 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
             if name not in seen:
                 scores   = entity_sentiments[name]
                 avg_sent = sum(scores) / len(scores) if scores else 0.0
-                rows.append((name, "—", cnt, avg_sent, "flat"))
+                rows.append((name, "\u2014", cnt, avg_sent, "flat"))
 
         rows.sort(key=lambda r: r[2], reverse=True)
 
         # Header
         st.markdown(
             f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
-            f'gap:8px;padding:6px 14px;border-bottom:1px solid {C_BORDER};'
-            f'color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:0.8px;'
-            f'text-transform:uppercase;">'
+            f'gap:8px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
+            f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:0.8px;text-transform:uppercase;">'
             f'<span>Entity</span><span>Type</span>'
             f'<span style="text-align:center;">Mentions</span>'
             f'<span style="text-align:center;">Sentiment</span>'
@@ -590,20 +611,22 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
             label, lcolor = _sentiment_label(avg_sent)
             sign          = "+" if avg_sent > 0 else ""
             sent_str      = f"{sign}{avg_sent:.2f}"
-            trend_icon    = "▲" if trend == "up" else ("▼" if trend == "down" else "●")
+            trend_icon    = "\u25b2" if trend == "up" else ("\u25bc" if trend == "down" else "\u25cf")
             trend_color   = C_HIGH if trend == "up" else (C_LOW if trend == "down" else C_TEXT3)
             row_bg        = C_CARD if i % 2 == 0 else C_SURFACE
 
             st.markdown(
                 f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
                 f'gap:8px;padding:9px 14px;background:{row_bg};'
-                f'border-radius:6px;align-items:center;margin-bottom:2px;">'
-                f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">{name}</span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;">{etype}</span>'
+                f'border-radius:3px;align-items:center;margin-bottom:2px;">'
+                f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
+                f'font-family:{F_SERIF};">{name}</span>'
+                f'<span style="color:{C_TEXT2};font-size:12px;font-family:{F_BODY};">{etype}</span>'
                 f'<span style="color:{C_ACCENT};font-size:13px;font-weight:700;'
-                f'text-align:center;display:block;">{mentions}</span>'
-                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:4px;'
-                f'padding:1px 5px;font-size:11px;display:block;text-align:center;">{sent_str}</code>'
+                f'font-family:{F_MONO};text-align:center;display:block;">{mentions}</span>'
+                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
+                f'padding:1px 5px;font-size:11px;font-family:{F_MONO};'
+                f'display:block;text-align:center;">{sent_str}</code>'
                 f'<span style="color:{trend_color};font-size:14px;font-weight:700;'
                 f'text-align:center;display:block;">{trend_icon}</span>'
                 f'</div>',
@@ -680,20 +703,20 @@ def _render_geo_map(articles: list[dict]) -> None:
             geo=dict(
                 showframe=False,
                 showcoastlines=True,
-                coastlinecolor=C_BORDER,
+                coastlinecolor="#cccccc",
                 showland=True,
                 landcolor=C_SURFACE,
                 showocean=True,
-                oceancolor=C_BG,
+                oceancolor="#e8e6e1",
                 showlakes=False,
                 showcountries=True,
-                countrycolor=C_BORDER,
+                countrycolor="#cccccc",
                 bgcolor=C_BG,
                 projection_type="natural earth",
             ),
             paper_bgcolor=C_BG,
             plot_bgcolor=C_BG,
-            font=dict(color=C_TEXT2),
+            font=dict(color=C_TEXT2, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
             margin=dict(l=0, r=0, t=10, b=0),
             height=400,
         )
@@ -725,19 +748,20 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
         updated = max((a["published_at"] for a in articles), default=_now())
         updated_str = updated.strftime("%d %b %Y %H:%M UTC")
         mock_badge = (
-            f'<span style="background:{C_MOD}22;color:{C_MOD};border:1px solid {C_MOD}44;'
-            f'border-radius:4px;padding:1px 8px;font-size:10px;font-weight:700;'
-            f'margin-left:10px;">DEMO DATA</span>'
+            f'<span style="background:{C_MOD}18;color:{C_MOD};border:1px solid {C_MOD}33;'
+            f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:700;'
+            f'font-family:{F_BODY};margin-left:10px;">DEMO DATA</span>'
             if using_mock else ""
         )
         st.markdown(
             f'<div style="display:flex;align-items:baseline;gap:12px;'
-            f'margin-bottom:22px;flex-wrap:wrap;">'
-            f'<h2 style="color:{C_TEXT};font-size:22px;font-weight:800;margin:0;'
-            f'letter-spacing:-0.3px;">Shipping News Intelligence</h2>'
+            f'margin-bottom:22px;flex-wrap:wrap;border-bottom:3px double {C_TEXT};'
+            f'padding-bottom:12px;">'
+            f'<h2 style="color:{C_TEXT};font-size:24px;font-weight:700;margin:0;'
+            f'font-family:{F_SERIF};letter-spacing:-0.3px;">Shipping News Intelligence</h2>'
             f'{mock_badge}'
-            f'<span style="color:{C_TEXT3};font-size:11px;margin-left:auto;">'
-            f'Last updated {updated_str}</span>'
+            f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
+            f'margin-left:auto;">Last updated {updated_str}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -747,8 +771,8 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 1. Sentiment Pulse ────────────────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">01</span>&nbsp;&nbsp;Sentiment Pulse</div>',
             unsafe_allow_html=True,
         )
@@ -761,10 +785,10 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 2. Topic Heatmap ──────────────────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">02</span>&nbsp;&nbsp;Topic Heatmap — '
-            f'9 Topics × 5 Days</div>',
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_ACCENT};">02</span>&nbsp;&nbsp;Topic Heatmap \u2014 '
+            f'9 Topics \u00d7 5 Days</div>',
             unsafe_allow_html=True,
         )
         _render_topic_heatmap(articles)
@@ -776,9 +800,9 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 3. Breaking News ──────────────────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_LOW};">03</span>&nbsp;&nbsp;Breaking News — Top 5 Urgent</div>',
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<span style="color:{C_LOW};">03</span>&nbsp;&nbsp;Breaking News \u2014 Top 5 Urgent</div>',
             unsafe_allow_html=True,
         )
         _render_breaking_news(articles)
@@ -790,8 +814,8 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 4. Full News Feed ─────────────────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">04</span>&nbsp;&nbsp;Full News Feed</div>',
             unsafe_allow_html=True,
         )
@@ -804,8 +828,8 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 5. Named Entity Tracker ───────────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">05</span>&nbsp;&nbsp;Named Entity Tracker</div>',
             unsafe_allow_html=True,
         )
@@ -818,8 +842,8 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     # ── 6. Geographic Sentiment Map ───────────────────────────────────────────
     try:
         st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;letter-spacing:1.2px;'
-            f'text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
+            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
             f'<span style="color:{C_ACCENT};">06</span>&nbsp;&nbsp;Geographic Sentiment Map</div>',
             unsafe_allow_html=True,
         )
@@ -831,7 +855,8 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     try:
         st.markdown(
             f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;'
-            f'margin-top:32px;padding-top:16px;border-top:1px solid {C_BORDER};">'
+            f'font-family:{F_BODY};margin-top:32px;padding-top:16px;'
+            f'border-top:1px solid {C_BORDER};">'
             f'Shipping News Intelligence &nbsp;|&nbsp; '
             f'{len(articles)} articles indexed &nbsp;|&nbsp; '
             f'Sentiment scored by NLP pipeline'

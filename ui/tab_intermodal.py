@@ -19,17 +19,17 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Design tokens
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ---------------------------------------------------------------------------
 # Static reference data
@@ -130,7 +130,7 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
         if delta else ""
     )
     st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:16px 18px;text-align:center;">'
         f'<div style="color:{C_TEXT3};font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;">{label}</div>'
         f'<div style="color:{C_TEXT};font-size:1.55rem;font-weight:700;margin-top:6px;">{value}</div>'
@@ -141,10 +141,10 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> N
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
-    sub = f'<div style="color:{C_TEXT3};font-size:0.82rem;margin-top:3px;">{subtitle}</div>' if subtitle else ""
+    sub = f'<div style="color:{C_TEXT3};font-size:0.82rem;margin-top:3px;font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>' if subtitle else ""
     st.markdown(
         f'<div style="border-left:3px solid {C_ACCENT};padding-left:12px;margin:28px 0 14px;">'
-        f'<span style="color:{C_TEXT};font-size:1.05rem;font-weight:600;">{title}</span>'
+        f'<span style="color:{C_TEXT};font-size:1.05rem;font-weight:600;font-family:\'Libre Baskerville\',serif;">{title}</span>'
         f'{sub}</div>',
         unsafe_allow_html=True,
     )
@@ -159,7 +159,7 @@ def _bottleneck_badge(level: str) -> str:
     bg, fg = cfg.get(level, (C_TEXT3, "#fff"))
     return (
         f'<span style="background:{bg};color:{fg};font-size:0.68rem;font-weight:700;'
-        f'padding:2px 8px;border-radius:10px;">{level}</span>'
+        f'padding:2px 8px;border-radius:6px;">{level}</span>'
     )
 
 
@@ -208,7 +208,7 @@ def _render_port_inland_table() -> None:
 
         header = (
             '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.8rem;">'
+            '<table style="width:100%;border-collapse:collapse;font-size:0.8rem;font-family:\'Libre Franklin\',sans-serif;">'
             f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
             '<th style="padding:8px 10px;text-align:left;">Port</th>'
             '<th style="padding:8px 10px;text-align:left;">Rail Connections</th>'
@@ -328,9 +328,9 @@ def _render_network_map() -> None:
             geo={
                 "scope": "north america",
                 "showland": True,
-                "landcolor": "#1a2235",
+                "landcolor": "#181c28",
                 "showocean": True,
-                "oceancolor": "#0a0f1a",
+                "oceancolor": "#0c0e14",
                 "showcoastlines": True,
                 "coastlinecolor": C_TEXT3,
                 "showcountries": True,
@@ -374,7 +374,7 @@ def _render_dwell_tracker() -> None:
         )
         header = (
             '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
+            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;font-family:\'Libre Franklin\',sans-serif;">'
             f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
             '<th style="padding:9px 12px;text-align:left;">Port</th>'
             '<th style="padding:9px 12px;text-align:center;">Current Dwell (days)</th>'
@@ -432,7 +432,7 @@ def _render_equipment_availability() -> None:
         )
         header = (
             '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
+            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;font-family:\'Libre Franklin\',sans-serif;">'
             f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
             '<th style="padding:9px 12px;text-align:left;">Port</th>'
             '<th style="padding:9px 12px;text-align:center;">Available Chassis</th>'
@@ -474,7 +474,7 @@ def _render_inland_destination() -> None:
         with c1:
             labels = ["Chicago", "Dallas", "Kansas City", "Denver", "Other Midwest", "Other"]
             values = [35, 12, 10, 8, 15, 20]
-            colors = [C_ACCENT, C_HIGH, C_MOD, "#8b5cf6", "#06b6d4", C_TEXT3]
+            colors = [C_ACCENT, C_HIGH, C_MOD, "#7c6eaf", "#4a90a4", C_TEXT3]
 
             fig_pie = go.Figure(go.Pie(
                 labels=labels, values=values,
@@ -550,7 +550,7 @@ def _render_cost_comparison() -> None:
                 mc = mode_colors.get(opt["mode"], C_TEXT2)
                 with col:
                     st.markdown(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
                         f'padding:14px 16px;height:100%;">'
                         f'<div style="color:{C_TEXT3};font-size:0.72rem;margin-bottom:6px;">{opt["label"]}</div>'
                         f'<div style="color:{mc};font-size:1.3rem;font-weight:700;">${opt["cost_teu"]:,}<span style="font-size:0.75rem;color:{C_TEXT3};">/TEU</span></div>'
@@ -664,7 +664,7 @@ def _render_market_signals() -> None:
             corr = 0.87
 
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:16px 20px;margin-top:6px;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-top:6px;">'
             f'<div style="display:flex;gap:32px;align-items:center;">'
             f'<div><div style="color:{C_TEXT3};font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;">Pearson Correlation</div>'
             f'<div style="color:{C_HIGH};font-size:1.4rem;font-weight:700;">{corr}</div></div>'
@@ -689,10 +689,10 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_ACCENT}18,{C_HIGH}0a);'
-            f'border:1px solid {C_BORDER};border-radius:14px;padding:22px 28px;margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT};font-size:1.35rem;font-weight:700;letter-spacing:-0.02em;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:22px 28px;margin-bottom:20px;">'
+            f'<div style="color:{C_TEXT};font-size:1.35rem;font-weight:700;letter-spacing:-0.02em;font-family:\'Libre Baskerville\',serif;">'
             f'Intermodal &amp; Supply Chain Connectivity</div>'
-            f'<div style="color:{C_TEXT2};font-size:0.88rem;margin-top:4px;">'
+            f'<div style="color:{C_TEXT2};font-size:0.88rem;margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
             f'Port-to-inland rail corridors · Chassis availability · Dwell times · '
             f'Multi-modal cost analysis · Market signals</div>'
             f'</div>',
@@ -718,7 +718,7 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="margin-top:24px;padding:12px 18px;background:{C_SURFACE};'
-            f'border-top:1px solid {C_BORDER};border-radius:8px;color:{C_TEXT3};font-size:0.75rem;">'
+            f'border-top:1px solid {C_BORDER};border-radius:6px;color:{C_TEXT3};font-size:0.75rem;font-family:\'Libre Franklin\',sans-serif;">'
             f'Data sources: BNSF / UP / CSX capacity bulletins, POLA/POLB drayage reports, '
             f'IANA intermodal statistics, Freightos index, proprietary congestion model. '
             f'Refresh: weekly. Chassis data: pool operators + port authority surveys.</div>',

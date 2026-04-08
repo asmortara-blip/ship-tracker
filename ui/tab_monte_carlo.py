@@ -18,19 +18,19 @@ from loguru import logger
 from scipy import stats as scipy_stats
 
 # ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 
 
 # ── Simulation engine ─────────────────────────────────────────────────────────
@@ -102,12 +102,12 @@ def _simulate(
 
 def _section_header(title: str, subtitle: str = "") -> None:
     sub_html = (
-        f'<p style="margin:4px 0 0; font-size:0.82rem; color:{C_TEXT2}">{subtitle}</p>'
+        f'<p style="margin:4px 0 0; font-size:0.82rem; color:{C_TEXT2}; font-family:Libre Franklin, sans-serif">{subtitle}</p>'
         if subtitle else ""
     )
     st.markdown(
         f'<div style="margin:32px 0 16px">'
-        f'<h3 style="margin:0; font-size:1.05rem; font-weight:700; color:{C_TEXT}">{title}</h3>'
+        f'<h3 style="margin:0; font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">{title}</h3>'
         f'{sub_html}'
         f'</div>',
         unsafe_allow_html=True,
@@ -116,10 +116,10 @@ def _section_header(title: str, subtitle: str = "") -> None:
 
 def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px;'
+        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px;'
         f' padding:16px 20px; min-width:160px; flex:1">'
         f'<div style="font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase;'
-        f' letter-spacing:0.1em; font-weight:600; margin-bottom:6px">{label}</div>'
+        f' letter-spacing:0.1em; font-weight:600; margin-bottom:6px; font-family:Libre Franklin, sans-serif">{label}</div>'
         f'<div style="font-size:1.35rem; font-weight:700; color:{color}">{value}</div>'
         f'<div style="font-size:0.76rem; color:{C_TEXT2}; margin-top:4px">{sub}</div>'
         f'</div>'
@@ -341,7 +341,7 @@ def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float
         def row(label: str, value: str) -> str:
             return (
                 f'<tr>'
-                f'<td style="padding:8px 16px; color:{C_TEXT2}; font-size:0.82rem; border-bottom:1px solid {C_BORDER}">{label}</td>'
+                f'<td style="padding:8px 16px; color:{C_TEXT2}; font-size:0.82rem; border-bottom:1px solid {C_BORDER}; font-family:Libre Franklin, sans-serif">{label}</td>'
                 f'<td style="padding:8px 16px; color:{C_TEXT}; font-size:0.85rem; font-weight:600; border-bottom:1px solid {C_BORDER}; text-align:right">{value}</td>'
                 f'</tr>'
             )
@@ -361,7 +361,7 @@ def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float
             row("Sharpe (annualized)", f"{sharpe:.3f}"),
         ])
         html = (
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px; overflow:hidden; margin-bottom:24px">'
+            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px; overflow:hidden; margin-bottom:24px">'
             f'<table style="width:100%; border-collapse:collapse">'
             f'<thead><tr>'
             f'<th style="padding:10px 16px; text-align:left; font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; background:{C_SURFACE}; border-bottom:1px solid {C_BORDER}">Metric</th>'
@@ -555,10 +555,10 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
-            f'border:1px solid {C_BORDER}; border-radius:14px; padding:24px 28px; margin-bottom:28px">'
-            f'<h2 style="margin:0 0 6px; font-size:1.4rem; font-weight:800; color:{C_TEXT}">'
+            f'border:1px solid {C_BORDER}; border-radius:6px; padding:24px 28px; margin-bottom:28px">'
+            f'<h2 style="margin:0 0 6px; font-size:1.4rem; font-weight:800; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">'
             f'Monte Carlo Simulation</h2>'
-            f'<p style="margin:0; color:{C_TEXT2}; font-size:0.88rem">'
+            f'<p style="margin:0; color:{C_TEXT2}; font-size:0.88rem; font-family:Libre Franklin, sans-serif">'
             f'Stochastic path simulation for shipping indices and equities '
             f'using GBM and Jump-Diffusion models.</p>'
             f'</div>',
@@ -590,7 +590,7 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
 
     if paths is None:
         st.markdown(
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:10px;'
+            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px;'
             f'padding:40px; text-align:center; color:{C_TEXT3}; margin-top:24px">'
             f'Configure parameters above and click <strong style="color:{C_TEXT2}">Run Simulation</strong> to generate results.'
             f'</div>',

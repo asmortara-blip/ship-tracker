@@ -20,19 +20,19 @@ import streamlit as st
 from loguru import logger
 
 # ── Color palette ──────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
-C_PURPLE  = "#8b5cf6"
-C_CYAN    = "#06b6d4"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
+C_PURPLE  = "#7c6eaf"
+C_CYAN    = "#4a90a4"
 C_ORANGE  = "#f97316"
 
 
@@ -178,7 +178,7 @@ _LEADING_INDICATORS = [
 def _card_style(border_color: str = C_BORDER, pad: str = "18px 20px") -> str:
     return (
         f"background:{C_CARD};border:1px solid {border_color};"
-        f"border-radius:10px;padding:{pad};margin-bottom:16px;"
+        f"border-radius:6px;padding:{pad};margin-bottom:16px;"
     )
 
 
@@ -713,7 +713,7 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
     try:
         st.markdown(
             f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-bottom:20px;">'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
             f'<div>'
             f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};margin-bottom:6px;">'

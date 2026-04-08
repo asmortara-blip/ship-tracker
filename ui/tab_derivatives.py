@@ -35,11 +35,11 @@ from ui.styles import (
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_PURPLE  = "#8b5cf6"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_PURPLE  = "#7c6eaf"
 C_TEAL    = "#14b8a6"
-C_CYAN    = "#06b6d4"
+C_CYAN    = "#4a90a4"
 
 # ── Mock market data ───────────────────────────────────────────────────────────
 _BDI_SPOT = 1_847
@@ -98,9 +98,9 @@ def _chg_str(v: float) -> str:
 
 def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:18px 20px;text-align:center;">'
-        f'<div style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">{label}</div>'
+        f'<div style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;font-family:Libre Franklin, sans-serif;">{label}</div>'
         f'<div style="color:{color};font-size:24px;font-weight:700;line-height:1;">{value}</div>'
         f'<div style="color:{C_TEXT2};font-size:12px;margin-top:6px;">{sub}</div>'
         f'</div>'
@@ -108,10 +108,10 @@ def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str
 
 
 def _section_header(title: str, subtitle: str = "") -> None:
-    sub_html = f'<div style="color:{C_TEXT2};font-size:13px;margin-top:4px;">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="color:{C_TEXT2};font-size:13px;margin-top:4px;font-family:Libre Franklin, sans-serif;">{subtitle}</div>' if subtitle else ""
     st.markdown(
         f'<div style="margin:28px 0 14px;">'
-        f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;letter-spacing:.3px;">{title}</div>'
+        f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;letter-spacing:.3px;font-family:Libre Baskerville, Georgia, serif;">{title}</div>'
         f'{sub_html}'
         f'</div>',
         unsafe_allow_html=True,
@@ -270,7 +270,7 @@ def _render_quote_board() -> None:
             is_alt = _QUOTE_BOARD.index(r) % 2 == 1
             row_bg = f"background:rgba(255,255,255,0.02);" if is_alt else ""
             rows_html += (
-                f'<tr style="{row_bg}border-bottom:1px solid rgba(255,255,255,0.04);">'
+                f'<tr style="{row_bg}border-bottom:1px solid rgba(232,230,225,0.04);">'
                 f'<td style="color:{C_TEXT};padding:9px 10px;font-weight:600;text-align:right;">{r["contract"]}</td>'
                 f'<td style="color:{C_TEXT2};padding:9px 10px;text-align:right;">{r["bid"]:,}</td>'
                 f'<td style="color:{C_TEXT2};padding:9px 10px;text-align:right;">{r["ask"]:,}</td>'
@@ -287,7 +287,7 @@ def _render_quote_board() -> None:
             '</tbody></table></div>'
         )
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'padding:16px 20px;">{table_html}</div>',
             unsafe_allow_html=True,
         )
@@ -321,7 +321,7 @@ def _render_options_table() -> None:
             tc = type_colors.get(o["type"], C_TEXT2)
             row_bg = "background:rgba(255,255,255,0.02);" if i % 2 == 1 else ""
             rows_html += (
-                f'<tr style="{row_bg}border-bottom:1px solid rgba(255,255,255,0.04);">'
+                f'<tr style="{row_bg}border-bottom:1px solid rgba(232,230,225,0.04);">'
                 f'<td style="color:{C_TEXT};padding:9px 10px;font-weight:600;text-align:right;">{o["contract"]}</td>'
                 f'<td style="color:{tc};padding:9px 10px;font-weight:700;text-align:right;">{o["type"]}</td>'
                 f'<td style="color:{C_TEXT2};padding:9px 10px;text-align:right;">{o["strike"]:,}</td>'
@@ -335,7 +335,7 @@ def _render_options_table() -> None:
 
         table_html = header_html + rows_html + '</tbody></table></div>'
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:16px 20px;">{table_html}</div>',
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;">{table_html}</div>',
             unsafe_allow_html=True,
         )
     except Exception as exc:
@@ -435,16 +435,16 @@ def _render_hedging_strategies() -> None:
 
         with col_a:
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:18px 20px;">'
-                f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:10px;">FREIGHT RECEIVER — Carrier (Sell FFA)</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;">'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
+                f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">FREIGHT RECEIVER — Carrier (Sell FFA)</div>'
+                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;font-family:Libre Franklin, sans-serif;">'
                 f'A carrier earning spot freight wants protection against rate <b style="color:{C_LOW};">declines</b>.<br>'
                 f'<b>Strategy:</b> Sell C5TC FFA forward to lock in current rate.<br>'
                 f'<b>Example:</b> Sell Q3 C5TC @ $15,920/day for 3 months.<br>'
                 f'If spot falls to $12,000 — FFA profit offsets physical loss.<br>'
                 f'Net locked rate: ~$15,920/day regardless of market.'
                 f'</div>'
-                f'<div style="margin-top:14px;padding:10px 14px;background:rgba(16,185,129,0.08);border-radius:6px;">'
+                f'<div style="margin-top:14px;padding:10px 14px;background:rgba(46,158,110,0.08);border-radius:6px;">'
                 f'<span style="color:{C_HIGH};font-size:11px;font-weight:700;">P&amp;L AT EXPIRY (Q3 2026)</span><br>'
                 f'<span style="color:{C_TEXT2};font-size:11px;">FFA sold @ 15,920 | Spot settles @ 13,500</span><br>'
                 f'<span style="color:{C_HIGH};font-size:12px;font-weight:600;">FFA gain: $2,420/day × 92 days × vessel = +$222,640</span>'
@@ -455,16 +455,16 @@ def _render_hedging_strategies() -> None:
 
         with col_b:
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:18px 20px;">'
-                f'<div style="color:{C_LOW};font-size:13px;font-weight:700;margin-bottom:10px;">FREIGHT PAYER — Shipper (Buy FFA)</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;">'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
+                f'<div style="color:{C_LOW};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">FREIGHT PAYER — Shipper (Buy FFA)</div>'
+                f'<div style="color:{C_TEXT2};font-size:12px;line-height:1.8;font-family:Libre Franklin, sans-serif;">'
                 f'A shipper paying voyage freight fears rate <b style="color:{C_HIGH};">increases</b>.<br>'
                 f'<b>Strategy:</b> Buy C5TC FFA to cap freight cost.<br>'
                 f'<b>Example:</b> Buy Q2 C5TC @ $15,030/day for 3 months.<br>'
                 f'If spot rises to $18,000 — FFA profit covers the extra cost.<br>'
                 f'Max freight cost capped at ~$15,030/day.'
                 f'</div>'
-                f'<div style="margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.08);border-radius:6px;">'
+                f'<div style="margin-top:14px;padding:10px 14px;background:rgba(192,57,43,0.08);border-radius:6px;">'
                 f'<span style="color:{C_LOW};font-size:11px;font-weight:700;">WORKED EXAMPLE: 50,000 MT/MO CAPESIZE</span><br>'
                 f'<span style="color:{C_TEXT2};font-size:11px;">Route: Brazil → China | C5TC Q2 FFA: $15,030/day</span><br>'
                 f'<span style="color:{C_MOD};font-size:12px;font-weight:600;">Hedge cost: ~$1.38M/quarter | Breakeven protection above $18,500/day</span>'
@@ -475,23 +475,23 @@ def _render_hedging_strategies() -> None:
 
         # Spread trades
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:16px 20px;margin-top:14px;">'
-            f'<div style="color:{C_ACCENT};font-size:13px;font-weight:700;margin-bottom:10px;">SPECULATIVE FFA SPREAD TRADES</div>'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-top:14px;">'
+            f'<div style="color:{C_ACCENT};font-size:13px;font-weight:700;margin-bottom:10px;font-family:Libre Baskerville, Georgia, serif;">SPECULATIVE FFA SPREAD TRADES</div>'
             f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">'
-            f'<div style="padding:12px;background:rgba(59,130,246,0.06);border-radius:8px;">'
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;">Q2/Q3 CAPE SPREAD</div>'
+            f'<div style="padding:12px;background:rgba(53,114,176,0.06);border-radius:8px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;font-family:Libre Franklin, sans-serif;">Q2/Q3 CAPE SPREAD</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">Buy Q2, Sell Q3 C5TC</div>'
             f'<div style="color:{C_ACCENT};font-size:12px;font-weight:700;margin-top:6px;">Spread: −$890/day</div>'
             f'<div style="color:{C_TEXT3};font-size:10px;">Bet Q2 outperforms</div>'
             f'</div>'
-            f'<div style="padding:12px;background:rgba(59,130,246,0.06);border-radius:8px;">'
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;">CAPE/PMAX RATIO</div>'
+            f'<div style="padding:12px;background:rgba(53,114,176,0.06);border-radius:8px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;font-family:Libre Franklin, sans-serif;">CAPE/PMAX RATIO</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">C5TC / P5TC Cal26</div>'
             f'<div style="color:{C_MOD};font-size:12px;font-weight:700;margin-top:6px;">Ratio: 1.44×</div>'
             f'<div style="color:{C_TEXT3};font-size:10px;">Hist avg 1.38× — Cape rich</div>'
             f'</div>'
-            f'<div style="padding:12px;background:rgba(59,130,246,0.06);border-radius:8px;">'
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;">CAL26/CAL27 CURVE</div>'
+            f'<div style="padding:12px;background:rgba(53,114,176,0.06);border-radius:8px;">'
+            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:600;font-family:Libre Franklin, sans-serif;">CAL26/CAL27 CURVE</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">Buy Cal27, Sell Cal26 BDI</div>'
             f'<div style="color:{C_HIGH};font-size:12px;font-weight:700;margin-top:6px;">Carry: +69 pts</div>'
             f'<div style="color:{C_TEXT3};font-size:10px;">Deferred premium intact</div>'
@@ -565,7 +565,7 @@ def _render_options_screen() -> None:
 
             with cols[i]:
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;padding:14px 16px;">'
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;">'
                     f'<div style="color:{C_TEXT};font-size:16px;font-weight:800;">{ticker}</div>'
                     f'<div style="color:{C_TEXT3};font-size:10px;margin-bottom:10px;">${prices[ticker]:.2f} underlying</div>'
                     f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
@@ -626,7 +626,7 @@ def _render_vol_surface() -> None:
             x=strike_labels,
             y=terms,
             colorscale=[
-                [0.0,  "#0a0f1a"],
+                [0.0,  "#0c0e14"],
                 [0.25, C_ACCENT],
                 [0.55, C_MOD],
                 [0.85, C_LOW],
@@ -681,10 +681,10 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Shipping Derivatives & FFA Dashboard."""
     try:
         st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,rgba(59,130,246,0.08) 100%);'
-            f'border:1px solid {C_BORDER};border-radius:12px;padding:22px 28px;margin-bottom:22px;">'
-            f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;letter-spacing:.4px;">Freight Derivatives Desk</div>'
-            f'<div style="color:{C_TEXT2};font-size:13px;margin-top:6px;">'
+            f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,rgba(53,114,176,0.08) 100%);'
+            f'border:1px solid {C_BORDER};border-radius:6px;padding:22px 28px;margin-bottom:22px;">'
+            f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;letter-spacing:.4px;font-family:Libre Baskerville, Georgia, serif;">Freight Derivatives Desk</div>'
+            f'<div style="color:{C_TEXT2};font-size:13px;margin-top:6px;font-family:Libre Franklin, sans-serif;">'
             f'FFA forward curves · Quote board · Options Greeks · Basis analysis · Hedging strategies · Vol surface'
             f'</div>'
             f'</div>',

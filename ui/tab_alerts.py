@@ -18,28 +18,28 @@ import pandas as pd
 import streamlit as st
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 _SEV_COLOR = {"Critical": C_LOW, "Warning": C_MOD, "Info": C_ACCENT}
 _SEV_BG    = {
-    "Critical": "rgba(239,68,68,0.12)",
-    "Warning":  "rgba(245,158,11,0.12)",
-    "Info":     "rgba(59,130,246,0.12)",
+    "Critical": "rgba(192,57,43,0.12)",
+    "Warning":  "rgba(201,150,43,0.12)",
+    "Info":     "rgba(53,114,176,0.12)",
 }
 _SEV_BORDER = {
-    "Critical": "rgba(239,68,68,0.45)",
-    "Warning":  "rgba(245,158,11,0.40)",
-    "Info":     "rgba(59,130,246,0.40)",
+    "Critical": "rgba(192,57,43,0.45)",
+    "Warning":  "rgba(201,150,43,0.40)",
+    "Info":     "rgba(53,114,176,0.40)",
 }
 _SEV_ICON = {"Critical": "🔴", "Warning": "🟡", "Info": "🔵"}
 
@@ -59,25 +59,25 @@ _CSS = """
     color: #475569; margin-bottom: 6px;
 }
 .alc-hero-title {
-    font-size: 1.9rem; font-weight: 900; color: #f1f5f9;
+    font-size: 1.9rem; font-weight: 900; color: #e8e6e1;
     letter-spacing: -0.03em; line-height: 1.1;
 }
 .alc-hero-sub {
-    font-size: 0.8rem; color: #64748b; margin-top: 5px;
+    font-size: 0.8rem; color: #6b6760; margin-top: 5px;
 }
 .alc-stat-card {
-    background: #1a2235;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 10px;
+    background: #181c28;
+    border: 1px solid rgba(232,230,225,0.06);
+    border-radius: 6px;
     padding: 16px 18px;
     text-align: center;
 }
 .alc-stat-num  { font-size: 2rem; font-weight: 900; line-height: 1; }
 .alc-stat-lbl  { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em;
-                  color: #94a3b8; margin-top: 4px; }
-.alc-stat-sub  { font-size: 0.7rem; color: #64748b; margin-top: 2px; }
+                  color: #9a968e; margin-top: 4px; }
+.alc-stat-sub  { font-size: 0.7rem; color: #6b6760; margin-top: 2px; }
 .alc-alert-card {
-    border-radius: 10px;
+    border-radius: 6px;
     padding: 14px 16px;
     margin-bottom: 10px;
     border-left: 4px solid;
@@ -87,35 +87,35 @@ _CSS = """
 }
 .alc-sev-badge {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 2px 10px; border-radius: 999px;
+    padding: 2px 10px; border-radius: 3px;
     font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em;
     border: 1px solid;
 }
 .alc-section-label {
-    font-size: 0.75rem; font-weight: 700; color: #94a3b8;
+    font-size: 0.75rem; font-weight: 700; color: #9a968e;
     text-transform: uppercase; letter-spacing: 0.1em;
     margin-bottom: 14px;
 }
 .alc-rule-row {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(232,230,225,0.04);
 }
 .alc-pill {
     display: inline-flex; align-items: center;
-    padding: 2px 9px; border-radius: 999px;
+    padding: 2px 9px; border-radius: 3px;
     font-size: 0.67rem; font-weight: 600;
-    background: rgba(59,130,246,0.12);
-    color: #3b82f6; border: 1px solid rgba(59,130,246,0.3);
+    background: rgba(53,114,176,0.12);
+    color: #3572b0; border: 1px solid rgba(53,114,176,0.3);
 }
 .alc-hist-row {
     display: flex; align-items: flex-start; gap: 10px;
-    padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 9px 0; border-bottom: 1px solid rgba(232,230,225,0.04);
 }
-.alc-hist-ts { font-size: 0.67rem; color: #64748b; white-space: nowrap; margin-top: 2px; }
+.alc-hist-ts { font-size: 0.67rem; color: #6b6760; white-space: nowrap; margin-top: 2px; }
 @keyframes crit-pulse {
-    0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
-    50%      { box-shadow: 0 0 0 5px rgba(239,68,68,0.15); }
+    0%,100% { box-shadow: 0 0 0 0 rgba(192,57,43,0); }
+    50%      { box-shadow: 0 0 0 5px rgba(192,57,43,0.15); }
 }
 .alc-critical-pulse { animation: crit-pulse 2.2s ease-in-out infinite; }
 </style>
@@ -532,7 +532,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     try:
         st.markdown(
             '<div class="alc-header-label">INTELLIGENCE PLATFORM</div>'
-            '<div class="alc-hero-title">Alert <span style="color:#ef4444">Center</span></div>'
+            '<div class="alc-hero-title">Alert <span style="color:#c0392b">Center</span></div>'
             '<div class="alc-hero-sub">Real-time threshold monitoring &amp; notifications</div>',
             unsafe_allow_html=True,
         )
@@ -612,7 +612,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
     try:
         with st.expander("⚙️  Alert Configuration — Create New Rule", expanded=False):
             st.markdown(
-                '<div style="font-size:0.78rem;color:#94a3b8;margin-bottom:14px">'
+                '<div style="font-size:0.78rem;color:#9a968e;margin-bottom:14px">'
                 'Define a new threshold rule. Alerts are evaluated on each data refresh.'
                 '</div>',
                 unsafe_allow_html=True,
@@ -698,7 +698,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
         if not visible_alerts:
             st.markdown(
                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-radius:10px;padding:28px;text-align:center;'
+                f'border-radius:6px;padding:28px;text-align:center;'
                 f'color:{C_TEXT3};font-size:0.85rem">'
                 f'<span style="font-size:1.6rem">✅</span><br/>'
                 f'<strong style="color:{C_HIGH}">All clear.</strong> No alerts are currently active.'
@@ -757,9 +757,9 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
             ts     = _fmt_dt(alert.get("triggered_at", ""))
             dis    = alert.get("dismissed", False)
             ack_html = (
-                '<span style="font-size:0.65rem;color:#64748b">Dismissed</span>'
+                '<span style="font-size:0.65rem;color:#6b6760">Dismissed</span>'
                 if dis else
-                '<span style="font-size:0.65rem;color:#10b981;font-weight:700">Active</span>'
+                '<span style="font-size:0.65rem;color:#2e9e6e;font-weight:700">Active</span>'
             )
             rows_html += (
                 f'<div class="alc-hist-row">'
@@ -780,7 +780,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
 
         st.markdown(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;padding:8px 14px">'
+            f'border-radius:6px;padding:8px 14px">'
             f'{rows_html}'
             f'</div>',
             unsafe_allow_html=True,

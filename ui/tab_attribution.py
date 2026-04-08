@@ -23,17 +23,17 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 # ── Design constants ─────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 _CHART_LAYOUT = dict(
     paper_bgcolor=C_SURFACE,
@@ -166,12 +166,12 @@ def _render_hero(contributions: Dict[str, float]) -> None:
         total_sign  = "+" if total >= 0 else ""
 
         factor_colors = {
-            "Freight Market Alpha": "#3b82f6",
-            "Macro Factor":         "#f59e0b",
-            "Stock Selection":      "#10b981",
-            "Sentiment Timing":     "#8b5cf6",
-            "Sector Allocation":    "#06b6d4",
-            "Residual":             "#64748b",
+            "Freight Market Alpha": "#3572b0",
+            "Macro Factor":         "#c9962b",
+            "Stock Selection":      "#2e9e6e",
+            "Sentiment Timing":     "#7c6eaf",
+            "Sector Allocation":    "#4a90a4",
+            "Residual":             "#6b6760",
         }
 
         cards_html = ""
@@ -186,20 +186,20 @@ def _render_hero(contributions: Dict[str, float]) -> None:
                 f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
                 f'letter-spacing:1px;margin-bottom:6px;">{name}</div>'
                 f'<div style="color:{color};font-size:22px;font-weight:700;'
-                f'font-family:monospace;">{sign}{val:.0f}</div>'
+                f'font-family:JetBrains Mono,monospace;">{sign}{val:.0f}</div>'
                 f'<div style="color:{C_TEXT3};font-size:10px;margin-top:2px;">bps</div>'
                 f'</div>'
             )
 
         html = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;padding:20px 24px;margin-bottom:20px;">'
+            f'border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
             f'<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">'
             f'<div>'
             f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;'
             f'letter-spacing:1.5px;">Total Portfolio Return</div>'
             f'<div style="color:{total_color};font-size:42px;font-weight:800;'
-            f'font-family:monospace;line-height:1;">{total_sign}{total:.0f} bps</div>'
+            f'font-family:JetBrains Mono,monospace;line-height:1;">{total_sign}{total:.0f} bps</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">'
             f'Attribution decomposition across 6 factors</div>'
             f'</div>'
@@ -227,7 +227,7 @@ def _render_factor_table(df: pd.DataFrame) -> None:
         def val_cell(v: float) -> str:
             color = C_HIGH if v > 0 else (C_LOW if v < 0 else C_TEXT3)
             sign  = "+" if v > 0 else ""
-            return f'<span style="color:{color};font-family:monospace;">{sign}{v:.1f}</span>'
+            return f'<span style="color:{color};font-family:JetBrains Mono,monospace;">{sign}{v:.1f}</span>'
 
         rows_html = ""
         for _, row in df.iterrows():
@@ -238,7 +238,7 @@ def _render_factor_table(df: pd.DataFrame) -> None:
                 f'<td style="padding:10px 12px;text-align:right;">'
                 f'{val_cell(row["Contribution (bps)"])}</td>'
                 f'<td style="padding:10px 12px;text-align:right;'
-                f'color:{C_TEXT2};font-family:monospace;">{row["t-stat"]:.2f}</td>'
+                f'color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{row["t-stat"]:.2f}</td>'
                 f'<td style="padding:10px 12px;text-align:center;">'
                 f'{sig_badge(row["Significance"])}</td>'
                 f'<td style="padding:10px 12px;text-align:right;">'
@@ -263,7 +263,7 @@ def _render_factor_table(df: pd.DataFrame) -> None:
 
         html = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;overflow:hidden;margin-bottom:20px;">'
+            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr style="background:{C_CARD};">'
             f'<th style="{first_style}">Factor</th>'
@@ -286,10 +286,10 @@ def _render_factor_table(df: pd.DataFrame) -> None:
 def _render_bhb(df: pd.DataFrame) -> None:
     try:
         sector_colors = {
-            "Container": "#3b82f6",
-            "Bulker":    "#10b981",
-            "Tanker":    "#f59e0b",
-            "LNG":       "#8b5cf6",
+            "Container": "#3572b0",
+            "Bulker":    "#2e9e6e",
+            "Tanker":    "#c9962b",
+            "LNG":       "#7c6eaf",
         }
 
         rows_html = ""
@@ -299,7 +299,7 @@ def _render_bhb(df: pd.DataFrame) -> None:
             def cell(v: float) -> str:
                 c = C_HIGH if v > 0 else (C_LOW if v < 0 else C_TEXT3)
                 s = "+" if v > 0 else ""
-                return f'<td style="padding:10px 12px;text-align:right;color:{c};font-family:monospace;">{s}{v:.1f}</td>'
+                return f'<td style="padding:10px 12px;text-align:right;color:{c};font-family:JetBrains Mono,monospace;">{s}{v:.1f}</td>'
 
             total_c = C_HIGH if row["Total"] > 0 else (C_LOW if row["Total"] < 0 else C_TEXT3)
             total_s = "+" if row["Total"] > 0 else ""
@@ -314,7 +314,7 @@ def _render_bhb(df: pd.DataFrame) -> None:
                 f'{cell(row["Selection Effect"])}'
                 f'{cell(row["Interaction"])}'
                 f'<td style="padding:10px 12px;text-align:right;color:{total_c};'
-                f'font-family:monospace;font-weight:700;">{total_s}{row["Total"]:.1f}</td>'
+                f'font-family:JetBrains Mono,monospace;font-weight:700;">{total_s}{row["Total"]:.1f}</td>'
                 f'</tr>'
             )
 
@@ -327,7 +327,7 @@ def _render_bhb(df: pd.DataFrame) -> None:
 
         html = (
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:10px;overflow:hidden;margin-bottom:20px;">'
+            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
             f'<div style="padding:14px 16px;background:{C_CARD};'
             f'border-bottom:1px solid {C_BORDER};">'
             f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">'
@@ -368,7 +368,7 @@ def _render_alpha_decay_chart(df: pd.DataFrame) -> None:
             line=dict(color=C_ACCENT, width=3),
             marker=dict(size=9, color=C_ACCENT, line=dict(color=C_SURFACE, width=2)),
             fill="tozeroy",
-            fillcolor=f"rgba(59,130,246,0.12)",
+            fillcolor=f"rgba(53,114,176,0.12)",
         ))
 
         fig.add_hline(
@@ -428,7 +428,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                     f'{row["Trade"]}</td>'
                     f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
                     f'{row["Sector"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_HIGH};font-family:monospace;'
+                    f'<td style="padding:9px 12px;color:{C_HIGH};font-family:JetBrains Mono,monospace;'
                     f'font-weight:700;font-size:12px;">{row["Impact"]}</td>'
                     f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
                     f'{row["Reason"]}</td>'
@@ -436,7 +436,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 )
             html = (
                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-top:3px solid {C_HIGH};border-radius:10px;overflow:hidden;">'
+                f'border-top:3px solid {C_HIGH};border-radius:6px;overflow:hidden;">'
                 f'<div style="padding:12px 16px;background:{C_CARD};">'
                 f'<span style="color:{C_HIGH};font-size:12px;font-weight:700;">'
                 f'TOP 5 BEST CALLS</span></div>'
@@ -455,7 +455,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                     f'{row["Trade"]}</td>'
                     f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
                     f'{row["Sector"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_LOW};font-family:monospace;'
+                    f'<td style="padding:9px 12px;color:{C_LOW};font-family:JetBrains Mono,monospace;'
                     f'font-weight:700;font-size:12px;">{row["Impact"]}</td>'
                     f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
                     f'{row["Reason"]}</td>'
@@ -463,7 +463,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 )
             html = (
                 f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-top:3px solid {C_LOW};border-radius:10px;overflow:hidden;">'
+                f'border-top:3px solid {C_LOW};border-radius:6px;overflow:hidden;">'
                 f'<div style="padding:12px 16px;background:{C_CARD};">'
                 f'<span style="color:{C_LOW};font-size:12px;font-weight:700;">'
                 f'TOP 5 WORST CALLS</span></div>'
@@ -479,12 +479,12 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
 def _render_attribution_over_time(df: pd.DataFrame) -> None:
     try:
         factor_colors = [
-            "#3b82f6",  # Freight Market Alpha
-            "#f59e0b",  # Macro Factor
-            "#10b981",  # Stock Selection
-            "#8b5cf6",  # Sentiment Timing
-            "#06b6d4",  # Sector Allocation
-            "#64748b",  # Residual
+            "#3572b0",  # Freight Market Alpha
+            "#c9962b",  # Macro Factor
+            "#2e9e6e",  # Stock Selection
+            "#7c6eaf",  # Sentiment Timing
+            "#4a90a4",  # Sector Allocation
+            "#6b6760",  # Residual
         ]
         factors = [c for c in df.columns if c != "Month"]
         months  = df["Month"].dt.strftime("%b %Y").tolist()
@@ -505,10 +505,10 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
 
         # Fix fillcolor — use rgba properly
         rgba_map = [
-            "rgba(59,130,246,0.75)",
-            "rgba(245,158,11,0.75)",
-            "rgba(16,185,129,0.75)",
-            "rgba(139,92,246,0.75)",
+            "rgba(53,114,176,0.75)",
+            "rgba(201,150,43,0.75)",
+            "rgba(46,158,110,0.75)",
+            "rgba(124,110,175,0.75)",
             "rgba(6,182,212,0.75)",
             "rgba(100,116,139,0.75)",
         ]

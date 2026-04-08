@@ -278,16 +278,16 @@ _DISRUPTION_MULTIPLIER: dict[str, float] = {
 }
 
 _RISK_COLORS: dict[str, str] = {
-    "CRITICAL": "#ef4444",
+    "CRITICAL": "#c0392b",
     "HIGH":     "#f97316",
-    "MODERATE": "#f59e0b",
-    "LOW":      "#10b981",
+    "MODERATE": "#c9962b",
+    "LOW":      "#2e9e6e",
 }
 
 
 def risk_color(level: str) -> str:
     """Return hex color string for a given risk level."""
-    return _RISK_COLORS.get(level, "#94a3b8")
+    return _RISK_COLORS.get(level, "#9a968e")
 
 
 # ---------------------------------------------------------------------------

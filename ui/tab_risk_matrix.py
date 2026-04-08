@@ -21,20 +21,24 @@ import streamlit as st
 from loguru import logger
 
 # ---------------------------------------------------------------------------
-# Design tokens
+# Design tokens  —  Wall Street Journal editorial palette
 # ---------------------------------------------------------------------------
 
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#FFFDF5"
+C_SURFACE = "#F7F4EC"
+C_CARD    = "#FFFFFF"
+C_BORDER  = "rgba(51,51,51,0.12)"
+C_HIGH    = "#2e7d32"
+C_MOD     = "#b8860b"
+C_LOW     = "#b71c1c"
+C_ACCENT  = "#0d47a1"
+C_TEXT    = "#222222"
+C_TEXT2   = "#555555"
+C_TEXT3   = "#888888"
+
+FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
+FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', sans-serif"
+FONT_MONO     = "'JetBrains Mono', monospace"
 
 LEVEL_COLOR = {"LOW": C_HIGH, "MOD": C_MOD, "HIGH": C_MOD, "CRITICAL": C_LOW}
 LEVEL_LABEL = {"LOW": "LOW", "MOD": "MODERATE", "HIGH": "HIGH", "CRITICAL": "CRITICAL"}
@@ -42,7 +46,7 @@ LEVEL_LABEL = {"LOW": "LOW", "MOD": "MODERATE", "HIGH": "HIGH", "CRITICAL": "CRI
 PLOT_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color=C_TEXT2, family="Inter, sans-serif", size=11),
+    font=dict(color=C_TEXT2, family="Libre Franklin, Helvetica Neue, sans-serif", size=11),
     margin=dict(l=10, r=10, t=36, b=10),
 )
 
@@ -80,31 +84,31 @@ def _risk_color(score: float) -> str:
 
 def _kpi_card(label: str, value: str, sub: str, color: str, icon: str) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
         f'padding:20px 18px;display:flex;flex-direction:column;gap:6px;">'
         f'<div style="display:flex;align-items:center;gap:8px;">'
         f'<span style="font-size:18px;">{icon}</span>'
-        f'<span style="color:{C_TEXT3};font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">{label}</span>'
+        f'<span style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">{label}</span>'
         f'</div>'
-        f'<div style="color:{color};font-size:28px;font-weight:700;line-height:1.1;">{value}</div>'
-        f'<div style="color:{C_TEXT3};font-size:12px;">{sub}</div>'
+        f'<div style="color:{color};font-family:{FONT_HEADLINE};font-size:28px;font-weight:700;line-height:1.1;">{value}</div>'
+        f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:12px;">{sub}</div>'
         f'</div>'
     )
 
 
 def _section_header(title: str, subtitle: str = "") -> str:
-    sub_html = f'<div style="color:{C_TEXT3};font-size:12px;margin-top:2px;">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:12px;margin-top:2px;">{subtitle}</div>' if subtitle else ""
     return (
-        f'<div style="margin:28px 0 12px 0;padding-bottom:10px;border-bottom:1px solid {C_BORDER};">'
-        f'<span style="color:{C_TEXT};font-size:16px;font-weight:700;letter-spacing:.02em;">{title}</span>'
+        f'<div style="margin:28px 0 12px 0;padding-bottom:10px;border-bottom:2px solid {C_TEXT};">'
+        f'<span style="color:{C_TEXT};font-family:{FONT_HEADLINE};font-size:16px;font-weight:700;letter-spacing:.02em;">{title}</span>'
         f'{sub_html}</div>'
     )
 
 
 def _badge(text: str, color: str) -> str:
     return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}55;'
-        f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">{text}</span>'
+        f'<span style="background:{color}18;color:{color};border:1px solid {color}44;'
+        f'border-radius:3px;padding:2px 8px;font-family:{FONT_BODY};font-size:11px;font-weight:700;">{text}</span>'
     )
 
 # ---------------------------------------------------------------------------
@@ -266,17 +270,17 @@ _RISK_FACTORS = [
 def _render_risk_factor_matrix() -> None:
     try:
         header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-size:10px;"
+            f"background:{C_SURFACE};color:{C_TEXT3};font-family:{FONT_BODY};font-size:10px;"
             f"font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
             f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
         )
         cell_style = (
             f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-            f"color:{C_TEXT2};font-size:12px;vertical-align:top;"
+            f"color:{C_TEXT2};font-family:{FONT_BODY};font-size:12px;vertical-align:top;"
         )
         name_style = (
             f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-            f"color:{C_TEXT};font-size:13px;font-weight:600;vertical-align:top;"
+            f"color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;font-weight:600;vertical-align:top;"
         )
 
         rows_html = ""
@@ -292,14 +296,14 @@ def _render_risk_factor_matrix() -> None:
                 f'<td style="{name_style}">{rf["name"]}'
                 f'<div style="color:{C_TEXT3};font-size:11px;font-weight:400;margin-top:2px;">{rf["desc"]}</div></td>'
                 f'<td style="{cell_style}">{badge}</td>'
-                f'<td style="{cell_style};color:{chg_color};font-weight:700;">{chg}</td>'
+                f'<td style="{cell_style};color:{chg_color};font-family:{FONT_MONO};font-weight:700;">{chg}</td>'
                 f'<td style="{cell_style}">{rf["driver"]}</td>'
                 f'<td style="{cell_style}">{rf["mitigation"]}</td>'
                 f'</tr>'
             )
 
         table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
             f'<th style="{header_style}width:22%;">Risk Factor</th>'
@@ -351,11 +355,11 @@ def _render_correlation_heatmap(rng: random.Random) -> None:
             texttemplate="%{text}",
             textfont={"size": 11, "color": C_TEXT},
             colorscale=[
-                [0.0,  "#dc2626"],
-                [0.25, "#f97316"],
-                [0.5,  C_SURFACE],
-                [0.75, "#22c55e"],
-                [1.0,  "#10b981"],
+                [0.0,  "#b71c1c"],
+                [0.25, "#e65100"],
+                [0.5,  "#F7F4EC"],
+                [0.75, "#388e3c"],
+                [1.0,  "#2e7d32"],
             ],
             zmin=-1.0,
             zmax=1.0,
@@ -369,7 +373,7 @@ def _render_correlation_heatmap(rng: random.Random) -> None:
         ))
         fig.update_layout(
             **PLOT_LAYOUT,
-            title=dict(text="Asset & Index Correlation Matrix", font=dict(color=C_TEXT, size=13), x=0),
+            title=dict(text="Asset & Index Correlation Matrix", font=dict(color=C_TEXT, size=13, family=FONT_HEADLINE), x=0),
             height=380,
             xaxis=dict(tickfont=dict(color=C_TEXT2, size=11), side="bottom"),
             yaxis=dict(tickfont=dict(color=C_TEXT2, size=11), autorange="reversed"),
@@ -428,7 +432,7 @@ def _render_drawdown_waterfall() -> None:
         ))
         fig.update_layout(
             **PLOT_LAYOUT,
-            title=dict(text="10 Largest Shipping Market Drawdown Events", font=dict(color=C_TEXT, size=13), x=0),
+            title=dict(text="10 Largest Shipping Market Drawdown Events", font=dict(color=C_TEXT, size=13, family=FONT_HEADLINE), x=0),
             height=380,
             yaxis=dict(
                 title="Drawdown (%)",
@@ -505,18 +509,18 @@ _SCENARIOS = [
 def _pct_cell(val: int) -> str:
     color = C_HIGH if val > 0 else C_LOW if val < 0 else C_TEXT2
     sign = "+" if val > 0 else ""
-    return f'<td style="padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{color};font-weight:700;font-size:13px;">{sign}{val}%</td>'
+    return f'<td style="padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{color};font-family:{FONT_MONO};font-weight:700;font-size:13px;">{sign}{val}%</td>'
 
 
 def _render_stress_test() -> None:
     try:
         header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-size:10px;"
+            f"background:{C_SURFACE};color:{C_TEXT3};font-family:{FONT_BODY};font-size:10px;"
             f"font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
             f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
         )
-        name_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_TEXT};font-size:13px;font-weight:600;"
-        prob_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_ACCENT};font-weight:700;font-size:13px;"
+        name_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;font-weight:600;"
+        prob_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_ACCENT};font-family:{FONT_MONO};font-weight:700;font-size:13px;"
 
         rows_html = ""
         for sc in _SCENARIOS:
@@ -532,7 +536,7 @@ def _render_stress_test() -> None:
             )
 
         table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
             f'<th style="{header_style}width:30%;">Scenario</th>'
@@ -615,12 +619,12 @@ def _render_alert_queue(alerts: list[dict]) -> None:
                 f'<div style="width:4px;min-height:40px;background:{bar_color};border-radius:2px;flex-shrink:0;"></div>'
                 f'<div style="flex:1;">'
                 f'<div style="margin-bottom:4px;">{_severity_badge(sev)}</div>'
-                f'<div style="color:{C_TEXT};font-size:13px;">{al.get("text","")}</div>'
+                f'<div style="color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;">{al.get("text","")}</div>'
                 f'</div></div>'
             )
 
         queue_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
             + items_html
             + '</div>'
         )
@@ -641,8 +645,8 @@ def render(stock_data, macro_data, insights, freight_data=None):
         # ── Page header ──────────────────────────────────────────────────────
         st.markdown(
             f'<div style="padding:4px 0 18px 0;">'
-            f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;letter-spacing:-.01em;">Risk Management Dashboard</div>'
-            f'<div style="color:{C_TEXT3};font-size:13px;margin-top:4px;">Institutional risk intelligence — shipping & macro factors</div>'
+            f'<div style="color:{C_TEXT};font-family:{FONT_HEADLINE};font-size:22px;font-weight:700;letter-spacing:-.01em;">Risk Management Dashboard</div>'
+            f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:13px;margin-top:4px;">Institutional risk intelligence — shipping & macro factors</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -676,7 +680,7 @@ def render(stock_data, macro_data, insights, freight_data=None):
         # Footer timestamp
         now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         st.markdown(
-            f'<div style="text-align:right;color:{C_TEXT3};font-size:11px;margin-top:24px;padding-top:10px;border-top:1px solid {C_BORDER};">Last updated: {now}</div>',
+            f'<div style="text-align:right;color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;margin-top:24px;padding-top:10px;border-top:1px solid {C_BORDER};">Last updated: {now}</div>',
             unsafe_allow_html=True,
         )
 

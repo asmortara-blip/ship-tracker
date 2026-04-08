@@ -26,18 +26,23 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+# ── Palette (WSJ editorial) ────────────────────────────────────────────────────
+C_BG      = "#f8f5f0"
+C_SURFACE = "#f0ebe3"
+C_CARD    = "#ffffff"
+C_BORDER  = "rgba(51,51,51,0.12)"
+C_HIGH    = "#2e7d32"
+C_MOD     = "#b8860b"
+C_LOW     = "#b71c1c"
+C_ACCENT  = "#0d3b66"
+C_TEXT    = "#222222"
+C_TEXT2   = "#555555"
+C_TEXT3   = "#888888"
+
+# ── Typography ────────────────────────────────────────────────────────────────
+FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
+FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', sans-serif"
+FONT_MONO     = "'JetBrains Mono', monospace"
 
 # ── Static reference data ──────────────────────────────────────────────────────
 ROUTES = {
@@ -448,9 +453,9 @@ def _hex_rgba(hex_color: str, alpha: float) -> str:
 def _divider(label: str) -> None:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
-        f'<div style="flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),{C_BORDER})"></div>'
-        f'<span style="font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.14em;font-weight:700">{label}</span>'
-        f'<div style="flex:1;height:1px;background:linear-gradient(90deg,{C_BORDER},rgba(255,255,255,0))"></div>'
+        f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
+        f'<span style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.14em;font-weight:700">{label}</span>'
+        f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -458,8 +463,8 @@ def _divider(label: str) -> None:
 
 def _card_open(extra_style: str = "") -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-        f'padding:20px 24px;margin-bottom:16px;{extra_style}">'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
+        f'padding:20px 24px;margin-bottom:16px;font-family:{FONT_BODY};{extra_style}">'
     )
 
 
@@ -467,7 +472,7 @@ def _badge(text: str, color: str) -> str:
     bg = _hex_rgba(color, 0.15)
     return (
         f'<span style="background:{bg};color:{color};border:1px solid {_hex_rgba(color,0.35)};'
-        f'border-radius:6px;padding:2px 9px;font-size:0.67rem;font-weight:700;letter-spacing:0.06em">'
+        f'border-radius:3px;padding:2px 9px;font-family:{FONT_BODY};font-size:0.67rem;font-weight:700;letter-spacing:0.06em">'
         f'{text}</span>'
     )
 
@@ -530,7 +535,7 @@ def _render_selector() -> tuple[str, str]:
     """Section 1 — route + commodity dropdowns."""
     st.markdown(
         f'<div style="{_card_open()[5:]}">'
-        f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+        f'<div style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;'
         f'letter-spacing:0.12em;font-weight:700;margin-bottom:14px">Deep Dive Selector</div>',
         unsafe_allow_html=True,
     )
@@ -558,16 +563,16 @@ def _render_route_card(route_name: str) -> None:
             f'{_card_open()}'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">'
             f'<div>'
-            f'<div style="font-size:1.05rem;font-weight:800;color:{C_TEXT}">'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:1.05rem;font-weight:700;color:{C_TEXT}">'
             f'{rd["origin"]} → {rd["dest"]}</div>'
-            f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:4px">'
+            f'<div style="font-family:{FONT_BODY};font-size:0.75rem;color:{C_TEXT3};margin-top:4px">'
             f'{rd["nm"]:,} nm &nbsp;·&nbsp; {rd["transit_days"]} day transit'
             f'&nbsp;·&nbsp; {rd["weekly_services"]} weekly services'
             f'&nbsp;·&nbsp; {rd["carriers_active"]} active carriers</div>'
             f'</div>'
             f'<div style="text-align:right">'
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.1em">Current Rate</div>'
-            f'<div style="font-size:1.5rem;font-weight:900;color:{C_TEXT}">${rd["base_rate"]:,}</div>'
+            f'<div style="font-family:{FONT_BODY};font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.1em">Current Rate</div>'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:1.5rem;font-weight:700;color:{C_TEXT}">${rd["base_rate"]:,}</div>'
             f'<div style="font-size:0.7rem;color:{pct_color};font-weight:700">'
             f'{pct}th percentile (12-mo)</div>'
             f'</div>'
@@ -578,7 +583,7 @@ def _render_route_card(route_name: str) -> None:
 
         # Carrier table
         header = (
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Top 5 Carriers by Capacity Share</div>'
         )
         rows = ""
@@ -587,8 +592,8 @@ def _render_route_card(route_name: str) -> None:
             rows += (
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
                 f'<div style="width:110px;font-size:0.75rem;color:{C_TEXT};font-weight:600">{carrier}</div>'
-                f'<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:4px;height:6px">'
-                f'<div style="background:{C_ACCENT};width:{bar_w}%;height:100%;border-radius:4px"></div>'
+                f'<div style="flex:1;background:rgba(232,230,225,0.04);border-radius:3px;height:6px">'
+                f'<div style="background:{C_ACCENT};width:{bar_w}%;height:100%;border-radius:3px"></div>'
                 f'</div>'
                 f'<div style="width:42px;text-align:right;font-size:0.75rem;color:{C_ACCENT};font-weight:700">'
                 f'{share}%</div>'
@@ -609,7 +614,7 @@ def _render_route_card(route_name: str) -> None:
         )
         st.markdown(
             f'{_card_open()}'
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Upcoming Capacity Changes</div>'
             f'{changes_html}</div>',
             unsafe_allow_html=True,
@@ -632,8 +637,8 @@ def _render_route_card(route_name: str) -> None:
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=0, r=0, t=28, b=0), height=220,
-            font=dict(color=C_TEXT2, size=11),
-            title=dict(text="Rate History — 52 Weeks", font=dict(color=C_TEXT2, size=12), x=0),
+            font=dict(family="Libre Franklin, Helvetica Neue, sans-serif", color=C_TEXT2, size=11),
+            title=dict(text="Rate History \u2014 52 Weeks", font=dict(family="Libre Baskerville, Georgia, serif", color=C_TEXT2, size=12), x=0),
             xaxis=dict(showgrid=False, color=C_TEXT3),
             yaxis=dict(showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickprefix="$"),
             showlegend=False,
@@ -675,16 +680,16 @@ def _render_commodity_flow(commodity: str) -> None:
         fig_map.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=0, r=0, t=36, b=0), height=280,
-            title=dict(text=f"{commodity} — Global Production (Top Exporters)", font=dict(color=C_TEXT2, size=12), x=0),
+            title=dict(text=f"{commodity} \u2014 Global Production (Top Exporters)", font=dict(family="Libre Baskerville, Georgia, serif", color=C_TEXT2, size=12), x=0),
             geo=dict(
                 bgcolor="rgba(0,0,0,0)",
                 showframe=False, showcoastlines=True,
-                coastlinecolor=C_BORDER, landcolor="#1a2235",
+                coastlinecolor=C_BORDER, landcolor="#ede8df",
                 showocean=True, oceancolor=C_SURFACE,
                 showlakes=False, showcountries=True,
                 countrycolor=C_BORDER,
             ),
-            font=dict(color=C_TEXT2),
+            font=dict(family="Libre Franklin, Helvetica Neue, sans-serif", color=C_TEXT2),
         )
         st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False})
 
@@ -703,7 +708,7 @@ def _render_commodity_flow(commodity: str) -> None:
             )
             st.markdown(
                 f'{_card_open()}'
-                f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+                f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
                 f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Top 5 Trade Flows</div>'
                 f'{rows_html}</div>',
                 unsafe_allow_html=True,
@@ -715,11 +720,11 @@ def _render_commodity_flow(commodity: str) -> None:
             corr_color = C_HIGH if corr > 0.7 else (C_MOD if corr > 0.4 else C_TEXT3)
             st.markdown(
                 f'{_card_open()}'
-                f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+                f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
                 f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Shipping Metrics</div>'
                 f'<div style="margin-bottom:14px">'
-                f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:4px">Demand Elasticity</div>'
-                f'<div style="font-size:1.3rem;font-weight:900;color:{el_color}">{el:.2f}</div>'
+                f'<div style="font-family:{FONT_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:4px">Demand Elasticity</div>'
+                f'<div style="font-family:{FONT_HEADLINE};font-size:1.3rem;font-weight:700;color:{el_color}">{el:.2f}</div>'
                 f'<div style="font-size:0.67rem;color:{C_TEXT3}">vs production change</div>'
                 f'</div>'
                 f'<div style="margin-bottom:14px">'
@@ -742,7 +747,7 @@ def _render_commodity_flow(commodity: str) -> None:
         bars_html = "".join(
             f'<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1">'
             f'<div style="font-size:0.62rem;color:{C_ACCENT};font-weight:700">{v}</div>'
-            f'<div style="width:100%;background:rgba(255,255,255,0.05);border-radius:3px 3px 0 0;'
+            f'<div style="width:100%;background:rgba(232,230,225,0.04);border-radius:3px 3px 0 0;'
             f'height:80px;display:flex;align-items:flex-end">'
             f'<div style="width:100%;background:linear-gradient(180deg,{C_ACCENT},{_hex_rgba(C_ACCENT,0.4)});'
             f'height:{int(v/max_s*100)}%;border-radius:3px 3px 0 0"></div>'
@@ -753,7 +758,7 @@ def _render_commodity_flow(commodity: str) -> None:
         )
         st.markdown(
             f'{_card_open()}'
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Seasonal Volume Index</div>'
             f'<div style="display:flex;gap:6px;align-items:flex-end">{bars_html}</div>'
             f'</div>',
@@ -782,11 +787,11 @@ def _render_pressure_points(route_name: str, commodity: str) -> None:
             with col:
                 st.markdown(
                     f'<div style="background:{bg};border:1px solid {border};'
-                    f'border-radius:10px;padding:14px 12px;text-align:center">'
-                    f'<div style="font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;'
+                    f'border-radius:3px;padding:14px 12px;text-align:center">'
+                    f'<div style="font-family:{FONT_HEADLINE};font-size:0.62rem;color:{C_TEXT2};text-transform:uppercase;'
                     f'letter-spacing:0.1em;font-weight:700;margin-bottom:8px">{label}</div>'
-                    f'<div style="font-size:1rem;font-weight:900;color:{color};margin-bottom:6px">{rating}</div>'
-                    f'<div style="font-size:0.68rem;color:{C_TEXT2}">{metric}</div>'
+                    f'<div style="font-family:{FONT_HEADLINE};font-size:1rem;font-weight:700;color:{color};margin-bottom:6px">{rating}</div>'
+                    f'<div style="font-family:{FONT_BODY};font-size:0.68rem;color:{C_TEXT2}">{metric}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -832,7 +837,7 @@ def _render_shipper_intel(route_name: str, commodity: str) -> None:
             )
         st.markdown(
             f'{_card_open()}'
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">'
             f'Top 10 Beneficial Cargo Owners — {commodity} on {route_name}</div>'
             f'{header_html}{rows_html}</div>',
@@ -902,16 +907,16 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
                 content = "".join(
                     f'<div style="display:flex;gap:8px;margin-bottom:6px">'
                     f'<div style="color:{color};font-weight:900;margin-top:1px">▸</div>'
-                    f'<div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.5">{it}</div>'
+                    f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT2};line-height:1.5">{it}</div>'
                     f'</div>'
                     for it in items
                 )
             else:
-                content = f'<div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.6">{items}</div>'
+                content = f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT2};line-height:1.6">{items}</div>'
             return (
                 f'<div style="background:{bg};border-left:3px solid {color};'
-                f'border-radius:0 8px 8px 0;padding:14px 16px;margin-bottom:12px">'
-                f'<div style="font-size:0.67rem;color:{color};font-weight:800;'
+                f'border-radius:0 3px 3px 0;padding:14px 16px;margin-bottom:12px">'
+                f'<div style="font-family:{FONT_HEADLINE};font-size:0.67rem;color:{color};font-weight:700;'
                 f'letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px">{title}</div>'
                 f'{content}</div>'
             )
@@ -957,7 +962,7 @@ def _render_similar_routes(route_name: str) -> None:
         rows_html = (
             f'<div style="display:grid;grid-template-columns:1fr 90px 90px 100px;'
             f'gap:8px;padding:8px 0;border-bottom:1px solid {C_BORDER};'
-            f'background:{_hex_rgba(C_ACCENT,0.07)};border-radius:6px;'
+            f'background:{_hex_rgba(C_ACCENT,0.07)};border-radius:3px;'
             f'padding-left:8px;align-items:center;margin-bottom:2px">'
             f'<div style="font-size:0.78rem;color:{C_TEXT};font-weight:800">'
             f'{route_name} <span style="color:{C_ACCENT};font-size:0.62rem">(selected)</span></div>'
@@ -983,7 +988,7 @@ def _render_similar_routes(route_name: str) -> None:
 
         st.markdown(
             f'{_card_open()}'
-            f'<div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
             f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Route Benchmarking</div>'
             f'{header_html}{rows_html}</div>',
             unsafe_allow_html=True,
@@ -1004,14 +1009,13 @@ def render(
     """Render the Deep Dive research analyst tab."""
     try:
         st.markdown(
-            f'<div style="background:linear-gradient(135deg,{_hex_rgba(C_ACCENT,0.12)},rgba(0,0,0,0));'
-            f'border:1px solid {_hex_rgba(C_ACCENT,0.25)};border-radius:14px;'
+            f'<div style="background:{C_CARD};'
+            f'border:1px solid {C_BORDER};border-bottom:2px solid {C_ACCENT};border-radius:3px;'
             f'padding:20px 26px;margin-bottom:24px">'
             f'<div style="display:flex;align-items:center;gap:14px">'
-            f'<div style="font-size:1.5rem">🔬</div>'
             f'<div>'
-            f'<div style="font-size:1.1rem;font-weight:900;color:{C_TEXT}">Deep Dive — Research Analyst View</div>'
-            f'<div style="font-size:0.78rem;color:{C_TEXT3};margin-top:3px">'
+            f'<div style="font-family:{FONT_HEADLINE};font-size:1.15rem;font-weight:700;color:{C_TEXT}">Deep Dive &mdash; Research Analyst View</div>'
+            f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT3};margin-top:3px">'
             f'Select a route and commodity to generate comprehensive trade lane intelligence.</div>'
             f'</div></div></div>',
             unsafe_allow_html=True,

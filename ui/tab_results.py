@@ -12,17 +12,17 @@ from loguru import logger
 from scipy import stats as scipy_stats
 
 # ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 SIGNAL_TYPES = [
     "Momentum", "Mean Reversion", "BDI Divergence", "Rate Breakout",
@@ -30,12 +30,12 @@ SIGNAL_TYPES = [
 ]
 
 SIGNAL_COLORS = {
-    "Momentum":       "#3b82f6",
-    "Mean Reversion": "#8b5cf6",
-    "BDI Divergence": "#10b981",
-    "Rate Breakout":  "#f59e0b",
-    "Congestion Play":"#ef4444",
-    "Macro Overlay":  "#06b6d4",
+    "Momentum":       "#3572b0",
+    "Mean Reversion": "#7c6eaf",
+    "BDI Divergence": "#2e9e6e",
+    "Rate Breakout":  "#c9962b",
+    "Congestion Play":"#c0392b",
+    "Macro Overlay":  "#4a90a4",
     "Sentiment Shift":"#ec4899",
     "Carrier Alpha":  "#a3e635",
 }
@@ -50,7 +50,7 @@ ROUTES = ["SHNG-ROTT", "SHNG-LOSA", "SING-ROTT", "BUEN-HBUR", "ROTT-NYBA"]
 def _card_wrap(inner: str, accent: str = C_ACCENT) -> str:
     return (
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-top:2px solid {accent};border-radius:14px;padding:20px 24px;'
+        f'border-top:2px solid {accent};border-radius:6px;padding:20px 24px;'
         f'box-shadow:0 4px 24px rgba(0,0,0,0.25);margin-bottom:12px">'
         f'{inner}</div>'
     )
@@ -77,7 +77,7 @@ def _kpi(label: str, value: str, delta: str = "", accent: str = C_ACCENT) -> str
     ) if delta else ""
     return (
         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-top:2px solid {accent};border-radius:12px;padding:16px 18px">'
+        f'border-top:2px solid {accent};border-radius:6px;padding:16px 18px">'
         f'<div style="font-size:0.68rem;font-weight:700;color:{C_TEXT3};'
         f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px">{label}</div>'
         f'<div style="font-size:1.55rem;font-weight:800;color:{C_TEXT};'
@@ -257,7 +257,7 @@ def _plotly_timeline(df: pd.DataFrame) -> go.Figure:
         ))
     fig.update_layout(
         paper_bgcolor=C_BG, plot_bgcolor=C_SURFACE,
-        font=dict(color=C_TEXT, family="Inter, sans-serif"),
+        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         margin=dict(l=40, r=20, t=30, b=40),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
         xaxis=dict(gridcolor=C_BORDER, showgrid=True),
@@ -287,7 +287,7 @@ def _plotly_return_dist(df: pd.DataFrame) -> go.Figure:
     ))
     fig.update_layout(
         paper_bgcolor=C_BG, plot_bgcolor=C_SURFACE,
-        font=dict(color=C_TEXT, family="Inter, sans-serif"),
+        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         margin=dict(l=40, r=20, t=30, b=40),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
         xaxis=dict(title="Return %", gridcolor=C_BORDER),
@@ -312,7 +312,7 @@ def _plotly_win_rate_bar(inst_df: pd.DataFrame) -> go.Figure:
     ))
     fig.update_layout(
         paper_bgcolor=C_BG, plot_bgcolor=C_SURFACE,
-        font=dict(color=C_TEXT, family="Inter, sans-serif"),
+        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         margin=dict(l=20, r=60, t=20, b=30),
         xaxis=dict(title="Win Rate %", gridcolor=C_BORDER, range=[0, 90]),
         yaxis=dict(gridcolor="rgba(0,0,0,0)"),
@@ -336,7 +336,7 @@ def _plotly_decay(decay_df: pd.DataFrame) -> go.Figure:
         ))
     fig.update_layout(
         paper_bgcolor=C_BG, plot_bgcolor=C_SURFACE,
-        font=dict(color=C_TEXT, family="Inter, sans-serif"),
+        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         margin=dict(l=40, r=20, t=30, b=40),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
         xaxis=dict(title="Holding Day", gridcolor=C_BORDER,
@@ -353,16 +353,16 @@ def _plotly_decay(decay_df: pd.DataFrame) -> go.Figure:
 def _monthly_attr_html(pivot: pd.DataFrame) -> str:
     def cell_bg(v: float) -> str:
         if v > 8:
-            return f"rgba(16,185,129,0.55)"
+            return f"rgba(46,158,110,0.55)"
         if v > 3:
-            return f"rgba(16,185,129,0.30)"
+            return f"rgba(46,158,110,0.30)"
         if v > 0:
-            return f"rgba(16,185,129,0.12)"
+            return f"rgba(46,158,110,0.12)"
         if v > -3:
-            return f"rgba(239,68,68,0.12)"
+            return f"rgba(192,57,43,0.12)"
         if v > -8:
-            return f"rgba(239,68,68,0.30)"
-        return f"rgba(239,68,68,0.55)"
+            return f"rgba(192,57,43,0.30)"
+        return f"rgba(192,57,43,0.55)"
 
     th_style = (f'style="padding:8px 10px;font-size:0.65rem;font-weight:700;'
                 f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;'
@@ -378,7 +378,7 @@ def _monthly_attr_html(pivot: pd.DataFrame) -> str:
             cells += (
                 f'<td style="padding:8px 10px;text-align:right;font-size:0.72rem;'
                 f'font-weight:600;color:{color};background:{bg};'
-                f'border:1px solid rgba(255,255,255,0.03)">'
+                f'border:1px solid rgba(232,230,225,0.03)">'
                 f'{sign}{v:.1f}%</td>'
             )
         rows_html += f'<tr style="border-bottom:1px solid {C_BORDER}">{cells}</tr>'
@@ -387,7 +387,7 @@ def _monthly_attr_html(pivot: pd.DataFrame) -> str:
         f'<th {th_style}>{c}</th>' for c in pivot.columns
     )
     return (
-        f'<div style="overflow-x:auto;border-radius:10px;border:1px solid {C_BORDER}">'
+        f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER}">'
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{cols_header}</tr></thead>'
         f'<tbody>{rows_html}</tbody>'
@@ -415,20 +415,20 @@ def _signal_log_html(df: pd.DataFrame, n: int = 50) -> str:
         conv_bar = int(r["conviction"] * 10)
         conv_str = f'{"█" * conv_bar}{"░" * (10 - conv_bar)} {r["conviction"]:.2f}'
 
-        td = f'style="padding:8px 12px;font-size:0.72rem;color:{C_TEXT2};border-bottom:1px solid rgba(255,255,255,0.04)"'
+        td = f'style="padding:8px 12px;font-size:0.72rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
         date_str = r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
         rows_html += (
             f'<tr style="transition:background 0.15s" '
-            f'onmouseover="this.style.background=\'rgba(59,130,246,0.05)\'" '
+            f'onmouseover="this.style.background=\'rgba(53,114,176,0.05)\'" '
             f'onmouseout="this.style.background=\'transparent\'">'
             f'<td {td}>{date_str}</td>'
             f'<td {td} style="font-weight:700;color:{C_TEXT}">{r["instrument"]}</td>'
             f'<td {td}>'
-            f'<span style="background:rgba(59,130,246,0.15);color:{SIGNAL_COLORS.get(r["signal_type"], C_ACCENT)};'
+            f'<span style="background:rgba(53,114,176,0.15);color:{SIGNAL_COLORS.get(r["signal_type"], C_ACCENT)};'
             f'padding:2px 7px;border-radius:4px;font-size:0.65rem;font-weight:700">'
             f'{r["signal_type"]}</span></td>'
             f'<td {td} style="font-weight:700;color:{dir_color}">{r["direction"]}</td>'
-            f'<td {td} style="font-family:monospace;font-size:0.65rem;color:{C_TEXT3}">{conv_str}</td>'
+            f'<td {td} style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{C_TEXT3}">{conv_str}</td>'
             f'<td {td}>${r["entry"]:.2f}</td>'
             f'<td {td}>${r["exit"]:.2f}</td>'
             f'<td {td} style="font-weight:700;color:{ret_color}">{ret_sign}{ret:.2f}%</td>'
@@ -437,7 +437,7 @@ def _signal_log_html(df: pd.DataFrame, n: int = 50) -> str:
         )
     return (
         f'<div style="overflow-x:auto;max-height:520px;overflow-y:auto;'
-        f'border-radius:10px;border:1px solid {C_BORDER}">'
+        f'border-radius:6px;border:1px solid {C_BORDER}">'
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{head_html}</tr></thead>'
         f'<tbody>{rows_html}</tbody>'
@@ -462,7 +462,7 @@ def _leaderboard_html(lb: pd.DataFrame) -> str:
         ret_sign = "+" if r["Avg Return"] >= 0 else ""
         rank_lbl = medal.get(i, f"#{i+1}")
         sig_color = SIGNAL_COLORS.get(r["Signal Type"], C_ACCENT)
-        td = f'style="padding:10px 14px;font-size:0.75rem;color:{C_TEXT2};border-bottom:1px solid rgba(255,255,255,0.04)"'
+        td = f'style="padding:10px 14px;font-size:0.75rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
         rows_html += (
             f'<tr>'
             f'<td {td} style="font-size:0.9rem">{rank_lbl}</td>'
@@ -476,7 +476,7 @@ def _leaderboard_html(lb: pd.DataFrame) -> str:
             f'</tr>'
         )
     return (
-        f'<div style="border-radius:10px;border:1px solid {C_BORDER};overflow:hidden">'
+        f'<div style="border-radius:6px;border:1px solid {C_BORDER};overflow:hidden">'
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{head_html}</tr></thead>'
         f'<tbody>{rows_html}</tbody>'
@@ -497,7 +497,7 @@ def _instrument_table_html(inst_df: pd.DataFrame) -> str:
         wr_c = C_HIGH if r["Win Rate"] >= 55 else C_MOD if r["Win Rate"] >= 48 else C_LOW
         ta_c = C_HIGH if r["Total Alpha"] >= 0 else C_LOW
         ta_s = "+" if r["Total Alpha"] >= 0 else ""
-        td = f'style="padding:9px 12px;font-size:0.73rem;color:{C_TEXT2};border-bottom:1px solid rgba(255,255,255,0.04)"'
+        td = f'style="padding:9px 12px;font-size:0.73rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
         rows_html += (
             f'<tr>'
             f'<td {td} style="font-weight:800;color:{C_TEXT}">{r["Instrument"]}</td>'
@@ -509,7 +509,7 @@ def _instrument_table_html(inst_df: pd.DataFrame) -> str:
             f'</tr>'
         )
     return (
-        f'<div style="border-radius:10px;border:1px solid {C_BORDER};overflow:hidden">'
+        f'<div style="border-radius:6px;border:1px solid {C_BORDER};overflow:hidden">'
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{head_html}</tr></thead>'
         f'<tbody>{rows_html}</tbody>'
@@ -710,11 +710,11 @@ def render(stock_data, insights, freight_data=None):
             ).idxmin()
             note_html = (
                 f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">'
-                f'<div style="background:rgba(239,68,68,0.1);border-left:3px solid {C_LOW};'
+                f'<div style="background:rgba(192,57,43,0.1);border-left:3px solid {C_LOW};'
                 f'border-radius:6px;padding:10px 16px;font-size:0.78rem;color:{C_TEXT2}">'
                 f'<span style="font-weight:700;color:{C_LOW}">Fastest Decay:</span> '
                 f'{fastest} — signal degrades most quickly over holding period</div>'
-                f'<div style="background:rgba(16,185,129,0.1);border-left:3px solid {C_HIGH};'
+                f'<div style="background:rgba(46,158,110,0.1);border-left:3px solid {C_HIGH};'
                 f'border-radius:6px;padding:10px 16px;font-size:0.78rem;color:{C_TEXT2}">'
                 f'<span style="font-weight:700;color:{C_HIGH}">Slowest Decay:</span> '
                 f'{slowest} — maintains alpha across longer holding windows</div>'

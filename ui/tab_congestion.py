@@ -20,17 +20,17 @@ import streamlit as st
 from loguru import logger
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 # ── Static port data ──────────────────────────────────────────────────────────
 _PORTS: list[dict] = [
@@ -115,8 +115,8 @@ def _render_hero(stats: dict) -> None:
         wk_sign = "+" if stats["vs_week"] > 0 else ""
         yr_sign = "+" if stats["vs_year"] > 0 else ""
         html = (
-            f'<div style="background:linear-gradient(135deg,#1a0a0a 0%,#1a1408 50%,#0a0f1a 100%);'
-            f'border:1px solid {C_LOW}44;border-radius:14px;padding:28px 32px;margin-bottom:24px;">'
+            f'<div style="background:linear-gradient(135deg,#1a0a0a 0%,#1a1408 50%,#0c0e14 100%);'
+            f'border:1px solid {C_LOW}44;border-radius:6px;padding:28px 32px;margin-bottom:24px;">'
             f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">'
             f'<div style="width:10px;height:10px;border-radius:50%;background:{C_LOW};box-shadow:0 0 8px {C_LOW};animation:none;"></div>'
             f'<span style="font-size:13px;font-weight:600;letter-spacing:2px;color:{C_LOW};text-transform:uppercase;">Port Congestion Alert</span>'
@@ -198,10 +198,10 @@ def _render_map(ports: list[dict]) -> None:
         fig.update_layout(
             geo=dict(
                 projection_type="natural earth",
-                showland=True, landcolor="#1a2235",
+                showland=True, landcolor="#181c28",
                 showocean=True, oceancolor="#0d1520",
                 showcoastlines=True, coastlinecolor="rgba(255,255,255,0.12)",
-                showcountries=True, countrycolor="rgba(255,255,255,0.08)",
+                showcountries=True, countrycolor="rgba(232,230,225,0.06)",
                 showframe=False,
                 bgcolor=C_BG,
             ),
@@ -209,7 +209,7 @@ def _render_map(ports: list[dict]) -> None:
             plot_bgcolor=C_BG,
             margin=dict(l=0, r=0, t=8, b=8),
             height=480,
-            font=dict(color=C_TEXT, family="Inter, sans-serif"),
+            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     except Exception as exc:
@@ -265,8 +265,8 @@ def _render_table(ports: list[dict]) -> None:
             )
 
         table_html = (
-            f'<div style="overflow-x:auto;border-radius:12px;border:1px solid {C_BORDER};">'
-            f'<table style="width:100%;border-collapse:collapse;font-family:Inter,sans-serif;">'
+            f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER};">'
+            f'<table style="width:100%;border-collapse:collapse;font-family:Libre Franklin,sans-serif;">'
             f'<thead><tr>'
             f'<th style="{header_style}">Port</th>'
             f'<th style="{header_style}">Region</th>'
@@ -300,7 +300,7 @@ def _render_timeline(ports: list[dict]) -> None:
         days = [today - timedelta(days=89 - i) for i in range(90)]
         x_dates = [d.strftime("%Y-%m-%d") for d in days]
 
-        palette = [C_LOW, C_MOD, C_ACCENT, C_HIGH, "#8b5cf6"]
+        palette = [C_LOW, C_MOD, C_ACCENT, C_HIGH, "#7c6eaf"]
         fig = go.Figure()
 
         for idx, p in enumerate(top5):
@@ -330,7 +330,7 @@ def _render_timeline(ports: list[dict]) -> None:
             xaxis=dict(showgrid=False, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3), tickangle=-30),
             yaxis=dict(showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3),
                        title=dict(text="Congestion Index", font=dict(color=C_TEXT2, size=11)), range=[0, 105]),
-            font=dict(color=C_TEXT, family="Inter, sans-serif"),
+            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -385,7 +385,7 @@ def _render_wait_dist(ports: list[dict]) -> None:
             yaxis=dict(title=dict(text="Number of Vessels", font=dict(color=C_TEXT2, size=11)),
                        showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
             bargap=0.06,
-            font=dict(color=C_TEXT, family="Inter, sans-serif"),
+            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
             showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -467,12 +467,12 @@ def _render_correlation(ports: list[dict]) -> None:
             yaxis=dict(title=dict(text="Freight Rate Change (%)", font=dict(color=C_TEXT2, size=11)),
                        showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
             legend=dict(font=dict(color=C_TEXT2, size=11), bgcolor="rgba(0,0,0,0)"),
-            font=dict(color=C_TEXT, family="Inter, sans-serif"),
+            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         insight_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}33;border-radius:10px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}33;border-radius:6px;'
             f'padding:14px 20px;margin-top:8px;font-size:13px;color:{C_TEXT2};">'
             f'<span style="color:{C_ACCENT};font-weight:600;">Insight:</span> '
             f'Each 10-point rise in the congestion index correlates with approximately '
@@ -541,8 +541,8 @@ def _render_efficiency() -> None:
         )
         table_html = (
             f'{legend_html}'
-            f'<div style="overflow-x:auto;border-radius:12px;border:1px solid {C_BORDER};">'
-            f'<table style="width:100%;border-collapse:collapse;font-family:Inter,sans-serif;">'
+            f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER};">'
+            f'<table style="width:100%;border-collapse:collapse;font-family:Libre Franklin,sans-serif;">'
             f'<thead><tr>'
             f'<th style="{header_left}">Port</th>'
             f'<th style="{header_style}">Crane Moves/hr</th>'
@@ -601,7 +601,7 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
         st.markdown(
             f'<div style="margin-top:32px;padding:16px 20px;background:{C_SURFACE};'
-            f'border-radius:10px;border:1px solid {C_BORDER};'
+            f'border-radius:6px;border:1px solid {C_BORDER};'
             f'font-size:12px;color:{C_TEXT3};display:flex;align-items:center;gap:8px;">'
             f'<span style="color:{C_ACCENT};">&#9432;</span>'
             f'Congestion data refreshed every 6 hours. Index scores are composite metrics derived from vessel AIS data, '

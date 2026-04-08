@@ -24,25 +24,25 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Palette
 # ---------------------------------------------------------------------------
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
-C_CARD    = "#1a2235"
-C_BORDER  = "rgba(255,255,255,0.08)"
-C_HIGH    = "#10b981"
-C_MOD     = "#f59e0b"
-C_LOW     = "#ef4444"
-C_ACCENT  = "#3b82f6"
-C_TEXT    = "#f1f5f9"
-C_TEXT2   = "#94a3b8"
-C_TEXT3   = "#64748b"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
+C_CARD    = "#181c28"
+C_BORDER  = "rgba(232,230,225,0.06)"
+C_HIGH    = "#2e9e6e"
+C_MOD     = "#c9962b"
+C_LOW     = "#c0392b"
+C_ACCENT  = "#3572b0"
+C_TEXT    = "#e8e6e1"
+C_TEXT2   = "#9a968e"
+C_TEXT3   = "#6b6760"
 
 _CHART_LAYOUT = dict(
     paper_bgcolor=C_BG,
     plot_bgcolor=C_SURFACE,
     font=dict(color=C_TEXT, family="Inter, system-ui, sans-serif"),
     margin=dict(t=48, b=36, l=56, r=24),
-    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)"),
-    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)"),
+    xaxis=dict(gridcolor="rgba(232,230,225,0.04)", zerolinecolor="rgba(232,230,225,0.06)"),
+    yaxis=dict(gridcolor="rgba(232,230,225,0.04)", zerolinecolor="rgba(232,230,225,0.06)"),
 )
 
 # ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def _reliability_series(base: float, volatility: float, n: int = 18) -> list[flo
 
 def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
         f'padding:20px 16px;text-align:center;">'
         f'<div style="font-size:28px;font-weight:700;color:{color};line-height:1.1;">{value}</div>'
         f'<div style="font-size:12px;color:{C_TEXT2};margin-top:4px;text-transform:uppercase;'
@@ -200,12 +200,12 @@ def _delay_color(hrs: int) -> str:
 
 def _status_badge(hrs: int) -> str:
     if hrs < 0:
-        return f'<span style="background:rgba(16,185,129,.18);color:{C_HIGH};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">AHEAD</span>'
+        return f'<span style="background:rgba(46,158,110,.18);color:{C_HIGH};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">AHEAD</span>'
     if hrs == 0:
         return f'<span style="background:rgba(148,163,184,.12);color:{C_TEXT2};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">ON TIME</span>'
     if hrs <= 24:
-        return f'<span style="background:rgba(245,158,11,.18);color:{C_MOD};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DELAYED</span>'
-    return f'<span style="background:rgba(239,68,68,.18);color:{C_LOW};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DIVERTED</span>'
+        return f'<span style="background:rgba(201,150,43,.18);color:{C_MOD};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DELAYED</span>'
+    return f'<span style="background:rgba(192,57,43,.18);color:{C_LOW};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DIVERTED</span>'
 
 
 # ---------------------------------------------------------------------------
@@ -274,10 +274,10 @@ def _render_voyage_tracker() -> None:
             )
 
         th_style = f'style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid {C_BORDER};"'
-        td_style  = f'style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);"'
+        td_style  = f'style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);"'
 
         table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
             f'overflow-x:auto;padding:4px 0;">'
             f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
@@ -305,20 +305,20 @@ def _render_voyage_tracker() -> None:
             dc = _delay_color(delay_hrs)
             badge = _status_badge(delay_hrs)
             delay_txt = f'<span style="color:{dc};font-weight:600;">{"+" if delay_hrs > 0 else ""}{delay_hrs}h</span>'
-            td = f'style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);"'
+            td = f'style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);"'
             rows_final += (
                 f"<tr>"
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT};font-weight:600;">{name}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT3};">{imo}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT2};">{orig}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT2};">{dest}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT3};">{departed.strftime("%b %d")}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT2};">{orig_eta.strftime("%b %d")}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT};">{curr_eta.strftime("%b %d")}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);">{delay_txt}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);">{badge}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_ACCENT};">{spd} kn</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT3};font-size:11px;">{pos}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{name}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{imo}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{orig}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{dest}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{departed.strftime("%b %d")}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{orig_eta.strftime("%b %d")}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};">{curr_eta.strftime("%b %d")}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);">{delay_txt}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);">{badge}</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_ACCENT};">{spd} kn</td>'
+                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};font-size:11px;">{pos}</td>'
                 f"</tr>"
             )
 
@@ -373,7 +373,7 @@ def _render_eta_calculator() -> None:
                 wr_clr = risk_colors[weather_risk]
 
                 result_html = (
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;padding:20px 24px;margin-top:12px;">'
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-top:12px;">'
                     f'<div style="font-size:15px;font-weight:700;color:{C_TEXT};margin-bottom:14px;">'
                     f'Route: {origin} → {destination}</div>'
                     f'<div style="display:flex;gap:32px;flex-wrap:wrap;">'
@@ -557,7 +557,7 @@ def _render_reliability_trends() -> None:
             title="Carrier Schedule Reliability % — Last 18 Months",
             height=400,
             legend=dict(orientation="h", y=-0.18, font=dict(size=11)),
-            yaxis=dict(range=[35, 90], title="On-Time %", gridcolor="rgba(255,255,255,0.05)"),
+            yaxis=dict(range=[35, 90], title="On-Time %", gridcolor="rgba(232,230,225,0.04)"),
         )
         st.plotly_chart(fig, use_container_width=True, key="eta_reliability_trends")
     except Exception:
@@ -596,16 +596,16 @@ def _render_weather_forecast() -> None:
 
             rows_html += (
                 f'<tr style="font-size:13px;">'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT};font-weight:600;">{route}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT2};">{system}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{prob_clr};font-weight:600;">{prob_pct}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{delay_clr};font-weight:600;">{delay_h}h</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_ACCENT};">{affected} vessels</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{route}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{system}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{prob_clr};font-weight:600;">{prob_pct}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{delay_clr};font-weight:600;">{delay_h}h</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_ACCENT};">{affected} vessels</td>'
                 f'</tr>'
             )
 
         table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow-x:auto;padding:4px 0;">'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow-x:auto;padding:4px 0;">'
             f'<table style="width:100%;border-collapse:collapse;">'
             f'<thead><tr>'
             f'<th {header_style}>ROUTE</th>'
@@ -652,24 +652,24 @@ def _render_port_queue() -> None:
                     wait_clr = C_HIGH
 
                 bar_html = (
-                    f'<div style="background:rgba(255,255,255,0.07);border-radius:3px;height:6px;width:140px;margin-top:4px;">'
+                    f'<div style="background:rgba(232,230,225,0.06);border-radius:3px;height:6px;width:140px;margin-top:4px;">'
                     f'<div style="background:{bar_clr};width:{bar_pct}%;height:6px;border-radius:3px;"></div>'
                     f'</div>'
                 )
                 rows_html += (
                     f'<tr style="font-size:13px;">'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT};font-weight:600;">{port}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:{C_TEXT3};">{locode}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{port}</td>'
+                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{locode}</td>'
+                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);">'
                     f'<span style="color:{bar_clr};font-weight:700;font-size:15px;">{vessels}</span>'
                     f'<span style="color:{C_TEXT3};font-size:11px;"> vessels</span>'
                     f'{bar_html}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:{wait_clr};font-weight:600;">{wait_h}h</td>'
+                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{wait_clr};font-weight:600;">{wait_h}h</td>'
                     f'</tr>'
                 )
 
             table_html = (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;overflow:hidden;">'
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
                 f'<table style="width:100%;border-collapse:collapse;">'
                 f'<thead><tr>'
                 f'<th {header_style}>PORT</th>'

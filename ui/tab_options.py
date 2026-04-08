@@ -22,8 +22,8 @@ from ui.styles import (
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0a0f1a"
-C_SURFACE = "#111827"
+C_BG      = "#0c0e14"
+C_SURFACE = "#12151e"
 
 _ALL_TICKERS = ["ZIM", "MATX", "DAC", "SBLK", "STNG", "GSL"]
 
@@ -135,7 +135,7 @@ def render(stock_data, insights):
     # ── 1. Hero header ─────────────────────────────────────────────────────────
     st.markdown(
         f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,{C_CARD} 100%);'
-        f'border:1px solid {C_BORDER};border-radius:12px;padding:28px 32px;margin-bottom:24px;">'
+        f'border:1px solid {C_BORDER};border-radius:6px;padding:28px 32px;margin-bottom:24px;">'
         f'<div style="display:flex;align-items:center;gap:14px;margin-bottom:6px;">'
         f'<span style="font-size:2rem;">📊</span>'
         f'<h1 style="margin:0;font-size:1.9rem;font-weight:800;'
@@ -241,7 +241,7 @@ def render(stock_data, insights):
             with ua_cols[i]:
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-top:3px solid {cp_color};border-radius:10px;padding:14px 16px;">'
+                    f'border-top:3px solid {cp_color};border-radius:6px;padding:14px 16px;">'
                     f'<div style="display:flex;justify-content:space-between;'
                     f'align-items:center;margin-bottom:8px;">'
                     f'<span style="font-weight:800;font-size:1rem;color:{C_TEXT};">{opt.ticker}</span>'
@@ -336,8 +336,8 @@ def render(stock_data, insights):
                 [0.00, "#1e3a5f"],
                 [0.25, "#1d4ed8"],
                 [0.50, "#0891b2"],
-                [0.75, "#f59e0b"],
-                [1.00, "#ef4444"],
+                [0.75, "#c9962b"],
+                [1.00, "#c0392b"],
             ],
             colorbar=dict(
                 title="IV (%)",
@@ -439,7 +439,7 @@ def render(stock_data, insights):
             diff_color = C_HIGH if diff_pct >= 0 else C_LOW
             st.markdown(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-radius:10px;padding:14px 20px;display:flex;gap:40px;margin-top:8px;">'
+                f'border-radius:6px;padding:14px 20px;display:flex;gap:40px;margin-top:8px;">'
                 f'<div><div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
                 f'margin-bottom:4px;">Max Pain Strike</div>'
                 f'<div style="font-size:1.5rem;font-weight:800;color:{C_MOD};">${max_pain_strike:.2f}</div></div>'
@@ -593,7 +593,7 @@ def render(stock_data, insights):
                 with cols[i % 3]:
                     st.markdown(
                         f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                        f'border-left:4px solid {c};border-radius:10px;'
+                        f'border-left:4px solid {c};border-radius:6px;'
                         f'padding:14px 16px;margin-bottom:12px;">'
                         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
                         f'<span style="font-size:1.1rem;">{idea["icon"]}</span>'

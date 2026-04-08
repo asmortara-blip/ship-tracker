@@ -12,9 +12,9 @@ if TYPE_CHECKING:
 # ── Severity palette ──────────────────────────────────────────────────────────
 
 SEVERITY_COLORS: dict[str, str] = {
-    "INFO":     "#3b82f6",
-    "WARNING":  "#f59e0b",
-    "CRITICAL": "#ef4444",
+    "INFO":     "#3572b0",
+    "WARNING":  "#c9962b",
+    "CRITICAL": "#c0392b",
 }
 
 SEVERITY_ICONS: dict[str, str] = {

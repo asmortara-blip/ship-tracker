@@ -358,10 +358,10 @@ EMERGING_ROUTES_BY_ID: dict[str, EmergingRoute] = {r.route_id: r for r in EMERGI
 # ---------------------------------------------------------------------------
 
 STATUS_COLORS: dict[str, str] = {
-    "OPERATIONAL": "#10b981",    # Green
-    "PILOT":       "#3b82f6",    # Blue
-    "DEVELOPING":  "#f59e0b",    # Amber
-    "FUTURE":      "#8b5cf6",    # Purple
+    "OPERATIONAL": "#2e9e6e",    # Green
+    "PILOT":       "#3572b0",    # Blue
+    "DEVELOPING":  "#c9962b",    # Amber
+    "FUTURE":      "#7c6eaf",    # Purple
 }
 
 
