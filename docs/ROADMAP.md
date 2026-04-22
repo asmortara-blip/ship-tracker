@@ -1,0 +1,76 @@
+# Roadmap
+
+Live index of the build-out across five phases. The source-of-truth plan is
+[`how-else-to-buidl-happy-perlis.md`](../../.claude/plans/how-else-to-buidl-happy-perlis.md)
+in `~/.claude/plans/` — this file is the checked-in summary.
+
+## Phase 1 — Foundation (in progress)
+
+Plumbing that unlocks every downstream track.
+
+- [x] Design-system audit tool — `tools/styles_audit.py`
+- [x] Consolidate design system into `ui/styles.py`
+    - Added `live_data_badge`, `regime_pill`, `spark_cell`, `source_footer`
+    - Folded `stat_counter`, `mini_sparkline`, `gauge_ring`, `alert_banner`,
+      `kpi_row`, `shipping_heat_bar`, `section_divider` in from `ui/components.py`
+    - `ui/components.py` is now a deprecated re-export shim
+- [x] Data-quality primitives — `data/quality.py` (`DataSource`, `DataSeries`)
+- [x] Feed retrofits — FRED, Yahoo Finance, Freightos now have
+      `*_wrapped(...)` variants returning `DataSeries`
+- [x] Typed session schema — `state/session.py` (`SessionState`, `Filters`)
+- [x] Tests scaffold — `tests/` with pytest config; unit tests for quality,
+      session, styles additions, audit tool, and the refactored-tab smoke test
+- [x] GitHub Actions CI — `.github/workflows/ci.yml` (ruff + pytest)
+- [x] Migration playbook — [`TAB_MIGRATION.md`](TAB_MIGRATION.md)
+- [x] Audit baseline — [`audit-baseline.csv`](audit-baseline.csv)
+
+## Phase 2 — Refactor sweep + live data + first quant artifact
+
+- [ ] Refactor wave 1 — top 10 ROI tabs (see `audit-baseline.csv`)
+- [ ] Refactor wave 2 — mid-complexity tabs (20)
+- [ ] Refactor wave 3 — large tabs
+- [ ] Live-data map for `tab_indices` mocks (SCFI, WCI, HARPEX, FBX,
+      BDTI/BCTI/BLNG/BLPG, FFA forward curve)
+- [ ] Live-data map for `tab_news` entity mocks
+- [ ] Live-data map for `tab_congestion` port-history mocks (AIS-derived)
+- [ ] `engine/cointegration.py` — Johansen test + ECM + half-life,
+      surfaced inside `tab_indices`
+- [ ] Delete `ui/components.py`
+
+## Phase 3 — Analytical depth
+
+- [ ] `processing/congestion_rate_lag.py`
+- [ ] `engine/fleet_utilization.py`
+- [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
+- [ ] `processing/performance_attribution.py` (extend to Brinson-style)
+- [ ] `engine/carrier_factor_model.py`
+- [ ] `state/scenarios.py` + scenario overlay mixin
+- [ ] `engine/portfolio_optimizer.py`
+- [ ] Alert-rule editor UI on top of `engine/alert_engine_v2.py`
+- [ ] `engine/narration_engine.py` wired to Claude API (cached daily)
+
+## Phase 4 — New analytical tabs
+
+- [ ] `tab_convergence.py` — Convergence & Divergence Lab
+- [ ] `tab_nowcast.py` — Trade Nowcast
+- [ ] `tab_idea_engine.py` — Signal-to-Trade Ideas
+- [ ] `tab_risk_lab.py` — Risk Lab
+- [ ] `tab_briefing.py` — Daily Briefing (LLM-narrated)
+- [ ] Cross-tab filter bar (reads from `state/session.py`)
+- [ ] "Export this view" PDF on every tab
+
+## Phase 5 — Harden and ship
+
+- [ ] Coverage: engine 80%, processing 70%, data 60%
+- [ ] Data-SLA dashboard in `tab_data_health`
+- [ ] State layer — SQLite via `database/schema.sql`
+- [ ] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile`
+- [ ] Observability — log rotation + in-app log viewer + basic metrics
+
+## Guiding principles
+
+1. Analytical depth is the product; refactor serves depth.
+2. One canonical design system — `ui/styles.py`.
+3. Every figure surfaces its data source via `live_data_badge(...)`.
+4. Cached-first, async-tolerant; never block the UI on a cold API.
+5. Every new model ships with a walk-forward backtest.
