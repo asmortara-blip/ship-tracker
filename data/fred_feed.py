@@ -248,6 +248,46 @@ def get_bdi(macro_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return macro_data.get("BDIY", pd.DataFrame())
 
 
+# ── DataSeries variant (Phase 1 rollout) ─────────────────────────────────────
+# ``fetch_macro_series_wrapped`` returns the same payload as ``fetch_macro_series``
+# but paired with a ``DataSource``. Callers that have migrated to consume
+# ``DataSeries`` can use this; everyone else keeps the legacy function. Both
+# paths share the same cache so there's no duplicate work.
+
+def fetch_macro_series_wrapped(
+    lookback_days: int = 365,
+    cache: CacheManager | None = None,
+    ttl_hours: float = 24.0,
+):
+    """Wrapped-variant of ``fetch_macro_series`` returning a ``DataSeries``.
+
+    The wrapped payload is the same ``dict[series_id → DataFrame]`` the legacy
+    function returns; provenance is attached once at the dict level. Downstream
+    code that renders a per-series pill can construct per-series ``DataSource``
+    objects with ``DataSource.cached(...)`` by inspecting the cache age.
+    """
+    from data.quality import DataSeries, DataSource
+
+    data = fetch_macro_series(
+        lookback_days=lookback_days, cache=cache, ttl_hours=ttl_hours
+    )
+    if data:
+        source = DataSource.live(
+            "FRED",
+            url="https://fred.stlouisfed.org",
+            sla_hours=ttl_hours,
+            notes=f"{len(data)} series, {lookback_days}d lookback",
+        )
+    else:
+        source = DataSource(
+            name="FRED",
+            kind="demo",
+            quality="unknown",
+            notes="FRED_API_KEY not set or fredapi unavailable",
+        )
+    return DataSeries(data=data, source=source, meta={"lookback_days": lookback_days})
+
+
 def get_wti(macro_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Convenience: return WTI crude oil price series."""
     return macro_data.get("DCOILWTICO", pd.DataFrame())

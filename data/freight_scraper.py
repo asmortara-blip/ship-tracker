@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -12,6 +13,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from data.cache_manager import CacheManager
 from data.normalizer import normalize_freight_df
+from data.quality import DataSeries, DataSource
 from routes.route_registry import ROUTES, get_all_fbx_indices
 
 
@@ -75,6 +77,69 @@ def fetch_fbx_rates(
             results[route.id] = _single_fallback(route.id, route.fbx_index)
 
     return results
+
+
+# ── DataSeries variant (Phase 1 rollout) ─────────────────────────────────────
+
+def fetch_fbx_rates_wrapped(
+    lookback_days: int = 120,
+    cache: CacheManager | None = None,
+    ttl_hours: float = 24.0,
+):
+    """Wrapped-variant of ``fetch_fbx_rates`` returning a ``DataSeries``.
+
+    The FBX scraper is fragile — we label it ``scraped`` + ``unofficial`` so
+    the UI surfaces the caveat. When the fallback kicks in, we return a DEMO
+    ``DataSource`` so charts don't silently plot synthetic rates.
+    """
+    from data.quality import DataSeries, DataSource, DataKind, DataQuality
+
+    # We call the underlying function once and inspect whether the cache path
+    # fell back to ``_synthetic_fallback`` by checking for synthetic markers.
+    data = fetch_fbx_rates(
+        lookback_days=lookback_days, cache=cache, ttl_hours=ttl_hours
+    )
+    is_synthetic = _looks_synthetic(data)
+
+    if not data:
+        source = DataSource.demo("FBX — no data")
+    elif is_synthetic:
+        source = DataSource(
+            name="FBX (synthetic fallback)",
+            kind=DataKind.DEMO,
+            quality=DataQuality.DEMO,
+            url="https://fbx.freightos.com",
+            notes="All strategies failed; returning synthetic flat-rate baseline",
+        )
+    else:
+        source = DataSource(
+            name="Freightos Baltic Index",
+            kind=DataKind.SCRAPED,
+            url="https://fbx.freightos.com",
+            quality=DataQuality.UNOFFICIAL,
+            sla_hours=ttl_hours,
+            notes=f"{len(data)} routes, {lookback_days}d lookback",
+        )
+    return DataSeries(data=data, source=source,
+                      meta={"lookback_days": lookback_days})
+
+
+def _looks_synthetic(data: dict) -> bool:
+    """Return True if the payload looks like the ``_synthetic_fallback`` output.
+
+    The synthetic fallback in this module emits DataFrames with a ``source``
+    column set to ``"synthetic"``. We detect that marker.
+    """
+    if not data:
+        return False
+    for df in data.values():
+        if df is None or df.empty:
+            continue
+        if "source" in df.columns:
+            values = df["source"].dropna().astype(str).str.lower().unique()
+            if any(v in {"synthetic", "mock", "fallback"} for v in values):
+                return True
+    return False
 
 
 def _fetch_fbx_all(lookback_days: int) -> pd.DataFrame:
@@ -294,3 +359,110 @@ def get_rate_trend(
     pct = (end_rate - start_rate) / start_rate
     label = trend_label(pct)
     return pct, label
+
+
+# ── Baltic Exchange daily feed ───────────────────────────────────────────────
+
+_BALTIC_FAMILIES: tuple[str, ...] = ("BDI", "BCI", "BPI", "BSI", "BHSI")
+_BALTIC_URL = "https://www.balticexchange.com/en/data-services/market-information0/indices.html"
+_BALTIC_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "baltic_backfill.csv"
+
+
+def _load_baltic_fixture() -> pd.DataFrame:
+    """Load the static Baltic backfill CSV shipped with the repo."""
+    df = pd.read_csv(_BALTIC_FIXTURE_PATH)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
+    return df
+
+
+def _try_fetch_baltic_csv(url: str, timeout: float = 10.0) -> pd.DataFrame | None:
+    """Attempt a live HTTP fetch of the Baltic Exchange daily CSV.
+
+    The real Baltic CSV sits behind a paid/login gate, so this will almost
+    always fall through. We keep the request path so a future free endpoint
+    can be swapped in without refactoring the caller.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; ShipTracker/1.0)",
+            "Accept": "text/csv,application/json",
+        }
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        if resp.status_code != 200 or not resp.text.strip():
+            return None
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.text))
+        if "date" not in df.columns:
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()
+        # Require all five family columns
+        for fam in _BALTIC_FAMILIES:
+            if fam not in df.columns:
+                return None
+        return df
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        logger.debug("Baltic live fetch failed: {}", exc)
+        return None
+
+
+@st.cache_data(ttl=18 * 3600, hash_funcs={CacheManager: lambda _: None}, show_spinner=False)
+def _cached_baltic_frame(force_fixture: bool) -> tuple[pd.DataFrame, bool]:
+    """Return (frame, is_fixture). Cached for 18h.
+
+    ``is_fixture`` is True when we fell back to the bundled backfill CSV.
+    """
+    if not force_fixture:
+        live = _try_fetch_baltic_csv(_BALTIC_URL)
+        if live is not None and not live.empty:
+            logger.info("Baltic live fetch succeeded: {} rows", len(live))
+            return live, False
+
+    logger.debug("Baltic: falling back to fixture CSV")
+    return _load_baltic_fixture(), True
+
+
+def fetch_baltic_daily(family: str = "BDI", *, force_fixture: bool = False) -> DataSeries:
+    """Fetch the Baltic Exchange daily index for the given family.
+
+    Family ∈ {"BDI","BCI","BPI","BSI","BHSI"}. Returns a DataSeries with the
+    series indexed by date. On HTTP error or force_fixture=True, falls back to
+    ``data/fixtures/baltic_backfill.csv`` with ``quality="stale"``.
+    """
+    if family not in _BALTIC_FAMILIES:
+        raise ValueError(
+            f"Unknown Baltic family {family!r}; expected one of {_BALTIC_FAMILIES}"
+        )
+
+    frame, is_fixture = _cached_baltic_frame(force_fixture)
+    series = frame[family].astype(float).rename(family)
+    last_ts = series.index.max()
+    if pd.notna(last_ts):
+        as_of = pd.Timestamp(last_ts).to_pydatetime().replace(tzinfo=timezone.utc)
+    else:
+        as_of = datetime.now(timezone.utc)
+
+    if is_fixture:
+        # Hand-rolled: DataSource doesn't ship a .stale() classmethod but the
+        # string constants are stable, so constructing directly is idiomatic.
+        source = DataSource(
+            name="Baltic Exchange (fixture)",
+            kind="cached",
+            url=_BALTIC_URL,
+            as_of=as_of,
+            quality="stale",
+            notes="HTTP unreachable; using cached backfill",
+        )
+    else:
+        source = DataSource.scraped(
+            name="Baltic Exchange",
+            url=_BALTIC_URL,
+            notes=f"{len(series)} rows, last {as_of:%Y-%m-%d}",
+        )
+
+    return DataSeries(
+        data=series,
+        source=source,
+        meta={"family": family, "is_fixture": is_fixture},
+    )

@@ -84,6 +84,42 @@ def get_latest_price(symbol: str, stock_data: dict[str, pd.DataFrame]) -> float 
     return float(df["close"].iloc[-1])
 
 
+# ── DataSeries variant (Phase 1 rollout) ─────────────────────────────────────
+
+def fetch_all_stocks_wrapped(
+    tickers: list[str] | None = None,
+    lookback_days: int = 180,
+    cache: CacheManager | None = None,
+    ttl_hours: float = 1.0,
+):
+    """Wrapped-variant of ``fetch_all_stocks`` returning a ``DataSeries``.
+
+    Payload is the legacy ``dict[ticker → DataFrame]``. ``DataSource`` reflects
+    Yahoo Finance's public API — unofficial, so quality is ``unofficial`` when
+    data arrives, ``demo`` when it doesn't.
+    """
+    from data.quality import DataSeries, DataSource, DataKind, DataQuality
+
+    data = fetch_all_stocks(
+        tickers=tickers, lookback_days=lookback_days,
+        cache=cache, ttl_hours=ttl_hours,
+    )
+    if data:
+        source = DataSource(
+            name="Yahoo Finance",
+            kind=DataKind.SCRAPED,
+            url="https://finance.yahoo.com",
+            quality=DataQuality.UNOFFICIAL,
+            sla_hours=ttl_hours,
+            notes=f"{len(data)} tickers, {lookback_days}d lookback",
+        )
+    else:
+        source = DataSource.demo("Yahoo Finance unavailable")
+    return DataSeries(data=data, source=source,
+                      meta={"lookback_days": lookback_days,
+                            "tickers": tickers or _DEFAULT_TICKERS})
+
+
 def get_pct_change(symbol: str, stock_data: dict[str, pd.DataFrame], days: int = 30) -> float | None:
     """Return percentage price change over the last N days."""
     df = stock_data.get(symbol)
