@@ -16,12 +16,14 @@ def test_audit_dir_returns_rows() -> None:
     assert all(r.file.startswith("tab_") and r.file.endswith(".py") for r in rows)
 
 
-def test_refactored_tab_imports_styles() -> None:
+def test_reference_tab_imports_styles() -> None:
     # The canonical reference tab must always pass the "imports ui.styles" check.
     rows = audit_dir(UI_DIR)
-    ref = [r for r in rows if r.file == "tab_rate_analytics_refactored.py"]
-    assert ref, "canonical refactored tab missing from audit"
+    ref = [r for r in rows if r.file == "tab_rate_analytics.py"]
+    assert ref, "canonical reference tab missing from audit"
     assert ref[0].imports_styles == 1
+    # And it must never redeclare palette constants.
+    assert ref[0].palette_redecls == 0
 
 
 def test_roi_score_is_nonnegative() -> None:

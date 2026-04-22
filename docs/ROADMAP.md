@@ -26,15 +26,21 @@ Plumbing that unlocks every downstream track.
 
 ## Phase 2 — Refactor sweep + live data + first quant artifact
 
-- [ ] Refactor wave 1 — top 10 ROI tabs (see `audit-baseline.csv`)
-- [ ] Refactor wave 2 — mid-complexity tabs (20)
-- [ ] Refactor wave 3 — large tabs
+- [x] Palette consolidation sweep — 40 tabs now import from `ui.styles`
+- [x] `engine/cointegration.py` surfaced inside `tab_indices`
+      (see `_render_cointegration`)
+- [x] Promote `tab_rate_analytics_refactored.py` to canonical
+      `ui/tab_rate_analytics.py`
+- [ ] Refactor wave 1 — remaining 14 unmigrated tabs (top-ROI:
+      `tab_equipment`, `tab_results`, `tab_fleet`, `tab_emerging_routes`,
+      `tab_port_demand`; see `audit-baseline.csv`)
+- [ ] Refactor wave 2 — inline_divs / unsafe_html sweep on the 40 already
+      palette-migrated tabs (total 1,332 inline divs / 199 unsafe_html
+      remaining)
 - [ ] Live-data map for `tab_indices` mocks (SCFI, WCI, HARPEX, FBX,
       BDTI/BCTI/BLNG/BLPG, FFA forward curve)
 - [ ] Live-data map for `tab_news` entity mocks
 - [ ] Live-data map for `tab_congestion` port-history mocks (AIS-derived)
-- [ ] `engine/cointegration.py` — Johansen test + ECM + half-life,
-      surfaced inside `tab_indices`
 - [ ] Delete `ui/components.py`
 
 ## Phase 3 — Analytical depth

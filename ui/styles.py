@@ -1699,8 +1699,8 @@ def regime_pill(regime: str, *, mapping: dict[str, str] | None = None) -> str:
     """Return HTML for a regime tag (Boom / Normal / Bear / etc).
 
     ``mapping`` overrides the default regime→color palette for domain-specific
-    semantics; callers in ``tab_rate_analytics_refactored`` pass their
-    ``_REGIME_COLOR`` here.
+    semantics; callers in ``tab_rate_analytics`` pass their ``_REGIME_COLOR``
+    here.
     """
     default = {
         "Boom":          C_HIGH,
