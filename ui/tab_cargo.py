@@ -7,22 +7,17 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
+from ui.styles import (
+    C_ACCENT, C_BORDER, C_CARD, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
+    C_SURFACE, C_TEXT, C_TEXT2, C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
+
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -96,35 +91,33 @@ _EQUIPMENT_BALANCE = [
     ("Africa",          -3_500,  "Deficit",  C_LOW),
 ]
 
+_RISK_BADGE = {
+    "Very High": "red",
+    "High":      "red",
+    "Medium":    "yellow",
+    "Low":       "green",
+}
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Cell formatters
 # ---------------------------------------------------------------------------
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> None:
-    delta_html = (
-        f'<div style="font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
-        if delta else ""
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
     )
-    st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:16px 18px;text-align:center;">'
-        f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
-        f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
-        f'{delta_html}'
-        f'</div>', unsafe_allow_html=True)
 
 
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
-        if subtitle else ""
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
     )
-    st.markdown(
-        f'<div style="margin:28px 0 12px;">'
-        f'<div style="font-size:1.05rem;font-weight:600;color:{C_TEXT};">{title}</div>'
-        f'{sub}'
-        f'</div>', unsafe_allow_html=True)
+
+
+def _risk_badge(risk: str) -> str:
+    return badge(risk, _RISK_BADGE.get(risk, "blue"))
 
 
 # ---------------------------------------------------------------------------
@@ -132,22 +125,23 @@ def _section_header(title: str, subtitle: str = "") -> None:
 # ---------------------------------------------------------------------------
 def _render_hero() -> None:
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
-            f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Cargo Intelligence Hub</div>'
-            f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
-            f'Global commodity flows · Equipment balance · Specialised cargo monitoring</div>'
-            f'</div>', unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            _kpi_card("Global Container Throughput", "842M TEU", "▲ 3.1% YoY", C_HIGH)
-        with c2:
-            _kpi_card("TEU Demand Index", "108.4", "▲ 2.7 pts MoM", C_ACCENT)
-        with c3:
-            _kpi_card("LCL Share of Bookings", "23%", "▼ 1.2 pts YoY", C_MOD)
-        with c4:
-            _kpi_card("Reefer Volume", "51.2M TEU", "▲ 4.8% YoY", C_CYAN)
+        page_header(
+            title="Cargo Intelligence Hub",
+            subtitle="Global commodity flows · Equipment balance · Specialised cargo monitoring",
+            icon="📦",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
+        metric_card_row([
+            {"label": "Global Container Throughput", "value": "842M TEU",
+             "accent": C_HIGH, "sublabel": "▲ 3.1% YoY"},
+            {"label": "TEU Demand Index", "value": "108.4",
+             "accent": C_ACCENT, "sublabel": "▲ 2.7 pts MoM"},
+            {"label": "LCL Share of Bookings", "value": "23%",
+             "accent": C_MOD, "sublabel": "▼ 1.2 pts YoY"},
+            {"label": "Reefer Volume", "value": "51.2M TEU",
+             "accent": C_MACRO, "sublabel": "▲ 4.8% YoY"},
+        ])
     except Exception:
         logger.exception("Cargo hero render failed")
         st.error("Hero section unavailable.")
@@ -155,7 +149,8 @@ def _render_hero() -> None:
 
 def _render_cargo_breakdown() -> None:
     try:
-        _section_header("Cargo Type Breakdown", "Volume share and trade value by commodity class")
+        section_header("Cargo Type Breakdown",
+                       "Volume share and trade value by commodity class")
         c1, c2 = st.columns(2)
         with c1:
             labels = list(_CARGO_TYPE_VOL.keys())
@@ -163,24 +158,23 @@ def _render_cargo_breakdown() -> None:
             fig = go.Figure(go.Pie(
                 labels=labels, values=values,
                 hole=0.55,
-                marker_colors=[C_ACCENT, C_MOD, C_PURPLE],
+                marker_colors=[C_ACCENT, C_MOD, C_CONV],
                 textfont_color=C_TEXT,
                 textfont_size=12,
             ))
-            fig.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color=C_TEXT,
-                margin=dict(t=10, b=10, l=10, r=10),
+            apply_dark_layout(
+                fig,
+                title="Volume Share",
+                height=300,
+                margin=dict(t=40, b=10, l=10, r=10),
                 showlegend=True,
                 legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)"),
-                title=dict(text="Volume Share", font_color=C_TEXT2, font_size=13, x=0.5),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="cargo_vol_pie")
         with c2:
             labels2 = list(_CARGO_TYPE_VAL.keys())
             values2 = list(_CARGO_TYPE_VAL.values())
-            colors2 = [C_HIGH, C_CYAN, C_MOD, C_ACCENT, C_PURPLE, "#f97316", C_TEXT3]
+            colors2 = [C_HIGH, C_MACRO, C_MOD, C_ACCENT, C_CONV, "#f97316", C_TEXT3]
             fig2 = go.Figure(go.Pie(
                 labels=labels2, values=values2,
                 hole=0.55,
@@ -188,16 +182,15 @@ def _render_cargo_breakdown() -> None:
                 textfont_color=C_TEXT,
                 textfont_size=12,
             ))
-            fig2.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color=C_TEXT,
-                margin=dict(t=10, b=10, l=10, r=10),
+            apply_dark_layout(
+                fig2,
+                title="Value Share",
+                height=300,
+                margin=dict(t=40, b=10, l=10, r=10),
                 showlegend=True,
                 legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)"),
-                title=dict(text="Value Share", font_color=C_TEXT2, font_size=13, x=0.5),
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True, key="cargo_val_pie")
     except Exception:
         logger.exception("Cargo breakdown render failed")
         st.error("Cargo breakdown unavailable.")
@@ -205,38 +198,21 @@ def _render_cargo_breakdown() -> None:
 
 def _render_commodity_table() -> None:
     try:
-        _section_header("Commodity-to-Shipping Routing", "20 key commodities with vessel type, transit time, and freight rate")
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 1fr 0.7fr 0.8fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Commodity</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Origin</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Destination</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Vessel Type</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Days</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.07em;">Rate $/MT</span>'
-            f'</div>'
-        )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = (
-            f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        )
-        for i, (comm, origin, dest, vessel, days, rate) in enumerate(_COMMODITIES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 1fr 0.7fr 0.8fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{comm}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT2};">{origin}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT2};">{dest}</span>'
-                f'<span style="font-size:0.78rem;color:{C_ACCENT};">{vessel}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT};">{days}d</span>'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_HIGH};">${rate:,.2f}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        section_header("Commodity-to-Shipping Routing",
+                       "20 key commodities with vessel type, transit time, and freight rate")
+        headers = ["Commodity", "Origin", "Destination", "Vessel Type", "Days", "Rate $/MT"]
+        rows = [
+            [
+                _sans(comm),
+                _sans(origin, color=C_TEXT2, weight=500),
+                _sans(dest, color=C_TEXT2, weight=500),
+                _sans(vessel, color=C_ACCENT, weight=600),
+                _mono(f"{days}d", color=C_TEXT, weight=500),
+                _mono(f"${rate:,.2f}", color=C_HIGH, weight=700),
+            ]
+            for (comm, origin, dest, vessel, days, rate) in _COMMODITIES
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Commodity table render failed")
         st.error("Commodity routing table unavailable.")
@@ -244,38 +220,21 @@ def _render_commodity_table() -> None:
 
 def _render_hazmat() -> None:
     try:
-        _section_header("Dangerous Goods Tracker", "Hazmat cargo restrictions by port and carrier")
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1.4fr 0.8fr 0.7fr 0.7fr 1.1fr 1.4fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Class</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Port</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Risk</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Carriers</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Restriction</span>'
-            f'</div>'
-        )
-        st.markdown(header_html, unsafe_allow_html=True)
-        risk_color = {"High": C_LOW, "Medium": C_MOD, "Low": C_HIGH}
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, (cargo, cls, port, risk, carriers, restriction) in enumerate(_HAZMAT):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rc = risk_color.get(risk, C_TEXT2)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1.4fr 0.8fr 0.7fr 0.7fr 1.1fr 1.4fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{cargo}</span>'
-                f'<span style="font-size:0.78rem;color:{C_MOD};">{cls}</span>'
-                f'<span style="font-size:0.78rem;color:{C_TEXT2};">{port}</span>'
-                f'<span style="font-size:0.78rem;font-weight:700;color:{rc};">{risk}</span>'
-                f'<span style="font-size:0.75rem;color:{C_TEXT2};">{carriers}</span>'
-                f'<span style="font-size:0.75rem;color:{C_TEXT3};">{restriction}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        section_header("Dangerous Goods Tracker",
+                       "Hazmat cargo restrictions by port and carrier")
+        headers = ["Cargo", "Class", "Port", "Risk", "Carriers", "Restriction"]
+        rows = [
+            [
+                _sans(cargo),
+                _mono(cls, color=C_MOD, weight=600),
+                _mono(port, color=C_TEXT2, weight=500),
+                _risk_badge(risk),
+                _sans(carriers, color=C_TEXT2, weight=500),
+                _sans(restriction, color=C_TEXT3, weight=400),
+            ]
+            for (cargo, cls, port, risk, carriers, restriction) in _HAZMAT
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Hazmat tracker render failed")
         st.error("Dangerous goods tracker unavailable.")
@@ -283,44 +242,30 @@ def _render_hazmat() -> None:
 
 def _render_reefer() -> None:
     try:
-        _section_header("Reefer Cargo Monitor", "Temperature-sensitive cargo stats, rate premiums, and top routes")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            _kpi_card("Active Reefer Units", "1.84M TEU", "▲ 6.2% YoY", C_CYAN)
-        with c2:
-            _kpi_card("Avg Reefer Rate Premium", "+31%", "vs standard dry rate", C_MOD)
-        with c3:
-            _kpi_card("Reefer Fleet Utilisation", "87%", "▲ 3 pts vs LY", C_HIGH)
-        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1.8fr 1.2fr 0.8fr 0.7fr 0.8fr 0.7fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Temp</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Transit</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Rate $/FEU</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Premium</span>'
-            f'</div>'
-        )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, (route, cargo, temp, transit, rate, prem) in enumerate(_REEFER_ROUTES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1.8fr 1.2fr 0.8fr 0.7fr 0.8fr 0.7fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{route}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT2};">{cargo}</span>'
-                f'<span style="font-size:0.78rem;color:{C_CYAN};font-family:JetBrains Mono,monospace;">{temp}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT};">{transit}</span>'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_HIGH};">${rate:,}</span>'
-                f'<span style="font-size:0.82rem;font-weight:700;color:{C_MOD};">{prem}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        section_header("Reefer Cargo Monitor",
+                       "Temperature-sensitive cargo stats, rate premiums, and top routes")
+        metric_card_row([
+            {"label": "Active Reefer Units", "value": "1.84M TEU",
+             "accent": C_MACRO, "sublabel": "▲ 6.2% YoY"},
+            {"label": "Avg Reefer Rate Premium", "value": "+31%",
+             "accent": C_MOD, "sublabel": "vs standard dry rate"},
+            {"label": "Reefer Fleet Utilisation", "value": "87%",
+             "accent": C_HIGH, "sublabel": "▲ 3 pts vs LY"},
+        ], columns=3)
+        st.html("<div style='height:12px;'></div>")
+        headers = ["Route", "Cargo", "Temp", "Transit", "Rate $/FEU", "Premium"]
+        rows = [
+            [
+                _sans(route),
+                _sans(cargo, color=C_TEXT2, weight=500),
+                _mono(temp, color=C_MACRO, weight=600),
+                _mono(transit, color=C_TEXT, weight=500),
+                _mono(f"${rate:,}", color=C_HIGH, weight=700),
+                _mono(prem, color=C_MOD, weight=700),
+            ]
+            for (route, cargo, temp, transit, rate, prem) in _REEFER_ROUTES
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Reefer monitor render failed")
         st.error("Reefer monitor unavailable.")
@@ -328,52 +273,62 @@ def _render_reefer() -> None:
 
 def _render_lcl_fcl_optimizer() -> None:
     try:
-        _section_header("LCL / FCL Optimizer", "Enter your cargo volume to get a cost recommendation")
-        with st.container():
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                cbm = st.number_input("Cargo Volume (CBM)", min_value=1, max_value=120, value=18, step=1)
-                weight_t = st.number_input("Cargo Weight (tonnes)", min_value=0.1, max_value=30.0, value=8.0, step=0.5)
-                route_sel = st.selectbox("Route", ["Asia → Europe", "Asia → USA", "Europe → USA", "Intra-Asia"])
+        section_header("LCL / FCL Optimizer",
+                       "Enter your cargo volume to get a cost recommendation")
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            cbm = st.number_input("Cargo Volume (CBM)", min_value=1, max_value=120,
+                                   value=18, step=1)
+            st.number_input("Cargo Weight (tonnes)", min_value=0.1, max_value=30.0,
+                            value=8.0, step=0.5)
+            route_sel = st.selectbox("Route",
+                                      ["Asia → Europe", "Asia → USA",
+                                       "Europe → USA", "Intra-Asia"])
 
-            lcl_rate_per_cbm = {"Asia → Europe": 68, "Asia → USA": 82, "Europe → USA": 55, "Intra-Asia": 38}
-            fcl_20ft_rate   = {"Asia → Europe": 1650, "Asia → USA": 2100, "Europe → USA": 1400, "Intra-Asia": 950}
-            fcl_40ft_rate   = {"Asia → Europe": 2400, "Asia → USA": 3200, "Europe → USA": 1900, "Intra-Asia": 1350}
+        lcl_rate_per_cbm = {"Asia → Europe": 68, "Asia → USA": 82,
+                             "Europe → USA": 55, "Intra-Asia": 38}
+        fcl_20ft_rate   = {"Asia → Europe": 1650, "Asia → USA": 2100,
+                             "Europe → USA": 1400, "Intra-Asia": 950}
+        fcl_40ft_rate   = {"Asia → Europe": 2400, "Asia → USA": 3200,
+                             "Europe → USA": 1900, "Intra-Asia": 1350}
 
-            lcl_cost  = cbm * lcl_rate_per_cbm.get(route_sel, 68)
-            fcl20_cost = fcl_20ft_rate.get(route_sel, 1650)
-            fcl40_cost = fcl_40ft_rate.get(route_sel, 2400)
+        lcl_cost  = cbm * lcl_rate_per_cbm.get(route_sel, 68)
+        fcl20_cost = fcl_20ft_rate.get(route_sel, 1650)
+        fcl40_cost = fcl_40ft_rate.get(route_sel, 2400)
 
-            if cbm <= 15:
-                rec = "LCL"
-                rec_color = C_ACCENT
-                rec_reason = f"At {cbm} CBM, LCL saves you ${fcl20_cost - lcl_cost:,} vs a 20ft FCL."
-            elif cbm <= 28:
-                rec = "20ft FCL"
-                rec_color = C_HIGH
-                rec_reason = f"At {cbm} CBM, a 20ft FCL (${fcl20_cost:,}) is more efficient than LCL (${lcl_cost:,})."
-            else:
-                rec = "40ft FCL"
-                rec_color = C_MOD
-                rec_reason = f"At {cbm} CBM, a 40ft FCL gives best per-CBM rate at ${fcl40_cost/67:.0f}/CBM."
+        if cbm <= 15:
+            rec = "LCL"
+            rec_color = C_ACCENT
+            rec_reason = f"At {cbm} CBM, LCL saves you ${fcl20_cost - lcl_cost:,} vs a 20ft FCL."
+        elif cbm <= 28:
+            rec = "20ft FCL"
+            rec_color = C_HIGH
+            rec_reason = f"At {cbm} CBM, a 20ft FCL (${fcl20_cost:,}) is more efficient than LCL (${lcl_cost:,})."
+        else:
+            rec = "40ft FCL"
+            rec_color = C_MOD
+            rec_reason = f"At {cbm} CBM, a 40ft FCL gives best per-CBM rate at ${fcl40_cost/67:.0f}/CBM."
 
-            with c2:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {rec_color};border-radius:6px;padding:20px 24px;">'
-                    f'<div style="font-size:0.75rem;color:{C_TEXT3};text-transform:uppercase;margin-bottom:6px;">Recommendation</div>'
-                    f'<div style="font-size:1.8rem;font-weight:700;color:{rec_color};">{rec}</div>'
-                    f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:8px;">{rec_reason}</div>'
-                    f'<div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">'
-                    f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                    f'<div style="font-size:0.7rem;color:{C_TEXT3};">LCL</div>'
-                    f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${lcl_cost:,}</div></div>'
-                    f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                    f'<div style="font-size:0.7rem;color:{C_TEXT3};">20ft FCL</div>'
-                    f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl20_cost:,}</div></div>'
-                    f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                    f'<div style="font-size:0.7rem;color:{C_TEXT3};">40ft FCL</div>'
-                    f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl40_cost:,}</div></div>'
-                    f'</div></div>', unsafe_allow_html=True)
+        with c2:
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {rec_color};'
+                f'border-radius:6px;padding:20px 24px;">'
+                f'<div style="font-size:0.75rem;color:{C_TEXT3};'
+                f'text-transform:uppercase;margin-bottom:6px;">Recommendation</div>'
+                f'<div style="font-size:1.8rem;font-weight:700;color:{rec_color};">{rec}</div>'
+                f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:8px;">{rec_reason}</div>'
+                f'<div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">'
+                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
+                f'<div style="font-size:0.7rem;color:{C_TEXT3};">LCL</div>'
+                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${lcl_cost:,}</div></div>'
+                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
+                f'<div style="font-size:0.7rem;color:{C_TEXT3};">20ft FCL</div>'
+                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl20_cost:,}</div></div>'
+                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
+                f'<div style="font-size:0.7rem;color:{C_TEXT3};">40ft FCL</div>'
+                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl40_cost:,}</div></div>'
+                f'</div></div>'
+            )
     except Exception:
         logger.exception("LCL/FCL optimizer render failed")
         st.error("LCL/FCL optimizer unavailable.")
@@ -381,44 +336,29 @@ def _render_lcl_fcl_optimizer() -> None:
 
 def _render_theft_tracker() -> None:
     try:
-        _section_header("Cargo Theft & Loss Tracker", "High-risk routes, stolen cargo categories, and insurance implications")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            _kpi_card("Annual Cargo Losses", "$22.4B", "Global estimate 2025", C_LOW)
-        with c2:
-            _kpi_card("Avg Loss per Incident", "$148K", "▲ 12% vs 2024", C_MOD)
-        with c3:
-            _kpi_card("Insurance Rate Impact", "+0.3–0.8%", "High-risk route surcharge", C_TEXT2)
-        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 0.8fr 0.6fr 1.2fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Cargo at Risk</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Risk Level</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Incidents/Mo</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Insurance Add-on</span>'
-            f'</div>'
-        )
-        st.markdown(header_html, unsafe_allow_html=True)
-        risk_color = {"Very High": C_LOW, "High": "#f97316", "Medium": C_MOD, "Low": C_HIGH}
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, (route, cargo, risk, incidents, insur) in enumerate(_THEFT_ROUTES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rc = risk_color.get(risk, C_TEXT2)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1.4fr 1.2fr 0.8fr 0.6fr 1.2fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{route}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT2};">{cargo}</span>'
-                f'<span style="font-size:0.78rem;font-weight:700;color:{rc};">{risk}</span>'
-                f'<span style="font-size:0.82rem;color:{C_TEXT};">{incidents}</span>'
-                f'<span style="font-size:0.78rem;color:{C_TEXT3};">{insur}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        section_header("Cargo Theft & Loss Tracker",
+                       "High-risk routes, stolen cargo categories, and insurance implications")
+        metric_card_row([
+            {"label": "Annual Cargo Losses", "value": "$22.4B",
+             "accent": C_LOW, "sublabel": "Global estimate 2025"},
+            {"label": "Avg Loss per Incident", "value": "$148K",
+             "accent": C_MOD, "sublabel": "▲ 12% vs 2024"},
+            {"label": "Insurance Rate Impact", "value": "+0.3–0.8%",
+             "accent": C_TEXT2, "sublabel": "High-risk route surcharge"},
+        ], columns=3)
+        st.html("<div style='height:12px;'></div>")
+        headers = ["Route", "Cargo at Risk", "Risk Level", "Incidents/Mo", "Insurance Add-on"]
+        rows = [
+            [
+                _sans(route),
+                _sans(cargo, color=C_TEXT2, weight=500),
+                _risk_badge(risk),
+                _mono(f"{incidents}", color=C_TEXT, weight=600),
+                _sans(insur, color=C_TEXT3, weight=400),
+            ]
+            for (route, cargo, risk, incidents, insur) in _THEFT_ROUTES
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Theft tracker render failed")
         st.error("Cargo theft tracker unavailable.")
@@ -426,7 +366,8 @@ def _render_theft_tracker() -> None:
 
 def _render_equipment_balance() -> None:
     try:
-        _section_header("Container Equipment Balance", "Regional surplus / deficit of empty containers (TEU units)")
+        section_header("Container Equipment Balance",
+                       "Regional surplus / deficit of empty containers (TEU units)")
         regions  = [r[0] for r in _EQUIPMENT_BALANCE]
         balances = [r[1] for r in _EQUIPMENT_BALANCE]
         colors   = [r[3] for r in _EQUIPMENT_BALANCE]
@@ -438,32 +379,25 @@ def _render_equipment_balance() -> None:
             textposition="outside",
             textfont=dict(color=C_TEXT2, size=11),
         ))
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color=C_TEXT,
-            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(232,230,225,0.04)"),
+        apply_dark_layout(
+            fig,
+            height=320,
+            margin=dict(t=20, b=10, l=10, r=10),
             yaxis=dict(
-                tickfont_color=C_TEXT2,
-                gridcolor="rgba(232,230,225,0.04)",
                 title="TEU Surplus / Deficit",
-                title_font_color=C_TEXT3,
                 zeroline=True,
                 zerolinecolor=C_BORDER,
                 zerolinewidth=1,
             ),
-            margin=dict(t=20, b=10, l=10, r=10),
-            height=320,
         )
-        st.plotly_chart(fig, use_container_width=True)
-        legend_html = (
+        st.plotly_chart(fig, use_container_width=True, key="cargo_equipment_bar")
+        st.html(
             f'<div style="display:flex;gap:20px;margin-top:4px;padding:0 4px;">'
             f'<span style="font-size:0.78rem;color:{C_HIGH};">&#9646; Surplus — excess empty boxes available for export</span>'
             f'<span style="font-size:0.78rem;color:{C_LOW};">&#9646; Deficit — repositioning cost pressure on importers</span>'
             f'<span style="font-size:0.78rem;color:{C_MOD};">&#9646; Balanced — within ±2,500 TEU tolerance</span>'
             f'</div>'
         )
-        st.markdown(legend_html, unsafe_allow_html=True)
     except Exception:
         logger.exception("Equipment balance render failed")
         st.error("Equipment balance chart unavailable.")

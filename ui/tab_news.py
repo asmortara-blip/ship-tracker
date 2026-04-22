@@ -12,7 +12,6 @@ Sections
 """
 from __future__ import annotations
 
-import random
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -20,25 +19,16 @@ from typing import Any
 import plotly.graph_objects as go
 import streamlit as st
 
-# ── WSJ Editorial Palette ─────────────────────────────────────────────────────
-C_BG      = "#f7f5f0"
-C_SURFACE = "#efefea"
-C_CARD    = "#ffffff"
-C_BORDER  = "rgba(34,34,34,0.12)"
-C_HIGH    = "#2e7d32"
-C_MOD     = "#b8860b"
-C_LOW     = "#b71c1c"
-C_ACCENT  = "#0274b6"
-C_TEXT    = "#222222"
-C_TEXT2   = "#555555"
-C_TEXT3   = "#888888"
-C_PURPLE  = "#6a4c93"
-C_CYAN    = "#2a7886"
-
-# ── Font stacks ───────────────────────────────────────────────────────────────
-F_SERIF = "'Libre Baskerville', 'Georgia', 'Times New Roman', serif"
-F_BODY  = "'Libre Franklin', 'Helvetica Neue', Arial, sans-serif"
-F_MONO  = "'JetBrains Mono', 'Consolas', monospace"
+from ui.styles import (
+    C_ACCENT, C_BG, C_BORDER, C_CARD, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
+    C_SURFACE, C_TEXT, C_TEXT2, C_TEXT3,
+    apply_dark_layout,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
 TOPICS = [
@@ -50,9 +40,9 @@ TOPICS = [
 _TOPIC_COLOR = {
     "Freight Rates":    C_ACCENT,
     "Port Congestion":  C_MOD,
-    "Carrier Capacity": C_CYAN,
+    "Carrier Capacity": C_MACRO,
     "Geopolitics":      C_LOW,
-    "Fuel/Bunker":      C_PURPLE,
+    "Fuel/Bunker":      C_CONV,
     "Trade Policy":     "#c65102",
     "Vessel Finance":   "#0e8a7a",
     "Sustainability":   C_HIGH,
@@ -61,10 +51,10 @@ _TOPIC_COLOR = {
 
 _SOURCE_COLOR = {
     "Reuters":       C_ACCENT,
-    "Bloomberg":     "#b8860b",
+    "Bloomberg":     C_MOD,
     "Lloyd's List":  C_HIGH,
-    "TradeWinds":    C_CYAN,
-    "Splash247":     C_PURPLE,
+    "TradeWinds":    C_MACRO,
+    "Splash247":     C_CONV,
     "Hellenic Shipping News": "#c65102",
     "The Loadstar":  "#0e8a7a",
 }
@@ -288,30 +278,34 @@ def _sentiment_label(score: float) -> tuple[str, str]:
     return "NEUTRAL", C_TEXT3
 
 
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _score_chip(score: float) -> str:
+    color = C_HIGH if score >= 0.15 else (C_LOW if score <= -0.15 else C_TEXT3)
+    sign  = "+" if score > 0 else ""
+    return _mono(f"{sign}{score:.2f}", color=color, weight=700)
+
+
 def _topic_chip(topic: str) -> str:
     color = _TOPIC_COLOR.get(topic, C_ACCENT)
     return (
-        f'<span style="background:{color}15;color:{color};border:1px solid {color}33;'
+        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
         f'border-radius:3px;padding:1px 7px;font-size:10px;font-weight:600;'
-        f'font-family:{F_BODY};letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
+        f'font-family:var(--sans);letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
     )
 
-
-def _source_badge(source: str) -> str:
-    color = _SOURCE_COLOR.get(source, C_TEXT2)
-    return (
-        f'<span style="color:{color};font-size:10px;font-weight:700;'
-        f'font-family:{F_BODY};letter-spacing:0.8px;white-space:nowrap;">{source.upper()}</span>'
-    )
-
-
-def _score_pill(score: float) -> str:
-    color = C_HIGH if score >= 0.15 else (C_LOW if score <= -0.15 else C_TEXT3)
-    sign  = "+" if score > 0 else ""
-    return (
-        f'<code style="background:{color}15;color:{color};border-radius:3px;'
-        f'padding:2px 6px;font-size:11px;font-family:{F_MONO};">{sign}{score:.2f}</code>'
-    )
 
 # ── Section 1: Sentiment Pulse ─────────────────────────────────────────────────
 
@@ -331,28 +325,16 @@ def _render_sentiment_pulse(articles: list[dict]) -> None:
         score_color = C_HIGH if avg_score >= 0.15 else (C_LOW if avg_score <= -0.15 else C_MOD)
         sign = "+" if avg_score > 0 else ""
 
-        kpis = [
-            ("Overall Sentiment", f"{sign}{avg_score:.2f}", "Score  \u20131 \u2192 +1", score_color),
-            ("Bullish Articles",  f"{bull_pct:.0f}%",       f"{bullish_n} articles",  C_HIGH),
-            ("Bearish Articles",  f"{bear_pct:.0f}%",       f"{bearish_n} articles",  C_LOW),
-            ("News Volume",       f"{volume_24h}",           "articles last 24 h",     C_ACCENT),
-        ]
-
-        cols = st.columns(4, gap="small")
-        for col, (label, value, sub, color) in zip(cols, kpis):
-            with col:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-top:3px solid {color};border-radius:3px;padding:18px 20px;'
-                    f'text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
-                    f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;'
-                    f'font-family:{F_BODY};letter-spacing:1px;text-transform:uppercase;'
-                    f'margin-bottom:8px;">{label}</div>'
-                    f'<div style="color:{color};font-size:34px;font-weight:800;'
-                    f'line-height:1;font-family:{F_MONO};">{value}</div>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
-                    f'margin-top:6px;">{sub}</div>'
-                    f'</div>', unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "Overall Sentiment", "value": f"{sign}{avg_score:.2f}",
+             "accent": score_color, "sublabel": "Score  −1 → +1"},
+            {"label": "Bullish Articles", "value": f"{bull_pct:.0f}%",
+             "accent": C_HIGH, "sublabel": f"{bullish_n} articles"},
+            {"label": "Bearish Articles", "value": f"{bear_pct:.0f}%",
+             "accent": C_LOW, "sublabel": f"{bearish_n} articles"},
+            {"label": "News Volume", "value": f"{volume_24h}",
+             "accent": C_ACCENT, "sublabel": "articles last 24 h"},
+        ])
     except Exception as exc:
         st.warning(f"Sentiment pulse error: {exc}")
 
@@ -366,65 +348,39 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
             d = today - timedelta(days=i)
             day_labels.append(d.strftime("%a %-d"))
 
-        # bucket articles
         grid: dict[tuple[str, str], list[float]] = defaultdict(list)
         for a in articles:
             day_key = a["published_at"].date().strftime("%a %-d")
             if day_key in day_labels:
                 grid[(a["topic"], day_key)].append(a["sentiment_score"])
 
-        # header row
-        header_cells = "".join(
-            f'<th style="padding:6px 10px;text-align:center;color:{C_TEXT2};'
-            f'font-size:11px;font-weight:600;font-family:{F_BODY};letter-spacing:0.5px;'
-            f'border-bottom:1px solid {C_BORDER};">{d}</th>'
-            for d in day_labels
-        )
-        header = (
-            f'<tr><th style="padding:6px 12px;text-align:left;color:{C_TEXT3};'
-            f'font-size:11px;font-family:{F_BODY};">Topic</th>{header_cells}</tr>'
-        )
-
-        rows_html = ""
+        headers = ["Topic"] + day_labels
+        rows: list[list[str]] = []
         for topic in TOPICS:
             tc = _TOPIC_COLOR.get(topic, C_ACCENT)
-            topic_cell = (
-                f'<td style="padding:8px 12px;white-space:nowrap;">'
-                f'<span style="color:{tc};font-size:12px;font-weight:600;'
-                f'font-family:{F_BODY};">{topic}</span></td>'
-            )
-            day_cells = ""
+            topic_cell = _sans(topic, color=tc, weight=600)
+            row_cells = [topic_cell]
             for day in day_labels:
                 scores = grid.get((topic, day), [])
                 if scores:
                     avg  = sum(scores) / len(scores)
                     cnt  = len(scores)
-                    bg   = C_HIGH if avg >= 0.2 else (C_LOW if avg <= -0.2 else C_MOD)
+                    col  = C_HIGH if avg >= 0.2 else (C_LOW if avg <= -0.2 else C_MOD)
                     sign = "+" if avg > 0 else ""
-                    cell_inner = (
-                        f'<div style="font-size:11px;font-weight:700;color:{bg};'
-                        f'font-family:{F_MONO};">'
-                        f'{sign}{avg:.1f}</div>'
-                        f'<div style="font-size:9px;color:{C_TEXT3};font-family:{F_BODY};">{cnt}art</div>'
+                    cell = (
+                        f'<div style="text-align:center;">'
+                        f'{_mono(f"{sign}{avg:.1f}", color=col, weight=700)}'
+                        f'<div style="font-size:9px;color:{C_TEXT3};font-family:var(--sans);">'
+                        f'{cnt}art</div></div>'
                     )
-                    cell_bg = f"{bg}12"
                 else:
-                    cell_inner = f'<div style="color:{C_TEXT3};font-size:11px;">\u2014</div>'
-                    cell_bg    = "transparent"
-                day_cells += (
-                    f'<td style="padding:6px 8px;text-align:center;'
-                    f'background:{cell_bg};border-radius:3px;">{cell_inner}</td>'
-                )
-            rows_html += f"<tr>{topic_cell}{day_cells}</tr>"
-
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:20px;overflow-x:auto;'
-            f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
-            f'<table style="width:100%;border-collapse:separate;border-spacing:4px;">'
-            f'<thead>{header}</thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table></div>', unsafe_allow_html=True)
+                    cell = (
+                        f'<div style="text-align:center;color:{C_TEXT3};'
+                        f'font-size:11px;">\u2014</div>'
+                    )
+                row_cells.append(cell)
+            rows.append(row_cells)
+        wsj_market_table(headers, rows)
     except Exception as exc:
         st.warning(f"Heatmap error: {exc}")
 
@@ -447,35 +403,36 @@ def _render_breaking_news(articles: list[dict]) -> None:
             sign          = "+" if a["sentiment_score"] > 0 else ""
             score_str     = f"{sign}{a['sentiment_score']:.2f}"
 
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-left:4px solid {urg_color};border-radius:3px;'
-                f'padding:18px 22px;margin-bottom:12px;'
-                f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+                f'border-left:4px solid {urg_color};border-radius:6px;'
+                f'padding:18px 22px;margin-bottom:12px;">'
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
-                f'<span style="color:{sc};font-size:10px;font-weight:700;font-family:{F_BODY};'
+                f'<span style="color:{sc};font-size:10px;font-weight:700;font-family:var(--sans);'
                 f'letter-spacing:1px;">{a["source"].upper()}</span>'
-                f'<span style="background:{lcolor}15;color:{lcolor};border:1px solid {lcolor}33;'
+                f'<span style="background:{lcolor}22;color:{lcolor};border:1px solid {lcolor}44;'
                 f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:700;'
-                f'font-family:{F_BODY};">{label}</span>'
-                f'<span style="background:{tc}15;color:{tc};border:1px solid {tc}33;'
+                f'font-family:var(--sans);">{label}</span>'
+                f'<span style="background:{tc}22;color:{tc};border:1px solid {tc}44;'
                 f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:600;'
-                f'font-family:{F_BODY};">{a["topic"]}</span>'
+                f'font-family:var(--sans);">{a["topic"]}</span>'
                 f'<span style="margin-left:auto;color:{urg_color};font-size:10px;font-weight:700;'
-                f'font-family:{F_BODY};">URGENCY {urgency_pct}</span>'
+                f'font-family:var(--sans);">URGENCY {urgency_pct}</span>'
                 f'</div>'
-                f'<div style="color:{C_TEXT};font-size:17px;font-weight:700;line-height:1.4;'
-                f'font-family:{F_SERIF};margin-bottom:8px;">{a["headline"]}</div>'
-                f'<div style="color:{C_TEXT2};font-size:13px;font-family:{F_BODY};'
+                f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;line-height:1.4;'
+                f'font-family:var(--sans);margin-bottom:8px;">{a["headline"]}</div>'
+                f'<div style="color:{C_TEXT2};font-size:13px;font-family:var(--sans);'
                 f'line-height:1.7;margin-bottom:10px;">{a["summary"][:200]}\u2026</div>'
                 f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};">{ago}</span>'
-                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
-                f'padding:1px 6px;font-size:11px;font-family:{F_MONO};">{score_str}</code>'
+                f'<span style="color:{C_TEXT3};font-size:11px;font-family:var(--sans);">{ago}</span>'
+                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:3px;'
+                f'padding:1px 6px;font-size:11px;font-family:var(--mono);">{score_str}</code>'
                 f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:11px;'
-                f'font-family:{F_BODY};text-decoration:none;margin-left:auto;">Read full story \u2197</a>'
+                f'font-family:var(--sans);text-decoration:none;margin-left:auto;">'
+                f'Read full story \u2197</a>'
                 f'</div>'
-                f'</div>', unsafe_allow_html=True)
+                f'</div>'
+            )
     except Exception as exc:
         st.warning(f"Breaking news error: {exc}")
 
@@ -494,59 +451,36 @@ def _render_news_feed(articles: list[dict]) -> None:
             st.info("No articles match the filter.")
             return
 
-        # Column headers
-        st.markdown(
-            f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
-            f'gap:10px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
-            f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:0.8px;text-transform:uppercase;">'
-            f'<span>Source</span><span>Headline</span>'
-            f'<span style="text-align:center;">Score</span>'
-            f'<span>Topic</span><span style="text-align:right;">Time</span>'
-            f'</div>', unsafe_allow_html=True)
+        headers = ["Source", "Headline", "Score", "Topic", "Time"]
+        rows: list[list[str]] = []
+        for a in filtered:
+            sc   = _SOURCE_COLOR.get(a["source"], C_TEXT2)
+            ago  = _time_ago(a["published_at"])
+            hl_short = a["headline"][:90] + ("\u2026" if len(a["headline"]) > 90 else "")
+            rows.append([
+                _sans(a["source"], color=sc, weight=700),
+                _sans(hl_short, color=C_TEXT, weight=500),
+                _score_chip(a["sentiment_score"]),
+                _topic_chip(a["topic"]),
+                _sans(ago, color=C_TEXT3, weight=400),
+            ])
+        wsj_market_table(headers, rows)
 
-        for idx, a in enumerate(filtered):
-            label, lcolor = _sentiment_label(a["sentiment_score"])
-            sc    = _SOURCE_COLOR.get(a["source"], C_TEXT2)
-            tc    = _TOPIC_COLOR.get(a["topic"], C_ACCENT)
-            ago   = _time_ago(a["published_at"])
-            sign  = "+" if a["sentiment_score"] > 0 else ""
-            score_str = f"{sign}{a['sentiment_score']:.2f}"
-            hl_short  = a["headline"][:90] + ("\u2026" if len(a["headline"]) > 90 else "")
-
-            # Row — alternating warm tones
-            row_bg = C_CARD if idx % 2 == 0 else C_SURFACE
-            st.markdown(
-                f'<div style="display:grid;grid-template-columns:90px 1fr 70px 120px 60px;'
-                f'gap:10px;padding:10px 14px;background:{row_bg};'
-                f'border-radius:3px;align-items:center;margin-bottom:2px;">'
-                f'<span style="color:{sc};font-size:10px;font-weight:700;'
-                f'font-family:{F_BODY};letter-spacing:0.5px;">{a["source"]}</span>'
-                f'<span style="color:{C_TEXT};font-size:13px;font-family:{F_SERIF};"'
-                f' title="{a["headline"]}">{hl_short}</span>'
-                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
-                f'padding:1px 5px;font-size:11px;font-family:{F_MONO};'
-                f'text-align:center;">{score_str}</code>'
-                f'<span style="background:{tc}15;color:{tc};border-radius:3px;'
-                f'padding:1px 7px;font-size:10px;font-weight:600;'
-                f'font-family:{F_BODY};">{a["topic"]}</span>'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
-                f'text-align:right;">{ago}</span>'
-                f'</div>', unsafe_allow_html=True)
-
-            with st.expander(f"Summary \u2014 {a['headline'][:60]}\u2026", expanded=False):
+        # Expandable article summaries
+        for a in filtered:
+            with st.expander(f"{a['headline'][:70]}\u2026", expanded=False):
                 ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
-                st.markdown(
-                    f'<div style="background:{C_SURFACE};border-radius:3px;padding:14px 18px;">'
-                    f'<p style="color:{C_TEXT};font-size:13px;font-family:{F_BODY};'
-                    f'line-height:1.7;margin:0 0 12px 0;">'
-                    f'{a["summary"]}</p>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};">'
+                st.html(
+                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:14px 18px;">'
+                    f'<p style="color:{C_TEXT};font-size:13px;font-family:var(--sans);'
+                    f'line-height:1.7;margin:0 0 12px 0;">{a["summary"]}</p>'
+                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:var(--sans);">'
                     f'<strong style="color:{C_TEXT2};">Entities mentioned:</strong> {ent_str}</div>'
                     f'<div style="margin-top:10px;">'
                     f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;'
-                    f'font-family:{F_BODY};">Read full article \u2197</a>'
-                    f'</div></div>', unsafe_allow_html=True)
+                    f'font-family:var(--sans);">Read full article \u2197</a>'
+                    f'</div></div>'
+                )
     except Exception as exc:
         st.warning(f"News feed error: {exc}")
 
@@ -554,7 +488,6 @@ def _render_news_feed(articles: list[dict]) -> None:
 
 def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
     try:
-        # Augment with live entity counts if we have articles
         entity_counts: Counter = Counter()
         entity_sentiments: dict[str, list[float]] = defaultdict(list)
         for a in articles:
@@ -562,60 +495,36 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
                 entity_counts[ent] += 1
                 entity_sentiments[ent].append(a["sentiment_score"])
 
-        # Merge with _MOCK_ENTITIES
         seen = set()
-        rows = []
+        rows_data: list[tuple[str, str, int, float, str]] = []
         for e in entities:
             name = e["entity"]
             seen.add(name)
             mentions = entity_counts.get(name, e["mentions"])
             scores   = entity_sentiments.get(name, [e["sentiment"]])
             avg_sent = sum(scores) / len(scores) if scores else e["sentiment"]
-            trend    = e["trend"]
-            rows.append((name, e["type"], mentions, avg_sent, trend))
+            rows_data.append((name, e["type"], mentions, avg_sent, e["trend"]))
         for name, cnt in entity_counts.most_common(20):
             if name not in seen:
                 scores   = entity_sentiments[name]
                 avg_sent = sum(scores) / len(scores) if scores else 0.0
-                rows.append((name, "\u2014", cnt, avg_sent, "flat"))
+                rows_data.append((name, "\u2014", cnt, avg_sent, "flat"))
 
-        rows.sort(key=lambda r: r[2], reverse=True)
+        rows_data.sort(key=lambda r: r[2], reverse=True)
 
-        # Header
-        st.markdown(
-            f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
-            f'gap:8px;padding:6px 14px;border-bottom:2px solid {C_TEXT};'
-            f'color:{C_TEXT2};font-size:10px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:0.8px;text-transform:uppercase;">'
-            f'<span>Entity</span><span>Type</span>'
-            f'<span style="text-align:center;">Mentions</span>'
-            f'<span style="text-align:center;">Sentiment</span>'
-            f'<span style="text-align:center;">Trend</span>'
-            f'</div>', unsafe_allow_html=True)
-
-        for i, (name, etype, mentions, avg_sent, trend) in enumerate(rows[:15]):
-            label, lcolor = _sentiment_label(avg_sent)
-            sign          = "+" if avg_sent > 0 else ""
-            sent_str      = f"{sign}{avg_sent:.2f}"
-            trend_icon    = "\u25b2" if trend == "up" else ("\u25bc" if trend == "down" else "\u25cf")
-            trend_color   = C_HIGH if trend == "up" else (C_LOW if trend == "down" else C_TEXT3)
-            row_bg        = C_CARD if i % 2 == 0 else C_SURFACE
-
-            st.markdown(
-                f'<div style="display:grid;grid-template-columns:140px 100px 80px 90px 60px;'
-                f'gap:8px;padding:9px 14px;background:{row_bg};'
-                f'border-radius:3px;align-items:center;margin-bottom:2px;">'
-                f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                f'font-family:{F_SERIF};">{name}</span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;font-family:{F_BODY};">{etype}</span>'
-                f'<span style="color:{C_ACCENT};font-size:13px;font-weight:700;'
-                f'font-family:{F_MONO};text-align:center;display:block;">{mentions}</span>'
-                f'<code style="background:{lcolor}15;color:{lcolor};border-radius:3px;'
-                f'padding:1px 5px;font-size:11px;font-family:{F_MONO};'
-                f'display:block;text-align:center;">{sent_str}</code>'
-                f'<span style="color:{trend_color};font-size:14px;font-weight:700;'
-                f'text-align:center;display:block;">{trend_icon}</span>'
-                f'</div>', unsafe_allow_html=True)
+        headers = ["Entity", "Type", "Mentions", "Sentiment", "Trend"]
+        rows: list[list[str]] = []
+        for name, etype, mentions, avg_sent, trend in rows_data[:15]:
+            trend_icon  = "▲" if trend == "up" else ("▼" if trend == "down" else "●")
+            trend_color = C_HIGH if trend == "up" else (C_LOW if trend == "down" else C_TEXT3)
+            rows.append([
+                _sans(name),
+                _sans(etype, color=C_TEXT2, weight=500),
+                _mono(str(mentions), color=C_ACCENT, weight=700),
+                _score_chip(avg_sent),
+                _sans(trend_icon, color=trend_color, weight=700),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         st.warning(f"Entity tracker error: {exc}")
 
@@ -623,10 +532,8 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
 
 def _render_geo_map(articles: list[dict]) -> None:
     try:
-        # Prefer live data; fall back to mock
         geo = _GEO_DATA[:]
 
-        # Build regional sentiment from articles if possible
         region_scores: dict[str, list[float]] = defaultdict(list)
         region_vol: dict[str, int] = defaultdict(int)
         for a in articles:
@@ -647,7 +554,6 @@ def _render_geo_map(articles: list[dict]) -> None:
         vols   = [g["volume"]    for g in geo]
         labels = [g["region"]    for g in geo]
 
-        colors = [C_HIGH if s >= 0.15 else (C_LOW if s <= -0.15 else C_MOD) for s in sents]
         sizes  = [max(14, min(50, v // 2)) for v in vols]
         signs  = ["+" if s > 0 else "" for s in sents]
         texts  = [
@@ -671,41 +577,38 @@ def _render_geo_map(articles: list[dict]) -> None:
                     thickness=12,
                     len=0.6,
                     tickfont=dict(color=C_TEXT2, size=10),
-                    titlefont=dict(color=C_TEXT2, size=11),
                 ),
                 line=dict(width=1, color=C_BORDER),
                 opacity=0.88,
             ),
-            text=[l[:12] for l in labels],
+            text=[lbl[:12] for lbl in labels],
             textposition="top center",
             textfont=dict(color=C_TEXT2, size=9),
             hovertemplate="%{customdata}<extra></extra>",
             customdata=texts,
         ))
 
-        fig.update_layout(
+        apply_dark_layout(
+            fig,
+            height=400,
+            margin=dict(l=0, r=0, t=10, b=0),
             geo=dict(
                 showframe=False,
                 showcoastlines=True,
-                coastlinecolor="#cccccc",
+                coastlinecolor="rgba(255,255,255,0.14)",
                 showland=True,
-                landcolor=C_SURFACE,
+                landcolor=C_CARD,
                 showocean=True,
-                oceancolor="#e8e6e1",
+                oceancolor=C_BG,
                 showlakes=False,
                 showcountries=True,
-                countrycolor="#cccccc",
+                countrycolor="rgba(255,255,255,0.08)",
                 bgcolor=C_BG,
                 projection_type="natural earth",
             ),
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            font=dict(color=C_TEXT2, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
-            margin=dict(l=0, r=0, t=10, b=0),
-            height=400,
         )
-
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, use_container_width=True,
+                         config={"displayModeBar": False}, key="news_geo_map")
     except Exception as exc:
         st.warning(f"Geo map error: {exc}")
 
@@ -714,7 +617,6 @@ def _render_geo_map(articles: list[dict]) -> None:
 def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
     """Render the Shipping News Intelligence tab."""
 
-    # ── Normalise & fallback ──────────────────────────────────────────────────
     try:
         raw = news_items if news_items else []
         articles = _normalise(raw)
@@ -727,109 +629,59 @@ def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
         articles   = _normalise(_MOCK_ARTICLES)
         using_mock = True
 
-    # ── Page header ───────────────────────────────────────────────────────────
     try:
         updated = max((a["published_at"] for a in articles), default=_now())
-        updated_str = updated.strftime("%d %b %Y %H:%M UTC")
-        mock_badge = (
-            f'<span style="background:{C_MOD}18;color:{C_MOD};border:1px solid {C_MOD}33;'
-            f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:700;'
-            f'font-family:{F_BODY};margin-left:10px;">DEMO DATA</span>'
-            if using_mock else ""
+        page_header(
+            title="Shipping News Intelligence",
+            subtitle="Sentiment, topics, and entity flow across 20+ shipping articles",
+            icon="📰",
+            badge_text="Demo Data" if using_mock else "Live Feed",
+            badge_color=C_MOD if using_mock else C_HIGH,
         )
         st.markdown(
-            f'<div style="display:flex;align-items:baseline;gap:12px;'
-            f'margin-bottom:22px;flex-wrap:wrap;border-bottom:3px double {C_TEXT};'
-            f'padding-bottom:12px;">'
-            f'<h2 style="color:{C_TEXT};font-size:24px;font-weight:700;margin:0;'
-            f'font-family:{F_SERIF};letter-spacing:-0.3px;">Shipping News Intelligence</h2>'
-            f'{mock_badge}'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-family:{F_BODY};'
-            f'margin-left:auto;">Last updated {updated_str}</span>'
-            f'</div>', unsafe_allow_html=True)
+            live_data_badge(
+                source="NewsAPI + Reuters RSS (stub)",
+                as_of=updated,
+                quality="demo" if using_mock else "good",
+                kind="demo" if using_mock else "scraped",
+                notes="Entity feed is a Track B stub — replace with engine.news_sentiment when live",
+            ),
+            unsafe_allow_html=True,
+        )
     except Exception:
         st.subheader("Shipping News Intelligence")
 
-    # ── 1. Sentiment Pulse ────────────────────────────────────────────────────
+    section_header("01 · Sentiment Pulse",
+                   "Tone across the last 24 hours of coverage")
+    _render_sentiment_pulse(articles)
+
+    section_header("02 · Topic Heatmap",
+                   "9 topics × 5 days — sentiment and volume")
+    _render_topic_heatmap(articles)
+
+    section_header("03 · Breaking News",
+                   "Top 5 urgent stories sorted by importance")
+    _render_breaking_news(articles)
+
+    section_header("04 · Full News Feed", "Filterable by topic")
+    _render_news_feed(articles)
+
+    section_header("05 · Named Entity Tracker",
+                   "Most-mentioned carriers, ports, regions, commodities")
+    _render_entity_tracker(articles, _MOCK_ENTITIES)
+
+    section_header("06 · Geographic Sentiment Map",
+                   "Regional tone and volume, ocean-basin view")
+    _render_geo_map(articles)
+
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">01</span>&nbsp;&nbsp;Sentiment Pulse</div>', unsafe_allow_html=True)
-        _render_sentiment_pulse(articles)
-    except Exception as exc:
-        st.warning(f"Section 1 error: {exc}")
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # ── 2. Topic Heatmap ──────────────────────────────────────────────────────
-    try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">02</span>&nbsp;&nbsp;Topic Heatmap \u2014 '
-            f'9 Topics \u00d7 5 Days</div>', unsafe_allow_html=True)
-        _render_topic_heatmap(articles)
-    except Exception as exc:
-        st.warning(f"Section 2 error: {exc}")
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # ── 3. Breaking News ──────────────────────────────────────────────────────
-    try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_LOW};">03</span>&nbsp;&nbsp;Breaking News \u2014 Top 5 Urgent</div>', unsafe_allow_html=True)
-        _render_breaking_news(articles)
-    except Exception as exc:
-        st.warning(f"Section 3 error: {exc}")
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # ── 4. Full News Feed ─────────────────────────────────────────────────────
-    try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">04</span>&nbsp;&nbsp;Full News Feed</div>', unsafe_allow_html=True)
-        _render_news_feed(articles)
-    except Exception as exc:
-        st.warning(f"Section 4 error: {exc}")
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # ── 5. Named Entity Tracker ───────────────────────────────────────────────
-    try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">05</span>&nbsp;&nbsp;Named Entity Tracker</div>', unsafe_allow_html=True)
-        _render_entity_tracker(articles, _MOCK_ENTITIES)
-    except Exception as exc:
-        st.warning(f"Section 5 error: {exc}")
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # ── 6. Geographic Sentiment Map ───────────────────────────────────────────
-    try:
-        st.markdown(
-            f'<div style="color:{C_TEXT2};font-size:11px;font-weight:700;font-family:{F_BODY};'
-            f'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;padding-left:2px;">'
-            f'<span style="color:{C_ACCENT};">06</span>&nbsp;&nbsp;Geographic Sentiment Map</div>', unsafe_allow_html=True)
-        _render_geo_map(articles)
-    except Exception as exc:
-        st.warning(f"Section 6 error: {exc}")
-
-    # ── Footer ────────────────────────────────────────────────────────────────
-    try:
-        st.markdown(
+        st.html(
             f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;'
-            f'font-family:{F_BODY};margin-top:32px;padding-top:16px;'
+            f'font-family:var(--sans);margin-top:32px;padding-top:16px;'
             f'border-top:1px solid {C_BORDER};">'
-            f'Shipping News Intelligence &nbsp;|&nbsp; '
-            f'{len(articles)} articles indexed &nbsp;|&nbsp; '
+            f'Shipping News Intelligence · {len(articles)} articles indexed · '
             f'Sentiment scored by NLP pipeline'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
     except Exception:
         pass

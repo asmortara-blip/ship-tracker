@@ -3,7 +3,7 @@
 Sections
 --------
 1. Port Intelligence Header    — KPI cards: monitored, critical, elevated, normal, global TEU
-2. Top 20 Ports Global Rankings — Full HTML table with all key metrics
+2. Top 20 Ports Global Rankings — wsj_market_table with all key metrics
 3. Port Efficiency Benchmarks   — Crane moves/hour bar chart
 4. Port Status Map              — Scatter geo sized by throughput, colored by congestion
 5. Regional Port Dashboard      — st.tabs by region
@@ -12,27 +12,31 @@ Sections
 """
 from __future__ import annotations
 
-import random as _rand
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Color palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
 # ── Master port dataset ───────────────────────────────────────────────────────
 TOP_PORTS = [
@@ -56,7 +60,6 @@ TOP_PORTS = [
     {"rank": 18, "port": "New York",          "country": "USA",         "region": "Americas",         "lat": 40.66,  "lon": -74.04, "teu_m": 9.0,  "growth": 1.6,  "calls_day": 52,  "berths": 35,  "max_vessel": 18000, "crane_moves": 20, "dwell": 4.8, "status": "ELEVATED"},
     {"rank": 19, "port": "Colombo",           "country": "Sri Lanka",   "region": "Asia-Pacific",     "lat": 6.93,   "lon": 79.85,  "teu_m": 7.0,  "growth": 8.4,  "calls_day": 48,  "berths": 32,  "max_vessel": 20000, "crane_moves": 23, "dwell": 2.1, "status": "NORMAL"},
     {"rank": 20, "port": "Felixstowe",        "country": "UK",          "region": "Europe",           "lat": 51.96,  "lon": 1.35,   "teu_m": 4.0,  "growth": -1.8, "calls_day": 35,  "berths": 22,  "max_vessel": 20000, "crane_moves": 23, "dwell": 3.2, "status": "NORMAL"},
-    # Additional ports for regional tabs
     {"rank": 21, "port": "Kaohsiung",         "country": "Taiwan",      "region": "Asia-Pacific",     "lat": 22.62,  "lon": 120.28, "teu_m": 9.8,  "growth": 1.4,  "calls_day": 62,  "berths": 44,  "max_vessel": 20000, "crane_moves": 26, "dwell": 2.3, "status": "NORMAL"},
     {"rank": 22, "port": "Valencia",          "country": "Spain",       "region": "Europe",           "lat": 39.44,  "lon": -0.33,  "teu_m": 5.8,  "growth": 3.9,  "calls_day": 40,  "berths": 28,  "max_vessel": 20000, "crane_moves": 22, "dwell": 2.9, "status": "NORMAL"},
     {"rank": 23, "port": "Santos",            "country": "Brazil",      "region": "Americas",         "lat": -23.95, "lon": -46.33, "teu_m": 4.9,  "growth": 4.6,  "calls_day": 38,  "berths": 26,  "max_vessel": 14000, "crane_moves": 19, "dwell": 5.1, "status": "ELEVATED"},
@@ -90,52 +93,56 @@ LANE_RATES = [
     {"lane": "Port Klang → Rotterdam",   "from_port": "Port Klang", "to_port": "Rotterdam",  "spot_rate": 3300, "transit_days": 21, "weekly_svcs": 7,  "cap_teu": 90000},
 ]
 
-STATUS_COLOR = {"NORMAL": C_HIGH, "ELEVATED": C_MOD, "CRITICAL": C_LOW}
-STATUS_BADGE = {
-    "NORMAL":   f'<span style="background:{C_HIGH}20;color:{C_HIGH};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">NORMAL</span>',
-    "ELEVATED": f'<span style="background:{C_MOD}20;color:{C_MOD};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">ELEVATED</span>',
-    "CRITICAL": f'<span style="background:{C_LOW}20;color:{C_LOW};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">CRITICAL</span>',
+_STATUS_COLOR = {"NORMAL": C_HIGH, "ELEVATED": C_MOD, "CRITICAL": C_LOW}
+_STATUS_BADGE = {"NORMAL": "green", "ELEVATED": "yellow", "CRITICAL": "red"}
+
+_EVENT_COLOR = {
+    "Labor Strike":      C_LOW,
+    "Terminal Upgrade":  C_ACCENT,
+    "Berth Maintenance": C_MOD,
+    "Infrastructure":    C_LOW,
+    "Dredging Works":    C_MOD,
+    "New Berth Opening": C_HIGH,
+    "Terminal Expansion":C_HIGH,
+    "Tuas Phase 3":      C_HIGH,
+    "Weather Delay":     C_MOD,
+    "IT System Upgrade": C_TEXT3,
+}
+_EVENT_ICON = {
+    "Labor Strike":      "🚫",
+    "Terminal Upgrade":  "🔧",
+    "Berth Maintenance": "⚙️",
+    "Infrastructure":    "🏗️",
+    "Dredging Works":    "⛏️",
+    "New Berth Opening": "✅",
+    "Terminal Expansion":"✅",
+    "Tuas Phase 3":      "✅",
+    "Weather Delay":     "⚠️",
+    "IT System Upgrade": "💻",
 }
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# ── Cell formatters ──────────────────────────────────────────────────────────
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">{value}</span>'
+
 
 def _growth_cell(v: float) -> str:
     color = C_HIGH if v >= 0 else C_LOW
     arrow = "▲" if v >= 0 else "▼"
-    return f'<span style="color:{color};font-weight:600;">{arrow} {abs(v):.1f}%</span>'
+    return _mono(f"{arrow} {abs(v):.1f}%", color=color, weight=600)
 
 
-def _kpi_card(label: str, value: str, sub: str, color: str) -> str:
+def _rank_cell(rank: int) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:20px 24px;border-top:3px solid {color};">'
-        f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">{label}</div>'
-        f'<div style="color:{color};font-size:32px;font-weight:800;line-height:1;">{value}</div>'
-        f'<div style="color:{C_TEXT2};font-size:12px;margin-top:6px;">{sub}</div>'
-        f'</div>'
-    )
-
-
-def _section_header(title: str, subtitle: str = "") -> str:
-    sub_html = f'<div style="color:{C_TEXT2};font-size:13px;margin-top:4px;">{subtitle}</div>' if subtitle else ""
-    return (
-        f'<div style="margin:32px 0 16px 0;">'
-        f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;letter-spacing:-0.3px;">{title}</div>'
-        f'{sub_html}'
-        f'<div style="height:2px;background:linear-gradient(90deg,{C_ACCENT},transparent);margin-top:10px;border-radius:2px;"></div>'
-        f'</div>'
-    )
-
-
-def _dark_table_style() -> str:
-    return (
-        "<style>"
-        "table.portmon{width:100%;border-collapse:collapse;font-size:13px;}"
-        "table.portmon th{background:#0d1525;color:#6b6760;font-size:10px;font-weight:700;"
-        "letter-spacing:1px;text-transform:uppercase;padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.06);text-align:left;}"
-        "table.portmon td{padding:9px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:#e8e6e1;vertical-align:middle;}"
-        "table.portmon tr:hover td{background:rgba(53,114,176,0.06);}"
-        "</style>"
+        f'<span style="background:{C_ACCENT};color:#fff;border-radius:50%;'
+        f'width:24px;height:24px;display:inline-flex;align-items:center;'
+        f'justify-content:center;font-size:11px;font-weight:700;">{rank}</span>'
     )
 
 
@@ -148,22 +155,26 @@ def _render_kpi_header(ports: list[dict]) -> None:
         elevated = sum(1 for p in ports if p["status"] == "ELEVATED")
         normal   = sum(1 for p in ports if p["status"] == "NORMAL")
         global_teu = sum(p["teu_m"] for p in ports)
+        now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
-        st.markdown(_section_header(
-            "Port Operations Intelligence",
-            f"Real-time monitoring across {total} major global ports · Updated {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
-        ), unsafe_allow_html=True)
+        page_header(
+            title="Port Operations Intelligence",
+            subtitle=f"Real-time monitoring across {total} major global ports · Updated {now_str}",
+            icon="⚓",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        cols = st.columns(5)
-        cards = [
-            ("Ports Monitored",       str(total),      "global coverage",         C_ACCENT),
-            ("Critical Congestion",   str(critical),   "immediate action needed", C_LOW),
-            ("Elevated Status",       str(elevated),   "monitoring closely",      C_MOD),
-            ("Normal Operations",     str(normal),     "within parameters",       C_HIGH),
-            ("Global Throughput",     f"{global_teu:.0f}M", "TEU annual capacity",C_TEXT2),
-        ]
-        for col, (label, val, sub, color) in zip(cols, cards):
-            col.html(_kpi_card(label, val, sub, color))
+        metric_card_row(
+            [
+                {"label": "Ports Monitored",     "value": str(total),           "accent": C_ACCENT, "sublabel": "global coverage"},
+                {"label": "Critical Congestion", "value": str(critical),        "accent": C_LOW,    "sublabel": "immediate action needed"},
+                {"label": "Elevated Status",     "value": str(elevated),        "accent": C_MOD,    "sublabel": "monitoring closely"},
+                {"label": "Normal Operations",   "value": str(normal),          "accent": C_HIGH,   "sublabel": "within parameters"},
+                {"label": "Global Throughput",   "value": f"{global_teu:.0f}M", "accent": C_TEXT2,  "sublabel": "TEU annual capacity"},
+            ],
+            columns=5,
+        )
     except Exception:
         logger.exception("KPI header render failed")
         st.error("KPI header unavailable")
@@ -173,51 +184,35 @@ def _render_kpi_header(ports: list[dict]) -> None:
 
 def _render_rankings_table(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Top 20 Ports — Global Rankings",
-            "Annual throughput, efficiency metrics, and operational status"
-        ), unsafe_allow_html=True)
+            "Annual throughput, efficiency metrics, and operational status",
+        )
 
         headers = [
             "Rank", "Port", "Country", "TEU M/yr", "Growth",
             "Calls/Day", "Berths", "Max Vessel", "Crane Mvs/hr", "Dwell Days", "Status"
         ]
-        header_row = "".join(f"<th>{h}</th>" for h in headers)
-
-        rows_html = ""
+        rows = []
         for p in sorted(ports, key=lambda x: x["rank"]):
             if p["rank"] > 20:
                 continue
-            rank_badge = (
-                f'<span style="background:{C_ACCENT};color:#fff;border-radius:50%;'
-                f'width:24px;height:24px;display:inline-flex;align-items:center;'
-                f'justify-content:center;font-size:11px;font-weight:700;">{p["rank"]}</span>'
-            )
             dwell_color = C_LOW if p["dwell"] > 4 else (C_MOD if p["dwell"] > 3 else C_HIGH)
             crane_color = C_HIGH if p["crane_moves"] >= 30 else (C_MOD if p["crane_moves"] >= 24 else C_LOW)
-            rows_html += (
-                f'<tr>'
-                f'<td style="text-align:center;">{rank_badge}</td>'
-                f'<td style="font-weight:600;color:{C_TEXT};">{p["port"]}</td>'
-                f'<td style="color:{C_TEXT2};">{p["country"]}</td>'
-                f'<td style="font-weight:700;color:{C_ACCENT};">{p["teu_m"]:.0f}M</td>'
-                f'<td>{_growth_cell(p["growth"])}</td>'
-                f'<td style="color:{C_TEXT2};">{p["calls_day"]}</td>'
-                f'<td style="color:{C_TEXT2};">{p["berths"]}</td>'
-                f'<td style="color:{C_TEXT2};">{p["max_vessel"]:,}</td>'
-                f'<td style="color:{crane_color};font-weight:600;">{p["crane_moves"]}</td>'
-                f'<td style="color:{dwell_color};font-weight:600;">{p["dwell"]:.1f}</td>'
-                f'<td>{STATUS_BADGE[p["status"]]}</td>'
-                f'</tr>'
-            )
-
-        html = (
-            _dark_table_style()
-            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;padding:0;">'
-            + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
-            + '</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
+            rows.append([
+                _rank_cell(p["rank"]),
+                _sans(p["port"], weight=600),
+                _sans(p["country"], color=C_TEXT2),
+                _mono(f"{p['teu_m']:.0f}M", color=C_ACCENT, weight=700),
+                _growth_cell(p["growth"]),
+                _mono(str(p["calls_day"]), color=C_TEXT2),
+                _mono(str(p["berths"]), color=C_TEXT2),
+                _mono(f"{p['max_vessel']:,}", color=C_TEXT2),
+                _mono(str(p["crane_moves"]), color=crane_color, weight=600),
+                _mono(f"{p['dwell']:.1f}", color=dwell_color, weight=600),
+                badge(p["status"], _STATUS_BADGE[p["status"]]),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Rankings table render failed")
         st.error("Rankings table unavailable")
@@ -227,10 +222,10 @@ def _render_rankings_table(ports: list[dict]) -> None:
 
 def _render_efficiency_chart(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Port Efficiency Benchmarks",
-            "Crane moves per hour — world leaders vs. laggards"
-        ), unsafe_allow_html=True)
+            "Crane moves per hour — world leaders vs. laggards",
+        )
 
         data = sorted([p for p in ports if p["rank"] <= 20], key=lambda x: x["crane_moves"], reverse=True)
         names  = [p["port"] for p in data]
@@ -246,17 +241,18 @@ def _render_efficiency_chart(ports: list[dict]) -> None:
             textfont=dict(color=C_TEXT, size=11),
         ))
         world_avg = sum(moves) / len(moves)
-        fig.add_hline(y=world_avg, line_dash="dot", line_color=C_TEXT3, line_width=1.5,
-                      annotation_text=f"Avg {world_avg:.1f}", annotation_font_color=C_TEXT3,
-                      annotation_position="top right")
-        fig.update_layout(
-            plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
-            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
-            xaxis=dict(showgrid=False, tickfont=dict(size=11), tickangle=-30),
-            yaxis=dict(showgrid=True, gridcolor=C_BORDER, title="Crane Moves / Hour", range=[0, max(moves) + 5]),
-            margin=dict(l=20, r=20, t=20, b=60),
+        fig.add_hline(
+            y=world_avg, line_dash="dot", line_color=C_TEXT3, line_width=1.5,
+            annotation_text=f"Avg {world_avg:.1f}", annotation_font_color=C_TEXT3,
+            annotation_position="top right",
+        )
+        apply_dark_layout(
+            fig,
             height=350,
             showlegend=False,
+            margin=dict(l=20, r=20, t=20, b=60),
+            xaxis=dict(showgrid=False, tickfont=dict(size=11), tickangle=-30),
+            yaxis=dict(title="Crane Moves / Hour", range=[0, max(moves) + 5]),
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception:
@@ -268,10 +264,10 @@ def _render_efficiency_chart(ports: list[dict]) -> None:
 
 def _render_port_map(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Global Port Status Map",
-            "Bubble size = annual throughput · Color = congestion status"
-        ), unsafe_allow_html=True)
+            "Bubble size = annual throughput · Color = congestion status",
+        )
 
         traces = []
         for status in ["NORMAL", "ELEVATED", "CRITICAL"]:
@@ -285,7 +281,7 @@ def _render_port_map(ports: list[dict]) -> None:
                 name=status,
                 marker=dict(
                     size=[max(8, p["teu_m"] * 0.9) for p in subset],
-                    color=STATUS_COLOR[status],
+                    color=_STATUS_COLOR[status],
                     opacity=0.85,
                     line=dict(color="#ffffff", width=0.8),
                 ),
@@ -301,20 +297,18 @@ def _render_port_map(ports: list[dict]) -> None:
             ))
 
         fig = go.Figure(traces)
-        fig.update_layout(
+        apply_dark_layout(
+            fig,
+            height=480,
+            margin=dict(l=0, r=0, t=0, b=0),
             geo=dict(
                 bgcolor=C_BG,
-                showland=True, landcolor="#181c28",
+                showland=True, landcolor=C_CARD,
                 showocean=True, oceancolor=C_BG,
                 showcoastlines=True, coastlinecolor="rgba(255,255,255,0.12)",
                 showframe=False,
                 projection_type="natural earth",
             ),
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            font=dict(color=C_TEXT),
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=480,
             legend=dict(
                 orientation="h", yanchor="bottom", y=0.02, xanchor="right", x=1,
                 bgcolor="rgba(17,24,39,0.8)", bordercolor=C_BORDER, borderwidth=1,
@@ -329,72 +323,49 @@ def _render_port_map(ports: list[dict]) -> None:
 
 # ── Section 5: Regional Port Dashboard ───────────────────────────────────────
 
-def _regional_table(region_ports: list[dict]) -> str:
+def _render_regional_table(region_ports: list[dict]) -> None:
     headers = ["Port", "Country", "TEU M/yr", "Growth", "Berths", "Crane Mvs/hr", "Dwell", "Status"]
-    header_row = "".join(f"<th>{h}</th>" for h in headers)
-    rows_html = ""
+    rows = []
     for p in sorted(region_ports, key=lambda x: x["teu_m"], reverse=True):
         dwell_color = C_LOW if p["dwell"] > 4 else (C_MOD if p["dwell"] > 3 else C_HIGH)
-        rows_html += (
-            f'<tr>'
-            f'<td style="font-weight:600;">{p["port"]}</td>'
-            f'<td style="color:{C_TEXT2};">{p["country"]}</td>'
-            f'<td style="color:{C_ACCENT};font-weight:700;">{p["teu_m"]:.0f}M</td>'
-            f'<td>{_growth_cell(p["growth"])}</td>'
-            f'<td style="color:{C_TEXT2};">{p["berths"]}</td>'
-            f'<td style="color:{C_HIGH};font-weight:600;">{p["crane_moves"]}</td>'
-            f'<td style="color:{dwell_color};">{p["dwell"]:.1f} d</td>'
-            f'<td>{STATUS_BADGE[p["status"]]}</td>'
-            f'</tr>'
-        )
-    return (
-        _dark_table_style()
-        + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-        + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
-        + '</div>'
-    )
+        rows.append([
+            _sans(p["port"], weight=600),
+            _sans(p["country"], color=C_TEXT2),
+            _mono(f"{p['teu_m']:.0f}M", color=C_ACCENT, weight=700),
+            _growth_cell(p["growth"]),
+            _mono(str(p["berths"]), color=C_TEXT2),
+            _mono(str(p["crane_moves"]), color=C_HIGH, weight=600),
+            _mono(f"{p['dwell']:.1f} d", color=dwell_color),
+            badge(p["status"], _STATUS_BADGE[p["status"]]),
+        ])
+    wsj_market_table(headers, rows)
 
 
-def _regional_highlight(region: str, region_ports: list[dict]) -> str:
+def _render_regional_highlight(region_ports: list[dict]) -> None:
     if not region_ports:
-        return ""
+        return
     top = max(region_ports, key=lambda x: x["teu_m"])
     fastest = max(region_ports, key=lambda x: x["crane_moves"])
     total_teu = sum(p["teu_m"] for p in region_ports)
     critical_count = sum(1 for p in region_ports if p["status"] == "CRITICAL")
     crit_color = C_LOW if critical_count > 0 else C_HIGH
-    return (
-        f'<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">'
-        f'<div style="flex:1;min-width:140px;background:{C_BG};border:1px solid {C_BORDER};border-radius:8px;padding:14px;">'
-        f'<div style="color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Largest Port</div>'
-        f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;margin-top:4px;">{top["port"]}</div>'
-        f'<div style="color:{C_ACCENT};font-size:13px;">{top["teu_m"]:.0f}M TEU/yr</div>'
-        f'</div>'
-        f'<div style="flex:1;min-width:140px;background:{C_BG};border:1px solid {C_BORDER};border-radius:8px;padding:14px;">'
-        f'<div style="color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Most Efficient</div>'
-        f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;margin-top:4px;">{fastest["port"]}</div>'
-        f'<div style="color:{C_HIGH};font-size:13px;">{fastest["crane_moves"]} crane mvs/hr</div>'
-        f'</div>'
-        f'<div style="flex:1;min-width:140px;background:{C_BG};border:1px solid {C_BORDER};border-radius:8px;padding:14px;">'
-        f'<div style="color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Regional TEU</div>'
-        f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;margin-top:4px;">{total_teu:.0f}M</div>'
-        f'<div style="color:{C_TEXT2};font-size:13px;">{len(region_ports)} ports</div>'
-        f'</div>'
-        f'<div style="flex:1;min-width:140px;background:{C_BG};border:1px solid {C_BORDER};border-radius:8px;padding:14px;">'
-        f'<div style="color:{C_TEXT3};font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Critical Ports</div>'
-        f'<div style="color:{crit_color};font-size:24px;font-weight:800;margin-top:4px;">{critical_count}</div>'
-        f'<div style="color:{C_TEXT2};font-size:13px;">require attention</div>'
-        f'</div>'
-        f'</div>'
+    metric_card_row(
+        [
+            {"label": "Largest Port",    "value": top["port"],                 "accent": C_ACCENT, "sublabel": f"{top['teu_m']:.0f}M TEU/yr"},
+            {"label": "Most Efficient",  "value": fastest["port"],             "accent": C_HIGH,   "sublabel": f"{fastest['crane_moves']} crane mvs/hr"},
+            {"label": "Regional TEU",    "value": f"{total_teu:.0f}M",         "accent": C_TEXT,   "sublabel": f"{len(region_ports)} ports"},
+            {"label": "Critical Ports",  "value": str(critical_count),         "accent": crit_color, "sublabel": "require attention"},
+        ],
+        columns=4,
     )
 
 
 def _render_regional_dashboard(ports: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Regional Port Dashboard",
-            "Performance breakdown by geographic region"
-        ), unsafe_allow_html=True)
+            "Performance breakdown by geographic region",
+        )
 
         regions = ["Asia-Pacific", "Europe", "Americas", "Middle East/Africa"]
         tabs = st.tabs(regions)
@@ -405,8 +376,8 @@ def _render_regional_dashboard(ports: list[dict]) -> None:
                     if not region_ports:
                         st.info(f"No ports data for {region}")
                         continue
-                    st.markdown(_regional_highlight(region, region_ports), unsafe_allow_html=True)
-                    st.markdown(_regional_table(region_ports), unsafe_allow_html=True)
+                    _render_regional_highlight(region_ports)
+                    _render_regional_table(region_ports)
                 except Exception:
                     logger.exception(f"Regional tab render failed: {region}")
                     st.error(f"{region} data unavailable")
@@ -419,58 +390,25 @@ def _render_regional_dashboard(ports: list[dict]) -> None:
 
 def _render_events_feed(events: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Port Events Feed",
-            "Upcoming events affecting port operations — strikes, maintenance, expansions"
-        ), unsafe_allow_html=True)
-
-        EVENT_COLOR = {
-            "Labor Strike":      C_LOW,
-            "Terminal Upgrade":  C_ACCENT,
-            "Berth Maintenance": C_MOD,
-            "Infrastructure":    C_LOW,
-            "Dredging Works":    C_MOD,
-            "New Berth Opening": C_HIGH,
-            "Terminal Expansion":C_HIGH,
-            "Weather Delay":     C_MOD,
-            "IT System Upgrade": C_TEXT3,
-        }
-        EVENT_ICON = {
-            "Labor Strike":      "🚫",
-            "Terminal Upgrade":  "🔧",
-            "Berth Maintenance": "⚙️",
-            "Infrastructure":    "🏗️",
-            "Dredging Works":    "⛏️",
-            "New Berth Opening": "✅",
-            "Terminal Expansion":"✅",
-            "Weather Delay":     "⚠️",
-            "IT System Upgrade": "💻",
-        }
+            "Upcoming events affecting port operations — strikes, maintenance, expansions",
+        )
 
         headers = ["Port", "Event Type", "Date", "Duration", "Capacity Impact"]
-        header_row = "".join(f"<th>{h}</th>" for h in headers)
-        rows_html = ""
+        rows = []
         for e in events:
-            ev_color = EVENT_COLOR.get(e["type"], C_TEXT2)
-            icon = EVENT_ICON.get(e["type"], "•")
+            ev_color = _EVENT_COLOR.get(e["type"], C_TEXT2)
+            icon = _EVENT_ICON.get(e["type"], "•")
             impact_color = C_LOW if "-" in e["impact"] else C_HIGH
-            rows_html += (
-                f'<tr>'
-                f'<td style="font-weight:600;">{e["port"]}</td>'
-                f'<td><span style="color:{ev_color};font-weight:600;">{icon} {e["type"]}</span></td>'
-                f'<td style="color:{C_TEXT2};">{e["date"]}</td>'
-                f'<td style="color:{C_TEXT2};">{e["duration"]}</td>'
-                f'<td style="color:{impact_color};font-weight:600;">{e["impact"]}</td>'
-                f'</tr>'
-            )
-
-        html = (
-            _dark_table_style()
-            + f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            + f'<table class="portmon"><thead><tr>{header_row}</tr></thead><tbody>{rows_html}</tbody></table>'
-            + '</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
+            rows.append([
+                _sans(e["port"], weight=600),
+                _sans(f"{icon} {e['type']}", color=ev_color, weight=600),
+                _mono(e["date"], color=C_TEXT2),
+                _sans(e["duration"], color=C_TEXT2),
+                _sans(e["impact"], color=impact_color, weight=600),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Events feed render failed")
         st.error("Events feed unavailable")
@@ -480,16 +418,16 @@ def _render_events_feed(events: list[dict]) -> None:
 
 def _render_rate_cards(lanes: list[dict]) -> None:
     try:
-        st.markdown(_section_header(
+        section_header(
             "Port-to-Port Rate Cards",
-            "Top 10 trade lanes — spot rates, transit times, weekly services"
-        ), unsafe_allow_html=True)
+            "Top 10 trade lanes — spot rates, transit times, weekly services",
+        )
 
-        cards_html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;">'
+        card_blocks = []
         for lane in lanes:
             rate = lane["spot_rate"]
             rate_color = C_LOW if rate > 4000 else (C_MOD if rate > 2500 else C_HIGH)
-            cards_html += (
+            card_blocks.append(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px;">'
                 f'<div style="font-weight:700;font-size:14px;color:{C_TEXT};margin-bottom:12px;">'
                 f'{lane["from_port"]} <span style="color:{C_TEXT3};">→</span> {lane["to_port"]}'
@@ -509,8 +447,12 @@ def _render_rate_cards(lanes: list[dict]) -> None:
                 f'</div>'
                 f'</div>'
             )
-        cards_html += '</div>'
-        st.markdown(cards_html, unsafe_allow_html=True)
+        grid_html = (
+            '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;">'
+            + "".join(card_blocks)
+            + "</div>"
+        )
+        st.html(grid_html)
     except Exception:
         logger.exception("Rate cards render failed")
         st.error("Rate cards unavailable")
@@ -523,7 +465,6 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None
     try:
         logger.info("Rendering port monitor tab")
 
-        # Merge live port_results into mock data where available
         ports = list(TOP_PORTS)
         if port_results:
             try:
@@ -549,7 +490,7 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None
         _render_kpi_header(ports)
         _render_rankings_table(ports)
 
-        col_chart, col_gap = st.columns([3, 1])
+        col_chart, _col_gap = st.columns([3, 1])
         with col_chart:
             _render_efficiency_chart(ports)
 
@@ -558,10 +499,11 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None
         _render_events_feed(PORT_EVENTS)
         _render_rate_cards(LANE_RATES)
 
-        st.markdown(
+        st.html(
             f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;padding:24px 0 8px 0;">'
             f'Port Operations Intelligence · {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
         logger.success("Port monitor tab rendered successfully")
     except Exception:
         logger.exception("Port monitor tab render failed")

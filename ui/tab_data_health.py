@@ -26,27 +26,49 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
+
 try:
     from data.cache_manager import CacheManager
     _CM_OK = True
 except Exception:
     _CM_OK = False
 
-# ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_GRAY    = "#374151"
-
 _CACHE_DIR = Path(__file__).parent.parent / "cache"
+
+# ── Status maps ───────────────────────────────────────────────────────────────
+_STATUS_BADGE: dict[str, str] = {
+    "LIVE":           "green",
+    "STALE":          "yellow",
+    "EXPIRED":        "red",
+    "UNAVAILABLE":    "red",
+    "NOT CONFIGURED": "gray",
+}
+
+_STATUS_HEX: dict[str, str] = {
+    "LIVE":           C_HIGH,
+    "STALE":          C_MOD,
+    "EXPIRED":        C_LOW,
+    "UNAVAILABLE":    C_LOW,
+    "NOT CONFIGURED": C_TEXT3,
+}
 
 # ── Source registry ───────────────────────────────────────────────────────────
 _SOURCES = [
@@ -202,6 +224,25 @@ _API_KEYS = [
 ]
 
 
+# ── Cell formatters ──────────────────────────────────────────────────────────
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
+
+
+def _status_pill(status: str) -> str:
+    return badge(status, _STATUS_BADGE.get(status, "gray"))
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _now_utc() -> datetime:
@@ -214,7 +255,6 @@ def _scan_cache_files(sub: str, pattern: str) -> list[Path]:
         base = _CACHE_DIR / sub
         if base.exists():
             return list(base.rglob("*.parquet"))
-        # fallback: scan whole cache dir
         return list(_CACHE_DIR.rglob(f"{pattern}.parquet"))
     except Exception:
         return []
@@ -229,7 +269,6 @@ def _file_age_hours(p: Path) -> float:
 
 
 def _classify_status(age_h: float, ttl_h: float, has_file: bool, key_needed: str | None) -> str:
-    """Return status string."""
     if key_needed:
         try:
             val = st.secrets.get(key_needed, os.environ.get(key_needed, ""))
@@ -244,26 +283,6 @@ def _classify_status(age_h: float, ttl_h: float, has_file: bool, key_needed: str
     if age_h > ttl_h:
         return "STALE"
     return "LIVE"
-
-
-def _status_color(status: str) -> str:
-    return {
-        "LIVE": C_HIGH,
-        "STALE": C_MOD,
-        "EXPIRED": C_LOW,
-        "UNAVAILABLE": C_LOW,
-        "NOT CONFIGURED": C_TEXT3,
-    }.get(status, C_TEXT3)
-
-
-def _status_bg(status: str) -> str:
-    return {
-        "LIVE": "rgba(46,158,110,0.12)",
-        "STALE": "rgba(201,150,43,0.12)",
-        "EXPIRED": "rgba(192,57,43,0.12)",
-        "UNAVAILABLE": "rgba(192,57,43,0.12)",
-        "NOT CONFIGURED": "rgba(100,116,139,0.12)",
-    }.get(status, "rgba(100,116,139,0.12)")
 
 
 def _key_configured(env: str) -> bool:
@@ -305,131 +324,81 @@ def _render_overview(source_rows: list[dict]) -> None:
     failing = sum(1 for r in source_rows if r["status"] in ("EXPIRED", "UNAVAILABLE", "NOT CONFIGURED"))
     coverage = round(100 * healthy / total) if total else 0
 
-    st.markdown(
-        f"""<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin-bottom:14px;">Data Health Overview</div>
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px;">
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:{C_TEXT};">{total}</div>
-            <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Total Sources</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:{C_HIGH};">{healthy}</div>
-            <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Healthy</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:{C_MOD};">{stale}</div>
-            <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Stale (&gt;TTL)</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:{C_LOW};">{failing}</div>
-            <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Failing / Unconfigured</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:{C_ACCENT};">{coverage}%</div>
-            <div style="font-size:11px;color:{C_TEXT2};margin-top:4px;">Data Coverage</div>
-          </div>
-        </div>
-        </div>""", unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "TOTAL SOURCES",    "value": f"{total}",      "accent": C_ACCENT},
+        {"label": "HEALTHY",          "value": f"{healthy}",    "accent": C_HIGH,   "sublabel": "Fresh · within TTL"},
+        {"label": "STALE (>TTL)",     "value": f"{stale}",      "accent": C_MOD,    "sublabel": "Past refresh window"},
+        {"label": "FAILING / UNCFG",  "value": f"{failing}",    "accent": C_LOW,    "sublabel": "Expired / unavailable"},
+        {"label": "DATA COVERAGE",    "value": f"{coverage}%",  "accent": C_ACCENT, "sublabel": "Healthy / total"},
+    ], columns=5)
 
 
 def _render_source_table(source_rows: list[dict]) -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:24px 0 10px;">Data Source Status</div>""", unsafe_allow_html=True)
-    header = f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Source</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Type</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Last Updated</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Age</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Records</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Status</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Next Refresh</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Endpoint / File</span>
-    </div>"""
-    rows_html = ""
-    for i, r in enumerate(source_rows):
-        bg = C_CARD if i % 2 == 0 else C_SURFACE
-        sc = _status_color(r["status"])
-        sbg = _status_bg(r["status"])
+    section_header("Data Source Status", "Live catalog of every feed, its cache state, and refresh schedule.")
+    headers = ["Source", "Type", "Last Updated", "Age", "Records", "Status", "Next Refresh", "Endpoint"]
+    rows: list[list[str]] = []
+    for r in source_rows:
         ts = r["last_updated"].strftime("%Y-%m-%d %H:%M") if r.get("last_updated") else "—"
-        rows_html += f"""<div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 0.8fr 0.9fr 1.1fr 1.2fr 1.5fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{r["name"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{r["type"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{ts}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{_fmt_age(r["age_h"]) if r["age_h"] < 9000 else "—"}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{f'{r["records"]:,}' if r["records"] else "—"}</span>
-            <span style="display:inline-block;font-size:10px;font-weight:700;color:{sc};background:{sbg};border:1px solid {sc}33;border-radius:4px;padding:2px 7px;">{r["status"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{r["next_refresh"]}</span>
-            <span style="font-size:10px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{r["endpoint"]}">{r["endpoint"]}</span>
-        </div>"""
-    st.markdown(header + rows_html, unsafe_allow_html=True)
+        age = _fmt_age(r["age_h"]) if r["age_h"] < 9000 else "—"
+        recs = f"{r['records']:,}" if r["records"] else "—"
+        rows.append([
+            _sans(r["name"], weight=600),
+            _sans(r["type"], color=C_TEXT2),
+            _mono(ts, color=C_TEXT2),
+            _sans(age, color=C_TEXT2),
+            _mono(recs, color=C_TEXT2),
+            _status_pill(r["status"]),
+            _sans(r["next_refresh"], color=C_TEXT2),
+            _mono(r["endpoint"], color=C_TEXT3),
+        ])
+    wsj_market_table(headers, rows)
 
 
 def _render_cache_performance(source_rows: list[dict]) -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Cache Size &amp; Performance</div>""", unsafe_allow_html=True)
-    header = f"""<div style="display:grid;grid-template-columns:2.5fr 1fr 1.2fr 1.2fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Data Source</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Cache Size</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Fetches (7d)</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Avg Fetch (ms)</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Hit Rate</span>
-    </div>"""
-    rows_html = ""
-    for i, r in enumerate(source_rows):
-        bg = C_CARD if i % 2 == 0 else C_SURFACE
-        seed = _seed_from_name(r["name"])
-        rng = random.Random(seed)
+    section_header("Cache Size & Performance", "Per-source footprint, fetch volume, and hit rate (illustrative where no live telemetry).")
+    headers = ["Data Source", "Cache Size", "Fetches (7d)", "Avg Fetch (ms)", "Hit Rate"]
+    rows: list[list[str]] = []
+    for r in source_rows:
+        rng = random.Random(_seed_from_name(r["name"]))
         size_mb = r.get("size_mb", rng.uniform(0.1, 12.0))
         fetches = rng.randint(1, 48)
         avg_ms  = rng.randint(120, 3200)
         hit_pct = rng.randint(55, 98)
         hit_col = C_HIGH if hit_pct > 80 else C_MOD if hit_pct > 60 else C_LOW
-        rows_html += f"""<div style="display:grid;grid-template-columns:2.5fr 1fr 1.2fr 1.2fr 1fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:12px;color:{C_TEXT};">{r["name"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{size_mb:.2f} MB</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{fetches}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{avg_ms:,} ms</span>
-            <span style="font-size:11px;color:{hit_col};font-weight:700;">{hit_pct}%</span>
-        </div>"""
-    st.markdown(header + rows_html, unsafe_allow_html=True)
+        rows.append([
+            _sans(r["name"]),
+            _mono(f"{size_mb:.2f} MB", color=C_TEXT2),
+            _mono(f"{fetches}", color=C_TEXT2),
+            _mono(f"{avg_ms:,} ms", color=C_TEXT2),
+            _mono(f"{hit_pct}%", color=hit_col, weight=700),
+        ])
+    wsj_market_table(headers, rows)
 
 
 def _render_api_keys() -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">API Key Configuration</div>""", unsafe_allow_html=True)
-    header = f"""<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr 1fr 1fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">API Service</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Key Configured</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Plan / Tier</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Rate Limit</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Usage Today</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">% of Limit</span>
-    </div>"""
-    rows_html = ""
-    for i, k in enumerate(_API_KEYS):
-        bg = C_CARD if i % 2 == 0 else C_SURFACE
+    section_header("API Key Configuration", "Credential presence and daily usage — no values are displayed.")
+    headers = ["API Service", "Key Configured", "Plan / Tier", "Rate Limit", "Usage Today", "% of Limit"]
+    rows: list[list[str]] = []
+    for k in _API_KEYS:
         configured = _key_configured(k["env"])
-        key_icon = f'<span style="color:{C_HIGH};font-weight:700;">&#10003; Configured</span>' if configured else f'<span style="color:{C_LOW};">&#10007; Missing</span>'
-        seed = _seed_from_name(k["service"])
-        rng = random.Random(seed)
+        cfg_pill = badge("CONFIGURED", "green") if configured else badge("MISSING", "red")
+        rng = random.Random(_seed_from_name(k["service"]))
         usage = rng.randint(0, 80) if configured else 0
         pct = usage
         pct_col = C_HIGH if pct < 60 else C_MOD if pct < 85 else C_LOW
-        rows_html += f"""<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr 1fr 1fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{k["service"]}</span>
-            <span style="font-size:12px;">{key_icon}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{k["plan"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{k["rate_limit"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{usage}</span>
-            <span style="font-size:11px;color:{pct_col};font-weight:700;">{pct}%</span>
-        </div>"""
-    st.markdown(header + rows_html, unsafe_allow_html=True)
+        rows.append([
+            _sans(k["service"], weight=600),
+            cfg_pill,
+            _sans(k["plan"], color=C_TEXT2),
+            _mono(k["rate_limit"], color=C_TEXT2),
+            _mono(f"{usage}", color=C_TEXT2),
+            _mono(f"{pct}%", color=pct_col, weight=700),
+        ])
+    wsj_market_table(headers, rows)
 
 
 def _render_staleness_heatmap(source_rows: list[dict]) -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Staleness Heatmap — Sources × Hour of Day (UTC)</div>""", unsafe_allow_html=True)
+    section_header("Data Staleness Heatmap", "Source × hour-of-day (UTC) — illustrative coverage pattern.")
     try:
         names = [r["name"] for r in source_rows]
         hours = list(range(24))
@@ -438,14 +407,14 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
             row_vals = []
             rng = random.Random(_seed_from_name(r["name"]))
             ttl = r["ttl_h"]
-            for h in hours:
+            for _ in hours:
                 age = rng.uniform(0, ttl * 2.5)
                 if age <= ttl:
-                    row_vals.append(0)       # fresh
+                    row_vals.append(0)
                 elif age <= ttl * 2:
-                    row_vals.append(1)       # stale
+                    row_vals.append(1)
                 else:
-                    row_vals.append(2)       # very stale
+                    row_vals.append(2)
             z.append(row_vals)
 
         colorscale = [[0, C_HIGH], [0.5, C_MOD], [1.0, C_LOW]]
@@ -467,12 +436,10 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
             ),
             hovertemplate="<b>%{y}</b><br>Hour: %{x}<br>State: %{z}<extra></extra>",
         ))
-        fig.update_layout(
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_SURFACE,
-            margin=dict(l=10, r=10, t=10, b=10),
+        apply_dark_layout(
+            fig,
             height=420,
-            font=dict(color=C_TEXT2, size=10),
+            margin=dict(l=10, r=10, t=10, b=10),
             xaxis=dict(tickfont=dict(size=9, color=C_TEXT3), showgrid=False, zeroline=False),
             yaxis=dict(tickfont=dict(size=10, color=C_TEXT2), showgrid=False),
         )
@@ -483,56 +450,44 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
 
 
 def _render_error_log() -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Error Log — Last 24 Hours</div>""", unsafe_allow_html=True)
+    section_header("Error Log — Last 24 Hours", "Recent fetch failures with resolution state (demo data pending log wiring).")
     mock_errors = [
-        {"ts": _now_utc() - timedelta(minutes=12),  "source": "AIS Feed",        "type": "ConnectionTimeout", "msg": "aisstream.io timeout after 10s",              "resolved": False},
-        {"ts": _now_utc() - timedelta(minutes=47),  "source": "Freightos FBX",   "type": "HTTP 429",          "msg": "Rate limit exceeded — retry after 3600s",    "resolved": True},
-        {"ts": _now_utc() - timedelta(hours=2, minutes=5),  "source": "News API", "type": "HTTP 401",          "msg": "Invalid API key in st.secrets",              "resolved": False},
-        {"ts": _now_utc() - timedelta(hours=4),     "source": "ACS Panama",      "type": "ParseError",        "msg": "Table schema changed at source website",     "resolved": False},
-        {"ts": _now_utc() - timedelta(hours=7, minutes=33), "source": "FRED",    "type": "HTTP 503",          "msg": "Service unavailable — upstream maintenance",  "resolved": True},
+        {"ts": _now_utc() - timedelta(minutes=12),          "source": "AIS Feed",      "type": "ConnectionTimeout", "msg": "aisstream.io timeout after 10s",             "resolved": False},
+        {"ts": _now_utc() - timedelta(minutes=47),          "source": "Freightos FBX", "type": "HTTP 429",          "msg": "Rate limit exceeded — retry after 3600s",    "resolved": True},
+        {"ts": _now_utc() - timedelta(hours=2, minutes=5),  "source": "News API",      "type": "HTTP 401",          "msg": "Invalid API key in st.secrets",              "resolved": False},
+        {"ts": _now_utc() - timedelta(hours=4),             "source": "ACS Panama",    "type": "ParseError",        "msg": "Table schema changed at source website",     "resolved": False},
+        {"ts": _now_utc() - timedelta(hours=7, minutes=33), "source": "FRED",          "type": "HTTP 503",          "msg": "Service unavailable — upstream maintenance", "resolved": True},
     ]
-    header = f"""<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 3fr 0.9fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Timestamp (UTC)</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Source</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Error Type</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Message</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Status</span>
-    </div>"""
-    rows_html = ""
-    for i, e in enumerate(mock_errors):
-        bg = C_CARD if i % 2 == 0 else C_SURFACE
-        resolved_html = f'<span style="color:{C_HIGH};font-weight:700;">Resolved</span>' if e["resolved"] else f'<span style="color:{C_LOW};font-weight:700;">Open</span>'
+    headers = ["Timestamp (UTC)", "Source", "Error Type", "Message", "Status"]
+    rows: list[list[str]] = []
+    for e in mock_errors:
         ts_str = e["ts"].strftime("%Y-%m-%d %H:%M")
-        rows_html += f"""<div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.2fr 3fr 0.9fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{ts_str}</span>
-            <span style="font-size:11px;color:{C_TEXT};font-weight:600;">{e["source"]}</span>
-            <span style="font-size:11px;color:{C_MOD};">{e["type"]}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{e["msg"]}</span>
-            <span style="font-size:12px;">{resolved_html}</span>
-        </div>"""
-    st.markdown(header + rows_html, unsafe_allow_html=True)
+        status_pill = badge("RESOLVED", "green") if e["resolved"] else badge("OPEN", "red")
+        rows.append([
+            _mono(ts_str, color=C_TEXT2),
+            _sans(e["source"], weight=600),
+            _sans(e["type"], color=C_MOD),
+            _sans(e["msg"], color=C_TEXT2),
+            status_pill,
+        ])
+    wsj_market_table(headers, rows)
 
 
 def _render_manual_refresh(source_rows: list[dict]) -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Manual Refresh — Cache Invalidation</div>""", unsafe_allow_html=True)
-    st.markdown(
-        f"""<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Click a source button to invalidate its cache and queue a fresh fetch on next data load. Stale sources are highlighted.</div>""", unsafe_allow_html=True)
+    section_header("Manual Refresh — Cache Invalidation", "Click a source to clear its parquet cache and queue a fresh fetch on next load.")
     cols_per_row = 4
     chunks = [source_rows[i:i+cols_per_row] for i in range(0, len(source_rows), cols_per_row)]
     for chunk in chunks:
         cols = st.columns(len(chunk))
         for col, r in zip(cols, chunk):
             with col:
-                sc = _status_color(r["status"])
                 label_html = f"{r['name']} [{r['status']}]"
                 btn_key = f"refresh__{r['name'].replace(' ', '_').replace('/', '_')}"
                 if st.button(label_html, key=btn_key, use_container_width=True):
                     try:
                         sub = r.get("cache_sub", "")
                         if _CM_OK and sub:
-                            cm = CacheManager(_CACHE_DIR)
+                            CacheManager(_CACHE_DIR)
                             target = _CACHE_DIR / sub
                             cleared = 0
                             if target.exists():
@@ -556,9 +511,7 @@ def _render_data_quality(
     freight_data: Any,
     news_items: Any,
 ) -> None:
-    st.markdown(
-        f"""<div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:{C_TEXT3};text-transform:uppercase;margin:28px 0 10px;">Data Quality Metrics</div>""", unsafe_allow_html=True)
-
+    section_header("Data Quality Metrics", "Record counts, null %, value range, and 3σ anomalies per in-memory dataset.")
     datasets: list[tuple[str, Any]] = [
         ("Port Results",    port_results),
         ("Route Results",   route_results),
@@ -568,17 +521,9 @@ def _render_data_quality(
         ("News Items",      news_items),
     ]
 
-    header = f"""<div style="display:grid;grid-template-columns:1.5fr 0.8fr 0.9fr 1.1fr 1.1fr 2fr;gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;padding:8px 14px;">
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Dataset</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Records</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Null %</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Min Value</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Max Value</span>
-        <span style="font-size:10px;font-weight:700;color:{C_TEXT3};text-transform:uppercase;">Anomalies (&gt;3σ)</span>
-    </div>"""
-    rows_html = ""
-    for i, (label, data) in enumerate(datasets):
-        bg = C_CARD if i % 2 == 0 else C_SURFACE
+    headers = ["Dataset", "Records", "Null %", "Min Value", "Max Value", "Anomalies (>3σ)"]
+    rows: list[list[str]] = []
+    for label, data in datasets:
         try:
             if isinstance(data, pd.DataFrame) and not data.empty:
                 records = len(data)
@@ -587,7 +532,6 @@ def _render_data_quality(
                 if not numeric.empty:
                     mn = numeric.min().min()
                     mx = numeric.max().max()
-                    # anomaly detection >3σ
                     anomalies = 0
                     for col in numeric.columns:
                         col_data = numeric[col].dropna()
@@ -618,15 +562,15 @@ def _render_data_quality(
             records, null_pct, mn_str, mx_str, anom_txt = 0, 0.0, "Err", "Err", "Error"
             null_col, anom_col = C_LOW, C_LOW
 
-        rows_html += f"""<div style="display:grid;grid-template-columns:1.5fr 0.8fr 0.9fr 1.1fr 1.1fr 2fr;gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};border-bottom:1px solid {C_BORDER};padding:9px 14px;align-items:center;">
-            <span style="font-size:12px;color:{C_TEXT};font-weight:600;">{label}</span>
-            <span style="font-size:11px;color:{C_TEXT2};">{records:,}</span>
-            <span style="font-size:11px;color:{null_col};font-weight:700;">{null_pct}%</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{mn_str}</span>
-            <span style="font-size:11px;color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{mx_str}</span>
-            <span style="font-size:11px;color:{anom_col};">{anom_txt}</span>
-        </div>"""
-    st.markdown(header + rows_html, unsafe_allow_html=True)
+        rows.append([
+            _sans(label, weight=600),
+            _mono(f"{records:,}", color=C_TEXT2),
+            _mono(f"{null_pct}%", color=null_col, weight=700),
+            _mono(mn_str, color=C_TEXT2),
+            _mono(mx_str, color=C_TEXT2),
+            _sans(anom_txt, color=anom_col),
+        ])
+    wsj_market_table(headers, rows)
 
 
 # ── Build source rows ─────────────────────────────────────────────────────────
@@ -688,68 +632,65 @@ def render(
 ) -> None:
     """Render the Data Health & Freshness Monitoring tab."""
     try:
-        # Page header
-        st.markdown(
-            f"""<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
-            <div>
-              <div style="font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:-0.5px;">Data Source Health &amp; Freshness</div>
-              <div style="font-size:13px;color:{C_TEXT2};margin-top:4px;">Real-time monitoring of all data sources, cache status, API keys, and data quality.</div>
-            </div>
-            <div style="font-size:11px;color:{C_TEXT3};font-family:JetBrains Mono,monospace;">Last scan: {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}</div>
-            </div>""", unsafe_allow_html=True)
+        page_header(
+            title="Data Source Health & Freshness",
+            subtitle=f"Real-time monitoring of all data sources, cache status, API keys, and data quality · Last scan {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}",
+            icon="🩺",
+            badge_text="Live Scan",
+            badge_color=C_ACCENT,
+        )
 
         source_rows = _build_source_rows()
 
-        # 1. Overview KPIs
         try:
             _render_overview(source_rows)
         except Exception as exc:
             logger.error(f"Overview render error: {exc}")
             st.error("Overview unavailable.")
 
-        # 2. Source Status Table
+        section_divider()
         try:
             _render_source_table(source_rows)
         except Exception as exc:
             logger.error(f"Source table render error: {exc}")
             st.error("Source table unavailable.")
 
-        # 3. Cache Performance
+        section_divider()
         try:
             _render_cache_performance(source_rows)
         except Exception as exc:
             logger.error(f"Cache performance render error: {exc}")
             st.error("Cache performance unavailable.")
 
-        # 4. API Key Config
+        section_divider()
         try:
             _render_api_keys()
         except Exception as exc:
             logger.error(f"API key render error: {exc}")
             st.error("API key table unavailable.")
 
-        # 5. Staleness Heatmap
+        section_divider()
         try:
             _render_staleness_heatmap(source_rows)
         except Exception as exc:
             logger.error(f"Staleness heatmap render error: {exc}")
             st.error("Heatmap unavailable.")
 
-        # 6. Error Log
+        section_divider()
         try:
             _render_error_log()
         except Exception as exc:
             logger.error(f"Error log render error: {exc}")
             st.error("Error log unavailable.")
 
-        # 7. Manual Refresh
+        section_divider()
         try:
             _render_manual_refresh(source_rows)
         except Exception as exc:
             logger.error(f"Manual refresh render error: {exc}")
             st.error("Manual refresh unavailable.")
 
-        # 8. Data Quality Metrics
+        section_divider()
         try:
             _render_data_quality(port_results, route_results, macro_data, stock_data, freight_data, news_items)
         except Exception as exc:

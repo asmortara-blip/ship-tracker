@@ -12,34 +12,29 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Colour palette ──────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_RULE    = "rgba(232,230,225,0.12)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
-
-_SANS  = "'Libre Franklin', 'Inter', system-ui, sans-serif"
-_MONO  = "'JetBrains Mono', 'Fira Code', monospace"
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    metric_card_row,
+)
 
 try:
     from ports.port_registry import PORTS, PORTS_BY_LOCODE
     from ports.demand_analyzer import PortDemandResult
-    from routes.route_registry import ROUTES
     from routes.optimizer import RouteOpportunity
     from engine.insight import Insight
 except Exception:
@@ -53,6 +48,12 @@ except Exception:
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+_SANS = "var(--sans)"
+_MONO = "var(--mono)"
+C_PURPLE = "#7c6eaf"
+C_CYAN = C_MACRO
+
 
 def _rgba(h: str, a: float) -> str:
     try:
@@ -91,18 +92,22 @@ def _fv(d: dict, *keys, fmt="{}", default="--"):
 
 
 def _card_open(title: str = "", subtitle: str = "", accent: str = "") -> str:
-    """Open a modern card container."""
     border_left = f"border-left:3px solid {accent};" if accent else ""
     hdr = ""
     if title:
-        hdr = f"""
-        <div style="margin-bottom:12px">
-            <div style="font-family:{_SANS};font-size:0.78rem;font-weight:700;color:{C_TEXT};
-                        letter-spacing:-0.01em">{title}</div>
-            {'<div style="font-family:' + _SANS + ';font-size:0.68rem;color:' + C_TEXT3 + ';margin-top:2px">' + subtitle + '</div>' if subtitle else ''}
-        </div>"""
-    return f"""<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;
-                           padding:16px 20px;{border_left}margin-bottom:12px">{hdr}"""
+        sub = (
+            f'<div style="font-family:{_SANS};font-size:0.68rem;color:{C_TEXT3};margin-top:2px">{subtitle}</div>'
+            if subtitle else ""
+        )
+        hdr = (
+            f'<div style="margin-bottom:12px">'
+            f'<div style="font-family:{_SANS};font-size:0.78rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.01em">{title}</div>'
+            f'{sub}</div>'
+        )
+    return (
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
+        f'padding:16px 20px;{border_left}margin-bottom:12px">{hdr}'
+    )
 
 
 def _card_close() -> str:
@@ -130,7 +135,6 @@ def _render_status_bar(
         else:
             tone, tone_color = "Awaiting Data", C_TEXT3
 
-        # Data source health dots
         sources = [
             ("Ports", bool(has_data)),
             ("Routes", bool(route_results)),
@@ -143,33 +147,30 @@ def _render_status_bar(
         dots_html = ""
         for name, ok in sources:
             color = C_HIGH if ok else C_LOW
-            dots_html += f"""
-            <div style="display:flex;align-items:center;gap:4px">
-                <span style="display:inline-block;width:6px;height:6px;border-radius:50%;
-                             background:{color}"></span>
-                <span style="font-size:0.64rem;color:{C_TEXT3}">{name}</span>
-            </div>"""
+            dots_html += (
+                f'<div style="display:flex;align-items:center;gap:4px">'
+                f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{color}"></span>'
+                f'<span style="font-size:0.64rem;color:{C_TEXT3}">{name}</span>'
+                f'</div>'
+            )
 
-        st.markdown(f"""
-        <div style="display:flex;justify-content:space-between;align-items:center;
-                    padding:8px 16px;background:{C_SURFACE};border:1px solid {C_BORDER};
-                    border-radius:8px;margin-bottom:16px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:12px">
-                <span style="font-family:{_SANS};font-size:0.92rem;font-weight:700;
-                             color:{C_TEXT};letter-spacing:-0.02em">Dashboard</span>
-                <span style="background:{_rgba(tone_color, 0.1)};color:{tone_color};
-                             border:1px solid {_rgba(tone_color, 0.2)};
-                             padding:2px 10px;border-radius:12px;font-size:0.64rem;font-weight:600;
-                             font-family:{_SANS};letter-spacing:0.02em">{tone}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px">
-                {dots_html}
-                <span style="font-family:{_MONO};font-size:0.64rem;color:{C_TEXT3};
-                             margin-left:4px">{_now_utc()}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.html(
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:8px 16px;background:{C_SURFACE};border:1px solid {C_BORDER};'
+            f'border-radius:8px;margin-bottom:16px;flex-wrap:wrap;gap:8px">'
+            f'<div style="display:flex;align-items:center;gap:12px">'
+            f'<span style="font-family:{_SANS};font-size:0.92rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.02em">Dashboard</span>'
+            f'<span style="background:{_rgba(tone_color, 0.1)};color:{tone_color};'
+            f'border:1px solid {_rgba(tone_color, 0.2)};'
+            f'padding:2px 10px;border-radius:12px;font-size:0.64rem;font-weight:600;'
+            f'font-family:{_SANS};letter-spacing:0.02em">{tone}</span>'
+            f'</div>'
+            f'<div style="display:flex;align-items:center;gap:12px">'
+            f'{dots_html}'
+            f'<span style="font-family:{_MONO};font-size:0.64rem;color:{C_TEXT3};margin-left:4px">{_now_utc()}</span>'
+            f'</div>'
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"Status bar render failed: {exc}")
 
@@ -191,45 +192,20 @@ def _render_kpi_strip(
         n_alerts = len(alerts) if alerts else sum(1 for i in insights if getattr(i, "score", 0) >= 0.80)
         strong_rts = sum(1 for r in route_results if getattr(r, "opportunity_label", "") == "Strong")
 
-        def _kpi(label: str, value: str, delta: str = "", delta_color: str = C_TEXT3) -> str:
-            delta_html = ""
-            if delta:
-                delta_html = f"""
-                <span style="font-family:{_MONO};font-size:0.68rem;color:{delta_color};
-                             margin-left:6px">{delta}</span>"""
-            return f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;
-                        padding:14px 16px">
-                <div style="font-family:{_SANS};font-size:0.62rem;font-weight:600;color:{C_TEXT3};
-                            text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">{label}</div>
-                <div style="display:flex;align-items:baseline">
-                    <span style="font-family:{_MONO};font-size:1.5rem;font-weight:700;
-                                 color:{C_TEXT};line-height:1">{value}</span>
-                    {delta_html}
-                </div>
-            </div>"""
+        demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
+        alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
 
-        cols = st.columns(6)
-        with cols[0]:
-            st.markdown(_kpi("Baltic Dry Index",
-                _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847")), unsafe_allow_html=True)
-        with cols[1]:
-            st.markdown(_kpi("Container Index",
-                _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204")), unsafe_allow_html=True)
-        with cols[2]:
-            demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
-            st.markdown(_kpi("Avg Port Demand", demand_str,
-                f"{len(has_data)} ports", C_HIGH if avg_demand >= 0.6 else C_TEXT3), unsafe_allow_html=True)
-        with cols[3]:
-            alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
-            st.markdown(_kpi("Active Alerts", str(n_alerts), "", alert_color), unsafe_allow_html=True)
-        with cols[4]:
-            st.markdown(_kpi("High Conviction", str(hi_conv),
-                f"of {len(insights)}", C_HIGH if hi_conv > 2 else C_TEXT3), unsafe_allow_html=True)
-        with cols[5]:
-            st.markdown(_kpi("Strong Routes", str(strong_rts),
-                f"of {len(route_results)}", C_HIGH if strong_rts > 2 else C_TEXT3), unsafe_allow_html=True)
-
+        metric_card_row(
+            [
+                {"label": "Baltic Dry Index",  "value": _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"), "accent": C_ACCENT},
+                {"label": "Container Index",   "value": _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204"), "accent": C_ACCENT},
+                {"label": "Avg Port Demand",   "value": demand_str, "accent": C_HIGH if avg_demand >= 0.6 else C_TEXT3, "sublabel": f"{len(has_data)} ports"},
+                {"label": "Active Alerts",     "value": str(n_alerts), "accent": alert_color},
+                {"label": "High Conviction",   "value": str(hi_conv), "accent": C_HIGH if hi_conv > 2 else C_TEXT3, "sublabel": f"of {len(insights)}"},
+                {"label": "Strong Routes",     "value": str(strong_rts), "accent": C_HIGH if strong_rts > 2 else C_TEXT3, "sublabel": f"of {len(route_results)}"},
+            ],
+            columns=6,
+        )
     except Exception as exc:
         logger.warning(f"KPI strip render failed: {exc}")
 
@@ -242,7 +218,6 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
     try:
         fd = freight_data or {}
         md = macro_data or {}
-        sd = stock_data or {}
 
         rates = [
             ("BDI",       _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"),  "+1.3%",  C_HIGH),
@@ -255,21 +230,18 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
 
         rows_html = ""
         for name, value, delta, delta_color in rates:
-            rows_html += f"""
-            <div style="display:flex;justify-content:space-between;align-items:center;
-                        padding:8px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                <span style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT2}">{name}</span>
-                <div style="display:flex;align-items:center;gap:10px">
-                    <span style="font-family:{_MONO};font-size:0.82rem;font-weight:600;
-                                 color:{C_TEXT}">{value}</span>
-                    <span style="font-family:{_MONO};font-size:0.7rem;color:{delta_color};
-                                 min-width:48px;text-align:right">{delta}</span>
-                </div>
-            </div>"""
+            rows_html += (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'padding:8px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
+                f'<span style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT2}">{name}</span>'
+                f'<div style="display:flex;align-items:center;gap:10px">'
+                f'<span style="font-family:{_MONO};font-size:0.82rem;font-weight:600;color:{C_TEXT}">{value}</span>'
+                f'<span style="font-family:{_MONO};font-size:0.7rem;color:{delta_color};min-width:48px;text-align:right">{delta}</span>'
+                f'</div>'
+                f'</div>'
+            )
 
-        html = _card_open("Market Pulse", "Key indices and rates") + rows_html + _card_close()
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(_card_open("Market Pulse", "Key indices and rates") + rows_html + _card_close())
     except Exception as exc:
         logger.warning(f"Market pulse render failed: {exc}")
 
@@ -308,42 +280,57 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
             return 0.35
 
         def _cell_style(s: float) -> tuple[str, str, str]:
-            if s >= 0.80: return (_rgba("#064e3b", 0.6), C_HIGH, "Strong")
-            if s >= 0.65: return (_rgba("#065f46", 0.35), "#6ee7b7", "Bullish")
-            if s >= 0.50: return (_rgba("#1e2a3a", 0.5), C_TEXT2, "Neutral")
-            if s >= 0.35: return (_rgba("#450a0a", 0.35), "#e8a0a0", "Caution")
+            if s >= 0.80:
+                return (_rgba("#064e3b", 0.6), C_HIGH, "Strong")
+            if s >= 0.65:
+                return (_rgba("#065f46", 0.35), "#6ee7b7", "Bullish")
+            if s >= 0.50:
+                return (_rgba("#1e2a3a", 0.5), C_TEXT2, "Neutral")
+            if s >= 0.35:
+                return (_rgba("#450a0a", 0.35), "#e8a0a0", "Caution")
             return (_rgba("#7f1d1d", 0.4), C_LOW, "Avoid")
 
-        # Header
-        hdr = f'<th style="text-align:left;font-family:{_SANS};font-size:0.62rem;font-weight:600;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;border-bottom:1px solid {_rgba(C_TEXT, 0.08)}"></th>'
+        hdr = (
+            f'<th style="text-align:left;font-family:{_SANS};font-size:0.62rem;font-weight:600;'
+            f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;'
+            f'border-bottom:1px solid {_rgba(C_TEXT, 0.08)}"></th>'
+        )
         for comm in COMMODITIES:
-            hdr += f'<th style="text-align:center;font-family:{_SANS};font-size:0.62rem;font-weight:600;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;border-bottom:1px solid {_rgba(C_TEXT, 0.08)}">{comm}</th>'
+            hdr += (
+                f'<th style="text-align:center;font-family:{_SANS};font-size:0.62rem;font-weight:600;'
+                f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;'
+                f'border-bottom:1px solid {_rgba(C_TEXT, 0.08)}">{comm}</th>'
+            )
 
         rows = ""
         for corridor in CORRIDORS:
-            row = f'<td style="font-family:{_SANS};font-size:0.76rem;font-weight:600;color:{C_TEXT};padding:8px 10px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">{corridor}</td>'
+            row = (
+                f'<td style="font-family:{_SANS};font-size:0.76rem;font-weight:600;color:{C_TEXT};'
+                f'padding:8px 10px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">{corridor}</td>'
+            )
             for commodity in COMMODITIES:
                 score = _cell_score(corridor, commodity)
                 bg, fg, label = _cell_style(score)
                 pct = int(score * 100)
-                row += f"""
-                <td style="text-align:center;padding:6px 4px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                    <div style="background:{bg};border-radius:6px;padding:6px 4px">
-                        <div style="font-family:{_MONO};font-size:0.88rem;font-weight:700;color:{fg}">{pct}%</div>
-                        <div style="font-family:{_SANS};font-size:0.56rem;font-weight:600;color:{fg};
-                                    text-transform:uppercase;letter-spacing:0.04em;margin-top:1px;opacity:0.75">{label}</div>
-                    </div>
-                </td>"""
+                row += (
+                    f'<td style="text-align:center;padding:6px 4px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
+                    f'<div style="background:{bg};border-radius:6px;padding:6px 4px">'
+                    f'<div style="font-family:{_MONO};font-size:0.88rem;font-weight:700;color:{fg}">{pct}%</div>'
+                    f'<div style="font-family:{_SANS};font-size:0.56rem;font-weight:600;color:{fg};'
+                    f'text-transform:uppercase;letter-spacing:0.04em;margin-top:1px;opacity:0.75">{label}</div>'
+                    f'</div>'
+                    f'</td>'
+                )
             rows += f"<tr>{row}</tr>"
 
-        table = f"""<table style="width:100%;border-collapse:collapse">
-            <thead><tr>{hdr}</tr></thead>
-            <tbody>{rows}</tbody>
-        </table>"""
+        table = (
+            f'<table style="width:100%;border-collapse:collapse">'
+            f'<thead><tr>{hdr}</tr></thead>'
+            f'<tbody>{rows}</tbody>'
+            f'</table>'
+        )
 
-        html = _card_open("Signal Conviction", "Corridor x commodity scores") + table + _card_close()
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(_card_open("Signal Conviction", "Corridor x commodity scores") + table + _card_close())
     except Exception as exc:
         logger.warning(f"Signal matrix render failed: {exc}")
 
@@ -355,10 +342,10 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
 def _render_top_signals(insights: list) -> None:
     try:
         if not insights:
-            html = _card_open("Top Signals", "Highest conviction opportunities")
-            html += f'<div style="font-family:{_SANS};font-size:0.8rem;color:{C_TEXT3};padding:8px 0">No signals generated</div>'
-            html += _card_close()
-            st.markdown(html, unsafe_allow_html=True)
+            empty = (
+                f'<div style="font-family:{_SANS};font-size:0.8rem;color:{C_TEXT3};padding:8px 0">No signals generated</div>'
+            )
+            st.html(_card_open("Top Signals", "Highest conviction opportunities") + empty + _card_close())
             return
 
         ACTION_COLOR = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
@@ -373,27 +360,24 @@ def _render_top_signals(insights: list) -> None:
             sc = _score_color(score)
             ac = ACTION_COLOR.get(action, C_ACCENT)
 
-            items_html += f"""
-            <div style="display:flex;align-items:center;gap:10px;padding:8px 0;
-                        border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                <div style="flex-shrink:0;width:36px;text-align:center">
-                    <span style="font-family:{_MONO};font-size:0.76rem;font-weight:700;
-                                 color:{sc}">{pct}%</span>
-                </div>
-                <div style="flex:1;min-width:0">
-                    <div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT};
-                                white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</div>
-                </div>
-                <div style="flex-shrink:0">
-                    <span style="background:{_rgba(ac, 0.1)};color:{ac};
-                                 padding:2px 8px;border-radius:10px;font-size:0.6rem;
-                                 font-weight:600;font-family:{_SANS}">{action}</span>
-                </div>
-            </div>"""
+            items_html += (
+                f'<div style="display:flex;align-items:center;gap:10px;padding:8px 0;'
+                f'border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
+                f'<div style="flex-shrink:0;width:36px;text-align:center">'
+                f'<span style="font-family:{_MONO};font-size:0.76rem;font-weight:700;color:{sc}">{pct}%</span>'
+                f'</div>'
+                f'<div style="flex:1;min-width:0">'
+                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT};'
+                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</div>'
+                f'</div>'
+                f'<div style="flex-shrink:0">'
+                f'<span style="background:{_rgba(ac, 0.1)};color:{ac};'
+                f'padding:2px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;font-family:{_SANS}">{action}</span>'
+                f'</div>'
+                f'</div>'
+            )
 
-        html = _card_open("Top Signals", f"{len(insights)} active signals") + items_html + _card_close()
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(_card_open("Top Signals", f"{len(insights)} active signals") + items_html + _card_close())
     except Exception as exc:
         logger.warning(f"Top signals render failed: {exc}")
 
@@ -404,7 +388,6 @@ def _render_top_signals(insights: list) -> None:
 
 def _render_risk_alerts(insights: list, alerts: list) -> None:
     try:
-        # Build alert items from insights with high scores or from alerts list
         alert_items = []
         if alerts:
             for a in alerts[:6]:
@@ -412,7 +395,6 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
                 title = getattr(a, "title", "") or getattr(a, "message", "") or "--"
                 alert_items.append((sev, title[:70]))
         else:
-            # Derive from high-score insights
             risky = [i for i in insights if getattr(i, "score", 0) >= 0.75]
             risky.sort(key=lambda i: getattr(i, "score", 0), reverse=True)
             for ins in risky[:6]:
@@ -423,27 +405,29 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
 
         SEV_COLOR = {"CRITICAL": "#8b1a1a", "HIGH": C_LOW, "MODERATE": C_MOD, "LOW": C_HIGH}
 
-        items_html = ""
         if not alert_items:
-            items_html = f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No active alerts</div>'
+            items_html = (
+                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No active alerts</div>'
+            )
         else:
+            items_html = ""
             for sev, title in alert_items:
                 sc = SEV_COLOR.get(sev, C_MOD)
-                items_html += f"""
-                <div style="display:flex;align-items:center;gap:8px;padding:7px 0;
-                            border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                    <span style="background:{_rgba(sc, 0.12)};color:{sc};
-                                 padding:1px 7px;border-radius:10px;font-size:0.58rem;
-                                 font-weight:700;font-family:{_SANS};text-transform:uppercase;
-                                 letter-spacing:0.04em;flex-shrink:0">{sev}</span>
-                    <span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT2};
-                                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</span>
-                </div>"""
+                items_html += (
+                    f'<div style="display:flex;align-items:center;gap:8px;padding:7px 0;'
+                    f'border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
+                    f'<span style="background:{_rgba(sc, 0.12)};color:{sc};'
+                    f'padding:1px 7px;border-radius:10px;font-size:0.58rem;font-weight:700;'
+                    f'font-family:{_SANS};text-transform:uppercase;letter-spacing:0.04em;flex-shrink:0">{sev}</span>'
+                    f'<span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT2};'
+                    f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</span>'
+                    f'</div>'
+                )
 
-        html = (_card_open("Risk & Alerts", f"{len(alert_items)} active", accent=C_LOW)
-                + items_html + _card_close())
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(
+            _card_open("Risk & Alerts", f"{len(alert_items)} active", accent=C_LOW)
+            + items_html + _card_close()
+        )
     except Exception as exc:
         logger.warning(f"Risk alerts render failed: {exc}")
 
@@ -459,10 +443,12 @@ def _render_route_opps(route_results: list) -> None:
             key=lambda r: getattr(r, "opportunity_score", 0), reverse=True,
         )[:5]
 
-        items_html = ""
         if not strong:
-            items_html = f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No strong routes detected</div>'
+            items_html = (
+                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No strong routes detected</div>'
+            )
         else:
+            items_html = ""
             for r in strong:
                 name = getattr(r, "route_name", "") or getattr(r, "route_id", "") or "--"
                 score = getattr(r, "opportunity_score", 0)
@@ -472,24 +458,25 @@ def _render_route_opps(route_results: list) -> None:
                 rate = getattr(r, "current_rate_usd_feu", None)
                 rate_str = f"${rate:,.0f}/FEU" if rate else ""
 
-                items_html += f"""
-                <div style="padding:7px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                        <span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT}">{name[:25]}</span>
-                        <div style="display:flex;align-items:center;gap:6px">
-                            <span style="font-family:{_MONO};font-size:0.68rem;color:{C_TEXT3}">{rate_str}</span>
-                            <span style="font-family:{_MONO};font-size:0.72rem;font-weight:700;color:{sc}">{pct}%</span>
-                        </div>
-                    </div>
-                    <div style="height:3px;background:{_rgba(C_TEXT, 0.06)};border-radius:2px;overflow:hidden">
-                        <div style="height:100%;width:{bar_w}%;background:{_rgba(sc, 0.6)};border-radius:2px"></div>
-                    </div>
-                </div>"""
+                items_html += (
+                    f'<div style="padding:7px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                    f'<span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT}">{name[:25]}</span>'
+                    f'<div style="display:flex;align-items:center;gap:6px">'
+                    f'<span style="font-family:{_MONO};font-size:0.68rem;color:{C_TEXT3}">{rate_str}</span>'
+                    f'<span style="font-family:{_MONO};font-size:0.72rem;font-weight:700;color:{sc}">{pct}%</span>'
+                    f'</div>'
+                    f'</div>'
+                    f'<div style="height:3px;background:{_rgba(C_TEXT, 0.06)};border-radius:2px;overflow:hidden">'
+                    f'<div style="height:100%;width:{bar_w}%;background:{_rgba(sc, 0.6)};border-radius:2px"></div>'
+                    f'</div>'
+                    f'</div>'
+                )
 
-        html = (_card_open("Route Opportunities", f"{len(strong)} strong routes", accent=C_HIGH)
-                + items_html + _card_close())
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(
+            _card_open("Route Opportunities", f"{len(strong)} strong routes", accent=C_HIGH)
+            + items_html + _card_close()
+        )
     except Exception as exc:
         logger.warning(f"Route opps render failed: {exc}")
 
@@ -518,22 +505,22 @@ def _render_data_status(
         for name, ok in sources:
             color = C_HIGH if ok else C_LOW
             status = "Live" if ok else "Offline"
-            items_html += f"""
-            <div style="display:flex;justify-content:space-between;align-items:center;
-                        padding:5px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.03)}">
-                <span style="font-family:{_SANS};font-size:0.74rem;color:{C_TEXT2}">{name}</span>
-                <div style="display:flex;align-items:center;gap:5px">
-                    <span style="display:inline-block;width:6px;height:6px;border-radius:50%;
-                                 background:{color}"></span>
-                    <span style="font-family:{_SANS};font-size:0.66rem;color:{color}">{status}</span>
-                </div>
-            </div>"""
+            items_html += (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'padding:5px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.03)}">'
+                f'<span style="font-family:{_SANS};font-size:0.74rem;color:{C_TEXT2}">{name}</span>'
+                f'<div style="display:flex;align-items:center;gap:5px">'
+                f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{color}"></span>'
+                f'<span style="font-family:{_SANS};font-size:0.66rem;color:{color}">{status}</span>'
+                f'</div>'
+                f'</div>'
+            )
 
         ok_count = sum(1 for _, ok in sources if ok)
-        html = (_card_open("Data Sources", f"{ok_count}/{len(sources)} active")
-                + items_html + _card_close())
-        st.markdown(html, unsafe_allow_html=True)
-
+        st.html(
+            _card_open("Data Sources", f"{ok_count}/{len(sources)} active")
+            + items_html + _card_close()
+        )
     except Exception as exc:
         logger.warning(f"Data status render failed: {exc}")
 
@@ -542,15 +529,10 @@ def _render_data_status(
 # ROW 4 — Quick Sparkline Charts
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_sparklines(
-    port_results: list, insights: list, freight_data: dict,
-) -> None:
+def _render_sparklines(port_results: list, insights: list, freight_data: dict) -> None:
     try:
-        from ui.styles import dark_layout
-
         cols = st.columns(3)
 
-        # 1. Port demand distribution
         with cols[0]:
             if port_results:
                 scores = [getattr(r, "demand_score", 0) for r in port_results
@@ -561,15 +543,17 @@ def _render_sparklines(
                         marker_color=_rgba(C_ACCENT, 0.6),
                         marker_line_width=0,
                     ))
-                    layout = dark_layout(title="Port Demand Distribution", height=200,
-                                        margin={"l": 16, "r": 16, "t": 36, "b": 24})
-                    layout["showlegend"] = False
-                    fig.update_layout(**layout)
+                    apply_dark_layout(
+                        fig,
+                        title="Port Demand Distribution",
+                        height=200,
+                        showlegend=False,
+                        margin={"l": 16, "r": 16, "t": 36, "b": 24},
+                    )
                     fig.update_xaxes(title_text="Score", title_font_size=10)
                     fig.update_yaxes(title_text="Ports", title_font_size=10)
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        # 2. Signal score distribution
         with cols[1]:
             if insights:
                 scores = [getattr(i, "score", 0) for i in insights]
@@ -586,15 +570,17 @@ def _render_sparklines(
                     marker_color=colors,
                     marker_line_width=0,
                 ))
-                layout = dark_layout(title="Signal Scores", height=200,
-                                    margin={"l": 16, "r": 16, "t": 36, "b": 24})
-                layout["showlegend"] = False
-                fig.update_layout(**layout)
+                apply_dark_layout(
+                    fig,
+                    title="Signal Scores",
+                    height=200,
+                    showlegend=False,
+                    margin={"l": 16, "r": 16, "t": 36, "b": 24},
+                )
                 fig.update_xaxes(showticklabels=False, title_text="Signals", title_font_size=10)
                 fig.update_yaxes(title_text="Score", title_font_size=10, range=[0, 1])
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        # 3. Route opportunity scatter
         with cols[2]:
             if port_results:
                 demand = [getattr(r, "demand_score", 0) for r in port_results
@@ -615,14 +601,16 @@ def _render_sparklines(
                         text=names,
                         hovertemplate="<b>%{text}</b><br>Demand: %{x:.0%}<br>Congestion: %{y:.0%}<extra></extra>",
                     ))
-                    layout = dark_layout(title="Demand vs Congestion", height=200,
-                                        margin={"l": 16, "r": 16, "t": 36, "b": 24})
-                    layout["showlegend"] = False
-                    fig.update_layout(**layout)
+                    apply_dark_layout(
+                        fig,
+                        title="Demand vs Congestion",
+                        height=200,
+                        showlegend=False,
+                        margin={"l": 16, "r": 16, "t": 36, "b": 24},
+                    )
                     fig.update_xaxes(title_text="Demand", title_font_size=10, range=[0, 1])
                     fig.update_yaxes(title_text="Congestion", title_font_size=10, range=[0, 1])
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
     except Exception as exc:
         logger.warning(f"Sparklines render failed: {exc}")
 
@@ -633,31 +621,27 @@ def _render_sparklines(
 
 def _render_cold_start() -> None:
     try:
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;
-                    padding:40px;margin:24px 0;text-align:center">
-            <div style="font-family:{_SANS};font-size:1.2rem;font-weight:700;
-                        color:{C_TEXT};margin-bottom:8px">
-                Welcome to Ship Tracker</div>
-            <div style="font-family:{_SANS};font-size:0.84rem;color:{C_TEXT2};
-                        max-width:480px;margin:0 auto 28px;line-height:1.7">
-                No data loaded yet. Configure your API credentials and refresh to populate the dashboard.</div>
-            <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-                <div style="background:{_rgba(C_ACCENT, 0.08)};border:1px solid {_rgba(C_ACCENT, 0.15)};
-                            border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};
-                            font-family:{_SANS}">
-                    <span style="color:{C_ACCENT};font-weight:700">1</span>&ensp;Add API keys to <code style="color:{C_TEXT}">.env</code></div>
-                <div style="background:{_rgba(C_HIGH, 0.08)};border:1px solid {_rgba(C_HIGH, 0.15)};
-                            border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};
-                            font-family:{_SANS}">
-                    <span style="color:{C_HIGH};font-weight:700">2</span>&ensp;Click <b style="color:{C_TEXT}">Refresh Data</b></div>
-                <div style="background:{_rgba(C_MOD, 0.08)};border:1px solid {_rgba(C_MOD, 0.15)};
-                            border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};
-                            font-family:{_SANS}">
-                    <span style="color:{C_MOD};font-weight:700">3</span>&ensp;Data loads in ~30-60s</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
+            f'padding:40px;margin:24px 0;text-align:center">'
+            f'<div style="font-family:{_SANS};font-size:1.2rem;font-weight:700;color:{C_TEXT};margin-bottom:8px">'
+            f'Welcome to Ship Tracker</div>'
+            f'<div style="font-family:{_SANS};font-size:0.84rem;color:{C_TEXT2};'
+            f'max-width:480px;margin:0 auto 28px;line-height:1.7">'
+            f'No data loaded yet. Configure your API credentials and refresh to populate the dashboard.</div>'
+            f'<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">'
+            f'<div style="background:{_rgba(C_ACCENT, 0.08)};border:1px solid {_rgba(C_ACCENT, 0.15)};'
+            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
+            f'<span style="color:{C_ACCENT};font-weight:700">1</span>&ensp;Add API keys to <code style="color:{C_TEXT}">.env</code></div>'
+            f'<div style="background:{_rgba(C_HIGH, 0.08)};border:1px solid {_rgba(C_HIGH, 0.15)};'
+            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
+            f'<span style="color:{C_HIGH};font-weight:700">2</span>&ensp;Click <b style="color:{C_TEXT}">Refresh Data</b></div>'
+            f'<div style="background:{_rgba(C_MOD, 0.08)};border:1px solid {_rgba(C_MOD, 0.15)};'
+            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
+            f'<span style="color:{C_MOD};font-weight:700">3</span>&ensp;Data loads in ~30-60s</div>'
+            f'</div>'
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"Cold start splash failed: {exc}")
         st.info("Dashboard loading -- configure API credentials to enable live data.")
@@ -688,22 +672,18 @@ def render(
 
         all_empty = not port_results and not route_results and not insights
 
-        # Cold-start
         if all_empty:
             _render_cold_start()
             _render_data_status(port_results, route_results, insights,
                                freight_data, macro_data, stock_data)
             return
 
-        # Row 1: Status bar
         _render_status_bar(port_results, route_results, insights,
                           freight_data, macro_data, stock_data)
 
-        # Row 2: KPI strip
         _render_kpi_strip(port_results, route_results, insights,
                          freight_data, macro_data, stock_data, alerts)
 
-        # Row 3: Main body (60/40 split)
         left, right = st.columns([3, 2])
 
         with left:
@@ -717,9 +697,7 @@ def render(
             _render_data_status(port_results, route_results, insights,
                                freight_data, macro_data, stock_data)
 
-        # Row 4: Sparkline charts
         _render_sparklines(port_results, insights, freight_data)
-
     except Exception as exc:
         logger.error(f"tab_overview.render fatal: {exc}")
         st.error(f"Overview dashboard error: {exc}")

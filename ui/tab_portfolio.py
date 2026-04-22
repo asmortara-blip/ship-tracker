@@ -7,16 +7,25 @@ import random
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 
 from ui.styles import (
-    C_BG, C_SURFACE, C_CARD, C_BORDER,
+    C_SURFACE, C_CARD, C_BORDER,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
     dark_layout,
+    apply_dark_layout,
     section_header,
-    kpi_card,
+    metric_card_row,
+    wsj_market_table,
+    live_data_badge,
+)
+
+from engine.carrier_factor_model import (
+    build_factor_frame,
+    fit_carrier_factors,
+    residual_signal_backtest,
+    residual_zscore,
 )
 
 # ---------------------------------------------------------------------------
@@ -772,6 +781,251 @@ def _render_position_details(df: pd.DataFrame) -> None:
         logger.warning(f"position detail error: {e}")
 
 
+_FACTOR_CARRIERS: tuple[str, ...] = ("ZIM", "MATX", "SBLK", "DAC", "CMRE", "GSL")
+_FACTOR_LEVEL_KEYS: tuple[str, ...] = ("BDI", "SCFI", "Brent", "WTI", "DXY", "VIX")
+
+
+def _weekly_log_returns(stock_data) -> pd.DataFrame:
+    """Build a weekly log-returns DataFrame from the stock_data dict."""
+    if not isinstance(stock_data, dict):
+        return pd.DataFrame()
+    frames: dict[str, pd.Series] = {}
+    for ticker in _FACTOR_CARRIERS:
+        frame = stock_data.get(ticker)
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        col = None
+        for cand in ("close", "Close", "adj_close", "price"):
+            if cand in frame.columns:
+                col = cand
+                break
+        if col is None:
+            continue
+        series = pd.to_numeric(frame[col], errors="coerce").dropna()
+        if series.empty or not isinstance(series.index, pd.DatetimeIndex):
+            continue
+        weekly = series.resample("W-FRI").last().dropna()
+        rets = np.log(weekly.where(weekly > 0)).diff().dropna()
+        if len(rets) >= 60:
+            frames[ticker] = rets
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1).dropna(how="all")
+
+
+def _extract_level(series_or_frame) -> pd.Series | None:
+    """Coerce a macro item (Series or single-col DataFrame) into a level Series."""
+    if series_or_frame is None:
+        return None
+    if isinstance(series_or_frame, pd.Series):
+        s = pd.to_numeric(series_or_frame, errors="coerce").dropna()
+        return s if not s.empty else None
+    if isinstance(series_or_frame, pd.DataFrame):
+        if series_or_frame.empty:
+            return None
+        for cand in ("value", "close", "Close", "level"):
+            if cand in series_or_frame.columns:
+                s = pd.to_numeric(series_or_frame[cand], errors="coerce").dropna()
+                return s if not s.empty else None
+        first = series_or_frame.iloc[:, 0]
+        s = pd.to_numeric(first, errors="coerce").dropna()
+        return s if not s.empty else None
+    return None
+
+
+def _factors_from_macro(macro_data) -> pd.DataFrame:
+    """Build a factor frame from macro_data; empty DataFrame if unavailable."""
+    if not isinstance(macro_data, dict) or not macro_data:
+        return pd.DataFrame()
+    levels: dict[str, pd.Series] = {}
+    for key in _FACTOR_LEVEL_KEYS:
+        for candidate in (key, key.lower(), key.upper()):
+            if candidate in macro_data:
+                s = _extract_level(macro_data[candidate])
+                if s is not None:
+                    levels[key] = s
+                    break
+    if len(levels) < 2:
+        return pd.DataFrame()
+    return build_factor_frame(levels)
+
+
+def _synthetic_factor_frame(returns_df: pd.DataFrame) -> pd.DataFrame:
+    """Deterministic demo factor panel aligned to the returns index."""
+    if returns_df.empty:
+        return pd.DataFrame()
+    idx = returns_df.index
+    n = len(idx)
+    rng = np.random.default_rng(20260422)
+    data = {
+        "dBDI":             rng.normal(0, 0.04, n),
+        "dSCFI":            rng.normal(0, 0.03, n),
+        "dBrent":           rng.normal(0, 0.035, n),
+        "WTI_Brent_spread": rng.normal(0, 0.5, n),
+        "dDXY":             rng.normal(0, 0.008, n),
+        "VIX":              15 + rng.normal(0, 3.5, n).cumsum() * 0.02,
+    }
+    return pd.DataFrame(data, index=idx)
+
+
+def _t_color(tval: float) -> str:
+    a = abs(tval)
+    if a >= 2.0:
+        return C_HIGH
+    if a >= 1.0:
+        return C_MOD
+    return C_TEXT3
+
+
+def _render_carrier_factor_lens(stock_data, macro_data) -> None:
+    """Quant artifact: OLS betas + residual mean-reversion backtest."""
+    try:
+        returns_df = _weekly_log_returns(stock_data)
+        if returns_df.empty or returns_df.shape[1] < 2:
+            return
+
+        factors_df = _factors_from_macro(macro_data)
+        if factors_df.empty or len(factors_df) < 80:
+            factors_df = _synthetic_factor_frame(returns_df)
+            data_quality = "demo"
+            source_name = "Synthetic Factors"
+            notes = "Demo factors — wire BDI/SCFI/Brent/DXY/VIX in macro_data for real fit"
+        else:
+            data_quality = "modeled"
+            source_name = "FRED + Baltic (modeled)"
+            notes = "Factor panel: Δlog BDI/SCFI/Brent/DXY, WTI-Brent spread, VIX"
+
+        combined_idx = returns_df.index.intersection(factors_df.index)
+        if len(combined_idx) < 60:
+            return
+        returns_df = returns_df.loc[combined_idx]
+        factors_df = factors_df.loc[combined_idx]
+
+        fits = fit_carrier_factors(returns_df, factors_df, hac_lags=4)
+        if not fits:
+            return
+
+        st.markdown(section_header("Carrier Factor Lens", icon="🧮"), unsafe_allow_html=True)
+        st.markdown(
+            live_data_badge(
+                source=source_name,
+                as_of=combined_idx.max(),
+                quality=data_quality,
+                kind="modeled",
+                notes=notes,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        factor_cols = list(factors_df.columns)
+        headers = ["Carrier", "α (bps)", "R²", "n"] + factor_cols
+        rows: list[list[str]] = []
+        for ticker, fit in fits.items():
+            alpha_bps = fit.alpha * 1e4
+            alpha_cell = (
+                f'<span style="color:{_t_color(fit.alpha_tstat)};'
+                f'font-family:var(--mono);font-weight:600;">'
+                f'{alpha_bps:+.1f}'
+                f'<span style="color:{C_TEXT3};font-size:10px;margin-left:4px;">'
+                f't={fit.alpha_tstat:+.2f}</span></span>'
+            )
+            r2_cell = (
+                f'<span style="font-family:var(--mono);color:{C_TEXT};font-weight:600;">'
+                f'{fit.r_squared:.2f}</span>'
+            )
+            n_cell = (
+                f'<span style="font-family:var(--mono);color:{C_TEXT2};">{fit.n_obs}</span>'
+            )
+            beta_cells: list[str] = []
+            for f in factor_cols:
+                b = fit.betas.get(f, 0.0)
+                t = fit.tvalues.get(f, 0.0)
+                col = _t_color(t)
+                beta_cells.append(
+                    f'<span style="font-family:var(--mono);color:{col};font-weight:600;">'
+                    f'{b:+.2f}'
+                    f'<span style="color:{C_TEXT3};font-size:10px;margin-left:4px;">'
+                    f'{t:+.1f}</span></span>'
+                )
+            ticker_cell = (
+                f'<span style="font-family:var(--sans);color:{C_TEXT};font-weight:700;">'
+                f'{ticker}</span>'
+            )
+            rows.append([ticker_cell, alpha_cell, r2_cell, n_cell] + beta_cells)
+        wsj_market_table(headers, rows)
+
+        # Residual trajectory + backtest for the highest-R² carrier
+        focus_ticker = max(fits.keys(), key=lambda k: fits[k].r_squared)
+        focus_fit = fits[focus_ticker]
+        z = residual_zscore(focus_fit, returns_df[focus_ticker], factors_df, window=52)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=z.index, y=z.values,
+            mode="lines",
+            line=dict(color=C_ACCENT, width=1.8),
+            name="Residual z-score",
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>z = %{y:.2f}<extra></extra>",
+        ))
+        for level, color, dash in ((1.0, C_MOD, "dot"), (-1.0, C_MOD, "dot"),
+                                    (2.0, C_LOW, "dash"), (-2.0, C_LOW, "dash")):
+            fig.add_hline(y=level, line=dict(color=color, width=1, dash=dash))
+        apply_dark_layout(
+            fig,
+            title=f"{focus_ticker} — Residual Z-Score (52W rolling)",
+            height=300,
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, key="carrier_factor_resid")
+
+        try:
+            bt = residual_signal_backtest(
+                returns_df[focus_ticker], factors_df,
+                name=focus_ticker, lookback=52,
+            )
+        except ValueError:
+            return
+
+        cum_color = C_HIGH if bt.cumulative_return >= 0 else C_LOW
+        sharpe_color = (
+            C_HIGH if bt.sharpe >= 0.5 else (C_MOD if bt.sharpe >= 0 else C_LOW)
+        )
+        ir_color = (
+            C_HIGH if bt.information_ratio >= 0 else C_LOW
+        )
+        hit_color = (
+            C_HIGH if bt.hit_rate >= 0.55 else (C_MOD if bt.hit_rate >= 0.48 else C_LOW)
+        )
+        metric_card_row([
+            {
+                "label":    "Signal Sharpe",
+                "value":    f"{bt.sharpe:+.2f}",
+                "accent":   sharpe_color,
+                "sublabel": f"{focus_ticker} · walk-forward",
+            },
+            {
+                "label":    "Info Ratio vs. B&H",
+                "value":    f"{bt.information_ratio:+.2f}",
+                "accent":   ir_color,
+                "sublabel": "Sharpe − buy-and-hold",
+            },
+            {
+                "label":    "Hit Rate",
+                "value":    f"{bt.hit_rate * 100:.1f}%",
+                "accent":   hit_color,
+                "sublabel": f"{bt.n_trades} active weeks",
+            },
+            {
+                "label":    "Cumulative",
+                "value":    f"{bt.cumulative_return * 100:+.1f}%",
+                "accent":   cum_color,
+                "sublabel": f"{bt.mean_return_bps:+.1f} bps / wk",
+            },
+        ])
+    except Exception as e:
+        logger.warning(f"carrier factor lens error: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Main render entry point
 # ---------------------------------------------------------------------------
@@ -807,6 +1061,10 @@ def render(stock_data, macro_data, insights) -> None:
         st.markdown(_HR, unsafe_allow_html=True)
 
         _render_risk_metrics(df)
+
+        st.markdown(_HR, unsafe_allow_html=True)
+
+        _render_carrier_factor_lens(stock_data, macro_data)
 
         st.markdown(_HR, unsafe_allow_html=True)
 

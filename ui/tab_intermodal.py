@@ -16,27 +16,46 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
+
 # ---------------------------------------------------------------------------
-# Design tokens
+# Data sources (provenance for every block)
 # ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+_SRC_IANA      = DataSource.demo("IANA Intermodal Statistics")
+_SRC_RAILROADS = DataSource.demo("BNSF / UP / CSX capacity bulletins")
+_SRC_DRAYAGE   = DataSource.demo("POLA/POLB Drayage Report")
+_SRC_CHASSIS   = DataSource.demo("Chassis Pool Operators")
+_SRC_FREIGHTOS = DataSource.demo("Freightos Intermodal Index")
+_SRC_MODEL     = DataSource.modeled("Proprietary Congestion Model")
 
 # ---------------------------------------------------------------------------
 # Static reference data
 # ---------------------------------------------------------------------------
 _PORT_INLAND: list[dict] = [
     {"port": "Los Angeles / Long Beach", "region": "US West", "rail": "UP / BNSF (major hub)",
-     "truck": "High", "dist_mi": 1745, "drayage": "$320", "rail_cost": "$1,100", "transit_d": 5, "bottleneck": "MODERATE"},
+     "truck": "High", "dist_mi": 1745, "drayage": "$320", "rail_cost": "$1,100", "transit_d": 5, "bottleneck": "HIGH"},
     {"port": "New York / New Jersey", "region": "US East", "rail": "CSX / NS",
      "truck": "High", "dist_mi": 790, "drayage": "$410", "rail_cost": "$950", "transit_d": 4, "bottleneck": "HIGH"},
     {"port": "Seattle / Tacoma", "region": "US West", "rail": "BNSF / UP",
@@ -50,13 +69,13 @@ _PORT_INLAND: list[dict] = [
     {"port": "Norfolk (Virginia)", "region": "US East", "rail": "Norfolk Southern",
      "truck": "Moderate", "dist_mi": 560, "drayage": "$310", "rail_cost": "$800", "transit_d": 3, "bottleneck": "LOW"},
     {"port": "Rotterdam", "region": "Europe", "rail": "DB Cargo / Europort",
-     "truck": "Very High", "dist_mi": 620, "drayage": "€190", "rail_cost": "€480", "transit_d": 2, "bottleneck": "LOW"},
+     "truck": "Very High", "dist_mi": 620, "drayage": "\u20ac190", "rail_cost": "\u20ac480", "transit_d": 2, "bottleneck": "LOW"},
     {"port": "Hamburg", "region": "Europe", "rail": "DB Cargo",
-     "truck": "High", "dist_mi": 530, "drayage": "€210", "rail_cost": "€520", "transit_d": 2, "bottleneck": "LOW"},
+     "truck": "High", "dist_mi": 530, "drayage": "\u20ac210", "rail_cost": "\u20ac520", "transit_d": 2, "bottleneck": "LOW"},
     {"port": "Felixstowe", "region": "Europe", "rail": "Freightliner",
-     "truck": "High", "dist_mi": 120, "drayage": "£180", "rail_cost": "£290", "transit_d": 1, "bottleneck": "MODERATE"},
+     "truck": "High", "dist_mi": 120, "drayage": "\u00a3180", "rail_cost": "\u00a3290", "transit_d": 1, "bottleneck": "MODERATE"},
     {"port": "Antwerp", "region": "Europe", "rail": "SNCB / Rhine barge",
-     "truck": "Very High", "dist_mi": 480, "drayage": "€170", "rail_cost": "€450", "transit_d": 2, "bottleneck": "LOW"},
+     "truck": "Very High", "dist_mi": 480, "drayage": "\u20ac170", "rail_cost": "\u20ac450", "transit_d": 2, "bottleneck": "LOW"},
     {"port": "Shenzhen (via HK)", "region": "Asia", "rail": "China Rail / MTR",
      "truck": "Very High", "dist_mi": 1240, "drayage": "$220", "rail_cost": "$680", "transit_d": 3, "bottleneck": "MODERATE"},
     {"port": "Shanghai", "region": "Asia", "rail": "China Rail / Yangtze barge",
@@ -117,72 +136,114 @@ _COST_COMPARE: list[dict] = [
 
 # Simulated weekly signals: intermodal congestion index (0-100) vs rate index
 _WEEKS      = [f"W{i}" for i in range(1, 25)]
-_CONGESTION = [42,45,48,52,61,68,72,75,71,65,60,58,55,57,60,64,69,73,76,74,70,66,62,59]
-_RATES      = [100,103,107,112,121,130,136,139,134,128,122,119,116,118,122,127,132,138,142,139,133,127,122,118]
+_CONGESTION = [42, 45, 48, 52, 61, 68, 72, 75, 71, 65, 60, 58,
+               55, 57, 60, 64, 69, 73, 76, 74, 70, 66, 62, 59]
+_RATES      = [100, 103, 107, 112, 121, 130, 136, 139, 134, 128, 122, 119,
+               116, 118, 122, 127, 132, 138, 142, 139, 133, 127, 122, 118]
+
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Domain-specific color maps (kept local to this tab)
 # ---------------------------------------------------------------------------
-
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> None:
-    delta_html = (
-        f'<div style="color:{color};font-size:0.78rem;margin-top:2px;">{delta}</div>'
-        if delta else ""
-    )
-    st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:16px 18px;text-align:center;">'
-        f'<div style="color:{C_TEXT3};font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;">{label}</div>'
-        f'<div style="color:{C_TEXT};font-size:1.55rem;font-weight:700;margin-top:6px;">{value}</div>'
-        f'{delta_html}'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = f'<div style="color:{C_TEXT3};font-size:0.82rem;margin-top:3px;font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>' if subtitle else ""
-    st.markdown(
-        f'<div style="border-left:3px solid {C_ACCENT};padding-left:12px;margin:28px 0 14px;">'
-        f'<span style="color:{C_TEXT};font-size:1.05rem;font-weight:600;font-family:\'Libre Baskerville\',serif;">{title}</span>'
-        f'{sub}</div>', unsafe_allow_html=True)
+_BOTTLENECK_BADGE: dict[str, str] = {
+    "HIGH":     "red",
+    "MODERATE": "yellow",
+    "LOW":      "green",
+}
+_MODE_COLOR: dict[str, str] = {
+    "Ocean":      C_ACCENT,
+    "Intermodal": C_HIGH,
+    "Truck":      C_MOD,
+}
 
 
 def _bottleneck_badge(level: str) -> str:
-    cfg = {
-        "HIGH":     (C_LOW,    "#fff"),
-        "MODERATE": (C_MOD,    "#000"),
-        "LOW":      (C_HIGH,   "#000"),
-    }
-    bg, fg = cfg.get(level, (C_TEXT3, "#fff"))
+    return badge(level, _BOTTLENECK_BADGE.get(level, "blue"))
+
+
+def _dwell_status_color(current: float) -> str:
+    if current >= 7:
+        return C_LOW
+    if current >= 5:
+        return C_MOD
+    return C_HIGH
+
+
+def _dwell_status_label(current: float) -> str:
+    if current >= 7:
+        return "CRITICAL"
+    if current >= 5:
+        return "ELEVATED"
+    return "NORMAL"
+
+
+def _dwell_vs_color(vs: float) -> str:
+    if vs >= 3:
+        return C_LOW
+    if vs >= 1:
+        return C_MOD
+    return C_HIGH
+
+
+def _util_color(util: int) -> str:
+    if util >= 95:
+        return C_LOW
+    if util >= 88:
+        return C_MOD
+    return C_HIGH
+
+
+def _wait_color(hours: int) -> str:
+    if hours >= 24:
+        return C_LOW
+    if hours >= 8:
+        return C_MOD
+    return C_HIGH
+
+
+# ---------------------------------------------------------------------------
+# Cell formatters (tab-local)
+# ---------------------------------------------------------------------------
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
     return (
-        f'<span style="background:{bg};color:{fg};font-size:0.68rem;font-weight:700;'
-        f'padding:2px 8px;border-radius:6px;">{level}</span>'
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
     )
 
 
-def _shortage_badge(shortage: bool) -> str:
-    if shortage:
-        return f'<span style="color:{C_LOW};font-weight:700;">YES</span>'
-    return f'<span style="color:{C_HIGH};font-weight:700;">NO</span>'
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sub_section(label: str) -> None:
+    st.html(f'<div class="sub-section-header">{label}</div>')
 
 
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
-
 def _render_kpi_strip() -> None:
     try:
-        _section_header("Intermodal Network Dashboard", "Global port-to-inland connectivity metrics")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            _kpi_card("Active Intermodal Connections", "247", "+12 MoM", C_HIGH)
-        with c2:
-            _kpi_card("Avg Port-to-Inland (days)", "4.8", "+0.6 vs norm", C_MOD)
-        with c3:
-            _kpi_card("Rail Capacity Utilization", "83%", "Tight — watch LA/LB", C_MOD)
-        with c4:
-            _kpi_card("Trucking Capacity Index", "71", "-5 pts MoM", C_MOD)
-        with c5:
-            _kpi_card("Drayage Bottleneck Score", "6.4 / 10", "Elevated at USWC", C_LOW)
+        section_header(
+            "Intermodal Network Dashboard",
+            "Global port-to-inland connectivity metrics",
+        )
+        st.html(live_data_badge(_SRC_IANA))
+        metric_card_row([
+            {"label": "Active Intermodal Connections", "value": "247",
+             "accent": C_HIGH, "sublabel": "\u25b2 12 MoM"},
+            {"label": "Avg Port-to-Inland (days)", "value": "4.8",
+             "accent": C_MOD, "sublabel": "+0.6 vs norm"},
+            {"label": "Rail Capacity Utilization", "value": "83%",
+             "accent": C_MOD, "sublabel": "Tight - watch LA/LB"},
+            {"label": "Trucking Capacity Index", "value": "71",
+             "accent": C_MOD, "sublabel": "\u25bc 5 pts MoM"},
+            {"label": "Drayage Bottleneck Score", "value": "6.4 / 10",
+             "accent": C_LOW, "sublabel": "Elevated at USWC"},
+        ], columns=5)
     except Exception:
         logger.exception("KPI strip failed")
         st.error("KPI strip unavailable")
@@ -190,7 +251,7 @@ def _render_kpi_strip() -> None:
 
 def _render_port_inland_table() -> None:
     try:
-        _section_header(
+        section_header(
             "Port-to-Inland Connection Table",
             "Rail, truck, and drayage metrics for major global ports",
         )
@@ -199,40 +260,31 @@ def _render_port_inland_table() -> None:
             ["All", "US West", "US East", "US Gulf", "Europe", "Asia"],
             key="intermodal_region_filter",
         )
+        st.html(live_data_badge(_SRC_DRAYAGE))
 
-        rows = _PORT_INLAND if region_filter == "All" else [r for r in _PORT_INLAND if r["region"] == region_filter]
-
-        header = (
-            '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.8rem;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
-            '<th style="padding:8px 10px;text-align:left;">Port</th>'
-            '<th style="padding:8px 10px;text-align:left;">Rail Connections</th>'
-            '<th style="padding:8px 10px;text-align:center;">Truck Capacity</th>'
-            '<th style="padding:8px 10px;text-align:center;">Inland Dist (mi)</th>'
-            '<th style="padding:8px 10px;text-align:center;">Drayage Cost</th>'
-            '<th style="padding:8px 10px;text-align:center;">Rail Cost</th>'
-            '<th style="padding:8px 10px;text-align:center;">Transit (days)</th>'
-            '<th style="padding:8px 10px;text-align:center;">Bottleneck</th>'
-            '</tr>'
+        rows_src = (
+            _PORT_INLAND if region_filter == "All"
+            else [r for r in _PORT_INLAND if r["region"] == region_filter]
         )
-        body_rows = ""
-        for i, r in enumerate(rows):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            body_rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:8px 10px;color:{C_TEXT};font-weight:600;">{r["port"]}</td>'
-                f'<td style="padding:8px 10px;color:{C_TEXT2};">{r["rail"]}</td>'
-                f'<td style="padding:8px 10px;color:{C_TEXT2};text-align:center;">{r["truck"]}</td>'
-                f'<td style="padding:8px 10px;color:{C_TEXT};text-align:center;">{r["dist_mi"]:,}</td>'
-                f'<td style="padding:8px 10px;color:{C_HIGH};text-align:center;">{r["drayage"]}</td>'
-                f'<td style="padding:8px 10px;color:{C_ACCENT};text-align:center;">{r["rail_cost"]}</td>'
-                f'<td style="padding:8px 10px;color:{C_TEXT};text-align:center;">{r["transit_d"]}</td>'
-                f'<td style="padding:8px 10px;text-align:center;">{_bottleneck_badge(r["bottleneck"])}</td>'
-                '</tr>'
-            )
-        footer = '</table></div>'
-        st.markdown(header + body_rows + footer, unsafe_allow_html=True)
+
+        headers = [
+            "Port", "Rail Connections", "Truck Capacity", "Inland Dist (mi)",
+            "Drayage Cost", "Rail Cost", "Transit (days)", "Bottleneck",
+        ]
+        rows = [
+            [
+                _sans(r["port"], color=C_TEXT, weight=700),
+                _sans(r["rail"], color=C_TEXT2, weight=500),
+                _sans(r["truck"], color=C_TEXT2, weight=500),
+                _mono(f'{r["dist_mi"]:,}', color=C_TEXT),
+                _mono(r["drayage"], color=C_HIGH, weight=700),
+                _mono(r["rail_cost"], color=C_ACCENT, weight=700),
+                _mono(str(r["transit_d"]), color=C_TEXT),
+                _bottleneck_badge(r["bottleneck"]),
+            ]
+            for r in rows_src
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Port-to-inland table failed")
         st.error("Port-to-inland table unavailable")
@@ -240,12 +292,12 @@ def _render_port_inland_table() -> None:
 
 def _render_network_map() -> None:
     try:
-        _section_header(
+        section_header(
             "Intermodal Network Map",
-            "Rail corridors colored by capacity utilization — green: available, amber: tight, red: constrained",
+            "Rail corridors colored by capacity utilization - green: available, amber: tight, red: constrained",
         )
+        st.html(live_data_badge(_SRC_RAILROADS))
 
-        # Key nodes: (name, lat, lon, type)
         nodes = [
             ("Los Angeles / Long Beach", 33.74, -118.27, "port"),
             ("Seattle / Tacoma",         47.60, -122.34, "port"),
@@ -262,30 +314,27 @@ def _render_network_map() -> None:
             ("Atlanta",                  33.75,  -84.39, "inland"),
         ]
 
-        # Rail corridors: (from_idx, to_idx, carrier, util_color)
         corridors = [
-            (0,  7,  "BNSF / UP Transcon", C_LOW),      # LA-Chicago: constrained
-            (0,  9,  "UP Southwest Chief",  C_MOD),      # LA-Kansas City: tight
-            (0,  8,  "UP Sunset",           C_MOD),      # LA-Dallas: tight
-            (1,  7,  "BNSF Northern Transcon", C_HIGH),  # Seattle-Chicago: available
-            (1,  9,  "UP/BNSF N. Route",    C_HIGH),     # Seattle-KC: available
-            (2,  7,  "CSX / NS Midwest",    C_MOD),      # NY-Chicago: tight
-            (3, 11,  "CSX Southeast",       C_HIGH),     # Savannah-Memphis: ok
-            (3,  7,  "NS / CSX Midwest",    C_HIGH),     # Savannah-Chicago: ok
-            (4,  8,  "UP Texas Eagle",      C_HIGH),     # Houston-Dallas: ok
-            (4,  9,  "UP / BNSF Gulf",      C_HIGH),     # Houston-KC: ok
-            (5,  7,  "CSX Capitol",         C_HIGH),     # Baltimore-Chicago: ok
-            (6,  7,  "NS Heartland",        C_HIGH),     # Norfolk-Chicago: ok
-            (8,  7,  "UP / BNSF",          C_HIGH),      # Dallas-Chicago: ok
-            (9,  7,  "BNSF / UP",          C_HIGH),      # KC-Chicago: ok
+            (0,  7,  "BNSF / UP Transcon",         C_LOW),
+            (0,  9,  "UP Southwest Chief",         C_MOD),
+            (0,  8,  "UP Sunset",                  C_MOD),
+            (1,  7,  "BNSF Northern Transcon",     C_HIGH),
+            (1,  9,  "UP/BNSF N. Route",           C_HIGH),
+            (2,  7,  "CSX / NS Midwest",           C_MOD),
+            (3, 11,  "CSX Southeast",              C_HIGH),
+            (3,  7,  "NS / CSX Midwest",           C_HIGH),
+            (4,  8,  "UP Texas Eagle",             C_HIGH),
+            (4,  9,  "UP / BNSF Gulf",             C_HIGH),
+            (5,  7,  "CSX Capitol",                C_HIGH),
+            (6,  7,  "NS Heartland",               C_HIGH),
+            (8,  7,  "UP / BNSF",                  C_HIGH),
+            (9,  7,  "BNSF / UP",                  C_HIGH),
         ]
 
         fig = go.Figure()
-
-        # Draw corridors
         for from_i, to_i, carrier, color in corridors:
-            fn, flat, flon, _ = nodes[from_i]
-            tn, tlat, tlon, _ = nodes[to_i]
+            _, flat, flon, _ = nodes[from_i]
+            _, tlat, tlon, _ = nodes[to_i]
             fig.add_trace(go.Scattergeo(
                 lon=[flon, tlon, None],
                 lat=[flat, tlat, None],
@@ -320,34 +369,7 @@ def _render_network_map() -> None:
             name="Inland Hub",
         ))
 
-        fig.update_layout(
-            geo={
-                "scope": "north america",
-                "showland": True,
-                "landcolor": "#181c28",
-                "showocean": True,
-                "oceancolor": "#0c0e14",
-                "showcoastlines": True,
-                "coastlinecolor": C_TEXT3,
-                "showcountries": True,
-                "countrycolor": C_TEXT3,
-                "showlakes": False,
-                "projection_type": "albers usa",
-            },
-            paper_bgcolor=C_SURFACE,
-            plot_bgcolor=C_SURFACE,
-            font={"color": C_TEXT, "size": 11},
-            legend={"bgcolor": C_CARD, "bordercolor": C_BORDER},
-            margin={"l": 0, "r": 0, "t": 30, "b": 0},
-            height=440,
-            title={
-                "text": "US Rail Corridors — Capacity Utilization",
-                "font": {"color": C_TEXT, "size": 13},
-                "x": 0.5,
-            },
-        )
-
-        # Legend for colors
+        # Legend stubs for corridor coloring
         for label, color in [("Available", C_HIGH), ("Tight", C_MOD), ("Constrained", C_LOW)]:
             fig.add_trace(go.Scattergeo(
                 lon=[None], lat=[None],
@@ -356,7 +378,28 @@ def _render_network_map() -> None:
                 name=label,
             ))
 
-        st.plotly_chart(fig, use_container_width=True)
+        apply_dark_layout(
+            fig,
+            title="US Rail Corridors - Capacity Utilization",
+            height=440,
+            margin={"l": 0, "r": 0, "t": 40, "b": 0},
+            showlegend=True,
+            geo={
+                "scope": "north america",
+                "showland": True,
+                "landcolor": C_CARD,
+                "showocean": True,
+                "oceancolor": "#0c0e14",
+                "showcoastlines": True,
+                "coastlinecolor": C_TEXT3,
+                "showcountries": True,
+                "countrycolor": C_TEXT3,
+                "showlakes": False,
+                "projection_type": "albers usa",
+                "bgcolor": "rgba(0,0,0,0)",
+            },
+        )
+        st.plotly_chart(fig, use_container_width=True, key="intermodal_network_map")
     except Exception:
         logger.exception("Network map failed")
         st.error("Intermodal network map unavailable")
@@ -364,55 +407,41 @@ def _render_network_map() -> None:
 
 def _render_dwell_tracker() -> None:
     try:
-        _section_header(
+        section_header(
             "Rail Dwell Time Tracker",
-            "Days containers sit at port awaiting rail pickup — >7 days flagged CRITICAL",
+            "Days containers sit at port awaiting rail pickup - >7 days flagged CRITICAL",
         )
-        header = (
-            '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
-            '<th style="padding:9px 12px;text-align:left;">Port</th>'
-            '<th style="padding:9px 12px;text-align:center;">Current Dwell (days)</th>'
-            '<th style="padding:9px 12px;text-align:center;">30-Day Avg</th>'
-            '<th style="padding:9px 12px;text-align:center;">90-Day Avg</th>'
-            '<th style="padding:9px 12px;text-align:center;">Normal</th>'
-            '<th style="padding:9px 12px;text-align:center;">vs Normal</th>'
-            '<th style="padding:9px 12px;text-align:center;">Status</th>'
-            '</tr>'
-        )
-        body_rows = ""
-        for i, r in enumerate(sorted(_DWELL, key=lambda x: -x["current"])):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            vs = r["current"] - r["norm"]
-            vs_color = C_LOW if vs >= 3 else (C_MOD if vs >= 1 else C_HIGH)
-            vs_str = f'+{vs:.1f}' if vs >= 0 else f'{vs:.1f}'
-            if r["current"] >= 7:
-                status = f'<span style="color:{C_LOW};font-weight:700;">CRITICAL</span>'
-                cur_color = C_LOW
-            elif r["current"] >= 5:
-                status = f'<span style="color:{C_MOD};font-weight:700;">ELEVATED</span>'
-                cur_color = C_MOD
-            else:
-                status = f'<span style="color:{C_HIGH};font-weight:700;">NORMAL</span>'
-                cur_color = C_HIGH
-            body_rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:9px 12px;color:{C_TEXT};font-weight:600;">{r["port"]}</td>'
-                f'<td style="padding:9px 12px;color:{cur_color};text-align:center;font-weight:700;">{r["current"]:.1f}</td>'
-                f'<td style="padding:9px 12px;color:{C_TEXT2};text-align:center;">{r["avg30"]:.1f}</td>'
-                f'<td style="padding:9px 12px;color:{C_TEXT2};text-align:center;">{r["avg90"]:.1f}</td>'
-                f'<td style="padding:9px 12px;color:{C_TEXT3};text-align:center;">{r["norm"]:.1f}</td>'
-                f'<td style="padding:9px 12px;color:{vs_color};text-align:center;font-weight:600;">{vs_str}</td>'
-                f'<td style="padding:9px 12px;text-align:center;">{status}</td>'
-                '</tr>'
-            )
-        st.markdown(header + body_rows + '</table></div>', unsafe_allow_html=True)
+        st.html(live_data_badge(_SRC_RAILROADS))
 
-        st.markdown(
-            f'<div style="margin-top:8px;font-size:0.78rem;color:{C_TEXT3};">'
-            f'LA/LB currently at 8.2 days — 2.2 days above critical threshold. '
-            f'Primary cause: BNSF slot allocation lag and chassis queue at ICTF.</div>', unsafe_allow_html=True)
+        headers = [
+            "Port", "Current", "30-Day Avg", "90-Day Avg",
+            "Normal", "vs Normal", "Status",
+        ]
+        rows = []
+        for r in sorted(_DWELL, key=lambda x: -x["current"]):
+            vs = r["current"] - r["norm"]
+            vs_str = f"+{vs:.1f}" if vs >= 0 else f"{vs:.1f}"
+            status_label = _dwell_status_label(r["current"])
+            status_color = _dwell_status_color(r["current"])
+            rows.append([
+                _sans(r["port"], color=C_TEXT, weight=700),
+                _mono(f'{r["current"]:.1f}', color=status_color, weight=700),
+                _mono(f'{r["avg30"]:.1f}', color=C_TEXT2, weight=500),
+                _mono(f'{r["avg90"]:.1f}', color=C_TEXT2, weight=500),
+                _mono(f'{r["norm"]:.1f}', color=C_TEXT3, weight=500),
+                _mono(vs_str, color=_dwell_vs_color(vs), weight=700),
+                badge(status_label, _BOTTLENECK_BADGE.get(
+                    "HIGH" if status_label == "CRITICAL"
+                    else "MODERATE" if status_label == "ELEVATED"
+                    else "LOW", "blue")),
+            ])
+        wsj_market_table(headers, rows)
+        st.html(
+            f'<div style="margin-top:8px;font-size:0.78rem;color:{C_TEXT3};'
+            f'font-family:var(--sans);">'
+            f'LA/LB currently at 8.2 days - 2.2 days above critical threshold. '
+            f'Primary cause: BNSF slot allocation lag and chassis queue at ICTF.</div>'
+        )
     except Exception:
         logger.exception("Dwell tracker failed")
         st.error("Rail dwell tracker unavailable")
@@ -420,38 +449,31 @@ def _render_dwell_tracker() -> None:
 
 def _render_equipment_availability() -> None:
     try:
-        _section_header(
-            "Equipment Availability — Chassis by Port",
+        section_header(
+            "Equipment Availability - Chassis by Port",
             "Chassis shortages are the hidden bottleneck in US intermodal logistics",
         )
-        header = (
-            '<div style="overflow-x:auto;">'
-            '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<tr style="background:{C_SURFACE};color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">'
-            '<th style="padding:9px 12px;text-align:left;">Port</th>'
-            '<th style="padding:9px 12px;text-align:center;">Available Chassis</th>'
-            '<th style="padding:9px 12px;text-align:center;">Demand</th>'
-            '<th style="padding:9px 12px;text-align:center;">Utilization %</th>'
-            '<th style="padding:9px 12px;text-align:center;">Shortage</th>'
-            '<th style="padding:9px 12px;text-align:center;">Wait (hours)</th>'
-            '</tr>'
-        )
-        body_rows = ""
-        for i, r in enumerate(sorted(_CHASSIS, key=lambda x: -x["util"])):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            util_color = C_LOW if r["util"] >= 95 else (C_MOD if r["util"] >= 88 else C_HIGH)
-            wait_color = C_LOW if r["wait_h"] >= 24 else (C_MOD if r["wait_h"] >= 8 else C_HIGH)
-            body_rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:9px 12px;color:{C_TEXT};font-weight:600;">{r["port"]}</td>'
-                f'<td style="padding:9px 12px;color:{C_ACCENT};text-align:center;">{r["avail"]:,}</td>'
-                f'<td style="padding:9px 12px;color:{C_TEXT2};text-align:center;">{r["demand"]:,}</td>'
-                f'<td style="padding:9px 12px;color:{util_color};text-align:center;font-weight:700;">{r["util"]}%</td>'
-                f'<td style="padding:9px 12px;text-align:center;">{_shortage_badge(r["shortage"])}</td>'
-                f'<td style="padding:9px 12px;color:{wait_color};text-align:center;font-weight:600;">{r["wait_h"]}h</td>'
-                '</tr>'
+        st.html(live_data_badge(_SRC_CHASSIS))
+
+        headers = [
+            "Port", "Available Chassis", "Demand", "Utilization",
+            "Shortage", "Wait (hours)",
+        ]
+        rows = []
+        for r in sorted(_CHASSIS, key=lambda x: -x["util"]):
+            shortage_cell = (
+                badge("YES", "red") if r["shortage"]
+                else badge("NO", "green")
             )
-        st.markdown(header + body_rows + '</table></div>', unsafe_allow_html=True)
+            rows.append([
+                _sans(r["port"], color=C_TEXT, weight=700),
+                _mono(f'{r["avail"]:,}', color=C_ACCENT, weight=700),
+                _mono(f'{r["demand"]:,}', color=C_TEXT2, weight=500),
+                _mono(f'{r["util"]}%', color=_util_color(r["util"]), weight=700),
+                shortage_cell,
+                _mono(f'{r["wait_h"]}h', color=_wait_color(r["wait_h"]), weight=700),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Equipment availability failed")
         st.error("Equipment availability table unavailable")
@@ -459,16 +481,18 @@ def _render_equipment_availability() -> None:
 
 def _render_inland_destination() -> None:
     try:
-        _section_header(
+        section_header(
             "Inland Destination Analysis",
-            "Where do containers go after LA/LB? Asia → US West Coast trade flow breakdown",
+            "Where do containers go after LA/LB? Asia \u2192 US West Coast trade flow breakdown",
         )
+        st.html(live_data_badge(_SRC_IANA))
+
         c1, c2 = st.columns([1, 1])
 
         with c1:
             labels = ["Chicago", "Dallas", "Kansas City", "Denver", "Other Midwest", "Other"]
             values = [35, 12, 10, 8, 15, 20]
-            colors = [C_ACCENT, C_HIGH, C_MOD, "#7c6eaf", "#4a90a4", C_TEXT3]
+            colors = [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_MACRO, C_TEXT3]
 
             fig_pie = go.Figure(go.Pie(
                 labels=labels, values=values,
@@ -477,17 +501,20 @@ def _render_inland_destination() -> None:
                 textfont={"color": C_TEXT, "size": 12},
                 hovertemplate="<b>%{label}</b><br>Share: %{percent}<extra></extra>",
             ))
-            fig_pie.update_layout(
-                paper_bgcolor=C_SURFACE,
-                plot_bgcolor=C_SURFACE,
-                font={"color": C_TEXT},
-                legend={"bgcolor": C_CARD, "bordercolor": C_BORDER, "font": {"color": C_TEXT}},
-                margin={"l": 10, "r": 10, "t": 40, "b": 10},
+            apply_dark_layout(
+                fig_pie,
+                title="Destination Share (%)",
                 height=320,
-                title={"text": "Destination Share (%)", "font": {"color": C_TEXT, "size": 12}, "x": 0.5},
-                annotations=[{"text": "LA/LB<br>Outflow", "x": 0.5, "y": 0.5, "font": {"size": 11, "color": C_TEXT2}, "showarrow": False}],
+                margin={"l": 10, "r": 10, "t": 40, "b": 10},
+                showlegend=True,
+                annotations=[{
+                    "text": "LA/LB<br>Outflow",
+                    "x": 0.5, "y": 0.5,
+                    "font": {"size": 11, "color": C_TEXT2},
+                    "showarrow": False,
+                }],
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, use_container_width=True, key="intermodal_dest_pie")
 
         with c2:
             dest_rows = [
@@ -497,25 +524,29 @@ def _render_inland_destination() -> None:
                 ("Denver",        55, 45, 17,   820),
                 ("Other Midwest", 45, 55, 21,   950),
             ]
-            st.markdown(
-                f'<div style="font-size:0.78rem;color:{C_TEXT3};text-transform:uppercase;'
-                f'letter-spacing:0.06em;margin-bottom:8px;">Rail vs Truck Split by Destination</div>', unsafe_allow_html=True)
+            _sub_section("Rail vs Truck Split by Destination")
             for dest, rail_pct, truck_pct, days, cost in dest_rows:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-                    f'padding:10px 14px;margin-bottom:6px;">'
+                st.html(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'border-radius:6px;padding:10px 14px;margin-bottom:6px;">'
                     f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                    f'<span style="color:{C_TEXT};font-weight:600;font-size:0.85rem;">{dest}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:0.78rem;">{days}d transit · ${cost}/TEU avg</span>'
+                    f'<span style="color:{C_TEXT};font-weight:600;font-size:0.85rem;'
+                    f'font-family:var(--sans);">{dest}</span>'
+                    f'<span style="color:{C_TEXT3};font-size:0.78rem;'
+                    f'font-family:var(--mono);">{days}d transit \u00b7 ${cost}/TEU avg</span>'
                     f'</div>'
                     f'<div style="display:flex;gap:6px;align-items:center;">'
-                    f'<span style="color:{C_ACCENT};font-size:0.75rem;width:34px;">Rail {rail_pct}%</span>'
-                    f'<div style="flex:1;height:8px;background:{C_SURFACE};border-radius:4px;overflow:hidden;">'
-                    f'<div style="width:{rail_pct}%;height:100%;background:{C_ACCENT};border-radius:4px;display:inline-block;"></div>'
-                    f'<div style="width:{truck_pct}%;height:100%;background:{C_MOD};border-radius:4px;display:inline-block;"></div>'
+                    f'<span style="color:{C_ACCENT};font-size:0.75rem;width:48px;'
+                    f'font-family:var(--sans);">Rail {rail_pct}%</span>'
+                    f'<div style="flex:1;height:8px;background:{C_SURFACE};'
+                    f'border-radius:4px;overflow:hidden;display:flex;">'
+                    f'<div style="width:{rail_pct}%;height:100%;background:{C_ACCENT};"></div>'
+                    f'<div style="width:{truck_pct}%;height:100%;background:{C_MOD};"></div>'
                     f'</div>'
-                    f'<span style="color:{C_MOD};font-size:0.75rem;width:44px;text-align:right;">Truck {truck_pct}%</span>'
-                    f'</div></div>', unsafe_allow_html=True)
+                    f'<span style="color:{C_MOD};font-size:0.75rem;width:58px;'
+                    f'text-align:right;font-family:var(--sans);">Truck {truck_pct}%</span>'
+                    f'</div></div>'
+                )
     except Exception:
         logger.exception("Inland destination analysis failed")
         st.error("Inland destination analysis unavailable")
@@ -523,41 +554,43 @@ def _render_inland_destination() -> None:
 
 def _render_cost_comparison() -> None:
     try:
-        _section_header(
+        section_header(
             "Cost Comparison: Routing Options by Trade Lane",
-            "All-water vs transshipment vs intermodal — cost and transit time per TEU",
+            "All-water vs transshipment vs intermodal - cost and transit time per TEU",
         )
-        mode_colors = {"Ocean": C_ACCENT, "Intermodal": C_HIGH, "Truck": C_MOD}
+        st.html(live_data_badge(_SRC_FREIGHTOS))
 
         for pair in _COST_COMPARE:
-            st.markdown(
-                f'<div style="color:{C_TEXT};font-size:0.92rem;font-weight:700;margin:14px 0 8px;">'
-                f'{pair["origin"]} → {pair["dest"]}</div>', unsafe_allow_html=True)
+            _sub_section(f'{pair["origin"]} \u2192 {pair["dest"]}')
             cols = st.columns(len(pair["options"]))
             for col, opt in zip(cols, pair["options"]):
-                mc = mode_colors.get(opt["mode"], C_TEXT2)
+                mc = _MODE_COLOR.get(opt["mode"], C_TEXT2)
                 with col:
-                    st.markdown(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+                    st.html(
+                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                        f'border-top:2px solid {mc};border-radius:6px;'
                         f'padding:14px 16px;height:100%;">'
-                        f'<div style="color:{C_TEXT3};font-size:0.72rem;margin-bottom:6px;">{opt["label"]}</div>'
-                        f'<div style="color:{mc};font-size:1.3rem;font-weight:700;">${opt["cost_teu"]:,}<span style="font-size:0.75rem;color:{C_TEXT3};">/TEU</span></div>'
-                        f'<div style="color:{C_TEXT2};font-size:0.82rem;margin-top:4px;">{opt["days"]} days transit</div>'
-                        f'<div style="margin-top:8px;">'
-                        f'<span style="background:{mc}22;color:{mc};font-size:0.7rem;font-weight:700;'
-                        f'padding:2px 8px;border-radius:8px;">{opt["mode"].upper()}</span>'
-                        f'</div></div>', unsafe_allow_html=True)
-            st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+                        f'<div style="color:{C_TEXT3};font-size:0.72rem;'
+                        f'margin-bottom:6px;font-family:var(--sans);">{opt["label"]}</div>'
+                        f'<div style="color:{mc};font-size:1.3rem;font-weight:700;'
+                        f'font-family:var(--mono);">${opt["cost_teu"]:,}'
+                        f'<span style="font-size:0.75rem;color:{C_TEXT3};'
+                        f'font-family:var(--sans);">/TEU</span></div>'
+                        f'<div style="color:{C_TEXT2};font-size:0.82rem;margin-top:4px;'
+                        f'font-family:var(--sans);">{opt["days"]} days transit</div>'
+                        f'<div style="margin-top:8px;">{badge(opt["mode"].upper(), "blue")}</div>'
+                        f'</div>'
+                    )
+            st.html('<div style="height:4px;"></div>')
 
         # Bar chart: cost vs days for all options
         all_labels, all_costs, all_days, all_colors = [], [], [], []
         for pair in _COST_COMPARE:
             for opt in pair["options"]:
-                lbl = f'{pair["origin"]}→{pair["dest"]}\n{opt["mode"]}'
-                all_labels.append(lbl)
+                all_labels.append(f'{pair["origin"]}\u2192{pair["dest"]}\n{opt["mode"]}')
                 all_costs.append(opt["cost_teu"])
                 all_days.append(opt["days"])
-                all_colors.append(mode_colors.get(opt["mode"], C_TEXT2))
+                all_colors.append(_MODE_COLOR.get(opt["mode"], C_TEXT2))
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -573,17 +606,16 @@ def _render_cost_comparison() -> None:
             yaxis="y2",
             hovertemplate="<b>%{x}</b><br>Transit: %{y} days<extra></extra>",
         ))
-        fig.update_layout(
-            paper_bgcolor=C_SURFACE, plot_bgcolor=C_CARD,
-            font={"color": C_TEXT, "size": 11},
-            yaxis={"title": "Cost ($/TEU)", "gridcolor": C_BORDER, "color": C_TEXT2},
-            yaxis2={"title": "Transit (days)", "overlaying": "y", "side": "right", "color": C_TEXT2},
-            legend={"bgcolor": C_CARD, "bordercolor": C_BORDER},
-            margin={"l": 50, "r": 60, "t": 20, "b": 80},
+        apply_dark_layout(
+            fig,
             height=340,
+            margin={"l": 50, "r": 60, "t": 30, "b": 80},
+            yaxis={"title": "Cost ($/TEU)"},
+            yaxis2={"title": "Transit (days)", "overlaying": "y",
+                    "side": "right", "showgrid": False},
             bargap=0.3,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="intermodal_cost_bar")
     except Exception:
         logger.exception("Cost comparison failed")
         st.error("Cost comparison unavailable")
@@ -591,10 +623,11 @@ def _render_cost_comparison() -> None:
 
 def _render_market_signals() -> None:
     try:
-        _section_header(
+        section_header(
             "Intermodal Market Signals",
             "Correlation between intermodal congestion index and freight rate index (24-week rolling)",
         )
+        st.html(live_data_badge(_SRC_MODEL))
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -617,7 +650,6 @@ def _render_market_signals() -> None:
             hovertemplate="Week %{x}<br>Rate Index: %{y}<extra></extra>",
         ))
 
-        # Annotate peak
         peak_w = _WEEKS[_CONGESTION.index(max(_CONGESTION))]
         fig.add_annotation(
             x=peak_w, y=max(_CONGESTION),
@@ -625,17 +657,15 @@ def _render_market_signals() -> None:
             arrowcolor=C_LOW, font={"color": C_LOW, "size": 10},
             ax=0, ay=-30,
         )
-
-        fig.update_layout(
-            paper_bgcolor=C_SURFACE, plot_bgcolor=C_CARD,
-            font={"color": C_TEXT, "size": 11},
-            yaxis={"title": "Congestion Index", "gridcolor": C_BORDER, "color": C_TEXT2, "range": [0, 100]},
-            yaxis2={"title": "Rate Index", "overlaying": "y", "side": "right", "color": C_TEXT2},
-            legend={"bgcolor": C_CARD, "bordercolor": C_BORDER},
-            margin={"l": 50, "r": 60, "t": 20, "b": 40},
+        apply_dark_layout(
+            fig,
             height=320,
+            margin={"l": 50, "r": 60, "t": 30, "b": 40},
+            yaxis={"title": "Congestion Index", "range": [0, 100]},
+            yaxis2={"title": "Rate Index", "overlaying": "y",
+                    "side": "right", "showgrid": False},
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="intermodal_signals")
 
         # Correlation callout
         import statistics
@@ -644,21 +674,23 @@ def _render_market_signals() -> None:
             mean_c = statistics.mean(_CONGESTION)
             mean_r = statistics.mean(_RATES)
             num = sum((_CONGESTION[i] - mean_c) * (_RATES[i] - mean_r) for i in range(n))
-            den = (sum((v - mean_c) ** 2 for v in _CONGESTION) * sum((v - mean_r) ** 2 for v in _RATES)) ** 0.5
+            den = (sum((v - mean_c) ** 2 for v in _CONGESTION)
+                   * sum((v - mean_r) ** 2 for v in _RATES)) ** 0.5
             corr = round(num / den, 3) if den else 0
         except Exception:
             corr = 0.87
 
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-top:6px;">'
-            f'<div style="display:flex;gap:32px;align-items:center;">'
-            f'<div><div style="color:{C_TEXT3};font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;">Pearson Correlation</div>'
-            f'<div style="color:{C_HIGH};font-size:1.4rem;font-weight:700;">{corr}</div></div>'
-            f'<div style="color:{C_TEXT2};font-size:0.85rem;flex:1;">'
-            f'Strong positive correlation between intermodal congestion and spot freight rates. '
-            f'Congestion typically leads rates by 2–3 weeks, providing a leading indicator for '
-            f'rate movements. LA/LB rail dwell spikes have preceded USWC rate surges in 4 of the '
-            f'last 5 congestion events.</div></div></div>', unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "Pearson Correlation", "value": f"{corr}",
+             "accent": C_HIGH,
+             "sublabel": "Congestion vs freight rates (24-week rolling)"},
+            {"label": "Leading Lag", "value": "2\u20133 wks",
+             "accent": C_ACCENT,
+             "sublabel": "Congestion leads rates"},
+            {"label": "Hit Rate", "value": "4 / 5",
+             "accent": C_MOD,
+             "sublabel": "LA/LB dwell spikes preceding USWC rate surges"},
+        ], columns=3)
     except Exception:
         logger.exception("Market signals failed")
         st.error("Market signals section unavailable")
@@ -667,19 +699,16 @@ def _render_market_signals() -> None:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
-
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Intermodal & Supply Chain Connectivity tab."""
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_ACCENT}18,{C_HIGH}0a);'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:22px 28px;margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT};font-size:1.35rem;font-weight:700;letter-spacing:-0.02em;font-family:\'Libre Baskerville\',serif;">'
-            f'Intermodal &amp; Supply Chain Connectivity</div>'
-            f'<div style="color:{C_TEXT2};font-size:0.88rem;margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'Port-to-inland rail corridors · Chassis availability · Dwell times · '
-            f'Multi-modal cost analysis · Market signals</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Intermodal & Supply Chain Connectivity",
+            subtitle=("Port-to-inland rail corridors \u00b7 Chassis availability \u00b7 "
+                      "Dwell times \u00b7 Multi-modal cost analysis \u00b7 Market signals"),
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
     except Exception:
         logger.exception("Header render failed")
 
@@ -698,11 +727,9 @@ def render(port_results=None, route_results=None, insights=None) -> None:
     _render_market_signals()
 
     try:
-        st.markdown(
-            f'<div style="margin-top:24px;padding:12px 18px;background:{C_SURFACE};'
-            f'border-top:1px solid {C_BORDER};border-radius:6px;color:{C_TEXT3};font-size:0.75rem;font-family:\'Libre Franklin\',sans-serif;">'
-            f'Data sources: BNSF / UP / CSX capacity bulletins, POLA/POLB drayage reports, '
-            f'IANA intermodal statistics, Freightos index, proprietary congestion model. '
-            f'Refresh: weekly. Chassis data: pool operators + port authority surveys.</div>', unsafe_allow_html=True)
+        st.html(source_footer([
+            _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
+            _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
+        ], align="left"))
     except Exception:
         logger.exception("Footer failed")

@@ -1,13 +1,16 @@
-"""
-Risk Matrix Tab — Institutional Risk Management Dashboard (2026-03-22)
+"""Risk Matrix Tab — Institutional Risk Management Dashboard.
 
 Sections:
-  1. Risk Dashboard   — 5 KPI hero cards
-  2. Risk Factor Matrix — HTML table with 10 risk factors
-  3. Correlation Heatmap — 8×8 Plotly heatmap
-  4. Drawdown Waterfall — 10 largest historical drawdowns
-  5. Scenario Stress Test — 6 macro stress scenarios
+  1. Risk Dashboard KPI hero (composite score, VaR, drawdown, regime, tail)
+  2. Risk Factor Matrix — 10 factors with level, trend, driver, mitigation
+  3. Correlation Heatmap — cross-asset correlation matrix
+  4. Drawdown Waterfall — 10 largest historical shipping drawdowns
+  5. Scenario Stress Test — probability-weighted shock impact table
   6. Risk Alert Queue — severity-ordered live alerts
+
+Canonical design-system migration: palette is imported from ``ui.styles``,
+every figure/table carries a ``live_data_badge`` pill, and synthetic figures
+are tagged ``quality="demo"`` so viewers know not to trust the numbers.
 """
 from __future__ import annotations
 
@@ -20,39 +23,115 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Design tokens  —  Wall Street Journal editorial palette
-# ---------------------------------------------------------------------------
-
-C_BG      = "#FFFDF5"
-C_SURFACE = "#F7F4EC"
-C_CARD    = "#FFFFFF"
-C_BORDER  = "rgba(51,51,51,0.12)"
-C_HIGH    = "#2e7d32"
-C_MOD     = "#b8860b"
-C_LOW     = "#b71c1c"
-C_ACCENT  = "#0d47a1"
-C_TEXT    = "#222222"
-C_TEXT2   = "#555555"
-C_TEXT3   = "#888888"
-
-FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
-FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', sans-serif"
-FONT_MONO     = "'JetBrains Mono', monospace"
-
-LEVEL_COLOR = {"LOW": C_HIGH, "MOD": C_MOD, "HIGH": C_MOD, "CRITICAL": C_LOW}
-LEVEL_LABEL = {"LOW": "LOW", "MOD": "MODERATE", "HIGH": "HIGH", "CRITICAL": "CRITICAL"}
-
-PLOT_LAYOUT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color=C_TEXT2, family="Libre Franklin, Helvetica Neue, sans-serif", size=11),
-    margin=dict(l=10, r=10, t=36, b=10),
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_RULE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Domain-specific semantic mappings (kept local to the tab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Risk level → palette color. "HIGH" gets amber not red because "CRITICAL"
+# reserves the red slot — keeps the matrix readable at a glance.
+_LEVEL_COLOR: dict[str, str] = {
+    "LOW":      C_HIGH,
+    "MOD":      C_MOD,
+    "HIGH":     C_MOD,
+    "CRITICAL": C_LOW,
+}
+
+_LEVEL_LABEL: dict[str, str] = {
+    "LOW":      "LOW",
+    "MOD":      "MODERATE",
+    "HIGH":     "HIGH",
+    "CRITICAL": "CRITICAL",
+}
+
+# Badge color tokens accepted by `badge(text, color)` helper.
+_LEVEL_BADGE_COLOR: dict[str, str] = {
+    "LOW":      "green",
+    "MOD":      "yellow",
+    "HIGH":     "yellow",
+    "CRITICAL": "red",
+}
+
+_VOL_REGIME_COLOR: dict[str, str] = {
+    "LOW":      C_HIGH,
+    "MODERATE": C_ACCENT,
+    "HIGH":     C_MOD,
+    "EXTREME":  C_LOW,
+}
+
+_SEVERITY_COLOR: dict[str, str] = {
+    "CRITICAL": C_LOW,
+    "HIGH":     C_MOD,
+    "MODERATE": C_ACCENT,
+    "LOW":      C_HIGH,
+}
+
+_SEVERITY_BADGE_COLOR: dict[str, str] = {
+    "CRITICAL": "red",
+    "HIGH":     "yellow",
+    "MODERATE": "blue",
+    "LOW":      "green",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Data-provenance sources — demo pills make it clear the numbers are synthetic
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _risk_demo_source(name: str) -> DataSource:
+    return DataSource.demo(name)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Cell formatters for wsj_market_table
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans_with_sub(value: str, sub: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:600;">{value}</span>'
+        f'<div style="font-family:var(--sans);color:{C_TEXT3};font-size:0.74rem;'
+        f'font-weight:400;margin-top:2px;">{sub}</div>'
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _seed(stock_data) -> int:
     try:
@@ -72,7 +151,7 @@ def _safe_get(d, *keys, default=None):
         return default
 
 
-def _risk_color(score: float) -> str:
+def _risk_score_color(score: float) -> str:
     if score >= 75:
         return C_LOW
     if score >= 50:
@@ -82,38 +161,17 @@ def _risk_color(score: float) -> str:
     return C_HIGH
 
 
-def _kpi_card(label: str, value: str, sub: str, color: str, icon: str) -> str:
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-        f'padding:20px 18px;display:flex;flex-direction:column;gap:6px;">'
-        f'<div style="display:flex;align-items:center;gap:8px;">'
-        f'<span style="font-size:18px;">{icon}</span>'
-        f'<span style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">{label}</span>'
-        f'</div>'
-        f'<div style="color:{color};font-family:{FONT_HEADLINE};font-size:28px;font-weight:700;line-height:1.1;">{value}</div>'
-        f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:12px;">{sub}</div>'
-        f'</div>'
+def _render_badge_row(source: DataSource) -> None:
+    """Render a single `live_data_badge` pill aligned to the right."""
+    st.html(
+        f'<div style="display:flex;justify-content:flex-end;margin-bottom:6px;">'
+        f'{live_data_badge(source)}</div>'
     )
 
 
-def _section_header(title: str, subtitle: str = "") -> str:
-    sub_html = f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:12px;margin-top:2px;">{subtitle}</div>' if subtitle else ""
-    return (
-        f'<div style="margin:28px 0 12px 0;padding-bottom:10px;border-bottom:2px solid {C_TEXT};">'
-        f'<span style="color:{C_TEXT};font-family:{FONT_HEADLINE};font-size:16px;font-weight:700;letter-spacing:.02em;">{title}</span>'
-        f'{sub_html}</div>'
-    )
-
-
-def _badge(text: str, color: str) -> str:
-    return (
-        f'<span style="background:{color}18;color:{color};border:1px solid {color}44;'
-        f'border-radius:3px;padding:2px 8px;font-family:{FONT_BODY};font-size:11px;font-weight:700;">{text}</span>'
-    )
-
-# ---------------------------------------------------------------------------
-# Section 1 — Risk Dashboard KPIs
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 1 — Risk Dashboard KPIs
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_kpis(stock_data, macro_data, freight_data, rng: random.Random) -> dict:
     try:
@@ -140,11 +198,11 @@ def _compute_kpis(stock_data, macro_data, freight_data, rng: random.Random) -> d
         tail_events = rng.randint(1, 8)
 
         return {
-            "score": round(score, 1),
-            "var_pct": var_pct,
-            "var_dollar": var_dollar,
-            "max_dd": max_dd,
-            "regime": regime,
+            "score":       round(score, 1),
+            "var_pct":     var_pct,
+            "var_dollar":  var_dollar,
+            "max_dd":      max_dd,
+            "regime":      regime,
             "tail_events": tail_events,
         }
     except Exception as exc:
@@ -153,176 +211,167 @@ def _compute_kpis(stock_data, macro_data, freight_data, rng: random.Random) -> d
                 "max_dd": -0.18, "regime": "MODERATE", "tail_events": 3}
 
 
-def _render_kpis(kpis: dict) -> None:
+def _render_kpis(kpis: dict, source: DataSource) -> None:
     try:
-        sc = kpis["score"]
-        sc_color = _risk_color(sc)
-
-        var_pct_str = f"{kpis['var_pct']*100:.2f}%"
-        var_dollar_str = f"${kpis['var_dollar']:,.0f}"
-        dd_str = f"{kpis['max_dd']*100:.1f}%"
-
-        regime = kpis["regime"]
-        regime_color = {"LOW": C_HIGH, "MODERATE": C_ACCENT, "HIGH": C_MOD, "EXTREME": C_LOW}[regime]
-
-        cards_html = (
-            f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:8px;">'
-            + _kpi_card("Overall Risk Score", f"{sc:.0f}/100", "composite market risk index", sc_color, "⚡")
-            + _kpi_card("VaR 95% 1-Day", var_pct_str, f"{var_dollar_str} on $1M portfolio", C_MOD, "📉")
-            + _kpi_card("Max Drawdown 90D", dd_str, "rolling 90-day peak-to-trough", C_LOW, "🔻")
-            + _kpi_card("Volatility Regime", regime, "annualised realised vol", regime_color, "〰️")
-            + _kpi_card("Tail Events 30D", str(kpis["tail_events"]), "moves exceeding ±2σ", C_MOD, "🔔")
-            + '</div>'
-        )
-        st.markdown(cards_html, unsafe_allow_html=True)
+        sc      = kpis["score"]
+        regime  = kpis["regime"]
+        metrics = [
+            {
+                "label":   "Overall Risk Score",
+                "value":   f"{sc:.0f}/100",
+                "accent":  _risk_score_color(sc),
+                "sublabel": "Composite market risk index",
+            },
+            {
+                "label":   "VaR 95% 1-Day",
+                "value":   f"{kpis['var_pct']*100:.2f}%",
+                "accent":  C_MOD,
+                "sublabel": f"${kpis['var_dollar']:,.0f} on $1M portfolio",
+            },
+            {
+                "label":   "Max Drawdown 90D",
+                "value":   f"{kpis['max_dd']*100:.1f}%",
+                "accent":  C_LOW,
+                "sublabel": "Rolling 90-day peak-to-trough",
+            },
+            {
+                "label":   "Volatility Regime",
+                "value":   regime,
+                "accent":  _VOL_REGIME_COLOR.get(regime, C_ACCENT),
+                "sublabel": "Annualised realised vol",
+            },
+            {
+                "label":   "Tail Events 30D",
+                "value":   str(kpis["tail_events"]),
+                "accent":  C_MOD,
+                "sublabel": "Moves exceeding \u00b12\u03c3",
+            },
+        ]
+        _render_badge_row(source)
+        metric_card_row(metrics, columns=5)
     except Exception as exc:
         logger.error(f"_render_kpis: {exc}")
         st.warning("KPI cards unavailable.")
 
-# ---------------------------------------------------------------------------
-# Section 2 — Risk Factor Matrix
-# ---------------------------------------------------------------------------
 
-_RISK_FACTORS = [
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 2 — Risk Factor Matrix
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RISK_FACTORS: list[dict] = [
     {
-        "name": "Freight Rate Volatility",
-        "desc": "Spot vs time-charter spread instability",
-        "level": "HIGH",
-        "change": "+12%",
-        "driver": "BDI momentum reversal",
+        "name":       "Freight Rate Volatility",
+        "desc":       "Spot vs time-charter spread instability",
+        "level":      "HIGH",
+        "change":     "+12%",
+        "driver":     "BDI momentum reversal",
         "mitigation": "Forward freight agreements (FFAs)",
     },
     {
-        "name": "Port Congestion",
-        "desc": "Vessel waiting time at major hubs",
-        "level": "MOD",
-        "change": "-4%",
-        "driver": "Post-holiday clearance",
+        "name":       "Port Congestion",
+        "desc":       "Vessel waiting time at major hubs",
+        "level":      "MOD",
+        "change":     "-4%",
+        "driver":     "Post-holiday clearance",
         "mitigation": "Schedule buffer + alternate berths",
     },
     {
-        "name": "Geopolitical",
-        "desc": "Red Sea / Strait of Hormuz disruptions",
-        "level": "CRITICAL",
-        "change": "+28%",
-        "driver": "Houthi maritime attacks",
+        "name":       "Geopolitical",
+        "desc":       "Red Sea / Strait of Hormuz disruptions",
+        "level":      "CRITICAL",
+        "change":     "+28%",
+        "driver":     "Houthi maritime attacks",
         "mitigation": "Cape of Good Hope rerouting",
     },
     {
-        "name": "Currency (FX)",
-        "desc": "USD/CNY and USD/EUR rate exposure",
-        "level": "MOD",
-        "change": "+3%",
-        "driver": "Fed policy divergence",
+        "name":       "Currency (FX)",
+        "desc":       "USD/CNY and USD/EUR rate exposure",
+        "level":      "MOD",
+        "change":     "+3%",
+        "driver":     "Fed policy divergence",
         "mitigation": "FX forwards & natural hedging",
     },
     {
-        "name": "Bunker Fuel",
-        "desc": "VLSFO & MGO price and availability",
-        "level": "HIGH",
-        "change": "+9%",
-        "driver": "Brent crude rally + IMO 2020",
+        "name":       "Bunker Fuel",
+        "desc":       "VLSFO & MGO price and availability",
+        "level":      "HIGH",
+        "change":     "+9%",
+        "driver":     "Brent crude rally + IMO 2020",
         "mitigation": "Bunker hedging & slow steaming",
     },
     {
-        "name": "Credit / Counterparty",
-        "desc": "Charterer default and receivables risk",
-        "level": "LOW",
-        "change": "-1%",
-        "driver": "Stable freight demand",
+        "name":       "Credit / Counterparty",
+        "desc":       "Charterer default and receivables risk",
+        "level":      "LOW",
+        "change":     "-1%",
+        "driver":     "Stable freight demand",
         "mitigation": "L/C requirements & credit insurance",
     },
     {
-        "name": "Regulatory / Environmental",
-        "desc": "CII ratings, EU ETS, Poseidon Principles",
-        "level": "MOD",
-        "change": "+7%",
-        "driver": "EU ETS phase-in 2024-2025",
+        "name":       "Regulatory / Environmental",
+        "desc":       "CII ratings, EU ETS, Poseidon Principles",
+        "level":      "MOD",
+        "change":     "+7%",
+        "driver":     "EU ETS phase-in 2024-2025",
         "mitigation": "Fleet retrofitting & carbon credits",
     },
     {
-        "name": "Weather / Seasonal",
-        "desc": "Storm disruption, canal low-water events",
-        "level": "MOD",
-        "change": "+2%",
-        "driver": "El Niño persistence",
+        "name":       "Weather / Seasonal",
+        "desc":       "Storm disruption, canal low-water events",
+        "level":      "MOD",
+        "change":     "+2%",
+        "driver":     "El Ni\u00f1o persistence",
         "mitigation": "Seasonal scheduling adjustments",
     },
     {
-        "name": "Demand Shock",
-        "desc": "Sudden cargo volume contraction",
-        "level": "LOW",
-        "change": "-6%",
-        "driver": "Stable Chinese import demand",
+        "name":       "Demand Shock",
+        "desc":       "Sudden cargo volume contraction",
+        "level":      "LOW",
+        "change":     "-6%",
+        "driver":     "Stable Chinese import demand",
         "mitigation": "Diversified cargo mix",
     },
     {
-        "name": "Supply Glut",
-        "desc": "Fleet overcapacity vs demand balance",
-        "level": "HIGH",
-        "change": "+11%",
-        "driver": "Newbuild deliveries peaking 2025",
+        "name":       "Supply Glut",
+        "desc":       "Fleet overcapacity vs demand balance",
+        "level":      "HIGH",
+        "change":     "+11%",
+        "driver":     "Newbuild deliveries peaking 2025",
         "mitigation": "Early scrapping & lay-up options",
     },
 ]
 
 
-def _render_risk_factor_matrix() -> None:
+def _render_risk_factor_matrix(source: DataSource) -> None:
     try:
-        header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-family:{FONT_BODY};font-size:10px;"
-            f"font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
-            f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-        )
-        cell_style = (
-            f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-            f"color:{C_TEXT2};font-family:{FONT_BODY};font-size:12px;vertical-align:top;"
-        )
-        name_style = (
-            f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-            f"color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;font-weight:600;vertical-align:top;"
-        )
-
-        rows_html = ""
+        _render_badge_row(source)
+        headers = [
+            "Risk Factor", "Current Level", "30D Change", "Key Driver", "Mitigation",
+        ]
+        rows: list[list[str]] = []
         for rf in _RISK_FACTORS:
-            lv = rf["level"]
-            lv_color = LEVEL_COLOR.get(lv, C_TEXT2)
-            lv_label = LEVEL_LABEL.get(lv, lv)
-            badge = _badge(lv_label, lv_color)
-            chg = rf["change"]
-            chg_color = C_LOW if chg.startswith("+") else C_HIGH
-            rows_html += (
-                f'<tr>'
-                f'<td style="{name_style}">{rf["name"]}'
-                f'<div style="color:{C_TEXT3};font-size:11px;font-weight:400;margin-top:2px;">{rf["desc"]}</div></td>'
-                f'<td style="{cell_style}">{badge}</td>'
-                f'<td style="{cell_style};color:{chg_color};font-family:{FONT_MONO};font-weight:700;">{chg}</td>'
-                f'<td style="{cell_style}">{rf["driver"]}</td>'
-                f'<td style="{cell_style}">{rf["mitigation"]}</td>'
-                f'</tr>'
-            )
+            lv      = rf["level"]
+            lv_lbl  = _LEVEL_LABEL.get(lv, lv)
+            lv_bdg  = _LEVEL_BADGE_COLOR.get(lv, "blue")
+            chg     = rf["change"]
+            chg_clr = C_LOW if chg.startswith("+") else C_HIGH
 
-        table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th style="{header_style}width:22%;">Risk Factor</th>'
-            f'<th style="{header_style}width:12%;">Current Level</th>'
-            f'<th style="{header_style}width:10%;">30D Change</th>'
-            f'<th style="{header_style}width:28%;">Key Driver</th>'
-            f'<th style="{header_style}width:28%;">Mitigation</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table></div>'
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+            rows.append([
+                _sans_with_sub(rf["name"], rf["desc"], color=C_TEXT),
+                badge(lv_lbl, color=lv_bdg),
+                _mono(chg, color=chg_clr, weight=700),
+                _sans(rf["driver"], color=C_TEXT2, weight=500),
+                _sans(rf["mitigation"], color=C_TEXT2, weight=500),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.error(f"_render_risk_factor_matrix: {exc}")
         st.warning("Risk factor matrix unavailable.")
 
-# ---------------------------------------------------------------------------
-# Section 3 — Correlation Heatmap
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 3 — Correlation Heatmap
+# ─────────────────────────────────────────────────────────────────────────────
 
 _CORR_LABELS = ["BDI", "WCI", "SCFI", "S&P 500", "Oil", "USD Index", "CNY/USD", "Global PMI"]
 
@@ -338,7 +387,7 @@ _CORR_BASE = np.array([
 ], dtype=float)
 
 
-def _render_correlation_heatmap(rng: random.Random) -> None:
+def _render_correlation_heatmap(rng: random.Random, source: DataSource) -> None:
     try:
         noise = np.array([[rng.uniform(-0.06, 0.06) for _ in range(8)] for _ in range(8)])
         corr = np.clip(_CORR_BASE + noise, -1.0, 1.0)
@@ -347,6 +396,7 @@ def _render_correlation_heatmap(rng: random.Random) -> None:
 
         text_matrix = [[f"{v:.2f}" for v in row] for row in corr]
 
+        # Semantic scale: red = negative, palette-neutral mid, green = positive.
         fig = go.Figure(go.Heatmap(
             z=corr.tolist(),
             x=_CORR_LABELS,
@@ -355,11 +405,11 @@ def _render_correlation_heatmap(rng: random.Random) -> None:
             texttemplate="%{text}",
             textfont={"size": 11, "color": C_TEXT},
             colorscale=[
-                [0.0,  "#b71c1c"],
-                [0.25, "#e65100"],
-                [0.5,  "#F7F4EC"],
-                [0.75, "#388e3c"],
-                [1.0,  "#2e7d32"],
+                [0.0,  C_LOW],       # strongly negative
+                [0.35, C_MOD],       # mildly negative
+                [0.5,  "#12151e"],   # neutral — matches surface
+                [0.65, "#5fa884"],   # mildly positive
+                [1.0,  C_HIGH],      # strongly positive
             ],
             zmin=-1.0,
             zmax=1.0,
@@ -371,21 +421,25 @@ def _render_correlation_heatmap(rng: random.Random) -> None:
                 len=0.8,
             ),
         ))
-        fig.update_layout(
-            **PLOT_LAYOUT,
-            title=dict(text="Asset & Index Correlation Matrix", font=dict(color=C_TEXT, size=13, family=FONT_HEADLINE), x=0),
+        apply_dark_layout(
+            fig,
+            title="Asset & Index Correlation Matrix",
             height=380,
+            margin=dict(l=10, r=10, t=44, b=10),
+            showlegend=False,
             xaxis=dict(tickfont=dict(color=C_TEXT2, size=11), side="bottom"),
             yaxis=dict(tickfont=dict(color=C_TEXT2, size=11), autorange="reversed"),
         )
+        _render_badge_row(source)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     except Exception as exc:
         logger.error(f"_render_correlation_heatmap: {exc}")
         st.warning("Correlation heatmap unavailable.")
 
-# ---------------------------------------------------------------------------
-# Section 4 — Drawdown Waterfall
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 4 — Drawdown Waterfall
+# ─────────────────────────────────────────────────────────────────────────────
 
 _DRAWDOWN_EVENTS = [
     {"event": "2008 GFC",            "dd": -0.78, "duration_d": 312, "recovery_d": 540},
@@ -401,11 +455,11 @@ _DRAWDOWN_EVENTS = [
 ]
 
 
-def _render_drawdown_waterfall() -> None:
+def _render_drawdown_waterfall(source: DataSource) -> None:
     try:
-        events = [e["event"] for e in _DRAWDOWN_EVENTS]
-        dds = [e["dd"] * 100 for e in _DRAWDOWN_EVENTS]
-        durations = [e["duration_d"] for e in _DRAWDOWN_EVENTS]
+        events     = [e["event"] for e in _DRAWDOWN_EVENTS]
+        dds        = [e["dd"] * 100 for e in _DRAWDOWN_EVENTS]
+        durations  = [e["duration_d"] for e in _DRAWDOWN_EVENTS]
         recoveries = [e["recovery_d"] for e in _DRAWDOWN_EVENTS]
 
         colors = [C_LOW if d <= -40 else C_MOD if d <= -20 else C_ACCENT for d in dds]
@@ -430,14 +484,15 @@ def _render_drawdown_waterfall() -> None:
             textposition="outside",
             textfont=dict(color=C_TEXT, size=10),
         ))
-        fig.update_layout(
-            **PLOT_LAYOUT,
-            title=dict(text="10 Largest Shipping Market Drawdown Events", font=dict(color=C_TEXT, size=13, family=FONT_HEADLINE), x=0),
+        apply_dark_layout(
+            fig,
+            title="10 Largest Shipping Market Drawdown Events",
             height=380,
+            margin=dict(l=10, r=10, t=44, b=10),
+            showlegend=False,
             yaxis=dict(
                 title="Drawdown (%)",
                 tickfont=dict(color=C_TEXT2, size=10),
-                gridcolor=C_BORDER,
                 zeroline=True,
                 zerolinecolor=C_BORDER,
             ),
@@ -445,121 +500,102 @@ def _render_drawdown_waterfall() -> None:
             annotations=annotations,
             bargap=0.3,
         )
+        _render_badge_row(source)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     except Exception as exc:
         logger.error(f"_render_drawdown_waterfall: {exc}")
         st.warning("Drawdown waterfall unavailable.")
 
-# ---------------------------------------------------------------------------
-# Section 5 — Scenario Stress Test
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 5 — Scenario Stress Test
+# ─────────────────────────────────────────────────────────────────────────────
 
 _SCENARIOS = [
     {
-        "name": "2008 Global Financial Crisis",
-        "prob": 5,
-        "bdi_impact": -75,
+        "name":           "2008 Global Financial Crisis",
+        "prob":           5,
+        "bdi_impact":     -75,
         "freight_impact": -68,
-        "equity_impact": -52,
-        "pl_impact": -38,
+        "equity_impact":  -52,
+        "pl_impact":      -38,
     },
     {
-        "name": "2020 COVID-19 Pandemic",
-        "prob": 8,
-        "bdi_impact": -48,
+        "name":           "2020 COVID-19 Pandemic",
+        "prob":           8,
+        "bdi_impact":     -48,
         "freight_impact": -41,
-        "equity_impact": -34,
-        "pl_impact": -22,
+        "equity_impact":  -34,
+        "pl_impact":      -22,
     },
     {
-        "name": "2021 Suez Canal Blockage",
-        "prob": 12,
-        "bdi_impact": +14,
+        "name":           "2021 Suez Canal Blockage",
+        "prob":           12,
+        "bdi_impact":     +14,
         "freight_impact": +22,
-        "equity_impact": +3,
-        "pl_impact": +8,
+        "equity_impact":  +3,
+        "pl_impact":      +8,
     },
     {
-        "name": "2022 Ukraine War / Sanctions",
-        "prob": 15,
-        "bdi_impact": -28,
+        "name":           "2022 Ukraine War / Sanctions",
+        "prob":           15,
+        "bdi_impact":     -28,
         "freight_impact": +18,
-        "equity_impact": -21,
-        "pl_impact": -11,
+        "equity_impact":  -21,
+        "pl_impact":      -11,
     },
     {
-        "name": "2024 Red Sea Escalation",
-        "prob": 35,
-        "bdi_impact": +32,
+        "name":           "2024 Red Sea Escalation",
+        "prob":           35,
+        "bdi_impact":     +32,
         "freight_impact": +45,
-        "equity_impact": -8,
-        "pl_impact": +14,
+        "equity_impact":  -8,
+        "pl_impact":      +14,
     },
     {
-        "name": "Custom: China Hard Landing",
-        "prob": 18,
-        "bdi_impact": -55,
+        "name":           "Custom: China Hard Landing",
+        "prob":           18,
+        "bdi_impact":     -55,
         "freight_impact": -48,
-        "equity_impact": -40,
-        "pl_impact": -29,
+        "equity_impact":  -40,
+        "pl_impact":      -29,
     },
 ]
 
 
 def _pct_cell(val: int) -> str:
     color = C_HIGH if val > 0 else C_LOW if val < 0 else C_TEXT2
-    sign = "+" if val > 0 else ""
-    return f'<td style="padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{color};font-family:{FONT_MONO};font-weight:700;font-size:13px;">{sign}{val}%</td>'
+    sign  = "+" if val > 0 else ""
+    return _mono(f"{sign}{val}%", color=color, weight=700)
 
 
-def _render_stress_test() -> None:
+def _render_stress_test(source: DataSource) -> None:
     try:
-        header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-family:{FONT_BODY};font-size:10px;"
-            f"font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
-            f"padding:10px 12px;border-bottom:1px solid {C_BORDER};"
-        )
-        name_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;font-weight:600;"
-        prob_cell = f"padding:10px 12px;border-bottom:1px solid {C_BORDER};color:{C_ACCENT};font-family:{FONT_MONO};font-weight:700;font-size:13px;"
-
-        rows_html = ""
+        headers = ["Scenario", "Probability", "BDI Impact", "Freight Rate",
+                   "Equity Impact", "Portfolio P&L"]
+        rows: list[list[str]] = []
         for sc in _SCENARIOS:
-            rows_html += (
-                f'<tr>'
-                f'<td style="{name_cell}">{sc["name"]}</td>'
-                f'<td style="{prob_cell}">{sc["prob"]}%</td>'
-                + _pct_cell(sc["bdi_impact"])
-                + _pct_cell(sc["freight_impact"])
-                + _pct_cell(sc["equity_impact"])
-                + _pct_cell(sc["pl_impact"])
-                + '</tr>'
-            )
-
-        table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th style="{header_style}width:30%;">Scenario</th>'
-            f'<th style="{header_style}width:10%;">Probability</th>'
-            f'<th style="{header_style}width:15%;">BDI Impact</th>'
-            f'<th style="{header_style}width:15%;">Freight Rate</th>'
-            f'<th style="{header_style}width:15%;">Equity Impact</th>'
-            f'<th style="{header_style}width:15%;">Portfolio P&L</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table></div>'
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+            rows.append([
+                _sans(sc["name"], color=C_TEXT, weight=700),
+                _mono(f"{sc['prob']}%", color=C_ACCENT, weight=700),
+                _pct_cell(sc["bdi_impact"]),
+                _pct_cell(sc["freight_impact"]),
+                _pct_cell(sc["equity_impact"]),
+                _pct_cell(sc["pl_impact"]),
+            ])
+        _render_badge_row(source)
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.error(f"_render_stress_test: {exc}")
         st.warning("Stress test table unavailable.")
 
-# ---------------------------------------------------------------------------
-# Section 6 — Risk Alert Queue
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 6 — Risk Alert Queue
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _build_alerts(insights, macro_data, freight_data, rng: random.Random) -> list[dict]:
-    alerts = []
+    alerts: list[dict] = []
     try:
         if isinstance(insights, dict):
             raw = insights.get("alerts", insights.get("risk_alerts", []))
@@ -567,20 +603,22 @@ def _build_alerts(insights, macro_data, freight_data, rng: random.Random) -> lis
                 for a in raw:
                     if isinstance(a, dict):
                         alerts.append({"severity": a.get("severity", "MODERATE"),
-                                       "text": a.get("message", str(a))})
+                                       "text":     a.get("message", str(a))})
                     elif isinstance(a, str):
                         alerts.append({"severity": "MODERATE", "text": a})
         if isinstance(macro_data, dict):
             bdi = macro_data.get("bdi")
             if bdi and float(bdi) < 1000:
-                alerts.append({"severity": "HIGH", "text": f"BDI at {float(bdi):.0f} — below 1000 threshold, dry bulk distress."})
+                alerts.append({"severity": "HIGH",
+                               "text": f"BDI at {float(bdi):.0f} — below 1000 threshold, dry bulk distress."})
             vix = macro_data.get("vix")
             if vix and float(vix) > 30:
-                alerts.append({"severity": "HIGH", "text": f"VIX at {float(vix):.1f} — elevated macro volatility."})
+                alerts.append({"severity": "HIGH",
+                               "text": f"VIX at {float(vix):.1f} — elevated macro volatility."})
     except Exception as exc:
         logger.warning(f"alert build error: {exc}")
 
-    # Ensure at least 4 synthetic alerts for demo richness
+    # Ensure at least 4 synthetic alerts for demo richness.
     defaults = [
         {"severity": "CRITICAL", "text": "Red Sea routing disruptions — 14% of global container capacity rerouted."},
         {"severity": "HIGH",     "text": "Newbuild deliveries accelerating; fleet oversupply risk for H2 2026."},
@@ -596,89 +634,109 @@ def _build_alerts(insights, macro_data, freight_data, rng: random.Random) -> lis
     return alerts[:8]
 
 
-def _severity_badge(sev: str) -> str:
-    colors = {"CRITICAL": C_LOW, "HIGH": C_MOD, "MODERATE": C_ACCENT, "LOW": C_HIGH}
-    c = colors.get(sev, C_TEXT3)
-    return _badge(sev, c)
+def _severity_score(sev: str) -> float:
+    return {"CRITICAL": 0.95, "HIGH": 0.75, "MODERATE": 0.5, "LOW": 0.25}.get(sev, 0.5)
 
 
-def _render_alert_queue(alerts: list[dict]) -> None:
+def _severity_action(sev: str) -> str:
+    return {"CRITICAL": "Avoid", "HIGH": "Caution",
+            "MODERATE": "Monitor", "LOW": "Watch"}.get(sev, "Monitor")
+
+
+def _render_alert_queue(alerts: list[dict], source: DataSource) -> None:
     try:
         if not alerts:
             st.info("No active risk alerts.")
             return
 
-        items_html = ""
+        _render_badge_row(source)
         for al in alerts:
             sev = al.get("severity", "LOW")
-            colors = {"CRITICAL": C_LOW, "HIGH": C_MOD, "MODERATE": C_ACCENT, "LOW": C_HIGH}
-            bar_color = colors.get(sev, C_TEXT3)
-            items_html += (
-                f'<div style="display:flex;align-items:flex-start;gap:14px;padding:14px 16px;'
-                f'border-bottom:1px solid {C_BORDER};">'
-                f'<div style="width:4px;min-height:40px;background:{bar_color};border-radius:2px;flex-shrink:0;"></div>'
-                f'<div style="flex:1;">'
-                f'<div style="margin-bottom:4px;">{_severity_badge(sev)}</div>'
-                f'<div style="color:{C_TEXT};font-family:{FONT_BODY};font-size:13px;">{al.get("text","")}</div>'
-                f'</div></div>'
-            )
-
-        queue_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden;">'
-            + items_html
-            + '</div>'
-        )
-        st.markdown(queue_html, unsafe_allow_html=True)
+            st.html(insight_card_html(
+                title=al.get("text", ""),
+                score=_severity_score(sev),
+                action=_severity_action(sev),
+                rationale="",
+                category=sev,
+            ))
     except Exception as exc:
         logger.error(f"_render_alert_queue: {exc}")
         st.warning("Alert queue unavailable.")
 
-# ---------------------------------------------------------------------------
-# Main render entry point
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Main render entry point
+# ─────────────────────────────────────────────────────────────────────────────
 
 def render(stock_data, macro_data, insights, freight_data=None):
     try:
         seed = _seed(stock_data)
-        rng = random.Random(seed)
+        rng  = random.Random(seed)
 
-        # ── Page header ──────────────────────────────────────────────────────
-        st.markdown(
-            f'<div style="padding:4px 0 18px 0;">'
-            f'<div style="color:{C_TEXT};font-family:{FONT_HEADLINE};font-size:22px;font-weight:700;letter-spacing:-.01em;">Risk Management Dashboard</div>'
-            f'<div style="color:{C_TEXT3};font-family:{FONT_BODY};font-size:13px;margin-top:4px;">Institutional risk intelligence — shipping & macro factors</div>'
-            f'</div>', unsafe_allow_html=True)
+        # Provenance sources — all sections currently draw from synthetic fixtures,
+        # so every pill will display red "DEMO" to signal distrust.
+        kpi_source     = _risk_demo_source("Risk KPI Model")
+        matrix_source  = _risk_demo_source("Risk Factor Matrix")
+        corr_source    = _risk_demo_source("Cross-Asset Correlations")
+        dd_source      = _risk_demo_source("Historical Drawdown Ledger")
+        stress_source  = _risk_demo_source("Macro Stress Scenarios")
+        alert_source   = _risk_demo_source("Alert Engine")
 
-        # ── Section 1: KPI Hero ───────────────────────────────────────────────
-        st.markdown(_section_header("Risk Dashboard", "Live risk KPIs across volatility, drawdown, and tail exposure"), unsafe_allow_html=True)
+        page_header(
+            title="Risk Management Dashboard",
+            subtitle="Institutional risk intelligence — shipping & macro factors",
+            badge_text="DEMO",
+            badge_color=C_LOW,
+        )
+
+        # ── Section 1: KPI hero ─────────────────────────────────────────────
+        section_header(
+            "Risk Dashboard",
+            "Live risk KPIs across volatility, drawdown, and tail exposure",
+        )
         kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
-        _render_kpis(kpis)
+        _render_kpis(kpis, kpi_source)
 
-        # ── Section 2: Risk Factor Matrix ─────────────────────────────────────
-        st.markdown(_section_header("Risk Factor Matrix", "Exposure level, recent trend, and mitigation for 10 core risk factors"), unsafe_allow_html=True)
-        _render_risk_factor_matrix()
+        # ── Section 2: Risk factor matrix ──────────────────────────────────
+        section_header(
+            "Risk Factor Matrix",
+            "Exposure level, recent trend, and mitigation for 10 core risk factors",
+        )
+        _render_risk_factor_matrix(matrix_source)
 
-        # ── Section 3 & 4: Heatmap + Drawdown side by side ───────────────────
-        st.markdown(_section_header("Correlation Heatmap & Historical Drawdowns", "Cross-asset correlations and largest shipping market drawdowns"), unsafe_allow_html=True)
+        # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
+        section_header(
+            "Correlation Heatmap & Historical Drawdowns",
+            "Cross-asset correlations and largest shipping market drawdowns",
+        )
         col_left, col_right = st.columns(2)
         with col_left:
-            _render_correlation_heatmap(rng)
+            _render_correlation_heatmap(rng, corr_source)
         with col_right:
-            _render_drawdown_waterfall()
+            _render_drawdown_waterfall(dd_source)
 
-        # ── Section 5: Stress Test ────────────────────────────────────────────
-        st.markdown(_section_header("Scenario Stress Test", "Probability-weighted impact across 6 macro and shipping shock scenarios"), unsafe_allow_html=True)
-        _render_stress_test()
+        # ── Section 5: Stress test ──────────────────────────────────────────
+        section_header(
+            "Scenario Stress Test",
+            "Probability-weighted impact across 6 macro and shipping shock scenarios",
+        )
+        _render_stress_test(stress_source)
 
-        # ── Section 6: Alert Queue ────────────────────────────────────────────
-        st.markdown(_section_header("Risk Alert Queue", "Current alerts ranked by severity"), unsafe_allow_html=True)
+        # ── Section 6: Alert queue ──────────────────────────────────────────
+        section_header(
+            "Risk Alert Queue",
+            "Current alerts ranked by severity",
+        )
         alerts = _build_alerts(insights, macro_data, freight_data, rng)
-        _render_alert_queue(alerts)
+        _render_alert_queue(alerts, alert_source)
 
-        # Footer timestamp
+        # Footer timestamp (uses sub-section-header class + thin rule).
         now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        st.markdown(
-            f'<div style="text-align:right;color:{C_TEXT3};font-family:{FONT_BODY};font-size:11px;margin-top:24px;padding-top:10px;border-top:1px solid {C_BORDER};">Last updated: {now}</div>', unsafe_allow_html=True)
+        st.html(
+            f'<div style="text-align:right;color:{C_TEXT3};font-family:var(--sans);'
+            f'font-size:0.72rem;margin-top:24px;padding-top:10px;'
+            f'border-top:1px solid {C_RULE};">Last updated: {now}</div>'
+        )
 
     except Exception as exc:
         logger.error(f"tab_risk_matrix render error: {exc}")

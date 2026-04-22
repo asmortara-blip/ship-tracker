@@ -19,18 +19,25 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
 
 # ── Static port data ──────────────────────────────────────────────────────────
 _PORTS: list[dict] = [
@@ -74,9 +81,51 @@ _EFFICIENCY: list[dict] = [
     {"port": "Felixstowe",  "crane_mh": 24, "turns_day": 3.1, "gate_mh": 270, "rail_pct": 26, "truck_min": 48},
 ]
 
+_STATUS_BADGE: dict[str, str] = {
+    "CRITICAL": "red",
+    "ELEVATED": "yellow",
+    "NORMAL":   "green",
+    "LOW":      "gray",
+}
+
+
+# ── Cell formatters ──────────────────────────────────────────────────────────
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
+
+
+def _weekly_cell(wk: int) -> str:
+    if wk > 0:
+        return _mono(f"+{wk}%", color=C_LOW, weight=700)
+    if wk < 0:
+        return _mono(f"{wk}%", color=C_HIGH, weight=700)
+    return _mono("—", color=C_TEXT3)
+
+
+def _berth_cell(pct: int) -> str:
+    bar_color = C_LOW if pct >= 85 else (C_MOD if pct >= 65 else C_HIGH)
+    bar_w = max(4, pct)
+    return (
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<div style="width:60px;height:6px;background:{C_BORDER};border-radius:3px;">'
+        f'<div style="width:{bar_w}%;height:6px;background:{bar_color};border-radius:3px;"></div>'
+        f'</div>'
+        f'<span style="color:{bar_color};font-size:0.75rem;font-family:var(--mono);">{pct}%</span>'
+        f'</div>'
+    )
+
 
 def _global_stats(ports: list[dict]) -> dict:
-    """Compute global summary stats from port list."""
     try:
         scores = [p["score"] for p in ports]
         critical = sum(1 for p in ports if p["status"] == "CRITICAL")
@@ -96,55 +145,22 @@ def _global_stats(ports: list[dict]) -> dict:
         return {"critical": 6, "global_idx": 52.4, "total_vessels": 1248, "avg_wait": 3.1, "vs_week": 2.1, "vs_year": 6.4}
 
 
-def _status_color(status: str) -> str:
-    return {"CRITICAL": C_LOW, "ELEVATED": C_MOD, "NORMAL": C_HIGH, "LOW": C_TEXT3}.get(status, C_TEXT2)
-
-
-def _delta_html(val: float, suffix: str = "") -> str:
-    if val > 0:
-        return f'<span style="color:{C_LOW}">▲ +{val}{suffix}</span>'
-    if val < 0:
-        return f'<span style="color:{C_HIGH}">▼ {val}{suffix}</span>'
-    return f'<span style="color:{C_TEXT3}">— 0{suffix}</span>'
-
-
 # ── Section 1: Hero ───────────────────────────────────────────────────────────
 def _render_hero(stats: dict) -> None:
     try:
         idx_color = C_LOW if stats["global_idx"] >= 70 else (C_MOD if stats["global_idx"] >= 40 else C_HIGH)
         wk_sign = "+" if stats["vs_week"] > 0 else ""
         yr_sign = "+" if stats["vs_year"] > 0 else ""
-        html = (
-            f'<div style="background:linear-gradient(135deg,#1a0a0a 0%,#1a1408 50%,#0c0e14 100%);'
-            f'border:1px solid {C_LOW}44;border-radius:6px;padding:28px 32px;margin-bottom:24px;">'
-            f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">'
-            f'<div style="width:10px;height:10px;border-radius:50%;background:{C_LOW};box-shadow:0 0 8px {C_LOW};animation:none;"></div>'
-            f'<span style="font-size:13px;font-weight:600;letter-spacing:2px;color:{C_LOW};text-transform:uppercase;">Port Congestion Alert</span>'
-            f'</div>'
-            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:24px;align-items:center;">'
-            f'<div>'
-            f'<div style="font-size:48px;font-weight:800;color:{C_LOW};line-height:1;">{stats["critical"]}</div>'
-            f'<div style="font-size:14px;color:{C_TEXT2};margin-top:4px;">Ports at Critical Congestion</div>'
-            f'</div>'
-            f'<div>'
-            f'<div style="font-size:13px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Global Congestion Index</div>'
-            f'<div style="font-size:42px;font-weight:800;color:{idx_color};line-height:1;">{stats["global_idx"]}<span style="font-size:20px;color:{C_TEXT3}">/100</span></div>'
-            f'<div style="margin-top:8px;font-size:12px;color:{C_TEXT3};">vs prior week: <span style="color:{C_LOW}">{wk_sign}{stats["vs_week"]} pts</span> &nbsp;|&nbsp; vs prior year: <span style="color:{C_LOW}">{yr_sign}{stats["vs_year"]} pts</span></div>'
-            f'</div>'
-            f'<div>'
-            f'<div style="font-size:13px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Vessels Waiting</div>'
-            f'<div style="font-size:42px;font-weight:800;color:{C_TEXT};line-height:1;">{stats["total_vessels"]:,}</div>'
-            f'<div style="font-size:12px;color:{C_TEXT3};margin-top:8px;">across {len(_PORTS)} tracked ports</div>'
-            f'</div>'
-            f'<div>'
-            f'<div style="font-size:13px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Avg Wait Time</div>'
-            f'<div style="font-size:42px;font-weight:800;color:{C_MOD};line-height:1;">{stats["avg_wait"]}<span style="font-size:20px;color:{C_TEXT3}"> days</span></div>'
-            f'<div style="font-size:12px;color:{C_TEXT3};margin-top:8px;">global fleet average</div>'
-            f'</div>'
-            f'</div>'
-            f'</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "PORTS AT CRITICAL",  "value": str(stats["critical"]),   "accent": C_LOW,
+             "sublabel": "Berth util >85% · queue >5d"},
+            {"label": "GLOBAL CONGESTION INDEX", "value": f"{stats['global_idx']}", "accent": idx_color,
+             "delta": f"Wk {wk_sign}{stats['vs_week']} · Yr {yr_sign}{stats['vs_year']} pts", "delta_color": C_LOW},
+            {"label": "VESSELS WAITING",    "value": f"{stats['total_vessels']:,}", "accent": C_TEXT,
+             "sublabel": f"Across {len(_PORTS)} tracked ports"},
+            {"label": "AVG WAIT TIME",      "value": f"{stats['avg_wait']}d", "accent": C_MOD,
+             "sublabel": "Global fleet average"},
+        ], columns=4)
     except Exception as exc:
         logger.error("_render_hero error: {}", exc)
 
@@ -152,20 +168,16 @@ def _render_hero(stats: dict) -> None:
 # ── Section 2: World Port Map ─────────────────────────────────────────────────
 def _render_map(ports: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:28px 0 16px 0;'
-            f'letter-spacing:0.5px;">World Port Congestion Map</div>', unsafe_allow_html=True)
+        section_header("World Port Congestion Map", "Colour and size reflect composite congestion score (0–100).")
 
         lats = [p["lat"] for p in ports]
         lons = [p["lon"] for p in ports]
         scores = [p["score"] for p in ports]
-        colors = [C_LOW if p["score"] >= 70 else (C_MOD if p["score"] >= 40 else C_HIGH) for p in ports]
         sizes = [max(10, min(40, p["score"] * 0.4 + 8)) for p in ports]
         texts = [
             f"<b>{p['port']}</b><br>Wait: {p['wait']}d | Vessels: {p['vessels']}<br>Score: {p['score']}/100 | {p['status']}"
             for p in ports
         ]
-        labels = [p["port"] for p in ports]
 
         fig = go.Figure()
         fig.add_trace(go.Scattergeo(
@@ -193,7 +205,10 @@ def _render_map(ports: list[dict]) -> None:
                 ),
             ),
         ))
-        fig.update_layout(
+        apply_dark_layout(
+            fig,
+            height=480,
+            margin=dict(l=0, r=0, t=8, b=8),
             geo=dict(
                 projection_type="natural earth",
                 showland=True, landcolor="#181c28",
@@ -203,11 +218,6 @@ def _render_map(ports: list[dict]) -> None:
                 showframe=False,
                 bgcolor=C_BG,
             ),
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            margin=dict(l=0, r=0, t=8, b=8),
-            height=480,
-            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     except Exception as exc:
@@ -217,67 +227,22 @@ def _render_map(ports: list[dict]) -> None:
 # ── Section 3: Congestion Table ───────────────────────────────────────────────
 def _render_table(ports: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:28px 0 16px 0;'
-            f'letter-spacing:0.5px;">Port Congestion Intelligence Table</div>', unsafe_allow_html=True)
-
-        header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-size:11px;font-weight:600;"
-            f"letter-spacing:1.2px;text-transform:uppercase;padding:10px 14px;text-align:left;"
-            f"border-bottom:1px solid {C_BORDER};"
-        )
-        cell_style = f"padding:11px 14px;border-bottom:1px solid {C_BORDER};font-size:13px;color:{C_TEXT};"
-        cell_sub = f"padding:11px 14px;border-bottom:1px solid {C_BORDER};font-size:13px;color:{C_TEXT2};"
-
-        rows_html = ""
-        for i, p in enumerate(ports):
-            sc = _status_color(p["status"])
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            wk = p["weekly"]
-            wk_html = f'<span style="color:{C_LOW}">+{wk}%</span>' if wk > 0 else (f'<span style="color:{C_HIGH}">{wk}%</span>' if wk < 0 else f'<span style="color:{C_TEXT3}">—</span>')
-            status_html = f'<span style="color:{sc};font-weight:700;font-size:11px;letter-spacing:0.8px;">{p["status"]}</span>'
-            bar_w = max(4, p["berth"])
-            bar_color = C_LOW if p["berth"] >= 85 else (C_MOD if p["berth"] >= 65 else C_HIGH)
-            berth_html = (
-                f'<div style="display:flex;align-items:center;gap:8px;">'
-                f'<div style="width:60px;height:6px;background:{C_BORDER};border-radius:3px;">'
-                f'<div style="width:{bar_w}%;height:6px;background:{bar_color};border-radius:3px;"></div>'
-                f'</div>'
-                f'<span style="color:{bar_color};font-size:12px;">{p["berth"]}%</span>'
-                f'</div>'
-            )
-            ri_color = C_MOD if "+" in p["rate_impact"] else C_TEXT3
-            rows_html += (
-                f'<tr style="background:{bg};">'
-                f'<td style="{cell_style}font-weight:600;">{p["port"]}</td>'
-                f'<td style="{cell_sub}">{p["region"]}</td>'
-                f'<td style="{cell_style}text-align:right;">{p["vessels"]}</td>'
-                f'<td style="{cell_style}text-align:right;color:{C_MOD if p["wait"]>3 else C_TEXT};">{p["wait"]}d</td>'
-                f'<td style="{cell_style}">{berth_html}</td>'
-                f'<td style="{cell_style}text-align:center;">{wk_html}</td>'
-                f'<td style="{cell_style}">{status_html}</td>'
-                f'<td style="{cell_style}color:{ri_color};font-size:12px;">{p["rate_impact"]}</td>'
-                f'</tr>'
-            )
-
-        table_html = (
-            f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER};">'
-            f'<table style="width:100%;border-collapse:collapse;font-family:Libre Franklin,sans-serif;">'
-            f'<thead><tr>'
-            f'<th style="{header_style}">Port</th>'
-            f'<th style="{header_style}">Region</th>'
-            f'<th style="{header_style}text-align:right;">Vessels Waiting</th>'
-            f'<th style="{header_style}text-align:right;">Avg Wait</th>'
-            f'<th style="{header_style}">Berth Utilization</th>'
-            f'<th style="{header_style}text-align:center;">Weekly Chg</th>'
-            f'<th style="{header_style}">Status</th>'
-            f'<th style="{header_style}">Rate Impact</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
-            f'</div>'
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+        section_header("Port Congestion Intelligence Table", "Live queue depth, berth utilization, weekly change, rate impact.")
+        headers = ["Port", "Region", "Vessels Waiting", "Avg Wait", "Berth Utilization", "Weekly Chg", "Status", "Rate Impact"]
+        rows: list[list[str]] = []
+        for p in ports:
+            wait_col = C_MOD if p["wait"] > 3 else C_TEXT
+            rows.append([
+                _sans(p["port"], weight=600),
+                _sans(p["region"], color=C_TEXT2),
+                _mono(str(p["vessels"]), color=C_TEXT),
+                _mono(f"{p['wait']}d", color=wait_col),
+                _berth_cell(p["berth"]),
+                _weekly_cell(p["weekly"]),
+                badge(p["status"], _STATUS_BADGE.get(p["status"], "gray")),
+                _sans(p["rate_impact"], color=(C_MOD if "+" in p["rate_impact"] else C_TEXT3)),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.error("_render_table error: {}", exc)
 
@@ -285,10 +250,7 @@ def _render_table(ports: list[dict]) -> None:
 # ── Section 4: Congestion Timeline ───────────────────────────────────────────
 def _render_timeline(ports: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">90-Day Congestion Timeline — Top 5 Ports</div>', unsafe_allow_html=True)
-
+        section_header("90-Day Congestion Timeline — Top 5 Ports", "Mock-trend area series anchored on current score.")
         top5 = sorted(ports, key=lambda p: p["score"], reverse=True)[:5]
         today = date.today()
         days = [today - timedelta(days=89 - i) for i in range(90)]
@@ -296,12 +258,10 @@ def _render_timeline(ports: list[dict]) -> None:
 
         palette = [C_LOW, C_MOD, C_ACCENT, C_HIGH, "#7c6eaf"]
         fig = go.Figure()
-
         for idx, p in enumerate(top5):
             rng = random.Random(hash(p["port"]) & 0xFFFF)
-            base = p["score"]
             series = []
-            val = max(20, base - 15)
+            val = max(20, p["score"] - 15)
             for _ in range(90):
                 val += rng.uniform(-2.5, 3.0)
                 val = max(10, min(100, val))
@@ -312,19 +272,16 @@ def _render_timeline(ports: list[dict]) -> None:
                 mode="lines",
                 line=dict(color=col, width=2),
                 fill="tozeroy",
-                fillcolor=col.replace("#", "rgba(") + ",0.07)" if col.startswith("#") else col,
                 hovertemplate=f"<b>{p['port']}</b><br>%{{x}}<br>Score: %{{y:.1f}}<extra></extra>",
             ))
 
-        fig.update_layout(
-            paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+        apply_dark_layout(
+            fig,
             height=360,
             margin=dict(l=12, r=12, t=12, b=12),
-            legend=dict(orientation="h", y=-0.15, font=dict(color=C_TEXT2, size=11), bgcolor="rgba(0,0,0,0)"),
-            xaxis=dict(showgrid=False, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3), tickangle=-30),
-            yaxis=dict(showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3),
-                       title=dict(text="Congestion Index", font=dict(color=C_TEXT2, size=11)), range=[0, 105]),
-            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
+            legend=dict(orientation="h", y=-0.15, bgcolor="rgba(0,0,0,0)"),
+            xaxis=dict(tickangle=-30),
+            yaxis=dict(title=dict(text="Congestion Index", font=dict(color=C_TEXT2, size=11)), range=[0, 105]),
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -335,10 +292,7 @@ def _render_timeline(ports: list[dict]) -> None:
 # ── Section 5: Wait Time Distribution ────────────────────────────────────────
 def _render_wait_dist(ports: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Vessel Wait Time Distribution</div>', unsafe_allow_html=True)
-
+        section_header("Vessel Wait Time Distribution", "Synthetic per-vessel waits drawn from port averages.")
         rng = random.Random(42)
         waits: list[float] = []
         for p in ports:
@@ -346,7 +300,6 @@ def _render_wait_dist(ports: list[dict]) -> None:
             for _ in range(count):
                 w = max(0.1, rng.gauss(p["wait"], p["wait"] * 0.35))
                 waits.append(round(w, 2))
-
         if not waits:
             waits = [rng.uniform(0.5, 9) for _ in range(120)]
 
@@ -368,34 +321,21 @@ def _render_wait_dist(ports: list[dict]) -> None:
             fig.add_vline(x=val, line_dash="dash", line_color=col, line_width=2,
                           annotation=dict(text=label, font=dict(color=col, size=11), y=1.05))
 
-        fig.update_layout(
-            paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+        apply_dark_layout(
+            fig,
             height=320,
             margin=dict(l=12, r=12, t=36, b=12),
-            xaxis=dict(title=dict(text="Wait Time (days)", font=dict(color=C_TEXT2, size=11)),
-                       showgrid=False, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
-            yaxis=dict(title=dict(text="Number of Vessels", font=dict(color=C_TEXT2, size=11)),
-                       showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
-            bargap=0.06,
-            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
+            xaxis=dict(title=dict(text="Wait Time (days)", font=dict(color=C_TEXT2, size=11))),
+            yaxis=dict(title=dict(text="Number of Vessels", font=dict(color=C_TEXT2, size=11))),
             showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        stats_html = (
-            f'<div style="display:flex;gap:16px;margin-top:8px;">'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:12px 20px;flex:1;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;">Average</div>'
-            f'<div style="font-size:22px;font-weight:700;color:{C_MOD};">{avg_w}d</div></div>'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:12px 20px;flex:1;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;">Median</div>'
-            f'<div style="font-size:22px;font-weight:700;color:{C_HIGH};">{med_w}d</div></div>'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:12px 20px;flex:1;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;text-transform:uppercase;">90th Percentile</div>'
-            f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{p90_w}d</div></div>'
-            f'</div>'
-        )
-        st.markdown(stats_html, unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "AVERAGE",        "value": f"{avg_w}d", "accent": C_MOD},
+            {"label": "MEDIAN",         "value": f"{med_w}d", "accent": C_HIGH},
+            {"label": "90TH PERCENTILE","value": f"{p90_w}d", "accent": C_LOW},
+        ], columns=3)
     except Exception as exc:
         logger.error("_render_wait_dist error: {}", exc)
 
@@ -403,10 +343,7 @@ def _render_wait_dist(ports: list[dict]) -> None:
 # ── Section 6: Congestion-to-Rate Correlation ─────────────────────────────────
 def _render_correlation(ports: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Congestion vs Freight Rate Change</div>', unsafe_allow_html=True)
-
+        section_header("Congestion vs Freight Rate Change", "Scatter of congestion index against synthetic rate move, with OLS trend.")
         rng = random.Random(77)
         xs, ys, labels, cols = [], [], [], []
         for p in ports:
@@ -416,7 +353,6 @@ def _render_correlation(ports: list[dict]) -> None:
             labels.append(p["port"])
             cols.append(C_LOW if p["score"] >= 70 else (C_MOD if p["score"] >= 40 else C_HIGH))
 
-        # Trend line (simple linear regression)
         n = len(xs)
         sx, sy = sum(xs), sum(ys)
         sxy = sum(xs[i] * ys[i] for i in range(n))
@@ -448,29 +384,26 @@ def _render_correlation(ports: list[dict]) -> None:
             name="Ports",
             hovertemplate="<b>%{text}</b><br>Congestion: %{x}<br>Rate Chg: +%{y:.1f}%<extra></extra>",
         ))
-        fig.update_layout(
-            paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+        apply_dark_layout(
+            fig,
             height=360,
             margin=dict(l=12, r=12, t=12, b=12),
-            xaxis=dict(title=dict(text="Congestion Index (0-100)", font=dict(color=C_TEXT2, size=11)),
-                       showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
-            yaxis=dict(title=dict(text="Freight Rate Change (%)", font=dict(color=C_TEXT2, size=11)),
-                       showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickfont=dict(size=11, color=C_TEXT3)),
-            legend=dict(font=dict(color=C_TEXT2, size=11), bgcolor="rgba(0,0,0,0)"),
-            font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
+            xaxis=dict(title=dict(text="Congestion Index (0-100)", font=dict(color=C_TEXT2, size=11))),
+            yaxis=dict(title=dict(text="Freight Rate Change (%)", font=dict(color=C_TEXT2, size=11))),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        insight_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}33;border-radius:6px;'
-            f'padding:14px 20px;margin-top:8px;font-size:13px;color:{C_TEXT2};">'
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid rgba(53,114,176,0.25);'
+            f'border-radius:6px;padding:14px 20px;margin-top:8px;font-size:0.82rem;color:{C_TEXT2};'
+            f'font-family:var(--sans);">'
             f'<span style="color:{C_ACCENT};font-weight:600;">Insight:</span> '
             f'Each 10-point rise in the congestion index correlates with approximately '
-            f'<span style="color:{C_MOD};font-weight:600;">+{round(m*10,1)}%</span> freight rate uplift. '
+            f'<span style="color:{C_MOD};font-weight:600;font-family:var(--mono);">+{round(m*10,1)}%</span> freight rate uplift. '
             f'Critical ports are driving the bulk of current rate pressure on Asia-Europe and Trans-Pacific lanes.'
             f'</div>'
         )
-        st.markdown(insight_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_correlation error: {}", exc)
 
@@ -478,18 +411,7 @@ def _render_correlation(ports: list[dict]) -> None:
 # ── Section 7: Port Efficiency Benchmarks ─────────────────────────────────────
 def _render_efficiency() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};margin:32px 0 16px 0;'
-            f'letter-spacing:0.5px;">Port Efficiency Benchmarks</div>', unsafe_allow_html=True)
-
-        header_style = (
-            f"background:{C_SURFACE};color:{C_TEXT3};font-size:11px;font-weight:600;"
-            f"letter-spacing:1.2px;text-transform:uppercase;padding:10px 14px;text-align:right;"
-            f"border-bottom:1px solid {C_BORDER};"
-        )
-        header_left = header_style.replace("text-align:right;", "text-align:left;")
-        cell_r = f"padding:11px 14px;border-bottom:1px solid {C_BORDER};font-size:13px;color:{C_TEXT};text-align:right;"
-        cell_l = f"padding:11px 14px;border-bottom:1px solid {C_BORDER};font-size:13px;color:{C_TEXT};text-align:left;"
+        section_header("Port Efficiency Benchmarks", "Per-port productivity metrics — color denotes tier.")
 
         def score_color(val: float, lo: float, hi: float, invert: bool = False) -> str:
             norm = (val - lo) / max(hi - lo, 1)
@@ -501,49 +423,24 @@ def _render_efficiency() -> None:
                 return C_MOD
             return C_LOW
 
-        rows_html = ""
-        for i, e in enumerate(_EFFICIENCY):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            crane_c  = score_color(e["crane_mh"], 20, 42)
-            turns_c  = score_color(e["turns_day"], 2.5, 5.5)
-            gate_c   = score_color(e["gate_mh"], 250, 650)
-            rail_c   = score_color(e["rail_pct"], 5, 55)
-            truck_c  = score_color(e["truck_min"], 15, 90, invert=True)
-            rows_html += (
-                f'<tr style="background:{bg};">'
-                f'<td style="{cell_l}font-weight:600;">{e["port"]}</td>'
-                f'<td style="{cell_r}color:{crane_c};">{e["crane_mh"]}</td>'
-                f'<td style="{cell_r}color:{turns_c};">{e["turns_day"]}</td>'
-                f'<td style="{cell_r}color:{gate_c};">{e["gate_mh"]}</td>'
-                f'<td style="{cell_r}color:{rail_c};">{e["rail_pct"]}%</td>'
-                f'<td style="{cell_r}color:{truck_c};">{e["truck_min"]} min</td>'
-                f'</tr>'
-            )
+        st.html(
+            f'<div style="display:flex;gap:16px;margin:0 0 10px 0;font-size:0.76rem;font-family:var(--sans);">'
+            f'{badge("Good", "green")}&nbsp;{badge("Average", "yellow")}&nbsp;{badge("Poor", "red")}'
+            f'</div>'
+        )
 
-        legend_html = (
-            f'<div style="display:flex;gap:16px;margin-bottom:10px;font-size:12px;">'
-            f'<span style="color:{C_HIGH};">&#9646; Good</span>'
-            f'<span style="color:{C_MOD};">&#9646; Average</span>'
-            f'<span style="color:{C_LOW};">&#9646; Poor</span>'
-            f'</div>'
-        )
-        table_html = (
-            f'{legend_html}'
-            f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER};">'
-            f'<table style="width:100%;border-collapse:collapse;font-family:Libre Franklin,sans-serif;">'
-            f'<thead><tr>'
-            f'<th style="{header_left}">Port</th>'
-            f'<th style="{header_style}">Crane Moves/hr</th>'
-            f'<th style="{header_style}">Ship Turns/day</th>'
-            f'<th style="{header_style}">Gate Moves/hr</th>'
-            f'<th style="{header_style}">Rail Lift %</th>'
-            f'<th style="{header_style}">Truck Queue</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
-            f'</div>'
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+        headers = ["Port", "Crane Moves/hr", "Ship Turns/day", "Gate Moves/hr", "Rail Lift %", "Truck Queue"]
+        rows: list[list[str]] = []
+        for e in _EFFICIENCY:
+            rows.append([
+                _sans(e["port"], weight=600),
+                _mono(str(e["crane_mh"]),  color=score_color(e["crane_mh"],  20, 42), weight=700),
+                _mono(f"{e['turns_day']}", color=score_color(e["turns_day"], 2.5, 5.5), weight=700),
+                _mono(str(e["gate_mh"]),   color=score_color(e["gate_mh"],   250, 650), weight=700),
+                _mono(f"{e['rail_pct']}%", color=score_color(e["rail_pct"],  5, 55), weight=700),
+                _mono(f"{e['truck_min']} min", color=score_color(e["truck_min"], 15, 90, invert=True), weight=700),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.error("_render_efficiency error: {}", exc)
 
@@ -554,7 +451,6 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
     try:
         ports: list[dict] = _PORTS
 
-        # Attempt to ingest port_results if provided
         if port_results is not None:
             try:
                 import pandas as pd
@@ -574,10 +470,22 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
         stats = _global_stats(ports)
 
+        page_header(
+            title="Port Congestion Intelligence",
+            subtitle="Critical-port alerts, global congestion index, rate-impact attribution, and efficiency benchmarks.",
+            icon="⚓",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
+
         _render_hero(stats)
+        section_divider()
         _render_map(ports)
+        section_divider()
         _render_table(ports)
+        section_divider()
         _render_timeline(ports)
+        section_divider()
 
         col1, col2 = st.columns(2)
         with col1:
@@ -585,16 +493,18 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
         with col2:
             _render_correlation(ports)
 
+        section_divider()
         _render_efficiency()
 
-        st.markdown(
-            f'<div style="margin-top:32px;padding:16px 20px;background:{C_SURFACE};'
+        st.html(
+            f'<div style="margin-top:32px;padding:16px 20px;background:{C_CARD};'
             f'border-radius:6px;border:1px solid {C_BORDER};'
-            f'font-size:12px;color:{C_TEXT3};display:flex;align-items:center;gap:8px;">'
-            f'<span style="color:{C_ACCENT};">&#9432;</span>'
+            f'font-size:0.78rem;color:{C_TEXT3};font-family:var(--sans);">'
+            f'<span style="color:{C_ACCENT};">&#9432;</span> '
             f'Congestion data refreshed every 6 hours. Index scores are composite metrics derived from vessel AIS data, '
             f'berth utilization signals, and port authority reports. Rate impact estimates reflect 5-day rolling correlation.'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
 
     except Exception as exc:
         logger.error("tab_congestion render error: {}", exc)

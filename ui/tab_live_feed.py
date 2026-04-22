@@ -1,4 +1,14 @@
-"""Live Market Feed tab — WSJ editorial-style real-time data ticker and feed dashboard."""
+"""Live Market Feed tab — WSJ editorial-style real-time data ticker and feed dashboard.
+
+Refactored to use the shared design system in :mod:`ui.styles`. All palette
+constants are imported (not redeclared); ad-hoc inline HTML has been replaced
+with ``page_header``, ``metric_card_row``, ``section_header``,
+``wsj_market_table``, ``badge`` and ``live_data_badge`` helpers.
+
+Every figure/table that consumes data surfaces a provenance pill via
+``live_data_badge`` — synthetic blocks are labeled ``quality="demo"`` so the
+viewer can see the data is not trustworthy.
+"""
 from __future__ import annotations
 
 import random
@@ -6,24 +16,30 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
 # ── Static feed data ───────────────────────────────────────────────────────────
 
@@ -111,6 +127,31 @@ _DATA_REFRESHES = [
     ("Capesize TCE", "$14,500/day", "Baltic Exchange"),
 ]
 
+
+# ── Domain color mappings (tab-local) ──────────────────────────────────────────
+
+_FEED_TYPE_COLOR: dict[str, str] = {
+    "SIGNAL":      C_ACCENT,
+    "NEWS":        C_TEXT3,
+    "RATE CHANGE": C_HIGH,
+    "ALERT":       C_LOW,
+    "DATA UPDATE": C_TEXT,
+}
+
+_SEVERITY_COLOR: dict[str, str] = {
+    "HIGH": C_LOW,
+    "MOD":  C_MOD,
+    "LOW":  C_TEXT3,
+}
+
+_SIGNAL_COLOR_MAP = {
+    "STRONG BUY": C_HIGH,
+    "BUY":        C_HIGH,
+    "HOLD":       C_MOD,
+    "SELL":       C_LOW,
+}
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _utc_now() -> datetime:
@@ -144,48 +185,88 @@ def _pct(val: float, base: float) -> float:
         return 0.0
 
 
-# ── Section 1: Live Header ─────────────────────────────────────────────────────
+def _signal_color(signal: str) -> str:
+    for key, color in _SIGNAL_COLOR_MAP.items():
+        if key in signal:
+            return color
+    return C_MOD
+
+
+def _conviction_color(conv: int) -> str:
+    if conv >= 75:
+        return C_HIGH
+    if conv >= 55:
+        return C_MOD
+    return C_TEXT3
+
+
+def _severity_color(sev: str) -> str:
+    return _SEVERITY_COLOR.get(sev, C_TEXT3)
+
+
+# ── Cell formatters ────────────────────────────────────────────────────────────
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _badge_for_severity(sev: str) -> str:
+    color_map = {"HIGH": "red", "MOD": "yellow", "LOW": "blue"}
+    return badge(sev, color=color_map.get(sev, "blue"))
+
+
+def _render_pill(source: DataSource) -> None:
+    """Render a provenance pill under a section header without an extra div."""
+    st.html(live_data_badge(source))
+
+
+# ── Section 1: Page header + status strip ─────────────────────────────────────
 
 def _render_header(auto_refresh: bool, last_ts: float) -> None:
     try:
         now = _utc_now()
         elapsed = int(time.time() - last_ts)
-        pulse_color = C_HIGH if auto_refresh else C_TEXT3
+        badge_color = C_HIGH if auto_refresh else C_TEXT3
+        badge_text = "LIVE" if auto_refresh else "PAUSED"
 
-        st.markdown(
-            f"""
-            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;
-                        padding:18px 24px;margin-bottom:16px;display:flex;
-                        align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-              <div style="display:flex;align-items:center;gap:14px;">
-                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
-                             background:{pulse_color};"></span>
-                <span style="color:{C_TEXT};font-size:22px;font-weight:700;
-                             letter-spacing:2px;font-family:Libre Baskerville,Georgia,serif;">LIVE MARKET FEED</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
-                <span style="color:{C_TEXT2};font-size:13px;font-family:JetBrains Mono,monospace;">
-                  UTC {now.strftime("%Y-%m-%d %H:%M:%S")}
-                </span>
-                <span style="color:{C_TEXT3};font-size:12px;font-family:Libre Franklin,sans-serif;">
-                  Last updated <span style="color:{C_MOD};font-weight:600;">{elapsed}s ago</span>
-                </span>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+        page_header(
+            title="Live Market Feed",
+            subtitle=(
+                f"Real-time shipping market pulse · UTC "
+                f"{now.strftime('%Y-%m-%d %H:%M:%S')} · updated {elapsed}s ago"
+            ),
+            badge_text=badge_text,
+            badge_color=badge_color,
+        )
     except Exception as exc:
         logger.warning(f"_render_header error: {exc}")
 
 
-# ── Section 2: Market Ticker Strip ─────────────────────────────────────────────
+# ── Section 2: Market ticker strip ─────────────────────────────────────────────
 
 def _render_ticker_strip() -> None:
     try:
+        section_header(
+            "Market Ticker",
+            subtitle="Benchmarks, equities and FX — live snapshot",
+        )
+        _render_pill(DataSource.demo("Baltic/Drewry/SCFI composite"))
+
         items = []
         for label, val, chg, pct in _MARKET_METRICS:
             color = _color_for(chg)
             arrow = _arrow(chg)
-            sign  = _sign(chg)
+            sign = _sign(chg)
             if label in ("BDI", "WCI", "SCFI"):
                 val_str = f"{val:,.0f}"
                 chg_str = f"{sign}{chg:,.0f}"
@@ -207,42 +288,40 @@ def _render_ticker_strip() -> None:
             )
 
         ticker_html = "".join(items)
-        # duplicate for seamless loop
         double = ticker_html + ticker_html
 
-        st.markdown(
-            f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;
-                        overflow:hidden;padding:10px 0;margin-bottom:16px;">
-              <div style="overflow:hidden;white-space:nowrap;position:relative;">
-                <div style="display:inline-block;animation:scroll-left 45s linear infinite;
-                            font-family:JetBrains Mono,monospace;">
-                  {double}
-                </div>
-              </div>
-            </div>
-            <style>
-              @keyframes scroll-left {{
-                0%   {{ transform: translateX(0); }}
-                100% {{ transform: translateX(-50%); }}
-              }}
-            </style>
-            """, unsafe_allow_html=True)
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
+            f'overflow:hidden;padding:10px 0;margin-bottom:16px;">'
+            f'<div style="overflow:hidden;white-space:nowrap;position:relative;">'
+            f'<div style="display:inline-block;animation:scroll-left 45s linear infinite;'
+            f'font-family:var(--mono);">'
+            f'{double}'
+            f'</div>'
+            f'</div>'
+            f'</div>'
+            f'<style>'
+            f'@keyframes scroll-left {{'
+            f'0% {{ transform: translateX(0); }}'
+            f'100% {{ transform: translateX(-50%); }}'
+            f'}}'
+            f'</style>'
+        )
     except Exception as exc:
         logger.warning(f"_render_ticker_strip error: {exc}")
 
 
-# ── Section 3: Breaking Alerts ─────────────────────────────────────────────────
+# ── Section 3: Breaking alerts ─────────────────────────────────────────────────
 
 def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">BREAKING ALERTS</div>', unsafe_allow_html=True)
+        section_header("Breaking Alerts",
+                       subtitle="High-severity events from news + insight feeds")
+
+        _render_pill(DataSource.demo("News + insights (static)"))
 
         alerts: list[str] = []
 
-        # pull from news_items
         if news_items:
             for item in news_items:
                 try:
@@ -256,7 +335,6 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
                 except Exception:
                     pass
 
-        # pull from insights
         if insights:
             for ins in (insights if isinstance(insights, list) else []):
                 try:
@@ -266,43 +344,35 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
                 except Exception:
                     pass
 
-        # fallback to static high-urgency news
         if not alerts:
             alerts = [h for h, s in _NEWS_ITEMS if s == "HIGH"]
 
         alerts = alerts[:3]
 
         if not alerts:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:Libre Franklin,sans-serif;">No critical alerts at this time.</div>', unsafe_allow_html=True)
+                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:var(--sans);">'
+                f'No critical alerts at this time.</div>'
+            )
             return
 
         for alert in alerts:
-            st.markdown(
-                f"""
-                <div style="background:{C_CARD};border:1px solid {C_LOW};border-left:4px solid {C_LOW};
-                            border-radius:3px;padding:14px 18px;margin-bottom:8px;
-                            display:flex;align-items:center;gap:14px;">
-                  <span style="background:{C_LOW};color:#fff;font-size:10px;font-weight:800;
-                               padding:2px 7px;border-radius:3px;letter-spacing:1px;">NEW</span>
-                  <span style="color:{C_TEXT};font-size:13px;font-weight:500;font-family:Libre Franklin,sans-serif;">{alert}</span>
-                </div>
-                """, unsafe_allow_html=True)
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {C_LOW};'
+                f'border-left:4px solid {C_LOW};border-radius:3px;padding:14px 18px;'
+                f'margin-bottom:8px;display:flex;align-items:center;gap:14px;">'
+                f'<span style="background:{C_LOW};color:#fff;font-size:10px;font-weight:800;'
+                f'padding:2px 7px;border-radius:3px;letter-spacing:1px;font-family:var(--sans);">NEW</span>'
+                f'<span style="color:{C_TEXT};font-size:13px;font-weight:500;'
+                f'font-family:var(--sans);">{alert}</span>'
+                f'</div>'
+            )
     except Exception as exc:
         logger.warning(f"_render_breaking_alerts error: {exc}")
 
 
-# ── Section 4: Multi-Feed Table ─────────────────────────────────────────────────
-
-_FEED_TYPE_STYLE: dict[str, tuple[str, str]] = {
-    "SIGNAL":      (C_ACCENT, "#1e3a5f"),
-    "NEWS":        (C_TEXT3,  C_SURFACE),
-    "RATE CHANGE": (C_HIGH,   "#0d2b1e"),
-    "ALERT":       (C_LOW,    "#2d0f0f"),
-    "DATA UPDATE": (C_TEXT,   "#181c28"),
-}
-
+# ── Section 4: Multi-feed table ────────────────────────────────────────────────
 
 def _build_feed_rows() -> list[dict]:
     rows: list[dict] = []
@@ -315,38 +385,37 @@ def _build_feed_rows() -> list[dict]:
     for i, (route, old, new, chg) in enumerate(_RATE_CHANGES[:15]):
         sign = "+" if chg >= 0 else ""
         color = C_HIGH if chg >= 0 else C_LOW
-        pct_val = _pct(chg, old)
         rows.append({
             "ts": ts(i * 3 + 1),
             "type": "RATE CHANGE",
             "item": f"{route}",
-            "value": f'<span style="color:{color};font-weight:600;">{sign}${chg:,.0f}/TEU → ${new:,.0f}</span>',
+            "value": _mono(f"{sign}${chg:,.0f}/TEU → ${new:,.0f}", color=color, weight=600),
             "severity": "MOD" if abs(chg) < 200 else "HIGH",
             "sort_key": i * 3 + 1,
         })
 
     # Alpha signals (10)
     for i, (ticker, signal, conv, rationale) in enumerate(_ALPHA_SIGNALS):
-        conv_color = C_HIGH if conv >= 75 else (C_MOD if conv >= 55 else C_TEXT3)
-        sig_color  = C_HIGH if "BUY" in signal else (C_LOW if "SELL" in signal else C_MOD)
         rows.append({
             "ts": ts(i * 4 + 2),
             "type": "SIGNAL",
             "item": f"{ticker}: {rationale[:45]}...",
-            "value": f'<span style="color:{sig_color};font-weight:700;">{signal}</span> '
-                     f'<span style="color:{conv_color};font-size:11px;">conviction {conv}%</span>',
+            "value": (
+                _sans(signal, color=_signal_color(signal), weight=700)
+                + " "
+                + _sans(f"conviction {conv}%", color=_conviction_color(conv), weight=500)
+            ),
             "severity": "HIGH" if conv >= 80 else "MOD",
             "sort_key": i * 4 + 2,
         })
 
     # News (10)
     for i, (headline, sev) in enumerate(_NEWS_ITEMS):
-        sev_color = C_LOW if sev == "HIGH" else (C_MOD if sev == "MOD" else C_TEXT3)
         rows.append({
             "ts": ts(i * 5 + 3),
             "type": "NEWS",
             "item": headline[:60] + ("..." if len(headline) > 60 else ""),
-            "value": f'<span style="color:{sev_color};font-size:11px;">&#9632; {sev}</span>',
+            "value": _sans(f"&#9632; {sev}", color=_severity_color(sev), weight=500),
             "severity": sev,
             "sort_key": i * 5 + 3,
         })
@@ -357,7 +426,7 @@ def _build_feed_rows() -> list[dict]:
             "ts": ts(i * 7 + 10),
             "type": "ALERT",
             "item": f"{port}: {update}",
-            "value": f'<span style="color:{C_MOD};">PORT OPS</span>',
+            "value": _sans("PORT OPS", color=C_MOD, weight=600),
             "severity": "MOD",
             "sort_key": i * 7 + 10,
         })
@@ -369,7 +438,7 @@ def _build_feed_rows() -> list[dict]:
             "ts": ts(i * 6 + 15),
             "type": "DATA UPDATE",
             "item": f"{name}: {actual} (consensus {consensus})",
-            "value": f'<span style="color:{color};font-size:12px;">{note}</span>',
+            "value": _sans(note, color=color, weight=500),
             "severity": "MOD",
             "sort_key": i * 6 + 15,
         })
@@ -380,7 +449,7 @@ def _build_feed_rows() -> list[dict]:
             "ts": ts(i * 8 + 20),
             "type": "DATA UPDATE",
             "item": f"{metric} updated: {val}",
-            "value": f'<span style="color:{C_TEXT3};font-size:11px;">{source}</span>',
+            "value": _sans(source, color=C_TEXT3, weight=500),
             "severity": "LOW",
             "sort_key": i * 8 + 20,
         })
@@ -391,67 +460,48 @@ def _build_feed_rows() -> list[dict]:
 
 def _render_feed_table() -> None:
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:20px 0 10px;font-family:Libre Baskerville,Georgia,serif;">LIVE DATA FEED</div>', unsafe_allow_html=True)
+        section_header(
+            "Live Data Feed",
+            subtitle="Unified stream of rates, signals, news and macro updates",
+        )
+        _render_pill(DataSource.demo("Composite multi-feed"))
 
         rows = _build_feed_rows()
 
-        header = (
-            f'<div style="display:grid;grid-template-columns:70px 110px 1fr 220px 60px;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:3px 3px 0 0;padding:8px 12px;">'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">TIME</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">FEED TYPE</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">ITEM</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">VALUE / CHANGE</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">SEV</span>'
-            f'</div>'
-        )
+        headers = ["Time", "Feed Type", "Item", "Value / Change", "Severity"]
+        table_rows: list[list[str]] = []
+        for row in rows:
+            ftype = row["type"]
+            type_color = _FEED_TYPE_COLOR.get(ftype, C_TEXT2)
+            table_rows.append([
+                _mono(row["ts"], color=C_TEXT3, weight=500),
+                badge(ftype, color=type_color),
+                _sans(row["item"], color=C_TEXT2, weight=500),
+                row["value"],
+                _badge_for_severity(row["severity"]),
+            ])
 
-        body_parts = [header]
-        for idx, row in enumerate(rows):
-            ftype      = row["type"]
-            label_col, bg_col = _FEED_TYPE_STYLE.get(ftype, (C_TEXT2, C_CARD))
-            sev        = row["severity"]
-            sev_color  = C_LOW if sev == "HIGH" else (C_MOD if sev == "MOD" else C_TEXT3)
-            row_bg     = bg_col if idx % 2 == 0 else C_BG
-            border_bot = f"border-bottom:1px solid {C_BORDER};"
-
-            body_parts.append(
-                f'<div style="display:grid;grid-template-columns:70px 110px 1fr 220px 60px;'
-                f'gap:0;background:{row_bg};{border_bot}padding:7px 12px;align-items:center;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:JetBrains Mono,monospace;">{row["ts"]}</span>'
-                f'<span style="background:{label_col}22;color:{label_col};font-size:10px;'
-                f'font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;'
-                f'white-space:nowrap;font-family:Libre Franklin,sans-serif;">{ftype}</span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;padding:0 8px;'
-                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Libre Franklin,sans-serif;">{row["item"]}</span>'
-                f'<span style="font-size:12px;font-family:Libre Franklin,sans-serif;">{row["value"]}</span>'
-                f'<span style="color:{sev_color};font-size:10px;font-weight:700;">{sev}</span>'
-                f'</div>'
-            )
-
-        st.markdown(
-            f'<div style="border-radius:3px;overflow:hidden;max-height:480px;'
-            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>', unsafe_allow_html=True)
+        wsj_market_table(headers, table_rows)
     except Exception as exc:
         logger.warning(f"_render_feed_table error: {exc}")
 
 
-# ── Section 5: Signal Activity Chart ───────────────────────────────────────────
+# ── Section 5: Signal activity chart ──────────────────────────────────────────
 
 def _render_signal_chart() -> None:
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">SIGNAL ACTIVITY — LAST 24H</div>', unsafe_allow_html=True)
+        section_header(
+            "Signal Activity — Last 24h",
+            subtitle="Hourly count of alpha signals, shaded by avg conviction",
+        )
+        # Synthetic data: replace with a signal-history feed when wired.
+        _render_pill(DataSource.demo("Hourly signal counts"))
 
         rng = list(range(24))
-        counts  = [random.randint(0, 8) for _ in rng]
-        convs   = [random.randint(50, 95) for _ in rng]
-        labels  = [f"{h:02d}:00" for h in rng]
-        colors  = [C_HIGH if c >= 75 else (C_MOD if c >= 60 else C_TEXT3) for c in convs]
+        counts = [random.randint(0, 8) for _ in rng]
+        convs = [random.randint(50, 95) for _ in rng]
+        labels = [f"{h:02d}:00" for h in rng]
+        colors = [C_HIGH if c >= 75 else (C_MOD if c >= 60 else C_TEXT3) for c in convs]
 
         fig = go.Figure(go.Bar(
             x=labels,
@@ -462,116 +512,85 @@ def _render_signal_chart() -> None:
             textfont_color=C_TEXT2,
             hovertemplate="<b>%{x}</b><br>Signals: %{y}<extra></extra>",
         ))
-
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor=C_SURFACE,
-            font_color=C_TEXT2,
+        apply_dark_layout(
+            fig,
             height=220,
             margin=dict(l=40, r=20, t=10, b=40),
-            xaxis=dict(
-                showgrid=False,
-                tickfont_color=C_TEXT3,
-                tickfont_size=10,
-            ),
-            yaxis=dict(
-                showgrid=True,
-                gridcolor=C_BORDER,
-                tickfont_color=C_TEXT3,
-                title_text="Signals",
-                title_font_color=C_TEXT3,
-            ),
+            xaxis=dict(showgrid=False),
+            yaxis=dict(title_text="Signals"),
             bargap=0.25,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="live_feed_signal_chart")
 
-        # Legend
-        st.markdown(
-            f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;font-family:Libre Franklin,sans-serif;">'
+        st.html(
+            f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;'
+            f'font-family:var(--sans);">'
             f'<span style="color:{C_HIGH};font-size:11px;">&#9632; High conviction (&ge;75%)</span>'
             f'<span style="color:{C_MOD};font-size:11px;">&#9632; Moderate (60–74%)</span>'
             f'<span style="color:{C_TEXT3};font-size:11px;">&#9632; Low (&lt;60%)</span>'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"_render_signal_chart error: {exc}")
 
 
-# ── Section 6: Freight Rate Changes ────────────────────────────────────────────
+# ── Section 6: Freight rate changes ────────────────────────────────────────────
 
 def _render_freight_table(freight_data: Any) -> None:
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">FREIGHT RATE CHANGES</div>', unsafe_allow_html=True)
+        section_header(
+            "Freight Rate Changes",
+            subtitle="Recent per-TEU rate moves across primary container lanes",
+        )
+        _render_pill(DataSource.demo("Rate change ticker"))
 
         base = _utc_now()
-        rows = []
+        headers = ["Time", "Route", "Old", "New", "Change", "Pct"]
+        rows: list[list[str]] = []
         for i, (route, old, new, chg) in enumerate(_RATE_CHANGES[:20]):
-            pct_val  = _pct(chg, old)
-            sign     = "+" if chg >= 0 else ""
-            ts_str   = _fmt_time(base - timedelta(minutes=i * 4 + random.randint(0, 3)))
-            chg_col  = C_HIGH if chg >= 0 else C_LOW
-            rows.append((ts_str, route, f"${old:,.0f}", f"${new:,.0f}",
-                         f"{sign}${chg:,.0f}", f"{sign}{pct_val:.1f}%", chg_col))
+            pct_val = _pct(chg, old)
+            sign = "+" if chg >= 0 else ""
+            # Jitter the timestamp so entries look staggered; synthetic.
+            ts_str = _fmt_time(base - timedelta(minutes=i * 4 + random.randint(0, 3)))
+            chg_col = C_HIGH if chg >= 0 else C_LOW
+            rows.append([
+                _mono(ts_str, color=C_TEXT3, weight=500),
+                _sans(route, color=C_TEXT2, weight=500),
+                _mono(f"${old:,.0f}", color=C_TEXT3, weight=500),
+                _mono(f"${new:,.0f}", color=C_TEXT, weight=600),
+                _mono(f"{sign}${chg:,.0f}", color=chg_col, weight=700),
+                _mono(f"{sign}{pct_val:.1f}%", color=chg_col, weight=600),
+            ])
 
-        header = (
-            f'<div style="display:grid;grid-template-columns:80px 1fr 90px 90px 90px 70px;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:3px 3px 0 0;padding:8px 12px;">'
-            + "".join(
-                f'<span style="color:{C_TEXT3};font-size:11px;font-weight:700;letter-spacing:1px;font-family:Libre Franklin,sans-serif;">{h}</span>'
-                for h in ["TIME", "ROUTE", "OLD", "NEW", "CHANGE", "PCT"]
-            )
-            + "</div>"
-        )
-
-        body_parts = [header]
-        for idx, (ts_str, route, old_s, new_s, chg_s, pct_s, chg_col) in enumerate(rows):
-            row_bg = C_CARD if idx % 2 == 0 else C_BG
-            body_parts.append(
-                f'<div style="display:grid;grid-template-columns:80px 1fr 90px 90px 90px 70px;'
-                f'gap:0;background:{row_bg};border-bottom:1px solid {C_BORDER};'
-                f'padding:7px 12px;align-items:center;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:JetBrains Mono,monospace;">{ts_str}</span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;font-family:Libre Franklin,sans-serif;">{route}</span>'
-                f'<span style="color:{C_TEXT3};font-size:12px;">{old_s}</span>'
-                f'<span style="color:{C_TEXT};font-size:12px;font-weight:600;">{new_s}</span>'
-                f'<span style="color:{chg_col};font-size:12px;font-weight:700;">{chg_s}</span>'
-                f'<span style="color:{chg_col};font-size:12px;">{pct_s}</span>'
-                f'</div>'
-            )
-
-        st.markdown(
-            f'<div style="border-radius:3px;overflow:hidden;max-height:340px;'
-            f'overflow-y:auto;border:1px solid {C_BORDER};">{"".join(body_parts)}</div>', unsafe_allow_html=True)
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"_render_freight_table error: {exc}")
 
 
-# ── Section 7: News Sentiment Pulse ────────────────────────────────────────────
+# ── Section 7: News sentiment pulse ────────────────────────────────────────────
 
 def _render_sentiment_pulse(news_items: Any) -> None:
     try:
-        st.markdown(
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;'
-            f'letter-spacing:1px;margin:24px 0 10px;font-family:Libre Baskerville,Georgia,serif;">NEWS SENTIMENT PULSE</div>', unsafe_allow_html=True)
+        section_header(
+            "News Sentiment Pulse",
+            subtitle="Rolling sentiment scores derived from headline severity mix",
+        )
+        _render_pill(DataSource.demo("Headline-derived sentiment"))
 
-        # Derive from news_items if available, else use static values
-        s1h  = -0.18
-        s4h  =  0.04
-        s24h =  0.11
+        s1h, s4h, s24h = -0.18, 0.04, 0.11
 
         if news_items and isinstance(news_items, list):
-            high_count = sum(1 for n in news_items if isinstance(n, dict) and
-                             str(n.get("severity", "")).upper() == "HIGH")
+            high_count = sum(
+                1 for n in news_items
+                if isinstance(n, dict) and str(n.get("severity", "")).upper() == "HIGH"
+            )
             total = max(len(news_items), 1)
-            s1h  = round(-high_count / total + random.uniform(-0.05, 0.05), 2)
-            s4h  = round(s1h * 0.6 + random.uniform(-0.08, 0.08), 2)
+            # Synthetic jitter — replace with real sentiment windowing when a
+            # scored news feed is wired into the app.
+            s1h = round(-high_count / total + random.uniform(-0.05, 0.05), 2)
+            s4h = round(s1h * 0.6 + random.uniform(-0.08, 0.08), 2)
             s24h = round(s4h * 0.5 + random.uniform(-0.05, 0.08), 2)
-
-        def _fmt_score(v: float) -> str:
-            return f"{'+' if v >= 0 else ''}{v:.2f}"
 
         def _score_color(v: float) -> str:
             if v > 0.05:
@@ -580,21 +599,35 @@ def _render_sentiment_pulse(news_items: Any) -> None:
                 return C_LOW
             return C_MOD
 
-        cols = st.columns(3)
-        for col, (label, val, window) in zip(cols, [
-            ("1-Hour Score",    s1h,  "Rolling 1h"),
-            ("4-Hour Average",  s4h,  "Rolling 4h"),
-            ("24-Hour Average", s24h, "Rolling 24h"),
-        ]):
-            col.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                f'padding:18px;text-align:center;">'
-                f'<div style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;margin-bottom:6px;font-family:Libre Franklin,sans-serif;">{label}</div>'
-                f'<div style="color:{_score_color(val)};font-size:32px;font-weight:800;'
-                f'font-family:JetBrains Mono,monospace;">{_fmt_score(val)}</div>'
-                f'<div style="color:{C_TEXT3};font-size:11px;margin-top:6px;font-family:Libre Franklin,sans-serif;">{window}</div>'
-                f'</div>'
-            )
+        def _accent(v: float) -> str:
+            return _score_color(v)
+
+        def _fmt_score(v: float) -> str:
+            return f"{'+' if v >= 0 else ''}{v:.2f}"
+
+        metric_card_row(
+            [
+                {
+                    "label":    "1-Hour Score",
+                    "value":    _fmt_score(s1h),
+                    "accent":   _accent(s1h),
+                    "sublabel": "Rolling 1h",
+                },
+                {
+                    "label":    "4-Hour Average",
+                    "value":    _fmt_score(s4h),
+                    "accent":   _accent(s4h),
+                    "sublabel": "Rolling 4h",
+                },
+                {
+                    "label":    "24-Hour Average",
+                    "value":    _fmt_score(s24h),
+                    "accent":   _accent(s24h),
+                    "sublabel": "Rolling 24h",
+                },
+            ],
+            columns=3,
+        )
     except Exception as exc:
         logger.warning(f"_render_sentiment_pulse error: {exc}")
 
@@ -632,42 +665,27 @@ def render(
     try:
         logger.debug("Rendering tab_live_feed")
 
-        # Track last-updated timestamp in session state
         _TS_KEY = "_live_feed_last_ts"
         if _TS_KEY not in st.session_state:
             st.session_state[_TS_KEY] = time.time()
 
-        # ── Controls row ──────────────────────────────────────────────────────
         ctrl_col, _ = st.columns([2, 8])
         with ctrl_col:
-            auto_refresh = st.checkbox("Auto-refresh (60s)", value=False, key="_live_feed_auto")
+            auto_refresh = st.checkbox(
+                "Auto-refresh (60s)",
+                value=False,
+                key="_live_feed_auto",
+            )
 
         last_ts = st.session_state.get(_TS_KEY, time.time())
 
-        # ── 1. Header ─────────────────────────────────────────────────────────
         _render_header(auto_refresh, last_ts)
-
-        # ── 2. Ticker strip ───────────────────────────────────────────────────
         _render_ticker_strip()
-
-        # ── 3. Breaking alerts ────────────────────────────────────────────────
         _render_breaking_alerts(insights, news_items)
-
-        st.markdown("<div style='margin:8px 0;'></div>", unsafe_allow_html=True)
-
-        # ── 4. Multi-feed table ───────────────────────────────────────────────
         _render_feed_table()
-
-        # ── 5. Signal activity chart ──────────────────────────────────────────
         _render_signal_chart()
-
-        # ── 6. Freight rate changes ───────────────────────────────────────────
         _render_freight_table(freight_data)
-
-        # ── 7. Sentiment pulse ────────────────────────────────────────────────
         _render_sentiment_pulse(news_items)
-
-        # ── 8. Auto-refresh trigger ───────────────────────────────────────────
         _handle_auto_refresh(auto_refresh)
 
     except Exception as exc:

@@ -1,43 +1,54 @@
-"""tab_trade_flows.py — Global Trade Flows: cargo flow map, Sankey diagram,
-route cargo breakdowns, and commodity deep-dive cards."""
+"""tab_trade_flows.py — Global Trade Flows dashboard.
+
+Refactored to follow the canonical WSJ design-system migration playbook:
+palette constants now live in ``ui.styles``; all headers/cards/tables use
+shared helpers; every figure and table carries a ``live_data_badge`` with
+honest provenance. The underlying data is still illustrative — it will be
+wired to ``data.comtrade_feed.fetch_bilateral_flows()`` in Track B, at
+which point the ``DataSource.demo(...)`` calls flip to ``scraped``.
+"""
 from __future__ import annotations
 
-import math
-from typing import Any
+import calendar
 
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ports.port_registry import PORTS
-from routes.route_registry import ROUTES
 from processing.cargo_analyzer import (
-    HS_CATEGORIES,
     CARGO_CHARACTERISTICS,
-    _ROUTE_REGIONS,
+    HS_CATEGORIES,
     _REGION_DOMINANT_CARGO,
+    _ROUTE_REGIONS,
     _demand_signal,
     _key_insight,
 )
+from routes.route_registry import ROUTES
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    live_data_badge,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
-# ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
 
-_SANS = "'Libre Franklin', 'Inter', system-ui, sans-serif"
-_MONO = "'JetBrains Mono', 'Fira Code', monospace"
-
-# Commodity → color mapping
-COMMODITY_COLORS = {
+# ── Domain-specific (non-palette) constants ─────────────────────────────────
+# Commodity → color lookup. Kept local because it is *semantic* to this tab
+# (commodity taxonomy), not part of the shared palette.
+COMMODITY_COLORS: dict[str, str] = {
     "electronics": "#3b82f6",
     "machinery":   "#8b5cf6",
     "automotive":  "#06b6d4",
@@ -47,13 +58,12 @@ COMMODITY_COLORS = {
     "apparel":     "#ec4899",
 }
 
-COMMODITY_LABELS = {k: v["label"] for k, v in HS_CATEGORIES.items()}
+COMMODITY_LABELS: dict[str, str] = {k: v["label"] for k, v in HS_CATEGORIES.items()}
 
-# Port lookup by locode
 _PORTS_BY_LOCODE = {p.locode: p for p in PORTS}
 
-# Estimated annual trade volume per route ($ billions, illustrative)
-_ROUTE_VOLUMES = {
+# Estimated annual trade volume per route ($ billions, illustrative).
+_ROUTE_VOLUMES: dict[str, int] = {
     "transpacific_eb": 420, "asia_europe": 380, "transpacific_wb": 120,
     "transatlantic": 210, "sea_transpacific_eb": 95, "ningbo_europe": 180,
     "middle_east_to_europe": 85, "middle_east_to_asia": 110,
@@ -65,44 +75,76 @@ _ROUTE_VOLUMES = {
 }
 
 
-def _rgba(h: str, a: float) -> str:
+# ── Provenance ──────────────────────────────────────────────────────────────
+# Single demo-quality source used until the Comtrade feed is wired up. The
+# red pill makes it unambiguous that the figures are synthetic.
+
+def _trade_flow_source() -> DataSource:
+    return DataSource(
+        name="Illustrative Trade Flows",
+        kind="demo",
+        quality="demo",
+        notes=(
+            "Demo data derived from route registry + region dominant-cargo heuristics. "
+            "Wire to data.comtrade_feed.fetch_bilateral_flows() in Track B."
+        ),
+    )
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Local hex → rgba helper (kept because translucent link/arc colors are
+    hot-path inside the Plotly traces)."""
     try:
-        h2 = h.lstrip("#")
-        r, g, b = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-        return f"rgba({r},{g},{b},{a})"
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
     except Exception:
-        return f"rgba(255,255,255,{a})"
+        return f"rgba(255,255,255,{alpha})"
 
 
-def _card_html(title: str, subtitle: str = "") -> str:
-    sub = f'<div style="font-family:{_SANS};font-size:0.68rem;color:{C_TEXT3};margin-top:2px">{subtitle}</div>' if subtitle else ""
-    return f"""<div style="font-family:{_SANS};font-size:0.78rem;font-weight:700;color:{C_TEXT};
-                letter-spacing:-0.01em;margin-bottom:12px">{title}{sub}</div>"""
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content for wsj_market_table."""
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    """Monospace numeric cell content for wsj_market_table."""
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
 
 
 def _get_route_cargo_mix(route_id: str) -> dict[str, float]:
-    """Get cargo category weights for a route based on origin region."""
+    """Return cargo category weights for a route based on origin region."""
     regions = _ROUTE_REGIONS.get(route_id)
     if not regions:
         return {"electronics": 0.25, "machinery": 0.25, "chemicals": 0.25, "metals": 0.25}
     origin_region = regions[0]
     dominant = _REGION_DOMINANT_CARGO.get(origin_region, ["electronics", "machinery"])
-    n = len(dominant)
-    weights = {}
+    weights: dict[str, float] = {}
     remaining = 1.0
     for i, cat in enumerate(dominant):
         w = max(0.10, (0.55 - i * 0.12))
         weights[cat] = w
         remaining -= w
-    # Distribute remaining among other categories
     others = [c for c in HS_CATEGORIES if c not in weights]
     if others and remaining > 0:
         per = remaining / len(others)
         for c in others:
             weights[c] = per
-    # Normalize
     total = sum(weights.values())
     return {k: v / total for k, v in weights.items()}
+
+
+def _provenance_pill() -> None:
+    """Render the shared data-quality pill above a figure/table."""
+    st.html(live_data_badge(_trade_flow_source()))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -111,18 +153,16 @@ def _get_route_cargo_mix(route_id: str) -> dict[str, float]:
 
 def _render_flow_map() -> None:
     try:
-        from ui.styles import dark_layout
-
         fig = go.Figure()
 
         # Port markers
-        lats = [p.lat for p in PORTS]
-        lons = [p.lon for p in PORTS]
-        names = [p.name for p in PORTS]
         fig.add_trace(go.Scattergeo(
-            lat=lats, lon=lons, text=names,
+            lat=[p.lat for p in PORTS],
+            lon=[p.lon for p in PORTS],
+            text=[p.name for p in PORTS],
             mode="markers+text",
-            marker=dict(size=6, color=C_ACCENT, opacity=0.8, line=dict(width=0.5, color=C_TEXT3)),
+            marker=dict(size=6, color=C_ACCENT, opacity=0.8,
+                        line=dict(width=0.5, color=C_TEXT3)),
             textposition="top center",
             textfont=dict(size=8, color=C_TEXT3),
             hovertemplate="<b>%{text}</b><extra></extra>",
@@ -130,7 +170,7 @@ def _render_flow_map() -> None:
         ))
 
         # Route arcs colored by dominant commodity
-        legend_added = set()
+        legend_added: set[str] = set()
         for route in ROUTES:
             origin = _PORTS_BY_LOCODE.get(route.origin_locode)
             dest = _PORTS_BY_LOCODE.get(route.dest_locode)
@@ -163,7 +203,11 @@ def _render_flow_map() -> None:
                 ),
             ))
 
-        fig.update_layout(
+        apply_dark_layout(
+            fig,
+            height=480,
+            margin=dict(l=0, r=0, t=10, b=10),
+            showlegend=True,
             geo=dict(
                 bgcolor=C_BG,
                 landcolor=C_SURFACE,
@@ -176,20 +220,19 @@ def _render_flow_map() -> None:
                 lataxis_range=[-50, 75],
                 lonaxis_range=[-130, 160],
             ),
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            height=480,
-            margin=dict(l=0, r=0, t=10, b=10),
             legend=dict(
                 bgcolor="rgba(0,0,0,0)",
-                font=dict(color=C_TEXT2, size=11, family=_SANS),
+                font=dict(color=C_TEXT2, size=11,
+                          family="'Libre Franklin','Inter',system-ui,sans-serif"),
                 orientation="h",
                 yanchor="bottom", y=1.02,
                 xanchor="center", x=0.5,
             ),
         )
 
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        _provenance_pill()
+        st.plotly_chart(fig, use_container_width=True,
+                        config={"displayModeBar": False})
 
     except Exception as exc:
         logger.warning(f"Flow map render failed: {exc}")
@@ -202,12 +245,10 @@ def _render_flow_map() -> None:
 
 def _render_sankey() -> None:
     try:
-        # Build nodes: origin regions + commodity types + dest regions
-        origin_regions = sorted(set(r[0] for r in _ROUTE_REGIONS.values()))
+        origin_regions = sorted({r[0] for r in _ROUTE_REGIONS.values()})
         commodities = list(HS_CATEGORIES.keys())
-        dest_regions = sorted(set(r[1] for r in _ROUTE_REGIONS.values()))
+        dest_regions = sorted({r[1] for r in _ROUTE_REGIONS.values()})
 
-        # Deduplicate regions that appear on both sides
         all_origins = [f"{r} (origin)" for r in origin_regions]
         all_dests = [f"{r} (dest)" for r in dest_regions]
         all_commodities = [COMMODITY_LABELS.get(c, c.title()) for c in commodities]
@@ -215,17 +256,19 @@ def _render_sankey() -> None:
 
         origin_idx = {r: i for i, r in enumerate(origin_regions)}
         commodity_idx = {c: len(origin_regions) + i for i, c in enumerate(commodities)}
-        dest_idx = {r: len(origin_regions) + len(commodities) + i for i, r in enumerate(dest_regions)}
+        dest_idx = {
+            r: len(origin_regions) + len(commodities) + i
+            for i, r in enumerate(dest_regions)
+        }
 
         sources, targets, values, link_colors = [], [], [], []
 
         # Origin → Commodity links
-        for route_id, (orig_region, dest_region) in _ROUTE_REGIONS.items():
+        for route_id, (orig_region, _dest_region) in _ROUTE_REGIONS.items():
             if orig_region not in origin_idx:
                 continue
             vol = _ROUTE_VOLUMES.get(route_id, 30)
-            cargo_mix = _get_route_cargo_mix(route_id)
-            for cat, weight in cargo_mix.items():
+            for cat, weight in _get_route_cargo_mix(route_id).items():
                 if cat not in commodity_idx:
                     continue
                 flow_val = vol * weight
@@ -237,12 +280,11 @@ def _render_sankey() -> None:
                 link_colors.append(_rgba(COMMODITY_COLORS.get(cat, C_ACCENT), 0.4))
 
         # Commodity → Destination links
-        for route_id, (orig_region, dest_region) in _ROUTE_REGIONS.items():
+        for route_id, (_orig_region, dest_region) in _ROUTE_REGIONS.items():
             if dest_region not in dest_idx:
                 continue
             vol = _ROUTE_VOLUMES.get(route_id, 30)
-            cargo_mix = _get_route_cargo_mix(route_id)
-            for cat, weight in cargo_mix.items():
+            for cat, weight in _get_route_cargo_mix(route_id).items():
                 if cat not in commodity_idx:
                     continue
                 flow_val = vol * weight
@@ -253,7 +295,6 @@ def _render_sankey() -> None:
                 values.append(flow_val)
                 link_colors.append(_rgba(COMMODITY_COLORS.get(cat, C_ACCENT), 0.4))
 
-        # Node colors
         node_colors = (
             [_rgba(C_ACCENT, 0.7)] * len(origin_regions)
             + [COMMODITY_COLORS.get(c, C_ACCENT) for c in commodities]
@@ -274,15 +315,16 @@ def _render_sankey() -> None:
             ),
         ))
 
-        fig.update_layout(
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            font=dict(color=C_TEXT2, size=11, family=_SANS),
+        apply_dark_layout(
+            fig,
             height=450,
             margin=dict(l=10, r=10, t=10, b=10),
+            showlegend=False,
         )
 
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        _provenance_pill()
+        st.plotly_chart(fig, use_container_width=True,
+                        config={"displayModeBar": False})
 
     except Exception as exc:
         logger.warning(f"Sankey render failed: {exc}")
@@ -290,19 +332,21 @@ def _render_sankey() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — Route Cargo Breakdown
+# SECTION 3 — Route Cargo Breakdown (WSJ market table)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_route_breakdown() -> None:
     try:
-        rows_html = ""
+        headers = ["Route", "Volume", "Top Commodity", "Second", "Mix"]
+        rows = []
+
         for route in ROUTES:
             cargo_mix = _get_route_cargo_mix(route.id)
             vol = _ROUTE_VOLUMES.get(route.id, 30)
+            sorted_cats = sorted(cargo_mix.items(), key=lambda kv: -kv[1])
 
-            # Build stacked bar segments
+            # Inline stacked-bar "mix" visual (pure HTML inside the cell)
             bar_segments = ""
-            sorted_cats = sorted(cargo_mix.items(), key=lambda x: -x[1])
             for cat, weight in sorted_cats:
                 if weight < 0.03:
                     continue
@@ -310,35 +354,46 @@ def _render_route_breakdown() -> None:
                 pct = weight * 100
                 label = COMMODITY_LABELS.get(cat, cat.title())
                 bar_segments += (
-                    f'<div style="width:{pct}%;height:100%;background:{color};display:inline-block"'
-                    f' title="{label}: {pct:.0f}%"></div>'
+                    f'<span style="display:inline-block;width:{pct}%;height:8px;'
+                    f'background:{color};" title="{label}: {pct:.0f}%"></span>'
                 )
-
-            # Top 2 commodities as text
-            top2 = sorted_cats[:2]
-            top_text = ", ".join(
-                f"{COMMODITY_LABELS.get(c, c.title())} {w:.0%}" for c, w in top2
+            mix_cell = (
+                f'<span style="display:inline-block;width:140px;height:8px;'
+                f'border-radius:3px;overflow:hidden;background:{_rgba(C_TEXT, 0.06)};'
+                f'font-size:0;line-height:0;vertical-align:middle;">'
+                f'{bar_segments}</span>'
             )
 
-            rows_html += f"""
-            <div style="padding:8px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                    <span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT};
-                                 font-weight:600;min-width:180px">{route.name}</span>
-                    <span style="font-family:{_MONO};font-size:0.66rem;color:{C_TEXT3}">${vol}B/yr</span>
-                </div>
-                <div style="height:8px;border-radius:4px;overflow:hidden;background:{_rgba(C_TEXT, 0.06)};
-                            font-size:0;line-height:0;white-space:nowrap">{bar_segments}</div>
-                <div style="font-family:{_SANS};font-size:0.64rem;color:{C_TEXT3};margin-top:3px">{top_text}</div>
-            </div>"""
+            top = sorted_cats[0] if sorted_cats else ("electronics", 0.0)
+            second = sorted_cats[1] if len(sorted_cats) > 1 else ("", 0.0)
 
-        html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;padding:16px 20px">'
-            + _card_html("Route Cargo Breakdown", "Inferred commodity mix by trade lane")
-            + rows_html
-            + "</div>"
-        )
-        st.markdown(html, unsafe_allow_html=True)
+            top_label = COMMODITY_LABELS.get(top[0], top[0].title())
+            second_label = (
+                COMMODITY_LABELS.get(second[0], second[0].title())
+                if second[0] else "—"
+            )
+            top_badge = badge(
+                f"{top_label} {top[1]:.0%}",
+                color=COMMODITY_COLORS.get(top[0], C_ACCENT),
+            )
+            second_badge = (
+                badge(
+                    f"{second_label} {second[1]:.0%}",
+                    color=COMMODITY_COLORS.get(second[0], C_TEXT2),
+                )
+                if second[0] else _sans("—", color=C_TEXT3)
+            )
+
+            rows.append([
+                _sans(route.name, color=C_TEXT, weight=600),
+                _mono(f"${vol}B", color=C_TEXT),
+                top_badge,
+                second_badge,
+                mix_cell,
+            ])
+
+        _provenance_pill()
+        wsj_market_table(headers, rows)
 
     except Exception as exc:
         logger.warning(f"Route breakdown render failed: {exc}")
@@ -349,11 +404,25 @@ def _render_route_breakdown() -> None:
 # SECTION 4 — Commodity Deep Dive Cards
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _top_routes_for(cat_key: str, limit: int = 3) -> str:
+    """Comma-joined top-N route names for a given commodity."""
+    matches: list[tuple[str, float]] = []
+    for route in ROUTES:
+        mix = _get_route_cargo_mix(route.id)
+        if cat_key in mix and mix[cat_key] >= 0.15:
+            matches.append((route.name, mix[cat_key]))
+    matches.sort(key=lambda kv: -kv[1])
+    return ", ".join(n for n, _ in matches[:limit]) if matches else "Various"
+
+
 def _render_commodity_cards() -> None:
     try:
-        import calendar
+        headers = [
+            "Commodity", "Signal", "YoY", "Peak",
+            "Vessel", "Sensitivity", "Top Routes",
+        ]
+        rows = []
 
-        cards_html = ""
         for cat_key, cat_meta in HS_CATEGORIES.items():
             chars = CARGO_CHARACTERISTICS.get(cat_key, {})
             label = cat_meta["label"]
@@ -363,117 +432,37 @@ def _render_commodity_cards() -> None:
             shipping = chars.get("shipping", "container")
             sensitivity = chars.get("sensitivity", "moderate")
             signal, signal_color = _demand_signal(yoy)
-            insight = _key_insight(cat_key, yoy, signal)
 
-            # Find top routes for this commodity
-            top_routes = []
-            for route in ROUTES:
-                mix = _get_route_cargo_mix(route.id)
-                if cat_key in mix and mix[cat_key] >= 0.15:
-                    top_routes.append((route.name, mix[cat_key]))
-            top_routes.sort(key=lambda x: -x[1])
-            routes_text = ", ".join(f"{n}" for n, _ in top_routes[:3]) if top_routes else "Various"
+            rows.append([
+                _sans(label, color=color, weight=700),
+                badge(signal, color=signal_color),
+                _mono(f"{yoy:+.1f}%", color=C_HIGH if yoy > 0 else C_LOW),
+                _sans(calendar.month_abbr[peak], color=C_TEXT),
+                _sans(shipping, color=C_TEXT2),
+                _sans(sensitivity.title(), color=C_TEXT2),
+                _sans(_top_routes_for(cat_key), color=C_TEXT3),
+            ])
 
-            cards_html += f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;
-                        padding:14px 18px;border-left:3px solid {color}">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-                    <div style="font-family:{_SANS};font-size:0.82rem;font-weight:700;color:{C_TEXT}">{label}</div>
-                    <span style="background:{_rgba(signal_color, 0.12)};color:{signal_color};
-                                 padding:2px 8px;border-radius:10px;font-size:0.6rem;
-                                 font-weight:700;font-family:{_SANS}">{signal}</span>
-                </div>
-                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">YoY Growth</div>
-                        <div style="font-family:{_MONO};font-size:0.82rem;font-weight:700;
-                                    color:{C_HIGH if yoy > 0 else C_LOW}">{yoy:+.1f}%</div>
-                    </div>
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">Peak Season</div>
-                        <div style="font-family:{_MONO};font-size:0.82rem;color:{C_TEXT}">{calendar.month_abbr[peak]}</div>
-                    </div>
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">Ship Type</div>
-                        <div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT}">{shipping}</div>
-                    </div>
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">Sensitivity</div>
-                        <div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT}">{sensitivity.title()}</div>
-                    </div>
-                </div>
-                <div style="font-family:{_SANS};font-size:0.72rem;color:{C_TEXT2};line-height:1.5;
-                            margin-bottom:6px">{insight}</div>
-                <div style="font-family:{_SANS};font-size:0.64rem;color:{C_TEXT3}">
-                    Top routes: {routes_text}</div>
-            </div>"""
+        _provenance_pill()
+        wsj_market_table(headers, rows)
 
-        # Render in 2-column grid
-        cats = list(HS_CATEGORIES.keys())
-        mid = (len(cats) + 1) // 2
-        col1, col2 = st.columns(2)
-
-        # Build per-column HTML
-        for i, cat_key in enumerate(cats):
+        # Key insights list (one per commodity, compact)
+        st.html('<div class="sub-section-header">Key Insights</div>')
+        for cat_key, cat_meta in HS_CATEGORIES.items():
             chars = CARGO_CHARACTERISTICS.get(cat_key, {})
-            cat_meta = HS_CATEGORIES[cat_key]
-            label = cat_meta["label"]
-            color = COMMODITY_COLORS.get(cat_key, C_ACCENT)
             yoy = chars.get("yoy_growth", 0)
-            peak = chars.get("seasonal_peak", 6)
-            shipping = chars.get("shipping", "container")
-            sensitivity = chars.get("sensitivity", "moderate")
-            signal, signal_color = _demand_signal(yoy)
+            signal, _ = _demand_signal(yoy)
             insight = _key_insight(cat_key, yoy, signal)
-
-            top_routes = []
-            for route in ROUTES:
-                mix = _get_route_cargo_mix(route.id)
-                if cat_key in mix and mix[cat_key] >= 0.15:
-                    top_routes.append((route.name, mix[cat_key]))
-            top_routes.sort(key=lambda x: -x[1])
-            routes_text = ", ".join(f"{n}" for n, _ in top_routes[:3]) if top_routes else "Various"
-
-            card = f"""
-            <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;
-                        padding:14px 18px;border-left:3px solid {color};margin-bottom:12px">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-                    <div style="font-family:{_SANS};font-size:0.82rem;font-weight:700;color:{C_TEXT}">{label}</div>
-                    <span style="background:{_rgba(signal_color, 0.12)};color:{signal_color};
-                                 padding:2px 8px;border-radius:10px;font-size:0.6rem;
-                                 font-weight:700;font-family:{_SANS}">{signal}</span>
-                </div>
-                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">YoY Growth</div>
-                        <div style="font-family:{_MONO};font-size:0.82rem;font-weight:700;
-                                    color:{C_HIGH if yoy > 0 else C_LOW}">{yoy:+.1f}%</div>
-                    </div>
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">Peak</div>
-                        <div style="font-family:{_MONO};font-size:0.82rem;color:{C_TEXT}">{calendar.month_abbr[peak]}</div>
-                    </div>
-                    <div>
-                        <div style="font-family:{_SANS};font-size:0.58rem;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em">Vessel</div>
-                        <div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT}">{shipping}</div>
-                    </div>
-                </div>
-                <div style="font-family:{_SANS};font-size:0.72rem;color:{C_TEXT2};line-height:1.5;
-                            margin-bottom:6px">{insight}</div>
-                <div style="font-family:{_SANS};font-size:0.64rem;color:{C_TEXT3}">
-                    Routes: {routes_text}</div>
-            </div>"""
-
-            target = col1 if i < mid else col2
-            with target:
-                st.markdown(card, unsafe_allow_html=True)
+            color = COMMODITY_COLORS.get(cat_key, C_ACCENT)
+            label = cat_meta["label"]
+            st.html(
+                f'<div style="border-left:2px solid {color};padding:6px 12px;'
+                f'margin-bottom:6px;font-family:var(--sans);font-size:0.82rem;'
+                f'color:{C_TEXT2};line-height:1.5;">'
+                f'<span style="color:{C_TEXT};font-weight:600;">{label}.</span> '
+                f'{insight}'
+                f'</div>'
+            )
 
     except Exception as exc:
         logger.warning(f"Commodity cards render failed: {exc}")
@@ -493,36 +482,45 @@ def render(
 ) -> None:
     """Global Trade Flows dashboard."""
     try:
-        # Section header
-        st.markdown(f"""
-        <div style="margin-bottom:16px">
-            <div style="font-family:{_SANS};font-size:0.92rem;font-weight:700;color:{C_TEXT};
-                        letter-spacing:-0.02em">Global Trade Flows</div>
-            <div style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT3};margin-top:2px">
-                Mapping what the world ships — commodity flows by route, region, and vessel type</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # 1. Page header
+        page_header(
+            title="Global Trade Flows",
+            subtitle=(
+                "Mapping what the world ships — commodity flows by route, "
+                "region, and vessel type"
+            ),
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        # 1. Flow map
+        # 2. Flow map
+        section_header(
+            "Bilateral Trade Arcs",
+            subtitle=(
+                "Route arcs coloured by dominant commodity; arc width scaled to "
+                "illustrative annual trade value ($B)"
+            ),
+        )
         _render_flow_map()
 
-        # 2. Sankey + Route breakdown side by side
+        # 3. Sankey + Route breakdown side by side
+        section_header(
+            "Origin → Commodity → Destination",
+            subtitle="How bulk flows resolve through commodity categories",
+        )
         left, right = st.columns([3, 2])
         with left:
-            st.markdown(_card_html("Commodity Flow Sankey", "Origin region → commodity → destination region"), unsafe_allow_html=True)
+            st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
             _render_sankey()
         with right:
+            st.html('<div class="sub-section-header">Route Cargo Breakdown</div>')
             _render_route_breakdown()
 
-        # 3. Commodity deep dive
-        st.markdown(f"""
-        <div style="margin:20px 0 12px">
-            <div style="font-family:{_SANS};font-size:0.82rem;font-weight:700;color:{C_TEXT}">
-                Commodity Intelligence</div>
-            <div style="font-family:{_SANS};font-size:0.68rem;color:{C_TEXT3};margin-top:2px">
-                Demand signals, seasonal patterns, and key routes by cargo type</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # 4. Commodity deep dive
+        section_header(
+            "Commodity Intelligence",
+            subtitle="Demand signals, seasonal patterns, and key routes by cargo type",
+        )
         _render_commodity_cards()
 
     except Exception as exc:

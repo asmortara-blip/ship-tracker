@@ -5,32 +5,38 @@ milestone tracking, and carrier visibility rankings.
 """
 from __future__ import annotations
 
-import random
-from typing import Any
-
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
+
+# Local aliases for single-purpose accents
+C_PURPLE = C_CONV
+C_CYAN   = C_MACRO
 
 # ---------------------------------------------------------------------------
-# Static data helpers
+# Static data
 # ---------------------------------------------------------------------------
 
 _PIPELINE_DATA = {
@@ -86,13 +92,13 @@ _VISIBILITY_LANES = [
 ]
 
 _EXCEPTIONS = [
-    ("MSCU-3847261", "MSC Zoe", "AIS Signal Lost", "48 hrs", "North Atlantic", C_LOW, "Vessel went dark — signal lost near 42°N 28°W"),
-    ("OOLU-1029384", "OOCL Europe", "Customs Hold", "72 hrs", "Rotterdam", C_MOD, "Documentary discrepancy — phytosanitary cert missing"),
-    ("HLCU-8827364", "Hapag Express", "Port Denial", "96 hrs", "Long Beach", C_LOW, "Terminal congestion — vessel diverted to Oakland"),
-    ("CMAU-2038471", "CMA CGM Marco Polo", "Carrier Change", "24 hrs", "Singapore", C_MOD, "Alliance swap — cargo rolled to next sailing"),
-    ("EVGU-4482019", "Ever Given II", "ETA Deviation >5d", "120 hrs", "Suez Canal", C_LOW, "Route change via Cape of Good Hope"),
-    ("MAEU-9918374", "Maersk Elba", "Reefer Alert", "6 hrs", "In Transit", C_MOD, "Temperature excursion logged — monitoring active"),
-    ("ZIMU-3748201", "ZIM Pacific", "AIS Signal Lost", "18 hrs", "Red Sea", C_LOW, "Security zone — AIS intentionally disabled"),
+    ("MSCU-3847261", "MSC Zoe", "AIS Signal Lost", "48 hrs", "North Atlantic", "red", "Vessel went dark — signal lost near 42°N 28°W"),
+    ("OOLU-1029384", "OOCL Europe", "Customs Hold", "72 hrs", "Rotterdam", "yellow", "Documentary discrepancy — phytosanitary cert missing"),
+    ("HLCU-8827364", "Hapag Express", "Port Denial", "96 hrs", "Long Beach", "red", "Terminal congestion — vessel diverted to Oakland"),
+    ("CMAU-2038471", "CMA CGM Marco Polo", "Carrier Change", "24 hrs", "Singapore", "yellow", "Alliance swap — cargo rolled to next sailing"),
+    ("EVGU-4482019", "Ever Given II", "ETA Deviation >5d", "120 hrs", "Suez Canal", "red", "Route change via Cape of Good Hope"),
+    ("MAEU-9918374", "Maersk Elba", "Reefer Alert", "6 hrs", "In Transit", "yellow", "Temperature excursion logged — monitoring active"),
+    ("ZIMU-3748201", "ZIM Pacific", "AIS Signal Lost", "18 hrs", "Red Sea", "red", "Security zone — AIS intentionally disabled"),
 ]
 
 _MILESTONE_STEPS = [
@@ -126,13 +132,37 @@ _CARRIER_RANKINGS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Cell formatters
+# ---------------------------------------------------------------------------
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">{value}</span>'
+
+
 def _score_bar(score: int, color: str, width: int = 120) -> str:
-    """Return an inline HTML progress bar."""
     pct = max(0, min(100, score))
     return (
         f'<div style="background:{C_SURFACE};border-radius:4px;height:8px;width:{width}px;display:inline-block;vertical-align:middle;">'
         f'<div style="background:{color};width:{pct}%;height:100%;border-radius:4px;"></div>'
         f'</div>'
+    )
+
+
+def _score_cell(score: int, color: str) -> str:
+    return (
+        f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
+    )
+
+
+def _overall_cell(score: int, color: str) -> str:
+    return (
+        f'<span style="font-size:16px;font-weight:800;color:{color};">{score}</span>'
+        f'<span style="font-size:10px;color:{C_TEXT3};">/100</span>'
     )
 
 
@@ -143,34 +173,23 @@ def _grade_badge(grade: str, color: str) -> str:
     )
 
 
-def _status_dot(color: str) -> str:
-    return f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{color};margin-right:6px;"></span>'
-
-
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
 
 def _render_hero_kpis() -> None:
     try:
-        kpis = [
-            ("Shipments Tracked", "2,847", C_ACCENT, "Total active shipments in system"),
-            ("On-Time Rate", "78.4%", C_HIGH, "Delivered within original ETA window"),
-            ("In Transit", "1,203", C_ACCENT, "Vessels currently at sea"),
-            ("At Origin", "412", C_MOD, "Loaded, awaiting departure"),
-            ("At Destination", "384", C_HIGH, "Arrived, pending discharge/delivery"),
-            ("Delayed", "298", C_LOW, "ETA deviation >48 hours"),
-        ]
-        cols = st.columns(6)
-        for col, (label, value, color, tip) in zip(cols, kpis):
-            with col:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
-                    f'border-radius:6px;padding:18px 14px;text-align:center;">'
-                    f'<div style="font-size:26px;font-weight:800;color:{color};">{value}</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
-                    f'</div>', unsafe_allow_html=True)
+        metric_card_row(
+            [
+                {"label": "Shipments Tracked", "value": "2,847", "accent": C_ACCENT, "sublabel": "Total active shipments in system"},
+                {"label": "On-Time Rate",      "value": "78.4%", "accent": C_HIGH,   "sublabel": "Delivered within original ETA window"},
+                {"label": "In Transit",        "value": "1,203", "accent": C_ACCENT, "sublabel": "Vessels currently at sea"},
+                {"label": "At Origin",         "value": "412",   "accent": C_MOD,    "sublabel": "Loaded, awaiting departure"},
+                {"label": "At Destination",    "value": "384",   "accent": C_HIGH,   "sublabel": "Arrived, pending discharge/delivery"},
+                {"label": "Delayed",           "value": "298",   "accent": C_LOW,    "sublabel": "ETA deviation >48 hours"},
+            ],
+            columns=6,
+        )
     except Exception as exc:
         logger.warning(f"hero kpis error: {exc}")
         st.info("KPI data unavailable.")
@@ -178,16 +197,15 @@ def _render_hero_kpis() -> None:
 
 def _render_pipeline() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Shipment Pipeline</div>', unsafe_allow_html=True)
+        section_header("Shipment Pipeline", "Active shipments by stage — click through to carrier portal")
 
         col_colors = {
             "ORIGIN LOADED": C_MOD,
-            "IN TRANSIT": C_ACCENT,
-            "CUSTOMS": C_PURPLE,
-            "AT PORT": C_CYAN,
-            "LAST MILE": "#f97316",
-            "DELIVERED": C_HIGH,
+            "IN TRANSIT":    C_ACCENT,
+            "CUSTOMS":       C_PURPLE,
+            "AT PORT":       C_CYAN,
+            "LAST MILE":     "#f97316",
+            "DELIVERED":     C_HIGH,
         }
 
         cols = st.columns(6)
@@ -204,12 +222,13 @@ def _render_pipeline() -> None:
                     f'</div>'
                 )
             with col:
-                st.markdown(
+                st.html(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px;">'
                     f'<div style="font-size:10px;font-weight:800;color:{color};letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
                     f'<div style="font-size:20px;font-weight:800;color:{C_TEXT};margin-bottom:10px;">{len(shipments)}</div>'
                     f'{cards_html}'
-                    f'</div>', unsafe_allow_html=True)
+                    f'</div>'
+                )
     except Exception as exc:
         logger.warning(f"pipeline error: {exc}")
         st.info("Pipeline data unavailable.")
@@ -217,44 +236,20 @@ def _render_pipeline() -> None:
 
 def _render_visibility_scores() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Visibility Score by Trade Lane</div>', unsafe_allow_html=True)
+        section_header("Visibility Score by Trade Lane", "AIS coverage × milestone reporting × predictive ETA quality")
 
-        header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Trade Lane</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">AIS Coverage %</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Milestone Tracking %</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Predictive ETA %</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Overall Score</th>'
-            f'</tr></thead><tbody>'
-        )
-
-        rows = ""
-        for i, (lane, ais, milestone, pred_eta, color) in enumerate(_VISIBILITY_LANES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
+        headers = ["Trade Lane", "AIS Coverage %", "Milestone Tracking %", "Predictive ETA %", "Overall Score"]
+        rows = []
+        for lane, ais, milestone, pred_eta, color in _VISIBILITY_LANES:
             overall = int((ais + milestone + pred_eta) / 3)
-            rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{C_TEXT};font-weight:600;">{lane}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="color:{color};font-weight:700;">{ais}%</span> '
-                f'{_score_bar(ais, color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="color:{color};font-weight:700;">{milestone}%</span> '
-                f'{_score_bar(milestone, color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="color:{color};font-weight:700;">{pred_eta}%</span> '
-                f'{_score_bar(pred_eta, color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="font-size:16px;font-weight:800;color:{color};">{overall}</span>'
-                f'<span style="font-size:10px;color:{C_TEXT3};">/100</span></td>'
-                f'</tr>'
-            )
-
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+            rows.append([
+                _sans(lane, weight=600),
+                _score_cell(ais, color),
+                _score_cell(milestone, color),
+                _score_cell(pred_eta, color),
+                _overall_cell(overall, color),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"visibility scores error: {exc}")
         st.info("Visibility score data unavailable.")
@@ -262,39 +257,21 @@ def _render_visibility_scores() -> None:
 
 def _render_exception_management() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Exception Management</div>', unsafe_allow_html=True)
+        section_header("Exception Management", "Active issues requiring attention — investigate and resolve")
 
-        header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Booking Ref</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Vessel</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Issue Type</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Duration</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Location</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Detail</th>'
-            f'</tr></thead><tbody>'
-        )
-
-        rows = ""
-        for i, (ref, vessel, issue, duration, location, color, detail) in enumerate(_EXCEPTIONS):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{C_TEXT};font-weight:700;">{ref}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT2};">{vessel}</td>'
-                f'<td style="padding:10px 14px;">'
-                f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-                f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">{issue}</span></td>'
-                f'<td style="padding:10px 14px;text-align:center;color:{color};font-weight:700;">{duration}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT2};">{location}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-size:11px;">{detail}</td>'
-                f'</tr>'
-            )
-
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+        headers = ["Booking Ref", "Vessel", "Issue Type", "Duration", "Location", "Detail"]
+        rows = []
+        for ref, vessel, issue, duration, location, color_name, detail in _EXCEPTIONS:
+            severity_color = C_LOW if color_name == "red" else C_MOD
+            rows.append([
+                _sans(ref, weight=700),
+                _sans(vessel, color=C_TEXT2),
+                badge(issue, color_name),
+                _mono(duration, color=severity_color, weight=700),
+                _sans(location, color=C_TEXT2),
+                _sans(detail, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"exception mgmt error: {exc}")
         st.info("Exception data unavailable.")
@@ -302,16 +279,16 @@ def _render_exception_management() -> None:
 
 def _render_milestone_tracking() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 4px;font-family:\'Libre Baskerville\',serif;">Milestone Tracking</div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;">Sample shipment MAEU-2847561 — Shanghai → Rotterdam (MV Maersk Edmonton, Voy. 026W)</div>', unsafe_allow_html=True)
+        section_header(
+            "Milestone Tracking",
+            "Sample shipment MAEU-2847561 — Shanghai → Rotterdam (MV Maersk Edmonton, Voy. 026W)",
+        )
 
         completed_count = sum(1 for _, _, done, _, _ in _MILESTONE_STEPS if done)
         total = len(_MILESTONE_STEPS)
         pct = int(completed_count / total * 100)
 
-        # Progress bar
-        st.markdown(
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-bottom:14px;">'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
             f'<span style="font-size:12px;color:{C_TEXT2};">Journey Progress</span>'
@@ -320,9 +297,9 @@ def _render_milestone_tracking() -> None:
             f'<div style="background:{C_CARD};border-radius:6px;height:12px;">'
             f'<div style="background:linear-gradient(90deg,{C_ACCENT},{C_HIGH});width:{pct}%;height:100%;border-radius:6px;"></div>'
             f'</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
 
-        # Timeline
         timeline_html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;">'
         for i, (name, ts, done, color, note) in enumerate(_MILESTONE_STEPS):
             is_last = i == len(_MILESTONE_STEPS) - 1
@@ -354,7 +331,7 @@ def _render_milestone_tracking() -> None:
                 f'</div>'
             )
         timeline_html += "</div>"
-        st.markdown(timeline_html, unsafe_allow_html=True)
+        st.html(timeline_html)
     except Exception as exc:
         logger.warning(f"milestone tracking error: {exc}")
         st.info("Milestone data unavailable.")
@@ -362,46 +339,29 @@ def _render_milestone_tracking() -> None:
 
 def _render_carrier_rankings() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Digital Visibility Rankings</div>', unsafe_allow_html=True)
-
-        header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">#</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Carrier</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Visibility Score</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Grade</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Capabilities</th>'
-            f'</tr></thead><tbody>'
+        section_header(
+            "Carrier Digital Visibility Rankings",
+            "Scored 0-100 across AIS, milestone, and predictive ETA capabilities",
         )
 
-        rows = ""
+        headers = ["#", "Carrier", "Visibility Score", "Grade", "Capabilities"]
+        rows = []
         for i, (carrier, score, grade, caps, color) in enumerate(_CARRIER_RANKINGS):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
             rank_color = [C_MOD, C_TEXT2, C_PURPLE][min(i, 2)] if i < 3 else C_TEXT3
-            rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{rank_color};font-weight:800;">{i+1}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT};font-weight:700;">{carrier}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="font-size:16px;font-weight:800;color:{color};">{score}</span>'
-                f'<span style="font-size:10px;color:{C_TEXT3};">/100</span> '
-                f'{_score_bar(score, color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">{_grade_badge(grade, color)}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-size:11px;">{caps}</td>'
-                f'</tr>'
-            )
-
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+            rows.append([
+                _mono(str(i + 1), color=rank_color, weight=800),
+                _sans(carrier, weight=700),
+                _score_cell(score, color),
+                _grade_badge(grade, color),
+                _sans(caps, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"carrier rankings error: {exc}")
         st.info("Carrier ranking data unavailable.")
 
 
 def _render_visibility_chart() -> None:
-    """Radar / bar chart: AIS vs Milestone vs Predictive across top lanes."""
     try:
         lanes = [r[0].split(" (")[0] for r in _VISIBILITY_LANES]
         ais_vals = [r[1] for r in _VISIBILITY_LANES]
@@ -409,22 +369,22 @@ def _render_visibility_chart() -> None:
         pred_vals = [r[3] for r in _VISIBILITY_LANES]
 
         fig = go.Figure()
-        fig.add_trace(go.Bar(name="AIS Coverage", x=lanes, y=ais_vals, marker_color=C_ACCENT, opacity=0.85))
-        fig.add_trace(go.Bar(name="Milestone Tracking", x=lanes, y=ms_vals, marker_color=C_HIGH, opacity=0.85))
-        fig.add_trace(go.Bar(name="Predictive ETA", x=lanes, y=pred_vals, marker_color=C_MOD, opacity=0.85))
+        fig.add_trace(go.Bar(name="AIS Coverage",       x=lanes, y=ais_vals,  marker_color=C_ACCENT, opacity=0.85))
+        fig.add_trace(go.Bar(name="Milestone Tracking", x=lanes, y=ms_vals,   marker_color=C_HIGH,   opacity=0.85))
+        fig.add_trace(go.Bar(name="Predictive ETA",     x=lanes, y=pred_vals, marker_color=C_MOD,    opacity=0.85))
 
-        fig.update_layout(
-            barmode="group",
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            font=dict(color=C_TEXT2, size=11),
-            margin=dict(l=10, r=10, t=30, b=80),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                        font=dict(color=C_TEXT2), bgcolor="rgba(0,0,0,0)"),
-            xaxis=dict(gridcolor=C_BORDER, tickangle=-30),
-            yaxis=dict(gridcolor=C_BORDER, range=[0, 100], title="Score (%)"),
+        apply_dark_layout(
+            fig,
+            title="Visibility Scores by Trade Lane",
             height=320,
-            title=dict(text="Visibility Scores by Trade Lane", font=dict(color=C_TEXT, size=13)),
+            margin=dict(l=10, r=10, t=46, b=80),
+            barmode="group",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                font=dict(color=C_TEXT2), bgcolor="rgba(0,0,0,0)",
+            ),
+            xaxis=dict(tickangle=-30),
+            yaxis=dict(range=[0, 100], title="Score (%)"),
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as exc:
@@ -438,22 +398,20 @@ def _render_visibility_chart() -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Supply Chain Visibility & Tracking tab."""
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Supply Chain Visibility & Tracking</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Supply Chain Visibility & Tracking",
+            subtitle="Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking",
+            icon="🛰️",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
     except Exception as exc:
         logger.warning(f"header error: {exc}")
 
     _render_hero_kpis()
     _render_pipeline()
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     col_left, col_right = st.columns([3, 2])
     with col_left:
@@ -464,13 +422,11 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         except Exception as exc:
             logger.warning(f"chart col error: {exc}")
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     _render_exception_management()
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     col_a, col_b = st.columns([2, 3])
     with col_a:
@@ -479,12 +435,13 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         _render_milestone_tracking()
 
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
+            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
             f'Data refreshed every 15 minutes from AIS feeds, carrier APIs, and port EDI streams. '
             f'Visibility scores calculated as rolling 30-day averages. '
             f'Exception alerts generated when deviations exceed configured thresholds.'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"footer error: {exc}")

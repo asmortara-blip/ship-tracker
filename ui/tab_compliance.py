@@ -17,30 +17,38 @@ Data currency note:
 """
 from __future__ import annotations
 
-import datetime
-
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    wsj_market_table,
+)
 
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+# ---------------------------------------------------------------------------
+# Domain-specific palette
+# ---------------------------------------------------------------------------
 
 _CII_COLOR = {"A": "#065f46", "B": "#2e9e6e", "C": "#c9962b", "D": "#c0392b", "E": "#7f1d1d"}
 _CII_BG    = {"A": "#022c22", "B": "#052e1c", "C": "#451a03", "D": "#450a0a", "E": "#3b0808"}
+
+_SEVERITY_COLOR = {"critical": "red", "high": "orange", "moderate": "yellow"}
+_STATUS_COLOR   = {"past": "green", "current": "blue", "upcoming": "purple"}
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -385,153 +393,116 @@ _CARGO_RISK: dict[str, int] = {
     "Containers": 12, "Ro-Ro": 8, "General Cargo": 10,
 }
 
+
 # ---------------------------------------------------------------------------
-# Helper: shared card CSS injected once
+# Cell formatters
 # ---------------------------------------------------------------------------
 
-_CSS = f"""
-<style>
-.comp-card {{
-    background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-    padding:18px 20px;margin-bottom:14px;
-}}
-.comp-kpi {{
-    background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-    padding:16px 18px;text-align:center;
-}}
-.comp-kpi-val {{font-size:2rem;font-weight:700;line-height:1.1;}}
-.comp-kpi-lbl {{font-family:'Libre Franklin',sans-serif;font-size:0.75rem;color:{C_TEXT2};margin-top:4px;}}
-.comp-th {{
-    background:{C_SURFACE};color:{C_TEXT2};font-size:0.7rem;font-weight:600;
-    text-transform:uppercase;letter-spacing:.06em;padding:8px 10px;
-    border-bottom:1px solid {C_BORDER};
-}}
-.comp-td {{
-    font-family:'Libre Franklin',sans-serif;color:{C_TEXT};font-size:0.78rem;padding:8px 10px;
-    border-bottom:1px solid {C_BORDER};vertical-align:top;
-}}
-.comp-td2 {{font-family:'Libre Franklin',sans-serif;color:{C_TEXT2};font-size:0.78rem;padding:8px 10px;border-bottom:1px solid {C_BORDER};vertical-align:top;}}
-.badge {{display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.68rem;font-weight:600;}}
-.badge-critical {{background:#7f1d1d;color:#fca5a5;}}
-.badge-high {{background:#431407;color:#fdba74;}}
-.badge-moderate {{background:#451a03;color:#fcd34d;}}
-.badge-past {{background:#1e3a2f;color:{C_HIGH};}}
-.badge-current {{background:#1e3a5f;color:{C_ACCENT};}}
-.badge-upcoming {{background:#312e81;color:#a5b4fc;}}
-.badge-detained {{background:#7f1d1d;color:#fca5a5;}}
-.badge-released {{background:#1e3a2f;color:{C_HIGH};}}
-.section-hdr {{
-    font-family:'Libre Baskerville',serif;font-size:1.05rem;font-weight:700;color:{C_TEXT};
-    border-left:3px solid {C_ACCENT};padding-left:10px;margin-bottom:14px;
-}}
-</style>
-"""
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return f'<span style="font-family:var(--mono);color:{color};font-variant-numeric:tabular-nums;">{value}</span>'
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">{value}</span>'
+
+
+def _cii_pill(rating: str) -> str:
+    fg = _CII_COLOR.get(rating, C_TEXT)
+    bg = _CII_BG.get(rating, C_CARD)
+    return (
+        f'<span style="background:{bg};color:{fg};padding:3px 10px;'
+        f'border-radius:6px;font-weight:700;font-family:var(--mono);">{rating}</span>'
+    )
+
 
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
 
 def _section_1_dashboard() -> None:
-    """KPI tiles."""
     try:
-        st.markdown(_CSS, unsafe_allow_html=True)
-        st.markdown(f'<div class="section-hdr">Compliance Dashboard</div>', unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        tiles = [
-            (c1, "12", "Active Sanctions Regimes", C_LOW),
-            (c2, "847", "Vessels on OFAC SDN List", C_MOD),
-            (c3, "23", "IMO Updates (last 30 days)", C_ACCENT),
-            (c4, "164", "Non-Compliant Vessels Flagged", C_LOW),
+        metric_card_row(
+            [
+                {"label": "Active Sanctions Regimes",   "value": "12",  "accent": C_LOW},
+                {"label": "Vessels on OFAC SDN List",   "value": "847", "accent": C_MOD},
+                {"label": "IMO Updates (last 30 days)", "value": "23",  "accent": C_ACCENT},
+                {"label": "Non-Compliant Vessels",      "value": "164", "accent": C_LOW},
+            ],
+            columns=4,
+        )
+        st.html("<div style='margin-top:14px;'></div>")
+
+        regime_rows = [
+            ("US OFAC — SDN + CAATSA", "5 active programs", C_LOW),
+            ("EU — OJ Regulations",    "3 active programs", C_MOD),
+            ("UK OFSI",                "2 active programs", C_MOD),
+            ("UN Security Council",    "2 active programs", C_ACCENT),
         ]
-        for col, val, lbl, color in tiles:
-            with col:
-                st.markdown(
-                    f'<div class="comp-kpi">'
-                    f'<div class="comp-kpi-val" style="color:{color}">{val}</div>'
-                    f'<div class="comp-kpi-lbl">{lbl}</div>'
-                    f'</div>', unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+        fleet_rows = [
+            ("CII A or B rated vessels",         "61%",       C_HIGH),
+            ("CII C rated (under review)",       "27%",       C_MOD),
+            ("CII D or E (corrective action)",   "12%",       C_LOW),
+            ("PSC detentions YTD 2026",          "164 vessels", C_LOW),
+        ]
+
         ca, cb = st.columns(2)
         with ca:
-            st.markdown(
-                f'<div class="comp-card">'
+            rows_html = "".join(
+                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
+                f'<span style="color:{C_TEXT};font-size:0.82rem;">{label}</span>'
+                f'<span style="color:{color};font-weight:600;font-size:0.82rem;">{value}</span></div>'
+                for label, value, color in regime_rows
+            )
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
                 f'<div style="font-size:0.8rem;font-weight:600;color:{C_TEXT2};margin-bottom:10px;">SANCTIONS REGIME COVERAGE</div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">US OFAC — SDN + CAATSA</span>'
-                f'<span style="color:{C_LOW};font-weight:600;font-size:0.82rem;">5 active programs</span></div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">EU — OJ Regulations</span>'
-                f'<span style="color:{C_MOD};font-weight:600;font-size:0.82rem;">3 active programs</span></div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">UK OFSI</span>'
-                f'<span style="color:{C_MOD};font-weight:600;font-size:0.82rem;">2 active programs</span></div>'
-                f'<div style="display:flex;justify-content:space-between;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">UN Security Council</span>'
-                f'<span style="color:{C_ACCENT};font-weight:600;font-size:0.82rem;">2 active programs</span></div>'
-                f'</div>', unsafe_allow_html=True)
+                f'{rows_html}</div>'
+            )
         with cb:
-            st.markdown(
-                f'<div class="comp-card">'
+            rows_html = "".join(
+                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
+                f'<span style="color:{C_TEXT};font-size:0.82rem;">{label}</span>'
+                f'<span style="color:{color};font-weight:600;">{value}</span></div>'
+                for label, value, color in fleet_rows
+            )
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;">'
                 f'<div style="font-size:0.8rem;font-weight:600;color:{C_TEXT2};margin-bottom:10px;">FLEET COMPLIANCE SNAPSHOT</div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">CII A or B rated vessels</span>'
-                f'<span style="color:{C_HIGH};font-weight:600;">61%</span></div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">CII C rated (under review)</span>'
-                f'<span style="color:{C_MOD};font-weight:600;">27%</span></div>'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">CII D or E (corrective action)</span>'
-                f'<span style="color:{C_LOW};font-weight:600;">12%</span></div>'
-                f'<div style="display:flex;justify-content:space-between;">'
-                f'<span style="color:{C_TEXT};font-size:0.82rem;">PSC detentions YTD 2026</span>'
-                f'<span style="color:{C_LOW};font-weight:600;">164 vessels</span></div>'
-                f'</div>', unsafe_allow_html=True)
+                f'{rows_html}</div>'
+            )
     except Exception:
         logger.exception("Compliance dashboard error")
         st.error("Dashboard unavailable.")
 
 
 def _section_2_sanctions_table() -> None:
-    """Sanctions screening table."""
     try:
-        st.markdown(f'<div class="section-hdr">Sanctions Screening Table</div>', unsafe_allow_html=True)
         severity_filter = st.selectbox(
             "Filter by severity",
             ["All", "Critical", "High", "Moderate"],
             key="sanct_severity_filter",
         )
-        rows = _SANCTIONS_ROWS
+        rows_data = _SANCTIONS_ROWS
         if severity_filter != "All":
-            rows = [r for r in rows if r["severity"] == severity_filter.lower()]
+            rows_data = [r for r in rows_data if r["severity"] == severity_filter.lower()]
 
-        header = (
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th class="comp-th">Jurisdiction</th>'
-            f'<th class="comp-th">Sanctioned Entities</th>'
-            f'<th class="comp-th">Vessel Types</th>'
-            f'<th class="comp-th">Trade Lanes Affected</th>'
-            f'<th class="comp-th">Effective Date</th>'
-            f'<th class="comp-th">Penalty</th>'
-            f'<th class="comp-th">Severity</th>'
-            f'</tr></thead><tbody>'
-        )
-        body = ""
-        for r in rows:
-            badge_cls = f"badge-{r['severity']}"
-            body += (
-                f'<tr>'
-                f'<td class="comp-td" style="color:{C_ACCENT};font-weight:600;">{r["jurisdiction"]}</td>'
-                f'<td class="comp-td">{r["entity"]}</td>'
-                f'<td class="comp-td2">{r["vessel_types"]}</td>'
-                f'<td class="comp-td2">{r["trade_lanes"]}</td>'
-                f'<td class="comp-td2">{r["effective"]}</td>'
-                f'<td class="comp-td" style="color:{C_LOW};font-size:0.75rem;">{r["penalty"]}</td>'
-                f'<td class="comp-td"><span class="badge {badge_cls}">{r["severity"].upper()}</span></td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<div class="comp-card" style="padding:0;overflow-x:auto;">{header}{body}</tbody></table></div>', unsafe_allow_html=True)
+        headers = [
+            "Jurisdiction", "Sanctioned Entities", "Vessel Types",
+            "Trade Lanes Affected", "Effective Date", "Penalty", "Severity",
+        ]
+        rows = [
+            [
+                _sans(r["jurisdiction"], color=C_ACCENT, weight=600),
+                _sans(r["entity"], color=C_TEXT),
+                _sans(r["vessel_types"]),
+                _sans(r["trade_lanes"]),
+                _sans(r["effective"]),
+                _sans(r["penalty"], color=C_LOW),
+                badge(r["severity"].upper(), _SEVERITY_COLOR.get(r["severity"], "yellow")),
+            ]
+            for r in rows_data
+        ]
+        wsj_market_table(headers, rows)
         st.caption("Sources: OFAC SDN List, EUR-Lex Official Journal, UK OFSI, UN SC Resolutions. Updated continuously.")
     except Exception:
         logger.exception("Sanctions table error")
@@ -539,171 +510,131 @@ def _section_2_sanctions_table() -> None:
 
 
 def _section_3_imo_calendar() -> None:
-    """IMO regulatory calendar."""
     try:
-        st.markdown(f'<div class="section-hdr">IMO Regulatory Calendar</div>', unsafe_allow_html=True)
-        header = (
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th class="comp-th">Date</th>'
-            f'<th class="comp-th">Regulation</th>'
-            f'<th class="comp-th">Scope</th>'
-            f'<th class="comp-th">Affected Vessels</th>'
-            f'<th class="comp-th">Compliance Cost</th>'
-            f'<th class="comp-th">Enforcement</th>'
-            f'<th class="comp-th">Status</th>'
-            f'</tr></thead><tbody>'
-        )
-        body = ""
-        for r in _IMO_CALENDAR:
-            badge_cls = f"badge-{r['status']}"
-            body += (
-                f'<tr>'
-                f'<td class="comp-td" style="font-weight:600;color:{C_TEXT};white-space:nowrap;">{r["date"]}</td>'
-                f'<td class="comp-td" style="font-weight:600;">{r["regulation"]}</td>'
-                f'<td class="comp-td2">{r["scope"]}</td>'
-                f'<td class="comp-td2">{r["vessels"]}</td>'
-                f'<td class="comp-td2">{r["cost"]}</td>'
-                f'<td class="comp-td2">{r["enforcement"]}</td>'
-                f'<td class="comp-td"><span class="badge {badge_cls}">{r["status"].upper()}</span></td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<div class="comp-card" style="padding:0;overflow-x:auto;">{header}{body}</tbody></table></div>', unsafe_allow_html=True)
+        headers = [
+            "Date", "Regulation", "Scope", "Affected Vessels",
+            "Compliance Cost", "Enforcement", "Status",
+        ]
+        rows = [
+            [
+                _sans(r["date"], color=C_TEXT, weight=600),
+                _sans(r["regulation"], color=C_TEXT, weight=600),
+                _sans(r["scope"]),
+                _sans(r["vessels"]),
+                _sans(r["cost"]),
+                _sans(r["enforcement"]),
+                badge(r["status"].upper(), _STATUS_COLOR.get(r["status"], "blue")),
+            ]
+            for r in _IMO_CALENDAR
+        ]
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("IMO calendar error")
         st.error("IMO calendar unavailable.")
 
 
 def _section_4_cii_tracker() -> None:
-    """CII carrier tracker."""
     try:
-        st.markdown(f'<div class="section-hdr">CII (Carbon Intensity Indicator) Tracker — Major Carriers</div>', unsafe_allow_html=True)
-
-        header = (
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th class="comp-th">Carrier</th>'
-            f'<th class="comp-th">2024 CII Rating</th>'
-            f'<th class="comp-th">2025 Projected</th>'
-            f'<th class="comp-th">Fleet Compliance %</th>'
-            f'<th class="comp-th">Corrective Actions</th>'
-            f'<th class="comp-th">At Risk?</th>'
-            f'</tr></thead><tbody>'
-        )
-        body = ""
+        headers = [
+            "Carrier", "2024 CII", "2025 Proj",
+            "Fleet Compliance %", "Corrective Actions", "At Risk?",
+        ]
+        rows = []
         for r in _CII_CARRIERS:
-            r24 = r["rating_2024"]
-            r25 = r["proj_2025"]
             pct = r["fleet_pct"]
             pct_color = C_HIGH if pct >= 80 else (C_MOD if pct >= 60 else C_LOW)
-            at_risk_html = (
-                f'<span style="color:{C_LOW};font-weight:700;">YES</span>'
-                if r["at_risk"]
-                else f'<span style="color:{C_HIGH};">No</span>'
+            at_risk = (
+                _sans("YES", color=C_LOW, weight=700) if r["at_risk"]
+                else _sans("No", color=C_HIGH)
             )
-            body += (
-                f'<tr>'
-                f'<td class="comp-td" style="font-weight:600;">{r["carrier"]}</td>'
-                f'<td class="comp-td">'
-                f'<span style="background:{_CII_BG.get(r24,"#181c28")};color:{_CII_COLOR.get(r24,C_TEXT)};'
-                f'padding:3px 10px;border-radius:6px;font-weight:700;">{r24}</span></td>'
-                f'<td class="comp-td">'
-                f'<span style="background:{_CII_BG.get(r25,"#181c28")};color:{_CII_COLOR.get(r25,C_TEXT)};'
-                f'padding:3px 10px;border-radius:6px;font-weight:700;">{r25}</span></td>'
-                f'<td class="comp-td" style="color:{pct_color};font-weight:600;">{pct}%</td>'
-                f'<td class="comp-td2">{r["actions"]}</td>'
-                f'<td class="comp-td">{at_risk_html}</td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<div class="comp-card" style="padding:0;overflow-x:auto;">{header}{body}</tbody></table></div>', unsafe_allow_html=True)
+            rows.append([
+                _sans(r["carrier"], color=C_TEXT, weight=600),
+                _cii_pill(r["rating_2024"]),
+                _cii_pill(r["proj_2025"]),
+                _mono(f"{pct}%", color=pct_color),
+                _sans(r["actions"]),
+                at_risk,
+            ])
+        wsj_market_table(headers, rows)
 
-        st.markdown(
-            f'<div class="comp-card">'
+        pills = "".join(
+            f'<span style="background:{_CII_BG[k]};color:{_CII_COLOR[k]};padding:4px 14px;'
+            f'border-radius:6px;font-weight:700;font-family:var(--mono);">{k} — {desc}</span>'
+            for k, desc in [
+                ("A", "Superior"), ("B", "Minor superior"), ("C", "Moderate"),
+                ("D", "Minor inferior"), ("E", "Inferior"),
+            ]
+        )
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px 20px;margin-top:14px;">'
             f'<div style="font-size:0.8rem;font-weight:600;color:{C_TEXT2};margin-bottom:10px;">CII RATING SCALE</div>'
-            f'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
-            f'<span style="background:{_CII_BG["A"]};color:{_CII_COLOR["A"]};padding:4px 14px;border-radius:6px;font-weight:700;">A — Superior</span>'
-            f'<span style="background:{_CII_BG["B"]};color:{_CII_COLOR["B"]};padding:4px 14px;border-radius:6px;font-weight:700;">B — Minor superior</span>'
-            f'<span style="background:{_CII_BG["C"]};color:{_CII_COLOR["C"]};padding:4px 14px;border-radius:6px;font-weight:700;">C — Moderate</span>'
-            f'<span style="background:{_CII_BG["D"]};color:{_CII_COLOR["D"]};padding:4px 14px;border-radius:6px;font-weight:700;">D — Minor inferior</span>'
-            f'<span style="background:{_CII_BG["E"]};color:{_CII_COLOR["E"]};padding:4px 14px;border-radius:6px;font-weight:700;">E — Inferior</span>'
-            f'</div>'
-            f'<div style="font-size:0.72rem;color:{C_TEXT3};margin-top:8px;">D or E for 3 consecutive years triggers mandatory corrective action plan and SEEMP Part III review.</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'<div style="display:flex;gap:10px;flex-wrap:wrap;">{pills}</div>'
+            f'<div style="font-size:0.72rem;color:{C_TEXT3};margin-top:8px;">'
+            f'D or E for 3 consecutive years triggers mandatory corrective action plan and SEEMP Part III review.'
+            f'</div></div>'
+        )
     except Exception:
         logger.exception("CII tracker error")
         st.error("CII tracker unavailable.")
 
 
 def _section_5_evasion_patterns() -> None:
-    """Sanctions evasion intelligence."""
     try:
-        st.markdown(f'<div class="section-hdr">Sanctions Evasion Patterns — Compliance Intelligence</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="comp-card" style="border-left:3px solid {C_MOD};">'
-            f'<div style="font-size:0.78rem;color:{C_MOD};font-weight:600;margin-bottom:6px;">EDUCATIONAL / DUE DILIGENCE REFERENCE</div>'
-            f'<div style="font-size:0.8rem;color:{C_TEXT2};">The following patterns are documented by OFAC, IMO, and compliance practitioners as common evasion techniques. Use for vessel due diligence and counterparty screening.</div>'
-            f'</div>', unsafe_allow_html=True)
-        header = (
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th class="comp-th">Method</th>'
-            f'<th class="comp-th">Category</th>'
-            f'<th class="comp-th">Risk Level</th>'
-            f'<th class="comp-th">Indicators to Watch</th>'
-            f'<th class="comp-th">Key Regions</th>'
-            f'</tr></thead><tbody>'
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {C_MOD};'
+            f'border-radius:6px;padding:14px 18px;margin-bottom:14px;">'
+            f'<div style="font-size:0.78rem;color:{C_MOD};font-weight:600;margin-bottom:6px;">'
+            f'EDUCATIONAL / DUE DILIGENCE REFERENCE</div>'
+            f'<div style="font-size:0.8rem;color:{C_TEXT2};">'
+            f'The following patterns are documented by OFAC, IMO, and compliance practitioners as '
+            f'common evasion techniques. Use for vessel due diligence and counterparty screening.'
+            f'</div></div>'
         )
-        body = ""
+        headers = ["Method", "Category", "Risk Level", "Indicators to Watch", "Key Regions"]
+        rows = []
         for r in _EVASION_PATTERNS:
             risk_color = C_LOW if r["risk"] == "Critical" else (C_MOD if r["risk"] == "High" else C_ACCENT)
-            body += (
-                f'<tr>'
-                f'<td class="comp-td" style="font-weight:600;color:{C_TEXT};">{r["method"]}</td>'
-                f'<td class="comp-td2">{r["category"]}</td>'
-                f'<td class="comp-td"><span style="color:{risk_color};font-weight:600;">{r["risk"]}</span></td>'
-                f'<td class="comp-td2" style="font-size:0.75rem;">{r["indicators"]}</td>'
-                f'<td class="comp-td2" style="font-size:0.75rem;">{r["regions"]}</td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<div class="comp-card" style="padding:0;overflow-x:auto;">{header}{body}</tbody></table></div>', unsafe_allow_html=True)
+            rows.append([
+                _sans(r["method"], color=C_TEXT, weight=600),
+                _sans(r["category"]),
+                _sans(r["risk"], color=risk_color, weight=600),
+                _sans(r["indicators"]),
+                _sans(r["regions"]),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Evasion patterns error")
         st.error("Evasion patterns section unavailable.")
 
 
 def _section_6_dark_fleet() -> None:
-    """Dark fleet tracker."""
     try:
-        st.markdown(f'<div class="section-hdr">Dark Fleet Tracker</div>', unsafe_allow_html=True)
-
-        total_est = "~780"
-        st.markdown(
-            f'<div class="comp-card" style="border-left:3px solid {C_LOW};">'
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {C_LOW};'
+            f'border-radius:6px;padding:18px 20px;margin-bottom:14px;">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;">'
             f'<div>'
             f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-bottom:4px;">ESTIMATED TOTAL SHADOW FLEET (2026)</div>'
-            f'<div style="font-size:2.2rem;font-weight:700;color:{C_LOW};">{total_est} vessels</div>'
+            f'<div style="font-size:2.2rem;font-weight:700;color:{C_LOW};">~780 vessels</div>'
             f'</div>'
             f'<div style="text-align:right;">'
             f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-bottom:4px;">LEGITIMATE TANKER RATE IMPACT</div>'
             f'<div style="font-size:1.4rem;font-weight:700;color:{C_MOD};">−8% to −15%</div>'
             f'<div style="font-size:0.72rem;color:{C_TEXT3};">spot rate depression</div>'
             f'</div>'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'</div></div>'
+        )
 
         cols = st.columns(2)
         for i, fleet in enumerate(_DARK_FLEET):
             with cols[i % 2]:
-                st.markdown(
-                    f'<div class="comp-card" style="border-left:3px solid {fleet["color"]};">'
+                st.html(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'border-left:3px solid {fleet["color"]};border-radius:6px;padding:18px 20px;margin-bottom:14px;">'
                     f'<div style="font-size:0.95rem;font-weight:700;color:{fleet["color"]};margin-bottom:10px;">{fleet["fleet"]}</div>'
                     f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">'
                     f'<div><div style="font-size:0.68rem;color:{C_TEXT3};">ESTIMATED VESSELS</div>'
-                    f'<div style="font-size:1.1rem;font-weight:700;color:{C_TEXT};">{fleet["est_vessels"]}</div></div>'
+                    f'<div style="font-size:1.1rem;font-weight:700;color:{C_TEXT};font-family:var(--mono);">{fleet["est_vessels"]}</div></div>'
                     f'<div><div style="font-size:0.68rem;color:{C_TEXT3};">VESSEL TYPES</div>'
                     f'<div style="font-size:0.78rem;color:{C_TEXT2};">{fleet["types"]}</div></div>'
                     f'<div><div style="font-size:0.68rem;color:{C_TEXT3};">OPERATING AREAS</div>'
@@ -714,8 +645,8 @@ def _section_6_dark_fleet() -> None:
                     f'<div style="font-size:0.78rem;color:{C_LOW};">{fleet["p_i_cover"]}</div></div>'
                     f'<div><div style="font-size:0.68rem;color:{C_TEXT3};">MARKET IMPACT</div>'
                     f'<div style="font-size:0.78rem;color:{C_MOD};">{fleet["impact"]}</div></div>'
-                    f'</div>'
-                    f'</div>', unsafe_allow_html=True)
+                    f'</div></div>'
+                )
 
         try:
             fig = go.Figure(go.Scattergeo(
@@ -738,22 +669,20 @@ def _section_6_dark_fleet() -> None:
                 ],
                 hovertemplate="%{text}<extra></extra>",
             ))
-            fig.update_layout(
+            apply_dark_layout(
+                fig,
+                height=320,
+                showlegend=False,
+                margin=dict(l=0, r=0, t=0, b=0),
                 geo=dict(
-                    showland=True, landcolor="#12151e",
-                    showocean=True, oceancolor="#0c0e14",
+                    showland=True, landcolor=C_CARD,
+                    showocean=True, oceancolor=C_BG,
                     showlakes=False,
                     showcountries=True, countrycolor="rgba(255,255,255,0.1)",
                     showcoastlines=True, coastlinecolor="rgba(255,255,255,0.15)",
                     bgcolor=C_BG,
                     projection_type="natural earth",
                 ),
-                paper_bgcolor=C_BG,
-                plot_bgcolor=C_BG,
-                font=dict(color=C_TEXT2, size=11),
-                margin=dict(l=0, r=0, t=0, b=0),
-                height=320,
-                showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         except Exception:
@@ -765,53 +694,33 @@ def _section_6_dark_fleet() -> None:
 
 
 def _section_7_psc() -> None:
-    """Port State Control detentions."""
     try:
-        st.markdown(f'<div class="section-hdr">Port State Control — Recent Detentions & Deficiencies</div>', unsafe_allow_html=True)
         detained_count = sum(1 for r in _PSC_DETENTIONS if r["status"] == "Detained")
         released_count = sum(1 for r in _PSC_DETENTIONS if r["status"] == "Released")
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(
-                f'<div class="comp-kpi"><div class="comp-kpi-val" style="color:{C_LOW};">{detained_count}</div>'
-                f'<div class="comp-kpi-lbl">Currently Detained</div></div>', unsafe_allow_html=True)
-        with c2:
-            st.markdown(
-                f'<div class="comp-kpi"><div class="comp-kpi-val" style="color:{C_HIGH};">{released_count}</div>'
-                f'<div class="comp-kpi-lbl">Released (recent)</div></div>', unsafe_allow_html=True)
-        with c3:
-            st.markdown(
-                f'<div class="comp-kpi"><div class="comp-kpi-val" style="color:{C_MOD};">{len(_PSC_DETENTIONS)}</div>'
-                f'<div class="comp-kpi-lbl">Total Deficiency Records</div></div>', unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        header = (
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th class="comp-th">Vessel</th>'
-            f'<th class="comp-th">Flag</th>'
-            f'<th class="comp-th">Port</th>'
-            f'<th class="comp-th">Deficiency</th>'
-            f'<th class="comp-th">Status</th>'
-            f'<th class="comp-th">Release Date</th>'
-            f'</tr></thead><tbody>'
+        metric_card_row(
+            [
+                {"label": "Currently Detained",        "value": str(detained_count),      "accent": C_LOW},
+                {"label": "Released (recent)",         "value": str(released_count),      "accent": C_HIGH},
+                {"label": "Total Deficiency Records",  "value": str(len(_PSC_DETENTIONS)), "accent": C_MOD},
+            ],
+            columns=3,
         )
-        body = ""
-        for r in _PSC_DETENTIONS:
-            status_cls = "badge-detained" if r["status"] == "Detained" else "badge-released"
-            body += (
-                f'<tr>'
-                f'<td class="comp-td" style="font-weight:600;">{r["vessel"]}</td>'
-                f'<td class="comp-td2">{r["flag"]}</td>'
-                f'<td class="comp-td2">{r["port"]}</td>'
-                f'<td class="comp-td2" style="font-size:0.75rem;">{r["deficiency"]}</td>'
-                f'<td class="comp-td"><span class="badge {status_cls}">{r["status"].upper()}</span></td>'
-                f'<td class="comp-td2" style="font-size:0.75rem;">{r["release"]}</td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<div class="comp-card" style="padding:0;overflow-x:auto;">{header}{body}</tbody></table></div>', unsafe_allow_html=True)
+        st.html("<div style='margin-top:14px;'></div>")
+
+        headers = ["Vessel", "Flag", "Port", "Deficiency", "Status", "Release Date"]
+        rows = [
+            [
+                _sans(r["vessel"], color=C_TEXT, weight=600),
+                _sans(r["flag"]),
+                _sans(r["port"]),
+                _sans(r["deficiency"]),
+                badge(r["status"].upper(), "red" if r["status"] == "Detained" else "green"),
+                _sans(r["release"]),
+            ]
+            for r in _PSC_DETENTIONS
+        ]
+        wsj_market_table(headers, rows)
         st.caption("Source: Paris MOU, Tokyo MOU, US Coast Guard PSIX. Records illustrative — verify against live MOU databases.")
     except Exception:
         logger.exception("PSC section error")
@@ -819,13 +728,15 @@ def _section_7_psc() -> None:
 
 
 def _section_8_risk_score() -> None:
-    """Interactive compliance risk score calculator."""
     try:
-        st.markdown(f'<div class="section-hdr">Compliance Risk Score Calculator</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="comp-card" style="border-left:3px solid {C_ACCENT};">'
-            f'<div style="font-size:0.8rem;color:{C_TEXT2};">Select your trade parameters to generate a sanctions and regulatory compliance risk score. For due diligence and pre-fixture screening.</div>'
-            f'</div>', unsafe_allow_html=True)
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {C_ACCENT};'
+            f'border-radius:6px;padding:14px 18px;margin-bottom:14px;">'
+            f'<div style="font-size:0.8rem;color:{C_TEXT2};">'
+            f'Select your trade parameters to generate a sanctions and regulatory compliance risk score. '
+            f'For due diligence and pre-fixture screening.'
+            f'</div></div>'
+        )
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -842,11 +753,11 @@ def _section_8_risk_score() -> None:
         score    = min(int(raw), 99)
 
         if score >= 75:
-            color, label, border_color = C_LOW, "HIGH RISK — Do Not Proceed Without Legal Review", C_LOW
+            color, label = C_LOW,  "HIGH RISK — Do Not Proceed Without Legal Review"
         elif score >= 40:
-            color, label, border_color = C_MOD, "MODERATE RISK — Enhanced Due Diligence Required", C_MOD
+            color, label = C_MOD,  "MODERATE RISK — Enhanced Due Diligence Required"
         else:
-            color, label, border_color = C_HIGH, "LOW RISK — Standard Screening Sufficient", C_HIGH
+            color, label = C_HIGH, "LOW RISK — Standard Screening Sufficient"
 
         gauge_fig = go.Figure(go.Indicator(
             mode="gauge+number",
@@ -866,26 +777,23 @@ def _section_8_risk_score() -> None:
                 "threshold": {"line": {"color": color, "width": 3}, "thickness": 0.75, "value": score},
             },
         ))
-        gauge_fig.update_layout(
-            paper_bgcolor=C_CARD,
-            font=dict(color=C_TEXT),
-            height=220,
-            margin=dict(l=20, r=20, t=20, b=10),
-        )
+        apply_dark_layout(gauge_fig, height=220, margin=dict(l=20, r=20, t=20, b=10))
 
         cg, cd = st.columns([1, 1])
         with cg:
             st.plotly_chart(gauge_fig, use_container_width=True, config={"displayModeBar": False})
         with cd:
-            st.markdown(
-                f'<div class="comp-card" style="border-left:3px solid {border_color};height:100%;">'
-                f'<div style="font-size:1.5rem;font-weight:700;color:{color};margin-bottom:8px;">{score}/100</div>'
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {color};'
+                f'border-radius:6px;padding:18px 20px;height:100%;">'
+                f'<div style="font-size:1.5rem;font-weight:700;color:{color};margin-bottom:8px;font-family:var(--mono);">{score}/100</div>'
                 f'<div style="font-size:0.85rem;font-weight:600;color:{color};margin-bottom:14px;">{label}</div>'
                 f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-bottom:6px;"><b style="color:{C_TEXT};">Route risk:</b> {route_r}/100 — {route}</div>'
                 f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-bottom:6px;"><b style="color:{C_TEXT};">Counterparty risk:</b> {party_r}/100 — {party}</div>'
                 f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-bottom:14px;"><b style="color:{C_TEXT};">Cargo risk:</b> {cargo_r}/100 — {cargo}</div>'
                 f'<div style="font-size:0.72rem;color:{C_TEXT3};">Weighted: 45% route · 40% counterparty · 15% cargo</div>'
-                f'</div>', unsafe_allow_html=True)
+                f'</div>'
+            )
 
         if score >= 75:
             recs = [
@@ -915,11 +823,13 @@ def _section_8_risk_score() -> None:
             f'<li style="margin-bottom:5px;color:{C_TEXT2};font-size:0.8rem;">{rec}</li>'
             for rec in recs
         )
-        st.markdown(
-            f'<div class="comp-card">'
+        st.html(
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+            f'padding:18px 20px;margin-top:14px;">'
             f'<div style="font-size:0.8rem;font-weight:600;color:{C_TEXT};margin-bottom:10px;">RECOMMENDED ACTIONS</div>'
             f'<ul style="margin:0;padding-left:18px;">{rec_items}</ul>'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
         st.caption("Risk scores are illustrative guidance only. Not legal advice. Consult qualified sanctions counsel before any fixture decision.")
     except Exception:
         logger.exception("Risk score calculator error")
@@ -933,9 +843,13 @@ def _section_8_risk_score() -> None:
 def render(port_results=None, insights=None) -> None:
     """Render the full Compliance & Sanctions Intelligence tab."""
     try:
-        st.markdown(
-            f'<div style="font-family:\'Libre Baskerville\',serif;font-size:1.35rem;font-weight:700;color:{C_TEXT};margin-bottom:4px;">Regulatory Compliance & Sanctions Intelligence</div>'
-            f'<div style="font-family:\'Libre Franklin\',sans-serif;font-size:0.82rem;color:{C_TEXT3};margin-bottom:20px;">Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement</div>', unsafe_allow_html=True)
+        page_header(
+            title="Regulatory Compliance & Sanctions Intelligence",
+            subtitle="Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement",
+            icon="⚖️",
+            badge_text="Illustrative Data",
+            badge_color=C_MOD,
+        )
     except Exception:
         logger.exception("Header render error")
 
@@ -950,7 +864,9 @@ def render(port_results=None, insights=None) -> None:
         ("Compliance Risk Score",         _section_8_risk_score),
     ]
 
-    for label, fn in sections:
+    for idx, (label, fn) in enumerate(sections):
+        if idx > 0:
+            section_divider()
         try:
             with st.expander(label, expanded=(label == "Compliance Dashboard")):
                 fn()

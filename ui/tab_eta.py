@@ -13,36 +13,28 @@ Sections:
 from __future__ import annotations
 
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Palette
-# ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-
-_CHART_LAYOUT = dict(
-    paper_bgcolor=C_BG,
-    plot_bgcolor=C_SURFACE,
-    font=dict(color=C_TEXT, family="Inter, system-ui, sans-serif"),
-    margin=dict(t=48, b=36, l=56, r=24),
-    xaxis=dict(gridcolor="rgba(232,230,225,0.04)", zerolinecolor="rgba(232,230,225,0.06)"),
-    yaxis=dict(gridcolor="rgba(232,230,225,0.04)", zerolinecolor="rgba(232,230,225,0.06)"),
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
 )
 
 # ---------------------------------------------------------------------------
@@ -92,10 +84,6 @@ _ROUTES_DIST: dict[tuple[str, str], int] = {
 }
 
 _CARGO_TYPES = ["Container (TEU)", "Bulk (MT)", "Liquid Bulk (MT)", "Ro-Ro", "Breakbulk"]
-_CARRIERS = [
-    "Maersk", "MSC", "CMA CGM", "COSCO", "Hapag-Lloyd",
-    "ONE", "Evergreen", "Yang Ming", "HMM", "ZIM",
-]
 
 _WEATHER_ROUTES = [
     ("North Atlantic",      "Extratropical Cyclone", 0.72, 38, 14),
@@ -148,11 +136,8 @@ _MONTHS_18 = [
     (date(2026,  2, 1), "Feb '26"),
 ]
 
-# Seeded reliability curves per carrier (top 5 vs bottom 5)
-_TOP_CARRIERS    = ["Maersk", "Hapag-Lloyd", "CMA CGM", "ONE", "Evergreen"]
-_BOTTOM_CARRIERS = ["HMM", "Yang Ming", "ZIM", "PIL", "IRISL"]
-
 random.seed(42)
+
 
 def _reliability_series(base: float, volatility: float, n: int = 18) -> list[float]:
     vals, v = [], base
@@ -163,27 +148,20 @@ def _reliability_series(base: float, volatility: float, n: int = 18) -> list[flo
 
 
 # ---------------------------------------------------------------------------
-# Section helpers
+# Cell formatters
 # ---------------------------------------------------------------------------
-
-def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:20px 16px;text-align:center;">'
-        f'<div style="font-size:28px;font-weight:700;color:{color};line-height:1.1;">{value}</div>'
-        f'<div style="font-size:12px;color:{C_TEXT2};margin-top:4px;text-transform:uppercase;'
-        f'letter-spacing:.06em;">{label}</div>'
-        f'{"<div style=font-size:11px;color:" + C_TEXT3 + ";margin-top:2px;>" + sub + "</div>" if sub else ""}'
-        f'</div>'
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
     )
 
 
-def _section_header(title: str, sub: str = "") -> None:
-    sub_html = f'<div style="font-size:13px;color:{C_TEXT2};margin-top:2px;">{sub}</div>' if sub else ""
-    st.markdown(
-        f'<div style="margin:28px 0 12px;border-left:3px solid {C_ACCENT};padding-left:12px;">'
-        f'<div style="font-size:18px;font-weight:700;color:{C_TEXT};">{title}</div>'
-        f'{sub_html}</div>', unsafe_allow_html=True)
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
 
 
 def _delay_color(hrs: int) -> str:
@@ -198,12 +176,12 @@ def _delay_color(hrs: int) -> str:
 
 def _status_badge(hrs: int) -> str:
     if hrs < 0:
-        return f'<span style="background:rgba(46,158,110,.18);color:{C_HIGH};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">AHEAD</span>'
+        return badge("AHEAD", "green")
     if hrs == 0:
-        return f'<span style="background:rgba(148,163,184,.12);color:{C_TEXT2};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">ON TIME</span>'
+        return badge("ON TIME", "gray")
     if hrs <= 24:
-        return f'<span style="background:rgba(201,150,43,.18);color:{C_MOD};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DELAYED</span>'
-    return f'<span style="background:rgba(192,57,43,.18);color:{C_LOW};border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">DIVERTED</span>'
+        return badge("DELAYED", "yellow")
+    return badge("DIVERTED", "red")
 
 
 # ---------------------------------------------------------------------------
@@ -219,16 +197,13 @@ def _render_kpis() -> None:
         worst = max(delays)
         unknown = 0
 
-        cols = st.columns(5)
-        cards = [
-            ("Vessels Tracked",        str(tracked),          "active voyages",         C_ACCENT),
-            ("On-Time Arrival",        f"{on_time_pct}%",     "vs 65% industry avg",    C_HIGH),
-            ("Avg Delay (delayed)",    f"{avg_delay}h",       "hours per delayed vessel", C_MOD),
-            ("Worst Delay",            f"{worst}h",           "max delay in fleet",     C_LOW),
-            ("Unknown ETA",            str(unknown),          "vessels with no ETA",    C_TEXT2),
-        ]
-        for col, (lbl, val, sub, clr) in zip(cols, cards):
-            col.html(_kpi_card(lbl, val, sub, clr))
+        metric_card_row([
+            {"label": "VESSELS TRACKED",     "value": str(tracked),    "accent": C_ACCENT, "sublabel": "active voyages"},
+            {"label": "ON-TIME ARRIVAL",     "value": f"{on_time_pct}%", "accent": C_HIGH, "sublabel": "vs 65% industry avg"},
+            {"label": "AVG DELAY (DELAYED)", "value": f"{avg_delay}h",  "accent": C_MOD,    "sublabel": "hours per delayed vessel"},
+            {"label": "WORST DELAY",         "value": f"{worst}h",      "accent": C_LOW,    "sublabel": "max delay in fleet"},
+            {"label": "UNKNOWN ETA",         "value": str(unknown),     "accent": C_TEXT2,  "sublabel": "vessels with no ETA"},
+        ], columns=5)
     except Exception:
         logger.exception("ETA KPI render failed")
         st.warning("KPI data unavailable.")
@@ -240,87 +215,34 @@ def _render_kpis() -> None:
 
 def _render_voyage_tracker() -> None:
     try:
-        _section_header(
+        section_header(
             "Vessel Voyage Tracker",
             "Real-time voyage positions and ETA status — refreshed hourly",
         )
 
         today = date(2026, 3, 22)
-
-        rows_html = ""
+        headers = ["Vessel", "IMO", "Origin", "Destination", "Departed", "Orig ETA", "Curr ETA", "Delay", "Status", "Speed", "Position"]
+        rows: list[list[str]] = []
         for name, imo, orig, dest, delay_hrs, spd, pos in _VESSELS:
-            departed = today - timedelta(days=random.randint(3, 25))
-            orig_eta = today + timedelta(days=random.randint(1, 18))
+            departed = today - timedelta(days=abs(hash(name)) % 22 + 3)
+            orig_eta = today + timedelta(days=abs(hash(name + "e")) % 18 + 1)
             curr_eta = orig_eta + timedelta(hours=delay_hrs)
             dc = _delay_color(delay_hrs)
-            badge = _status_badge(delay_hrs)
-            delay_txt = f'<span style="color:{dc};font-weight:600;">{"+" if delay_hrs > 0 else ""}{delay_hrs}h</span>'
-            rows_html += (
-                f"<tr>"
-                f'<td style="color:{C_TEXT};font-weight:600;">{name}</td>'
-                f'<td style="color:{C_TEXT3};">{imo}</td>'
-                f'<td style="color:{C_TEXT2};">{orig}</td>'
-                f'<td style="color:{C_TEXT2};">{dest}</td>'
-                f'<td style="color:{C_TEXT3};">{departed.strftime("%b %d")}</td>'
-                f'<td style="color:{C_TEXT2};">{orig_eta.strftime("%b %d")}</td>'
-                f'<td style="color:{C_TEXT};">{curr_eta.strftime("%b %d")}</td>'
-                f"<td>{delay_txt}</td>"
-                f"<td>{badge}</td>"
-                f'<td style="color:{C_ACCENT};">{spd} kn</td>'
-                f'<td style="color:{C_TEXT3};font-size:11px;">{pos}</td>'
-                f"</tr>"
-            )
-
-        th_style = f'style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid {C_BORDER};"'
-        td_style  = f'style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);"'
-
-        table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'overflow-x:auto;padding:4px 0;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-            f'<thead><tr>'
-            f'<th {th_style}>VESSEL</th>'
-            f'<th {th_style}>IMO</th>'
-            f'<th {th_style}>ORIGIN</th>'
-            f'<th {th_style}>DESTINATION</th>'
-            f'<th {th_style}>DEPARTED</th>'
-            f'<th {th_style}>ORIG ETA</th>'
-            f'<th {th_style}>CURR ETA</th>'
-            f'<th {th_style}>DELAY</th>'
-            f'<th {th_style}>STATUS</th>'
-            f'<th {th_style}>SPEED</th>'
-            f'<th {th_style}>POSITION</th>'
-            f'</tr></thead>'
-            f'<tbody style="color:{C_TEXT};">'
-        )
-
-        # inject td_style per row — rebuild rows with proper td padding
-        rows_final = ""
-        for name, imo, orig, dest, delay_hrs, spd, pos in _VESSELS:
-            departed = date(2026, 3, 22) - timedelta(days=abs(hash(name)) % 22 + 3)
-            orig_eta = date(2026, 3, 22) + timedelta(days=abs(hash(name + "e")) % 18 + 1)
-            curr_eta = orig_eta + timedelta(hours=delay_hrs)
-            dc = _delay_color(delay_hrs)
-            badge = _status_badge(delay_hrs)
-            delay_txt = f'<span style="color:{dc};font-weight:600;">{"+" if delay_hrs > 0 else ""}{delay_hrs}h</span>'
-            td = f'style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);"'
-            rows_final += (
-                f"<tr>"
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{name}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{imo}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{orig}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{dest}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{departed.strftime("%b %d")}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{orig_eta.strftime("%b %d")}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};">{curr_eta.strftime("%b %d")}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);">{delay_txt}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);">{badge}</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_ACCENT};">{spd} kn</td>'
-                f'<td {td} style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};font-size:11px;">{pos}</td>'
-                f"</tr>"
-            )
-
-        st.markdown(table_html + rows_final + "</tbody></table></div>", unsafe_allow_html=True)
+            sign = "+" if delay_hrs > 0 else ""
+            rows.append([
+                _sans(name, weight=600),
+                _mono(imo, color=C_TEXT3),
+                _sans(orig, color=C_TEXT2),
+                _sans(dest, color=C_TEXT2),
+                _sans(departed.strftime("%b %d"), color=C_TEXT3),
+                _sans(orig_eta.strftime("%b %d"), color=C_TEXT2),
+                _sans(curr_eta.strftime("%b %d"), color=C_TEXT),
+                _mono(f"{sign}{delay_hrs}h", color=dc, weight=600),
+                _status_badge(delay_hrs),
+                _mono(f"{spd} kn", color=C_ACCENT),
+                _mono(pos, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Voyage tracker render failed")
         st.error("Voyage tracker unavailable.")
@@ -332,20 +254,18 @@ def _render_voyage_tracker() -> None:
 
 def _render_eta_calculator() -> None:
     try:
-        _section_header(
+        section_header(
             "ETA Calculator",
             "Estimate transit time, distance, fuel consumption, and route risk factors",
         )
 
         all_ports = sorted({p for pair in _ROUTES_DIST for p in pair})
-        cargo_options = _CARGO_TYPES
 
-        with st.container():
-            c1, c2, c3, c4 = st.columns(4)
-            origin      = c1.selectbox("Origin Port",      all_ports, key="eta_calc_origin")
-            destination = c2.selectbox("Destination Port", all_ports, index=min(1, len(all_ports)-1), key="eta_calc_dest")
-            speed_kn    = c3.slider("Vessel Speed (kn)", 10, 25, 18, key="eta_calc_speed")
-            cargo_type  = c4.selectbox("Cargo Type", cargo_options, key="eta_calc_cargo")
+        c1, c2, c3, c4 = st.columns(4)
+        origin      = c1.selectbox("Origin Port",      all_ports, key="eta_calc_origin")
+        destination = c2.selectbox("Destination Port", all_ports, index=min(1, len(all_ports)-1), key="eta_calc_dest")
+        speed_kn    = c3.slider("Vessel Speed (kn)", 10, 25, 18, key="eta_calc_speed")
+        cargo_type  = c4.selectbox("Cargo Type", _CARGO_TYPES, key="eta_calc_cargo")
 
         if st.button("Calculate ETA", key="eta_calc_btn", type="primary"):
             try:
@@ -366,37 +286,29 @@ def _render_eta_calculator() -> None:
                 weather_risk    = random.choice(["Low", "Moderate", "High"])
                 canal_wait_hrs  = random.randint(0, 48)
 
-                risk_colors = {"Low": C_HIGH, "Moderate": C_MOD, "High": C_LOW}
-                cr_clr = risk_colors[congestion_risk]
-                wr_clr = risk_colors[weather_risk]
+                risk_badge_color = {"Low": "green", "Moderate": "yellow", "High": "red"}
 
-                result_html = (
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-top:12px;">'
-                    f'<div style="font-size:15px;font-weight:700;color:{C_TEXT};margin-bottom:14px;">'
-                    f'Route: {origin} → {destination}</div>'
-                    f'<div style="display:flex;gap:32px;flex-wrap:wrap;">'
-                    f'<div><div style="font-size:24px;font-weight:700;color:{C_ACCENT};">{transit_days}d</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT3};text-transform:uppercase;">Transit Time</div></div>'
-                    f'<div><div style="font-size:24px;font-weight:700;color:{C_TEXT};">{dist_nm:,} nm</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT3};text-transform:uppercase;">Distance</div></div>'
-                    f'<div><div style="font-size:24px;font-weight:700;color:{C_MOD};">{int(fuel_total_mt):,} MT</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT3};text-transform:uppercase;">Fuel Consumption</div></div>'
-                    f'<div><div style="font-size:24px;font-weight:700;color:{C_HIGH};">${bunker_cost:,}</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT3};text-transform:uppercase;">Est. Bunker Cost</div></div>'
-                    f'</div>'
-                    f'<div style="margin-top:16px;padding-top:16px;border-top:1px solid {C_BORDER};">'
-                    f'<div style="font-size:12px;color:{C_TEXT2};">Historical accuracy: '
-                    f'<span style="color:{C_ACCENT};font-weight:600;">±{accuracy_pct}%</span> '
-                    f'based on <span style="color:{C_TEXT};font-weight:600;">{voyage_count:,} voyages</span></div>'
-                    f'</div>'
-                    f'<div style="margin-top:14px;display:flex;gap:20px;flex-wrap:wrap;">'
-                    f'<span style="font-size:12px;color:{C_TEXT2};">Port Congestion: <span style="color:{cr_clr};font-weight:600;">{congestion_risk}</span></span>'
-                    f'<span style="font-size:12px;color:{C_TEXT2};">Weather Risk: <span style="color:{wr_clr};font-weight:600;">{weather_risk}</span></span>'
-                    f'<span style="font-size:12px;color:{C_TEXT2};">Canal Wait: <span style="color:{C_MOD};font-weight:600;">{canal_wait_hrs}h</span></span>'
-                    f'</div>'
+                section_header(f"Route: {origin} → {destination}", "")
+                metric_card_row([
+                    {"label": "TRANSIT TIME",   "value": f"{transit_days}d",       "accent": C_ACCENT},
+                    {"label": "DISTANCE",       "value": f"{dist_nm:,} nm",        "accent": C_TEXT},
+                    {"label": "FUEL CONSUMPTION","value": f"{int(fuel_total_mt):,} MT", "accent": C_MOD},
+                    {"label": "EST. BUNKER COST","value": f"${bunker_cost:,}",    "accent": C_HIGH},
+                ], columns=4)
+
+                st.html(
+                    f'<div style="margin-top:14px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">'
+                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
+                    f'Historical accuracy: <span style="color:{C_ACCENT};font-weight:600;">±{accuracy_pct}%</span> '
+                    f'based on <span style="color:{C_TEXT};font-weight:600;">{voyage_count:,} voyages</span></span>'
+                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
+                    f'Port Congestion: {badge(congestion_risk, risk_badge_color[congestion_risk])}</span>'
+                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
+                    f'Weather Risk: {badge(weather_risk, risk_badge_color[weather_risk])}</span>'
+                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
+                    f'Canal Wait: <span style="color:{C_MOD};font-weight:600;font-family:var(--mono);">{canal_wait_hrs}h</span></span>'
                     f'</div>'
                 )
-                st.markdown(result_html, unsafe_allow_html=True)
             except Exception:
                 logger.exception("ETA calculation inner error")
                 st.error("Calculation failed.")
@@ -411,7 +323,7 @@ def _render_eta_calculator() -> None:
 
 def _render_delay_analysis() -> None:
     try:
-        _section_header(
+        section_header(
             "Delay Analysis",
             "Which routes and ports drive the most schedule disruption",
         )
@@ -459,13 +371,18 @@ def _render_delay_analysis() -> None:
                 textposition="outside",
                 textfont=dict(color=C_TEXT2, size=11),
             ))
-            fig_r.update_layout(**_CHART_LAYOUT, title="Avg Delay by Route (hours)", height=360)
-            fig_r.update_xaxes(title="Avg Delay (h)")
+            apply_dark_layout(
+                fig_r,
+                title="Avg Delay by Route (hours)",
+                height=360,
+                margin=dict(t=48, b=36, l=150, r=24),
+                xaxis=dict(title="Avg Delay (h)"),
+            )
             st.plotly_chart(fig_r, use_container_width=True, key="eta_delay_by_route")
 
         with col2:
-            ports  = list(port_delays.keys())
-            pvals  = list(port_delays.values())
+            ports   = list(port_delays.keys())
+            pvals   = list(port_delays.values())
             pcolors = [C_LOW if v > 30 else C_MOD if v > 18 else C_HIGH for v in pvals]
             fig_p = go.Figure(go.Bar(
                 x=pvals, y=ports, orientation="h",
@@ -474,11 +391,15 @@ def _render_delay_analysis() -> None:
                 textposition="outside",
                 textfont=dict(color=C_TEXT2, size=11),
             ))
-            fig_p.update_layout(**_CHART_LAYOUT, title="Avg Delay by Port (hours)", height=360)
-            fig_p.update_xaxes(title="Avg Delay (h)")
+            apply_dark_layout(
+                fig_p,
+                title="Avg Delay by Port (hours)",
+                height=360,
+                margin=dict(t=48, b=36, l=120, r=24),
+                xaxis=dict(title="Avg Delay (h)"),
+            )
             st.plotly_chart(fig_p, use_container_width=True, key="eta_delay_by_port")
 
-        # Delay distribution histogram
         sorted_delays = sorted(delay_distribution)
         n = len(sorted_delays)
         median_val = sorted_delays[n // 2]
@@ -501,9 +422,14 @@ def _render_delay_analysis() -> None:
                             annotation_text=plabel,
                             annotation_font_color=pclr,
                             annotation_position="top right")
-        fig_h.update_layout(**_CHART_LAYOUT, title="Delay Distribution (hours) — All Routes", height=320)
-        fig_h.update_xaxes(title="Delay (hours)")
-        fig_h.update_yaxes(title="Voyage Count")
+        apply_dark_layout(
+            fig_h,
+            title="Delay Distribution (hours) — All Routes",
+            height=320,
+            margin=dict(t=48, b=48, l=60, r=24),
+            xaxis=dict(title="Delay (hours)"),
+            yaxis=dict(title="Voyage Count"),
+        )
         st.plotly_chart(fig_h, use_container_width=True, key="eta_delay_distribution")
     except Exception:
         logger.exception("Delay analysis render failed")
@@ -516,7 +442,7 @@ def _render_delay_analysis() -> None:
 
 def _render_reliability_trends() -> None:
     try:
-        _section_header(
+        section_header(
             "Schedule Reliability Trends",
             "Carrier on-time performance over 18 months vs industry average (65%)",
         )
@@ -550,12 +476,13 @@ def _render_reliability_trends() -> None:
             name="Industry Avg", line=dict(color=C_TEXT3, width=1.5, dash="dash"),
         ))
 
-        fig.update_layout(
-            **_CHART_LAYOUT,
+        apply_dark_layout(
+            fig,
             title="Carrier Schedule Reliability % — Last 18 Months",
             height=400,
+            margin=dict(t=48, b=56, l=56, r=24),
             legend=dict(orientation="h", y=-0.18, font=dict(size=11)),
-            yaxis=dict(range=[35, 90], title="On-Time %", gridcolor="rgba(232,230,225,0.04)"),
+            yaxis=dict(range=[35, 90], title="On-Time %"),
         )
         st.plotly_chart(fig, use_container_width=True, key="eta_reliability_trends")
     except Exception:
@@ -569,53 +496,25 @@ def _render_reliability_trends() -> None:
 
 def _render_weather_forecast() -> None:
     try:
-        _section_header(
+        section_header(
             "Weather Delay Forecast — Next 14 Days",
             "Routes with elevated weather delay risk based on current meteorological data",
         )
 
-        header_style = f'style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid {C_BORDER};"'
-        rows_html = ""
+        headers = ["Route", "Weather System", "Delay Probability", "Expected Delay", "Affected Vessels"]
+        rows: list[list[str]] = []
         for route, system, prob, delay_h, affected in _WEATHER_ROUTES:
             prob_pct = f"{int(prob * 100)}%"
-            if prob >= 0.65:
-                prob_clr = C_LOW
-            elif prob >= 0.40:
-                prob_clr = C_MOD
-            else:
-                prob_clr = C_HIGH
-
-            if delay_h >= 36:
-                delay_clr = C_LOW
-            elif delay_h >= 20:
-                delay_clr = C_MOD
-            else:
-                delay_clr = C_TEXT2
-
-            rows_html += (
-                f'<tr style="font-size:13px;">'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{route}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT2};">{system}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{prob_clr};font-weight:600;">{prob_pct}</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{delay_clr};font-weight:600;">{delay_h}h</td>'
-                f'<td style="padding:7px 10px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_ACCENT};">{affected} vessels</td>'
-                f'</tr>'
-            )
-
-        table_html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow-x:auto;padding:4px 0;">'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr>'
-            f'<th {header_style}>ROUTE</th>'
-            f'<th {header_style}>WEATHER SYSTEM</th>'
-            f'<th {header_style}>DELAY PROBABILITY</th>'
-            f'<th {header_style}>EXPECTED DELAY</th>'
-            f'<th {header_style}>AFFECTED VESSELS</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table></div>'
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+            prob_clr = C_LOW if prob >= 0.65 else C_MOD if prob >= 0.40 else C_HIGH
+            delay_clr = C_LOW if delay_h >= 36 else C_MOD if delay_h >= 20 else C_TEXT2
+            rows.append([
+                _sans(route, weight=600),
+                _sans(system, color=C_TEXT2),
+                _mono(prob_pct, color=prob_clr, weight=700),
+                _mono(f"{delay_h}h", color=delay_clr, weight=600),
+                _mono(f"{affected} vessels", color=C_ACCENT),
+            ])
+        wsj_market_table(headers, rows)
     except Exception:
         logger.exception("Weather forecast render failed")
         st.error("Weather forecast unavailable.")
@@ -627,7 +526,7 @@ def _render_weather_forecast() -> None:
 
 def _render_port_queue() -> None:
     try:
-        _section_header(
+        section_header(
             "Port Queue Tracker — Top 10 Busiest Ports",
             "Current anchorage queue depth and estimated wait time — updated hourly",
         )
@@ -635,50 +534,30 @@ def _render_port_queue() -> None:
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            header_style = f'style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 12px;border-bottom:1px solid {C_BORDER};"'
-            rows_html = ""
+            headers = ["Port", "LOCODE", "Vessels Waiting", "Est. Wait Time"]
+            rows: list[list[str]] = []
             for port, locode, vessels, wait_h in _PORT_QUEUES:
                 bar_pct = min(100, int(vessels / 65 * 100))
                 if vessels >= 45:
-                    bar_clr = C_LOW
-                    wait_clr = C_LOW
+                    bar_clr, wait_clr = C_LOW, C_LOW
                 elif vessels >= 25:
-                    bar_clr = C_MOD
-                    wait_clr = C_MOD
+                    bar_clr, wait_clr = C_MOD, C_MOD
                 else:
-                    bar_clr = C_HIGH
-                    wait_clr = C_HIGH
-
-                bar_html = (
-                    f'<div style="background:rgba(232,230,225,0.06);border-radius:3px;height:6px;width:140px;margin-top:4px;">'
+                    bar_clr, wait_clr = C_HIGH, C_HIGH
+                vessels_cell = (
+                    f'<span style="color:{bar_clr};font-weight:700;font-size:0.95rem;font-family:var(--mono);">{vessels}</span>'
+                    f'<span style="color:{C_TEXT3};font-size:0.7rem;font-family:var(--sans);"> vessels</span>'
+                    f'<div style="background:{C_BORDER};border-radius:3px;height:6px;width:140px;margin-top:4px;">'
                     f'<div style="background:{bar_clr};width:{bar_pct}%;height:6px;border-radius:3px;"></div>'
                     f'</div>'
                 )
-                rows_html += (
-                    f'<tr style="font-size:13px;">'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT};font-weight:600;">{port}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{C_TEXT3};">{locode}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);">'
-                    f'<span style="color:{bar_clr};font-weight:700;font-size:15px;">{vessels}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:11px;"> vessels</span>'
-                    f'{bar_html}</td>'
-                    f'<td style="padding:10px 12px;border-bottom:1px solid rgba(232,230,225,0.04);color:{wait_clr};font-weight:600;">{wait_h}h</td>'
-                    f'</tr>'
-                )
-
-            table_html = (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-                f'<table style="width:100%;border-collapse:collapse;">'
-                f'<thead><tr>'
-                f'<th {header_style}>PORT</th>'
-                f'<th {header_style}>LOCODE</th>'
-                f'<th {header_style}>VESSELS WAITING</th>'
-                f'<th {header_style}>EST. WAIT TIME</th>'
-                f'</tr></thead>'
-                f'<tbody>{rows_html}</tbody>'
-                f'</table></div>'
-            )
-            st.markdown(table_html, unsafe_allow_html=True)
+                rows.append([
+                    _sans(port, weight=600),
+                    _mono(locode, color=C_TEXT3),
+                    vessels_cell,
+                    _mono(f"{wait_h}h", color=wait_clr, weight=600),
+                ])
+            wsj_market_table(headers, rows)
 
         with col2:
             ports_chart  = [p[0] for p in _PORT_QUEUES]
@@ -691,13 +570,13 @@ def _render_port_queue() -> None:
                 textposition="outside",
                 textfont=dict(color=C_TEXT2, size=11),
             ))
-            fig_q.update_layout(
-                **_CHART_LAYOUT,
+            apply_dark_layout(
+                fig_q,
                 title="Vessels in Queue",
                 height=380,
                 margin=dict(t=40, b=20, l=100, r=40),
+                xaxis=dict(title="Vessel Count"),
             )
-            fig_q.update_xaxes(title="Vessel Count")
             st.plotly_chart(fig_q, use_container_width=True, key="eta_port_queue_chart")
     except Exception:
         logger.exception("Port queue render failed")
@@ -710,22 +589,28 @@ def _render_port_queue() -> None:
 
 def render(port_results=None, route_results=None) -> None:
     try:
-        st.markdown(
-            f'<div style="padding:20px 0 4px;">'
-            f'<div style="font-size:26px;font-weight:800;color:{C_TEXT};letter-spacing:-.02em;">'
-            f'ETA Intelligence &amp; Voyage Tracking</div>'
-            f'<div style="font-size:14px;color:{C_TEXT2};margin-top:4px;">'
-            f'Vessel ETA prediction, delay analysis, carrier reliability, and port queue monitoring</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="ETA Intelligence & Voyage Tracking",
+            subtitle="Vessel ETA prediction, delay analysis, carrier reliability, and port queue monitoring.",
+            icon="🚢",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        _section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
+        section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
         _render_kpis()
 
+        section_divider()
         _render_voyage_tracker()
+        section_divider()
         _render_eta_calculator()
+        section_divider()
         _render_delay_analysis()
+        section_divider()
         _render_reliability_trends()
+        section_divider()
         _render_weather_forecast()
+        section_divider()
         _render_port_queue()
 
     except Exception:

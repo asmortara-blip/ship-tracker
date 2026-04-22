@@ -4,46 +4,149 @@ Decomposes portfolio returns into factor contributions using a
 Brinson-Hood-Beebower framework combined with alpha decay analysis.
 
 Sections:
-  1. Attribution Hero        — total return decomposed into 6 factors
+  1. Attribution Hero         — total return decomposed into 6 factors
   2. Factor Attribution Table — contribution, significance, vs history
   3. BHB Attribution          — allocation + selection + interaction by sub-sector
-  4. Alpha Decay Chart         — alpha remaining after 1/5/10/20/30 days
-  5. Best/Worst Decisions      — top 5 best calls, top 5 worst calls
-  6. Attribution over Time     — stacked area, 12 months of factor contributions
+  4. Alpha Decay Chart        — alpha remaining after 1/5/10/20/30 days
+  5. Best/Worst Decisions     — top 5 best calls, top 5 worst calls
+  6. Attribution over Time    — stacked area, 12 months of factor contributions
+
+Refactored to the shared WSJ design system (see ``docs/TAB_MIGRATION.md``):
+palette constants import from ``ui.styles``; all headers/cards/tables use
+shared helpers; every figure and table carries a ``live_data_badge`` that
+honestly labels the synthetic data as ``DEMO``.
 """
 from __future__ import annotations
 
-import random
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
+from loguru import logger
 
-# ── Design constants ─────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-
-_CHART_LAYOUT = dict(
-    paper_bgcolor=C_SURFACE,
-    plot_bgcolor=C_SURFACE,
-    font=dict(family="monospace", color=C_TEXT2, size=11),
-    margin=dict(l=48, r=24, t=40, b=40),
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
 )
 
 
-# ── Synthetic data helpers ────────────────────────────────────────────────────
+# ── Domain-specific color mappings ──────────────────────────────────────────
+# Semantic mappings (factor → color, sector → color) stay local to the tab.
+
+_FACTOR_COLORS: dict[str, str] = {
+    "Freight Market Alpha": C_ACCENT,
+    "Macro Factor":         C_MOD,
+    "Stock Selection":      C_HIGH,
+    "Sentiment Timing":     C_CONV,
+    "Sector Allocation":    C_MACRO,
+    "Residual":             C_TEXT3,
+}
+
+_FACTOR_FILL_RGBA: dict[str, str] = {
+    "Freight Market Alpha": "rgba(53,114,176,0.75)",
+    "Macro Factor":         "rgba(201,150,43,0.75)",
+    "Stock Selection":      "rgba(46,158,110,0.75)",
+    "Sentiment Timing":     "rgba(124,110,175,0.75)",
+    "Sector Allocation":    "rgba(74,144,164,0.75)",
+    "Residual":             "rgba(107,103,96,0.75)",
+}
+
+_SECTOR_COLORS: dict[str, str] = {
+    "Container": C_ACCENT,
+    "Bulker":    C_HIGH,
+    "Tanker":    C_MOD,
+    "LNG":       C_CONV,
+}
+
+_SIG_BADGE_COLOR: dict[str, str] = {
+    "HIGH": C_HIGH,
+    "MOD":  C_MOD,
+    "LOW":  C_TEXT3,
+}
+
+
+# ── Provenance ──────────────────────────────────────────────────────────────
+# Attribution data is fully synthetic; every figure/table above gets a red
+# DEMO pill so users know not to trust the numbers.
+
+def _attribution_source(notes: str = "") -> DataSource:
+    return DataSource(
+        name="Attribution (synthetic)",
+        kind="demo",
+        quality="demo",
+        notes=notes or "Brinson-Hood-Beebower decomposition on simulated returns.",
+    )
+
+
+def _provenance_pill(notes: str = "") -> None:
+    """Render the shared data-quality pill above a figure/table."""
+    st.html(live_data_badge(_attribution_source(notes)))
+
+
+# ── Cell formatters for WSJ market tables ───────────────────────────────────
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content for ``wsj_market_table``."""
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    """Monospace numeric cell content for ``wsj_market_table``."""
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;font-weight:{weight};">{value}</span>'
+    )
+
+
+def _signed_mono(value: float, *, width: int = 1) -> str:
+    """Signed bps value rendered in monospace with green/red coloring."""
+    color = C_HIGH if value > 0 else (C_LOW if value < 0 else C_TEXT3)
+    sign = "+" if value > 0 else ""
+    return _mono(f"{sign}{value:.{width}f}", color=color, weight=600)
+
+
+def _significance_badge(sig: str) -> str:
+    """Map HIGH/MOD/LOW significance string to a colored badge."""
+    return badge(sig, color=_SIG_BADGE_COLOR.get(sig, C_TEXT3))
+
+
+def _sector_dot(name: str) -> str:
+    """Small colored dot + sector name for BHB row labels."""
+    color = _SECTOR_COLORS.get(name, C_ACCENT)
+    return (
+        f'<span style="display:inline-block;width:10px;height:10px;'
+        f'background:{color};border-radius:2px;margin-right:8px;'
+        f'vertical-align:middle;"></span>'
+        f'<span style="font-family:var(--sans);color:{C_TEXT};'
+        f'font-weight:600;vertical-align:middle;">{name}</span>'
+    )
+
+
+# ── Synthetic data helpers ──────────────────────────────────────────────────
+# Every data helper feeds a section labelled ``DEMO`` via ``_provenance_pill``.
 
 def _seed() -> int:
     return 42
@@ -52,7 +155,7 @@ def _seed() -> int:
 def _build_factor_contributions() -> Dict[str, float]:
     """Return factor contributions in basis points (sum = total return)."""
     rng = np.random.default_rng(_seed())
-    factors = {
+    return {
         "Freight Market Alpha": float(rng.normal(185, 30)),
         "Macro Factor":         float(rng.normal(-42, 15)),
         "Stock Selection":      float(rng.normal(97, 25)),
@@ -60,33 +163,28 @@ def _build_factor_contributions() -> Dict[str, float]:
         "Sector Allocation":    float(rng.normal(61, 18)),
         "Residual":             float(rng.normal(-18, 8)),
     }
-    return factors
 
 
 def _build_factor_table() -> pd.DataFrame:
     rng = np.random.default_rng(_seed() + 1)
     factors = [
-        "Freight Market Alpha",
-        "Macro Factor",
-        "Stock Selection",
-        "Sentiment Timing",
-        "Sector Allocation",
-        "Residual",
+        "Freight Market Alpha", "Macro Factor", "Stock Selection",
+        "Sentiment Timing", "Sector Allocation", "Residual",
     ]
     data = []
     for f in factors:
-        contrib = float(rng.normal(50, 80))
+        contrib  = float(rng.normal(50, 80))
         hist_avg = float(rng.normal(30, 40))
-        t_stat = float(rng.normal(1.8, 0.9))
-        sig = "HIGH" if abs(t_stat) > 2.0 else ("MOD" if abs(t_stat) > 1.0 else "LOW")
+        t_stat   = float(rng.normal(1.8, 0.9))
+        sig      = "HIGH" if abs(t_stat) > 2.0 else ("MOD" if abs(t_stat) > 1.0 else "LOW")
         data.append({
             "Factor": f,
             "Contribution (bps)": round(contrib, 1),
-            "t-stat": round(t_stat, 2),
-            "Significance": sig,
-            "Current": round(contrib, 1),
-            "Hist Avg (bps)": round(hist_avg, 1),
-            "vs Avg": round(contrib - hist_avg, 1),
+            "t-stat":             round(t_stat, 2),
+            "Significance":       sig,
+            "Current":            round(contrib, 1),
+            "Hist Avg (bps)":     round(hist_avg, 1),
+            "vs Avg":             round(contrib - hist_avg, 1),
         })
     return pd.DataFrame(data)
 
@@ -111,53 +209,48 @@ def _build_bhb_data() -> pd.DataFrame:
 
 def _build_alpha_decay() -> pd.DataFrame:
     days = [1, 5, 10, 20, 30]
-    decay_curve = [100, 78, 58, 37, 22]
+    curve = [100, 78, 58, 37, 22]
     rng = np.random.default_rng(_seed() + 3)
     noise = rng.normal(0, 2, len(days))
     return pd.DataFrame({
-        "Days": days,
-        "Alpha Remaining (%)": [max(0, v + n) for v, n in zip(decay_curve, noise)],
+        "Days":                days,
+        "Alpha Remaining (%)": [max(0, v + n) for v, n in zip(curve, noise)],
     })
 
 
 def _build_best_worst() -> tuple[pd.DataFrame, pd.DataFrame]:
-    rng = np.random.default_rng(_seed() + 4)
-    best_calls = [
-        ("Long ZIM Jan-25",      "Container",  "+312 bps", "Long freight spike"),
-        ("Long MATX Feb-25",     "Container",  "+218 bps", "Post-CNY demand surge"),
-        ("Long FLNG Mar-25",     "LNG",        "+187 bps", "Winter premium trade"),
-        ("Short BDI puts Apr-25","Bulker",     "+143 bps", "Vol compression play"),
-        ("Long DSX May-25",      "Bulker",     "+121 bps", "Panamax rate recovery"),
+    best = [
+        ("Long ZIM Jan-25",       "Container", "+312 bps", "Long freight spike"),
+        ("Long MATX Feb-25",      "Container", "+218 bps", "Post-CNY demand surge"),
+        ("Long FLNG Mar-25",      "LNG",       "+187 bps", "Winter premium trade"),
+        ("Short BDI puts Apr-25", "Bulker",    "+143 bps", "Vol compression play"),
+        ("Long DSX May-25",       "Bulker",    "+121 bps", "Panamax rate recovery"),
     ]
-    worst_calls = [
-        ("Long SBLK Jun-24",     "Bulker",     "-198 bps", "Iron ore demand miss"),
-        ("Long TK Jul-24",       "Tanker",     "-156 bps", "Geopolitical unwind"),
-        ("Long ZIM Aug-24",      "Container",  "-134 bps", "Rate normalization"),
-        ("Long HAFN Sep-24",     "Tanker",     "-98 bps",  "Refinery margin squeeze"),
-        ("Long NMM Oct-24",      "Container",  "-76 bps",  "Charter rate reversal"),
+    worst = [
+        ("Long SBLK Jun-24",  "Bulker",    "-198 bps", "Iron ore demand miss"),
+        ("Long TK Jul-24",    "Tanker",    "-156 bps", "Geopolitical unwind"),
+        ("Long ZIM Aug-24",   "Container", "-134 bps", "Rate normalization"),
+        ("Long HAFN Sep-24",  "Tanker",    "-98 bps",  "Refinery margin squeeze"),
+        ("Long NMM Oct-24",   "Container", "-76 bps",  "Charter rate reversal"),
     ]
     cols = ["Trade", "Sector", "Impact", "Reason"]
-    return pd.DataFrame(best_calls, columns=cols), pd.DataFrame(worst_calls, columns=cols)
+    return pd.DataFrame(best, columns=cols), pd.DataFrame(worst, columns=cols)
 
 
 def _build_monthly_attribution() -> pd.DataFrame:
     rng = np.random.default_rng(_seed() + 5)
     months = pd.date_range("2025-03", periods=12, freq="MS")
     factors = [
-        "Freight Market Alpha",
-        "Macro Factor",
-        "Stock Selection",
-        "Sentiment Timing",
-        "Sector Allocation",
-        "Residual",
+        "Freight Market Alpha", "Macro Factor", "Stock Selection",
+        "Sentiment Timing", "Sector Allocation", "Residual",
     ]
-    data = {"Month": months}
+    data: dict = {"Month": months}
     for f in factors:
         data[f] = rng.normal(30, 60, 12).tolist()
     return pd.DataFrame(data)
 
 
-# ── Section renderers ─────────────────────────────────────────────────────────
+# ── Section renderers ───────────────────────────────────────────────────────
 
 def _render_hero(contributions: Dict[str, float]) -> None:
     try:
@@ -165,191 +258,81 @@ def _render_hero(contributions: Dict[str, float]) -> None:
         total_color = C_HIGH if total >= 0 else C_LOW
         total_sign  = "+" if total >= 0 else ""
 
-        factor_colors = {
-            "Freight Market Alpha": "#3572b0",
-            "Macro Factor":         "#c9962b",
-            "Stock Selection":      "#2e9e6e",
-            "Sentiment Timing":     "#7c6eaf",
-            "Sector Allocation":    "#4a90a4",
-            "Residual":             "#6b6760",
-        }
-
-        cards_html = ""
-        for name, val in contributions.items():
-            color = C_HIGH if val >= 0 else C_LOW
-            sign  = "+" if val >= 0 else ""
-            fc    = factor_colors.get(name, C_ACCENT)
-            cards_html += (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-top:3px solid {fc};border-radius:8px;padding:14px 16px;'
-                f'text-align:center;min-width:120px;flex:1;">'
-                f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                f'letter-spacing:1px;margin-bottom:6px;">{name}</div>'
-                f'<div style="color:{color};font-size:22px;font-weight:700;'
-                f'font-family:JetBrains Mono,monospace;">{sign}{val:.0f}</div>'
-                f'<div style="color:{C_TEXT3};font-size:10px;margin-top:2px;">bps</div>'
-                f'</div>'
-            )
-
-        html = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">'
-            f'<div>'
+        # Total portfolio return card
+        st.html(
+            f'<div style="padding:16px 20px;background:{C_SURFACE};'
+            f'border:1px solid {C_BORDER};border-radius:6px;margin-bottom:14px;">'
             f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;'
             f'letter-spacing:1.5px;">Total Portfolio Return</div>'
             f'<div style="color:{total_color};font-size:42px;font-weight:800;'
-            f'font-family:JetBrains Mono,monospace;line-height:1;">{total_sign}{total:.0f} bps</div>'
+            f'font-family:var(--mono);line-height:1;">'
+            f'{total_sign}{total:.0f} bps</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">'
             f'Attribution decomposition across 6 factors</div>'
             f'</div>'
-            f'</div>'
-            f'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
-            f'{cards_html}'
-            f'</div>'
-            f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Attribution hero unavailable: {exc}")
+
+        # Factor-level breakdown using shared metric cards
+        cards = []
+        for name, val in contributions.items():
+            accent = _FACTOR_COLORS.get(name, C_ACCENT)
+            v_color = C_HIGH if val >= 0 else C_LOW
+            sign = "+" if val >= 0 else ""
+            cards.append({
+                "label":    name,
+                "value":    f"{sign}{val:.0f}",
+                "accent":   accent,
+                "sublabel": "bps",
+                "delta_color": v_color,
+            })
+        metric_card_row(cards, columns=6)
+    except Exception:
+        logger.exception("Attribution hero render failed")
+        st.error("Attribution hero unavailable.")
 
 
 def _render_factor_table(df: pd.DataFrame) -> None:
     try:
-        def sig_badge(sig: str) -> str:
-            color = C_HIGH if sig == "HIGH" else (C_MOD if sig == "MOD" else C_TEXT3)
-            return (
-                f'<span style="background:{color}22;color:{color};'
-                f'padding:2px 8px;border-radius:4px;font-size:10px;'
-                f'font-weight:600;">{sig}</span>'
-            )
-
-        def val_cell(v: float) -> str:
-            color = C_HIGH if v > 0 else (C_LOW if v < 0 else C_TEXT3)
-            sign  = "+" if v > 0 else ""
-            return f'<span style="color:{color};font-family:JetBrains Mono,monospace;">{sign}{v:.1f}</span>'
-
-        rows_html = ""
+        headers = [
+            "Factor", "Contrib (bps)", "t-stat", "Significance",
+            "Current", "Hist Avg", "vs Avg",
+        ]
+        rows = []
         for _, row in df.iterrows():
-            rows_html += (
-                f'<tr style="border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 12px;color:{C_TEXT};font-size:13px;">'
-                f'{row["Factor"]}</td>'
-                f'<td style="padding:10px 12px;text-align:right;">'
-                f'{val_cell(row["Contribution (bps)"])}</td>'
-                f'<td style="padding:10px 12px;text-align:right;'
-                f'color:{C_TEXT2};font-family:JetBrains Mono,monospace;">{row["t-stat"]:.2f}</td>'
-                f'<td style="padding:10px 12px;text-align:center;">'
-                f'{sig_badge(row["Significance"])}</td>'
-                f'<td style="padding:10px 12px;text-align:right;">'
-                f'{val_cell(row["Current"])}</td>'
-                f'<td style="padding:10px 12px;text-align:right;">'
-                f'{val_cell(row["Hist Avg (bps)"])}</td>'
-                f'<td style="padding:10px 12px;text-align:right;">'
-                f'{val_cell(row["vs Avg"])}</td>'
-                f'</tr>'
-            )
-
-        header_style = (
-            f'color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-            f'letter-spacing:1px;padding:10px 12px;text-align:right;'
-            f'border-bottom:1px solid {C_BORDER};font-weight:600;'
-        )
-        first_style = (
-            f'color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-            f'letter-spacing:1px;padding:10px 12px;text-align:left;'
-            f'border-bottom:1px solid {C_BORDER};font-weight:600;'
-        )
-
-        html = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr style="background:{C_CARD};">'
-            f'<th style="{first_style}">Factor</th>'
-            f'<th style="{header_style}">Contrib (bps)</th>'
-            f'<th style="{header_style}">t-stat</th>'
-            f'<th style="{header_style}text-align:center;">Significance</th>'
-            f'<th style="{header_style}">Current</th>'
-            f'<th style="{header_style}">Hist Avg</th>'
-            f'<th style="{header_style}">vs Avg</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
-            f'</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Factor table unavailable: {exc}")
+            rows.append([
+                _sans(row["Factor"], color=C_TEXT, weight=600),
+                _signed_mono(row["Contribution (bps)"]),
+                _mono(f"{row['t-stat']:.2f}", color=C_TEXT2),
+                _significance_badge(row["Significance"]),
+                _signed_mono(row["Current"]),
+                _signed_mono(row["Hist Avg (bps)"]),
+                _signed_mono(row["vs Avg"]),
+            ])
+        wsj_market_table(headers, rows)
+    except Exception:
+        logger.exception("Factor table render failed")
+        st.error("Factor attribution table unavailable.")
 
 
 def _render_bhb(df: pd.DataFrame) -> None:
     try:
-        sector_colors = {
-            "Container": "#3572b0",
-            "Bulker":    "#2e9e6e",
-            "Tanker":    "#c9962b",
-            "LNG":       "#7c6eaf",
-        }
-
-        rows_html = ""
+        headers = ["Sub-Sector", "Allocation", "Selection", "Interaction", "Total"]
+        rows = []
         for _, row in df.iterrows():
-            color = sector_colors.get(row["Sub-Sector"], C_ACCENT)
-
-            def cell(v: float) -> str:
-                c = C_HIGH if v > 0 else (C_LOW if v < 0 else C_TEXT3)
-                s = "+" if v > 0 else ""
-                return f'<td style="padding:10px 12px;text-align:right;color:{c};font-family:JetBrains Mono,monospace;">{s}{v:.1f}</td>'
-
-            total_c = C_HIGH if row["Total"] > 0 else (C_LOW if row["Total"] < 0 else C_TEXT3)
-            total_s = "+" if row["Total"] > 0 else ""
-            rows_html += (
-                f'<tr style="border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 12px;">'
-                f'<span style="display:inline-block;width:10px;height:10px;'
-                f'background:{color};border-radius:2px;margin-right:8px;"></span>'
-                f'<span style="color:{C_TEXT};font-size:13px;">{row["Sub-Sector"]}</span>'
-                f'</td>'
-                f'{cell(row["Allocation Effect"])}'
-                f'{cell(row["Selection Effect"])}'
-                f'{cell(row["Interaction"])}'
-                f'<td style="padding:10px 12px;text-align:right;color:{total_c};'
-                f'font-family:JetBrains Mono,monospace;font-weight:700;">{total_s}{row["Total"]:.1f}</td>'
-                f'</tr>'
-            )
-
-        th = (
-            f'color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-            f'letter-spacing:1px;padding:10px 12px;border-bottom:1px solid {C_BORDER};'
-            f'font-weight:600;text-align:right;'
-        )
-        th_first = th.replace("text-align:right;", "text-align:left;")
-
-        html = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
-            f'<div style="padding:14px 16px;background:{C_CARD};'
-            f'border-bottom:1px solid {C_BORDER};">'
-            f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">'
-            f'Brinson-Hood-Beebower Attribution by Sub-Sector</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;margin-left:10px;">'
-            f'All values in basis points</span>'
-            f'</div>'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr style="background:{C_CARD};">'
-            f'<th style="{th_first}">Sub-Sector</th>'
-            f'<th style="{th}">Allocation</th>'
-            f'<th style="{th}">Selection</th>'
-            f'<th style="{th}">Interaction</th>'
-            f'<th style="{th}">Total</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
-            f'</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"BHB table unavailable: {exc}")
+            total = row["Total"]
+            total_color = C_HIGH if total > 0 else (C_LOW if total < 0 else C_TEXT3)
+            total_sign = "+" if total > 0 else ""
+            rows.append([
+                _sector_dot(row["Sub-Sector"]),
+                _signed_mono(row["Allocation Effect"]),
+                _signed_mono(row["Selection Effect"]),
+                _signed_mono(row["Interaction"]),
+                _mono(f"{total_sign}{total:.1f}", color=total_color, weight=700),
+            ])
+        wsj_market_table(headers, rows)
+    except Exception:
+        logger.exception("BHB render failed")
+        st.error("BHB attribution table unavailable.")
 
 
 def _render_alpha_decay_chart(df: pd.DataFrame) -> None:
@@ -359,18 +342,17 @@ def _render_alpha_decay_chart(df: pd.DataFrame) -> None:
         ]
 
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(
             x=df["Days"],
             y=df["Alpha Remaining (%)"],
             mode="lines+markers",
             name="Alpha Remaining",
             line=dict(color=C_ACCENT, width=3),
-            marker=dict(size=9, color=C_ACCENT, line=dict(color=C_SURFACE, width=2)),
+            marker=dict(size=9, color=C_ACCENT,
+                        line=dict(color=C_SURFACE, width=2)),
             fill="tozeroy",
-            fillcolor=f"rgba(53,114,176,0.12)",
+            fillcolor="rgba(53,114,176,0.12)",
         ))
-
         fig.add_hline(
             y=50,
             line=dict(color=C_MOD, width=1.5, dash="dash"),
@@ -378,7 +360,6 @@ def _render_alpha_decay_chart(df: pd.DataFrame) -> None:
             annotation_font_color=C_MOD,
             annotation_position="top right",
         )
-
         fig.add_vline(
             x=optimal_day,
             line=dict(color=C_HIGH, width=1.5, dash="dot"),
@@ -386,33 +367,24 @@ def _render_alpha_decay_chart(df: pd.DataFrame) -> None:
             annotation_font_color=C_HIGH,
             annotation_position="top left",
         )
-
-        fig.update_layout(
-            **_CHART_LAYOUT,
-            title=dict(
-                text="Alpha Decay Curve — Optimal Holding Period",
-                font=dict(color=C_TEXT, size=13),
-                x=0,
-            ),
+        apply_dark_layout(
+            fig,
+            title="Alpha Decay Curve - Optimal Holding Period",
+            height=320,
+            showlegend=False,
             xaxis=dict(
                 title="Holding Period (Days)",
                 tickvals=[1, 5, 10, 20, 30],
-                gridcolor=C_BORDER,
-                showline=False,
-                color=C_TEXT2,
             ),
             yaxis=dict(
                 title="Alpha Remaining (%)",
                 range=[0, 110],
-                gridcolor=C_BORDER,
-                color=C_TEXT2,
             ),
-            showlegend=False,
-            height=300,
         )
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        st.warning(f"Alpha decay chart unavailable: {exc}")
+        st.plotly_chart(fig, use_container_width=True, key="attribution_alpha_decay")
+    except Exception:
+        logger.exception("Alpha decay chart render failed")
+        st.error("Alpha decay chart unavailable.")
 
 
 def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
@@ -420,77 +392,44 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
         col_l, col_r = st.columns(2)
 
         with col_l:
-            rows_html = ""
-            for _, row in best.iterrows():
-                rows_html += (
-                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
-                    f'<td style="padding:9px 12px;color:{C_TEXT};font-size:12px;">'
-                    f'{row["Trade"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
-                    f'{row["Sector"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_HIGH};font-family:JetBrains Mono,monospace;'
-                    f'font-weight:700;font-size:12px;">{row["Impact"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
-                    f'{row["Reason"]}</td>'
-                    f'</tr>'
-                )
-            html = (
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-top:3px solid {C_HIGH};border-radius:6px;overflow:hidden;">'
-                f'<div style="padding:12px 16px;background:{C_CARD};">'
-                f'<span style="color:{C_HIGH};font-size:12px;font-weight:700;">'
-                f'TOP 5 BEST CALLS</span></div>'
-                f'<table style="width:100%;border-collapse:collapse;">'
-                f'<tbody>{rows_html}</tbody>'
-                f'</table></div>'
-            )
-            st.markdown(html, unsafe_allow_html=True)
+            st.html('<div class="sub-section-header">Top 5 Best Calls</div>')
+            headers = ["Trade", "Sector", "Impact", "Reason"]
+            rows = [
+                [
+                    _sans(row["Trade"], color=C_TEXT, weight=600),
+                    _sans(row["Sector"], color=C_TEXT3, weight=500),
+                    _mono(row["Impact"], color=C_HIGH, weight=700),
+                    _sans(row["Reason"], color=C_TEXT3, weight=400),
+                ]
+                for _, row in best.iterrows()
+            ]
+            wsj_market_table(headers, rows)
 
         with col_r:
-            rows_html = ""
-            for _, row in worst.iterrows():
-                rows_html += (
-                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
-                    f'<td style="padding:9px 12px;color:{C_TEXT};font-size:12px;">'
-                    f'{row["Trade"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
-                    f'{row["Sector"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_LOW};font-family:JetBrains Mono,monospace;'
-                    f'font-weight:700;font-size:12px;">{row["Impact"]}</td>'
-                    f'<td style="padding:9px 12px;color:{C_TEXT3};font-size:11px;">'
-                    f'{row["Reason"]}</td>'
-                    f'</tr>'
-                )
-            html = (
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-top:3px solid {C_LOW};border-radius:6px;overflow:hidden;">'
-                f'<div style="padding:12px 16px;background:{C_CARD};">'
-                f'<span style="color:{C_LOW};font-size:12px;font-weight:700;">'
-                f'TOP 5 WORST CALLS</span></div>'
-                f'<table style="width:100%;border-collapse:collapse;">'
-                f'<tbody>{rows_html}</tbody>'
-                f'</table></div>'
-            )
-            st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Best/worst decisions unavailable: {exc}")
+            st.html('<div class="sub-section-header">Top 5 Worst Calls</div>')
+            headers = ["Trade", "Sector", "Impact", "Reason"]
+            rows = [
+                [
+                    _sans(row["Trade"], color=C_TEXT, weight=600),
+                    _sans(row["Sector"], color=C_TEXT3, weight=500),
+                    _mono(row["Impact"], color=C_LOW, weight=700),
+                    _sans(row["Reason"], color=C_TEXT3, weight=400),
+                ]
+                for _, row in worst.iterrows()
+            ]
+            wsj_market_table(headers, rows)
+    except Exception:
+        logger.exception("Best/worst render failed")
+        st.error("Best/worst decisions unavailable.")
 
 
 def _render_attribution_over_time(df: pd.DataFrame) -> None:
     try:
-        factor_colors = [
-            "#3572b0",  # Freight Market Alpha
-            "#c9962b",  # Macro Factor
-            "#2e9e6e",  # Stock Selection
-            "#7c6eaf",  # Sentiment Timing
-            "#4a90a4",  # Sector Allocation
-            "#6b6760",  # Residual
-        ]
         factors = [c for c in df.columns if c != "Month"]
         months  = df["Month"].dt.strftime("%b %Y").tolist()
 
         fig = go.Figure()
-        for i, factor in enumerate(factors):
+        for factor in factors:
             fig.add_trace(go.Scatter(
                 x=months,
                 y=df[factor].tolist(),
@@ -498,36 +437,17 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
                 mode="lines",
                 stackgroup="one",
                 line=dict(width=0),
-                fillcolor=factor_colors[i % len(factor_colors)]
-                          .replace("#", "rgba(").rstrip(")")
-                          + ",0.75)",
+                fillcolor=_FACTOR_FILL_RGBA.get(factor, "rgba(107,103,96,0.75)"),
             ))
 
-        # Fix fillcolor — use rgba properly
-        rgba_map = [
-            "rgba(53,114,176,0.75)",
-            "rgba(201,150,43,0.75)",
-            "rgba(46,158,110,0.75)",
-            "rgba(124,110,175,0.75)",
-            "rgba(6,182,212,0.75)",
-            "rgba(100,116,139,0.75)",
-        ]
-        for i, trace in enumerate(fig.data):
-            trace.fillcolor = rgba_map[i % len(rgba_map)]
-            trace.line = dict(width=0)
-
-        fig.update_layout(
-            **_CHART_LAYOUT,
-            title=dict(
-                text="Factor Contributions — Rolling 12 Months (bps)",
-                font=dict(color=C_TEXT, size=13),
-                x=0,
-            ),
-            xaxis=dict(gridcolor=C_BORDER, color=C_TEXT2, showline=False),
+        apply_dark_layout(
+            fig,
+            title="Factor Contributions - Rolling 12 Months (bps)",
+            height=380,
+            showlegend=True,
+            xaxis=dict(showline=False),
             yaxis=dict(
                 title="Contribution (bps)",
-                gridcolor=C_BORDER,
-                color=C_TEXT2,
                 zeroline=True,
                 zerolinecolor=C_BORDER,
             ),
@@ -540,101 +460,99 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
                 font=dict(size=10, color=C_TEXT2),
                 bgcolor="rgba(0,0,0,0)",
             ),
-            height=360,
         )
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        st.warning(f"Attribution over time chart unavailable: {exc}")
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<span style="color:{C_TEXT3};font-size:11px;margin-left:10px;">'
-        f'{subtitle}</span>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin:24px 0 10px;padding-bottom:8px;'
-        f'border-bottom:1px solid {C_BORDER};">'
-        f'<span style="color:{C_TEXT};font-size:14px;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:1px;">{title}</span>'
-        f'{sub}</div>', unsafe_allow_html=True)
-
-
-# ── Main render ───────────────────────────────────────────────────────────────
-
-def render(stock_data=None, insights=None, freight_data=None):
-    """Render the Performance Attribution Analysis tab."""
-    try:
-        st.markdown(
-            f'<div style="padding:4px 0 18px;">'
-            f'<span style="color:{C_TEXT};font-size:18px;font-weight:800;'
-            f'letter-spacing:0.5px;">Performance Attribution</span>'
-            f'<span style="color:{C_TEXT3};font-size:12px;margin-left:12px;">'
-            f'Factor decomposition &amp; alpha analysis</span>'
-            f'</div>', unsafe_allow_html=True)
+        st.plotly_chart(fig, use_container_width=True, key="attribution_over_time")
     except Exception:
-        st.subheader("Performance Attribution")
+        logger.exception("Attribution over time render failed")
+        st.error("Attribution over time chart unavailable.")
 
-    # ── 1. Attribution Hero ───────────────────────────────────────────────────
+
+# ── Main render ─────────────────────────────────────────────────────────────
+
+def render(stock_data=None, insights=None, freight_data=None) -> None:
+    """Render the Performance Attribution Analysis tab."""
+
+    page_header(
+        title="Performance Attribution",
+        subtitle="Factor decomposition and alpha analysis",
+        badge_text="Demo Data",
+        badge_color=C_LOW,
+    )
+
+    # ── 1. Attribution Hero ─────────────────────────────────────────────────
     try:
-        _section_header("1. Attribution Hero", "Total return decomposed into 6 factors")
+        section_header(
+            "1. Attribution Hero",
+            subtitle="Total return decomposed into 6 factors",
+        )
+        _provenance_pill("Total portfolio return and per-factor contribution (bps).")
         contributions = _build_factor_contributions()
         _render_hero(contributions)
-    except Exception as exc:
-        st.warning(f"Section 1 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 1 failed")
+        st.warning("Section 1 unavailable.")
 
-    # ── 2. Factor Attribution Table ───────────────────────────────────────────
+    # ── 2. Factor Attribution Table ─────────────────────────────────────────
     try:
-        _section_header(
+        section_header(
             "2. Factor Attribution Table",
-            "Contribution, significance, current vs historical average",
+            subtitle="Contribution, significance, current vs historical average",
         )
+        _provenance_pill("Per-factor contribution with t-stat significance.")
         factor_df = _build_factor_table()
         _render_factor_table(factor_df)
-    except Exception as exc:
-        st.warning(f"Section 2 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 2 failed")
+        st.warning("Section 2 unavailable.")
 
-    # ── 3. BHB Attribution ────────────────────────────────────────────────────
+    # ── 3. BHB Attribution ──────────────────────────────────────────────────
     try:
-        _section_header(
+        section_header(
             "3. Brinson-Hood-Beebower Attribution",
-            "Allocation + Selection + Interaction by sub-sector",
+            subtitle="Allocation + Selection + Interaction by sub-sector (bps)",
         )
+        _provenance_pill("Allocation / selection / interaction by sub-sector.")
         bhb_df = _build_bhb_data()
         _render_bhb(bhb_df)
-    except Exception as exc:
-        st.warning(f"Section 3 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 3 failed")
+        st.warning("Section 3 unavailable.")
 
-    # ── 4. Alpha Decay Chart ──────────────────────────────────────────────────
+    # ── 4. Alpha Decay ──────────────────────────────────────────────────────
     try:
-        _section_header(
-            "4. Alpha Decay Chart",
-            "Alpha remaining after 1 / 5 / 10 / 20 / 30 days — optimal holding period",
+        section_header(
+            "4. Alpha Decay",
+            subtitle="Alpha remaining after 1/5/10/20/30 days - optimal holding period",
         )
+        _provenance_pill("Alpha-remaining curve over 1-30 day holding periods.")
         decay_df = _build_alpha_decay()
         _render_alpha_decay_chart(decay_df)
-    except Exception as exc:
-        st.warning(f"Section 4 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 4 failed")
+        st.warning("Section 4 unavailable.")
 
-    # ── 5. Best / Worst Attribution Decisions ─────────────────────────────────
+    # ── 5. Best / Worst Decisions ───────────────────────────────────────────
     try:
-        _section_header(
+        section_header(
             "5. Best / Worst Attribution Decisions",
-            "Top 5 best calls and top 5 worst calls by attribution impact",
+            subtitle="Top 5 best calls and top 5 worst calls by attribution impact",
         )
+        _provenance_pill("Top and bottom 5 trades by attribution impact.")
         best_df, worst_df = _build_best_worst()
         _render_best_worst(best_df, worst_df)
-    except Exception as exc:
-        st.warning(f"Section 5 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 5 failed")
+        st.warning("Section 5 unavailable.")
 
-    # ── 6. Attribution over Time ──────────────────────────────────────────────
+    # ── 6. Attribution over Time ────────────────────────────────────────────
     try:
-        _section_header(
+        section_header(
             "6. Attribution over Time",
-            "Stacked area — factor contributions each month, last 12 months",
+            subtitle="Stacked area - factor contributions each month, last 12 months",
         )
+        _provenance_pill("Rolling 12-month factor contributions (bps).")
         monthly_df = _build_monthly_attribution()
         _render_attribution_over_time(monthly_df)
-    except Exception as exc:
-        st.warning(f"Section 6 error: {exc}")
+    except Exception:
+        logger.exception("Attribution section 6 failed")
+        st.warning("Section 6 unavailable.")

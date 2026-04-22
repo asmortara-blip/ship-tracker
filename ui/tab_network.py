@@ -5,35 +5,40 @@ carrier service coverage, and network stress testing.
 """
 from __future__ import annotations
 
-import random
-from typing import Any
-
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
+
+C_PURPLE = C_CONV
+C_CYAN   = C_MACRO
 
 # ---------------------------------------------------------------------------
 # Static network data
 # ---------------------------------------------------------------------------
 
-# (port, lat, lon, throughput_mTEU, region, color)
 _PORTS = [
     ("Shanghai",      31.23,  121.47, 47.3, "Asia East",         C_ACCENT),
     ("Singapore",      1.29,  103.85, 37.2, "Southeast Asia",    C_CYAN),
@@ -62,7 +67,6 @@ _PORTS = [
     ("Durban",       -29.87,   31.02,  2.8, "Africa",            "#84cc16"),
 ]
 
-# (port_a, port_b, weekly_calls, trade_lane_color)
 _ROUTES = [
     ("Shanghai",   "Rotterdam",     14, C_ACCENT),
     ("Shanghai",   "Los Angeles",   18, C_CYAN),
@@ -86,7 +90,6 @@ _ROUTES = [
     ("Piraeus",    "Shanghai",       4, C_ACCENT),
 ]
 
-# (port, centrality, connections, disruption_pct, description)
 _CENTRALITY = [
     ("Singapore",        98, 38, 18.4, "Global transshipment nexus — half of Asia-Europe containers touch here"),
     ("Shanghai",         95, 42, 22.1, "Largest port by volume — Asia export anchor"),
@@ -105,7 +108,6 @@ _CENTRALITY = [
     ("Santos",           31, 14,  2.4, "South America primary — Brazil gateway"),
 ]
 
-# (hub, type, avg_cost_usd, avg_days, reliability_pct, note)
 _HUB_SPOKE = [
     ("Singapore",         "Transshipment Hub", 850,  28, 89, "Feeder to 200+ ports — 2.4d avg dwell"),
     ("Colombo",           "Transshipment Hub", 720,  32, 84, "South Asia feeder — lower cost, longer dwell"),
@@ -119,7 +121,6 @@ _HUB_SPOKE = [
     ("Qingdao → Hamburg",    "Direct Call",   1100,  28, 91, "Weekly direct — limited capacity"),
 ]
 
-# (alliance, carriers, weekly_services, port_pairs_pct, flagship_service)
 _CARRIER_SERVICES = [
     ("Gemini (Maersk + Hapag-Lloyd)", "Maersk, Hapag-Lloyd",       42, 72, "AE-1/Shogun (Asia–Europe, 18,000 TEU)"),
     ("Premier Alliance (ONE + HMM + YM)", "ONE, HMM, Yang Ming",   38, 65, "FE4 (Far East–US East Coast)"),
@@ -130,7 +131,6 @@ _CARRIER_SERVICES = [
     ("Wan Hai (Independent)",         "Wan Hai Lines",               9, 30, "SE Asia Regional Loop"),
 ]
 
-# (port, scenario, affected_routes, alternative, rate_impact_pct, add_days, recovery_weeks)
 _STRESS_TESTS = [
     ("Shanghai",
      "Major typhoon + terminal fire — full closure 30 days",
@@ -161,14 +161,15 @@ _STRESS_TESTS = [
 
 
 # ---------------------------------------------------------------------------
-# Helper rendering functions
+# Cell formatters
 # ---------------------------------------------------------------------------
 
-def _badge(text: str, color: str) -> str:
-    return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-        f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">{text}</span>'
-    )
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">{value}</span>'
 
 
 def _score_bar(score: int, color: str, width: int = 100) -> str:
@@ -181,28 +182,25 @@ def _score_bar(score: int, color: str, width: int = 100) -> str:
     )
 
 
+def _score_cell(score: int, color: str) -> str:
+    return f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
+
+
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
 
 def _render_hero_stats() -> None:
     try:
-        kpis = [
-            ("Ports in Network",         "847",   C_ACCENT, "Total ports with active container services"),
-            ("Trade Routes",             "2,340", C_CYAN,   "Unique port-pair routes tracked"),
-            ("Network Resilience Score", "73/100", C_MOD,   "Composite redundancy & connectivity index"),
-            ("Single Points of Failure", "7",     C_LOW,    "Ports whose closure disrupts >5% of global trade"),
-        ]
-        cols = st.columns(4)
-        for col, (label, value, color, tip) in zip(cols, kpis):
-            with col:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-top:3px solid {color};'
-                    f'border-radius:6px;padding:18px 14px;text-align:center;">'
-                    f'<div style="font-size:28px;font-weight:800;color:{color};">{value}</div>'
-                    f'<div style="font-size:11px;color:{C_TEXT2};margin-top:4px;font-weight:600;">{label}</div>'
-                    f'<div style="font-size:10px;color:{C_TEXT3};margin-top:3px;">{tip}</div>'
-                    f'</div>', unsafe_allow_html=True)
+        metric_card_row(
+            [
+                {"label": "Ports in Network",         "value": "847",    "accent": C_ACCENT, "sublabel": "Active container services"},
+                {"label": "Trade Routes",             "value": "2,340",  "accent": C_CYAN,   "sublabel": "Unique port-pair routes tracked"},
+                {"label": "Network Resilience Score", "value": "73/100", "accent": C_MOD,    "sublabel": "Composite redundancy & connectivity index"},
+                {"label": "Single Points of Failure", "value": "7",      "accent": C_LOW,    "sublabel": "Closure disrupts >5% of global trade"},
+            ],
+            columns=4,
+        )
     except Exception as exc:
         logger.warning(f"hero stats error: {exc}")
         st.info("Network stats unavailable.")
@@ -210,12 +208,10 @@ def _render_hero_stats() -> None:
 
 def _render_network_map() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Global Network Map</div>', unsafe_allow_html=True)
+        section_header("Global Network Map", "Port throughput × route density, weighted by weekly calls")
 
         fig = go.Figure()
 
-        # Draw route edges first
         for port_a, port_b, weekly, color in _ROUTES:
             port_a_data = next((p for p in _PORTS if p[0] == port_a), None)
             port_b_data = next((p for p in _PORTS if p[0] == port_b), None)
@@ -230,7 +226,6 @@ def _render_network_map() -> None:
                     hoverinfo="skip",
                 ))
 
-        # Draw port nodes
         lats = [p[1] for p in _PORTS]
         lons = [p[2] for p in _PORTS]
         names = [p[0] for p in _PORTS]
@@ -259,20 +254,19 @@ def _render_network_map() -> None:
             showlegend=False,
         ))
 
-        fig.update_geos(
-            projection_type="natural earth",
-            showland=True, landcolor="#181c28",
-            showocean=True, oceancolor="#0c0e14",
-            showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
-            showcountries=True, countrycolor="rgba(232,230,225,0.04)",
-            showframe=False,
-            bgcolor=C_BG,
-        )
-        fig.update_layout(
-            paper_bgcolor=C_CARD,
-            margin=dict(l=0, r=0, t=10, b=0),
+        apply_dark_layout(
+            fig,
             height=440,
-            font=dict(color=C_TEXT2),
+            margin=dict(l=0, r=0, t=10, b=0),
+            geo=dict(
+                projection_type="natural earth",
+                showland=True, landcolor=C_CARD,
+                showocean=True, oceancolor=C_BG,
+                showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
+                showcountries=True, countrycolor="rgba(232,230,225,0.04)",
+                showframe=False,
+                bgcolor=C_BG,
+            ),
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as exc:
@@ -282,25 +276,11 @@ def _render_network_map() -> None:
 
 def _render_centrality() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Centrality Analysis</div>', unsafe_allow_html=True)
+        section_header("Network Centrality Analysis", "Betweenness centrality weighted by TEU throughput")
 
-        header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">#</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Port</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Centrality Score</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Connections</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">If Removed → Trade Impact</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Role</th>'
-            f'</tr></thead><tbody>'
-        )
-
-        rows = ""
+        headers = ["#", "Port", "Centrality Score", "Connections", "If Removed → Trade Impact", "Role"]
+        rows = []
         for i, (port, centrality, connections, disruption, description) in enumerate(_CENTRALITY):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
             if centrality >= 85:
                 color = C_LOW
             elif centrality >= 65:
@@ -308,22 +288,19 @@ def _render_centrality() -> None:
             else:
                 color = C_HIGH
             impact_color = C_LOW if disruption >= 12 else (C_MOD if disruption >= 7 else C_HIGH)
-            rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-weight:700;">{i+1}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT};font-weight:700;">{port}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="font-size:15px;font-weight:800;color:{color};">{centrality}</span> '
-                f'{_score_bar(centrality, color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">{connections}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
+            impact_cell = (
                 f'<span style="font-size:14px;font-weight:800;color:{impact_color};">{disruption:.1f}%</span>'
-                f'<span style="font-size:10px;color:{C_TEXT3};"> global trade</span></td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-size:11px;">{description[:60]}…</td>'
-                f'</tr>'
+                f'<span style="font-size:10px;color:{C_TEXT3};"> global trade</span>'
             )
-
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+            rows.append([
+                _mono(str(i + 1), color=C_TEXT3, weight=700),
+                _sans(port, weight=700),
+                _score_cell(centrality, color),
+                _mono(str(connections), color=C_TEXT2, weight=600),
+                impact_cell,
+                _sans(f"{description[:60]}…", color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"centrality error: {exc}")
         st.info("Centrality data unavailable.")
@@ -331,44 +308,25 @@ def _render_centrality() -> None:
 
 def _render_hub_spoke() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Hub-and-Spoke vs Direct Calls — Cost/Time Tradeoff</div>', unsafe_allow_html=True)
+        section_header("Hub-and-Spoke vs Direct Calls", "Cost, transit time, and reliability tradeoff")
 
-        header = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Route / Hub</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Type</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Avg Cost/TEU</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Transit Days</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Reliability</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Notes</th>'
-            f'</tr></thead><tbody>'
-        )
-
-        rows = ""
-        for i, (route, rtype, cost, days, reliability, note) in enumerate(_HUB_SPOKE):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
+        headers = ["Route / Hub", "Type", "Avg Cost/TEU", "Transit Days", "Reliability", "Notes"]
+        rows = []
+        for route, rtype, cost, days, reliability, note in _HUB_SPOKE:
             is_direct = rtype == "Direct Call"
-            type_color = C_CYAN if is_direct else C_PURPLE
+            type_color_name = "blue" if is_direct else "purple"
             rel_color = C_HIGH if reliability >= 90 else (C_MOD if reliability >= 80 else C_LOW)
             cost_color = C_HIGH if cost < 700 else (C_MOD if cost < 900 else C_LOW)
             days_color = C_HIGH if days <= 20 else (C_MOD if days <= 30 else C_LOW)
-            rows += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{C_TEXT};font-weight:700;">{route}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">{_badge(rtype, type_color)}</td>'
-                f'<td style="padding:10px 14px;text-align:center;color:{cost_color};font-weight:700;">${cost:,}</td>'
-                f'<td style="padding:10px 14px;text-align:center;color:{days_color};font-weight:700;">{days}d</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="color:{rel_color};font-weight:700;">{reliability}%</span> '
-                f'{_score_bar(reliability, rel_color)}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-size:11px;">{note}</td>'
-                f'</tr>'
-            )
-
-        st.markdown(header + rows + "</tbody></table></div>", unsafe_allow_html=True)
+            rows.append([
+                _sans(route, weight=700),
+                badge(rtype, type_color_name),
+                _mono(f"${cost:,}", color=cost_color, weight=700),
+                _mono(f"{days}d", color=days_color, weight=700),
+                _score_cell(reliability, rel_color),
+                _sans(note, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"hub spoke error: {exc}")
         st.info("Hub-and-spoke data unavailable.")
@@ -376,49 +334,31 @@ def _render_hub_spoke() -> None:
 
 def _render_carrier_services() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Carrier Alliance Service Network</div>', unsafe_allow_html=True)
+        section_header("Carrier Alliance Service Network", "Weekly service count & port-pair coverage")
 
         alliance_colors = {
-            "Gemini": C_ACCENT,
+            "Gemini":  C_ACCENT,
             "Premier": C_PURPLE,
-            "Ocean": C_CYAN,
-            "MSC": C_MOD,
-            "ZIM": C_HIGH,
-            "PIL": C_TEXT2,
+            "Ocean":   C_CYAN,
+            "MSC":     C_MOD,
+            "ZIM":     C_HIGH,
+            "PIL":     C_TEXT2,
             "Wan Hai": C_TEXT3,
         }
 
-        html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;overflow:hidden;">'
-        html += (
-            f'<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Alliance / Carrier</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Members</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Weekly Services</th>'
-            f'<th style="padding:10px 14px;text-align:center;color:{C_TEXT2};font-weight:600;">Port Pair Coverage</th>'
-            f'<th style="padding:10px 14px;text-align:left;color:{C_TEXT2};font-weight:600;">Flagship Service</th>'
-            f'</tr></thead><tbody>'
-        )
-
-        for i, (alliance, carriers, weekly, pct, flagship) in enumerate(_CARRIER_SERVICES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
+        headers = ["Alliance / Carrier", "Members", "Weekly Services", "Port Pair Coverage", "Flagship Service"]
+        rows = []
+        for alliance, carriers, weekly, pct, flagship in _CARRIER_SERVICES:
             short_name = alliance.split(" (")[0].split(" Alliance")[0].split(" ")[0]
             color = alliance_colors.get(short_name, C_TEXT2)
-            html += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 14px;color:{color};font-weight:700;">{alliance}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT2};font-size:11px;">{carriers}</td>'
-                f'<td style="padding:10px 14px;text-align:center;color:{C_TEXT};font-weight:700;font-size:16px;">{weekly}</td>'
-                f'<td style="padding:10px 14px;text-align:center;">'
-                f'<span style="color:{color};font-weight:700;">{pct}%</span> '
-                f'{_score_bar(pct, color)}</td>'
-                f'<td style="padding:10px 14px;color:{C_TEXT3};font-size:11px;">{flagship}</td>'
-                f'</tr>'
-            )
-
-        html += "</tbody></table></div>"
-        st.markdown(html, unsafe_allow_html=True)
+            rows.append([
+                _sans(alliance, color=color, weight=700),
+                _sans(carriers, color=C_TEXT2),
+                _mono(str(weekly), color=C_TEXT, weight=700),
+                _score_cell(pct, color),
+                _sans(flagship, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
     except Exception as exc:
         logger.warning(f"carrier services error: {exc}")
         st.info("Carrier service data unavailable.")
@@ -426,11 +366,13 @@ def _render_carrier_services() -> None:
 
 def _render_stress_test() -> None:
     try:
-        st.markdown(
-            f'<div style="font-size:16px;font-weight:700;color:{C_TEXT};margin:24px 0 12px;font-family:\'Libre Baskerville\',serif;">Network Stress Test — Port Closure Scenarios (30-Day Simulation)</div>', unsafe_allow_html=True)
+        section_header(
+            "Network Stress Test",
+            "Port Closure Scenarios (30-Day Simulation) — rate, routing, and recovery impact",
+        )
 
         for port, scenario, affected, alternative, rate_impact, add_days, recovery in _STRESS_TESTS:
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:4px solid {C_LOW};'
                 f'border-radius:6px;padding:16px 20px;margin-bottom:12px;">'
                 f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
@@ -458,14 +400,14 @@ def _render_stress_test() -> None:
                 f'<div style="font-size:10px;color:{C_TEXT3};">Recovery: {recovery}</div>'
                 f'</div>'
                 f'</div>'
-                f'</div>', unsafe_allow_html=True)
+                f'</div>'
+            )
     except Exception as exc:
         logger.warning(f"stress test error: {exc}")
         st.info("Stress test data unavailable.")
 
 
 def _render_centrality_chart() -> None:
-    """Bar chart for top 10 ports by centrality score."""
     try:
         top10 = _CENTRALITY[:10]
         ports = [r[0] for r in top10]
@@ -479,39 +421,37 @@ def _render_centrality_chart() -> None:
         fig = go.Figure()
         fig.add_trace(go.Bar(
             name="Centrality Score",
-            x=ports,
-            y=scores,
-            marker_color=colors_list,
-            opacity=0.85,
-            yaxis="y",
+            x=ports, y=scores,
+            marker_color=colors_list, opacity=0.85, yaxis="y",
             hovertemplate="%{x}<br>Centrality: %{y}<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
             name="Trade Disruption %",
-            x=ports,
-            y=disruption,
+            x=ports, y=disruption,
             mode="lines+markers",
             line=dict(color=C_PURPLE, width=2),
             marker=dict(size=7, color=C_PURPLE),
             yaxis="y2",
             hovertemplate="%{x}<br>Disruption: %{y}%<extra></extra>",
         ))
+        apply_dark_layout(
+            fig,
+            title="Port Centrality & Trade Disruption Risk",
+            height=300,
+            margin=dict(l=10, r=10, t=46, b=80),
+            xaxis=dict(tickangle=-30),
+            yaxis=dict(range=[0, 110], title="Centrality Score"),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                bgcolor="rgba(0,0,0,0)", font=dict(color=C_TEXT2),
+            ),
+        )
         fig.update_layout(
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            font=dict(color=C_TEXT2, size=11),
-            margin=dict(l=10, r=10, t=30, b=80),
-            xaxis=dict(gridcolor=C_BORDER, tickangle=-30),
-            yaxis=dict(gridcolor=C_BORDER, range=[0, 110], title="Centrality Score"),
             yaxis2=dict(
                 overlaying="y", side="right",
                 range=[0, 30], title="Disruption %",
                 gridcolor="rgba(0,0,0,0)",
             ),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                        bgcolor="rgba(0,0,0,0)", font=dict(color=C_TEXT2)),
-            height=300,
-            title=dict(text="Port Centrality & Trade Disruption Risk", font=dict(color=C_TEXT, size=13)),
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as exc:
@@ -525,22 +465,20 @@ def _render_centrality_chart() -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Shipping Network Topology & Resilience tab."""
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-size:22px;font-weight:800;color:{C_TEXT};font-family:\'Libre Baskerville\',serif;">Shipping Network Topology & Resilience</div>'
-            f'<div style="font-size:13px;color:{C_TEXT2};margin-top:4px;font-family:\'Libre Franklin\',sans-serif;">'
-            f'Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Shipping Network Topology & Resilience",
+            subtitle="Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing",
+            icon="🕸️",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
     except Exception as exc:
         logger.warning(f"header error: {exc}")
 
     _render_hero_stats()
     _render_network_map()
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     col_left, col_right = st.columns([3, 2])
     with col_left:
@@ -551,28 +489,26 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         except Exception as exc:
             logger.warning(f"centrality chart col error: {exc}")
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     _render_hub_spoke()
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     _render_carrier_services()
 
-    st.markdown(
-        f'<div style="height:1px;background:{C_BORDER};margin:28px 0;"></div>', unsafe_allow_html=True)
+    section_divider()
 
     _render_stress_test()
 
     try:
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;">'
+            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
             f'Network topology derived from vessel scheduling data, AIS tracking, and carrier service announcements. '
             f'Centrality scores calculated using betweenness centrality weighted by TEU throughput. '
             f'Stress test scenarios are modelled simulations — actual outcomes depend on market conditions and carrier response.'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"footer error: {exc}")

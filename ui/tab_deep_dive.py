@@ -20,29 +20,31 @@ import datetime
 import random
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Palette (WSJ editorial) ────────────────────────────────────────────────────
-C_BG      = "#f8f5f0"
-C_SURFACE = "#f0ebe3"
-C_CARD    = "#ffffff"
-C_BORDER  = "rgba(51,51,51,0.12)"
-C_HIGH    = "#2e7d32"
-C_MOD     = "#b8860b"
-C_LOW     = "#b71c1c"
-C_ACCENT  = "#0d3b66"
-C_TEXT    = "#222222"
-C_TEXT2   = "#555555"
-C_TEXT3   = "#888888"
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
 
-# ── Typography ────────────────────────────────────────────────────────────────
-FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
-FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', sans-serif"
-FONT_MONO     = "'JetBrains Mono', monospace"
 
 # ── Static reference data ──────────────────────────────────────────────────────
 ROUTES = {
@@ -407,29 +409,29 @@ COMMODITIES = {
 
 PRESSURE_TEMPLATES = {
     "origin_port": {
-        "LOW":  ("Origin Port Congestion", "LOW", C_HIGH, "Avg wait: 0.4 days"),
-        "MOD":  ("Origin Port Congestion", "MODERATE", C_MOD,  "Avg wait: 1.8 days"),
-        "HIGH": ("Origin Port Congestion", "HIGH", C_LOW,  "Avg wait: 4.2 days"),
+        "LOW":  ("Origin Port", "LOW", C_HIGH, "Avg wait: 0.4 days"),
+        "MOD":  ("Origin Port", "MODERATE", C_MOD,  "Avg wait: 1.8 days"),
+        "HIGH": ("Origin Port", "HIGH", C_LOW,  "Avg wait: 4.2 days"),
     },
     "dest_port": {
-        "LOW":  ("Destination Port Congestion", "LOW", C_HIGH, "Vessels at anchor: 3"),
-        "MOD":  ("Destination Port Congestion", "MODERATE", C_MOD,  "Vessels at anchor: 14"),
-        "HIGH": ("Destination Port Congestion", "HIGH", C_LOW,  "Vessels at anchor: 31"),
+        "LOW":  ("Dest Port", "LOW", C_HIGH, "Anchor: 3"),
+        "MOD":  ("Dest Port", "MODERATE", C_MOD,  "Anchor: 14"),
+        "HIGH": ("Dest Port", "HIGH", C_LOW,  "Anchor: 31"),
     },
     "inland": {
-        "LOW":  ("Inland Connectivity", "LOW RISK", C_HIGH, "Rail + truck capacity adequate"),
-        "MOD":  ("Inland Connectivity", "MODERATE", C_MOD,  "Intermodal backlogs 2–5 days"),
-        "HIGH": ("Inland Connectivity", "HIGH RISK", C_LOW,  "Severe inland dwell; avg 9 days"),
+        "LOW":  ("Inland", "LOW RISK", C_HIGH, "Rail/truck OK"),
+        "MOD":  ("Inland", "MODERATE", C_MOD,  "Backlog 2–5d"),
+        "HIGH": ("Inland", "HIGH RISK", C_LOW,  "Dwell 9d"),
     },
     "labor": {
-        "LOW":  ("Labor Situation", "STABLE", C_HIGH, "No disputes; contracts current"),
-        "MOD":  ("Labor Situation", "WATCH", C_MOD,  "Negotiations ongoing; slowdowns possible"),
-        "HIGH": ("Labor Situation", "RISK", C_LOW,  "Active dispute; work-to-rule in effect"),
+        "LOW":  ("Labor", "STABLE", C_HIGH, "Contracts current"),
+        "MOD":  ("Labor", "WATCH", C_MOD,  "Negotiations"),
+        "HIGH": ("Labor", "RISK", C_LOW,  "Work-to-rule"),
     },
     "equipment": {
-        "LOW":  ("Equipment Availability", "ADEQUATE", C_HIGH, "Box surplus on route"),
-        "MOD":  ("Equipment Availability", "TIGHT", C_MOD,  "Lead time for 40HC: 5 days"),
-        "HIGH": ("Equipment Availability", "CRITICAL", C_LOW,  "Acute shortage; 14-day lead time"),
+        "LOW":  ("Equipment", "ADEQUATE", C_HIGH, "Box surplus"),
+        "MOD":  ("Equipment", "TIGHT", C_MOD,  "40HC: 5d lead"),
+        "HIGH": ("Equipment", "CRITICAL", C_LOW,  "Acute shortage"),
     },
 }
 
@@ -450,32 +452,21 @@ def _hex_rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def _divider(label: str) -> None:
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:12px;margin:32px 0 20px">'
-        f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
-        f'<span style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.14em;font-weight:700">{label}</span>'
-        f'<div style="flex:1;height:1px;background:{C_BORDER}"></div>'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _card_open(extra_style: str = "") -> str:
+def _mono(value: str, color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-        f'padding:20px 24px;margin-bottom:16px;font-family:{FONT_BODY};{extra_style}">'
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
     )
 
 
-def _badge(text: str, color: str) -> str:
-    bg = _hex_rgba(color, 0.15)
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     return (
-        f'<span style="background:{bg};color:{color};border:1px solid {_hex_rgba(color,0.35)};'
-        f'border-radius:3px;padding:2px 9px;font-family:{FONT_BODY};font-size:0.67rem;font-weight:700;letter-spacing:0.06em">'
-        f'{text}</span>'
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
     )
 
 
-def _pressure_level(route_name: str, commodity: str, rng: random.Random) -> dict[str, str]:
+def _pressure_level(route_name: str, commodity: str) -> dict[str, str]:
     seed_val = hash(route_name + commodity) % 1000
     rng2 = random.Random(seed_val)
     levels = ["LOW", "MOD", "HIGH"]
@@ -530,85 +521,58 @@ def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
 # ── Section renderers ──────────────────────────────────────────────────────────
 
 def _render_selector() -> tuple[str, str]:
-    """Section 1 — route + commodity dropdowns."""
-    st.markdown(
-        f'<div style="{_card_open()[5:]}">'
-        f'<div style="font-family:{FONT_HEADLINE};font-size:0.72rem;color:{C_TEXT2};text-transform:uppercase;'
-        f'letter-spacing:0.12em;font-weight:700;margin-bottom:14px">Deep Dive Selector</div>', unsafe_allow_html=True)
+    section_header("Deep Dive Selector", subtitle="Choose a trade lane and commodity")
     c1, c2 = st.columns(2)
     with c1:
         route = st.selectbox("Route", list(ROUTES.keys()), key="dd_route")
     with c2:
         commodity = st.selectbox("Commodity", list(COMMODITIES.keys()), key="dd_commodity")
-    st.markdown("</div>", unsafe_allow_html=True)
     return route, commodity
 
 
 def _render_route_card(route_name: str) -> None:
-    """Section 2 — Route Analysis Card."""
     try:
         rd = ROUTES[route_name]
         pct = rd["rate_pct"]
         pct_color = C_HIGH if pct < 40 else (C_MOD if pct < 70 else C_LOW)
         df = _seeded_rate_history(rd["base_rate"], route_name)
 
-        _divider("Route Analysis")
-
-        # Header row
-        st.markdown(
-            f'{_card_open()}'
-            f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">'
-            f'<div>'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:1.05rem;font-weight:700;color:{C_TEXT}">'
-            f'{rd["origin"]} → {rd["dest"]}</div>'
-            f'<div style="font-family:{FONT_BODY};font-size:0.75rem;color:{C_TEXT3};margin-top:4px">'
-            f'{rd["nm"]:,} nm &nbsp;·&nbsp; {rd["transit_days"]} day transit'
-            f'&nbsp;·&nbsp; {rd["weekly_services"]} weekly services'
-            f'&nbsp;·&nbsp; {rd["carriers_active"]} active carriers</div>'
-            f'</div>'
-            f'<div style="text-align:right">'
-            f'<div style="font-family:{FONT_BODY};font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.1em">Current Rate</div>'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:1.5rem;font-weight:700;color:{C_TEXT}">${rd["base_rate"]:,}</div>'
-            f'<div style="font-size:0.7rem;color:{pct_color};font-weight:700">'
-            f'{pct}th percentile (12-mo)</div>'
-            f'</div>'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
-
-        # Carrier table
-        header = (
-            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Top 5 Carriers by Capacity Share</div>'
+        section_divider("Route Analysis")
+        section_header(
+            f'{rd["origin"]} → {rd["dest"]}',
+            subtitle=f'{rd["nm"]:,} nm · {rd["transit_days"]} day transit · '
+                     f'{rd["weekly_services"]} weekly services · {rd["carriers_active"]} active carriers',
         )
-        rows = ""
+
+        metric_card_row(
+            [
+                {"label": "Current Rate", "value": f"${rd['base_rate']:,}", "accent": C_ACCENT},
+                {"label": "12-mo Percentile", "value": f"{pct}th", "accent": pct_color},
+                {"label": "Transit Days", "value": str(rd["transit_days"]), "accent": C_TEXT2},
+                {"label": "Weekly Services", "value": str(rd["weekly_services"]), "accent": C_TEXT2},
+            ],
+            columns=4,
+        )
+
+        section_header("Top 5 Carriers by Capacity Share")
+        carrier_rows = []
         for carrier, share in rd["carriers"]:
             bar_w = int(share * 2.5)
-            rows += (
-                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
-                f'<div style="width:110px;font-size:0.75rem;color:{C_TEXT};font-weight:600">{carrier}</div>'
-                f'<div style="flex:1;background:rgba(232,230,225,0.04);border-radius:3px;height:6px">'
+            bar_html = (
+                f'<div style="display:inline-block;width:110px;background:{C_BORDER};'
+                f'border-radius:3px;height:6px;vertical-align:middle;margin-right:8px">'
                 f'<div style="background:{C_ACCENT};width:{bar_w}%;height:100%;border-radius:3px"></div>'
                 f'</div>'
-                f'<div style="width:42px;text-align:right;font-size:0.75rem;color:{C_ACCENT};font-weight:700">'
-                f'{share}%</div>'
-                f'</div>'
             )
-        st.markdown(
-            f'{_card_open()}{header}{rows}</div>', unsafe_allow_html=True)
+            carrier_rows.append([
+                _sans(carrier, color=C_TEXT, weight=700),
+                bar_html + _mono(f"{share}%", color=C_ACCENT),
+            ])
+        wsj_market_table(headers=["Carrier", "Share"], rows=carrier_rows)
 
-        # Capacity changes
-        changes_html = "".join(
-            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-            f'<div style="width:6px;height:6px;border-radius:50%;background:{C_MOD};flex-shrink:0"></div>'
-            f'<div style="font-size:0.78rem;color:{C_TEXT2}">{c}</div>'
-            f'</div>'
-            for c in rd["capacity_changes"]
-        )
-        st.markdown(
-            f'{_card_open()}'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Upcoming Capacity Changes</div>'
-            f'{changes_html}</div>', unsafe_allow_html=True)
+        section_header("Upcoming Capacity Changes")
+        cap_rows = [[_sans(c, color=C_TEXT2)] for c in rd["capacity_changes"]]
+        wsj_market_table(headers=["Note"], rows=cap_rows)
 
         # Rate history chart
         fig = go.Figure()
@@ -617,22 +581,15 @@ def _render_route_card(route_name: str) -> None:
             mode="lines", name="Freight Rate",
             line=dict(color=C_ACCENT, width=2),
             fill="tozeroy",
-            fillcolor=_hex_rgba(C_ACCENT, 0.08),
+            fillcolor=_hex_rgba(C_ACCENT, 0.12),
         ))
         fig.add_hline(
             y=df["rate"].mean(), line_dash="dot",
             line_color=_hex_rgba(C_MOD, 0.6), line_width=1,
             annotation_text="12-mo avg", annotation_font_color=C_MOD,
         )
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=28, b=0), height=220,
-            font=dict(family="Libre Franklin, Helvetica Neue, sans-serif", color=C_TEXT2, size=11),
-            title=dict(text="Rate History \u2014 52 Weeks", font=dict(family="Libre Baskerville, Georgia, serif", color=C_TEXT2, size=12), x=0),
-            xaxis=dict(showgrid=False, color=C_TEXT3),
-            yaxis=dict(showgrid=True, gridcolor=C_BORDER, color=C_TEXT3, tickprefix="$"),
-            showlegend=False,
-        )
+        apply_dark_layout(fig, height=240, title="Rate History — 52 Weeks")
+        fig.update_yaxes(tickprefix="$")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     except Exception:
@@ -641,12 +598,10 @@ def _render_route_card(route_name: str) -> None:
 
 
 def _render_commodity_flow(commodity: str) -> None:
-    """Section 3 — Commodity Flow Analysis."""
     try:
         cd = COMMODITIES[commodity]
-        _divider("Commodity Flow Analysis")
+        section_divider("Commodity Flow Analysis")
 
-        # Production map
         exporters = cd["top_exporters"]
         country_names = [e[0] for e in exporters]
         volumes = [e[2] for e in exporters]
@@ -667,87 +622,57 @@ def _render_commodity_flow(commodity: str) -> None:
             hovertemplate="<b>%{location}</b><br>Volume: %{customdata[0]:,.0f} MT<br>YoY: %{customdata[1]:+.1f}%<extra></extra>",
             customdata=list(zip(volumes, yoy)),
         ))
+        apply_dark_layout(fig_map, height=320, title=f"{commodity} — Global Production (Top Exporters)")
         fig_map.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=36, b=0), height=280,
-            title=dict(text=f"{commodity} \u2014 Global Production (Top Exporters)", font=dict(family="Libre Baskerville, Georgia, serif", color=C_TEXT2, size=12), x=0),
             geo=dict(
-                bgcolor="rgba(0,0,0,0)",
+                bgcolor=C_CARD,
                 showframe=False, showcoastlines=True,
-                coastlinecolor=C_BORDER, landcolor="#ede8df",
-                showocean=True, oceancolor=C_SURFACE,
+                coastlinecolor=C_BORDER, landcolor=C_SURFACE,
+                showocean=True, oceancolor=C_CARD,
                 showlakes=False, showcountries=True,
                 countrycolor=C_BORDER,
             ),
-            font=dict(family="Libre Franklin, Helvetica Neue, sans-serif", color=C_TEXT2),
         )
         st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False})
 
-        # Trade flows table + elasticity
         c1, c2 = st.columns([3, 2])
         with c1:
-            rows_html = "".join(
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:8px 0;border-bottom:1px solid {C_BORDER}">'
-                f'<div style="font-size:0.77rem;color:{C_TEXT};font-weight:600">'
-                f'{tf[0]} → {tf[1]}</div>'
-                f'<div style="font-size:0.77rem;color:{C_ACCENT};font-weight:700">'
-                f'{tf[2]:.1f}M MT/yr</div>'
-                f'</div>'
+            section_header("Top 5 Trade Flows")
+            flow_rows = [
+                [
+                    _sans(f"{tf[0]} → {tf[1]}", color=C_TEXT, weight=600),
+                    _mono(f"{tf[2]:.1f}M MT/yr", color=C_ACCENT),
+                ]
                 for tf in cd["trade_flows"]
-            )
-            st.markdown(
-                f'{_card_open()}'
-                f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-                f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Top 5 Trade Flows</div>'
-                f'{rows_html}</div>', unsafe_allow_html=True)
+            ]
+            wsj_market_table(headers=["Route", "Volume"], rows=flow_rows)
         with c2:
             el = cd["elasticity"]
             el_color = C_HIGH if el < 0.5 else (C_MOD if el < 0.8 else C_LOW)
             corr = cd["price_corr"]
             corr_color = C_HIGH if corr > 0.7 else (C_MOD if corr > 0.4 else C_TEXT3)
-            st.markdown(
-                f'{_card_open()}'
-                f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-                f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Shipping Metrics</div>'
-                f'<div style="margin-bottom:14px">'
-                f'<div style="font-family:{FONT_BODY};font-size:0.68rem;color:{C_TEXT3};margin-bottom:4px">Demand Elasticity</div>'
-                f'<div style="font-family:{FONT_HEADLINE};font-size:1.3rem;font-weight:700;color:{el_color}">{el:.2f}</div>'
-                f'<div style="font-size:0.67rem;color:{C_TEXT3}">vs production change</div>'
-                f'</div>'
-                f'<div style="margin-bottom:14px">'
-                f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:4px">Price × Freight Corr.</div>'
-                f'<div style="font-size:1.3rem;font-weight:900;color:{corr_color}">{corr:.2f}</div>'
-                f'<div style="font-size:0.67rem;color:{C_TEXT3}">Pearson r (24-mo)</div>'
-                f'</div>'
-                f'<div>'
-                f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-bottom:4px">Avg Commodity Price</div>'
-                f'<div style="font-size:1.1rem;font-weight:800;color:{C_TEXT}">${cd["avg_price"]:,}</div>'
-                f'<div style="font-size:0.67rem;color:{C_TEXT3}">/MT or unit</div>'
-                f'</div>'
-                f'</div>', unsafe_allow_html=True)
+            section_header("Shipping Metrics")
+            metric_card_row(
+                [
+                    {"label": "Demand Elasticity", "value": f"{el:.2f}", "accent": el_color},
+                    {"label": "Price × Freight r", "value": f"{corr:.2f}", "accent": corr_color},
+                    {"label": "Avg Price", "value": f"${cd['avg_price']:,}", "accent": C_TEXT2},
+                ],
+                columns=1,
+            )
 
-        # Seasonal bar chart (HTML)
+        # Seasonality bar chart
         sea = cd["seasonality"]
-        max_s = max(sea)
-        bars_html = "".join(
-            f'<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1">'
-            f'<div style="font-size:0.62rem;color:{C_ACCENT};font-weight:700">{v}</div>'
-            f'<div style="width:100%;background:rgba(232,230,225,0.04);border-radius:3px 3px 0 0;'
-            f'height:80px;display:flex;align-items:flex-end">'
-            f'<div style="width:100%;background:linear-gradient(180deg,{C_ACCENT},{_hex_rgba(C_ACCENT,0.4)});'
-            f'height:{int(v/max_s*100)}%;border-radius:3px 3px 0 0"></div>'
-            f'</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3}">{MONTHS[i]}</div>'
-            f'</div>'
-            for i, v in enumerate(sea)
-        )
-        st.markdown(
-            f'{_card_open()}'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.1em;font-weight:700;margin-bottom:16px">Seasonal Volume Index</div>'
-            f'<div style="display:flex;gap:6px;align-items:flex-end">{bars_html}</div>'
-            f'</div>', unsafe_allow_html=True)
+        fig_sea = go.Figure(go.Bar(
+            x=MONTHS, y=sea,
+            marker=dict(color=C_ACCENT, opacity=0.85),
+            text=[str(v) for v in sea], textposition="outside",
+            textfont=dict(color=C_ACCENT, size=10),
+            hovertemplate="%{x}: %{y}<extra></extra>",
+        ))
+        apply_dark_layout(fig_sea, height=240, title="Seasonal Volume Index")
+        fig_sea.update_yaxes(range=[0, max(sea) * 1.15])
+        st.plotly_chart(fig_sea, use_container_width=True, config={"displayModeBar": False})
 
     except Exception:
         logger.exception("_render_commodity_flow failed")
@@ -755,117 +680,96 @@ def _render_commodity_flow(commodity: str) -> None:
 
 
 def _render_pressure_points(route_name: str, commodity: str) -> None:
-    """Section 4 — Supply Chain Pressure Points."""
     try:
-        _divider("Supply Chain Pressure Points")
-        rng = random.Random(hash(route_name + commodity) % 55555)
-        levels = _pressure_level(route_name, commodity, rng)
+        section_divider("Supply Chain Pressure Points")
+        levels = _pressure_level(route_name, commodity)
 
-        cols = st.columns(5)
-        keys = ["origin_port", "dest_port", "inland", "labor", "equipment"]
-        for col, key in zip(cols, keys):
+        metrics = []
+        for key in ["origin_port", "dest_port", "inland", "labor", "equipment"]:
             lvl = levels[key]
             label, rating, color, metric = PRESSURE_TEMPLATES[key][lvl]
-            bg = _hex_rgba(color, 0.10)
-            border = _hex_rgba(color, 0.30)
-            with col:
-                st.markdown(
-                    f'<div style="background:{bg};border:1px solid {border};'
-                    f'border-radius:3px;padding:14px 12px;text-align:center">'
-                    f'<div style="font-family:{FONT_HEADLINE};font-size:0.62rem;color:{C_TEXT2};text-transform:uppercase;'
-                    f'letter-spacing:0.1em;font-weight:700;margin-bottom:8px">{label}</div>'
-                    f'<div style="font-family:{FONT_HEADLINE};font-size:1rem;font-weight:700;color:{color};margin-bottom:6px">{rating}</div>'
-                    f'<div style="font-family:{FONT_BODY};font-size:0.68rem;color:{C_TEXT2}">{metric}</div>'
-                    f'</div>', unsafe_allow_html=True)
+            metrics.append({
+                "label": label,
+                "value": rating,
+                "accent": color,
+                "delta": metric,
+                "delta_color": C_TEXT3,
+            })
+        metric_card_row(metrics, columns=5)
     except Exception:
         logger.exception("_render_pressure_points failed")
         st.warning("Pressure points unavailable.")
 
 
 def _render_shipper_intel(route_name: str, commodity: str) -> None:
-    """Section 5 — Shipper Intelligence."""
     try:
-        _divider("Shipper Intelligence")
+        section_divider("Shipper Intelligence")
         bcos = _seeded_bcos(route_name, commodity)
 
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:28px 1fr 90px 80px 90px 1fr;'
-            f'gap:8px;padding:6px 0;border-bottom:1px solid {C_BORDER};margin-bottom:8px">'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700">#</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700">BCO</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:right">Vol (TEU/yr)</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:center">Spot %</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:center">Contract</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700">Strategy</div>'
-            f'</div>'
+        section_header(
+            f"Top 10 Beneficial Cargo Owners — {commodity} on {route_name}",
         )
-        rows_html = ""
+
+        rows = []
         for b in bcos:
             spot = b["spot_pct"]
             spot_color = C_LOW if spot > 60 else (C_MOD if spot > 35 else C_HIGH)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:28px 1fr 90px 80px 90px 1fr;'
-                f'gap:8px;padding:7px 0;border-bottom:1px solid {_hex_rgba(C_BORDER,0.4)}'
-                f';align-items:center">'
-                f'<div style="font-size:0.72rem;color:{C_TEXT3}">{b["rank"]}</div>'
-                f'<div style="font-size:0.75rem;color:{C_TEXT};font-weight:700">{b["name"]}</div>'
-                f'<div style="font-size:0.75rem;color:{C_TEXT2};text-align:right">'
-                f'{b["volume_teu"]:,}</div>'
-                f'<div style="text-align:center">{_badge(f"{spot}%", spot_color)}</div>'
-                f'<div style="font-size:0.72rem;color:{C_TEXT2};text-align:center">'
-                f'{b["contract_months"]}mo</div>'
-                f'<div style="font-size:0.68rem;color:{C_TEXT3}">{b["strategy"]}</div>'
-                f'</div>'
-            )
-        st.markdown(
-            f'{_card_open()}'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">'
-            f'Top 10 Beneficial Cargo Owners — {commodity} on {route_name}</div>'
-            f'{header_html}{rows_html}</div>', unsafe_allow_html=True)
+            rows.append([
+                _mono(str(b["rank"]), color=C_TEXT3),
+                _sans(b["name"], color=C_TEXT, weight=700),
+                _mono(f"{b['volume_teu']:,}", color=C_TEXT2),
+                badge(f"{spot}%", color=spot_color),
+                _mono(f"{b['contract_months']}mo", color=C_TEXT2),
+                _sans(b["strategy"], color=C_TEXT3),
+            ])
+
+        wsj_market_table(
+            headers=["#", "BCO", "Vol (TEU/yr)", "Spot %", "Contract", "Strategy"],
+            rows=rows,
+        )
     except Exception:
         logger.exception("_render_shipper_intel failed")
         st.warning("Shipper intelligence unavailable.")
 
 
 def _render_analyst_commentary(route_name: str, commodity: str) -> None:
-    """Section 6 — Analyst Commentary."""
     try:
-        _divider("Analyst Commentary")
+        section_divider("Analyst Commentary")
         rd = ROUTES[route_name]
         pct = rd["rate_pct"]
         rate = rd["base_rate"]
         cd = COMMODITIES[commodity]
 
-        # Generate bull/bear/base from data signals
         high_pct = pct >= 65
-        low_pct = pct <= 35
 
-        bull_1 = (
-            f"Peak season demand surge expected to push {route_name} rates +18–25% by Q3"
-            if high_pct else
-            f"Rates at {pct}th percentile leave significant upside; any demand shock could add $400–600/TEU"
-        )
-        bull_2 = (
-            f"{commodity} production growth of {cd['top_exporters'][0][3]:+.1f}% in top exporter "
-            f"drives incremental shipping demand through H2"
-        )
-        bull_3 = (
-            f"Vessel supply growth decelerating as orderbook deliveries pushed to 2027; "
-            f"effective capacity may tighten 3–5% YoY"
-        )
+        bull_items = [
+            (
+                f"Peak season demand surge expected to push {route_name} rates +18–25% by Q3"
+                if high_pct else
+                f"Rates at {pct}th percentile leave significant upside; "
+                f"any demand shock could add $400–600/TEU"
+            ),
+            (
+                f"{commodity} production growth of {cd['top_exporters'][0][3]:+.1f}% "
+                f"in top exporter drives incremental shipping demand through H2"
+            ),
+            (
+                "Vessel supply growth decelerating as orderbook deliveries pushed to 2027; "
+                "effective capacity may tighten 3–5% YoY"
+            ),
+        ]
 
-        bear_1 = (
-            f"Macroeconomic slowdown in key consumer markets risks demand contraction of 5–8%"
-        )
-        bear_2 = (
-            f"New {rd['carriers'][0][0]} loop deployment adds ~{rd['weekly_services'] // 3} "
-            f"weekly sailings — capacity pressure on rates"
-        )
-        bear_3 = (
-            f"{commodity} import substitution trends reducing long-haul shipment volumes; "
-            f"nearshoring accelerating"
-        )
+        bear_items = [
+            "Macroeconomic slowdown in key consumer markets risks demand contraction of 5–8%",
+            (
+                f"New {rd['carriers'][0][0]} loop deployment adds ~{rd['weekly_services'] // 3} "
+                f"weekly sailings — capacity pressure on rates"
+            ),
+            (
+                f"{commodity} import substitution trends reducing long-haul shipment volumes; "
+                f"nearshoring accelerating"
+            ),
+        ]
 
         base_case = (
             f"Rates expected to consolidate near current levels (${rate:,}/TEU) through Q2, "
@@ -881,35 +785,34 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
         ]
 
         def _case_block(title: str, color: str, items: list[str] | str) -> str:
-            bg = _hex_rgba(color, 0.08)
-            border = _hex_rgba(color, 0.25)
+            bg = _hex_rgba(color, 0.10)
             if isinstance(items, list):
                 content = "".join(
                     f'<div style="display:flex;gap:8px;margin-bottom:6px">'
                     f'<div style="color:{color};font-weight:900;margin-top:1px">▸</div>'
-                    f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT2};line-height:1.5">{it}</div>'
+                    f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.5">{it}</div>'
                     f'</div>'
                     for it in items
                 )
             else:
-                content = f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT2};line-height:1.6">{items}</div>'
+                content = f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.6">{items}</div>'
             return (
                 f'<div style="background:{bg};border-left:3px solid {color};'
                 f'border-radius:0 3px 3px 0;padding:14px 16px;margin-bottom:12px">'
-                f'<div style="font-family:{FONT_HEADLINE};font-size:0.67rem;color:{color};font-weight:700;'
+                f'<div style="font-family:var(--sans);font-size:0.7rem;color:{color};font-weight:700;'
                 f'letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px">{title}</div>'
                 f'{content}</div>'
             )
 
         html = (
-            f'{_card_open()}'
-            f'{_case_block("Bull Case", C_HIGH, [bull_1, bull_2, bull_3])}'
-            f'{_case_block("Bear Case", C_LOW, [bear_1, bear_2, bear_3])}'
+            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:16px 20px">'
+            f'{_case_block("Bull Case", C_HIGH, bull_items)}'
+            f'{_case_block("Bear Case", C_LOW, bear_items)}'
             f'{_case_block("Base Case", C_ACCENT, base_case)}'
             f'{_case_block("Key Watchpoints", C_MOD, watchpoints)}'
             f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
+        st.html(html)
 
     except Exception:
         logger.exception("_render_analyst_commentary failed")
@@ -917,9 +820,8 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
 
 
 def _render_similar_routes(route_name: str) -> None:
-    """Section 7 — Similar Route Comparisons."""
     try:
-        _divider("Similar Route Comparisons")
+        section_divider("Similar Route Comparisons")
         rd = ROUTES[route_name]
         similar = rd.get("similar", [])
 
@@ -927,50 +829,28 @@ def _render_similar_routes(route_name: str) -> None:
             st.info("No comparable routes configured.")
             return
 
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1fr 90px 90px 100px;'
-            f'gap:8px;padding:6px 0;border-bottom:1px solid {C_BORDER};margin-bottom:8px">'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700">Route</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:right">Rate ($/TEU)</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:right">Distance (nm)</div>'
-            f'<div style="font-size:0.62rem;color:{C_TEXT3};font-weight:700;text-align:center">vs Selected</div>'
-            f'</div>'
-        )
-
-        # Selected route row
         sel_rate = rd["base_rate"]
-        rows_html = (
-            f'<div style="display:grid;grid-template-columns:1fr 90px 90px 100px;'
-            f'gap:8px;padding:8px 0;border-bottom:1px solid {C_BORDER};'
-            f'background:{_hex_rgba(C_ACCENT,0.07)};border-radius:3px;'
-            f'padding-left:8px;align-items:center;margin-bottom:2px">'
-            f'<div style="font-size:0.78rem;color:{C_TEXT};font-weight:800">'
-            f'{route_name} <span style="color:{C_ACCENT};font-size:0.62rem">(selected)</span></div>'
-            f'<div style="font-size:0.78rem;color:{C_TEXT};font-weight:700;text-align:right">${sel_rate:,}</div>'
-            f'<div style="font-size:0.78rem;color:{C_TEXT2};text-align:right">{rd["nm"]:,}</div>'
-            f'<div style="text-align:center">—</div>'
-            f'</div>'
-        )
+        rows = [[
+            _sans(f"{route_name} (selected)", color=C_ACCENT, weight=800),
+            _mono(f"${sel_rate:,}", color=C_TEXT),
+            _mono(f"{rd['nm']:,}", color=C_TEXT2),
+            _sans("—", color=C_TEXT3),
+        ]]
         for name, rate, nm, diff in similar:
             diff_color = C_HIGH if diff < 0 else C_LOW
             diff_sign = "+" if diff > 0 else ""
             diff_label = f"{diff_sign}{diff}%" if isinstance(diff, (int, float)) else str(diff)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1fr 90px 90px 100px;'
-                f'gap:8px;padding:7px 0;padding-left:8px;border-bottom:1px solid '
-                f'{_hex_rgba(C_BORDER,0.4)};align-items:center">'
-                f'<div style="font-size:0.76rem;color:{C_TEXT2}">{name}</div>'
-                f'<div style="font-size:0.76rem;color:{C_TEXT2};text-align:right">${rate:,}</div>'
-                f'<div style="font-size:0.76rem;color:{C_TEXT3};text-align:right">{nm:,}</div>'
-                f'<div style="text-align:center">{_badge(diff_label, diff_color)}</div>'
-                f'</div>'
-            )
+            rows.append([
+                _sans(name, color=C_TEXT2),
+                _mono(f"${rate:,}", color=C_TEXT2),
+                _mono(f"{nm:,}", color=C_TEXT3),
+                badge(diff_label, color=diff_color),
+            ])
 
-        st.markdown(
-            f'{_card_open()}'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:0.65rem;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.1em;font-weight:700;margin-bottom:12px">Route Benchmarking</div>'
-            f'{header_html}{rows_html}</div>', unsafe_allow_html=True)
+        wsj_market_table(
+            headers=["Route", "Rate ($/TEU)", "Distance (nm)", "vs Selected"],
+            rows=rows,
+        )
     except Exception:
         logger.exception("_render_similar_routes failed")
         st.warning("Similar routes comparison unavailable.")
@@ -986,36 +866,20 @@ def render(
 ) -> None:
     """Render the Deep Dive research analyst tab."""
     try:
-        st.markdown(
-            f'<div style="background:{C_CARD};'
-            f'border:1px solid {C_BORDER};border-bottom:2px solid {C_ACCENT};border-radius:3px;'
-            f'padding:20px 26px;margin-bottom:24px">'
-            f'<div style="display:flex;align-items:center;gap:14px">'
-            f'<div>'
-            f'<div style="font-family:{FONT_HEADLINE};font-size:1.15rem;font-weight:700;color:{C_TEXT}">Deep Dive &mdash; Research Analyst View</div>'
-            f'<div style="font-family:{FONT_BODY};font-size:0.78rem;color:{C_TEXT3};margin-top:3px">'
-            f'Select a route and commodity to generate comprehensive trade lane intelligence.</div>'
-            f'</div></div></div>', unsafe_allow_html=True)
+        page_header(
+            title="Deep Dive — Research Analyst View",
+            subtitle="Select a route and commodity to generate comprehensive trade lane intelligence.",
+            icon="🔍",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        # Section 1: selector
         route, commodity = _render_selector()
-
-        # Section 2: route analysis
         _render_route_card(route)
-
-        # Section 3: commodity flow
         _render_commodity_flow(commodity)
-
-        # Section 4: pressure points
         _render_pressure_points(route, commodity)
-
-        # Section 5: shipper intelligence
         _render_shipper_intel(route, commodity)
-
-        # Section 6: analyst commentary
         _render_analyst_commentary(route, commodity)
-
-        # Section 7: similar routes
         _render_similar_routes(route)
 
     except Exception:

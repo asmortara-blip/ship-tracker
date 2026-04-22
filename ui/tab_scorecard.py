@@ -5,11 +5,12 @@ render(port_results, route_results, insights, freight_data, macro_data, stock_da
 Sections
 --------
 1. Executive Summary Card    — Week-of header, overall score, AI paragraph
-2. Scorecard Matrix          — 30-metric institutional table (6 categories)
-3. Score History Chart       — 12-month trend line with event annotations
-4. Quadrant Analysis         — Supply vs Demand scatter with zone labels
-5. Winner / Loser of Week    — Best, worst, biggest-surprise metric cards
-6. Forward 30-day Outlook    — 5 predictions with confidence % and key risk
+2. Category Summary Bar      — 6-category average scores (metric_card_row)
+3. Scorecard Matrix          — 30-metric institutional table (wsj_market_table)
+4. Score History Chart       — 12-month trend line with event annotations
+5. Quadrant Analysis         — Supply vs Demand scatter with zone labels
+6. Winner / Loser of Week    — Best, worst, biggest-surprise metric cards
+7. Forward 30-day Outlook    — 5 predictions with confidence % and key risk
 """
 from __future__ import annotations
 
@@ -25,23 +26,26 @@ from loguru import logger
 from ports.demand_analyzer import PortDemandResult
 from routes.optimizer import RouteOpportunity
 from engine.insight import Insight
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-
-_SERIF = "'Libre Baskerville', 'Georgia', 'Times New Roman', serif"
-_SANS  = "'Libre Franklin', 'Inter', system-ui, sans-serif"
-_MONO  = "'JetBrains Mono', 'Fira Code', monospace"
 
 # ── Scorecard metric definitions ──────────────────────────────────────────────
 _METRICS = [
@@ -71,7 +75,6 @@ _METRICS = [
     ("Risk",            "Weather",                None,      "weather",    None,   True),
     ("Risk",            "Regulatory / ESG",       None,      "esg_risk",   None,   True),
     ("Risk",            "Currency",               None,      "fx_vol",     None,   True),
-    # pad to 30 with extra cross-category composites
     ("Freight Markets", "Spot vs Contract Spread",None,      "spot_ctrt",  None,   False),
     ("Supply",          "Order Book / Fleet Ratio",None,     "ob_fleet",   None,   True),
     ("Demand",          "E-Commerce Lift",        None,      "ecom",       None,   False),
@@ -84,6 +87,32 @@ _CATEGORY_ORDER = [
     "Freight Markets", "Supply", "Demand",
     "Infrastructure", "Financial", "Risk",
 ]
+
+_CATEGORY_COLORS = {
+    "Freight Markets": C_ACCENT,
+    "Supply":          C_CONV,
+    "Demand":          C_HIGH,
+    "Infrastructure":  C_MACRO,
+    "Financial":       C_MOD,
+    "Risk":            C_LOW,
+}
+
+
+# ── Cell formatters ───────────────────────────────────────────────────────────
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -132,7 +161,7 @@ def _series_stock(stock_data: dict, ticker: str) -> list[float]:
                 return [float(v) for v in df[col].dropna().tolist()]
         return []
     except Exception as exc:
-        logger.debug("_series_stock {}: {}", key, exc)
+        logger.debug("_series_stock {}: {}", ticker, exc)
         return []
 
 
@@ -196,6 +225,12 @@ def _overall_score(rows: list[dict]) -> int:
         return 50
 
 
+def _hex_alpha(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 # ── Section 1: Executive Summary Card ────────────────────────────────────────
 
 def _render_executive_summary(overall: int, rows: list[dict]) -> None:
@@ -234,43 +269,75 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
                 "are critical. Watch for further rate erosion and potential carrier consolidation."
             )
 
-        bar_pct = overall
-        bar_color = rag_color
-
-        st.markdown(
+        st.html(
             f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
             f'padding:32px 36px 28px;margin-bottom:20px;">'
-            f'<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:20px;">'
+            f'<div style="display:flex;align-items:flex-start;justify-content:space-between;'
+            f'flex-wrap:wrap;gap:20px;">'
             f'<div style="flex:1;min-width:260px;">'
-            f'<div style="font-family:{_SANS};font-size:11px;letter-spacing:2px;color:{C_TEXT3};'
-            f'text-transform:uppercase;margin-bottom:6px;">Executive Intelligence</div>'
-            f'<div style="font-family:{_SERIF};font-size:22px;font-weight:700;color:{C_TEXT};'
-            f'letter-spacing:0.5px;margin-bottom:4px;">Shipping Market Scorecard</div>'
-            f'<div style="font-family:{_SANS};font-size:12px;color:{C_ACCENT};letter-spacing:1px;">'
-            f'WEEK OF {_week_label()}</div>'
+            f'<div style="font-family:var(--sans);font-size:11px;letter-spacing:2px;'
+            f'color:{C_TEXT3};text-transform:uppercase;margin-bottom:6px;">Executive Summary</div>'
+            f'<div style="font-family:var(--serif);font-size:22px;font-weight:700;'
+            f'color:{C_TEXT};letter-spacing:0.5px;margin-bottom:4px;">Composite Market Score</div>'
+            f'<div style="font-family:var(--sans);font-size:12px;color:{C_ACCENT};'
+            f'letter-spacing:1px;">WEEK OF {_week_label()}</div>'
             f'</div>'
             f'<div style="text-align:center;min-width:140px;">'
-            f'<div style="font-family:{_MONO};font-size:56px;font-weight:800;color:{bar_color};'
-            f'line-height:1;">{overall}</div>'
-            f'<div style="font-family:{_SANS};font-size:11px;color:{C_TEXT3};margin-top:2px;">/ 100 COMPOSITE</div>'
-            f'<div style="font-family:{_SANS};font-size:13px;font-weight:700;color:{bar_color};'
-            f'margin-top:4px;letter-spacing:2px;">{rag_label}</div>'
+            f'<div style="font-family:var(--mono);font-size:56px;font-weight:800;'
+            f'color:{rag_color};line-height:1;">{overall}</div>'
+            f'<div style="font-family:var(--sans);font-size:11px;color:{C_TEXT3};'
+            f'margin-top:2px;">/ 100 COMPOSITE</div>'
+            f'<div style="font-family:var(--sans);font-size:13px;font-weight:700;'
+            f'color:{rag_color};margin-top:4px;letter-spacing:2px;">{rag_label}</div>'
             f'</div>'
             f'</div>'
-            f'<div style="margin-top:20px;background:rgba(232,230,225,0.04);border-radius:3px;height:6px;">'
-            f'<div style="width:{bar_pct}%;height:100%;background:{bar_color};border-radius:3px;'
-            f'transition:width 0.8s ease;"></div>'
+            f'<div style="margin-top:20px;background:rgba(232,230,225,0.04);'
+            f'border-radius:3px;height:6px;">'
+            f'<div style="width:{overall}%;height:100%;background:{rag_color};'
+            f'border-radius:3px;transition:width 0.8s ease;"></div>'
             f'</div>'
-            f'<div style="margin-top:20px;font-family:{_SANS};font-size:14px;line-height:1.75;'
-            f'color:{C_TEXT2};max-width:900px;">{summary}</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'<div style="margin-top:20px;font-family:var(--sans);font-size:14px;'
+            f'line-height:1.75;color:{C_TEXT2};max-width:900px;">{summary}</div>'
+            f'</div>'
+        )
         logger.debug("Executive summary rendered — overall={}", overall)
     except Exception as exc:
         logger.error("_render_executive_summary: {}", exc)
         st.error("Executive summary unavailable.")
 
 
-# ── Section 2: Scorecard Matrix ───────────────────────────────────────────────
+# ── Section 2: Category Summary Bar ───────────────────────────────────────────
+
+def _render_category_bar(rows: list[dict]) -> None:
+    try:
+        section_header("Category Averages", "Aggregate scores across the six scorecard pillars")
+
+        cat_avgs: dict[str, float] = {}
+        for cat in _CATEGORY_ORDER:
+            scores = [r["score"] for r in rows if r["category"] == cat]
+            cat_avgs[cat] = sum(scores) / len(scores) if scores else 50.0
+
+        metrics = []
+        for cat in _CATEGORY_ORDER:
+            avg = int(cat_avgs[cat])
+            color = _CATEGORY_COLORS.get(cat, C_TEXT3)
+            rag_label, _ = _rag(avg)
+            metrics.append({
+                "label":    cat.upper(),
+                "value":    f"{avg}",
+                "delta":    f"{rag_label}",
+                "delta_color": color,
+                "sublabel": "/ 100",
+                "accent":   color,
+            })
+
+        metric_card_row(metrics, columns=6)
+        logger.debug("Category summary bar rendered")
+    except Exception as exc:
+        logger.error("_render_category_bar: {}", exc)
+
+
+# ── Section 3: Scorecard Matrix ───────────────────────────────────────────────
 
 def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[dict]:
     rows = []
@@ -293,7 +360,6 @@ def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[
             trend = _trend_arrow(series, prior_score, score)
             rag_label, rag_color = _rag(score)
 
-            notes = ""
             if score >= 75:
                 notes = "Strong"
             elif score >= 60:
@@ -334,83 +400,36 @@ def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[
 
 def _render_scorecard_matrix(rows: list[dict]) -> None:
     try:
-        st.markdown(
-            f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Scorecard Matrix — 30 Metrics</div>', unsafe_allow_html=True)
+        section_header("Scorecard Matrix — 30 Metrics",
+                       "Per-metric score, rating, week-over-week trend")
 
-        header = (
-            f'<div style="display:grid;grid-template-columns:160px 200px 70px 90px 90px 60px 1fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px 3px 0 0;'
-            f'padding:10px 16px;">'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;font-weight:600;">CATEGORY</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;font-weight:600;">METRIC</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;text-align:right;font-weight:600;">SCORE</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;text-align:center;font-weight:600;">RATING</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;text-align:right;font-weight:600;">PRIOR</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;text-align:center;font-weight:600;">TREND</div>'
-            f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};letter-spacing:1px;font-weight:600;">NOTES</div>'
-            f'</div>'
-        )
-        st.markdown(header, unsafe_allow_html=True)
+        headers = ["Category", "Metric", "Score", "Rating", "Prior", "Trend", "Notes"]
+        table_rows = []
+        for row in rows:
+            cat_color = _CATEGORY_COLORS.get(row["category"], C_TEXT3)
+            trend_color = (
+                C_HIGH if row["trend"] == "↑"
+                else C_LOW if row["trend"] == "↓"
+                else C_TEXT3
+            )
+            table_rows.append([
+                _sans(row["category"].upper(), color=cat_color, weight=600),
+                _sans(row["metric"], color=C_TEXT, weight=500),
+                _mono(str(row["score"]), color=row["rag_color"], weight=700),
+                badge(row["rag_label"], color=row["rag_color"]),
+                _mono(str(row["prior_score"]), color=C_TEXT3),
+                _mono(row["trend"], color=trend_color, weight=700),
+                _sans(row["notes"], color=C_TEXT3),
+            ])
 
-        cat_colors = {
-            "Freight Markets": C_ACCENT,
-            "Supply": "#7c6eaf",
-            "Demand": C_HIGH,
-            "Infrastructure": "#4a90a4",
-            "Financial": C_MOD,
-            "Risk": C_LOW,
-        }
-
-        for i, row in enumerate(rows):
-            try:
-                bg = C_CARD if i % 2 == 0 else C_SURFACE
-                cat_color = cat_colors.get(row["category"], C_TEXT3)
-                score_color = row["rag_color"]
-                trend_color = C_HIGH if row["trend"] == "↑" else (C_LOW if row["trend"] == "↓" else C_TEXT3)
-                border_bottom = "none" if i < len(rows) - 1 else "none"
-                radius = "0 0 3px 3px" if i == len(rows) - 1 else "0"
-
-                bar_w = row["score"]
-                rag_bg = f"rgba({','.join(str(int(row['rag_color'].lstrip('#')[j:j+2], 16)) for j in (0,2,4))},0.15)"
-
-                row_html = (
-                    f'<div style="display:grid;grid-template-columns:160px 200px 70px 90px 90px 60px 1fr;'
-                    f'gap:0;background:{bg};border-left:1px solid {C_BORDER};border-right:1px solid {C_BORDER};'
-                    f'border-bottom:1px solid {C_BORDER};border-radius:{radius};padding:9px 16px;'
-                    f'align-items:center;">'
-                    f'<div style="font-family:{_SANS};font-size:10px;color:{cat_color};'
-                    f'letter-spacing:0.5px;font-weight:600;">{row["category"].upper()}</div>'
-                    f'<div style="font-family:{_SANS};font-size:13px;color:{C_TEXT};font-weight:500;">'
-                    f'{row["metric"]}</div>'
-                    f'<div style="text-align:right;">'
-                    f'<span style="font-family:{_MONO};font-size:16px;font-weight:700;color:{score_color};">'
-                    f'{row["score"]}</span>'
-                    f'</div>'
-                    f'<div style="text-align:center;">'
-                    f'<span style="font-family:{_SANS};font-size:10px;font-weight:700;color:{row["rag_color"]};'
-                    f'background:{rag_bg};padding:2px 7px;border-radius:3px;letter-spacing:0.5px;">'
-                    f'{row["rag_label"]}</span>'
-                    f'</div>'
-                    f'<div style="font-family:{_MONO};font-size:13px;color:{C_TEXT3};text-align:right;">'
-                    f'{row["prior_score"]}</div>'
-                    f'<div style="font-family:{_MONO};font-size:18px;color:{trend_color};text-align:center;">'
-                    f'{row["trend"]}</div>'
-                    f'<div style="font-family:{_SANS};font-size:12px;color:{C_TEXT3};">'
-                    f'{row["notes"]}</div>'
-                    f'</div>'
-                )
-                st.markdown(row_html, unsafe_allow_html=True)
-            except Exception as exc:
-                logger.debug("matrix row {}: {}", i, exc)
-
+        wsj_market_table(headers, table_rows)
         logger.debug("Scorecard matrix rendered — {} rows", len(rows))
     except Exception as exc:
         logger.error("_render_scorecard_matrix: {}", exc)
         st.error("Scorecard matrix unavailable.")
 
 
-# ── Section 3: Score History Chart ───────────────────────────────────────────
+# ── Section 4: Score History Chart ───────────────────────────────────────────
 
 def _render_score_history(overall: int) -> None:
     try:
@@ -440,9 +459,9 @@ def _render_score_history(overall: int) -> None:
             x=labels, y=scores,
             mode="lines+markers",
             line=dict(color=C_ACCENT, width=2.5),
-            marker=dict(size=6, color=C_ACCENT, line=dict(color=C_BG, width=1.5)),
+            marker=dict(size=6, color=C_ACCENT),
             fill="tozeroy",
-            fillcolor="rgba(53,114,176,0.08)",
+            fillcolor=_hex_alpha(C_ACCENT, 0.08),
             name="Composite Score",
             hovertemplate="<b>%{x}</b><br>Score: %{y}/100<extra></extra>",
         ))
@@ -453,40 +472,33 @@ def _render_score_history(overall: int) -> None:
                 fig.add_annotation(
                     x=labels[idx], y=scores[idx] + 5,
                     text=label, showarrow=False,
-                    font=dict(size=9, color=color, family=_MONO),
+                    font=dict(size=9, color=color),
                     bgcolor=C_CARD,
                 )
 
         fig.add_hline(y=65, line=dict(color=C_HIGH, width=1, dash="dash"),
-                      annotation_text="GREEN threshold", annotation_font=dict(color=C_HIGH, size=9))
+                      annotation_text="GREEN threshold",
+                      annotation_font=dict(color=C_HIGH, size=9))
         fig.add_hline(y=40, line=dict(color=C_LOW, width=1, dash="dash"),
-                      annotation_text="RED threshold", annotation_font=dict(color=C_LOW, size=9))
+                      annotation_text="RED threshold",
+                      annotation_font=dict(color=C_LOW, size=9))
 
-        fig.update_layout(
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            font=dict(family=_SANS, color=C_TEXT2),
-            title=dict(text="Composite Score — 12-Month History", font=dict(size=14, color=C_TEXT, family=_SERIF), x=0.01),
+        apply_dark_layout(
+            fig,
+            title="Composite Score — 12-Month History",
             height=320,
-            margin=dict(l=50, r=30, t=50, b=40),
-            xaxis=dict(showgrid=False, tickfont=dict(size=10), color=C_TEXT3, linecolor=C_BORDER),
-            yaxis=dict(range=[0, 100], gridcolor=C_BORDER, tickfont=dict(size=10), color=C_TEXT3,
-                       title="Score", titlefont=dict(size=10)),
             showlegend=False,
+            xaxis=dict(showgrid=False, tickfont=dict(size=10)),
+            yaxis=dict(range=[0, 100], tickfont=dict(size=10), title="Score"),
         )
-
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'padding:20px 20px 8px;margin:24px 0 20px;">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.markdown("</div>", unsafe_allow_html=True)
         logger.debug("Score history chart rendered")
     except Exception as exc:
         logger.error("_render_score_history: {}", exc)
         st.error("Score history chart unavailable.")
 
 
-# ── Section 4: Quadrant Analysis ─────────────────────────────────────────────
+# ── Section 5: Quadrant Analysis ─────────────────────────────────────────────
 
 def _render_quadrant(rows: list[dict]) -> None:
     try:
@@ -511,27 +523,25 @@ def _render_quadrant(rows: list[dict]) -> None:
         fig = go.Figure()
 
         zone_defs = [
-            (50, 100, 50, 100, "rgba(46,158,110,0.06)", "GOLDILOCKS\n(Tight Supply, Strong Demand)", 75, 75),
-            (0, 50, 50, 100, "rgba(192,57,43,0.06)", "UNDERSUPPLY\n(Loose Supply, Strong Demand)", 25, 75),
-            (50, 100, 0, 50, "rgba(201,150,43,0.06)", "OVERSUPPLY\n(Tight Supply, Weak Demand)", 75, 25),
-            (0, 50, 0, 50, "rgba(100,116,139,0.06)", "SLOWDOWN\n(Loose Supply, Weak Demand)", 25, 25),
+            (50, 100, 50, 100, _hex_alpha(C_HIGH, 0.06), 75, 75, "GOLDILOCKS",  C_HIGH),
+            (0,  50,  50, 100, _hex_alpha(C_LOW,  0.06), 25, 75, "UNDERSUPPLY", C_LOW),
+            (50, 100, 0,  50,  _hex_alpha(C_MOD,  0.06), 75, 25, "OVERSUPPLY",  C_MOD),
+            (0,  50,  0,  50,  "rgba(100,116,139,0.06)", 25, 25, "SLOWDOWN",    C_TEXT3),
         ]
-        zone_colors = [C_HIGH, C_LOW, C_MOD, C_TEXT3]
-        zone_labels = ["GOLDILOCKS", "UNDERSUPPLY", "OVERSUPPLY", "SLOWDOWN"]
 
-        for i, (x0, x1, y0, y1, fill, label, lx, ly) in enumerate(zone_defs):
+        for x0, x1, y0, y1, fill, lx, ly, label, lcolor in zone_defs:
             fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
                           fillcolor=fill, line=dict(width=0))
-            fig.add_annotation(x=lx, y=ly, text=zone_labels[i], showarrow=False,
-                                font=dict(size=9, color=zone_colors[i], family=_MONO),
-                                opacity=0.6)
+            fig.add_annotation(x=lx, y=ly, text=label, showarrow=False,
+                               font=dict(size=9, color=lcolor),
+                               opacity=0.6)
 
         for hname, hx, hy, hc in historical:
             fig.add_trace(go.Scatter(
                 x=[hx], y=[hy], mode="markers+text",
                 marker=dict(size=10, color=hc, opacity=0.6, symbol="circle"),
                 text=[hname], textposition="top center",
-                textfont=dict(size=9, color=hc, family=_MONO),
+                textfont=dict(size=9, color=hc),
                 name=hname, showlegend=True,
                 hovertemplate=f"<b>{hname}</b><br>Supply: {hx}<br>Demand: {hy}<extra></extra>",
             ))
@@ -541,44 +551,33 @@ def _render_quadrant(rows: list[dict]) -> None:
             marker=dict(size=18, color=C_ACCENT, symbol="star",
                         line=dict(color=C_TEXT, width=1.5)),
             text=["NOW"], textposition="top center",
-            textfont=dict(size=11, color=C_TEXT, family=_MONO, weight=700),
+            textfont=dict(size=11, color=C_TEXT),
             name="Current", showlegend=True,
-            hovertemplate=f"<b>Current</b><br>Supply Outlook: {cur_x:.0f}<br>Demand Outlook: {cur_y:.0f}<extra></extra>",
+            hovertemplate=f"<b>Current</b><br>Supply Outlook: {cur_x:.0f}"
+                          f"<br>Demand Outlook: {cur_y:.0f}<extra></extra>",
         ))
 
         fig.add_hline(y=50, line=dict(color=C_BORDER, width=1))
         fig.add_vline(x=50, line=dict(color=C_BORDER, width=1))
 
-        fig.update_layout(
-            paper_bgcolor=C_CARD,
-            plot_bgcolor=C_CARD,
-            font=dict(family=_SANS, color=C_TEXT2),
-            title=dict(text="Market Quadrant Analysis — Supply vs Demand Outlook",
-                       font=dict(size=14, color=C_TEXT, family=_SERIF), x=0.01),
+        apply_dark_layout(
+            fig,
+            title="Market Quadrant Analysis — Supply vs Demand Outlook",
             height=400,
-            margin=dict(l=60, r=30, t=50, b=60),
-            xaxis=dict(range=[0, 100], title="Supply Outlook →", gridcolor=C_BORDER,
-                       tickfont=dict(size=9), color=C_TEXT3, linecolor=C_BORDER,
-                       titlefont=dict(size=10, color=C_TEXT2)),
-            yaxis=dict(range=[0, 100], title="Demand Outlook →", gridcolor=C_BORDER,
-                       tickfont=dict(size=9), color=C_TEXT3, linecolor=C_BORDER,
-                       titlefont=dict(size=10, color=C_TEXT2)),
-            legend=dict(font=dict(size=9, color=C_TEXT3), bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(range=[0, 100], title="Supply Outlook →", tickfont=dict(size=9)),
+            yaxis=dict(range=[0, 100], title="Demand Outlook →", tickfont=dict(size=9)),
+            legend=dict(font=dict(size=9, color=C_TEXT3),
+                        bgcolor="rgba(0,0,0,0)",
                         bordercolor=C_BORDER, borderwidth=1),
         )
-
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'padding:20px 20px 8px;margin-bottom:20px;">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.markdown("</div>", unsafe_allow_html=True)
         logger.debug("Quadrant chart rendered — cur=({:.0f},{:.0f})", cur_x, cur_y)
     except Exception as exc:
         logger.error("_render_quadrant: {}", exc)
         st.error("Quadrant analysis unavailable.")
 
 
-# ── Section 5: Winner / Loser / Surprise ─────────────────────────────────────
+# ── Section 6: Winner / Loser / Surprise ─────────────────────────────────────
 
 def _render_winner_loser(rows: list[dict]) -> None:
     try:
@@ -593,52 +592,52 @@ def _render_winner_loser(rows: list[dict]) -> None:
                     prior: int, color: str, note: str) -> str:
             delta = score - prior
             delta_str = f"+{delta}" if delta >= 0 else str(delta)
-            rag_bg = f"rgba({','.join(str(int(color.lstrip('#')[j:j+2], 16)) for j in (0,2,4))},0.12)"
+            delta_color = color if delta >= 0 else C_LOW
             return (
                 f'<div style="background:{C_CARD};border:1px solid {color};border-radius:3px;'
                 f'padding:22px 24px;flex:1;min-width:200px;">'
-                f'<div style="font-family:{_SANS};font-size:10px;color:{color};letter-spacing:2px;'
-                f'text-transform:uppercase;margin-bottom:12px;">{icon} {title}</div>'
-                f'<div style="font-family:{_SANS};font-size:16px;font-weight:600;color:{C_TEXT};'
-                f'margin-bottom:4px;">{metric}</div>'
-                f'<div style="font-family:{_SANS};font-size:10px;color:{C_TEXT3};margin-bottom:14px;">'
-                f'{cat.upper()}</div>'
+                f'<div style="font-family:var(--sans);font-size:10px;color:{color};'
+                f'letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">{icon} {title}</div>'
+                f'<div style="font-family:var(--sans);font-size:16px;font-weight:600;'
+                f'color:{C_TEXT};margin-bottom:4px;">{metric}</div>'
+                f'<div style="font-family:var(--sans);font-size:10px;color:{C_TEXT3};'
+                f'margin-bottom:14px;">{cat.upper()}</div>'
                 f'<div style="display:flex;align-items:baseline;gap:12px;">'
-                f'<span style="font-family:{_MONO};font-size:40px;font-weight:800;color:{color};">'
-                f'{score}</span>'
-                f'<span style="font-family:{_SANS};font-size:11px;color:{C_TEXT3};">/ 100</span>'
-                f'<span style="font-family:{_MONO};font-size:13px;color:{color if delta >= 0 else C_LOW};'
+                f'<span style="font-family:var(--mono);font-size:40px;font-weight:800;'
+                f'color:{color};">{score}</span>'
+                f'<span style="font-family:var(--sans);font-size:11px;color:{C_TEXT3};">/ 100</span>'
+                f'<span style="font-family:var(--mono);font-size:13px;color:{delta_color};'
                 f'font-weight:600;">{delta_str} vs prior</span>'
                 f'</div>'
-                f'<div style="margin-top:12px;font-family:{_SANS};font-size:12px;color:{C_TEXT3};">'
-                f'{note}</div>'
+                f'<div style="margin-top:12px;font-family:var(--sans);font-size:12px;'
+                f'color:{C_TEXT3};">{note}</div>'
                 f'</div>'
             )
 
         best_note  = f"Strongest performer this week across all {len(rows)} tracked metrics."
-        worst_note = f"Weakest signal — warrants immediate operational attention."
+        worst_note = "Weakest signal — warrants immediate operational attention."
         surp_note  = f"Largest week-over-week move: {abs(biggest['score'] - biggest['prior_score'])} pts."
 
-        html = (
-            f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Winner / Loser of the Week</div>'
-            f'<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+        section_header("Winner / Loser of the Week",
+                       "Strongest, weakest, and largest week-over-week surprise")
+
+        st.html(
+            '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
             + wl_card("Winner of the Week", "▲", best["metric"], best["category"],
                       best["score"], best["prior_score"], C_HIGH, best_note)
             + wl_card("Loser of the Week", "▼", worst["metric"], worst["category"],
                       worst["score"], worst["prior_score"], C_LOW, worst_note)
             + wl_card("Biggest Surprise", "◆", biggest["metric"], biggest["category"],
                       biggest["score"], biggest["prior_score"], C_MOD, surp_note)
-            + f'</div>'
+            + '</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
         logger.debug("Winner/loser section rendered")
     except Exception as exc:
         logger.error("_render_winner_loser: {}", exc)
         st.error("Winner/loser section unavailable.")
 
 
-# ── Section 6: Forward 30-day Outlook ────────────────────────────────────────
+# ── Section 7: Forward 30-day Outlook ────────────────────────────────────────
 
 def _render_outlook(rows: list[dict], overall: int) -> None:
     try:
@@ -700,37 +699,40 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
             },
         ]
 
-        st.markdown(
-            f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Forward 30-Day Outlook</div>', unsafe_allow_html=True)
+        section_header("Forward 30-Day Outlook",
+                       "Five forward-looking predictions with confidence bands and key risk")
 
         for i, pred in enumerate(predictions):
             try:
                 conf = pred["confidence"]
                 conf_color = C_HIGH if conf >= 70 else (C_MOD if conf >= 55 else C_LOW)
-                conf_bg = f"rgba({','.join(str(int(conf_color.lstrip('#')[j:j+2], 16)) for j in (0,2,4))},0.12)"
+                conf_bg = _hex_alpha(conf_color, 0.12)
 
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                    f'padding:18px 22px;margin-bottom:10px;display:flex;gap:20px;align-items:flex-start;">'
+                st.html(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                    f'border-radius:3px;padding:18px 22px;margin-bottom:10px;'
+                    f'display:flex;gap:20px;align-items:flex-start;">'
                     f'<div style="min-width:56px;text-align:center;padding-top:2px;">'
-                    f'<div style="font-family:{_MONO};font-size:22px;font-weight:800;color:{conf_color};">'
-                    f'{conf}%</div>'
-                    f'<div style="font-family:{_SANS};font-size:8px;color:{C_TEXT3};letter-spacing:1px;'
-                    f'margin-top:2px;">CONF.</div>'
+                    f'<div style="font-family:var(--mono);font-size:22px;font-weight:800;'
+                    f'color:{conf_color};">{conf}%</div>'
+                    f'<div style="font-family:var(--sans);font-size:8px;color:{C_TEXT3};'
+                    f'letter-spacing:1px;margin-top:2px;">CONF.</div>'
                     f'</div>'
                     f'<div style="flex:1;">'
-                    f'<div style="font-family:{_SERIF};font-size:13px;font-weight:700;color:{C_TEXT};'
-                    f'margin-bottom:6px;">{i+1}. {pred["title"]}</div>'
-                    f'<div style="font-family:{_SANS};font-size:13px;color:{C_TEXT2};line-height:1.65;'
-                    f'margin-bottom:10px;">{pred["body"]}</div>'
-                    f'<div style="display:inline-flex;align-items:center;gap:6px;background:{conf_bg};'
-                    f'border-radius:3px;padding:3px 10px;">'
-                    f'<span style="font-family:{_SANS};font-size:9px;color:{C_TEXT3};letter-spacing:1px;font-weight:600;">KEY RISK</span>'
-                    f'<span style="font-family:{_SANS};font-size:11px;color:{conf_color};">{pred["key_risk"]}</span>'
+                    f'<div style="font-family:var(--serif);font-size:13px;font-weight:700;'
+                    f'color:{C_TEXT};margin-bottom:6px;">{i+1}. {pred["title"]}</div>'
+                    f'<div style="font-family:var(--sans);font-size:13px;color:{C_TEXT2};'
+                    f'line-height:1.65;margin-bottom:10px;">{pred["body"]}</div>'
+                    f'<div style="display:inline-flex;align-items:center;gap:6px;'
+                    f'background:{conf_bg};border-radius:3px;padding:3px 10px;">'
+                    f'<span style="font-family:var(--sans);font-size:9px;color:{C_TEXT3};'
+                    f'letter-spacing:1px;font-weight:600;">KEY RISK</span>'
+                    f'<span style="font-family:var(--sans);font-size:11px;color:{conf_color};">'
+                    f'{pred["key_risk"]}</span>'
                     f'</div>'
                     f'</div>'
-                    f'</div>', unsafe_allow_html=True)
+                    f'</div>'
+                )
             except Exception as exc:
                 logger.debug("outlook prediction {}: {}", i, exc)
 
@@ -738,52 +740,6 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
     except Exception as exc:
         logger.error("_render_outlook: {}", exc)
         st.error("Forward outlook unavailable.")
-
-
-# ── Category Summary Bar ──────────────────────────────────────────────────────
-
-def _render_category_bar(rows: list[dict]) -> None:
-    try:
-        cat_avgs: dict[str, float] = {}
-        for cat in _CATEGORY_ORDER:
-            scores = [r["score"] for r in rows if r["category"] == cat]
-            cat_avgs[cat] = sum(scores) / len(scores) if scores else 50.0
-
-        cat_colors_map = {
-            "Freight Markets": C_ACCENT,
-            "Supply": "#7c6eaf",
-            "Demand": C_HIGH,
-            "Infrastructure": "#4a90a4",
-            "Financial": C_MOD,
-            "Risk": C_LOW,
-        }
-
-        cards_html = ""
-        for cat in _CATEGORY_ORDER:
-            avg = int(cat_avgs[cat])
-            color = cat_colors_map.get(cat, C_TEXT3)
-            rag_label, _ = _rag(avg)
-            cards_html += (
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                f'padding:14px 16px;flex:1;min-width:130px;text-align:center;">'
-                f'<div style="font-family:{_SANS};font-size:9px;color:{color};letter-spacing:1px;'
-                f'text-transform:uppercase;font-weight:600;margin-bottom:8px;">{cat}</div>'
-                f'<div style="font-family:{_MONO};font-size:28px;font-weight:800;color:{color};">{avg}</div>'
-                f'<div style="font-family:{_SANS};font-size:9px;color:{C_TEXT3};margin-top:2px;">{rag_label}</div>'
-                f'<div style="margin-top:8px;background:rgba(232,230,225,0.05);border-radius:3px;height:4px;">'
-                f'<div style="width:{avg}%;height:100%;background:{color};border-radius:3px;"></div>'
-                f'</div>'
-                f'</div>'
-            )
-
-        st.markdown(
-            f'<div style="font-family:{_SERIF};font-size:15px;font-weight:700;color:{C_TEXT};'
-            f'margin:28px 0 14px;border-bottom:1px solid {C_BORDER};padding-bottom:8px;">Category Averages</div>'
-            f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">'
-            + cards_html + f'</div>', unsafe_allow_html=True)
-        logger.debug("Category summary bar rendered")
-    except Exception as exc:
-        logger.error("_render_category_bar: {}", exc)
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
@@ -800,7 +756,6 @@ def render(
     try:
         logger.info("tab_scorecard.render() — building scorecard rows")
 
-        # Defensive defaults
         freight_data = freight_data or {}
         macro_data   = macro_data   or {}
         stock_data   = stock_data   or {}
@@ -810,31 +765,20 @@ def render(
 
         logger.info("Scorecard: {} metrics, overall={}", len(rows), overall)
 
-        # Global CSS injection (once)
-        st.markdown(
-            f'<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Libre+Franklin:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">'
-            f'<style>'
-            f'[data-testid="stAppViewContainer"] {{background:{C_BG};}}'
-            f'[data-testid="block-container"] {{padding-top:1rem;}}'
-            f'</style>', unsafe_allow_html=True)
+        page_header(
+            title="Shipping Market Scorecard",
+            subtitle=f"Executive scorecard of global shipping market conditions — Week of {_week_label()}",
+            icon="📊",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        # ── Section 1 ─────────────────────────────────────────────────────────
         _render_executive_summary(overall, rows)
-
-        # ── Section 2 ─────────────────────────────────────────────────────────
         _render_category_bar(rows)
         _render_scorecard_matrix(rows)
-
-        # ── Section 3 ─────────────────────────────────────────────────────────
         _render_score_history(overall)
-
-        # ── Section 4 ─────────────────────────────────────────────────────────
         _render_quadrant(rows)
-
-        # ── Section 5 ─────────────────────────────────────────────────────────
         _render_winner_loser(rows)
-
-        # ── Section 6 ─────────────────────────────────────────────────────────
         _render_outlook(rows, overall)
 
         logger.success("tab_scorecard.render() complete")

@@ -1,128 +1,104 @@
-"""Alert Center — intelligent shipping alert system with threshold monitoring & notifications.
+"""tab_alerts.py — Alert Center: threshold monitoring, rule management, and
+notification routing for the Ship Tracker intelligence platform.
 
 Sections
 --------
-0.  Hero            — total alerts, active rules, last triggered timestamp
-1.  Configure       — form to create new alert rules
-2.  Active Alerts   — triggered alerts derived from live data
-3.  History         — last 20 alerts (mock + session state)
-4.  Notifications   — email, frequency, digest toggle
-5.  Rules Manager   — table of all configured rules with toggles
+0. Hero            — total alerts, active rules, last triggered timestamp
+1. Configure       — form to create new alert rules
+2. Active Alerts   — triggered alerts derived from live data
+3. History         — last 20 alerts (mock + session state)
+4. Notifications   — email, frequency, digest toggle
+5. Rules Manager   — table of all configured rules with toggles
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
-import pandas as pd
 import streamlit as st
+from loguru import logger
 
-# ── Colour palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from data.quality import DataKind, DataQuality, DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    badge,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
-_SEV_COLOR = {"Critical": C_LOW, "Warning": C_MOD, "Info": C_ACCENT}
-_SEV_BG    = {
-    "Critical": "rgba(192,57,43,0.12)",
-    "Warning":  "rgba(201,150,43,0.12)",
-    "Info":     "rgba(53,114,176,0.12)",
-}
-_SEV_BORDER = {
-    "Critical": "rgba(192,57,43,0.45)",
-    "Warning":  "rgba(201,150,43,0.40)",
-    "Info":     "rgba(53,114,176,0.40)",
-}
-_SEV_ICON = {"Critical": "🔴", "Warning": "🟡", "Info": "🔵"}
 
-_METRIC_ICONS = {
-    "Freight Rate":     "💹",
-    "Sentiment Score":  "📡",
-    "Stock Price":      "📈",
-    "Port Congestion":  "🚧",
-    "Macro Indicator":  "🌍",
+# ---------------------------------------------------------------------------
+# Domain-specific mappings (kept local — not part of the shared palette)
+# ---------------------------------------------------------------------------
+_SEV_COLOR: dict[str, str] = {
+    "Critical": C_LOW,
+    "Warning":  C_MOD,
+    "Info":     C_ACCENT,
 }
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
-_CSS = """
-<style>
-.alc-header-label {
-    font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.15em;
-    color: #475569; margin-bottom: 6px;
+_SEV_BADGE: dict[str, str] = {
+    "Critical": "red",
+    "Warning":  "yellow",
+    "Info":     "blue",
 }
-.alc-hero-title {
-    font-size: 1.9rem; font-weight: 900; color: #e8e6e1;
-    letter-spacing: -0.03em; line-height: 1.1;
-}
-.alc-hero-sub {
-    font-size: 0.8rem; color: #6b6760; margin-top: 5px;
-}
-.alc-stat-card {
-    background: #181c28;
-    border: 1px solid rgba(232,230,225,0.06);
-    border-radius: 6px;
-    padding: 16px 18px;
-    text-align: center;
-}
-.alc-stat-num  { font-size: 2rem; font-weight: 900; line-height: 1; }
-.alc-stat-lbl  { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em;
-                  color: #9a968e; margin-top: 4px; }
-.alc-stat-sub  { font-size: 0.7rem; color: #6b6760; margin-top: 2px; }
-.alc-alert-card {
-    border-radius: 6px;
-    padding: 14px 16px;
-    margin-bottom: 10px;
-    border-left: 4px solid;
-    border-top: 1px solid;
-    border-right: 1px solid;
-    border-bottom: 1px solid;
-}
-.alc-sev-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 2px 10px; border-radius: 3px;
-    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em;
-    border: 1px solid;
-}
-.alc-section-label {
-    font-size: 0.75rem; font-weight: 700; color: #9a968e;
-    text-transform: uppercase; letter-spacing: 0.1em;
-    margin-bottom: 14px;
-}
-.alc-rule-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 0;
-    border-bottom: 1px solid rgba(232,230,225,0.04);
-}
-.alc-pill {
-    display: inline-flex; align-items: center;
-    padding: 2px 9px; border-radius: 3px;
-    font-size: 0.67rem; font-weight: 600;
-    background: rgba(53,114,176,0.12);
-    color: #3572b0; border: 1px solid rgba(53,114,176,0.3);
-}
-.alc-hist-row {
-    display: flex; align-items: flex-start; gap: 10px;
-    padding: 9px 0; border-bottom: 1px solid rgba(232,230,225,0.04);
-}
-.alc-hist-ts { font-size: 0.67rem; color: #6b6760; white-space: nowrap; margin-top: 2px; }
-@keyframes crit-pulse {
-    0%,100% { box-shadow: 0 0 0 0 rgba(192,57,43,0); }
-    50%      { box-shadow: 0 0 0 5px rgba(192,57,43,0.15); }
-}
-.alc-critical-pulse { animation: crit-pulse 2.2s ease-in-out infinite; }
-</style>
-"""
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+_METRIC_ICONS: dict[str, str] = {
+    "Freight Rate":     "FR",
+    "Sentiment Score":  "SENT",
+    "Stock Price":      "EQ",
+    "Port Congestion":  "PORT",
+    "Macro Indicator":  "MAC",
+}
 
+
+# ---------------------------------------------------------------------------
+# Data source declarations
+# ---------------------------------------------------------------------------
+_ACTIVE_SRC  = DataSource.modeled(
+    "Alert Engine",
+    notes="Derived from live freight, sentiment, stock, and macro feeds",
+)
+_HISTORY_SRC = DataSource.demo("Alert History")
+_RULES_SRC   = DataSource(
+    name="User Rules",
+    kind=DataKind.MANUAL,
+    quality=DataQuality.GOOD,
+    notes="User-configured rule set",
+)
+
+
+# ---------------------------------------------------------------------------
+# Cell formatters for WSJ market tables
+# ---------------------------------------------------------------------------
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
+        f'{value}</span>'
+    )
+
+
+def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sev_badge(sev: str) -> str:
+    return badge(sev, _SEV_BADGE.get(sev, "blue"))
+
+
+# ---------------------------------------------------------------------------
+# Date / time helpers
+# ---------------------------------------------------------------------------
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -151,62 +127,9 @@ def _time_ago(iso: str) -> str:
         return ""
 
 
-def _sev_badge(sev: str) -> str:
-    color  = _SEV_COLOR.get(sev, C_TEXT3)
-    bg     = _SEV_BG.get(sev, "rgba(100,116,139,0.1)")
-    border = _SEV_BORDER.get(sev, C_BORDER)
-    icon   = _SEV_ICON.get(sev, "⚪")
-    return (
-        f'<span class="alc-sev-badge" '
-        f'style="color:{color};background:{bg};border-color:{border}">'
-        f'{icon} {sev}</span>'
-    )
-
-
-def _alert_card_html(alert: dict) -> str:
-    sev    = alert.get("severity", "Info")
-    color  = _SEV_COLOR.get(sev, C_TEXT3)
-    bg     = _SEV_BG.get(sev, "rgba(100,116,139,0.1)")
-    border = _SEV_BORDER.get(sev, C_BORDER)
-    icon   = _METRIC_ICONS.get(alert.get("metric", ""), "📋")
-    pulse  = " alc-critical-pulse" if sev == "Critical" else ""
-    val    = alert.get("current_value", "—")
-    thr    = alert.get("threshold", "—")
-    ts     = _time_ago(alert.get("triggered_at", _now_iso()))
-    return (
-        f'<div class="alc-alert-card{pulse}" '
-        f'style="background:{bg};border-color:{border};border-left-color:{color}">'
-        f'  <div style="display:flex;align-items:flex-start;gap:12px">'
-        f'    <span style="font-size:1.35rem;margin-top:1px">{icon}</span>'
-        f'    <div style="flex:1;min-width:0">'
-        f'      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">'
-        f'        {_sev_badge(sev)}'
-        f'        <span style="font-size:0.7rem;color:{C_TEXT3}">{alert.get("metric","")}</span>'
-        f'        <span style="font-size:0.67rem;color:{C_TEXT3};margin-left:auto">{ts}</span>'
-        f'      </div>'
-        f'      <div style="font-size:0.95rem;font-weight:700;color:{C_TEXT};margin-bottom:5px;line-height:1.3">'
-        f'        {alert.get("name","Unnamed Alert")}'
-        f'      </div>'
-        f'      <div style="font-size:0.8rem;color:{C_TEXT2};line-height:1.5;margin-bottom:8px">'
-        f'        {alert.get("description","")}'
-        f'      </div>'
-        f'      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
-        f'        <span style="font-size:0.75rem;color:{C_TEXT3}">Current: '
-        f'          <strong style="color:{color}">{val}</strong>'
-        f'        </span>'
-        f'        <span style="font-size:0.75rem;color:{C_TEXT3}">Threshold: '
-        f'          <strong style="color:{C_TEXT}">{thr}</strong>'
-        f'        </span>'
-        f'        <span style="font-size:0.67rem;color:{C_TEXT3}">Triggered: {_fmt_dt(alert.get("triggered_at",""))}</span>'
-        f'      </div>'
-        f'    </div>'
-        f'  </div>'
-        f'</div>'
-    )
-
-
-# ── Default rules ──────────────────────────────────────────────────────────────
-
+# ---------------------------------------------------------------------------
+# Default rules & mock history
+# ---------------------------------------------------------------------------
 def _default_rules() -> list[dict]:
     return [
         {
@@ -262,8 +185,6 @@ def _default_rules() -> list[dict]:
     ]
 
 
-# ── Mock history data ──────────────────────────────────────────────────────────
-
 def _mock_history() -> list[dict]:
     base = datetime.now(timezone.utc)
     return [
@@ -278,12 +199,12 @@ def _mock_history() -> list[dict]:
             "dismissed": False,
         },
         {
-            "name": "ZIM Daily Move −6.2%",
+            "name": "ZIM Daily Move -6.2%",
             "metric": "Stock Price",
             "severity": "Warning",
             "description": "ZIM Integrated Shipping (ZIM) fell 6.2% intraday, exceeding the 5% alert threshold.",
-            "current_value": "−6.2%",
-            "threshold": "±5.0%",
+            "current_value": "-6.2%",
+            "threshold": "+/-5.0%",
             "triggered_at": (base - timedelta(hours=5, minutes=40)).isoformat(),
             "dismissed": False,
         },
@@ -301,19 +222,19 @@ def _mock_history() -> list[dict]:
             "name": "Bearish Sentiment Cluster",
             "metric": "Sentiment Score",
             "severity": "Warning",
-            "description": "Three consecutive bearish signals detected on Asia–Europe corridor.",
-            "current_value": "−0.61",
-            "threshold": "−0.50",
+            "description": "Three consecutive bearish signals detected on Asia-Europe corridor.",
+            "current_value": "-0.61",
+            "threshold": "-0.50",
             "triggered_at": (base - timedelta(hours=11, minutes=5)).isoformat(),
             "dismissed": True,
         },
         {
-            "name": "Baltic Dry Index Drop −8%",
+            "name": "Baltic Dry Index Drop -8%",
             "metric": "Macro Indicator",
             "severity": "Info",
             "description": "BDI declined 8% week-over-week, signalling softening dry bulk demand.",
             "current_value": "1,843",
-            "threshold": "BDI Δ >5%",
+            "threshold": "BDI delta >5%",
             "triggered_at": (base - timedelta(days=1, hours=3)).isoformat(),
             "dismissed": True,
         },
@@ -323,7 +244,7 @@ def _mock_history() -> list[dict]:
             "severity": "Warning",
             "description": "Matson Inc. (MATX) rallied 5.8% on stronger-than-expected volume guidance.",
             "current_value": "+5.8%",
-            "threshold": "±5.0%",
+            "threshold": "+/-5.0%",
             "triggered_at": (base - timedelta(days=1, hours=9, minutes=22)).isoformat(),
             "dismissed": True,
         },
@@ -351,27 +272,28 @@ def _mock_history() -> list[dict]:
             "name": "Los Angeles Port Congestion",
             "metric": "Port Congestion",
             "severity": "Critical",
-            "description": "USLAX congestion index reached 0.93 — severe vessel queue buildup.",
+            "description": "USLAX congestion index reached 0.93 - severe vessel queue buildup.",
             "current_value": "0.93",
             "threshold": "0.80",
             "triggered_at": (base - timedelta(days=4, hours=14)).isoformat(),
             "dismissed": True,
         },
         {
-            "name": "SBLK Daily Drop −7.1%",
+            "name": "SBLK Daily Drop -7.1%",
             "metric": "Stock Price",
             "severity": "Warning",
             "description": "Star Bulk Carriers (SBLK) fell 7.1% following BDI weakness.",
-            "current_value": "−7.1%",
-            "threshold": "±5.0%",
+            "current_value": "-7.1%",
+            "threshold": "+/-5.0%",
             "triggered_at": (base - timedelta(days=5, hours=8, minutes=30)).isoformat(),
             "dismissed": True,
         },
     ]
 
 
-# ── Scan real data for triggered alerts ───────────────────────────────────────
-
+# ---------------------------------------------------------------------------
+# Live alert scanner
+# ---------------------------------------------------------------------------
 def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> list[dict]:
     """Derive triggered alerts from live data; never raises."""
     triggered: list[dict] = []
@@ -390,15 +312,15 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
                     if chg is not None and abs(float(chg)) > 20:
                         direction = "surge" if float(chg) > 0 else "drop"
                         triggered.append({
-                            "name": f"Freight Rate {direction.title()} — {route}",
+                            "name": f"Freight Rate {direction.title()} - {route}",
                             "metric": "Freight Rate",
                             "severity": "Critical",
                             "description": (
                                 f"Weekly rate change on {route} reached {float(chg):+.1f}%, "
-                                f"exceeding the 20% threshold."
+                                "exceeding the 20% threshold."
                             ),
                             "current_value": f"{float(chg):+.1f}%",
-                            "threshold": "±20.0%",
+                            "threshold": "+/-20.0%",
                             "triggered_at": now,
                             "dismissed": False,
                         })
@@ -425,11 +347,11 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
                         else getattr(ins, "route_id", "")
                     )
                     triggered.append({
-                        "name": f"Bearish Sentiment — {route_label or 'Market'}",
+                        "name": f"Bearish Sentiment - {route_label or 'Market'}",
                         "metric": "Sentiment Score",
                         "severity": "Warning",
                         "description": (
-                            f"Sentiment model flagged a strong bearish signal"
+                            "Sentiment model flagged a strong bearish signal"
                             f"{f' on {route_label}' if route_label else ''}. "
                             "Monitor closely for rate deterioration."
                         ),
@@ -466,7 +388,7 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
                             "exceeding the 5% daily move threshold."
                         ),
                         "current_value": f"{float(chg):+.1f}%",
-                        "threshold": "±5.0%",
+                        "threshold": "+/-5.0%",
                         "triggered_at": now,
                         "dismissed": False,
                     })
@@ -489,7 +411,7 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
                     "Watch for downstream freight rate implications."
                 ),
                 "current_value": f"{float(bdi_chg):+.1f}%",
-                "threshold": "±8.0%",
+                "threshold": "+/-8.0%",
                 "triggered_at": now,
                 "dismissed": False,
             })
@@ -499,9 +421,10 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
     return triggered
 
 
-# ── Session state initialisation ──────────────────────────────────────────────
-
-def _init_state():
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+def _init_state() -> None:
     if "user_alerts" not in st.session_state:
         st.session_state["user_alerts"] = _default_rules()
     if "alert_dismissed" not in st.session_state:
@@ -518,95 +441,61 @@ def _init_state():
         st.session_state["active_alerts_cache"] = []
 
 
-# ── Main render ────────────────────────────────────────────────────────────────
-
-def render(port_results, route_results, insights, freight_data, macro_data, stock_data):
-    """Render the Alert Center tab."""
+# ---------------------------------------------------------------------------
+# Section renderers
+# ---------------------------------------------------------------------------
+def _render_hero(visible_alerts: list[dict]) -> None:
     try:
-        st.markdown(_CSS, unsafe_allow_html=True)
-        _init_state()
-    except Exception:
-        pass
+        page_header(
+            title="Alert Center",
+            subtitle="Real-time threshold monitoring and notifications",
+            icon="AL",
+            badge_text="LIVE",
+            badge_color=C_HIGH,
+        )
 
-    # ── Hero header ───────────────────────────────────────────────────────────
-    try:
-        st.markdown(
-            '<div class="alc-header-label">INTELLIGENCE PLATFORM</div>'
-            '<div class="alc-hero-title">Alert <span style="color:#c0392b">Center</span></div>'
-            '<div class="alc-hero-sub">Real-time threshold monitoring &amp; notifications</div>', unsafe_allow_html=True)
-    except Exception:
-        st.subheader("Alert Center")
-
-    st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
-
-    # ── Derive active alerts ──────────────────────────────────────────────────
-    try:
-        scanned = _scan_triggered_alerts(freight_data, insights, stock_data, macro_data)
-        if scanned:
-            st.session_state["active_alerts_cache"] = scanned
-        active_alerts = st.session_state["active_alerts_cache"]
-        # Fall back to mock if nothing real was found
-        if not active_alerts:
-            active_alerts = _mock_history()[:3]
-    except Exception:
-        active_alerts = _mock_history()[:3]
-
-    dismissed_ids = st.session_state.get("alert_dismissed", set())
-    visible_alerts = [
-        a for i, a in enumerate(active_alerts)
-        if i not in dismissed_ids and not a.get("dismissed", False)
-    ]
-
-    # ── Stats row ─────────────────────────────────────────────────────────────
-    try:
-        rules          = st.session_state["user_alerts"]
+        rules          = st.session_state.get("user_alerts", [])
         active_count   = len(visible_alerts)
         rules_count    = sum(1 for r in rules if r.get("enabled", True))
         history        = st.session_state.get("alert_history", [])
         last_triggered = history[0].get("triggered_at", "") if history else ""
 
-        col1, col2, col3 = st.columns(3, gap="medium")
+        last_ago = _time_ago(last_triggered) if last_triggered else "--"
+        last_sub = _fmt_dt(last_triggered) if last_triggered else "No history yet"
 
-        with col1:
-            crit_color = C_LOW if active_count > 0 else C_HIGH
-            st.markdown(
-                f'<div class="alc-stat-card">'
-                f'  <div class="alc-stat-num" style="color:{crit_color}">{active_count}</div>'
-                f'  <div class="alc-stat-lbl">Total Active Alerts</div>'
-                f'  <div class="alc-stat-sub">{"Requires attention" if active_count else "All clear"}</div>'
-                f'</div>', unsafe_allow_html=True)
-        with col2:
-            st.markdown(
-                f'<div class="alc-stat-card">'
-                f'  <div class="alc-stat-num" style="color:{C_ACCENT}">{rules_count}</div>'
-                f'  <div class="alc-stat-lbl">Active Rules</div>'
-                f'  <div class="alc-stat-sub">of {len(rules)} configured</div>'
-                f'</div>', unsafe_allow_html=True)
-        with col3:
-            last_ago = _time_ago(last_triggered) if last_triggered else "—"
-            st.markdown(
-                f'<div class="alc-stat-card">'
-                f'  <div class="alc-stat-num" style="color:{C_MOD};font-size:1.35rem;padding-top:6px">'
-                f'    {last_ago}'
-                f'  </div>'
-                f'  <div class="alc-stat-lbl">Last Triggered</div>'
-                f'  <div class="alc-stat-sub">{_fmt_dt(last_triggered) if last_triggered else "No history yet"}</div>'
-                f'</div>', unsafe_allow_html=True)
+        metric_card_row([
+            {
+                "label":    "Active Alerts",
+                "value":    str(active_count),
+                "accent":   C_LOW if active_count > 0 else C_HIGH,
+                "sublabel": "Requires attention" if active_count else "All clear",
+            },
+            {
+                "label":    "Active Rules",
+                "value":    str(rules_count),
+                "accent":   C_ACCENT,
+                "sublabel": f"of {len(rules)} configured",
+            },
+            {
+                "label":    "Last Triggered",
+                "value":    last_ago,
+                "accent":   C_MOD,
+                "sublabel": last_sub,
+            },
+        ], columns=3)
     except Exception:
-        pass
+        logger.exception("Alert Center hero render failed")
+        st.error("Hero section unavailable.")
 
-    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
-    st.divider()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  SECTION 1 — ALERT CONFIGURATION
-    # ─────────────────────────────────────────────────────────────────────────
+def _render_configuration_form() -> None:
     try:
-        with st.expander("⚙️  Alert Configuration — Create New Rule", expanded=False):
-            st.markdown(
-                '<div style="font-size:0.78rem;color:#9a968e;margin-bottom:14px">'
-                'Define a new threshold rule. Alerts are evaluated on each data refresh.'
-                '</div>', unsafe_allow_html=True)
+        with st.expander("Alert Configuration - Create New Rule", expanded=False):
+            st.html(
+                '<div class="sub-section-header">'
+                'Define a new threshold rule. Alerts evaluate on each data refresh.'
+                '</div>'
+            )
             with st.form("create_alert_form", clear_on_submit=True):
                 fc1, fc2 = st.columns(2, gap="medium")
                 with fc1:
@@ -638,7 +527,7 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                         "Severity",
                         options=["Info", "Warning", "Critical"],
                         index=1,
-                        help="Determines card color and notification urgency.",
+                        help="Determines badge color and notification urgency.",
                     )
                     email_notify = st.toggle(
                         "Email Notification",
@@ -672,57 +561,78 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                 except Exception as exc:
                     st.error(f"Could not create rule: {exc}")
     except Exception:
-        pass
+        logger.exception("Alert configuration render failed")
 
-    st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  SECTION 2 — ACTIVE ALERTS PANEL
-    # ─────────────────────────────────────────────────────────────────────────
+def _render_active_alerts(visible_alerts: list[dict]) -> None:
     try:
-        st.markdown(
-            '<div class="alc-section-label">📡 Active Alerts</div>', unsafe_allow_html=True)
+        section_header(
+            "Active Alerts",
+            f"{len(visible_alerts)} triggered · evaluated from live feeds",
+        )
+        st.html(live_data_badge(_ACTIVE_SRC))
 
         if not visible_alerts:
-            st.markdown(
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                f'border-radius:6px;padding:28px;text-align:center;'
-                f'color:{C_TEXT3};font-size:0.85rem">'
-                f'<span style="font-size:1.6rem">✅</span><br/>'
-                f'<strong style="color:{C_HIGH}">All clear.</strong> No alerts are currently active.'
-                f'</div>', unsafe_allow_html=True)
-        else:
-            for idx, alert in enumerate(visible_alerts):
+            st.success("All clear. No alerts are currently active.")
+            return
+
+        headers = ["Severity", "Metric", "Alert", "Current", "Threshold", "Triggered"]
+        rows = []
+        for alert in visible_alerts:
+            sev     = alert.get("severity", "Info")
+            sev_col = _SEV_COLOR.get(sev, C_TEXT3)
+            m_icon  = _METRIC_ICONS.get(alert.get("metric", ""), "--")
+            ts_ago  = _time_ago(alert.get("triggered_at", _now_iso()))
+
+            rows.append([
+                _sev_badge(sev),
+                _sans(
+                    f"{m_icon} {alert.get('metric','')}",
+                    color=C_TEXT2, weight=500,
+                ),
+                _sans(
+                    alert.get("name", "Unnamed Alert"),
+                    color=C_TEXT, weight=700,
+                ),
+                _mono(str(alert.get("current_value", "--")), color=sev_col, weight=700),
+                _mono(str(alert.get("threshold", "--")), color=C_TEXT, weight=600),
+                _sans(ts_ago, color=C_TEXT3, weight=400),
+            ])
+
+        wsj_market_table(headers, rows)
+
+        # Dismissal controls
+        st.html("<div style='height:8px;'></div>")
+        cols = st.columns(min(4, len(visible_alerts)))
+        for idx, alert in enumerate(visible_alerts):
+            with cols[idx % len(cols)]:
                 try:
-                    st.markdown(_alert_card_html(alert), unsafe_allow_html=True)
-                    dcol, _ = st.columns([1, 5])
-                    with dcol:
-                        if st.button(
-                            "Dismiss",
-                            key=f"dismiss_alert_{idx}",
-                            use_container_width=True,
-                        ):
-                            st.session_state["alert_dismissed"].add(idx)
-                            # Add to history
-                            alert_copy = dict(alert)
-                            alert_copy["dismissed"] = True
-                            hist = st.session_state.get("alert_history", [])
-                            hist.insert(0, alert_copy)
-                            st.session_state["alert_history"] = hist[:40]
-                            st.rerun()
+                    if st.button(
+                        f"Dismiss #{idx + 1}",
+                        key=f"dismiss_alert_{idx}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["alert_dismissed"].add(idx)
+                        alert_copy = dict(alert)
+                        alert_copy["dismissed"] = True
+                        hist = st.session_state.get("alert_history", [])
+                        hist.insert(0, alert_copy)
+                        st.session_state["alert_history"] = hist[:40]
+                        st.rerun()
                 except Exception:
                     pass
     except Exception:
-        pass
+        logger.exception("Active alerts render failed")
+        st.error("Active alerts section unavailable.")
 
-    st.divider()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  SECTION 3 — ALERT HISTORY TABLE
-    # ─────────────────────────────────────────────────────────────────────────
+def _render_history() -> None:
     try:
-        st.markdown(
-            '<div class="alc-section-label">🗂️ Alert History (Last 20)</div>', unsafe_allow_html=True)
+        section_header(
+            "Alert History",
+            "Last 20 triggered alerts across all rules",
+        )
+        st.html(live_data_badge(_HISTORY_SRC))
 
         history = st.session_state.get("alert_history", [])
         if not history:
@@ -730,53 +640,44 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
             st.session_state["alert_history"] = history
 
         display_hist = history[:20]
+        if not display_hist:
+            st.info("No alert history yet.")
+            return
 
-        # Build rows HTML in one pass
-        rows_html = ""
+        headers = ["Severity", "Metric", "Alert", "Current", "Threshold", "Triggered", "Status"]
+        rows = []
         for alert in display_hist:
-            sev    = alert.get("severity", "Info")
-            color  = _SEV_COLOR.get(sev, C_TEXT3)
-            icon   = _SEV_ICON.get(sev, "⚪")
-            m_icon = _METRIC_ICONS.get(alert.get("metric", ""), "📋")
-            ts     = _fmt_dt(alert.get("triggered_at", ""))
-            dis    = alert.get("dismissed", False)
-            ack_html = (
-                '<span style="font-size:0.65rem;color:#6b6760">Dismissed</span>'
-                if dis else
-                '<span style="font-size:0.65rem;color:#2e9e6e;font-weight:700">Active</span>'
-            )
-            rows_html += (
-                f'<div class="alc-hist-row">'
-                f'  <span style="font-size:1.1rem">{icon}</span>'
-                f'  <div style="flex:1;min-width:0">'
-                f'    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
-                f'      <span style="font-size:0.72rem;font-weight:700;color:{color}">{sev}</span>'
-                f'      <span style="font-size:0.68rem;color:{C_TEXT3}">{m_icon} {alert.get("metric","")}</span>'
-                f'      {ack_html}'
-                f'    </div>'
-                f'    <div style="font-size:0.82rem;font-weight:600;color:{C_TEXT};margin:2px 0">'
-                f'      {alert.get("name","")}'
-                f'    </div>'
-                f'    <div class="alc-hist-ts">{ts}</div>'
-                f'  </div>'
-                f'</div>'
+            sev      = alert.get("severity", "Info")
+            sev_col  = _SEV_COLOR.get(sev, C_TEXT3)
+            m_icon   = _METRIC_ICONS.get(alert.get("metric", ""), "--")
+            ts       = _fmt_dt(alert.get("triggered_at", ""))
+            dismissed = alert.get("dismissed", False)
+            status_badge = (
+                badge("Dismissed", "blue") if dismissed else badge("Active", "green")
             )
 
-        st.markdown(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;padding:8px 14px">'
-            f'{rows_html}'
-            f'</div>', unsafe_allow_html=True)
+            rows.append([
+                _sev_badge(sev),
+                _sans(
+                    f"{m_icon} {alert.get('metric','')}",
+                    color=C_TEXT2, weight=500,
+                ),
+                _sans(alert.get("name", ""), color=C_TEXT, weight=600),
+                _mono(str(alert.get("current_value", "--")), color=sev_col, weight=600),
+                _mono(str(alert.get("threshold", "--")), color=C_TEXT2, weight=500),
+                _mono(ts, color=C_TEXT3, weight=400),
+                status_badge,
+            ])
+
+        wsj_market_table(headers, rows)
     except Exception:
-        pass
+        logger.exception("Alert history render failed")
+        st.error("Alert history unavailable.")
 
-    st.divider()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  SECTION 4 — NOTIFICATION SETTINGS
-    # ─────────────────────────────────────────────────────────────────────────
+def _render_notifications() -> None:
     try:
-        with st.expander("📧  Notification Settings", expanded=False):
+        with st.expander("Notification Settings", expanded=False):
             nc1, nc2 = st.columns(2, gap="medium")
 
             with nc1:
@@ -787,10 +688,11 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                     key="notif_email_input",
                     help="Receive alert digests and critical notifications here.",
                 )
+                freq_options = ["Immediate", "Hourly Digest", "Daily Digest", "Weekly Summary"]
                 freq_val = st.selectbox(
                     "Notification Frequency",
-                    options=["Immediate", "Hourly Digest", "Daily Digest", "Weekly Summary"],
-                    index=["Immediate", "Hourly Digest", "Daily Digest", "Weekly Summary"].index(
+                    options=freq_options,
+                    index=freq_options.index(
                         st.session_state.get("notif_freq", "Immediate")
                     ),
                     key="notif_freq_select",
@@ -804,19 +706,15 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                     key="notif_digest_toggle",
                     help="Bundle multiple alerts into a single email digest.",
                 )
-                st.markdown(
-                    f'<div style="font-size:0.78rem;color:{C_TEXT3};margin-top:10px;line-height:1.6">'
-                    f'Digest emails summarise all triggered alerts into a single message '
-                    f'at the configured frequency. Critical alerts are always sent immediately '
-                    f'when <em>Immediate</em> is selected.'
-                    f'</div>', unsafe_allow_html=True)
+                st.html(
+                    '<div class="sub-section-header" style="margin-top:10px;">'
+                    'Digest emails summarise all triggered alerts into a single '
+                    'message at the configured frequency. Critical alerts are '
+                    'always sent immediately when Immediate is selected.'
+                    '</div>'
+                )
 
-            save_notif = st.button(
-                "Save Notification Settings",
-                key="save_notif_btn",
-                type="primary",
-            )
-            if save_notif:
+            if st.button("Save Notification Settings", key="save_notif_btn", type="primary"):
                 try:
                     st.session_state["notif_email"]  = email_val
                     st.session_state["notif_freq"]   = freq_val
@@ -825,85 +723,106 @@ def render(port_results, route_results, insights, freight_data, macro_data, stoc
                 except Exception as exc:
                     st.error(f"Could not save settings: {exc}")
     except Exception:
-        pass
+        logger.exception("Notification settings render failed")
 
-    st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  SECTION 5 — RULES MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────
+def _render_rules_manager() -> None:
     try:
-        st.markdown(
-            '<div class="alc-section-label">📋 Rules Management</div>', unsafe_allow_html=True)
+        rules = st.session_state.get("user_alerts") or _default_rules()
+        st.session_state["user_alerts"] = rules
 
-        rules = st.session_state.get("user_alerts", _default_rules())
-        if not rules:
-            rules = _default_rules()
-            st.session_state["user_alerts"] = rules
+        enabled_count = sum(1 for r in rules if r.get("enabled", True))
+        section_header(
+            "Rules Management",
+            f"{enabled_count} of {len(rules)} rules enabled",
+        )
+        st.html(live_data_badge(_RULES_SRC))
 
-        # Header row
-        st.markdown(
-            f'<div style="display:flex;gap:8px;padding:6px 10px;'
-            f'font-size:0.65rem;font-weight:700;color:{C_TEXT3};'
-            f'text-transform:uppercase;letter-spacing:0.08em;'
-            f'border-bottom:1px solid {C_BORDER}">'
-            f'  <span style="flex:2">Rule Name</span>'
-            f'  <span style="flex:1">Metric</span>'
-            f'  <span style="flex:1">Threshold</span>'
-            f'  <span style="flex:1">Condition</span>'
-            f'  <span style="flex:1">Severity</span>'
-            f'  <span style="width:90px;text-align:center">Email</span>'
-            f'  <span style="width:80px;text-align:center">Enabled</span>'
-            f'</div>', unsafe_allow_html=True)
+        # Table of rules (read-only summary)
+        headers = ["Rule Name", "Metric", "Threshold", "Condition", "Severity", "Email"]
+        rows = []
+        for rule in rules:
+            sev     = rule.get("severity", "Info")
+            m_icon  = _METRIC_ICONS.get(rule.get("metric", ""), "--")
+            email_label = "On" if rule.get("email_notify") else "Off"
+            email_color = C_HIGH if rule.get("email_notify") else C_TEXT3
 
+            rows.append([
+                _sans(rule.get("name", ""), color=C_TEXT, weight=700),
+                _sans(
+                    f"{m_icon} {rule.get('metric','')}",
+                    color=C_TEXT2, weight=500,
+                ),
+                _mono(str(rule.get("threshold", "--")), color=C_TEXT, weight=700),
+                _sans(rule.get("condition", ""), color=C_TEXT2, weight=500),
+                _sev_badge(sev),
+                _sans(email_label, color=email_color, weight=600),
+            ])
+        wsj_market_table(headers, rows)
+
+        # Enable / disable toggles
+        st.html('<div class="sub-section-header">Enable / Disable Rules</div>')
+        tcols = st.columns(min(3, max(1, len(rules))))
         for i, rule in enumerate(rules):
-            try:
-                sev    = rule.get("severity", "Info")
-                color  = _SEV_COLOR.get(sev, C_TEXT3)
-                m_icon = _METRIC_ICONS.get(rule.get("metric", ""), "📋")
-
-                r1, r2, r3, r4, r5, r6, r7 = st.columns(
-                    [2, 1, 1, 1, 1, 0.7, 0.6], gap="small"
-                )
-
-                with r1:
-                    st.markdown(
-                        f'<div style="font-size:0.83rem;font-weight:600;color:{C_TEXT};'
-                        f'padding-top:6px">{rule.get("name","")}</div>', unsafe_allow_html=True)
-                with r2:
-                    st.markdown(
-                        f'<div style="font-size:0.75rem;color:{C_TEXT2};padding-top:6px">'
-                        f'{m_icon} {rule.get("metric","")}</div>', unsafe_allow_html=True)
-                with r3:
-                    st.markdown(
-                        f'<div style="font-size:0.78rem;color:{C_TEXT};padding-top:6px;font-weight:600">'
-                        f'{rule.get("threshold","—")}</div>', unsafe_allow_html=True)
-                with r4:
-                    st.markdown(
-                        f'<div style="font-size:0.75rem;color:{C_TEXT2};padding-top:6px">'
-                        f'{rule.get("condition","")}</div>', unsafe_allow_html=True)
-                with r5:
-                    st.markdown(
-                        f'<div style="font-size:0.75rem;font-weight:700;color:{color};padding-top:6px">'
-                        f'{sev}</div>', unsafe_allow_html=True)
-                with r6:
-                    email_icon = "✉️" if rule.get("email_notify") else "—"
-                    st.markdown(
-                        f'<div style="text-align:center;font-size:0.8rem;padding-top:6px">'
-                        f'{email_icon}</div>', unsafe_allow_html=True)
-                with r7:
+            with tcols[i % len(tcols)]:
+                try:
                     enabled_new = st.toggle(
-                        "On",
+                        rule.get("name", f"Rule {i+1}"),
                         value=rule.get("enabled", True),
-                        key=f"rule_toggle_{rule.get('id',i)}_{i}",
-                        label_visibility="collapsed",
+                        key=f"rule_toggle_{rule.get('id', i)}_{i}",
                     )
                     st.session_state["user_alerts"][i]["enabled"] = enabled_new
-
-                st.markdown(
-                    f'<div style="height:1px;background:{C_BORDER};margin:2px 0"></div>', unsafe_allow_html=True)
-            except Exception:
-                pass
-
+                except Exception:
+                    pass
     except Exception:
-        pass
+        logger.exception("Rules manager render failed")
+        st.error("Rules management unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+def render(
+    port_results=None,
+    route_results=None,
+    insights=None,
+    freight_data=None,
+    macro_data=None,
+    stock_data=None,
+):
+    """Render the Alert Center tab."""
+    try:
+        _init_state()
+    except Exception:
+        logger.exception("Alert Center state init failed")
+
+    # Derive active alerts
+    try:
+        scanned = _scan_triggered_alerts(freight_data, insights, stock_data, macro_data)
+        if scanned:
+            st.session_state["active_alerts_cache"] = scanned
+        active_alerts = st.session_state.get("active_alerts_cache", []) or []
+        if not active_alerts:
+            active_alerts = _mock_history()[:3]
+    except Exception:
+        logger.exception("Alert scan failed")
+        active_alerts = _mock_history()[:3]
+
+    dismissed_ids = st.session_state.get("alert_dismissed", set())
+    visible_alerts = [
+        a for i, a in enumerate(active_alerts)
+        if i not in dismissed_ids and not a.get("dismissed", False)
+    ]
+
+    try:
+        _render_hero(visible_alerts)
+        _render_configuration_form()
+        _render_active_alerts(visible_alerts)
+        _render_history()
+        _render_notifications()
+        _render_rules_manager()
+    except Exception:
+        logger.exception("tab_alerts top-level render failed")
+        st.error("Alert Center tab encountered an error.")
+
+

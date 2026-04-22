@@ -5,22 +5,34 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Colour palette ────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
+)
 
+# Semantic CII rating colors (A–E scale) — tab-local because they extend the
+# shared palette with a bright green for an "A" grade.
 _CII_COLORS = {"A": "#2e9e6e", "B": "#34d399", "C": "#c9962b", "D": "#f97316", "E": "#c0392b"}
 
-# ── Static datasets ───────────────────────────────────────────────────────────
+# Local chart palette for fuel mix (neutral / indigo / teal shades the global palette lacks).
+_FUEL_GREY   = "#6b6760"
+_FUEL_PURPLE = "#7c6eaf"
+_FUEL_TEAL   = "#4a90a4"
+
+
+# ── Static datasets ─────────────────────────────────────────────────────────
 
 _CARRIERS = [
     {"carrier": "Maersk",          "cii": "B", "eeoi": 8.2,  "eco_pct": 34, "lng_pct": 12, "on_track": True,  "actions": "Methanol newbuilds, CII retrofits"},
@@ -90,174 +102,132 @@ _SPEED_TABLE = [
     {"speed_kn": 12, "fuel_tpd": 39,  "daily_opex_usd": 20200, "capacity_util_pct": 65,  "co2_tpd": 124},
 ]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _card_css() -> str:
+# ── Cell formatters ─────────────────────────────────────────────────────────
+
+def _mono(value: str, color: str = C_TEXT) -> str:
     return (
-        f"background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;"
-        f"padding:20px 24px;margin-bottom:16px;"
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
     )
 
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub_html = f"<p style='color:{C_TEXT2};font-size:13px;margin:4px 0 0 0;'>{subtitle}</p>" if subtitle else ""
-    st.markdown(
-        f"<div style='border-left:3px solid {C_ACCENT};padding-left:14px;margin:28px 0 16px 0;'>"
-        f"<h3 style='color:{C_TEXT};font-size:18px;font-weight:700;margin:0;'>{title}</h3>"
-        f"{sub_html}</div>", unsafe_allow_html=True)
 
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_TEXT, icon: str = "") -> str:
-    delta_html = (
-        f"<div style='color:{color};font-size:12px;margin-top:4px;'>{delta}</div>"
-        if delta else ""
-    )
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     return (
-        f"<div style='{_card_css()}'>"
-        f"<div style='color:{C_TEXT3};font-size:11px;font-weight:600;text-transform:uppercase;"
-        f"letter-spacing:0.08em;'>{icon} {label}</div>"
-        f"<div style='color:{C_TEXT};font-size:26px;font-weight:800;margin-top:8px;'>{value}</div>"
-        f"{delta_html}</div>"
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
     )
 
-def _badge(text: str, color: str) -> str:
-    return (
-        f"<span style='background:{color}22;color:{color};border:1px solid {color}44;"
-        f"border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;'>{text}</span>"
-    )
 
-def _yn(val: bool) -> str:
-    return _badge("YES", C_HIGH) if val else _badge("NO", C_LOW)
+def _yn_badge(val: bool) -> str:
+    return badge("YES" if val else "NO", color=C_HIGH if val else C_LOW)
 
-# ── Section renderers ─────────────────────────────────────────────────────────
+
+# ── Hero KPIs ───────────────────────────────────────────────────────────────
 
 def _render_hero_kpis() -> None:
     try:
-        _section_header(
+        section_header(
             "Sustainability Dashboard",
-            "Real-time shipping ESG intelligence — IMO, EU ETS, and green fuel metrics",
+            subtitle="Real-time shipping ESG intelligence — IMO, EU ETS, and green fuel metrics",
         )
-        c1, c2, c3, c4, c5 = st.columns(5)
-        kpis = [
-            (c1, "Global Shipping CO₂", "812M t/yr", "▲ +1.2% YoY", C_LOW, "🌍"),
-            (c2, "Carbon Intensity (CII)", "8.9 gCO₂/t-nm", "▼ −4.1% vs 2022", C_HIGH, "📊"),
-            (c3, "Fleet IMO-2030 Ready", "23.4%", "Target: 100% by 2030", C_MOD, "⚓"),
-            (c4, "EU ETS Carbon Price", "€63/t CO₂", "▼ −8% MTD", C_MOD, "🇪🇺"),
-            (c5, "Green Fuel Adoption", "7.4%", "▲ +1.9pp YoY", C_HIGH, "⚡"),
-        ]
-        for col, label, value, delta, color, icon in kpis:
-            with col:
-                st.markdown(_kpi_card(label, value, delta, color, icon), unsafe_allow_html=True)
+        metric_card_row(
+            [
+                {"label": "Global Shipping CO₂",     "value": "812M t/yr",       "accent": C_LOW,
+                 "delta": "▲ +1.2% YoY", "delta_color": C_LOW},
+                {"label": "Carbon Intensity (CII)",  "value": "8.9 gCO₂/t-nm",   "accent": C_HIGH,
+                 "delta": "▼ −4.1% vs 2022", "delta_color": C_HIGH},
+                {"label": "Fleet IMO-2030 Ready",    "value": "23.4%",            "accent": C_MOD,
+                 "delta": "Target: 100% by 2030", "delta_color": C_TEXT2},
+                {"label": "EU ETS Carbon Price",     "value": "€63/t CO₂",        "accent": C_MOD,
+                 "delta": "▼ −8% MTD", "delta_color": C_HIGH},
+                {"label": "Green Fuel Adoption",     "value": "7.4%",              "accent": C_HIGH,
+                 "delta": "▲ +1.9pp YoY", "delta_color": C_HIGH},
+            ],
+            columns=5,
+        )
     except Exception:
         logger.exception("Hero KPIs render error")
         st.error("Could not render sustainability dashboard KPIs.")
 
 
+# ── CII compliance tracker ──────────────────────────────────────────────────
+
 def _render_cii_tracker() -> None:
     try:
-        _section_header(
+        section_header(
             "IMO 2030/2050 Compliance Tracker",
-            "CII ratings, EEOI, and eco-fleet progress for 12 major carriers",
+            subtitle="CII ratings, EEOI, and eco-fleet progress for 12 major carriers",
         )
-        header_cols = st.columns([2, 1, 1, 1, 1, 1, 3])
-        headers = ["CARRIER", "CII RATING", "EEOI", "ECO SHIPS %", "LNG DUAL-FUEL %", "ON TRACK 2030?", "KEY ACTIONS"]
-        for col, h in zip(header_cols, headers):
-            col.html(
-                f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-            )
+        rows = []
         for row in _CARRIERS:
-            cii_color = _CII_COLORS.get(row["cii"], C_TEXT2)
+            cii_color   = _CII_COLORS.get(row["cii"], C_TEXT2)
             track_color = C_HIGH if row["on_track"] else C_LOW
-            track_text  = "✔ Yes" if row["on_track"] else "✘ No"
-            eeoi_color  = C_HIGH if row["eeoi"] < 9.5 else (C_MOD if row["eeoi"] < 11.5 else C_LOW)
+            eeoi_color  = C_HIGH if row["eeoi"] < 9.5  else (C_MOD if row["eeoi"] < 11.5  else C_LOW)
             eco_color   = C_HIGH if row["eco_pct"] >= 28 else (C_MOD if row["eco_pct"] >= 18 else C_LOW)
-            r1, r2, r3, r4, r5, r6, r7 = st.columns([2, 1, 1, 1, 1, 1, 3])
-            r1.html(
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;"
-                f"padding:6px 0;'>{row['carrier']}</div>"
-            )
-            r2.html(
-                f"<div style='padding:6px 0;'>"
-                f"<span style='background:{cii_color}33;color:{cii_color};border:1px solid {cii_color}66;"
-                f"border-radius:4px;padding:2px 10px;font-size:13px;font-weight:800;'>"
-                f"{row['cii']}</span></div>"
-            )
-            r3.html(
-                f"<div style='color:{eeoi_color};font-size:13px;font-weight:600;padding:6px 0;'>"
-                f"{row['eeoi']}</div>"
-            )
-            r4.html(
-                f"<div style='color:{eco_color};font-size:13px;font-weight:600;padding:6px 0;'>"
-                f"{row['eco_pct']}%</div>"
-            )
-            r5.html(
-                f"<div style='color:{C_TEXT2};font-size:13px;padding:6px 0;'>{row['lng_pct']}%</div>"
-            )
-            r6.html(
-                f"<div style='color:{track_color};font-size:12px;font-weight:700;padding:6px 0;'>"
-                f"{track_text}</div>"
-            )
-            r7.html(
-                f"<div style='color:{C_TEXT2};font-size:12px;padding:6px 0;'>{row['actions']}</div>"
-            )
+            rows.append([
+                _sans(row["carrier"], color=C_TEXT, weight=700),
+                badge(row["cii"], color=cii_color),
+                _mono(f"{row['eeoi']:.1f}", color=eeoi_color),
+                _mono(f"{row['eco_pct']}%", color=eco_color),
+                _mono(f"{row['lng_pct']}%", color=C_TEXT2),
+                badge("Yes" if row["on_track"] else "No", color=track_color),
+                _sans(row["actions"], color=C_TEXT2),
+            ])
+        wsj_market_table(
+            headers=[
+                "Carrier", "CII", "EEOI", "Eco %",
+                "LNG Dual-Fuel %", "On Track 2030?", "Key Actions",
+            ],
+            rows=rows,
+        )
     except Exception:
         logger.exception("CII tracker render error")
         st.error("Could not render compliance tracker.")
 
 
+# ── Route carbon intensity ──────────────────────────────────────────────────
+
 def _render_route_carbon() -> None:
     try:
-        _section_header(
+        section_header(
             "Carbon Intensity by Route",
-            "CO₂ per TEU-km vs 2008 baseline and IMO 2030 target (−40% vs 2008)",
+            subtitle="CO₂ per TEU-km vs 2008 baseline and IMO 2030 target (−40% vs 2008)",
         )
-        hcols = st.columns([2.2, 2, 1.2, 1.2, 1.2, 1.2])
-        for col, h in zip(hcols, ["ROUTE", "VESSEL CLASS", "CO₂/TEU-KM (g)", "VS 2008", "VS IMO TARGET", "TREND"]):
-            col.html(
-                f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-            )
+        rows = []
         for row in _ROUTES:
             vs08_color  = C_HIGH if row["vs_2008"] <= -30 else (C_MOD if row["vs_2008"] <= -20 else C_LOW)
-            vsimo_color = C_HIGH if row["vs_imo"] <= 0 else (C_MOD if row["vs_imo"] <= 10 else C_LOW)
+            vsimo_color = C_HIGH if row["vs_imo"] <= 0   else (C_MOD if row["vs_imo"] <= 10  else C_LOW)
             trend_color = C_HIGH if row["trend"] == "Improving" else (C_MOD if row["trend"] == "Stable" else C_LOW)
-            r1, r2, r3, r4, r5, r6 = st.columns([2.2, 2, 1.2, 1.2, 1.2, 1.2])
-            r1.html(
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['route']}</div>"
-            )
-            r2.html(
-                f"<div style='color:{C_TEXT2};font-size:12px;padding:5px 0;'>{row['vessel']}</div>"
-            )
-            r3.html(
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['co2_teu_km']:.4f}</div>"
-            )
             sign08  = "+" if row["vs_2008"] > 0 else ""
-            signimo = "+" if row["vs_imo"] > 0 else ""
-            r4.html(
-                f"<div style='color:{vs08_color};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{sign08}{row['vs_2008']}%</div>"
-            )
-            r5.html(
-                f"<div style='color:{vsimo_color};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{signimo}{row['vs_imo']}%</div>"
-            )
-            r6.html(
-                f"<div style='color:{trend_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['trend']}</div>"
-            )
+            signimo = "+" if row["vs_imo"]  > 0 else ""
+            rows.append([
+                _sans(row["route"],  color=C_TEXT, weight=700),
+                _sans(row["vessel"], color=C_TEXT2),
+                _mono(f"{row['co2_teu_km']:.4f}", color=C_TEXT),
+                _mono(f"{sign08}{row['vs_2008']}%", color=vs08_color),
+                _mono(f"{signimo}{row['vs_imo']}%", color=vsimo_color),
+                badge(row["trend"], color=trend_color),
+            ])
+        wsj_market_table(
+            headers=[
+                "Route", "Vessel Class", "CO₂/TEU-km (g)",
+                "vs 2008", "vs IMO Target", "Trend",
+            ],
+            rows=rows,
+        )
     except Exception:
         logger.exception("Route carbon render error")
         st.error("Could not render carbon intensity by route.")
 
 
+# ── Green fuel transition ───────────────────────────────────────────────────
+
 def _render_green_fuel() -> None:
     try:
-        _section_header(
+        section_header(
             "Green Fuel Transition",
-            "Alternative fuel adoption, newbuild orderbook mix, cost premiums, and port infrastructure",
+            subtitle="Alternative fuel adoption, newbuild orderbook mix, cost premiums, and port infrastructure",
         )
         col_pie, col_bar = st.columns(2)
 
@@ -265,7 +235,7 @@ def _render_green_fuel() -> None:
             try:
                 labels  = ["VLSFO", "LNG", "Biodiesel", "Methanol", "Ammonia"]
                 values  = [92.6, 4.5, 2.0, 0.8, 0.1]
-                colors  = ["#6b6760", "#3572b0", "#2e9e6e", "#7c6eaf", "#4a90a4"]
+                colors  = [_FUEL_GREY, C_ACCENT, C_HIGH, _FUEL_PURPLE, _FUEL_TEAL]
                 fig_pie = go.Figure(go.Pie(
                     labels=labels, values=values, hole=0.55,
                     marker=dict(colors=colors, line=dict(color=C_BG, width=2)),
@@ -273,12 +243,10 @@ def _render_green_fuel() -> None:
                     textfont=dict(color=C_TEXT, size=11),
                     hovertemplate="<b>%{label}</b><br>Share: %{percent}<extra></extra>",
                 ))
-                fig_pie.update_layout(
+                apply_dark_layout(
+                    fig_pie,
                     title=dict(text="Current Fleet Fuel Mix", font=dict(color=C_TEXT, size=14), x=0.02),
-                    paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-                    font=dict(color=C_TEXT2),
-                    showlegend=False, margin=dict(t=50, b=20, l=20, r=20),
-                    height=300,
+                    showlegend=False, height=300,
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
             except Exception:
@@ -288,12 +256,12 @@ def _render_green_fuel() -> None:
         with col_bar:
             try:
                 vessel_classes = ["ULCVs", "VLCVs", "Panamaxes", "Feeders", "Bulk", "Tankers"]
-                conv    = [42, 38, 61, 88, 71, 65]
-                dual    = [58, 62, 39, 12, 29, 35]
+                conv = [42, 38, 61, 88, 71, 65]
+                dual = [58, 62, 39, 12, 29, 35]
                 fig_bar = go.Figure()
                 fig_bar.add_trace(go.Bar(
                     name="Conventional Fuel", x=vessel_classes, y=conv,
-                    marker_color="#6b6760",
+                    marker_color=_FUEL_GREY,
                     hovertemplate="<b>%{x}</b> — Conventional: %{y}%<extra></extra>",
                 ))
                 fig_bar.add_trace(go.Bar(
@@ -301,88 +269,69 @@ def _render_green_fuel() -> None:
                     marker_color=C_ACCENT,
                     hovertemplate="<b>%{x}</b> — Alt-Fuel: %{y}%<extra></extra>",
                 ))
-                fig_bar.update_layout(
+                apply_dark_layout(
+                    fig_bar,
                     title=dict(text="Newbuild Orderbook by Fuel Type (%)", font=dict(color=C_TEXT, size=14), x=0.02),
-                    barmode="stack", paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-                    font=dict(color=C_TEXT2), legend=dict(font=dict(color=C_TEXT2), bgcolor=C_CARD),
-                    xaxis=dict(gridcolor=C_BORDER, color=C_TEXT2),
-                    yaxis=dict(gridcolor=C_BORDER, color=C_TEXT2, ticksuffix="%"),
-                    margin=dict(t=50, b=20, l=40, r=20), height=300,
+                    barmode="stack", height=300,
+                    yaxis=dict(ticksuffix="%"),
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
             except Exception:
                 logger.exception("Fuel bar chart error")
                 st.warning("Newbuild orderbook chart unavailable.")
 
-        st.markdown(
-            f"<div style='{_card_css()}'>"
-            f"<div style='color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;'>Green Fuel Cost Premium vs VLSFO (per TEU)</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;'>"
-            f"<div style='text-align:center;'>"
-            f"<div style='color:{C_TEXT3};font-size:11px;text-transform:uppercase;'>LNG</div>"
-            f"<div style='color:{C_ACCENT};font-size:20px;font-weight:800;'>+$18–28</div>"
-            f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
-            f"<div style='text-align:center;'>"
-            f"<div style='color:{C_TEXT3};font-size:11px;text-transform:uppercase;'>Bio-Methanol</div>"
-            f"<div style='color:{C_MOD};font-size:20px;font-weight:800;'>+$42–61</div>"
-            f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
-            f"<div style='text-align:center;'>"
-            f"<div style='color:{C_TEXT3};font-size:11px;text-transform:uppercase;'>Green Ammonia</div>"
-            f"<div style='color:{C_LOW};font-size:20px;font-weight:800;'>+$90–140</div>"
-            f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
-            f"<div style='text-align:center;'>"
-            f"<div style='color:{C_TEXT3};font-size:11px;text-transform:uppercase;'>Green H₂</div>"
-            f"<div style='color:{C_LOW};font-size:20px;font-weight:800;'>+$110–180</div>"
-            f"<div style='color:{C_TEXT3};font-size:11px;'>per TEU Asia–EU</div></div>"
-            f"</div></div>", unsafe_allow_html=True)
+        # Cost premium row
+        metric_card_row(
+            [
+                {"label": "LNG",            "value": "+$18–28",   "accent": C_ACCENT,
+                 "sublabel": "per TEU Asia–EU"},
+                {"label": "Bio-Methanol",   "value": "+$42–61",   "accent": C_MOD,
+                 "sublabel": "per TEU Asia–EU"},
+                {"label": "Green Ammonia",  "value": "+$90–140",  "accent": C_LOW,
+                 "sublabel": "per TEU Asia–EU"},
+                {"label": "Green H₂",       "value": "+$110–180", "accent": C_LOW,
+                 "sublabel": "per TEU Asia–EU"},
+            ],
+            columns=4,
+        )
 
-        st.markdown(
-            f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
-            f"Port Green Fuel Infrastructure Readiness</div>", unsafe_allow_html=True)
-        hcols = st.columns([1.8, 1, 1.4, 1.2, 1.4])
-        for col, h in zip(hcols, ["PORT", "LNG STATIONS", "METHANOL TERMINALS", "AMMONIA READY", "GREEN SHORE POWER"]):
-            col.html(
-                f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-            )
+        # Port infrastructure table
+        section_header("Port Green Fuel Infrastructure Readiness")
+        rows = []
         for row in _PORT_INFRA:
             lng_color = C_HIGH if row["lng_stations"] >= 7 else (C_MOD if row["lng_stations"] >= 4 else C_LOW)
-            r1, r2, r3, r4, r5 = st.columns([1.8, 1, 1.4, 1.2, 1.4])
-            r1.html(
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['port']}</div>"
-            )
-            r2.html(
-                f"<div style='color:{lng_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"{row['lng_stations']}</div>"
-            )
-            r3.html(
-                f"<div style='color:{C_TEXT2};font-size:13px;padding:5px 0;'>"
-                f"{row['methanol_terminals']}</div>"
-            )
-            r4.html(f"<div style='padding:5px 0;'>{_yn(row['ammonia_ready'])}</div>")
-            r5.html(f"<div style='padding:5px 0;'>{_yn(row['green_shore_power'])}</div>")
+            rows.append([
+                _sans(row["port"], color=C_TEXT, weight=700),
+                _mono(str(row["lng_stations"]), color=lng_color),
+                _mono(str(row["methanol_terminals"]), color=C_TEXT2),
+                _yn_badge(row["ammonia_ready"]),
+                _yn_badge(row["green_shore_power"]),
+            ])
+        wsj_market_table(
+            headers=["Port", "LNG Stations", "Methanol Terminals", "Ammonia Ready", "Green Shore Power"],
+            rows=rows,
+        )
     except Exception:
         logger.exception("Green fuel section render error")
         st.error("Could not render green fuel transition section.")
 
 
+# ── EU ETS impact ───────────────────────────────────────────────────────────
+
 def _render_eu_ets() -> None:
     try:
-        _section_header(
+        section_header(
             "EU ETS Impact Analysis",
-            "Shipping entered EU Emissions Trading System Jan 2024 — cost exposure and compliance implications",
+            subtitle="Shipping entered EU Emissions Trading System Jan 2024 — cost exposure and compliance implications",
         )
-
         col_chart, col_calc = st.columns([3, 2])
 
         with col_chart:
             try:
                 months = [
-                    "Jan-23","Apr-23","Jul-23","Oct-23",
-                    "Jan-24","Apr-24","Jul-24","Oct-24",
-                    "Jan-25","Apr-25","Jul-25","Oct-25",
+                    "Jan-23", "Apr-23", "Jul-23", "Oct-23",
+                    "Jan-24", "Apr-24", "Jul-24", "Oct-24",
+                    "Jan-25", "Apr-25", "Jul-25", "Oct-25",
                     "Jan-26",
                 ]
                 prices = [93, 87, 91, 72, 58, 63, 67, 59, 62, 70, 65, 61, 63]
@@ -392,7 +341,7 @@ def _render_eu_ets() -> None:
                     line=dict(color=C_ACCENT, width=2),
                     marker=dict(size=5, color=C_ACCENT),
                     fill="tozeroy",
-                    fillcolor=f"rgba(53,114,176,0.1)",
+                    fillcolor="rgba(53,114,176,0.1)",
                     hovertemplate="<b>%{x}</b><br>€%{y}/tonne CO₂<extra></extra>",
                     name="EU ETS Price",
                 ))
@@ -402,14 +351,11 @@ def _render_eu_ets() -> None:
                     annotation_font=dict(color=C_MOD, size=11),
                     annotation_position="top right",
                 )
-                fig.update_layout(
+                apply_dark_layout(
+                    fig,
                     title=dict(text="EU Carbon Price (€/tonne CO₂)", font=dict(color=C_TEXT, size=14), x=0.02),
-                    paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-                    font=dict(color=C_TEXT2),
-                    xaxis=dict(gridcolor=C_BORDER, color=C_TEXT2),
-                    yaxis=dict(gridcolor=C_BORDER, color=C_TEXT2, tickprefix="€"),
-                    margin=dict(t=50, b=30, l=50, r=20), height=280,
-                    showlegend=False,
+                    showlegend=False, height=280,
+                    yaxis=dict(tickprefix="€"),
                 )
                 st.plotly_chart(fig, use_container_width=True)
             except Exception:
@@ -417,257 +363,199 @@ def _render_eu_ets() -> None:
                 st.warning("EU ETS price chart unavailable.")
 
         with col_calc:
-            st.markdown(
-                f"<div style='{_card_css()}'>"
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>"
-                f"ETS Cost Estimator</div>", unsafe_allow_html=True)
+            st.html(
+                f'<div style="color:{C_TEXT};font-size:13px;font-weight:700;'
+                f'margin-bottom:10px;">ETS Cost Estimator</div>'
+            )
             distance_nm  = st.number_input("Route distance (nm)", min_value=100, max_value=25000, value=11200, step=100)
             vessel_teu   = st.number_input("Vessel capacity (TEU)", min_value=500, max_value=24000, value=15000, step=500)
             load_factor  = st.slider("Load factor (%)", min_value=50, max_value=100, value=85)
             carbon_price = st.number_input("Carbon price (€/tonne)", min_value=20, max_value=150, value=63)
-
             try:
-                fuel_cons_mt   = (distance_nm / 10.0) * 0.14
-                co2_mt         = fuel_cons_mt * 3.114
-                ets_eligible   = co2_mt * 0.5
-                ets_cost_eur   = ets_eligible * carbon_price
-                teu_carried    = vessel_teu * (load_factor / 100)
-                cost_per_teu   = ets_cost_eur / teu_carried if teu_carried else 0
-                st.markdown(
-                    f"<div style='margin-top:10px;'>"
-                    f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
-                    f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
-                    f"<div style='color:{C_TEXT3};font-size:10px;'>Est. CO₂ emitted</div>"
-                    f"<div style='color:{C_TEXT};font-size:16px;font-weight:700;'>{co2_mt:.0f} t</div></div>"
-                    f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
-                    f"<div style='color:{C_TEXT3};font-size:10px;'>ETS-eligible (50%)</div>"
-                    f"<div style='color:{C_TEXT};font-size:16px;font-weight:700;'>{ets_eligible:.0f} t</div></div>"
-                    f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
-                    f"<div style='color:{C_TEXT3};font-size:10px;'>Total ETS cost</div>"
-                    f"<div style='color:{C_MOD};font-size:16px;font-weight:700;'>€{ets_cost_eur:,.0f}</div></div>"
-                    f"<div style='background:{C_SURFACE};border-radius:8px;padding:10px;'>"
-                    f"<div style='color:{C_TEXT3};font-size:10px;'>Cost per TEU</div>"
-                    f"<div style='color:{C_ACCENT};font-size:16px;font-weight:700;'>€{cost_per_teu:.1f}</div></div>"
-                    f"</div></div>", unsafe_allow_html=True)
+                fuel_cons_mt = (distance_nm / 10.0) * 0.14
+                co2_mt       = fuel_cons_mt * 3.114
+                ets_eligible = co2_mt * 0.5
+                ets_cost_eur = ets_eligible * carbon_price
+                teu_carried  = vessel_teu * (load_factor / 100)
+                cost_per_teu = ets_cost_eur / teu_carried if teu_carried else 0
+                metric_card_row(
+                    [
+                        {"label": "Est. CO₂ emitted",    "value": f"{co2_mt:.0f} t",      "accent": C_TEXT2},
+                        {"label": "ETS-eligible (50%)",  "value": f"{ets_eligible:.0f} t", "accent": C_TEXT2},
+                        {"label": "Total ETS cost",      "value": f"€{ets_cost_eur:,.0f}", "accent": C_MOD},
+                        {"label": "Cost per TEU",        "value": f"€{cost_per_teu:.1f}",  "accent": C_ACCENT},
+                    ],
+                    columns=2,
+                )
             except Exception:
                 logger.exception("ETS calculator error")
                 st.warning("Calculation error.")
 
-        st.markdown(
-            f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin:16px 0 8px 0;'>"
-            f"Carrier EU ETS Exposure Ranking</div>", unsafe_allow_html=True)
-        hcols = st.columns([2, 1.2, 1.4, 2])
-        for col, h in zip(hcols, ["CARRIER", "EU REVENUE %", "CARBON INTENSITY", "EST. ANNUAL ETS COST"]):
-            col.html(
-                f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-            )
+        # Exposure table
+        section_header("Carrier EU ETS Exposure Ranking")
         sorted_ets = sorted(_EU_EXPOSURE, key=lambda r: r["est_ets_cost_mUSD"], reverse=True)
+        rows = []
         for row in sorted_ets:
-            rev_color  = C_LOW if row["eu_rev_pct"] >= 40 else (C_MOD if row["eu_rev_pct"] >= 28 else C_HIGH)
-            cost_color = C_LOW if row["est_ets_cost_mUSD"] >= 400 else (C_MOD if row["est_ets_cost_mUSD"] >= 200 else C_HIGH)
-            r1, r2, r3, r4 = st.columns([2, 1.2, 1.4, 2])
-            r1.html(
-                f"<div style='color:{C_TEXT};font-size:13px;font-weight:600;padding:5px 0;'>"
-                f"{row['carrier']}</div>"
-            )
-            r2.html(
-                f"<div style='color:{rev_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"{row['eu_rev_pct']}%</div>"
-            )
-            r3.html(
-                f"<div style='color:{C_TEXT2};font-size:13px;padding:5px 0;'>"
-                f"{row['carbon_int']} gCO₂/t-nm</div>"
-            )
-            r4.html(
-                f"<div style='color:{cost_color};font-size:13px;font-weight:700;padding:5px 0;'>"
-                f"${row['est_ets_cost_mUSD']}M USD equiv.</div>"
-            )
+            rev_color  = C_LOW  if row["eu_rev_pct"] >= 40 else (C_MOD if row["eu_rev_pct"] >= 28 else C_HIGH)
+            cost_color = C_LOW  if row["est_ets_cost_mUSD"] >= 400 else (C_MOD if row["est_ets_cost_mUSD"] >= 200 else C_HIGH)
+            rows.append([
+                _sans(row["carrier"], color=C_TEXT, weight=700),
+                _mono(f"{row['eu_rev_pct']}%", color=rev_color),
+                _mono(f"{row['carbon_int']} gCO₂/t-nm", color=C_TEXT2),
+                _mono(f"${row['est_ets_cost_mUSD']}M USD", color=cost_color),
+            ])
+        wsj_market_table(
+            headers=["Carrier", "EU Revenue %", "Carbon Intensity", "Est. Annual ETS Cost"],
+            rows=rows,
+        )
     except Exception:
         logger.exception("EU ETS section render error")
         st.error("Could not render EU ETS section.")
 
 
+# ── ESG scores ──────────────────────────────────────────────────────────────
+
+def _score_color(s: int) -> str:
+    return C_HIGH if s >= 70 else (C_MOD if s >= 55 else C_LOW)
+
+
 def _render_esg_scores() -> None:
     try:
-        _section_header(
+        section_header(
             "ESG Score Comparison",
-            "Aggregated ESG ratings, CDP scores, and DJSI inclusion for listed shipping companies",
+            subtitle="Aggregated ESG ratings, CDP scores, and DJSI inclusion for listed shipping companies",
         )
-        hcols = st.columns([2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1])
-        for col, h in zip(hcols, ["COMPANY", "OVERALL", "ENV", "SOCIAL", "GOV", "CDP", "DJSI", "CARBON DISCLOSURE"]):
-            col.html(
-                f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-            )
+        rows = []
         for row in sorted(_ESG_SCORES, key=lambda r: r["overall"], reverse=True):
-            def score_color(s: int) -> str:
-                return C_HIGH if s >= 70 else (C_MOD if s >= 55 else C_LOW)
-            r1, r2, r3, r4, r5, r6, r7, r8 = st.columns([2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1])
-            r1.html(
-                f"<div style='color:{C_TEXT};font-size:12px;font-weight:600;padding:5px 0;'>"
-                f"{row['company']}</div>"
-            )
-            r2.html(
-                f"<div style='color:{score_color(row['overall'])};font-size:13px;"
-                f"font-weight:800;padding:5px 0;'>{row['overall']}</div>"
-            )
-            r3.html(
-                f"<div style='color:{score_color(row['env'])};font-size:12px;padding:5px 0;'>"
-                f"{row['env']}</div>"
-            )
-            r4.html(
-                f"<div style='color:{score_color(row['social'])};font-size:12px;padding:5px 0;'>"
-                f"{row['social']}</div>"
-            )
-            r5.html(
-                f"<div style='color:{score_color(row['gov'])};font-size:12px;padding:5px 0;'>"
-                f"{row['gov']}</div>"
-            )
-            cdp_color = C_HIGH if row["cdp"].startswith("A") else (C_MOD if row["cdp"].startswith("B") else C_LOW)
-            r6.html(
-                f"<div style='color:{cdp_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['cdp']}</div>"
-            )
-            r7.html(f"<div style='padding:5px 0;'>{_yn(row['djsi'])}</div>")
+            cdp_color  = C_HIGH if row["cdp"].startswith("A")  else (C_MOD if row["cdp"].startswith("B") else C_LOW)
             cbds_color = C_HIGH if row["cbds"] >= 75 else (C_MOD if row["cbds"] >= 55 else C_LOW)
-            r8.html(
-                f"<div style='color:{cbds_color};font-size:12px;font-weight:700;padding:5px 0;'>"
-                f"{row['cbds']}/100</div>"
-            )
+            rows.append([
+                _sans(row["company"], color=C_TEXT, weight=700),
+                _mono(str(row["overall"]), color=_score_color(row["overall"])),
+                _mono(str(row["env"]),     color=_score_color(row["env"])),
+                _mono(str(row["social"]),  color=_score_color(row["social"])),
+                _mono(str(row["gov"]),     color=_score_color(row["gov"])),
+                badge(row["cdp"], color=cdp_color),
+                _yn_badge(row["djsi"]),
+                _mono(f"{row['cbds']}/100", color=cbds_color),
+            ])
+        wsj_market_table(
+            headers=["Company", "Overall", "Env", "Social", "Gov", "CDP", "DJSI", "Carbon Disclosure"],
+            rows=rows,
+        )
     except Exception:
         logger.exception("ESG scores render error")
         st.error("Could not render ESG score comparison.")
 
 
+# ── Speed optimization ──────────────────────────────────────────────────────
+
 def _render_speed_optimization() -> None:
     try:
-        _section_header(
+        section_header(
             "Speed Optimization — Slow Steaming Analysis",
-            "Reducing speed 10% cuts fuel consumption ~27% but reduces effective capacity; full trade-off breakdown",
+            subtitle="Reducing speed 10% cuts fuel consumption ~27% but reduces effective capacity; full trade-off breakdown",
         )
-
         col_tbl, col_chart = st.columns([2, 3])
 
         with col_tbl:
-            hcols = st.columns([1, 1, 1.4, 1.2, 1])
-            for col, h in zip(hcols, ["SPEED (kn)", "FUEL (t/day)", "OPEX ($/day)", "CAPACITY %", "CO₂ (t/day)"]):
-                col.html(
-                    f"<div style='color:{C_TEXT3};font-size:10px;font-weight:700;"
-                    f"text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px;"
-                    f"border-bottom:1px solid {C_BORDER};'>{h}</div>"
-                )
-            base_fuel = _SPEED_TABLE[0]["fuel_tpd"]
+            rows = []
             for row in _SPEED_TABLE:
-                pct_saving = (1 - row["fuel_tpd"] / base_fuel) * 100
-                spd_color  = C_HIGH if row["speed_kn"] <= 16 else (C_MOD if row["speed_kn"] <= 20 else C_LOW)
-                r1, r2, r3, r4, r5 = st.columns([1, 1, 1.4, 1.2, 1])
-                r1.html(
-                    f"<div style='color:{spd_color};font-size:12px;font-weight:700;padding:4px 0;'>"
-                    f"{row['speed_kn']}</div>"
-                )
-                r2.html(
-                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['fuel_tpd']}</div>"
-                )
+                spd_color  = C_HIGH if row["speed_kn"]       <= 16 else (C_MOD if row["speed_kn"]       <= 20 else C_LOW)
                 opex_color = C_HIGH if row["daily_opex_usd"] < 40000 else (C_MOD if row["daily_opex_usd"] < 70000 else C_LOW)
-                r3.html(
-                    f"<div style='color:{opex_color};font-size:12px;font-weight:600;padding:4px 0;'>"
-                    f"${row['daily_opex_usd']:,}</div>"
-                )
-                cap_color = C_HIGH if row["capacity_util_pct"] >= 90 else (C_MOD if row["capacity_util_pct"] >= 75 else C_LOW)
-                r4.html(
-                    f"<div style='color:{cap_color};font-size:12px;padding:4px 0;'>"
-                    f"{row['capacity_util_pct']}%</div>"
-                )
-                r5.html(
-                    f"<div style='color:{C_TEXT2};font-size:12px;padding:4px 0;'>{row['co2_tpd']}</div>"
-                )
+                cap_color  = C_HIGH if row["capacity_util_pct"] >= 90 else (C_MOD if row["capacity_util_pct"] >= 75 else C_LOW)
+                rows.append([
+                    _mono(str(row["speed_kn"]), color=spd_color),
+                    _mono(str(row["fuel_tpd"]), color=C_TEXT2),
+                    _mono(f"${row['daily_opex_usd']:,}", color=opex_color),
+                    _mono(f"{row['capacity_util_pct']}%", color=cap_color),
+                    _mono(str(row["co2_tpd"]), color=C_TEXT2),
+                ])
+            wsj_market_table(
+                headers=["Speed (kn)", "Fuel (t/day)", "Opex ($/day)", "Capacity %", "CO₂ (t/day)"],
+                rows=rows,
+            )
 
         with col_chart:
             try:
-                speeds  = [r["speed_kn"] for r in _SPEED_TABLE]
-                fuels   = [r["fuel_tpd"] for r in _SPEED_TABLE]
-                opex    = [r["daily_opex_usd"] / 1000 for r in _SPEED_TABLE]
-                co2s    = [r["co2_tpd"] for r in _SPEED_TABLE]
+                speeds = [r["speed_kn"] for r in _SPEED_TABLE]
+                fuels  = [r["fuel_tpd"] for r in _SPEED_TABLE]
+                opex   = [r["daily_opex_usd"] / 1000 for r in _SPEED_TABLE]
+                co2s   = [r["co2_tpd"] for r in _SPEED_TABLE]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
                     x=speeds, y=fuels, name="Fuel (t/day)",
                     mode="lines+markers",
-                    line=dict(color=C_ACCENT, width=2),
-                    marker=dict(size=6),
+                    line=dict(color=C_ACCENT, width=2), marker=dict(size=6),
                     hovertemplate="Speed: %{x}kn<br>Fuel: %{y}t/day<extra></extra>",
                 ))
                 fig.add_trace(go.Scatter(
                     x=speeds, y=opex, name="Opex ($k/day)",
                     mode="lines+markers",
-                    line=dict(color=C_MOD, width=2, dash="dot"),
-                    marker=dict(size=6),
+                    line=dict(color=C_MOD, width=2, dash="dot"), marker=dict(size=6),
                     yaxis="y2",
                     hovertemplate="Speed: %{x}kn<br>Opex: $%{y:.0f}k/day<extra></extra>",
                 ))
                 fig.add_trace(go.Scatter(
                     x=speeds, y=co2s, name="CO₂ (t/day)",
                     mode="lines+markers",
-                    line=dict(color=C_LOW, width=2, dash="dash"),
-                    marker=dict(size=6),
+                    line=dict(color=C_LOW, width=2, dash="dash"), marker=dict(size=6),
                     hovertemplate="Speed: %{x}kn<br>CO₂: %{y}t/day<extra></extra>",
                 ))
-                fig.update_layout(
+                apply_dark_layout(
+                    fig,
                     title=dict(text="Speed vs Fuel / Opex / CO₂ Trade-off", font=dict(color=C_TEXT, size=14), x=0.02),
-                    paper_bgcolor=C_CARD, plot_bgcolor=C_CARD,
-                    font=dict(color=C_TEXT2),
-                    xaxis=dict(title="Speed (kn)", gridcolor=C_BORDER, color=C_TEXT2, autorange="reversed"),
-                    yaxis=dict(title="Fuel / CO₂", gridcolor=C_BORDER, color=C_TEXT2),
+                    height=340,
+                    xaxis=dict(title="Speed (kn)", autorange="reversed"),
+                    yaxis=dict(title="Fuel / CO₂"),
                     yaxis2=dict(title="Opex ($k)", overlaying="y", side="right", color=C_MOD, showgrid=False),
-                    legend=dict(font=dict(color=C_TEXT2), bgcolor=C_CARD, orientation="h", y=-0.2),
-                    margin=dict(t=50, b=60, l=50, r=60), height=340,
+                    legend=dict(orientation="h", y=-0.2),
                 )
                 st.plotly_chart(fig, use_container_width=True)
             except Exception:
                 logger.exception("Speed chart error")
                 st.warning("Speed optimization chart unavailable.")
 
-        st.markdown(
-            f"<div style='{_card_css()}'>"
-            f"<div style='color:{C_TEXT};font-size:13px;font-weight:700;margin-bottom:10px;'>Key Slow-Steaming Insights</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:12px;'>"
-            f"<div style='background:{C_SURFACE};border-radius:8px;padding:12px;border-left:3px solid {C_HIGH};'>"
-            f"<div style='color:{C_HIGH};font-size:16px;font-weight:800;'>−27%</div>"
-            f"<div style='color:{C_TEXT2};font-size:12px;'>Fuel saving from 10% speed reduction (cubic law)</div></div>"
-            f"<div style='background:{C_SURFACE};border-radius:8px;padding:12px;border-left:3px solid {C_MOD};'>"
-            f"<div style='color:{C_MOD};font-size:16px;font-weight:800;'>−8–12%</div>"
-            f"<div style='color:{C_TEXT2};font-size:12px;'>Effective capacity reduction due to longer voyage times</div></div>"
-            f"<div style='background:{C_SURFACE};border-radius:8px;padding:12px;border-left:3px solid {C_ACCENT};'>"
-            f"<div style='color:{C_ACCENT};font-size:16px;font-weight:800;'>16–18 kn</div>"
-            f"<div style='color:{C_TEXT2};font-size:12px;'>Optimal slow-steam band balancing cost and capacity</div></div>"
-            f"</div></div>", unsafe_allow_html=True)
+        # Insight cards
+        metric_card_row(
+            [
+                {"label": "Fuel saving (10% speed cut)",  "value": "−27%",    "accent": C_HIGH,
+                 "sublabel": "cubic law of fuel vs speed"},
+                {"label": "Effective capacity loss",       "value": "−8–12%",  "accent": C_MOD,
+                 "sublabel": "due to longer voyage times"},
+                {"label": "Optimal slow-steam band",       "value": "16–18 kn", "accent": C_ACCENT,
+                 "sublabel": "balances cost and capacity"},
+            ],
+            columns=3,
+        )
     except Exception:
         logger.exception("Speed optimization render error")
         st.error("Could not render speed optimization section.")
 
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+# ── Main render ─────────────────────────────────────────────────────────────
 
 def render(port_results=None, insights=None) -> None:
     """Render the full Sustainability & ESG intelligence tab."""
     try:
-        st.markdown(
-            f"<div style='background:linear-gradient(135deg,{C_CARD} 0%,{C_BG} 100%);"
-            f"border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:24px;'>"
-            f"<h2 style='color:{C_TEXT};font-size:22px;font-weight:800;margin:0 0 6px 0;'>"
-            f"Shipping ESG &amp; Sustainability Intelligence</h2>"
-            f"<p style='color:{C_TEXT2};font-size:13px;margin:0;'>"
-            f"IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization"
-            f"</p></div>", unsafe_allow_html=True)
+        page_header(
+            title="Shipping ESG & Sustainability Intelligence",
+            subtitle="IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization",
+            icon="🌱",
+        )
     except Exception:
         logger.exception("Tab header render error")
 
     _render_hero_kpis()
+    section_divider("IMO Compliance")
     _render_cii_tracker()
+    section_divider("Route Carbon Intensity")
     _render_route_carbon()
+    section_divider("Green Fuel Transition")
     _render_green_fuel()
+    section_divider("EU ETS Impact")
     _render_eu_ets()
+    section_divider("ESG Scores")
     _render_esg_scores()
+    section_divider("Speed Optimization")
     _render_speed_optimization()

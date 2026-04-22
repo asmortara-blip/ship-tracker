@@ -1,48 +1,56 @@
-"""tab_cycle.py — Shipping Market Cycle Positioning tab.
+"""tab_cycle.py - Shipping Market Cycle Positioning tab.
 
 Identifies where we are in the shipping cycle and surfaces
 cycle-based trade recommendations.
 
 Sections:
-  1. Cycle Dashboard          — current phase with large text + historical context
-  2. Cycle Clock              — pure-CSS clock face showing cycle position
-  3. Cycle Indicator Table    — 10 indicators with cycle signal + composite score
-  4. Historical Cycle Map     — BDI 2000-2025 with shaded phase regions
-  5. Cycle-Based Trade Recs   — what to buy/sell in each phase
+  1. Cycle Dashboard          - current phase with large text + historical context
+  2. Cycle Clock              - pure-CSS clock face showing cycle position
+  3. Cycle Indicator Table    - 10 indicators with cycle signal + composite score
+  4. Historical Cycle Map     - BDI 2000-2025 with shaded phase regions
+  5. Cycle-Based Trade Recs   - what to buy/sell in each phase
 """
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from loguru import logger
 
-# ── Design constants ─────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    wsj_market_table,
+)
 
-# Phase palette
-_PHASE_COLOR = {
-    "TROUGH":      "#c0392b",
-    "RECOVERY":    "#3572b0",
-    "EXPANSION":   "#2e9e6e",
-    "PEAK":        "#c9962b",
+# ── Domain-specific phase palette (semantic, kept local to this tab) ────────
+_PHASE_COLOR: dict[str, str] = {
+    "TROUGH":      C_LOW,
+    "RECOVERY":    C_ACCENT,
+    "EXPANSION":   C_HIGH,
+    "PEAK":        C_MOD,
     "CONTRACTION": "#f97316",
 }
 
-_PHASE_DESC = {
+_PHASE_DESC: dict[str, str] = {
     "TROUGH":      "Freight rates at cycle lows. Prime accumulation window for quality names.",
     "RECOVERY":    "Rates recovering. Demand exceeding supply. Earnings upgrades incoming.",
     "EXPANSION":   "Sustained rate strength. Orderbook filling. Maximise long exposure.",
@@ -50,17 +58,16 @@ _PHASE_DESC = {
     "CONTRACTION": "Rates declining. Oversupply emerging. Reduce longs, add hedges.",
 }
 
-_PHASE_HIST = {
-    "TROUGH":      "Last seen: Dec 2015 – Mar 2016 (BDI 290). Avg duration: 4–8 months.",
-    "RECOVERY":    "Last seen: Apr 2020 – Dec 2020. Avg duration: 6–12 months.",
-    "EXPANSION":   "Last seen: Jan 2021 – Aug 2021. Avg duration: 8–18 months.",
-    "PEAK":        "Last seen: Oct 2021 (BDI 5,650). Avg duration: 2–6 months.",
-    "CONTRACTION": "Last seen: Sep 2022 – Mar 2023. Avg duration: 6–12 months.",
+_PHASE_HIST: dict[str, str] = {
+    "TROUGH":      "Last seen: Dec 2015 - Mar 2016 (BDI 290). Avg duration: 4-8 months.",
+    "RECOVERY":    "Last seen: Apr 2020 - Dec 2020. Avg duration: 6-12 months.",
+    "EXPANSION":   "Last seen: Jan 2021 - Aug 2021. Avg duration: 8-18 months.",
+    "PEAK":        "Last seen: Oct 2021 (BDI 5,650). Avg duration: 2-6 months.",
+    "CONTRACTION": "Last seen: Sep 2022 - Mar 2023. Avg duration: 6-12 months.",
 }
 
-# Clock-face angles: 12 o'clock = PEAK (0°), clockwise
-# PEAK=0°, CONTRACTION=90°, TROUGH=180°, RECOVERY=270°
-_PHASE_ANGLE = {
+# Clock-face angles: 12 o'clock = PEAK (0 deg), clockwise.
+_PHASE_ANGLE: dict[str, int] = {
     "PEAK":        0,
     "CONTRACTION": 90,
     "TROUGH":      180,
@@ -68,16 +75,27 @@ _PHASE_ANGLE = {
     "EXPANSION":   315,
 }
 
-_CHART_LAYOUT = dict(
-    paper_bgcolor=C_SURFACE,
-    plot_bgcolor=C_SURFACE,
-    font=dict(family="monospace", color=C_TEXT2, size=11),
-    margin=dict(l=48, r=24, t=40, b=40),
+_ALL_PHASES: tuple[str, ...] = (
+    "TROUGH", "RECOVERY", "EXPANSION", "PEAK", "CONTRACTION",
+)
+
+# ── Data sources (provenance pills) ──────────────────────────────────────────
+_CYCLE_SOURCE = DataSource.modeled(
+    "Cycle Phase Engine",
+    notes="Composite indicator model - refresh from processing.cycle_engine",
+)
+_INDICATOR_SOURCE = DataSource.modeled(
+    "Cycle Indicators",
+    notes="Fixed fixture data - replace with live feed when wired",
+)
+_BDI_DEMO_SOURCE = DataSource.demo("BDI 2000-2025 (synthetic)")
+_RECS_SOURCE = DataSource.modeled(
+    "Cycle Playbook",
+    notes="Hand-curated trade recommendations per cycle phase",
 )
 
 
 # ── Current cycle state (deterministic, replace with live engine when wired) ──
-
 def _current_phase() -> str:
     return "RECOVERY"
 
@@ -88,12 +106,11 @@ def _cycle_position_score() -> float:
 
 
 # ── Cycle indicator data ──────────────────────────────────────────────────────
-
 def _build_indicators() -> pd.DataFrame:
     rows = [
-        ("BDI Trend",              "+18% MoM",   "RECOVERY",    0.15, 72),
+        ("BDI Trend",              "+18% MoM",    "RECOVERY",    0.15, 72),
         ("Fleet Utilization",      "87.4%",       "EXPANSION",   0.12, 80),
-        ("Newbuild Orders",        "12% of fleet","CONTRACTION", 0.10, 35),
+        ("Newbuild Orders",        "12% of fleet", "CONTRACTION", 0.10, 35),
         ("Scrapping Rate",         "0.8% pa",     "TROUGH",      0.08, 20),
         ("Freight Rate Momentum",  "+11% QoQ",    "RECOVERY",    0.14, 68),
         ("Carrier Profitability",  "EBITDA +22%", "EXPANSION",   0.12, 78),
@@ -108,16 +125,13 @@ def _build_indicators() -> pd.DataFrame:
     )
 
 
-# ── BDI historical data ───────────────────────────────────────────────────────
-
+# ── BDI historical data (synthetic — DEMO badge is mandatory) ─────────────────
 def _build_bdi_history() -> pd.DataFrame:
     rng = np.random.default_rng(99)
-    years = np.arange(2000, 2026)
-    # Approximate annual BDI peaks for realism
     bdi_anchor = {
         2000: 1200, 2001: 900,  2002: 1100, 2003: 1800, 2004: 4500,
-        2005: 3000, 2006: 3200, 2007: 7200, 2008: 11793,2009: 1770,
-        2010: 2758,2011: 1549, 2012: 700,  2013: 1200, 2014: 1000,
+        2005: 3000, 2006: 3200, 2007: 7200, 2008: 11793, 2009: 1770,
+        2010: 2758, 2011: 1549, 2012: 700,  2013: 1200, 2014: 1000,
         2015: 550,  2016: 290,  2017: 1300, 2018: 1250, 2019: 2100,
         2020: 1400, 2021: 5650, 2022: 2100, 2023: 1500, 2024: 1800,
         2025: 2100,
@@ -131,8 +145,8 @@ def _build_bdi_history() -> pd.DataFrame:
     return pd.DataFrame({"Date": dates, "BDI": bdi_vals})
 
 
-_CYCLE_PHASES_HIST = [
-    # (start, end, phase_label, color_key)
+_CYCLE_PHASES_HIST: tuple[tuple[str, str, str, str], ...] = (
+    # (start, end, phase_label, rgba_fill)
     ("2000-01", "2003-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
     ("2004-01", "2008-09", "EXPANSION",   "rgba(46,158,110,0.15)"),
     ("2008-10", "2009-06", "CONTRACTION", "rgba(249,115,22,0.18)"),
@@ -145,35 +159,51 @@ _CYCLE_PHASES_HIST = [
     ("2021-11", "2021-12", "PEAK",        "rgba(201,150,43,0.18)"),
     ("2022-01", "2023-06", "CONTRACTION", "rgba(249,115,22,0.18)"),
     ("2023-07", "2025-12", "RECOVERY",    "rgba(53,114,176,0.15)"),
-]
+)
 
 
-# ── Section renderers ─────────────────────────────────────────────────────────
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<span style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;margin-left:10px;">'
-        f'{subtitle}</span>'
-        if subtitle else ""
+# ── Cell formatters for WSJ market table ────────────────────────────────────
+def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">'
+        f'{value}</span>'
     )
-    st.markdown(
-        f'<div style="margin:24px 0 10px;padding-bottom:8px;'
-        f'border-bottom:1px solid {C_BORDER};">'
-        f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:14px;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:1px;">{title}</span>'
-        f'{sub}</div>', unsafe_allow_html=True)
 
 
+def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _score_bar(score: float) -> str:
+    pct = max(0, min(100, score))
+    color = C_HIGH if pct >= 65 else (C_MOD if pct >= 40 else C_LOW)
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:8px;">'
+        f'<span style="display:inline-block;background:{C_CARD};border-radius:4px;'
+        f'height:6px;width:60px;overflow:hidden;">'
+        f'<span style="display:inline-block;background:{color};'
+        f'width:{pct:.0f}%;height:6px;border-radius:4px;"></span></span>'
+        f'<span style="color:{C_TEXT2};font-size:11px;font-family:var(--mono);">'
+        f'{pct:.0f}</span>'
+        f'</span>'
+    )
+
+
+# ── Section renderers ────────────────────────────────────────────────────────
 def _render_cycle_dashboard(phase: str) -> None:
     try:
-        color   = _PHASE_COLOR.get(phase, C_ACCENT)
-        desc    = _PHASE_DESC.get(phase, "")
-        hist    = _PHASE_HIST.get(phase, "")
+        color = _PHASE_COLOR.get(phase, C_ACCENT)
+        desc  = _PHASE_DESC.get(phase, "")
+        hist  = _PHASE_HIST.get(phase, "")
 
-        # Context pills for each phase
-        all_phases = ["TROUGH", "RECOVERY", "EXPANSION", "PEAK", "CONTRACTION"]
+        st.html(live_data_badge(_CYCLE_SOURCE))
+
         pills_html = ""
-        for p in all_phases:
+        for p in _ALL_PHASES:
             pc     = _PHASE_COLOR.get(p, C_TEXT3)
             active = p == phase
             bg     = f"{pc}30" if active else "transparent"
@@ -186,16 +216,18 @@ def _render_cycle_dashboard(phase: str) -> None:
                 f'{p}</span>'
             )
 
-        html = (
+        st.html(
             f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
             f'border-left:5px solid {color};border-radius:6px;padding:24px 28px;'
             f'margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;text-transform:uppercase;'
-            f'letter-spacing:2px;margin-bottom:8px;">Current Cycle Phase</div>'
+            f'<div style="color:{C_TEXT3};font-family:var(--sans);font-size:11px;'
+            f'text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">'
+            f'Current Cycle Phase</div>'
             f'<div style="color:{color};font-size:52px;font-weight:900;'
-            f'font-family:JetBrains Mono,monospace;letter-spacing:2px;line-height:1;">{phase}</div>'
-            f'<div style="color:{C_TEXT2};font-family:\'Libre Franklin\',sans-serif;font-size:13px;margin-top:12px;'
-            f'max-width:600px;">{desc}</div>'
+            f'font-family:var(--mono);letter-spacing:2px;line-height:1;">'
+            f'{phase}</div>'
+            f'<div style="color:{C_TEXT2};font-family:var(--sans);'
+            f'font-size:13px;margin-top:12px;max-width:600px;">{desc}</div>'
             f'<div style="color:{C_TEXT3};font-size:11px;margin-top:8px;">'
             f'{hist}</div>'
             f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;">'
@@ -203,208 +235,155 @@ def _render_cycle_dashboard(phase: str) -> None:
             f'</div>'
             f'</div>'
         )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Cycle dashboard unavailable: {exc}")
+    except Exception:
+        logger.exception("Cycle dashboard render failed")
+        st.warning("Cycle dashboard unavailable.")
 
 
 def _render_cycle_clock(phase: str, position_score: float) -> None:
-    """Pure-CSS clock face. No JS. Uses positioned div elements."""
+    """Pure-SVG clock face paired with a legend column."""
     try:
         color   = _PHASE_COLOR.get(phase, C_ACCENT)
         angle_d = _PHASE_ANGLE.get(phase, 0)
         angle_r = math.radians(angle_d)
 
-        # Hand tip coordinates (clock radius 90px from center 110,110)
-        cx, cy    = 110, 110
-        hand_len  = 78
-        tip_x     = cx + hand_len * math.sin(angle_r)
-        tip_y     = cy - hand_len * math.cos(angle_r)
+        cx, cy   = 110, 110
+        hand_len = 78
+        tip_x    = cx + hand_len * math.sin(angle_r)
+        tip_y    = cy - hand_len * math.cos(angle_r)
 
-        # Phase label positions (outer ring, radius ~96)
-        label_radius = 96
+        label_radius = 102
         phase_labels = {
-            "PEAK":        (0,   "#c9962b"),
-            "CONTRACTION": (90,  "#f97316"),
-            "TROUGH":      (180, "#c0392b"),
-            "RECOVERY":    (270, "#3572b0"),
+            "PEAK":        (0,   _PHASE_COLOR["PEAK"]),
+            "CONTRACTION": (90,  _PHASE_COLOR["CONTRACTION"]),
+            "TROUGH":      (180, _PHASE_COLOR["TROUGH"]),
+            "RECOVERY":    (270, _PHASE_COLOR["RECOVERY"]),
         }
-        labels_html = ""
+        labels_svg = ""
         for lbl, (ang, lc) in phase_labels.items():
-            ar   = math.radians(ang)
-            lx   = cx + label_radius * math.sin(ar)
-            ly   = cy - label_radius * math.cos(ar)
-            fw   = "700" if lbl == phase else "400"
-            op   = "1" if lbl == phase else "0.5"
-            size = "10" if lbl != phase else "11"
-            labels_html += (
-                f'<div style="position:absolute;left:{lx:.1f}px;top:{ly:.1f}px;'
-                f'transform:translate(-50%,-50%);color:{lc};font-size:{size}px;'
-                f'font-weight:{fw};opacity:{op};letter-spacing:0.5px;'
-                f'text-align:center;white-space:nowrap;">{lbl}</div>'
+            ar = math.radians(ang)
+            lx = cx + label_radius * math.sin(ar)
+            ly = cy - label_radius * math.cos(ar)
+            fw = "700" if lbl == phase else "400"
+            op = "1" if lbl == phase else "0.55"
+            sz = "11" if lbl == phase else "10"
+            labels_svg += (
+                f'<text x="{lx:.1f}" y="{ly:.1f}" fill="{lc}" opacity="{op}" '
+                f'font-size="{sz}" font-weight="{fw}" font-family="var(--sans)" '
+                f'text-anchor="middle" dominant-baseline="middle" '
+                f'letter-spacing="0.5">{lbl}</text>'
             )
 
-        # Tick marks (12 ticks for months)
-        ticks_html = ""
-        for i in range(12):
-            ta    = math.radians(i * 30)
-            r_in  = 68
-            r_out = 76
-            tx1   = cx + r_in  * math.sin(ta)
-            ty1   = cy - r_in  * math.cos(ta)
-            tx2   = cx + r_out * math.sin(ta)
-            ty2   = cy - r_out * math.cos(ta)
-            ticks_html += (
-                f'<div style="position:absolute;left:{tx1:.1f}px;top:{ty1:.1f}px;'
-                f'width:{abs(tx2-tx1)+1:.1f}px;height:2px;background:{C_BORDER};'
-                f'transform-origin:0 50%;'
-                f'transform:rotate({i*30}deg);"></div>'
-            )
-
-        html = (
-            f'<div style="display:flex;align-items:center;gap:32px;'
-            f'flex-wrap:wrap;margin-bottom:20px;">'
-            # Clock face
-            f'<div style="position:relative;width:220px;height:220px;'
-            f'flex-shrink:0;">'
-            # Outer ring
-            f'<div style="position:absolute;left:0;top:0;width:220px;height:220px;'
-            f'border-radius:50%;border:2px solid {C_BORDER};'
-            f'background:{C_CARD};"></div>'
-            # Inner ring
-            f'<div style="position:absolute;left:30px;top:30px;width:160px;height:160px;'
-            f'border-radius:50%;border:1px solid {C_BORDER};"></div>'
-            # Tick marks (SVG line via thin divs — kept simple)
-            f'<svg style="position:absolute;left:0;top:0;" width="220" height="220">'
-            + "".join(
-                f'<line x1="{cx + 68*math.sin(math.radians(i*30)):.1f}" '
-                f'y1="{cy - 68*math.cos(math.radians(i*30)):.1f}" '
-                f'x2="{cx + 78*math.sin(math.radians(i*30)):.1f}" '
-                f'y2="{cy - 78*math.cos(math.radians(i*30)):.1f}" '
-                f'stroke="{C_BORDER}" stroke-width="1.5"/>'
-                for i in range(12)
-            )
-            # Clock hand (SVG line)
-            + f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.1f}" y2="{tip_y:.1f}" '
-            f'stroke="{color}" stroke-width="3" stroke-linecap="round"/>'
-            # Center dot
-            + f'<circle cx="{cx}" cy="{cy}" r="5" fill="{color}"/>'
-            f'</svg>'
-            # Phase labels
-            f'{labels_html}'
-            f'</div>'
-            # Legend text
-            f'<div>'
-            f'<div style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:11px;text-transform:uppercase;'
-            f'letter-spacing:1.5px;margin-bottom:8px;">Cycle Clock</div>'
-            f'<div style="color:{color};font-size:26px;font-weight:800;'
-            f'font-family:JetBrains Mono,monospace;">{phase}</div>'
-            f'<div style="color:{C_TEXT3};font-size:12px;margin-top:6px;">'
-            f'12 o\'clock = PEAK &nbsp;|&nbsp; 6 o\'clock = TROUGH</div>'
-            f'<div style="color:{C_TEXT3};font-size:12px;margin-top:4px;">'
-            f'Cycle position score: '
-            f'<span style="color:{C_TEXT2};font-family:JetBrains Mono,monospace;">'
-            f'{position_score:.0%}</span> of peak</div>'
-            f'<div style="margin-top:14px;background:{C_CARD};border-radius:6px;'
-            f'height:8px;width:180px;overflow:hidden;">'
-            f'<div style="background:{color};width:{position_score*100:.0f}%;'
-            f'height:100%;border-radius:6px;"></div>'
-            f'</div>'
-            f'<div style="color:{C_TEXT3};font-size:10px;margin-top:4px;">'
-            f'TROUGH &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
-            f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;PEAK</div>'
-            f'</div>'
-            f'</div>'
+        tick_lines = "".join(
+            f'<line x1="{cx + 68*math.sin(math.radians(i*30)):.1f}" '
+            f'y1="{cy - 68*math.cos(math.radians(i*30)):.1f}" '
+            f'x2="{cx + 78*math.sin(math.radians(i*30)):.1f}" '
+            f'y2="{cy - 78*math.cos(math.radians(i*30)):.1f}" '
+            f'stroke="{C_BORDER}" stroke-width="1.5"/>'
+            for i in range(12)
         )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Cycle clock unavailable: {exc}")
+
+        clock_svg = (
+            f'<svg width="240" height="240" viewBox="0 0 220 220" '
+            f'xmlns="http://www.w3.org/2000/svg">'
+            f'<circle cx="{cx}" cy="{cy}" r="108" fill="{C_CARD}" '
+            f'stroke="{C_BORDER}" stroke-width="2"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="80" fill="none" '
+            f'stroke="{C_BORDER}" stroke-width="1"/>'
+            f'{tick_lines}'
+            f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.1f}" y2="{tip_y:.1f}" '
+            f'stroke="{color}" stroke-width="3" stroke-linecap="round"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="5" fill="{color}"/>'
+            f'{labels_svg}'
+            f'</svg>'
+        )
+
+        legend_html = (
+            f'<span class="sub-section-header" '
+            f'style="display:block;margin-bottom:8px;">Cycle Clock</span>'
+            f'<span style="display:block;color:{color};font-size:26px;font-weight:800;'
+            f'font-family:var(--mono);">{phase}</span>'
+            f'<span style="display:block;color:{C_TEXT3};font-size:12px;margin-top:6px;">'
+            f'12 o\'clock = PEAK &nbsp;|&nbsp; 6 o\'clock = TROUGH</span>'
+            f'<span style="display:block;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
+            f'Cycle position score: '
+            f'<span style="color:{C_TEXT2};font-family:var(--mono);">'
+            f'{position_score:.0%}</span> of peak</span>'
+            f'<span style="display:block;margin-top:14px;background:{C_CARD};'
+            f'border-radius:6px;height:8px;width:180px;overflow:hidden;">'
+            f'<span style="display:block;background:{color};'
+            f'width:{position_score*100:.0f}%;height:100%;border-radius:6px;">'
+            f'</span></span>'
+            f'<span style="display:flex;color:{C_TEXT3};font-size:10px;'
+            f'margin-top:4px;justify-content:space-between;width:180px;">'
+            f'<span>TROUGH</span><span>PEAK</span></span>'
+        )
+
+        st.html(live_data_badge(_CYCLE_SOURCE))
+        left, right = st.columns([1, 2])
+        with left:
+            st.html(clock_svg)
+        with right:
+            st.html(legend_html)
+    except Exception:
+        logger.exception("Cycle clock render failed")
+        st.warning("Cycle clock unavailable.")
 
 
 def _render_indicator_table(df: pd.DataFrame) -> None:
     try:
         composite = (df["Score"] * df["Weight"]).sum() / df["Weight"].sum()
-
-        def sig_badge(signal: str) -> str:
-            color = _PHASE_COLOR.get(signal, C_TEXT3)
-            return (
-                f'<span style="background:{color}22;color:{color};'
-                f'padding:2px 9px;border-radius:4px;font-size:10px;'
-                f'font-weight:600;letter-spacing:0.5px;">{signal}</span>'
-            )
-
-        def score_bar(score: float) -> str:
-            pct   = max(0, min(100, score))
-            color = C_HIGH if pct >= 65 else (C_MOD if pct >= 40 else C_LOW)
-            return (
-                f'<div style="display:flex;align-items:center;gap:8px;">'
-                f'<div style="background:{C_CARD};border-radius:4px;height:6px;'
-                f'width:60px;overflow:hidden;">'
-                f'<div style="background:{color};width:{pct:.0f}%;height:100%;'
-                f'border-radius:4px;"></div></div>'
-                f'<span style="color:{C_TEXT2};font-size:11px;font-family:JetBrains Mono,monospace;">'
-                f'{pct:.0f}</span>'
-                f'</div>'
-            )
-
-        rows_html = ""
-        for i, (_, row) in enumerate(df.iterrows()):
-            bg = C_CARD if i % 2 == 0 else "transparent"
-            rows_html += (
-                f'<tr style="background:{bg};border-bottom:1px solid {C_BORDER};">'
-                f'<td style="padding:10px 12px;color:{C_TEXT};font-size:12px;">'
-                f'{row["Indicator"]}</td>'
-                f'<td style="padding:10px 12px;color:{C_TEXT2};font-size:12px;'
-                f'font-family:JetBrains Mono,monospace;">{row["Current Reading"]}</td>'
-                f'<td style="padding:10px 12px;">{sig_badge(row["Cycle Signal"])}</td>'
-                f'<td style="padding:10px 12px;color:{C_TEXT3};font-size:11px;'
-                f'font-family:JetBrains Mono,monospace;text-align:right;">'
-                f'{row["Weight"]*100:.0f}%</td>'
-                f'<td style="padding:10px 12px;">{score_bar(row["Score"])}</td>'
-                f'</tr>'
-            )
-
         comp_color = C_HIGH if composite >= 65 else (C_MOD if composite >= 40 else C_LOW)
-        th = (
-            f'color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-            f'letter-spacing:1px;padding:10px 12px;border-bottom:1px solid {C_BORDER};'
-            f'font-weight:600;'
-        )
 
-        html = (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;overflow:hidden;margin-bottom:20px;">'
-            f'<div style="padding:12px 16px;background:{C_CARD};'
-            f'border-bottom:1px solid {C_BORDER};display:flex;'
-            f'justify-content:space-between;align-items:center;">'
-            f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:13px;font-weight:600;">'
-            f'Cycle Indicator Scorecard</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;">'
-            f'Composite score: <span style="color:{comp_color};font-family:JetBrains Mono,monospace;'
-            f'font-weight:700;">{composite:.1f}</span>/100</span>'
-            f'</div>'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr style="background:{C_CARD};">'
-            f'<th style="{th}text-align:left;">Indicator</th>'
-            f'<th style="{th}text-align:left;">Current Reading</th>'
-            f'<th style="{th}text-align:left;">Cycle Signal</th>'
-            f'<th style="{th}text-align:right;">Weight</th>'
-            f'<th style="{th}text-align:left;">Score</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
-            f'</div>'
+        metric_card_row(
+            [
+                {
+                    "label": "Composite Score",
+                    "value": f"{composite:.1f}/100",
+                    "accent": comp_color,
+                    "sublabel": "Weighted average of 10 indicators",
+                },
+                {
+                    "label": "Indicators Tracked",
+                    "value": f"{len(df)}",
+                    "accent": C_ACCENT,
+                    "sublabel": "Supply, demand, price, credit",
+                },
+                {
+                    "label": "Dominant Signal",
+                    "value": df["Cycle Signal"].mode().iloc[0],
+                    "accent": _PHASE_COLOR.get(df["Cycle Signal"].mode().iloc[0], C_ACCENT),
+                    "sublabel": "Most-frequent cycle read",
+                },
+            ],
+            columns=3,
         )
-        st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Indicator table unavailable: {exc}")
+        st.html("<div style='height:12px;'></div>")
+        st.html(live_data_badge(_INDICATOR_SOURCE))
+
+        headers = ["Indicator", "Current Reading", "Cycle Signal", "Weight", "Score"]
+        rows = []
+        for _, row in df.iterrows():
+            signal = row["Cycle Signal"]
+            rows.append([
+                _sans(row["Indicator"], color=C_TEXT, weight=600),
+                _mono(row["Current Reading"], color=C_TEXT2, weight=500),
+                badge(signal, color=_PHASE_COLOR.get(signal, C_TEXT3)),
+                _mono(f"{row['Weight']*100:.0f}%", color=C_TEXT3, weight=500),
+                _score_bar(row["Score"]),
+            ])
+        wsj_market_table(headers, rows)
+    except Exception:
+        logger.exception("Indicator table render failed")
+        st.warning("Indicator table unavailable.")
 
 
 def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
     try:
+        st.html(live_data_badge(_BDI_DEMO_SOURCE))
+
         fig = go.Figure()
 
-        # Shaded phase regions
         for start_s, end_s, label, rgba in _CYCLE_PHASES_HIST:
             try:
                 fig.add_vrect(
@@ -418,9 +397,8 @@ def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
                     annotation_font_color=C_TEXT3,
                 )
             except Exception:
-                pass
+                logger.debug("vrect failed for %s - %s", start_s, end_s)
 
-        # BDI line
         fig.add_trace(go.Scatter(
             x=bdi_df["Date"].astype(str),
             y=bdi_df["BDI"],
@@ -429,7 +407,6 @@ def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
             line=dict(color=C_ACCENT, width=2),
         ))
 
-        # Key event markers
         events = [
             ("2008-05-01", 11793, "2008 Peak\n11,793"),
             ("2016-02-01",   290, "2016 Trough\n290"),
@@ -452,41 +429,29 @@ def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
                     borderwidth=1,
                 )
             except Exception:
-                pass
+                logger.debug("annotation failed for %s", date_s)
 
-        fig.update_layout(
-            **_CHART_LAYOUT,
-            title=dict(
-                text="Baltic Dry Index 2000-2025 — Cycle Phases",
-                font=dict(color=C_TEXT, size=13),
-                x=0,
-            ),
-            xaxis=dict(
-                title="",
-                gridcolor=C_BORDER,
-                color=C_TEXT2,
-                showline=False,
-            ),
-            yaxis=dict(
-                title="BDI",
-                gridcolor=C_BORDER,
-                color=C_TEXT2,
-                zeroline=False,
-            ),
-            showlegend=False,
+        apply_dark_layout(
+            fig,
+            title="Baltic Dry Index 2000-2025 - Cycle Phases",
             height=380,
+            showlegend=False,
+            xaxis=dict(title=""),
+            yaxis=dict(title="BDI", zeroline=False),
         )
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        st.warning(f"Historical cycle map unavailable: {exc}")
+        st.plotly_chart(fig, use_container_width=True, key="cycle_historical_bdi")
+    except Exception:
+        logger.exception("Historical cycle map render failed")
+        st.warning("Historical cycle map unavailable.")
 
 
 def _render_trade_recommendations(current_phase: str) -> None:
     try:
+        st.html(live_data_badge(_RECS_SOURCE))
+
         recs = {
             "RECOVERY": {
                 "action":  "BUY",
-                "color":   C_HIGH,
                 "summary": "Accumulate quality carriers on dips. BDI momentum turning.",
                 "buys": [
                     ("ZIM",  "Container", "Spot rate leverage, strong FCF"),
@@ -503,7 +468,6 @@ def _render_trade_recommendations(current_phase: str) -> None:
             },
             "EXPANSION": {
                 "action":  "HOLD / ADD",
-                "color":   "#2e9e6e",
                 "summary": "Maximum long exposure. Rates running, earnings being upgraded.",
                 "buys": [
                     ("ZIM",  "Container", "Maximize position size"),
@@ -518,11 +482,10 @@ def _render_trade_recommendations(current_phase: str) -> None:
             },
             "PEAK": {
                 "action":  "REDUCE / SELL",
-                "color":   C_MOD,
                 "summary": "Rates peak. Newbuilds ordered. Begin reducing exposure systematically.",
                 "buys":  [],
                 "sells": [
-                    ("ZIM",  "Container", "Sell half — rate cycle turning"),
+                    ("ZIM",  "Container", "Sell half - rate cycle turning"),
                     ("SBLK", "Bulker",    "Trim into strength"),
                     ("GOGL", "Bulker",    "High leverage cuts both ways"),
                     ("FRO",  "Tanker",    "Tankers peak earlier"),
@@ -532,7 +495,6 @@ def _render_trade_recommendations(current_phase: str) -> None:
             },
             "CONTRACTION": {
                 "action":  "SHORT / HEDGE",
-                "color":   "#f97316",
                 "summary": "Rates declining. Oversupply building. Protect capital aggressively.",
                 "buys":  [],
                 "sells": [
@@ -545,62 +507,60 @@ def _render_trade_recommendations(current_phase: str) -> None:
             },
             "TROUGH": {
                 "action":  "ACCUMULATE",
-                "color":   C_LOW,
                 "summary": "Generational entry. Buy quality with stops. Patience required.",
                 "buys": [
                     ("MATX", "Container", "Bulletproof balance sheet"),
                     ("ZIM",  "Container", "Buy in tranches with stops at -10%"),
-                    ("GNK",  "Bulker",    "Accumulate slowly — dry bulk first"),
+                    ("GNK",  "Bulker",    "Accumulate slowly - dry bulk first"),
                     ("FLNG", "LNG",       "LNG resilient through cycle"),
                 ],
                 "sells": [
-                    ("HAFN", "Tanker",    "Weakest balance sheet — exit"),
+                    ("HAFN", "Tanker",    "Weakest balance sheet - exit"),
                 ],
                 "options": "Sell ZIM/MATX puts to get paid to wait for entry.",
             },
         }
 
-        all_phases = ["TROUGH", "RECOVERY", "EXPANSION", "PEAK", "CONTRACTION"]
-
-        for phase in all_phases:
+        for phase in _ALL_PHASES:
             rec   = recs.get(phase, {})
             color = _PHASE_COLOR.get(phase, C_ACCENT)
             is_current = (phase == current_phase)
-            border_style = f"border:2px solid {color};" if is_current else f"border:1px solid {C_BORDER};"
+            border_style = (
+                f"border:2px solid {color};"
+                if is_current else f"border:1px solid {C_BORDER};"
+            )
             opacity = "1" if is_current else "0.6"
-            badge = (
+            current_pill = (
                 f'<span style="background:{color}33;color:{color};padding:2px 10px;'
                 f'border-radius:6px;font-size:10px;font-weight:700;margin-left:10px;">'
                 f'CURRENT</span>'
                 if is_current else ""
             )
 
-            buys_html = ""
+            action_rows = []
             for ticker, sector, reason in rec.get("buys", []):
-                buys_html += (
+                action_rows.append(
                     f'<div style="display:flex;align-items:center;gap:10px;'
                     f'padding:6px 0;border-bottom:1px solid {C_BORDER};">'
                     f'<span style="background:{C_HIGH}22;color:{C_HIGH};'
                     f'padding:2px 8px;border-radius:4px;font-size:11px;'
                     f'font-weight:700;min-width:44px;text-align:center;">BUY</span>'
                     f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:JetBrains Mono,monospace;min-width:44px;">{ticker}</span>'
+                    f'font-family:var(--mono);min-width:44px;">{ticker}</span>'
                     f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
                     f'{sector}</span>'
                     f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
                     f'</div>'
                 )
-
-            sells_html = ""
             for ticker, sector, reason in rec.get("sells", []):
-                sells_html += (
+                action_rows.append(
                     f'<div style="display:flex;align-items:center;gap:10px;'
                     f'padding:6px 0;border-bottom:1px solid {C_BORDER};">'
                     f'<span style="background:{C_LOW}22;color:{C_LOW};'
                     f'padding:2px 8px;border-radius:4px;font-size:11px;'
                     f'font-weight:700;min-width:44px;text-align:center;">SELL</span>'
                     f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:JetBrains Mono,monospace;min-width:44px;">{ticker}</span>'
+                    f'font-family:var(--mono);min-width:44px;">{ticker}</span>'
                     f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
                     f'{sector}</span>'
                     f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
@@ -608,7 +568,7 @@ def _render_trade_recommendations(current_phase: str) -> None:
                 )
 
             opts = rec.get("options", "")
-            opts_html = (
+            opts_block = (
                 f'<div style="margin-top:10px;padding:10px;background:{C_CARD};'
                 f'border-radius:6px;border-left:3px solid {C_ACCENT};">'
                 f'<span style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
@@ -621,94 +581,144 @@ def _render_trade_recommendations(current_phase: str) -> None:
             action_label = rec.get("action", phase)
             summary      = rec.get("summary", "")
 
-            html = (
+            st.html(
                 f'<div style="{border_style}border-radius:6px;padding:16px 18px;'
                 f'margin-bottom:14px;background:{C_SURFACE};opacity:{opacity};">'
                 f'<div style="display:flex;align-items:center;gap:8px;'
                 f'margin-bottom:10px;">'
                 f'<span style="color:{color};font-size:15px;font-weight:800;'
                 f'letter-spacing:1px;">{phase}</span>'
-                f'{badge}'
+                f'{current_pill}'
                 f'<span style="margin-left:auto;background:{color}22;color:{color};'
                 f'padding:3px 12px;border-radius:6px;font-size:11px;font-weight:700;">'
                 f'{action_label}</span>'
                 f'</div>'
-                f'<div style="color:{C_TEXT2};font-family:\'Libre Franklin\',sans-serif;font-size:12px;margin-bottom:12px;">'
-                f'{summary}</div>'
-                f'{buys_html}'
-                f'{sells_html}'
-                f'{opts_html}'
+                f'<div style="color:{C_TEXT2};font-family:var(--sans);'
+                f'font-size:12px;margin-bottom:12px;">{summary}</div>'
+                f'{"".join(action_rows)}'
+                f'{opts_block}'
                 f'</div>'
             )
-            st.markdown(html, unsafe_allow_html=True)
-    except Exception as exc:
-        st.warning(f"Trade recommendations unavailable: {exc}")
+    except Exception:
+        logger.exception("Trade recommendations render failed")
+        st.warning("Trade recommendations unavailable.")
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
-
-def render(macro_data=None, freight_data=None, insights=None, stock_data=None):
+def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -> None:
     """Render the Shipping Market Cycle Positioning tab."""
     try:
-        st.markdown(
-            f'<div style="padding:4px 0 18px;">'
-            f'<span style="color:{C_TEXT};font-family:\'Libre Baskerville\',serif;font-size:18px;font-weight:800;'
-            f'letter-spacing:0.5px;">Shipping Cycle Positioning</span>'
-            f'<span style="color:{C_TEXT3};font-family:\'Libre Franklin\',sans-serif;font-size:12px;margin-left:12px;">'
-            f'~7-year cycle analysis &amp; trade recommendations</span>'
-            f'</div>', unsafe_allow_html=True)
-    except Exception:
-        st.subheader("Shipping Cycle Positioning")
-
-    try:
-        phase    = _current_phase()
+        phase     = _current_phase()
         pos_score = _cycle_position_score()
     except Exception:
-        phase    = "RECOVERY"
-        pos_score = 0.35
+        logger.exception("Failed to resolve current cycle phase")
+        phase, pos_score = "RECOVERY", 0.35
+
+    current_color = _PHASE_COLOR.get(phase, C_ACCENT)
+
+    page_header(
+        title="Shipping Cycle Positioning",
+        subtitle="~7-year cycle analysis and trade recommendations",
+        badge_text=phase,
+        badge_color=current_color,
+    )
+
+    # Hero KPI strip summarising the current cycle read
+    try:
+        metric_card_row(
+            [
+                {
+                    "label": "Current Phase",
+                    "value": phase,
+                    "accent": current_color,
+                    "sublabel": _PHASE_HIST.get(phase, ""),
+                },
+                {
+                    "label": "Cycle Position",
+                    "value": f"{pos_score:.0%}",
+                    "accent": current_color,
+                    "sublabel": "0% = trough, 100% = peak",
+                },
+                {
+                    "label": "Next Likely Phase",
+                    "value": _next_phase(phase),
+                    "accent": _PHASE_COLOR.get(_next_phase(phase), C_ACCENT),
+                    "sublabel": "Based on typical ordering",
+                },
+                {
+                    "label": "Playbook",
+                    "value": "Accumulate",
+                    "accent": C_HIGH,
+                    "sublabel": "Quality names on dips",
+                },
+            ],
+            columns=4,
+        )
+    except Exception:
+        logger.exception("Hero metrics render failed")
 
     # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
     try:
-        _section_header("1. Cycle Dashboard", "Current phase with historical context")
+        section_header(
+            "Cycle Dashboard",
+            "Current phase with historical context",
+        )
         _render_cycle_dashboard(phase)
-    except Exception as exc:
-        st.warning(f"Section 1 error: {exc}")
+    except Exception:
+        logger.exception("Section 1 render failed")
+        st.warning("Cycle dashboard section unavailable.")
 
     # ── 2. Cycle Clock ────────────────────────────────────────────────────────
     try:
-        _section_header("2. Cycle Clock", "Pure-CSS clock face — 12 o'clock = PEAK, 6 o'clock = TROUGH")
+        section_header(
+            "Cycle Clock",
+            "12 o'clock = PEAK, 6 o'clock = TROUGH",
+        )
         _render_cycle_clock(phase, pos_score)
-    except Exception as exc:
-        st.warning(f"Section 2 error: {exc}")
+    except Exception:
+        logger.exception("Section 2 render failed")
+        st.warning("Cycle clock section unavailable.")
 
     # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
     try:
-        _section_header(
-            "3. Cycle Indicator Scorecard",
-            "10 indicators — current reading, cycle signal, composite score",
+        section_header(
+            "Cycle Indicator Scorecard",
+            "10 indicators - current reading, cycle signal, composite score",
         )
         ind_df = _build_indicators()
         _render_indicator_table(ind_df)
-    except Exception as exc:
-        st.warning(f"Section 3 error: {exc}")
+    except Exception:
+        logger.exception("Section 3 render failed")
+        st.warning("Cycle indicator section unavailable.")
 
     # ── 4. Historical Cycle Map ───────────────────────────────────────────────
     try:
-        _section_header(
-            "4. Historical Cycle Map",
-            "BDI 2000-2025 with cycle phase regions — key events marked",
+        section_header(
+            "Historical Cycle Map",
+            "BDI 2000-2025 with cycle phase regions - key events marked",
         )
         bdi_df = _build_bdi_history()
         _render_historical_cycle_map(bdi_df)
-    except Exception as exc:
-        st.warning(f"Section 4 error: {exc}")
+    except Exception:
+        logger.exception("Section 4 render failed")
+        st.warning("Historical cycle map section unavailable.")
 
     # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
     try:
-        _section_header(
-            "5. Cycle-Based Trade Recommendations",
-            "What to buy / sell in each phase — current phase highlighted",
+        section_header(
+            "Cycle-Based Trade Recommendations",
+            "What to buy / sell in each phase - current phase highlighted",
         )
         _render_trade_recommendations(phase)
-    except Exception as exc:
-        st.warning(f"Section 5 error: {exc}")
+    except Exception:
+        logger.exception("Section 5 render failed")
+        st.warning("Trade recommendations section unavailable.")
+
+
+def _next_phase(phase: str) -> str:
+    """Return the canonical next phase in the cycle ordering."""
+    order = ["TROUGH", "RECOVERY", "EXPANSION", "PEAK", "CONTRACTION"]
+    try:
+        return order[(order.index(phase) + 1) % len(order)]
+    except ValueError:
+        return "RECOVERY"

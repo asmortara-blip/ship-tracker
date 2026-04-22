@@ -1,46 +1,115 @@
 """tab_bellwethers.py — WSJ-style Trade Bellwether Indicators & Earnings Calendar.
 
-Displays:
-  1. Composite bellwether score with editorial narrative
-  2. Individual indicator breakdown table
-  3. Yield curve analysis with shipping implications
-  4. Upcoming shipping earnings calendar
+Sections:
+  1. Page header
+  2. Composite bellwether KPI strip
+  3. Indicator breakdown table
+  4. Yield curve chart + implication callout + spread KPIs
+  5. Upcoming shipping earnings calendar
 """
 from __future__ import annotations
-
-from datetime import datetime, timezone
 
 import streamlit as st
 from loguru import logger
 
-# ── WSJ Palette ──────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_RULE    = "rgba(232,230,225,0.12)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from data.quality import DataSource
+from ui.styles import (
+    C_ACCENT,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
 
 
-def _rgba(h: str, a: float) -> str:
-    try:
-        h2 = h.lstrip("#")
-        r, g, b = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-        return f"rgba({r},{g},{b},{a})"
-    except Exception:
-        return f"rgba(255,255,255,{a})"
-
-
-def _score_color(s: float) -> str:
-    if s >= 0.65: return C_HIGH
-    if s >= 0.45: return C_MOD
+# ── Domain colour mappings ─────────────────────────────────────────────────
+# Score → semantic palette. Kept local because "bellwether score" is
+# domain-specific; the palette constants live in ``ui/styles.py``.
+def _score_color(score: float) -> str:
+    if score >= 0.65:
+        return C_HIGH
+    if score >= 0.45:
+        return C_MOD
     return C_LOW
 
+
+def _composite_label(score: float) -> str:
+    if score >= 0.65:
+        return "Bullish signals dominate leading indicators"
+    if score >= 0.45:
+        return "Mixed signals warrant cautious positioning"
+    return "Bearish undertones in economic bellwethers"
+
+
+def _spread_color(spread_val: float) -> str:
+    if spread_val < 0:
+        return C_LOW
+    if spread_val < 0.5:
+        return C_MOD
+    return C_HIGH
+
+
+def _urgency_color(days: int) -> str:
+    if days <= 7:
+        return C_LOW
+    if days <= 30:
+        return C_MOD
+    return C_TEXT2
+
+
+def _regime_from_label(label: str) -> str:
+    """Normalise composite_label to a short badge label."""
+    low = (label or "").lower()
+    if "bull" in low or "expansion" in low or "growth" in low:
+        return "BULLISH"
+    if "bear" in low or "contraction" in low:
+        return "BEARISH"
+    return "MIXED"
+
+
+# ── Cell formatters for WSJ market tables ──────────────────────────────────
+def _mono(value: str, color: str = C_TEXT, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+# ── Data-source declarations ───────────────────────────────────────────────
+# Bellwether indicators are sourced from FRED macro data; the earnings
+# calendar is a hand-curated schedule.
+_FRED_SRC = DataSource.cached(
+    "FRED Macro",
+    age_hours=6.0,
+    url="https://fred.stlouisfed.org",
+    sla_hours=24.0,
+    notes="Yield curve, PMI, housing, sentiment, trade balance",
+)
+_EARNINGS_SRC = DataSource.scraped(
+    "Earnings Calendar",
+    url="https://www.nasdaq.com/market-activity/earnings",
+    notes="Curated schedule for tracked shipping companies",
+)
+
+
+# ── Public entry point ─────────────────────────────────────────────────────
 
 def render(macro_data=None, **kwargs) -> None:
     """Render the Trade Bellwethers dashboard."""
@@ -56,255 +125,191 @@ def render(macro_data=None, **kwargs) -> None:
 
     macro_data = macro_data or {}
 
-    # ── 1. Composite Bellwether Score ────────────────────────────────────────
+    # ── 1. Page header ─────────────────────────────────────────────────────
+    page_header(
+        title="Trade Bellwether Index",
+        subtitle="Composite leading indicator for global shipping demand",
+        badge_text="LEADING",
+        badge_color=C_ACCENT,
+    )
+
+    # ── 2. Composite bellwether score (KPI strip + editorial narrative) ────
     bell = compute_bellwether_score(macro_data)
     score = bell["composite_score"]
     label = bell["composite_label"]
     sc = _score_color(score)
 
-    st.markdown(f"""
-    <div style="margin-bottom:24px">
-        <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px">
-            <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1.3rem;
-                        font-weight:700;color:{C_TEXT}">Trade Bellwether Index</div>
-            <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
-                        color:{C_TEXT3};margin-top:2px">
-                Composite leading indicator for global shipping demand</div>
-        </div>
+    metric_card_row(
+        [
+            {
+                "label":    "Composite Score",
+                "value":    f"{score:.0%}",
+                "accent":   sc,
+                "sublabel": label.upper(),
+            },
+            {
+                "label":    "Regime",
+                "value":    _regime_from_label(label),
+                "accent":   sc,
+                "sublabel": "Derived from composite",
+            },
+            {
+                "label":    "Indicators Tracked",
+                "value":    f"{len(bell.get('indicators', {}))}",
+                "accent":   C_ACCENT,
+                "sublabel": "Leading macro series",
+            },
+        ],
+        columns=3,
+    )
+    st.html(live_data_badge(_FRED_SRC))
 
-        <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">
-            <!-- Score box -->
-            <div style="border:1px solid {C_RULE};border-top:2px solid {sc};
-                        border-radius:0 0 6px 6px;padding:20px 28px;background:{C_CARD};
-                        text-align:center;min-width:160px">
-                <div style="font-family:JetBrains Mono,monospace;font-size:2.4rem;
-                            font-weight:700;color:{sc};line-height:1">{score:.0%}</div>
-                <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;
-                            font-weight:700;color:{C_TEXT3};text-transform:uppercase;
-                            letter-spacing:0.06em;margin-top:4px">Composite Score</div>
-                <div style="margin-top:8px">
-                    <span style="background:{_rgba(sc,0.08)};color:{sc};
-                                 border:1px solid {_rgba(sc,0.2)};
-                                 padding:3px 10px;border-radius:3px;font-size:0.7rem;
-                                 font-weight:700;font-family:'Libre Franklin',sans-serif">
-                        {label.upper()}</span>
-                </div>
-            </div>
+    # Editorial narrative (insight card pattern)
+    st.markdown(
+        insight_card_html(
+            title=_composite_label(score),
+            score=score,
+            action=_regime_from_label(label),
+            rationale=bell.get("narrative", "Narrative unavailable."),
+            category="BELLWETHER",
+        ),
+        unsafe_allow_html=True,
+    )
 
-            <!-- Narrative -->
-            <div style="flex:1;min-width:280px">
-                <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1.05rem;
-                            font-weight:700;color:{C_TEXT};line-height:1.3;margin-bottom:8px">
-                    {'Bullish signals dominate leading indicators' if score >= 0.65 else
-                     ('Mixed signals warrant cautious positioning' if score >= 0.45 else
-                      'Bearish undertones in economic bellwethers')}
-                </div>
-                <div style="font-family:'Libre Franklin',sans-serif;font-size:0.86rem;
-                            color:{C_TEXT2};line-height:1.65">
-                    {bell.get('narrative', 'Narrative unavailable.')}
-                </div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── 2. Indicator Breakdown ───────────────────────────────────────────────
+    # ── 3. Indicator breakdown ─────────────────────────────────────────────
     indicators = bell.get("indicators", {})
     if indicators:
-        st.markdown(f"""
-        <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:24px">
-            <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
-                        font-weight:700;color:{C_TEXT}">Indicator Breakdown</div>
-        </div>
-        """, unsafe_allow_html=True)
+        section_header(
+            "Indicator Breakdown",
+            subtitle="Component scores driving the composite reading",
+        )
 
-        # WSJ table
-        hdr = "<tr>"
-        for h in ["Indicator", "Reading", "Score", "Signal"]:
-            align = "left" if h == "Indicator" else "right"
-            hdr += f'<th style="text-align:{align};font-family:Libre Franklin,sans-serif;font-size:0.64rem;font-weight:700;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;padding:6px 12px;border-bottom:2px solid {C_TEXT}">{h}</th>'
-        hdr += "</tr>"
-
-        tbody = ""
+        rows = []
         for key, ind in indicators.items():
             raw = ind.get("raw")
-            raw_str = f'{raw:.2f}' if raw is not None else "--"
+            raw_str = f"{raw:.2f}" if raw is not None else "--"
             unit = ind.get("unit", "")
             if unit:
-                raw_str += f" {unit}"
+                raw_str = f"{raw_str} {unit}"
             ind_score = ind.get("score", 0.5)
             ind_color = _score_color(ind_score)
             interp = ind.get("interpretation", "")
-
-            # Score bar
             pct = int(ind_score * 100)
-            bar = f"""
-            <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
-                <div style="width:60px;height:3px;background:{_rgba(C_TEXT,0.06)};border-radius:2px;overflow:hidden">
-                    <div style="height:100%;width:{pct}%;background:{_rgba(ind_color,0.6)};border-radius:2px"></div>
-                </div>
-                <span style="font-family:JetBrains Mono,monospace;font-size:0.78rem;
-                             font-weight:700;color:{ind_color};min-width:32px;text-align:right">{pct}%</span>
-            </div>
-            """
 
-            tbody += f"""
-            <tr>
-                <td style="font-family:Libre Franklin,sans-serif;font-size:0.82rem;font-weight:600;
-                           color:{C_TEXT};padding:10px 12px;border-bottom:1px solid {C_RULE}">
-                    {ind.get('label', key)}</td>
-                <td style="text-align:right;font-family:JetBrains Mono,monospace;font-size:0.82rem;
-                           color:{C_TEXT2};padding:10px 12px;border-bottom:1px solid {C_RULE}">{raw_str}</td>
-                <td style="text-align:right;padding:10px 12px;border-bottom:1px solid {C_RULE}">{bar}</td>
-                <td style="text-align:right;font-family:Libre Franklin,sans-serif;font-size:0.78rem;
-                           color:{ind_color};padding:10px 12px;border-bottom:1px solid {C_RULE}">{interp}</td>
-            </tr>
-            """
+            rows.append([
+                _sans(ind.get("label", key), color=C_TEXT, weight=700),
+                _mono(raw_str, color=C_TEXT2),
+                _mono(f"{pct}%", color=ind_color, weight=700),
+                badge(interp, color=ind_color) if interp else _sans("--"),
+            ])
 
-        st.markdown(f"""
-        <table style="width:100%;border-collapse:collapse">
-            <thead>{hdr}</thead>
-            <tbody>{tbody}</tbody>
-        </table>
-        """, unsafe_allow_html=True)
+        wsj_market_table(
+            headers=["Indicator", "Reading", "Score", "Signal"],
+            rows=rows,
+        )
+        st.html(live_data_badge(_FRED_SRC))
 
-    # ── 3. Yield Curve Analysis ──────────────────────────────────────────────
+    # ── 4. Yield curve analysis ────────────────────────────────────────────
     yc = compute_yield_curve_analysis(macro_data)
     if yc.get("curve_points"):
-        st.markdown(f"""
-        <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
-            <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
-                        font-weight:700;color:{C_TEXT}">Treasury Yield Curve</div>
-            <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
-                        color:{C_TEXT3};margin-top:2px">
-                Curve shape: <span style="font-weight:700;color:{C_TEXT}">{yc['shape']}</span></div>
-        </div>
-        """, unsafe_allow_html=True)
+        section_header(
+            "Treasury Yield Curve",
+            subtitle=f"Curve shape: {yc['shape']}",
+        )
 
-        # Render yield curve chart
+        # Yield curve chart
         try:
             import plotly.graph_objects as go
-            fig = go.Figure()
+
             tenors = [p["tenor"] for p in yc["curve_points"]]
             yields = [p["yield"] for p in yc["curve_points"]]
+            fig = go.Figure()
             fig.add_trace(go.Scatter(
-                x=tenors, y=yields, mode="lines+markers",
+                x=tenors,
+                y=yields,
+                mode="lines+markers",
                 line=dict(color=C_ACCENT, width=2),
                 marker=dict(size=6, color=C_ACCENT),
                 name="Current Curve",
             ))
-            fig.update_layout(
-                paper_bgcolor=C_BG,
-                plot_bgcolor=C_SURFACE,
-                font=dict(color=C_TEXT2, family="Libre Franklin, sans-serif", size=12),
-                title=dict(
-                    text="US Treasury Yield Curve",
-                    font=dict(family="Libre Baskerville, Georgia, serif", size=14, color=C_TEXT),
-                    x=0.01,
-                ),
+            apply_dark_layout(
+                fig,
+                title="US Treasury Yield Curve",
                 height=320,
-                margin=dict(l=24, r=24, t=40, b=24),
-                xaxis=dict(
-                    gridcolor="rgba(232,230,225,0.04)",
-                    tickfont=dict(color=C_TEXT3, size=11),
-                    title="Maturity",
-                ),
-                yaxis=dict(
-                    gridcolor="rgba(232,230,225,0.04)",
-                    tickfont=dict(color=C_TEXT3, size=11),
-                    title="Yield (%)",
-                    ticksuffix="%",
-                ),
                 showlegend=False,
+                xaxis=dict(title="Maturity"),
+                yaxis=dict(title="Yield (%)", ticksuffix="%"),
             )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="bellwethers_yield_curve",
+            )
+            st.html(live_data_badge(_FRED_SRC))
         except Exception as exc:
             logger.warning(f"Yield curve chart failed: {exc}")
 
-        # Implication box
-        st.markdown(f"""
-        <div style="border-top:2px solid {C_TEXT};border-bottom:1px solid {C_RULE};
-                    padding:14px 0;margin:12px 0 20px">
-            <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:0.95rem;
-                        font-weight:700;color:{C_TEXT};line-height:1.4;font-style:italic">
-                {yc.get('implication', '')}</div>
-            <div style="font-family:'Libre Franklin',sans-serif;font-size:0.68rem;
-                        color:{C_TEXT3};margin-top:6px;text-transform:uppercase;
-                        letter-spacing:0.06em">-- Yield Curve Analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Implication callout
+        implication = yc.get("implication", "")
+        if implication:
+            st.markdown(
+                insight_card_html(
+                    title=implication,
+                    score=0.5,
+                    action="WATCH",
+                    rationale="Derived from the slope and shape of the US Treasury yield curve.",
+                    category="YIELD CURVE",
+                ),
+                unsafe_allow_html=True,
+            )
 
-        # Spread table
-        if yc.get("spreads"):
-            cols = st.columns(len(yc["spreads"]))
-            for col, (spread_name, spread_val) in zip(cols, yc["spreads"].items()):
-                with col:
-                    sv_color = C_LOW if spread_val < 0 else (C_MOD if spread_val < 0.5 else C_HIGH)
-                    st.markdown(f"""
-                    <div style="border:1px solid {C_RULE};border-top:2px solid {sv_color};
-                                border-radius:0 0 6px 6px;padding:12px 14px;background:{C_CARD};text-align:center">
-                        <div style="font-family:JetBrains Mono,monospace;font-size:1.3rem;
-                                    font-weight:700;color:{sv_color};line-height:1">{spread_val:+.2f}%</div>
-                        <div style="font-family:'Libre Franklin',sans-serif;font-size:0.64rem;
-                                    font-weight:700;color:{C_TEXT3};text-transform:uppercase;
-                                    letter-spacing:0.06em;margin-top:3px">{spread_name}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+        # Spread KPI row
+        spreads = yc.get("spreads")
+        if spreads:
+            metric_card_row(
+                [
+                    {
+                        "label":  spread_name,
+                        "value":  f"{spread_val:+.2f}%",
+                        "accent": _spread_color(spread_val),
+                    }
+                    for spread_name, spread_val in spreads.items()
+                ],
+                columns=min(len(spreads), 4),
+            )
+            st.html(live_data_badge(_FRED_SRC))
 
-    # ── 4. Earnings Calendar ─────────────────────────────────────────────────
+    # ── 5. Earnings calendar ───────────────────────────────────────────────
     calendar = compute_earnings_calendar()
     if calendar:
-        st.markdown(f"""
-        <div style="border-top:2px solid {C_TEXT};padding-top:10px;margin-bottom:14px;margin-top:28px">
-            <div style="font-family:'Libre Baskerville',Georgia,serif;font-size:1rem;
-                        font-weight:700;color:{C_TEXT}">Shipping Earnings Calendar</div>
-            <div style="font-family:'Libre Franklin',sans-serif;font-size:0.72rem;
-                        color:{C_TEXT3};margin-top:2px">
-                Next {min(len(calendar), 10)} upcoming earnings reports from tracked shipping companies</div>
-        </div>
-        """, unsafe_allow_html=True)
+        section_header(
+            "Shipping Earnings Calendar",
+            subtitle=(
+                f"Next {min(len(calendar), 10)} upcoming earnings reports "
+                "from tracked shipping companies"
+            ),
+        )
 
-        # WSJ-style table
-        hdr = "<tr>"
-        for h in ["Company", "Ticker", "Sector", "Quarter", "Date", "Days Until"]:
-            align = "left" if h in ("Company", "Sector") else "right"
-            hdr += f'<th style="text-align:{align};font-family:Libre Franklin,sans-serif;font-size:0.64rem;font-weight:700;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;padding:6px 12px;border-bottom:2px solid {C_TEXT}">{h}</th>'
-        hdr += "</tr>"
-
-        tbody = ""
+        rows = []
         for evt in calendar[:10]:
             days = evt["days_until"]
-            urgency_color = C_LOW if days <= 7 else (C_MOD if days <= 30 else C_TEXT2)
-            status_badge = ""
+            urgency = _urgency_color(days)
+            company_cell = _sans(evt["company"], color=C_TEXT, weight=700)
             if evt.get("status") == "This Week":
-                status_badge = f' <span style="background:{_rgba(C_LOW,0.08)};color:{C_LOW};border:1px solid {_rgba(C_LOW,0.2)};padding:1px 6px;border-radius:3px;font-size:0.6rem;font-weight:700">THIS WEEK</span>'
+                company_cell += " " + badge("THIS WEEK", color=C_LOW)
 
-            tbody += f"""
-            <tr>
-                <td style="font-family:Libre Franklin,sans-serif;font-size:0.82rem;font-weight:600;
-                           color:{C_TEXT};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {evt['company']}{status_badge}</td>
-                <td style="text-align:right;font-family:JetBrains Mono,monospace;font-size:0.82rem;
-                           font-weight:600;color:{C_ACCENT};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {evt['ticker']}</td>
-                <td style="font-family:Libre Franklin,sans-serif;font-size:0.78rem;
-                           color:{C_TEXT2};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {evt['sector']}</td>
-                <td style="text-align:right;font-family:Libre Franklin,sans-serif;font-size:0.78rem;
-                           color:{C_TEXT2};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {evt['quarter']}</td>
-                <td style="text-align:right;font-family:JetBrains Mono,monospace;font-size:0.78rem;
-                           color:{C_TEXT2};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {evt['date_display']}</td>
-                <td style="text-align:right;font-family:JetBrains Mono,monospace;font-size:0.82rem;
-                           font-weight:600;color:{urgency_color};padding:8px 12px;border-bottom:1px solid {C_RULE}">
-                    {days}d</td>
-            </tr>
-            """
+            rows.append([
+                company_cell,
+                _mono(evt["ticker"], color=C_ACCENT, weight=700),
+                _sans(evt["sector"], color=C_TEXT2),
+                _mono(evt["quarter"], color=C_TEXT2),
+                _mono(evt["date_display"], color=C_TEXT2),
+                _mono(f"{days}d", color=urgency, weight=700),
+            ])
 
-        st.markdown(f"""
-        <table style="width:100%;border-collapse:collapse">
-            <thead>{hdr}</thead>
-            <tbody>{tbody}</tbody>
-        </table>
-        """, unsafe_allow_html=True)
+        wsj_market_table(
+            headers=["Company", "Ticker", "Sector", "Quarter", "Date", "Days Until"],
+            rows=rows,
+        )
+        st.html(source_footer([_EARNINGS_SRC, _FRED_SRC]))

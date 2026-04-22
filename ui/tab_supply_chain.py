@@ -7,73 +7,67 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ── Color palette ──────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-
-# ── Plotly base layout ─────────────────────────────────────────────────────
-_LAYOUT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
-    margin=dict(l=40, r=20, t=30, b=40),
-    xaxis=dict(gridcolor="rgba(232,230,225,0.04)", linecolor=C_BORDER),
-    yaxis=dict(gridcolor="rgba(232,230,225,0.04)", linecolor=C_BORDER),
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    wsj_market_table,
 )
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Helpers
+# Tab-local semantic helpers
 # ══════════════════════════════════════════════════════════════════════════
 
-def _divider() -> None:
-    st.markdown(
-        f'<hr style="border:none; border-top:1px solid {C_BORDER}; margin:28px 0 22px 0;">', unsafe_allow_html=True)
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<div style="color:{C_TEXT2}; font-size:0.82rem; margin-top:4px; font-family:\'Libre Franklin\',sans-serif;">{subtitle}</div>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin-bottom:16px;">'
-        f'<span style="font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:\'Libre Baskerville\',serif;">{title}</span>'
-        f'{sub}</div>', unsafe_allow_html=True)
+def _rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _score_color(v: float) -> str:
-    if v >= 70: return C_HIGH
-    if v >= 45: return C_MOD
+    if v >= 70:
+        return C_HIGH
+    if v >= 45:
+        return C_MOD
     return C_LOW
 
 
 def _sev_color(sev: str) -> str:
     s = sev.upper()
-    if s == "CRITICAL": return C_LOW
-    if s == "HIGH":     return "#f97316"
-    if s == "MODERATE": return C_MOD
+    if s == "CRITICAL":
+        return C_LOW
+    if s == "HIGH":
+        return "#f97316"
+    if s == "MODERATE":
+        return C_MOD
     return C_HIGH
 
 
-def _trend_arrow(delta: float) -> str:
-    if delta > 0: return f'<span style="color:{C_HIGH};">&#9650; +{delta:.1f}</span>'
-    if delta < 0: return f'<span style="color:{C_LOW};">&#9660; {delta:.1f}</span>'
-    return f'<span style="color:{C_TEXT3};">&#8212; 0</span>'
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-size:0.82rem;">{value}</span>'
+    )
 
 
-def _sparkline_color(v: float, invert: bool = False) -> str:
-    good = v >= 70 if not invert else v <= 30
-    return C_HIGH if good else (C_MOD if (35 <= v <= 69) else C_LOW)
+def _sans(value: str, color: str = C_TEXT, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -82,12 +76,11 @@ def _sparkline_color(v: float, invert: bool = False) -> str:
 
 def _render_health_index(rng: random.Random) -> None:
     try:
-        _section_header(
+        section_header(
             "Supply Chain Health Index",
             "Composite score across freight availability, port fluidity, intermodal connectivity, and carrier reliability",
         )
 
-        # Deterministic sub-scores from seeded rng
         freight_raw    = rng.uniform(14.5, 22.5)
         port_raw       = rng.uniform(13.0, 21.5)
         intermodal_raw = rng.uniform(15.5, 23.0)
@@ -120,20 +113,24 @@ def _render_health_index(rng: random.Random) -> None:
                 ),
                 title=dict(text="SCHI Score", font=dict(color=C_TEXT2, size=13)),
             ))
-            gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", font=dict(color=C_TEXT), height=220, margin=dict(l=10, r=10, t=10, b=10))
+            apply_dark_layout(gauge, height=220, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(gauge, use_container_width=True, key="schi_gauge")
 
-            st.markdown(
-                f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;">'
-                f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:8px; padding:8px 14px; flex:1; min-width:110px;">'
-                f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Prior Mo.</div>'
-                f'<div style="color:{"#2e9e6e" if delta_month>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_month>=0 else ""}{delta_month:.1f}</div>'
-                f'</div>'
-                f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:8px; padding:8px 14px; flex:1; min-width:110px;">'
-                f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase;">vs Pre-COVID</div>'
-                f'<div style="color:{"#2e9e6e" if delta_precovid>=0 else C_LOW}; font-size:1.1rem; font-weight:700;">{"+" if delta_precovid>=0 else ""}{delta_precovid:.1f}</div>'
-                f'</div>'
-                f'</div>', unsafe_allow_html=True)
+            metric_card_row(
+                [
+                    dict(
+                        label="vs Prior Mo.",
+                        value=f"{'+' if delta_month >= 0 else ''}{delta_month:.1f}",
+                        accent=C_HIGH if delta_month >= 0 else C_LOW,
+                    ),
+                    dict(
+                        label="vs Pre-COVID",
+                        value=f"{'+' if delta_precovid >= 0 else ''}{delta_precovid:.1f}",
+                        accent=C_HIGH if delta_precovid >= 0 else C_LOW,
+                    ),
+                ],
+                columns=2,
+            )
 
         with col_subs:
             sub_scores = [
@@ -151,7 +148,7 @@ def _render_health_index(rng: random.Random) -> None:
                     f'<div style="margin-bottom:14px;">'
                     f'<div style="display:flex; justify-content:space-between; margin-bottom:4px;">'
                     f'<span style="color:{C_TEXT}; font-size:0.88rem; font-weight:600;">{label}</span>'
-                    f'<span style="color:{bar_color}; font-weight:700; font-size:0.88rem;">{val:.1f} / {cap}</span>'
+                    f'<span style="color:{bar_color}; font-weight:700; font-size:0.88rem; font-family:var(--mono);">{val:.1f} / {cap}</span>'
                     f'</div>'
                     f'<div style="background:rgba(232,230,225,0.05); border-radius:4px; height:7px;">'
                     f'<div style="width:{bar_w}%; background:{bar_color}; border-radius:4px; height:7px;"></div>'
@@ -159,10 +156,11 @@ def _render_health_index(rng: random.Random) -> None:
                     f'<div style="color:{C_TEXT3}; font-size:0.73rem; margin-top:3px;">{desc}</div>'
                     f'</div>'
                 )
-            st.markdown(
+            st.html(
                 f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:18px 20px;">'
                 f'{rows_html}'
-                f'</div>', unsafe_allow_html=True)
+                f'</div>'
+            )
     except Exception as exc:
         logger.warning(f"SCHI render error: {exc}")
         st.warning("Supply Chain Health Index unavailable.")
@@ -174,7 +172,7 @@ def _render_health_index(rng: random.Random) -> None:
 
 def _render_disruption_monitor() -> None:
     try:
-        _section_header(
+        section_header(
             "Supply Chain Disruption Monitor",
             "Active events affecting global trade routes — updated continuously",
         )
@@ -227,37 +225,22 @@ def _render_disruption_monitor() -> None:
             },
         ]
 
-        header_html = (
-            f'<div style="display:grid; grid-template-columns:1.4fr 2fr 90px 1.3fr 1fr 1.5fr 1.3fr;'
-            f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
-            f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
-            + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
-                for h in ["Disruption", "Cause", "Severity", "Affected Routes", "Duration", "Est. Resolution", "Rate Impact"]
-            )
-            + "</div>"
+        rows = [
+            [
+                _sans(d["event"], color=C_TEXT, weight=600),
+                _sans(d["cause"], color=C_TEXT2),
+                badge(d["severity"], color=_sev_color(d["severity"])),
+                _sans(d["routes"], color=C_TEXT2),
+                _sans(d["duration"], color=C_TEXT2),
+                _sans(d["resolution"], color=C_TEXT2),
+                _sans(d["rate_impact"], color=C_MOD, weight=600),
+            ]
+            for d in disruptions
+        ]
+        wsj_market_table(
+            ["Disruption", "Cause", "Severity", "Affected Routes", "Duration", "Est. Resolution", "Rate Impact"],
+            rows,
         )
-
-        rows_html = ""
-        for i, d in enumerate(disruptions):
-            sc = _sev_color(d["severity"])
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rows_html += (
-                f'<div style="display:grid; grid-template-columns:1.4fr 2fr 90px 1.3fr 1fr 1.5fr 1.3fr;'
-                f' gap:8px; padding:10px 14px; background:{bg}; border:1px solid {C_BORDER};'
-                f' border-top:none; {"border-radius:0 0 8px 8px;" if i==len(disruptions)-1 else ""}">'
-                f'<div style="color:{C_TEXT}; font-size:0.82rem; font-weight:600;">{d["event"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{d["cause"]}</div>'
-                f'<div><span style="background:{sc}22; color:{sc}; border:1px solid {sc}44;'
-                f' border-radius:5px; padding:2px 7px; font-size:0.70rem; font-weight:700;">{d["severity"]}</span></div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{d["routes"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{d["duration"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{d["resolution"]}</div>'
-                f'<div style="color:{C_MOD}; font-size:0.80rem; font-weight:600;">{d["rate_impact"]}</div>'
-                f'</div>'
-            )
-
-        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Disruption monitor error: {exc}")
         st.warning("Disruption monitor unavailable.")
@@ -269,7 +252,7 @@ def _render_disruption_monitor() -> None:
 
 def _render_inventory_sales(rng: random.Random) -> None:
     try:
-        _section_header(
+        section_header(
             "Inventory-to-Sales Ratio vs Container Shipping Demand",
             "When inventory is lean, retailers restock via ocean freight — a leading demand signal",
         )
@@ -289,8 +272,8 @@ def _render_inventory_sales(rng: random.Random) -> None:
             line=dict(color=C_ACCENT, width=2.5, dash="dot"),
             yaxis="y2",
         ))
-        fig.update_layout(
-            **_LAYOUT,
+        apply_dark_layout(
+            fig,
             height=280,
             yaxis=dict(title="I/S Ratio", color=C_MOD, gridcolor="rgba(232,230,225,0.04)"),
             yaxis2=dict(title="Volume Index", color=C_ACCENT, overlaying="y", side="right", gridcolor="rgba(0,0,0,0)"),
@@ -300,29 +283,31 @@ def _render_inventory_sales(rng: random.Random) -> None:
 
         current_is = is_ratio[-1]
         trend_str  = "Declining (lean inventories)" if is_ratio[-1] < is_ratio[-3] else "Rising (restocking)"
+        is_bullish = current_is < 1.22
         implication = (
             "Lean inventories signal upcoming restocking cycle — bullish for container volumes Q2–Q3 2026"
-            if current_is < 1.22 else
+            if is_bullish else
             "Elevated inventories suggest muted near-term shipping demand; watch for destocking"
         )
 
-        c1, c2, c3 = st.columns(3)
-        for col, label, val, sub in [
-            (c1, "Current I/S Ratio", f"{current_is:.2f}", "US Wholesale"),
-            (c2, "Trend", trend_str, "3-month direction"),
-            (c3, "Shipping Demand Signal", "BULLISH" if current_is < 1.22 else "NEUTRAL", "Next 3–6 months"),
-        ]:
-            with col:
-                st.markdown(
-                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
-                    f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
-                    f'<div style="color:{C_TEXT}; font-size:1.1rem; font-weight:700;">{val}</div>'
-                    f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
-                    f'</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div style="background:{C_ACCENT}11; border-left:3px solid {C_ACCENT}; border-radius:0 8px 8px 0;'
+        metric_card_row(
+            [
+                dict(label="Current I/S Ratio", value=f"{current_is:.2f}", sublabel="US Wholesale", accent=C_MOD),
+                dict(label="Trend", value=trend_str, sublabel="3-month direction", accent=C_ACCENT),
+                dict(
+                    label="Shipping Demand Signal",
+                    value="BULLISH" if is_bullish else "NEUTRAL",
+                    sublabel="Next 3–6 months",
+                    accent=C_HIGH if is_bullish else C_MOD,
+                ),
+            ],
+            columns=3,
+        )
+        st.html(
+            f'<div style="background:{_rgba(C_ACCENT, 0.08)}; border-left:3px solid {C_ACCENT}; border-radius:0 8px 8px 0;'
             f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
-            f'<strong style="color:{C_TEXT};">Implication:</strong> {implication}</div>', unsafe_allow_html=True)
+            f'<strong style="color:{C_TEXT};">Implication:</strong> {implication}</div>'
+        )
     except Exception as exc:
         logger.warning(f"I/S ratio render error: {exc}")
         st.warning("Inventory-to-Sales chart unavailable.")
@@ -334,7 +319,7 @@ def _render_inventory_sales(rng: random.Random) -> None:
 
 def _render_nearshoring() -> None:
     try:
-        _section_header(
+        section_header(
             "Nearshoring / Reshoring Tracker",
             "Companies shifting supply chains — trade route winners and losers",
         )
@@ -387,36 +372,22 @@ def _render_nearshoring() -> None:
             },
         ]
 
-        header_html = (
-            f'<div style="display:grid; grid-template-columns:1fr 1.2fr 1.4fr 0.9fr 1fr 1.3fr 1.3fr;'
-            f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
-            f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
-            + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
-                for h in ["Company", "Current Production", "New / Additional", "Timeline", "TEU Volume Shift", "Route Gains", "Route Loses"]
-            )
-            + "</div>"
+        rows = [
+            [
+                _sans(s["company"], color=C_TEXT, weight=600),
+                _sans(s["current"], color=C_TEXT2),
+                _sans(s["new_loc"], color=C_TEXT2),
+                _sans(s["timeline"], color=C_TEXT2),
+                _mono(s["teu_shift"], color=C_MOD),
+                _sans(s["winner"], color=C_HIGH),
+                _sans(s["loser"], color=C_LOW),
+            ]
+            for s in shifts
+        ]
+        wsj_market_table(
+            ["Company", "Current Production", "New / Additional", "Timeline", "TEU Volume Shift", "Route Gains", "Route Loses"],
+            rows,
         )
-
-        rows_html = ""
-        for i, s in enumerate(shifts):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            last = i == len(shifts) - 1
-            rows_html += (
-                f'<div style="display:grid; grid-template-columns:1fr 1.2fr 1.4fr 0.9fr 1fr 1.3fr 1.3fr;'
-                f' gap:8px; padding:10px 14px; background:{bg}; border:1px solid {C_BORDER};'
-                f' border-top:none; {"border-radius:0 0 8px 8px;" if last else ""}">'
-                f'<div style="color:{C_TEXT}; font-size:0.82rem; font-weight:600;">{s["company"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{s["current"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{s["new_loc"]}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.80rem;">{s["timeline"]}</div>'
-                f'<div style="color:{C_MOD}; font-size:0.80rem; font-weight:600;">{s["teu_shift"]}</div>'
-                f'<div style="color:{C_HIGH}; font-size:0.80rem;">{s["winner"]}</div>'
-                f'<div style="color:{C_LOW}; font-size:0.80rem;">{s["loser"]}</div>'
-                f'</div>'
-            )
-
-        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Nearshoring tracker error: {exc}")
         st.warning("Nearshoring tracker unavailable.")
@@ -428,7 +399,7 @@ def _render_nearshoring() -> None:
 
 def _render_lead_times() -> None:
     try:
-        _section_header(
+        section_header(
             "Lead Time Tracker — Key Commodities",
             "Ocean + inland transit times from order placement to destination. COVID distortion vs current state.",
         )
@@ -444,40 +415,23 @@ def _render_lead_times() -> None:
             ("Furniture / Home Goods",  10, 30, 12, 11, "IMPROVING"),
         ]
 
-        header_html = (
-            f'<div style="display:grid; grid-template-columns:1.6fr 1fr 1fr 1.2fr 1fr 1fr;'
-            f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
-            f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
-            + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
-                for h in ["Commodity", "2019 Baseline", "2021 Peak", "2023 Normalized", "Current (wks)", "Trend"]
-            )
-            + "</div>"
-        )
-
-        rows_html = ""
         trend_colors = {"IMPROVING": C_HIGH, "STABLE": C_ACCENT, "WORSENING": C_LOW}
-        for i, (name, b19, p21, n23, cur, trend) in enumerate(commodities):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            last = i == len(commodities) - 1
-            tc = trend_colors.get(trend, C_TEXT2)
+        rows = []
+        for name, b19, p21, n23, cur, trend in commodities:
             vs_base = cur - b19
             base_clr = C_HIGH if vs_base <= 1 else (C_MOD if vs_base <= 4 else C_LOW)
-            rows_html += (
-                f'<div style="display:grid; grid-template-columns:1.6fr 1fr 1fr 1.2fr 1fr 1fr;'
-                f' gap:8px; padding:10px 14px; background:{bg}; border:1px solid {C_BORDER};'
-                f' border-top:none; {"border-radius:0 0 8px 8px;" if last else ""}">'
-                f'<div style="color:{C_TEXT}; font-size:0.82rem; font-weight:600;">{name}</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.82rem;">{b19} wks</div>'
-                f'<div style="color:{C_LOW}; font-size:0.82rem; font-weight:600;">{p21} wks</div>'
-                f'<div style="color:{C_TEXT2}; font-size:0.82rem;">{n23} wks</div>'
-                f'<div style="color:{base_clr}; font-size:0.82rem; font-weight:700;">{cur} wks</div>'
-                f'<div><span style="background:{tc}22; color:{tc}; border:1px solid {tc}44;'
-                f' border-radius:5px; padding:2px 8px; font-size:0.72rem; font-weight:700;">{trend}</span></div>'
-                f'</div>'
-            )
-
-        st.markdown(header_html + rows_html, unsafe_allow_html=True)
+            rows.append([
+                _sans(name, color=C_TEXT, weight=600),
+                _mono(f"{b19} wks", color=C_TEXT2),
+                _mono(f"{p21} wks", color=C_LOW),
+                _mono(f"{n23} wks", color=C_TEXT2),
+                _mono(f"{cur} wks", color=base_clr),
+                badge(trend, color=trend_colors.get(trend, C_TEXT2)),
+            ])
+        wsj_market_table(
+            ["Commodity", "2019 Baseline", "2021 Peak", "2023 Normalized", "Current (wks)", "Trend"],
+            rows,
+        )
     except Exception as exc:
         logger.warning(f"Lead time tracker error: {exc}")
         st.warning("Lead time tracker unavailable.")
@@ -489,7 +443,7 @@ def _render_lead_times() -> None:
 
 def _render_resilience_scorecard(rng: random.Random) -> None:
     try:
-        _section_header(
+        section_header(
             "Supply Chain Resilience Scorecard — by Industry",
             "Assessment across five resilience dimensions. Higher = more resilient.",
         )
@@ -514,12 +468,11 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
                 name=name,
                 line=dict(color=clr, width=2),
                 fill="toself",
-                fillcolor=clr.replace("#", "") if len(clr) == 7 else clr,
-                opacity=0.15,
+                fillcolor=_rgba(clr, 0.15),
             ))
 
-        fig.update_layout(
-            **_LAYOUT,
+        apply_dark_layout(
+            fig,
             height=380,
             polar=dict(
                 bgcolor="rgba(255,255,255,0.02)",
@@ -530,35 +483,20 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="resilience_radar")
 
-        # Scorecard table below radar
-        header_html = (
-            f'<div style="display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr 1fr 0.8fr;'
-            f' gap:8px; padding:8px 14px; background:{C_SURFACE}; border-radius:8px 8px 0 0;'
-            f' border:1px solid {C_BORDER}; margin-bottom:2px;">'
-            + "".join(
-                f'<div style="color:{C_TEXT3}; font-size:0.70rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; font-family:\'Libre Franklin\',sans-serif;">{h}</div>'
-                for h in ["Industry", "Geo Divers.", "Single-Src Risk", "Inventory Buffer", "Carrier Diversity", "Score"]
-            )
-            + "</div>"
+        rows = []
+        for name, g, s, inv, cd, res in industries:
+            rows.append([
+                _sans(name, color=C_TEXT, weight=600),
+                _mono(f"{g}/100", color=_score_color(g)),
+                _mono(f"{s}/100", color=_score_color(s)),
+                _mono(f"{inv}/100", color=_score_color(inv)),
+                _mono(f"{cd}/100", color=_score_color(cd)),
+                _sans(str(res), color=_score_color(res), weight=700),
+            ])
+        wsj_market_table(
+            ["Industry", "Geo Divers.", "Single-Src Risk", "Inventory Buffer", "Carrier Diversity", "Score"],
+            rows,
         )
-        rows_html = ""
-        for i, (name, g, s, inv, cd, res) in enumerate(industries):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            last = i == len(industries) - 1
-            rc = _score_color(res)
-            rows_html += (
-                f'<div style="display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr 1fr 0.8fr;'
-                f' gap:8px; padding:10px 14px; background:{bg}; border:1px solid {C_BORDER};'
-                f' border-top:none; {"border-radius:0 0 8px 8px;" if last else ""}">'
-                f'<div style="color:{C_TEXT}; font-size:0.82rem; font-weight:600;">{name}</div>'
-                f'<div style="color:{_score_color(g)}; font-size:0.82rem;">{g}/100</div>'
-                f'<div style="color:{_score_color(s)}; font-size:0.82rem;">{s}/100</div>'
-                f'<div style="color:{_score_color(inv)}; font-size:0.82rem;">{inv}/100</div>'
-                f'<div style="color:{_score_color(cd)}; font-size:0.82rem;">{cd}/100</div>'
-                f'<div style="color:{rc}; font-size:0.90rem; font-weight:700;">{res}</div>'
-                f'</div>'
-            )
-        st.markdown(header_html + rows_html, unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Resilience scorecard error: {exc}")
         st.warning("Resilience scorecard unavailable.")
@@ -570,7 +508,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
 
 def _render_jit_vs_jic() -> None:
     try:
-        _section_header(
+        section_header(
             "Just-in-Time vs Just-in-Case — Post-COVID Inventory Strategy Shift",
             "Sectors that have permanently increased safety stock — a structural tailwind for shipping demand",
         )
@@ -593,8 +531,8 @@ def _render_jit_vs_jic() -> None:
             marker_color=C_ACCENT,
             opacity=0.9,
         ))
-        fig.update_layout(
-            **_LAYOUT,
+        apply_dark_layout(
+            fig,
             height=300,
             barmode="group",
             yaxis=dict(title="Months of Stock", gridcolor="rgba(232,230,225,0.04)"),
@@ -602,33 +540,42 @@ def _render_jit_vs_jic() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="jit_jic_chart")
 
-        # Insight cards
         max_delta_sector = sectors[delta.index(max(delta))]
         avg_increase = sum(delta) / len(delta)
 
-        c1, c2, c3 = st.columns(3)
-        cards = [
-            (c1, "Largest Safety Stock Increase", max_delta_sector, f"+{max(delta):.1f} months added"),
-            (c2, "Average Buffer Increase (all sectors)", f"+{avg_increase:.1f} months", "vs pre-COVID JIT baseline"),
-            (c3, "Structural Demand Impact", "~8–12% higher", "Baseline container volumes from permanent restocking"),
-        ]
-        for col, label, val, sub in cards:
-            with col:
-                st.markdown(
-                    f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:14px 16px;">'
-                    f'<div style="color:{C_TEXT3}; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px;">{label}</div>'
-                    f'<div style="color:{C_ACCENT}; font-size:1.1rem; font-weight:700;">{val}</div>'
-                    f'<div style="color:{C_TEXT3}; font-size:0.75rem; margin-top:3px;">{sub}</div>'
-                    f'</div>', unsafe_allow_html=True)
+        metric_card_row(
+            [
+                dict(
+                    label="Largest Safety Stock Increase",
+                    value=max_delta_sector,
+                    sublabel=f"+{max(delta):.1f} months added",
+                    accent=C_ACCENT,
+                ),
+                dict(
+                    label="Average Buffer Increase (all sectors)",
+                    value=f"+{avg_increase:.1f} months",
+                    sublabel="vs pre-COVID JIT baseline",
+                    accent=C_ACCENT,
+                ),
+                dict(
+                    label="Structural Demand Impact",
+                    value="~8–12% higher",
+                    sublabel="Baseline container volumes from permanent restocking",
+                    accent=C_ACCENT,
+                ),
+            ],
+            columns=3,
+        )
 
-        st.markdown(
-            f'<div style="background:{C_HIGH}11; border-left:3px solid {C_HIGH}; border-radius:0 8px 8px 0;'
+        st.html(
+            f'<div style="background:{_rgba(C_HIGH, 0.08)}; border-left:3px solid {C_HIGH}; border-radius:0 8px 8px 0;'
             f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
             f'<strong style="color:{C_TEXT};">Structural Tailwind:</strong> The JIT-to-JIC shift represents '
             f'a permanent increase in safety-stock requirements across most industrial sectors. This elevates '
             f'baseline container shipping demand by an estimated 8–12% above pre-COVID trend, independent of '
             f'cyclical economic conditions. Pharma and automotive show the most durable increases.'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>'
+        )
     except Exception as exc:
         logger.warning(f"JIT/JIC render error: {exc}")
         st.warning("JIT vs JIC analysis unavailable.")
@@ -640,7 +587,7 @@ def _render_jit_vs_jic() -> None:
 
 def _render_forecast() -> None:
     try:
-        _section_header(
+        section_header(
             "Supply Chain Forecast — Next 90 Days",
             "Which disruptions ease, which worsen, and where the opportunities emerge",
         )
@@ -694,18 +641,18 @@ def _render_forecast() -> None:
             for it in items:
                 conf_c = C_HIGH if it["confidence"] == "HIGH" else (C_MOD if it["confidence"] == "MODERATE" else C_TEXT3)
                 rows += (
-                    f'<div style="border-bottom:1px solid {C_BORDER}; padding:12px 0; last-child:border:none;">'
+                    f'<div style="border-bottom:1px solid {C_BORDER}; padding:12px 0;">'
                     f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">'
                     f'<span style="color:{C_TEXT}; font-weight:600; font-size:0.87rem;">{it["item"]}</span>'
-                    f'<span style="background:{conf_c}22; color:{conf_c}; border:1px solid {conf_c}44;'
+                    f'<span style="background:{_rgba(conf_c, 0.13)}; color:{conf_c}; border:1px solid {_rgba(conf_c, 0.27)};'
                     f' border-radius:5px; padding:2px 7px; font-size:0.68rem; font-weight:700;">{it["confidence"]} CONF</span>'
                     f'</div>'
                     f'<div style="color:{C_TEXT2}; font-size:0.80rem; margin-bottom:5px;">{it["detail"]}</div>'
-                    f'<div style="color:{color}; font-size:0.78rem; font-weight:600;">{it["rate_effect"]}</div>'
+                    f'<div style="color:{color}; font-size:0.78rem; font-weight:600; font-family:var(--mono);">{it["rate_effect"]}</div>'
                     f'</div>'
                 )
             container.html(
-                f'<div style="background:{C_SURFACE}; border:1px solid {color}44; border-top:3px solid {color};'
+                f'<div style="background:{C_SURFACE}; border:1px solid {_rgba(color, 0.27)}; border-top:3px solid {color};'
                 f' border-radius:0 0 6px 6px; padding:14px 16px;">'
                 f'<div style="color:{color}; font-size:0.80rem; font-weight:700; text-transform:uppercase;'
                 f' letter-spacing:0.06em; margin-bottom:10px;">{title}</div>'
@@ -730,40 +677,31 @@ def render(port_results=None, route_results=None, insights=None, macro_data=None
         port_results  = port_results  or []
         route_results = route_results or []
 
-        # Stable seed for deterministic random numbers within session
         seed_val = len(port_results) * 17 + len(route_results) * 31
         rng = random.Random(seed_val + 42)
 
-        st.markdown(
-            f'<div style="padding:18px 0 6px 0;">'
-            f'<div style="font-size:1.45rem; font-weight:800; color:{C_TEXT}; letter-spacing:-0.01em; font-family:\'Libre Baskerville\',serif;">'
-            f'Supply Chain Resilience &amp; Visibility</div>'
-            f'<div style="color:{C_TEXT2}; font-size:0.87rem; margin-top:5px; font-family:\'Libre Franklin\',sans-serif;">'
-            f'End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Supply Chain Resilience & Visibility",
+            subtitle="End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times",
+            icon="🔗",
+            badge_text="Demo Data",
+            badge_color=C_MOD,
+        )
 
-        _divider()
         _render_health_index(rng)
-
-        _divider()
+        section_divider()
         _render_disruption_monitor()
-
-        _divider()
+        section_divider()
         _render_inventory_sales(rng)
-
-        _divider()
+        section_divider()
         _render_nearshoring()
-
-        _divider()
+        section_divider()
         _render_lead_times()
-
-        _divider()
+        section_divider()
         _render_resilience_scorecard(rng)
-
-        _divider()
+        section_divider()
         _render_jit_vs_jic()
-
-        _divider()
+        section_divider()
         _render_forecast()
 
     except Exception as exc:
