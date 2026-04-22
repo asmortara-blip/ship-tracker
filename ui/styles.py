@@ -112,9 +112,20 @@ def dark_layout(
     }
 
 
+_DARK_LAYOUT_KEYS = {"title", "height", "margin", "showlegend", "legend_orientation"}
+
+
 def apply_dark_layout(fig, **kwargs) -> None:
-    """Apply dark_layout() to a Plotly figure in-place."""
-    fig.update_layout(**dark_layout(**kwargs))
+    """Apply dark_layout() to a Plotly figure in-place.
+
+    Kwargs belonging to ``dark_layout``'s signature seed the base theme;
+    any remaining kwargs (e.g. ``yaxis=...``, ``barmode=...``, ``geo=...``)
+    are forwarded as plotly layout overrides so callers can compose.
+    """
+    dark_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _DARK_LAYOUT_KEYS}
+    fig.update_layout(**dark_layout(**dark_kwargs))
+    if kwargs:
+        fig.update_layout(**kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1534,3 +1545,478 @@ def wsj_market_table(headers: list[str], rows: list[list[str]]) -> None:
         <tbody>{tbody}</tbody>
     </table>
     """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DATA-QUALITY SURFACING — every figure should wear one
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `live_data_badge` is the single pill every chart/table should show next to
+# its title. It reads from `data.quality.DataSource` when available, but also
+# accepts raw strings so callers can adopt it before retrofitting their feed.
+
+_QUALITY_COLOR_MAP: dict[str, str] = {
+    "good":        C_HIGH,
+    "stale":       C_MOD,
+    "unofficial":  C_MOD,
+    "modeled":     C_CONV,
+    "demo":        C_LOW,
+    "unknown":     C_TEXT3,
+}
+
+_KIND_LABEL: dict[str, str] = {
+    "live":     "LIVE",
+    "cached":   "CACHED",
+    "scraped":  "SCRAPED",
+    "modeled":  "MODELED",
+    "demo":     "DEMO",
+    "manual":   "MANUAL",
+}
+
+
+def _format_age(as_of) -> str:
+    """Format a datetime as a short 'as of' string."""
+    if as_of is None:
+        return ""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if getattr(as_of, "tzinfo", None) is None:
+        return as_of.strftime("%Y-%m-%d")
+    delta = now - as_of
+    mins = delta.total_seconds() / 60.0
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{int(mins)}m ago"
+    hours = mins / 60.0
+    if hours < 48:
+        return f"{hours:.1f}h ago"
+    days = hours / 24.0
+    if days < 30:
+        return f"{days:.1f}d ago"
+    return as_of.strftime("%Y-%m-%d")
+
+
+def live_data_badge(
+    source: str | object = "",
+    *,
+    as_of=None,
+    quality: str = "good",
+    kind: str = "live",
+    url: str = "",
+    notes: str = "",
+) -> str:
+    """Return HTML for a small provenance pill.
+
+    Accepts either a ``DataSource`` (from ``data.quality``) as the first
+    positional arg, or a plain source-name string plus keyword metadata.
+    """
+    # Duck-type a DataSource
+    if source and not isinstance(source, str) and hasattr(source, "quality"):
+        ds = source
+        name    = getattr(ds, "name", "")
+        quality = getattr(ds, "quality", quality)
+        kind    = getattr(ds, "kind",    kind)
+        url     = getattr(ds, "url",     url)
+        notes   = getattr(ds, "notes",   notes)
+        as_of   = getattr(ds, "as_of",   as_of)
+    else:
+        name = str(source) if source else ""
+
+    color = _QUALITY_COLOR_MAP.get(quality, C_TEXT3)
+    label = _KIND_LABEL.get(kind, kind.upper() or "DATA")
+    age   = _format_age(as_of)
+    bg    = _hex_to_rgba(color, 0.08)
+    bord  = _hex_to_rgba(color, 0.25)
+    dot_animation = " animation:pulse-dot 2s ease-in-out infinite;" if kind == "live" else ""
+    tooltip = notes or (f"{name} · {age}" if name or age else label)
+
+    name_html = (
+        f'<span style="color:{C_TEXT2};font-weight:500;margin-left:6px;">{name}</span>'
+        if name else ""
+    )
+    age_html = (
+        f'<span style="color:{C_TEXT3};margin-left:6px;font-family:var(--mono);'
+        f'font-size:0.66rem;">as of {age}</span>'
+        if age else ""
+    )
+    url_wrap_open  = f'<a href="{url}" target="_blank" style="text-decoration:none;">' if url else ""
+    url_wrap_close = '</a>' if url else ""
+
+    return (
+        f'{url_wrap_open}'
+        f'<span title="{tooltip}" style="display:inline-flex;align-items:center;'
+        f'gap:4px;padding:2px 8px;border-radius:3px;background:{bg};'
+        f'border:1px solid {bord};font-family:var(--sans);font-size:0.66rem;'
+        f'font-weight:700;letter-spacing:0.05em;text-transform:uppercase;'
+        f'color:{color};">'
+        f'<span style="display:inline-block;width:5px;height:5px;border-radius:50%;'
+        f'background:{color};{dot_animation}"></span>'
+        f'{label}'
+        f'{name_html}'
+        f'{age_html}'
+        f'</span>'
+        f'{url_wrap_close}'
+    )
+
+
+def source_footer(sources, *, align: str = "right") -> str:
+    """Return HTML for a subtle multi-source attribution footer.
+
+    Accepts a list of ``DataSource`` objects (from ``data.quality``) or plain
+    dicts ``{"name": ..., "url": ..., "kind": ..., "quality": ..., "as_of": ...}``.
+    """
+    if not sources:
+        return ""
+    pills = []
+    for s in sources:
+        if hasattr(s, "name"):
+            pills.append(live_data_badge(s))
+        elif isinstance(s, dict):
+            pills.append(live_data_badge(
+                s.get("name", ""),
+                as_of=s.get("as_of"),
+                quality=s.get("quality", "good"),
+                kind=s.get("kind", "live"),
+                url=s.get("url", ""),
+                notes=s.get("notes", ""),
+            ))
+        else:
+            pills.append(live_data_badge(str(s)))
+    justify = "flex-end" if align == "right" else ("center" if align == "center" else "flex-start")
+    return (
+        f'<div style="display:flex;flex-wrap:wrap;gap:6px;'
+        f'justify-content:{justify};margin-top:8px;padding-top:6px;'
+        f'border-top:1px dotted {C_RULE};">'
+        f'<span style="color:{C_TEXT3};font-family:var(--sans);font-size:0.66rem;'
+        f'text-transform:uppercase;letter-spacing:0.08em;margin-right:6px;">Source</span>'
+        f'{"".join(pills)}'
+        f'</div>'
+    )
+
+
+def regime_pill(regime: str, *, mapping: dict[str, str] | None = None) -> str:
+    """Return HTML for a regime tag (Boom / Normal / Bear / etc).
+
+    ``mapping`` overrides the default regime→color palette for domain-specific
+    semantics; callers in ``tab_rate_analytics_refactored`` pass their
+    ``_REGIME_COLOR`` here.
+    """
+    default = {
+        "Boom":          C_HIGH,
+        "Above Average": C_HIGH,
+        "Bull":          C_HIGH,
+        "Growth":        C_HIGH,
+        "Normal":        C_ACCENT,
+        "Neutral":       C_ACCENT,
+        "Below Average": C_MOD,
+        "Caution":       C_MOD,
+        "Bear":          C_LOW,
+        "Contraction":   C_LOW,
+        "Crisis":        C_LOW,
+    }
+    palette = {**default, **(mapping or {})}
+    color   = palette.get(regime, C_TEXT2)
+    return badge(regime, color=color)
+
+
+def spark_cell(
+    series,
+    *,
+    width: int = 80,
+    height: int = 18,
+    color: str | None = None,
+) -> str:
+    """Return an inline SVG sparkline sized to fit inside a table cell.
+
+    ``series`` may be any iterable of floats; NaN values are skipped.
+    """
+    try:
+        values = [float(v) for v in series if v is not None and v == v]  # NaN check
+    except TypeError:
+        values = []
+    if len(values) < 2:
+        return (
+            f'<span style="color:{C_TEXT3};font-family:var(--mono);font-size:0.7rem;">–</span>'
+        )
+
+    lo, hi = min(values), max(values)
+    span   = (hi - lo) or 1.0
+    n      = len(values)
+    pts    = []
+    for i, v in enumerate(values):
+        x = (i / (n - 1)) * width
+        y = height - ((v - lo) / span) * height
+        pts.append(f"{x:.1f},{y:.1f}")
+    polyline = " ".join(pts)
+
+    direction_color = color or (C_HIGH if values[-1] >= values[0] else C_LOW)
+    fill            = _hex_to_rgba(direction_color, 0.15)
+    area_pts        = f"0,{height} {polyline} {width:.1f},{height}"
+
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'style="vertical-align:middle;">'
+        f'<polygon points="{area_pts}" fill="{fill}" stroke="none"/>'
+        f'<polyline points="{polyline}" fill="none" '
+        f'stroke="{direction_color}" stroke-width="1.2"/>'
+        f'</svg>'
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  FOLD-IN FROM ui/components.py — canonical home is here
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _opportunity_color(score: float) -> str:
+    if score >= 0.65:
+        return C_HIGH
+    if score >= 0.40:
+        return C_MOD
+    return C_LOW
+
+
+def stat_counter(
+    label: str,
+    value,
+    prefix: str = "",
+    suffix: str = "",
+    color: str = C_HIGH,
+    delta: float | None = None,
+    delta_label: str = "",
+) -> None:
+    """Render a large stat card with optional delta indicator."""
+    shadow = _hex_to_rgba(color, 0.1)
+    if delta is not None:
+        arrow       = "▲" if delta >= 0 else "▼"
+        delta_color = C_HIGH if delta >= 0 else C_LOW
+        delta_text  = f"{abs(delta):.1f}%"
+        if delta_label:
+            delta_text = f"{delta_text} {delta_label}"
+        delta_html = (
+            f'<div style="font-size:0.75rem;color:{delta_color};margin-top:6px;">'
+            f'{arrow} {delta_text}'
+            f'</div>'
+        )
+    else:
+        delta_html = ""
+    st.markdown(f"""
+        <div class="slide-in" style="background:{C_CARD};border-radius:6px;
+            padding:20px;text-align:center;border-top:3px solid {color};
+            box-shadow:0 0 20px {shadow};">
+          <div style="font-size:2.2rem;font-weight:900;color:{color};
+              font-variant-numeric:tabular-nums;line-height:1.1;">
+              {prefix}{value}{suffix}</div>
+          <div style="font-size:0.78rem;color:{C_TEXT2};text-transform:uppercase;
+              letter-spacing:0.08em;margin-top:4px;">{label}</div>
+          {delta_html}
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def mini_sparkline(
+    data: list[float],
+    color: str = C_ACCENT,
+    height: int = 60,
+    show_area: bool = True,
+):
+    """Return a minimal Plotly sparkline figure for embedding in a column."""
+    import plotly.graph_objects as go
+
+    fill_color = _hex_to_rgba(color, 0.15)
+    fill       = "tozeroy" if show_area else "none"
+
+    fig = go.Figure(
+        go.Scatter(
+            y=data,
+            mode="lines",
+            line=dict(color=color, width=1.5),
+            fill=fill,
+            fillcolor=fill_color,
+            hoverinfo="skip",
+        )
+    )
+    fig.update_layout(
+        paper_bgcolor=C_BG,
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=height,
+        margin=dict(l=0, r=0, t=0, b=0),
+        xaxis=dict(visible=False, showgrid=False, zeroline=False),
+        yaxis=dict(visible=False, showgrid=False, zeroline=False),
+        showlegend=False,
+    )
+    return fig
+
+
+def gauge_ring(value: float, label: str, color: str = C_HIGH, size: int = 180):
+    """Return a clean circular gauge (donut) figure."""
+    import plotly.graph_objects as go
+
+    pct_text = f"{value * 100:.0f}%"
+    fig = go.Figure(
+        go.Pie(
+            values=[value, 1 - value],
+            hole=0.75,
+            marker=dict(colors=[color, C_CARD]),
+            textinfo="none",
+            hoverinfo="skip",
+            showlegend=False,
+            direction="clockwise",
+            sort=False,
+        )
+    )
+    fig.update_layout(
+        paper_bgcolor=C_BG,
+        height=size,
+        margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=False,
+        annotations=[
+            dict(
+                text=(
+                    f'<b><span style="font-size:1.4em;color:{color}">{pct_text}</span></b>'
+                    f'<br><span style="font-size:0.7em;color:{C_TEXT2}">{label}</span>'
+                ),
+                x=0.5, y=0.5,
+                font=dict(color=color, size=14),
+                showarrow=False,
+            )
+        ],
+    )
+    return fig
+
+
+_ALERT_CONFIG: dict[str, dict] = {
+    "info":     {"color": C_ACCENT, "icon": "ℹ️",  "pulse": False},
+    "success":  {"color": C_HIGH,   "icon": "✅",  "pulse": False},
+    "warning":  {"color": C_MOD,    "icon": "⚠️",  "pulse": False},
+    "critical": {"color": C_LOW,    "icon": "🚨",  "pulse": True},
+}
+
+
+def alert_banner(message: str, level: str = "info", dismissible: bool = False) -> None:
+    """Render a styled alert banner."""
+    cfg    = _ALERT_CONFIG.get(level, _ALERT_CONFIG["info"])
+    color  = cfg["color"]
+    icon   = cfg["icon"]
+    pulse  = cfg["pulse"]
+    bg     = _hex_to_rgba(color, 0.08)
+    border = _hex_to_rgba(color, 0.35)
+    anim   = "pulse-glow" if pulse else ""
+    st.markdown(f"""
+        <div class="{anim}" style="background:{bg};border:1px solid {border};
+            border-left:4px solid {color};border-radius:8px;padding:12px 16px;
+            display:flex;align-items:flex-start;gap:10px;margin:8px 0;">
+          <span style="font-size:1.1rem;line-height:1.4">{icon}</span>
+          <span style="color:{C_TEXT};font-size:0.88rem;line-height:1.5">{message}</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def kpi_row(metrics: list[dict]) -> None:
+    """Render a horizontal row of KPI cards (legacy-compatible with components.py).
+
+    Each dict: ``{"label": str, "value": str, "delta": float|None, "color": str}``.
+    For new code prefer ``metric_card_row(...)`` which supports sublabels and
+    typed accents; ``kpi_row`` is preserved for tabs migrating off
+    ``ui.components.kpi_row``.
+    """
+    cols = st.columns(len(metrics))
+    for col, m in zip(cols, metrics):
+        color  = m.get("color", C_ACCENT)
+        delta  = m.get("delta")
+        shadow = _hex_to_rgba(color, 0.08)
+        if delta is not None:
+            arrow      = "▲" if delta >= 0 else "▼"
+            dcolor     = C_HIGH if delta >= 0 else C_LOW
+            delta_html = (
+                f'<div style="font-size:0.78rem;color:{dcolor};margin-top:5px;">'
+                f'{arrow} {abs(delta):.1f}%</div>'
+            )
+        else:
+            delta_html = ""
+        card = f"""
+        <div class="slide-in" style="background:{C_CARD};border:1px solid {C_BORDER};
+            border-top:3px solid {color};border-radius:6px;padding:18px 16px;
+            text-align:center;box-shadow:0 0 16px {shadow};height:100%;">
+          <div style="font-size:1.9rem;font-weight:800;color:{C_TEXT};
+            font-variant-numeric:tabular-nums;line-height:1.1;">{m.get('value','')}</div>
+          <div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;
+            letter-spacing:0.06em;margin-top:4px;">{m.get('label','')}</div>
+          {delta_html}
+        </div>
+        """
+        with col:
+            st.markdown(card, unsafe_allow_html=True)
+
+
+def shipping_heat_bar(scores: dict[str, float], title: str = "") -> None:
+    """Render a horizontal heat bar segmented by metric scores."""
+    total = sum(scores.values()) or 1.0
+    segments = ""
+    for name, val in scores.items():
+        pct  = val / total * 100
+        col  = _opportunity_color(val)
+        bg   = _hex_to_rgba(col, 0.8)
+        segments += (
+            f'<div title="{name}: {val:.2f}" style="flex:{pct};background:{bg};'
+            f'height:8px;min-width:2px;"></div>'
+        )
+    title_html = ""
+    if title:
+        title_html = (
+            f'<div style="font-size:0.72rem;color:{C_TEXT3};'
+            f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">'
+            f'{title}</div>'
+        )
+    legend = "".join(
+        f'<span style="font-size:0.68rem;color:{C_TEXT3};margin-right:10px;">'
+        f'<span style="color:{_hex_to_rgba(_opportunity_color(v), 0.9)}">&#9632;</span>'
+        f' {k}: {v:.2f}</span>'
+        for k, v in scores.items()
+    )
+    st.markdown(f"""
+        {title_html}
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0;">
+          {segments}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;margin-top:4px;">{legend}</div>
+    """, unsafe_allow_html=True)
+
+
+def section_divider(label: str = "") -> None:
+    """Render a subtle horizontal section divider with optional label."""
+    label_span = (
+        f'<span style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;'
+        f'letter-spacing:0.12em;">{label}</span>' if label else ""
+    )
+    st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:12px;margin:28px 0;">
+            <div style="flex:1;height:1px;background:{C_RULE};"></div>
+            {label_span}
+            <div style="flex:1;height:1px;background:{C_RULE};"></div>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+# Public surface additions — keep __all__ declarative for tooling and docs.
+__all__ = [
+    # Palette
+    "C_BG", "C_SURFACE", "C_CARD", "C_BORDER", "C_HIGH", "C_MOD", "C_LOW",
+    "C_ACCENT", "C_CONV", "C_MACRO", "C_TEXT", "C_TEXT2", "C_TEXT3", "C_RULE",
+    "CATEGORY_COLORS", "DEMAND_COLORS", "ACTION_COLORS", "RISK_COLORS",
+    # Layout
+    "dark_layout", "apply_dark_layout", "inject_global_css",
+    # Headers / sections
+    "page_header", "section_header", "wsj_section", "wsj_headline",
+    "wsj_pullquote", "wsj_news_list", "wsj_market_table", "wsj_stat_box",
+    # Cards / rows / badges
+    "kpi_card", "metric_card_row", "render_kpi_row", "insight_card_html",
+    "badge", "status_badge", "live_badge", "gradient_card", "ticker_tape_html",
+    # Navigation
+    "nav_section_button",
+    # Phase-1 additions
+    "live_data_badge", "source_footer", "regime_pill", "spark_cell",
+    # Folded in from components.py
+    "stat_counter", "mini_sparkline", "gauge_ring", "alert_banner",
+    "kpi_row", "shipping_heat_bar", "section_divider",
+]
