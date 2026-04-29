@@ -918,18 +918,23 @@ def _render_shortage_surplus_map() -> None:
             xgap=3,
             ygap=3,
         ))
-        layout = dark_layout(height=320, showlegend=False)
-        layout["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
-        layout["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
-        layout["margin"] = {"l": 110, "r": 20, "t": 20, "b": 40}
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, height=320, showlegend=False)
+        fig.update_layout(
+            xaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
+            yaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
+            margin={"l": 110, "r": 20, "t": 20, "b": 40},
+        )
         st.plotly_chart(fig, use_container_width=True, key="equip_heatmap")
 
         # Risk legend
-        legend_html = " &nbsp; ".join(_risk_badge(r) for r in ["LOW","MODERATE","HIGH","CRITICAL"])
+        legend_html = " &nbsp; ".join(badge(r, color=RISK_COLORS[r]) for r in ["LOW","MODERATE","HIGH","CRITICAL"])
         st.markdown(
             f"<div style='font-size:0.76rem;color:{C_TEXT3};margin-top:-6px;'>"
             f"Shortage Risk: {legend_html}</div>", unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+            {"name": "Alphaliner Fleet Database",        "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_detail:
         # Per-region summary cards
@@ -941,8 +946,8 @@ def _render_shortage_surplus_map() -> None:
             total_k  = sum(e.available_units_k for e in region_equip)
             worst    = max(region_equip, key=lambda e: e.utilization_pct, default=None)
             color    = _REGION_COLORS.get(region, C_TEXT2)
-            risk_tag = _risk_badge(worst.shortage_risk if worst else "LOW")
-            rgb      = _hex_to_rgb(color)
+            worst_risk = worst.shortage_risk if worst else "LOW"
+            risk_tag   = badge(worst_risk, color=RISK_COLORS.get(worst_risk, C_TEXT2))
 
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
