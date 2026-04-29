@@ -35,32 +35,40 @@ from processing.equipment_tracker import (
 )
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_BORDER,
     C_CARD,
+    C_CONV,
     C_HIGH,
     C_LOW,
+    C_MACRO,
     C_MOD,
+    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     RISK_COLORS,
+    apply_dark_layout,
+    badge,
     dark_layout,
+    insight_card_html,
+    kpi_card,
+    live_data_badge,
+    metric_card_row,
+    page_header,
+    regime_pill,
+    section_divider,
     section_header,
+    source_footer,
+    status_badge,
+    wsj_market_table,
 )
 
-# ── Palette ────────────────────────────────────────────────────────────────
-_C_BG      = "#0c0e14"
-_C_SURFACE = "#12151e"
-_C_GREEN   = "#2e9e6e"
-_C_RED     = "#c0392b"
-_C_AMBER   = "#c9962b"
-_C_BLUE    = "#3572b0"
-_C_PURPLE  = "#7c6eaf"
-_C_CYAN    = "#4a90a4"
-_C_TEAL    = "#14b8a6"
-_C_INDIGO  = "#6366f1"
-_C_ROSE    = "#f43f5e"
-_C_ORANGE  = "#f97316"
+# ── Domain extensions to ui.styles palette ─────────────────────────────────
+# Used for status/age/commodity differentiation beyond the core WSJ palette.
+_TEAL    = "#14b8a6"   # prime-age fleet, seafood
+_ROSE    = "#f43f5e"   # reefer commodity / decline marker
+_ORANGE  = "#f97316"   # aging fleet, citrus
 
 # Heatmap color scale: green (surplus) → amber → red (critical)
 _UTIL_COLORSCALE = [
@@ -87,12 +95,12 @@ _TYPE_LABELS: Dict[str, str] = {
 }
 
 _REGION_COLORS: Dict[str, str] = {
-    "Asia Pacific":  _C_BLUE,
-    "North America": _C_GREEN,
-    "Europe":        _C_PURPLE,
-    "South America": _C_AMBER,
-    "Middle East":   _C_CYAN,
-    "Africa":        _C_RED,
+    "Asia Pacific":  C_ACCENT,
+    "North America": C_HIGH,
+    "Europe":        C_CONV,
+    "South America": C_MOD,
+    "Middle East":   C_MACRO,
+    "Africa":        C_LOW,
 }
 
 # ── Static data sets ───────────────────────────────────────────────────────
@@ -139,12 +147,12 @@ _PORT_GLOBAL_AVG_DWELL = 4.15  # global simple average dwell days
 # Container fleet age distribution (% of global fleet by age bracket)
 # Source: BRS Alphaliner Fleet Database 2025
 _FLEET_AGE_DIST: List[Dict[str, Any]] = [
-    {"bracket": "0–5 yrs",   "pct": 28.5, "status": "New",     "color": _C_GREEN,  "note": "Post-2020 newbuild surge"},
-    {"bracket": "5–10 yrs",  "pct": 22.0, "status": "Prime",   "color": _C_TEAL,   "note": "Peak productivity"},
-    {"bracket": "10–15 yrs", "pct": 19.5, "status": "Mid-life","color": _C_BLUE,   "note": "Approaching major survey"},
-    {"bracket": "15–20 yrs", "pct": 16.0, "status": "Aging",   "color": _C_AMBER,  "note": "Maintenance costs rising"},
-    {"bracket": "20–25 yrs", "pct": 9.5,  "status": "Old",     "color": _C_ORANGE, "note": "Replacement candidates"},
-    {"bracket": "25+ yrs",   "pct": 4.5,  "status": "EOL",     "color": _C_RED,    "note": "End-of-life / scrapping"},
+    {"bracket": "0–5 yrs",   "pct": 28.5, "status": "New",     "color": C_HIGH,  "note": "Post-2020 newbuild surge"},
+    {"bracket": "5–10 yrs",  "pct": 22.0, "status": "Prime",   "color": _TEAL,   "note": "Peak productivity"},
+    {"bracket": "10–15 yrs", "pct": 19.5, "status": "Mid-life","color": C_ACCENT,   "note": "Approaching major survey"},
+    {"bracket": "15–20 yrs", "pct": 16.0, "status": "Aging",   "color": C_MOD,  "note": "Maintenance costs rising"},
+    {"bracket": "20–25 yrs", "pct": 9.5,  "status": "Old",     "color": _ORANGE, "note": "Replacement candidates"},
+    {"bracket": "25+ yrs",   "pct": 4.5,  "status": "EOL",     "color": C_LOW,    "note": "End-of-life / scrapping"},
 ]
 
 # Leasing vs owned economics by container type (2026 market rates)
@@ -220,13 +228,13 @@ _REEFER_SEASONAL: Dict[str, Any] = {
 
 # Top reefer commodities
 _REEFER_COMMODITIES: List[Dict[str, Any]] = [
-    {"name": "Bananas",          "share_pct": 22, "peak_months": "Oct–Mar peak",    "key_origins": "Ecuador, Colombia, Costa Rica", "color": _C_AMBER},
-    {"name": "Meat & Poultry",   "share_pct": 18, "peak_months": "Nov–Jan",         "key_origins": "Brazil, Australia, USA",        "color": _C_RED},
-    {"name": "Avocados",         "share_pct": 10, "peak_months": "Mar–Aug",         "key_origins": "Mexico, Peru, South Africa",    "color": _C_GREEN},
-    {"name": "Pharmaceuticals",  "share_pct":  9, "peak_months": "Stable",          "key_origins": "Europe, India, USA",            "color": _C_BLUE},
-    {"name": "Citrus Fruit",     "share_pct":  8, "peak_months": "Apr–Sep",         "key_origins": "South Africa, Spain, Argentina","color": _C_ORANGE},
-    {"name": "Seafood",          "share_pct": 10, "peak_months": "Oct–Dec",         "key_origins": "Norway, Chile, Vietnam",        "color": _C_CYAN},
-    {"name": "Wine & Beer",      "share_pct":  6, "peak_months": "Sep–Dec",         "key_origins": "France, Australia, Chile",      "color": _C_PURPLE},
+    {"name": "Bananas",          "share_pct": 22, "peak_months": "Oct–Mar peak",    "key_origins": "Ecuador, Colombia, Costa Rica", "color": C_MOD},
+    {"name": "Meat & Poultry",   "share_pct": 18, "peak_months": "Nov–Jan",         "key_origins": "Brazil, Australia, USA",        "color": C_LOW},
+    {"name": "Avocados",         "share_pct": 10, "peak_months": "Mar–Aug",         "key_origins": "Mexico, Peru, South Africa",    "color": C_HIGH},
+    {"name": "Pharmaceuticals",  "share_pct":  9, "peak_months": "Stable",          "key_origins": "Europe, India, USA",            "color": C_ACCENT},
+    {"name": "Citrus Fruit",     "share_pct":  8, "peak_months": "Apr–Sep",         "key_origins": "South Africa, Spain, Argentina","color": _ORANGE},
+    {"name": "Seafood",          "share_pct": 10, "peak_months": "Oct–Dec",         "key_origins": "Norway, Chile, Vietnam",        "color": C_MACRO},
+    {"name": "Wine & Beer",      "share_pct":  6, "peak_months": "Sep–Dec",         "key_origins": "France, Australia, Chile",      "color": C_CONV},
     {"name": "Other Perishables","share_pct": 17, "peak_months": "Variable",        "key_origins": "Global",                        "color": C_TEXT3},
 ]
 
@@ -254,9 +262,9 @@ def _risk_badge(risk: str) -> str:
 
 def _trend_badge(trend: str) -> str:
     cfg = {
-        "improving": ("↗", _C_GREEN),
-        "stable":    ("→", _C_AMBER),
-        "worsening": ("↘", _C_RED),
+        "improving": ("↗", C_HIGH),
+        "stable":    ("→", C_MOD),
+        "worsening": ("↘", C_LOW),
     }
     arrow, color = cfg.get(trend, ("–", C_TEXT3))
     rgb = _hex_to_rgb(color)
@@ -288,6 +296,28 @@ def _kpi_card(label: str, value: str, subtitle: str, color: str, icon: str = "")
 def _section_divider() -> None:
     st.markdown(
         "<div style='margin:28px 0;border-top:1px solid rgba(232,230,225,0.05);'></div>", unsafe_allow_html=True)
+
+
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. The table
+# CSS already handles alignment, rule lines, and hover. These helpers only
+# style content (font family + conditional color). Mirrors the pattern in
+# ui/tab_rate_analytics.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    """Monospace numeric cell content."""
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content."""
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 
 def _build_equip_matrix() -> Tuple[List, List, List]:
@@ -411,11 +441,11 @@ def _render_enhanced_equipment_overview() -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     for col, label, value, subtitle, color, icon in [
-        (c1, "Global TEU Pool",       f"{pool['total_teu_m']}M TEU", "world fleet all types",           _C_BLUE,   ""),
-        (c2, "Active Utilization",    f"{global_util:.1f}%",         "loaded + in-service containers",  _C_GREEN if global_util < 80 else _C_AMBER, ""),
-        (c3, "Repositioning (Empty)", f"{reposition_count_k:,}K TEU","currently in empty transit",       _C_AMBER, ""),
+        (c1, "Global TEU Pool",       f"{pool['total_teu_m']}M TEU", "world fleet all types",           C_ACCENT,   ""),
+        (c2, "Active Utilization",    f"{global_util:.1f}%",         "loaded + in-service containers",  C_HIGH if global_util < 80 else C_MOD, ""),
+        (c3, "Repositioning (Empty)", f"{reposition_count_k:,}K TEU","currently in empty transit",       C_MOD, ""),
         (c4, "Shortage Risk Routes",  str(sum(1 for a in _SHORTAGE_ALERT_ROUTES if a["risk"] in ("CRITICAL","HIGH"))),
-                                      "CRITICAL or HIGH shortage",    _C_RED,    ""),
+                                      "CRITICAL or HIGH shortage",    C_LOW,    ""),
     ]:
         with col:
             st.markdown(_kpi_card(label, value, subtitle, color, icon), unsafe_allow_html=True)
@@ -433,13 +463,13 @@ def _render_enhanced_equipment_overview() -> None:
     geo_sizes  = []
     for g in _GEO_BALANCE:
         if g["balance"] > 20:
-            geo_colors.append(_C_GREEN)
+            geo_colors.append(C_HIGH)
         elif g["balance"] > 0:
-            geo_colors.append(_C_TEAL)
+            geo_colors.append(_TEAL)
         elif g["balance"] > -20:
-            geo_colors.append(_C_AMBER)
+            geo_colors.append(C_MOD)
         else:
-            geo_colors.append(_C_RED)
+            geo_colors.append(C_LOW)
         geo_sizes.append(max(16, min(55, abs(g["balance"]) * 1.2 + 14)))
 
     hover_texts = [
@@ -473,10 +503,10 @@ def _render_enhanced_equipment_overview() -> None:
             showlakes=False,
             showcountries=True, countrycolor="rgba(232,230,225,0.05)",
             showframe=False,
-            bgcolor=_C_BG,
+            bgcolor=C_BG,
             projection_type="natural earth",
         ),
-        paper_bgcolor=_C_BG,
+        paper_bgcolor=C_BG,
         font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
         height=380,
         margin=dict(l=0, r=0, t=10, b=0),
@@ -491,10 +521,10 @@ def _render_enhanced_equipment_overview() -> None:
             f'<div style="width:10px;height:10px;border-radius:50%;background:{col}"></div>'
             f'<span style="font-size:0.70rem;color:{C_TEXT2}">{lbl}</span></div>'
             for col, lbl in [
-                (_C_GREEN, "Large surplus (>+20)"),
-                (_C_TEAL,  "Slight surplus"),
-                (_C_AMBER, "Slight deficit"),
-                (_C_RED,   "Large deficit (<-20)"),
+                (C_HIGH, "Large surplus (>+20)"),
+                (_TEAL,  "Slight surplus"),
+                (C_MOD, "Slight deficit"),
+                (C_LOW,   "Large deficit (<-20)"),
             ]
         )
         + "</div>", unsafe_allow_html=True)
@@ -510,7 +540,7 @@ def _render_enhanced_equipment_overview() -> None:
 
     repo_sorted = sorted(_REPO_COST_ROUTES, key=lambda r: r["cost_feu"], reverse=True)
     repo_colors = [
-        _C_RED if r["risk"] == "HIGH" else (_C_AMBER if r["risk"] == "MODERATE" else _C_GREEN)
+        C_LOW if r["risk"] == "HIGH" else (C_MOD if r["risk"] == "MODERATE" else C_HIGH)
         for r in repo_sorted
     ]
 
@@ -548,13 +578,13 @@ def _render_enhanced_equipment_overview() -> None:
         tt_colors = []
         for p in tt_sorted:
             if p["dwell"] >= 9:
-                tt_colors.append(_C_RED)
+                tt_colors.append(C_LOW)
             elif p["dwell"] >= 6.5:
-                tt_colors.append(_C_AMBER)
+                tt_colors.append(C_MOD)
             elif p["dwell"] >= 4.5:
-                tt_colors.append(_C_BLUE)
+                tt_colors.append(C_ACCENT)
             else:
-                tt_colors.append(_C_GREEN)
+                tt_colors.append(C_HIGH)
 
         fig_tt = go.Figure(go.Bar(
             y=[p["port"] for p in tt_sorted],
@@ -638,9 +668,9 @@ def _render_enhanced_equipment_overview() -> None:
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Utilization</div>"
                 f"<div style='font-size:1.0rem;font-weight:700;color:{rc};margin-top:2px'>{alert['util']}%</div></div>"
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Shortfall</div>"
-                f"<div style='font-size:1.0rem;font-weight:700;color:{_C_RED};margin-top:2px'>{alert['shortfall_teu']:,} TEU</div></div>"
+                f"<div style='font-size:1.0rem;font-weight:700;color:{C_LOW};margin-top:2px'>{alert['shortfall_teu']:,} TEU</div></div>"
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Rate Premium</div>"
-                f"<div style='font-size:1.0rem;font-weight:700;color:{_C_AMBER};margin-top:2px'>+{alert['rate_premium_pct']}%</div></div>"
+                f"<div style='font-size:1.0rem;font-weight:700;color:{C_MOD};margin-top:2px'>+{alert['rate_premium_pct']}%</div></div>"
                 f"</div>"
                 f"<div style='font-size:0.72rem;color:{C_TEXT2};line-height:1.45'>{alert['detail']}</div>"
                 f"</div>", unsafe_allow_html=True)
@@ -663,19 +693,19 @@ def _render_global_pool_overview() -> None:
     global_idx = get_global_equipment_index()
 
     if global_idx >= 85:
-        idx_label, idx_color = "TIGHT", _C_RED
+        idx_label, idx_color = "TIGHT", C_LOW
     elif global_idx >= 70:
-        idx_label, idx_color = "NORMAL", _C_AMBER
+        idx_label, idx_color = "NORMAL", C_MOD
     else:
-        idx_label, idx_color = "SURPLUS", _C_GREEN
+        idx_label, idx_color = "SURPLUS", C_HIGH
 
     # ── Row 1: KPI cards ─────────────────────────────────────────────────
     c1, c2, c3, c4, c5 = st.columns(5)
     kpis = [
-        (c1, "Total World Fleet",     f"{pool['total_teu_m']}M TEU",  "all container types",           _C_BLUE,   ""),
-        (c2, "Active in Service",     f"{pool['active_pct']}%",       f"{pool['total_teu_m']*pool['active_pct']/100:.1f}M TEU loaded/moving", _C_GREEN,  ""),
-        (c3, "Empty Repositioning",   f"{pool['repositioning_pct']}%","TEU currently in empty transit", _C_AMBER,  ""),
-        (c4, "Idle / Awaiting",       f"{pool['idle_pct']}%",         "parked, not yet deployed",       _C_RED,    ""),
+        (c1, "Total World Fleet",     f"{pool['total_teu_m']}M TEU",  "all container types",           C_ACCENT,   ""),
+        (c2, "Active in Service",     f"{pool['active_pct']}%",       f"{pool['total_teu_m']*pool['active_pct']/100:.1f}M TEU loaded/moving", C_HIGH,  ""),
+        (c3, "Empty Repositioning",   f"{pool['repositioning_pct']}%","TEU currently in empty transit", C_MOD,  ""),
+        (c4, "Idle / Awaiting",       f"{pool['idle_pct']}%",         "parked, not yet deployed",       C_LOW,    ""),
         (c5, "Weighted Utilization",  f"{global_idx}%",               idx_label,                        idx_color, ""),
     ]
     for col, label, value, subtitle, color, icon in kpis:
@@ -693,7 +723,7 @@ def _render_global_pool_overview() -> None:
             labels=["Carrier-Owned", "Leased from Lessors"],
             values=[pool["owned_pct"], pool["leased_pct"]],
             hole=0.62,
-            marker_colors=[_C_BLUE, _C_PURPLE],
+            marker_colors=[C_ACCENT, C_CONV],
             textinfo="label+percent",
             textfont={"color": C_TEXT, "size": 11},
             hovertemplate="%{label}: %{value}%<extra></extra>",
@@ -715,7 +745,7 @@ def _render_global_pool_overview() -> None:
             labels=["Active", "Repositioning Empty", "Idle"],
             values=[pool["active_pct"], pool["repositioning_pct"], pool["idle_pct"]],
             hole=0.62,
-            marker_colors=[_C_GREEN, _C_AMBER, _C_RED],
+            marker_colors=[C_HIGH, C_MOD, C_LOW],
             textinfo="label+percent",
             textfont={"color": C_TEXT, "size": 11},
             hovertemplate="%{label}: %{value}%<extra></extra>",
@@ -758,7 +788,7 @@ def _render_global_pool_overview() -> None:
             x=[d["surplus"] for d in reposition_data],
             name="Surplus (days supply)",
             orientation="h",
-            marker_color=_C_GREEN,
+            marker_color=C_HIGH,
             marker_opacity=0.85,
             hovertemplate="%{y}: %{x:.1f}K TEU surplus-days<extra></extra>",
         ))
@@ -767,7 +797,7 @@ def _render_global_pool_overview() -> None:
             x=[-d["deficit"] for d in reposition_data],
             name="Deficit (days short)",
             orientation="h",
-            marker_color=_C_RED,
+            marker_color=C_LOW,
             marker_opacity=0.85,
             hovertemplate="%{y}: %{x:.1f}K TEU deficit-days<extra></extra>",
         ))
@@ -793,19 +823,19 @@ def _render_global_pool_overview() -> None:
         f"border-radius:6px;padding:14px 20px;display:flex;gap:48px;flex-wrap:wrap;'>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>YoY Fleet Growth"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_GREEN};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_HIGH};margin-top:4px;'>"
         f"+{pool['yoy_fleet_growth']}%</div></div>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Newbuild Deliveries"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_BLUE};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_ACCENT};margin-top:4px;'>"
         f"{pool['newbuild_delivery_m']}M TEU</div></div>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Scrappings"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_AMBER};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MOD};margin-top:4px;'>"
         f"{pool['scrapping_m']}M TEU</div></div>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Net Fleet Addition"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_CYAN};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MACRO};margin-top:4px;'>"
         f"+{pool['newbuild_delivery_m']-pool['scrapping_m']:.1f}M TEU</div></div>"
         f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Global Utilization Index"
@@ -880,7 +910,7 @@ def _render_shortage_surplus_map() -> None:
             colorbar={
                 "title": {"text": "Utilization %", "font": {"color": C_TEXT2, "size": 10}},
                 "tickfont": {"color": C_TEXT3, "size": 10},
-                "bgcolor": _C_SURFACE,
+                "bgcolor": C_SURFACE,
                 "bordercolor": C_BORDER,
                 "borderwidth": 1,
                 "len": 0.85,
@@ -976,7 +1006,7 @@ def _render_repositioning_costs() -> None:
         ]
         costs = [m.empty_container_repositioning_cost_per_feu for m in sorted_routes]
         bar_colors = [
-            _C_RED if c >= 400 else (_C_AMBER if c >= 250 else _C_GREEN)
+            C_LOW if c >= 400 else (C_MOD if c >= 250 else C_HIGH)
             for c in costs
         ]
 
@@ -1081,14 +1111,14 @@ def _render_repositioning_costs() -> None:
         f"border-radius:6px;padding:14px 20px;display:flex;gap:40px;flex-wrap:wrap;margin-top:8px;'>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
         f"Avg Repositioning Cost</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{_C_AMBER};margin-top:4px;'>${avg_cost:,.0f}/FEU</div></div>"
+        f"<div style='font-size:1.1rem;font-weight:700;color:{C_MOD};margin-top:4px;'>${avg_cost:,.0f}/FEU</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
         f"Highest Cost Route</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{_C_RED};margin-top:4px;'>"
+        f"<div style='font-size:1.1rem;font-weight:700;color:{C_LOW};margin-top:4px;'>"
         f"{max_route.route_id.replace('_',' ').title()} — ${max_route.empty_container_repositioning_cost_per_feu:,}</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
         f"Avg Reposition Days</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{_C_BLUE};margin-top:4px;'>{avg_days:.0f} days</div></div>"
+        f"<div style='font-size:1.1rem;font-weight:700;color:{C_ACCENT};margin-top:4px;'>{avg_days:.0f} days</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
         f"Routes Tracked</div>"
         f"<div style='font-size:1.1rem;font-weight:700;color:{C_TEXT};margin-top:4px;'>{len(TRADE_IMBALANCE_DATA)}</div></div>"
@@ -1145,13 +1175,13 @@ def _render_dwell_times() -> None:
         for p in filtered_sorted:
             d = p["dwell_days"]
             if d >= 8:
-                colors.append(_C_RED)
+                colors.append(C_LOW)
             elif d >= 6:
-                colors.append(_C_AMBER)
+                colors.append(C_MOD)
             elif d >= 4:
-                colors.append(_C_BLUE)
+                colors.append(C_ACCENT)
             else:
-                colors.append(_C_GREEN)
+                colors.append(C_HIGH)
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -1197,17 +1227,17 @@ def _render_dwell_times() -> None:
         for p in filtered_sorted[:10]:  # show top 10
             d = p["dwell_days"]
             if d >= 8:
-                dcolor = _C_RED
+                dcolor = C_LOW
             elif d >= 6:
-                dcolor = _C_AMBER
+                dcolor = C_MOD
             elif d >= 4:
-                dcolor = _C_BLUE
+                dcolor = C_ACCENT
             else:
-                dcolor = _C_GREEN
+                dcolor = C_HIGH
 
             vs_avg = p["vs_avg"]
             vs_sign = "+" if vs_avg >= 0 else ""
-            vs_color = _C_RED if vs_avg > 20 else (_C_AMBER if vs_avg > 0 else _C_GREEN)
+            vs_color = C_LOW if vs_avg > 20 else (C_MOD if vs_avg > 0 else C_HIGH)
             r_color = _REGION_COLORS.get(p["region"], C_TEXT2)
 
             st.markdown(
@@ -1233,13 +1263,13 @@ def _render_dwell_times() -> None:
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
             f"border-radius:6px;padding:12px 20px;display:flex;gap:36px;flex-wrap:wrap;margin-top:6px;'>"
             f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Selection Average</div><div style='font-size:1.05rem;font-weight:700;color:{_C_BLUE};margin-top:3px;'>"
+            f"Selection Average</div><div style='font-size:1.05rem;font-weight:700;color:{C_ACCENT};margin-top:3px;'>"
             f"{avg_d:.1f} days</div></div>"
             f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Worst Port</div><div style='font-size:1.05rem;font-weight:700;color:{_C_RED};margin-top:3px;'>"
+            f"Worst Port</div><div style='font-size:1.05rem;font-weight:700;color:{C_LOW};margin-top:3px;'>"
             f"{worst_p['port']} ({worst_p['dwell_days']}d)</div></div>"
             f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Best Port</div><div style='font-size:1.05rem;font-weight:700;color:{_C_GREEN};margin-top:3px;'>"
+            f"Best Port</div><div style='font-size:1.05rem;font-weight:700;color:{C_HIGH};margin-top:3px;'>"
             f"{best_p['port']} ({best_p['dwell_days']}d)</div></div>"
             f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
             f"Ports Tracked</div><div style='font-size:1.05rem;font-weight:700;color:{C_TEXT};margin-top:3px;'>"
@@ -1277,11 +1307,11 @@ def _render_reefer_section() -> None:
 
     c1, c2, c3, c4, c5 = st.columns(5)
     kpis = [
-        (c1, "Avg Reefer Utilization",  f"{avg_util}%",          "capacity-weighted",         _C_RED),
-        (c2, "Total Reefer Units",      f"{total_k:.0f}K",       "units tracked",              _C_BLUE),
-        (c3, "Avg Daily Lease Rate",    f"${avg_rate:.2f}/day",  "per 40ft reefer unit",       _C_AMBER),
-        (c4, "Premium vs Dry Box",      f"{premium_x}×",         "daily lease rate multiple",  _C_PURPLE),
-        (c5, "Critical Regions",        str(len(crit_regions)),  "CRITICAL shortage",          _C_ROSE),
+        (c1, "Avg Reefer Utilization",  f"{avg_util}%",          "capacity-weighted",         C_LOW),
+        (c2, "Total Reefer Units",      f"{total_k:.0f}K",       "units tracked",              C_ACCENT),
+        (c3, "Avg Daily Lease Rate",    f"${avg_rate:.2f}/day",  "per 40ft reefer unit",       C_MOD),
+        (c4, "Premium vs Dry Box",      f"{premium_x}×",         "daily lease rate multiple",  C_CONV),
+        (c5, "Critical Regions",        str(len(crit_regions)),  "CRITICAL shortage",          _ROSE),
     ]
     for col, label, value, subtitle, color in kpis:
         with col:
@@ -1314,12 +1344,12 @@ def _render_reefer_section() -> None:
             x=reg_names, y=rate_vals,
             name="Daily Lease Rate (USD)",
             mode="lines+markers+text",
-            line={"color": _C_AMBER, "width": 2.5},
-            marker={"size": 10, "color": _C_AMBER,
-                    "line": {"color": _C_BG, "width": 2}},
+            line={"color": C_MOD, "width": 2.5},
+            marker={"size": 10, "color": C_MOD,
+                    "line": {"color": C_BG, "width": 2}},
             text=[f"${r:.2f}" for r in rate_vals],
             textposition="top center",
-            textfont={"color": _C_AMBER, "size": 10},
+            textfont={"color": C_MOD, "size": 10},
             hovertemplate="%{x}: $%{y:.2f}/day<extra></extra>",
         ), secondary_y=True)
 
@@ -1327,7 +1357,7 @@ def _render_reefer_section() -> None:
         fig.add_hline(
             y=90, line={"color": "rgba(192,57,43,0.5)", "dash": "dash", "width": 1.5},
             annotation_text="90% danger zone",
-            annotation_font={"color": _C_RED, "size": 10},
+            annotation_font={"color": C_LOW, "size": 10},
             secondary_y=False,
         )
 
@@ -1339,8 +1369,8 @@ def _render_reefer_section() -> None:
                              "title": "Utilization %", "range": [70, 100],
                              "tickfont": {"color": C_TEXT3, "size": 10}}
         layout["yaxis2"] = {"title": "USD/day", "range": [2.5, 5.0],
-                             "tickfont": {"color": _C_AMBER, "size": 10},
-                             "titlefont": {"color": _C_AMBER}}
+                             "tickfont": {"color": C_MOD, "size": 10},
+                             "titlefont": {"color": C_MOD}}
         layout["margin"] = {"l": 50, "r": 60, "t": 45, "b": 30}
         layout["legend"] = {"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}}
         fig.update_layout(**layout)
@@ -1351,10 +1381,10 @@ def _render_reefer_section() -> None:
         fig2 = go.Figure()
         seasonal_colors = {
             "Global": C_TEXT2,
-            "South America": _C_AMBER,
-            "Europe": _C_PURPLE,
-            "Asia Pacific": _C_BLUE,
-            "North America": _C_GREEN,
+            "South America": C_MOD,
+            "Europe": C_CONV,
+            "Asia Pacific": C_ACCENT,
+            "North America": C_HIGH,
         }
         for region, color in seasonal_colors.items():
             y_vals = _REEFER_SEASONAL.get(region, [])
@@ -1416,7 +1446,7 @@ def _render_reefer_section() -> None:
             color = _RISK_COLOR.get(e.shortage_risk, C_TEXT2)
             rgb   = _hex_to_rgb(color)
             label = f"{abs(d)}d deficit" if d < 0 else f"{d}d surplus"
-            sign_color = _C_RED if d < 0 else _C_GREEN
+            sign_color = C_LOW if d < 0 else C_HIGH
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;"
                 f"align-items:center;padding:6px 12px;"
@@ -1479,11 +1509,11 @@ def _render_shortage_alerts() -> None:
 
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-left:4px solid {_C_RED};border-radius:6px;"
+        f"border-left:4px solid {C_LOW};border-radius:6px;"
         f"padding:14px 20px;display:flex;gap:32px;flex-wrap:wrap;margin-bottom:16px;'>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Active Alerts</div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:{_C_RED};margin-top:2px;'>"
+        f"<div style='font-size:1.4rem;font-weight:800;color:{C_LOW};margin-top:2px;'>"
         f"{len(alerts)}</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Critical</div>"
@@ -1491,7 +1521,7 @@ def _render_shortage_alerts() -> None:
         f"{crit_count}</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>High Risk</div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:{_C_RED};margin-top:2px;'>"
+        f"<div style='font-size:1.4rem;font-weight:800;color:{C_LOW};margin-top:2px;'>"
         f"{high_count}</div></div>"
         f"<div style='flex:1;display:flex;align-items:center;'>"
         f"<div style='font-size:0.80rem;color:{C_TEXT3};'>"
@@ -1506,12 +1536,12 @@ def _render_shortage_alerts() -> None:
         risk_color = _RISK_COLOR.get(alert["risk"], C_TEXT2)
         rgb = _hex_to_rgb(risk_color)
         yoy_sign  = "+" if alert["yoy"] >= 0 else ""
-        yoy_color = _C_RED if alert["yoy"] > 0 else _C_GREEN
+        yoy_color = C_LOW if alert["yoy"] > 0 else C_HIGH
         deficit_label = (
             f"{abs(alert['deficit_d'])}d DEFICIT" if alert["deficit_d"] < 0
             else f"{alert['deficit_d']}d surplus"
         )
-        deficit_color = _C_RED if alert["deficit_d"] < 0 else _C_GREEN
+        deficit_color = C_LOW if alert["deficit_d"] < 0 else C_HIGH
 
         with col:
             st.markdown(
@@ -1539,7 +1569,7 @@ def _render_shortage_alerts() -> None:
                 f"{deficit_label}</div></div>"
                 f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
                 f"letter-spacing:0.06em;'>Lease Rate</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{_C_AMBER};margin-top:2px;'>"
+                f"<div style='font-size:1.05rem;font-weight:700;color:{C_MOD};margin-top:2px;'>"
                 f"${alert['rate']:.2f}/day</div></div>"
                 f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
                 f"letter-spacing:0.06em;'>YoY Change</div>"
@@ -1573,7 +1603,7 @@ def _render_age_distribution() -> None:
             values=pcts,
             hole=0.58,
             marker_colors=colors,
-            marker_line={"color": _C_BG, "width": 2},
+            marker_line={"color": C_BG, "width": 2},
             textinfo="percent",
             textfont={"color": "#e8e6e1", "size": 11},
             hovertemplate="%{label}<br>%{value}% of fleet<extra></extra>",
@@ -1637,8 +1667,8 @@ def _render_age_distribution() -> None:
             x=age_brackets, y=urgency,
             name="Replacement Urgency (0–100)",
             mode="lines+markers",
-            line={"color": _C_ROSE, "width": 2.5},
-            marker={"size": 9, "color": _C_ROSE, "line": {"color": _C_BG, "width": 2}},
+            line={"color": _ROSE, "width": 2.5},
+            marker={"size": 9, "color": _ROSE, "line": {"color": C_BG, "width": 2}},
             hovertemplate="%{x}: urgency score %{y}<extra></extra>",
         ), secondary_y=True)
 
@@ -1648,8 +1678,8 @@ def _render_age_distribution() -> None:
         )
         layout2["yaxis"]  = {"title": "M TEU", "tickfont": {"color": C_TEXT3, "size": 10}}
         layout2["yaxis2"] = {"title": "Urgency (0–100)", "range": [0, 120],
-                              "tickfont": {"color": _C_ROSE, "size": 10},
-                              "titlefont": {"color": _C_ROSE}}
+                              "tickfont": {"color": _ROSE, "size": 10},
+                              "titlefont": {"color": _ROSE}}
         layout2["margin"] = {"l": 50, "r": 60, "t": 45, "b": 50}
         layout2["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
         layout2["legend"] = {"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}}
@@ -1661,9 +1691,9 @@ def _render_age_distribution() -> None:
         eol_teu = _GLOBAL_TEU_POOL["total_teu_m"] * eol_pct / 100
         st.markdown(
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {_C_ORANGE};border-radius:6px;"
+            f"border-left:4px solid {_ORANGE};border-radius:6px;"
             f"padding:12px 16px;margin-top:8px;'>"
-            f"<span style='font-size:0.80rem;font-weight:700;color:{_C_ORANGE};'>"
+            f"<span style='font-size:0.80rem;font-weight:700;color:{_ORANGE};'>"
             f"Fleet Replacement Pipeline: </span>"
             f"<span style='font-size:0.80rem;color:{C_TEXT2};'>"
             f"{eol_pct:.1f}% of global fleet ({eol_teu:.2f}M TEU) is 20+ years old "
@@ -1697,28 +1727,28 @@ def _render_lease_vs_own() -> None:
         fig.add_trace(go.Bar(
             x=types, y=own_d,
             name="Implied Own Cost (USD/day)",
-            marker_color=_C_BLUE,
+            marker_color=C_ACCENT,
             marker_opacity=0.85,
             hovertemplate="%{x}<br>Own: $%{y:.2f}/day<extra></extra>",
         ), secondary_y=False)
         fig.add_trace(go.Bar(
             x=types, y=lease_d,
             name="Lease Rate (USD/day)",
-            marker_color=_C_PURPLE,
+            marker_color=C_CONV,
             marker_opacity=0.85,
             hovertemplate="%{x}<br>Lease: $%{y:.2f}/day<extra></extra>",
         ), secondary_y=False)
         prem_colors = [
-            _C_GREEN if p < 0 else (_C_AMBER if p < 30 else _C_RED)
+            C_HIGH if p < 0 else (C_MOD if p < 30 else C_LOW)
             for p in premium
         ]
         fig.add_trace(go.Scatter(
             x=types, y=premium,
             name="Lease Premium vs Own (%)",
             mode="lines+markers+text",
-            line={"color": _C_AMBER, "width": 2.5},
+            line={"color": C_MOD, "width": 2.5},
             marker={"size": 10, "color": prem_colors,
-                    "line": {"color": _C_BG, "width": 2}},
+                    "line": {"color": C_BG, "width": 2}},
             text=[f"{p:+}%" for p in premium],
             textposition="top center",
             textfont={"size": 10},
@@ -1739,8 +1769,8 @@ def _render_lease_vs_own() -> None:
         layout["barmode"] = "group"
         layout["yaxis"]   = {"title": "USD/day", "tickfont": {"color": C_TEXT3, "size": 10}}
         layout["yaxis2"]  = {"title": "Lease Premium %",
-                              "tickfont": {"color": _C_AMBER, "size": 10},
-                              "titlefont": {"color": _C_AMBER},
+                              "tickfont": {"color": C_MOD, "size": 10},
+                              "titlefont": {"color": C_MOD},
                               "zeroline": False}
         layout["margin"]  = {"l": 50, "r": 60, "t": 45, "b": 50}
         layout["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
@@ -1752,7 +1782,7 @@ def _render_lease_vs_own() -> None:
         fig_be = go.Figure(go.Bar(
             x=types,
             y=[r["breakeven_yrs"] for r in _LEASE_VS_OWN],
-            marker_color=[_C_GREEN if r["breakeven_yrs"] <= 5 else _C_AMBER
+            marker_color=[C_HIGH if r["breakeven_yrs"] <= 5 else C_MOD
                           for r in _LEASE_VS_OWN],
             marker_opacity=0.85,
             text=[f"{r['breakeven_yrs']}y" for r in _LEASE_VS_OWN],
@@ -1763,7 +1793,7 @@ def _render_lease_vs_own() -> None:
         fig_be.add_hline(
             y=5, line={"color": "rgba(46,158,110,0.4)", "dash": "dash", "width": 1.5},
             annotation_text="5yr threshold",
-            annotation_font={"color": _C_GREEN, "size": 10},
+            annotation_font={"color": C_HIGH, "size": 10},
         )
         layout_be = dark_layout(
             title="Ownership Break-Even vs Leasing (years)",
@@ -1783,10 +1813,10 @@ def _render_lease_vs_own() -> None:
             f"Lease/Own Detail by Type</div>", unsafe_allow_html=True)
         for r in _LEASE_VS_OWN:
             prem = r["lease_premium"]
-            prem_color = _C_RED if prem > 30 else (_C_AMBER if prem > 0 else _C_GREEN)
+            prem_color = C_LOW if prem > 30 else (C_MOD if prem > 0 else C_HIGH)
             own_c = r["own_capex_usd"]
             pref  = "Leasing preferred" if prem < 0 else ("Ownership preferred" if prem > 35 else "Market-dependent")
-            pref_color = _C_GREEN if prem < 0 else (_C_RED if prem > 35 else _C_AMBER)
+            pref_color = C_HIGH if prem < 0 else (C_LOW if prem > 35 else C_MOD)
 
             st.markdown(
                 f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
@@ -1800,15 +1830,15 @@ def _render_lease_vs_own() -> None:
                 f"${own_c:,}</div></div>"
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
                 f"letter-spacing:0.06em;'>Break-Even</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{_C_BLUE};margin-top:2px;'>"
+                f"<div style='font-size:0.88rem;font-weight:700;color:{C_ACCENT};margin-top:2px;'>"
                 f"{r['breakeven_yrs']}y</div></div>"
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
                 f"letter-spacing:0.06em;'>Own Daily</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{_C_BLUE};margin-top:2px;'>"
+                f"<div style='font-size:0.88rem;font-weight:700;color:{C_ACCENT};margin-top:2px;'>"
                 f"${r['own_daily_usd']:.2f}</div></div>"
                 f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
                 f"letter-spacing:0.06em;'>Lease Daily</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{_C_PURPLE};margin-top:2px;'>"
+                f"<div style='font-size:0.88rem;font-weight:700;color:{C_CONV};margin-top:2px;'>"
                 f"${r['lease_daily']:.2f}</div></div>"
                 f"</div>"
                 f"<div style='margin-top:8px;border-top:1px solid {C_BORDER};padding-top:7px;'>"
@@ -1823,9 +1853,9 @@ def _render_lease_vs_own() -> None:
         # Fleet strategy callout
         st.markdown(
             f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {_C_CYAN};border-radius:6px;"
+            f"border-left:4px solid {C_MACRO};border-radius:6px;"
             f"padding:12px 14px;margin-top:6px;'>"
-            f"<div style='font-size:0.72rem;font-weight:700;color:{_C_CYAN};"
+            f"<div style='font-size:0.72rem;font-weight:700;color:{C_MACRO};"
             f"text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;'>"
             f"Fleet Strategy Note</div>"
             f"<div style='font-size:0.76rem;color:{C_TEXT2};line-height:1.55;'>"
@@ -1911,21 +1941,21 @@ def _render_cost_calculator(route_results: Any) -> None:
     uplift_pct         = (reposition_per_feu / base_rate_per_feu * 100) if base_rate_per_feu > 0 else 0.0
 
     if metrics.imbalance_ratio > 1.3:
-        imb_label, imb_color = "Export-heavy — empties flow back at cost", _C_RED
+        imb_label, imb_color = "Export-heavy — empties flow back at cost", C_LOW
     elif metrics.imbalance_ratio < 0.8:
-        imb_label, imb_color = "Import-heavy — carrier absorbs empty return", _C_AMBER
+        imb_label, imb_color = "Import-heavy — carrier absorbs empty return", C_MOD
     else:
-        imb_label, imb_color = "Near-balanced trade flow", _C_GREEN
+        imb_label, imb_color = "Near-balanced trade flow", C_HIGH
 
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
 
     # KPI output row
     c1, c2, c3, c4 = st.columns(4)
     for col, label, value, subtitle, color in [
-        (c1, "Base Freight Cost",     f"${total_base:,.0f}",       f"{feu_count:,.0f} FEU × ${base_rate_per_feu:,}",       _C_BLUE),
-        (c2, "Repositioning Charge",  f"${total_reposition:,.0f}", f"${reposition_per_feu:,}/FEU embedded surcharge",       _C_RED),
-        (c3, "Equipment-Adj. Total",  f"${total_adjusted:,.0f}",   f"full cost for {feu_count:,.0f} FEU",                   _C_AMBER),
-        (c4, "Rate Uplift",           f"{uplift_pct:.1f}%",        "repositioning as % of base rate",                       _C_PURPLE),
+        (c1, "Base Freight Cost",     f"${total_base:,.0f}",       f"{feu_count:,.0f} FEU × ${base_rate_per_feu:,}",       C_ACCENT),
+        (c2, "Repositioning Charge",  f"${total_reposition:,.0f}", f"${reposition_per_feu:,}/FEU embedded surcharge",       C_LOW),
+        (c3, "Equipment-Adj. Total",  f"${total_adjusted:,.0f}",   f"full cost for {feu_count:,.0f} FEU",                   C_MOD),
+        (c4, "Rate Uplift",           f"{uplift_pct:.1f}%",        "repositioning as % of base rate",                       C_CONV),
     ]:
         with col:
             st.markdown(_kpi_card(label, value, subtitle, color), unsafe_allow_html=True)
@@ -1950,13 +1980,13 @@ def _render_cost_calculator(route_results: Any) -> None:
         f"empty transit back to origin</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Reposition per FEU</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_AMBER};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MOD};margin-top:4px;'>"
         f"${reposition_per_feu:,.0f}</div>"
         f"<div style='font-size:0.75rem;color:{C_TEXT2};margin-top:2px;'>"
         f"adds to eastbound rate</div></div>"
         f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
         f"letter-spacing:0.07em;'>Adjusted Rate / FEU</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{_C_RED};margin-top:4px;'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{C_LOW};margin-top:4px;'>"
         f"${adjusted_rate:,.0f}</div>"
         f"<div style='font-size:0.75rem;color:{C_TEXT2};margin-top:2px;'>"
         f"vs base ${base_rate_per_feu:,}/FEU</div></div>"
@@ -1972,9 +2002,9 @@ def _render_cost_calculator(route_results: Any) -> None:
         textposition="outside",
         textfont={"color": C_TEXT2, "size": 11},
         connector={"line": {"color": "rgba(255,255,255,0.15)"}},
-        increasing={"marker": {"color": _C_RED}},
-        totals={"marker": {"color": _C_AMBER}},
-        decreasing={"marker": {"color": _C_GREEN}},
+        increasing={"marker": {"color": C_LOW}},
+        totals={"marker": {"color": C_MOD}},
+        decreasing={"marker": {"color": C_HIGH}},
         hovertemplate="%{x}: $%{y:,}/FEU<extra></extra>",
     ))
     layout_wf = dark_layout(
@@ -2037,20 +2067,20 @@ def _render_balance_timeline() -> None:
             name=region,
             mode="lines+markers",
             line={"color": color, "width": 2.2},
-            marker={"size": 8, "color": color, "line": {"color": _C_BG, "width": 1.5}},
+            marker={"size": 8, "color": color, "line": {"color": C_BG, "width": 1.5}},
             hovertemplate=f"{region} %{{x}}: %{{y}}<extra></extra>",
         ))
 
     # Zone bands
     fig.add_hrect(y0=0,   y1=35,  fillcolor="rgba(192,57,43,0.05)",   line_width=0,
                   annotation_text="Shortage zone",  annotation_position="left",
-                  annotation_font={"color": _C_RED,   "size": 10})
+                  annotation_font={"color": C_LOW,   "size": 10})
     fig.add_hrect(y0=35,  y1=65,  fillcolor="rgba(201,150,43,0.04)",  line_width=0,
                   annotation_text="Transition",     annotation_position="left",
-                  annotation_font={"color": _C_AMBER, "size": 10})
+                  annotation_font={"color": C_MOD, "size": 10})
     fig.add_hrect(y0=65,  y1=100, fillcolor="rgba(46,158,110,0.04)",  line_width=0,
                   annotation_text="Surplus zone",  annotation_position="left",
-                  annotation_font={"color": _C_GREEN, "size": 10})
+                  annotation_font={"color": C_HIGH, "size": 10})
 
     # Key event annotations
     for ann in [
@@ -2087,11 +2117,11 @@ def _render_balance_timeline() -> None:
     # Global index callout
     global_idx = get_global_equipment_index()
     if global_idx >= 85:
-        idx_label, idx_color = "TIGHT", _C_RED
+        idx_label, idx_color = "TIGHT", C_LOW
     elif global_idx >= 70:
-        idx_label, idx_color = "NORMAL", _C_AMBER
+        idx_label, idx_color = "NORMAL", C_MOD
     else:
-        idx_label, idx_color = "SURPLUS", _C_GREEN
+        idx_label, idx_color = "SURPLUS", C_HIGH
 
     st.markdown(
         f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
@@ -2148,6 +2178,14 @@ def render(
         Macro data dict from FRED/World Bank feeds.  May be None.
     """
     logger.debug("tab_equipment.render() called.")
+
+    page_header(
+        title="Equipment & Container Pools",
+        subtitle="Global TEU pool, regional shortage map, repositioning economics, "
+                 "fleet age, and lease-vs-own analytics.",
+        badge_text="OPERATIONS",
+        badge_color=C_ACCENT,
+    )
 
     try:
         _render_enhanced_equipment_overview()
