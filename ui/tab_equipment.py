@@ -1026,17 +1026,23 @@ def _render_repositioning_costs() -> None:
             textfont={"color": C_TEXT2, "size": 10},
             hovertemplate="%{y}<br>Repositioning: $%{x:,}/FEU<extra></extra>",
         ))
-        layout = dark_layout(
+        apply_dark_layout(
+            fig_bar,
             title="Repositioning Cost / FEU (USD)",
             height=480,
             showlegend=False,
         )
-        layout["xaxis"]["title"] = "USD per FEU"
-        layout["xaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-        layout["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
-        layout["margin"] = {"l": 160, "r": 60, "t": 40, "b": 30}
-        fig_bar.update_layout(**layout)
+        fig_bar.update_layout(
+            xaxis={"title": "USD per FEU",
+                   "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
+            margin={"l": 160, "r": 60, "t": 40, "b": 30},
+        )
         st.plotly_chart(fig_bar, use_container_width=True, key="equip_reposition_bar")
+        st.markdown(source_footer([
+            {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+            {"name": "Carrier reposition cost surveys",   "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_sankey:
         # Sankey: loaded vs empty flows across key corridors
@@ -1099,11 +1105,12 @@ def _render_repositioning_costs() -> None:
                     "hovertemplate": "%{label}<extra></extra>",
                 },
             ))
-            layout_sk = dark_layout(height=480, showlegend=False)
-            layout_sk["margin"] = {"l": 10, "r": 10, "t": 35, "b": 20}
-            layout_sk["title"] = {"text": "Trade Flow: Loaded (blue) vs Empty Repositioning (gray)",
-                                   "font": {"size": 12, "color": C_TEXT2}, "x": 0.01}
-            fig_sk.update_layout(**layout_sk)
+            apply_dark_layout(fig_sk, height=480, showlegend=False)
+            fig_sk.update_layout(
+                margin={"l": 10, "r": 10, "t": 35, "b": 20},
+                title={"text": "Trade Flow: Loaded (blue) vs Empty Repositioning (gray)",
+                       "font": {"size": 12, "color": C_TEXT2}, "x": 0.01},
+            )
             st.plotly_chart(fig_sk, use_container_width=True, key="equip_sankey")
 
     # Repositioning stats strip
@@ -1128,6 +1135,32 @@ def _render_repositioning_costs() -> None:
         f"Routes Tracked</div>"
         f"<div style='font-size:1.1rem;font-weight:700;color:{C_TEXT};margin-top:4px;'>{len(TRADE_IMBALANCE_DATA)}</div></div>"
         f"</div>", unsafe_allow_html=True)
+
+    # Per-route table
+    table_rows = []
+    for m in sorted_routes:
+        cost = m.empty_container_repositioning_cost_per_feu
+        if m.imbalance_ratio > 1.3:
+            risk_level = "HIGH"
+        elif m.imbalance_ratio < 0.8:
+            risk_level = "MODERATE"
+        else:
+            risk_level = "LOW"
+        cost_color = C_LOW if cost >= 400 else (C_MOD if cost >= 250 else C_HIGH)
+        table_rows.append([
+            _sans(m.route_id.replace("_", " ").title(), color=C_TEXT, weight=600),
+            _mono(f"${cost:,}", color=cost_color),
+            _mono(f"{m.repositioning_days}", color=C_TEXT2),
+            badge(risk_level, color=RISK_COLORS.get(risk_level, C_TEXT2)),
+        ])
+    wsj_market_table(
+        headers=["Route", "Cost / FEU", "Days", "Risk"],
+        rows=table_rows,
+    )
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+        {"name": "Carrier reposition cost surveys",   "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
 
     # CSV
     imb_rows = [{
@@ -1212,16 +1245,17 @@ def _render_dwell_times() -> None:
             annotation_position="top",
             annotation_font={"color": C_TEXT3, "size": 10},
         )
-        layout = dark_layout(
+        apply_dark_layout(
+            fig,
             title="Average Container Dwell Time (days) — Major Ports",
             height=max(320, len(filtered_sorted) * 26 + 60),
             showlegend=False,
         )
-        layout["xaxis"]["title"] = "Dwell Days"
-        layout["xaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-        layout["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
-        layout["margin"] = {"l": 110, "r": 70, "t": 40, "b": 30}
-        fig.update_layout(**layout)
+        fig.update_layout(
+            xaxis={"title": "Dwell Days", "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
+            margin={"l": 110, "r": 70, "t": 40, "b": 30},
+        )
         st.plotly_chart(fig, use_container_width=True, key="equip_dwell_bar")
 
     with col_cards:
@@ -1229,6 +1263,8 @@ def _render_dwell_times() -> None:
             f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
             f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
             f"Port Detail</div>", unsafe_allow_html=True)
+        _trend_color_map = {"improving": C_HIGH, "stable": C_MOD, "worsening": C_LOW}
+        rows: List[List[str]] = []
         for p in filtered_sorted[:10]:  # show top 10
             d = p["dwell_days"]
             if d >= 8:
@@ -1244,42 +1280,48 @@ def _render_dwell_times() -> None:
             vs_sign = "+" if vs_avg >= 0 else ""
             vs_color = C_LOW if vs_avg > 20 else (C_MOD if vs_avg > 0 else C_HIGH)
             r_color = _REGION_COLORS.get(p["region"], C_TEXT2)
+            trend_text = p["trend"]
+            trend_color = _trend_color_map.get(trend_text, C_TEXT2)
 
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {dcolor};border-radius:6px;"
-                f"padding:9px 13px;margin-bottom:5px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-                f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{p['port']}</span>"
-                f"<span style='font-size:0.85rem;font-weight:800;color:{dcolor};'>{d}d</span></div>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:4px;'>"
-                f"<span style='font-size:0.70rem;color:{r_color};'>{p['region']}</span>"
-                f"<span style='font-size:0.70rem;color:{vs_color};'>{vs_sign}{vs_avg}% vs avg</span></div>"
-                f"<div style='margin-top:4px;'>{_trend_badge(p['trend'])}</div>"
-                f"</div>", unsafe_allow_html=True)
+            rows.append([
+                _sans(p["port"], color=C_TEXT, weight=700),
+                _sans(p["region"], color=r_color),
+                _mono(f"{d}d", color=dcolor),
+                _mono(f"{vs_sign}{vs_avg}%", color=vs_color),
+                badge(trend_text, color=trend_color),
+            ])
+        wsj_market_table(
+            headers=["Port", "Region", "Dwell Days", "vs Avg", "Trend"],
+            rows=rows,
+        )
 
     # Dwell summary stats
     all_dwell = [p["dwell_days"] for p in filtered]
     if all_dwell:
         avg_d  = sum(all_dwell) / len(all_dwell)
         worst_p = max(filtered, key=lambda p: p["dwell_days"])
-        best_p  = min(filtered, key=lambda p: p["dwell_days"])
+        score = max(0.0, min(1.0, worst_p["dwell_days"] / 12.0))
         st.markdown(
-            f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-radius:6px;padding:12px 20px;display:flex;gap:36px;flex-wrap:wrap;margin-top:6px;'>"
-            f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Selection Average</div><div style='font-size:1.05rem;font-weight:700;color:{C_ACCENT};margin-top:3px;'>"
-            f"{avg_d:.1f} days</div></div>"
-            f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Worst Port</div><div style='font-size:1.05rem;font-weight:700;color:{C_LOW};margin-top:3px;'>"
-            f"{worst_p['port']} ({worst_p['dwell_days']}d)</div></div>"
-            f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Best Port</div><div style='font-size:1.05rem;font-weight:700;color:{C_HIGH};margin-top:3px;'>"
-            f"{best_p['port']} ({best_p['dwell_days']}d)</div></div>"
-            f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-            f"Ports Tracked</div><div style='font-size:1.05rem;font-weight:700;color:{C_TEXT};margin-top:3px;'>"
-            f"{len(filtered)}</div></div>"
-            f"</div>", unsafe_allow_html=True)
+            insight_card_html(
+                title="Worst Port Dwell Times",
+                score=score,
+                action="Caution",
+                rationale=(
+                    f"{worst_p['port']} leads at {worst_p['dwell_days']}d "
+                    f"vs selection average {avg_d:.1f}d across {len(filtered)} ports."
+                ),
+                category="PORT_DEMAND",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        source_footer([
+            {"name": "UNCTAD Port Productivity",   "kind": "modeled", "quality": "demo"},
+            {"name": "Drewry Port Tariff Monitor", "kind": "modeled", "quality": "demo"},
+        ]),
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2105,46 +2147,52 @@ def _render_balance_timeline() -> None:
             borderwidth=1, borderpad=4,
         )
 
-    layout = dark_layout(
+    apply_dark_layout(
+        fig,
         title="Equipment Balance Index by Region (100 = well-supplied)",
         height=380,
     )
-    layout["xaxis"]["title"] = "Year"
-    layout["xaxis"]["tickvals"] = years
-    layout["xaxis"]["ticktext"] = [str(y) for y in years]
-    layout["yaxis"]["title"] = "Balance Index"
-    layout["yaxis"]["range"] = [0, 108]
-    layout["margin"] = {"l": 90, "r": 20, "t": 45, "b": 50}
-    layout["legend"] = {"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}}
-    fig.update_layout(**layout)
+    fig.update_layout(
+        xaxis={"title": "Year", "tickvals": years, "ticktext": [str(y) for y in years]},
+        yaxis={"title": "Balance Index", "range": [0, 108]},
+        margin={"l": 90, "r": 20, "t": 45, "b": 50},
+        legend={"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}},
+    )
     st.plotly_chart(fig, use_container_width=True, key="equip_balance_timeline")
+
+    st.markdown(
+        source_footer([
+            {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+            {"name": "BRS Alphaliner Fleet Database",     "kind": "modeled", "quality": "demo"},
+        ]),
+        unsafe_allow_html=True,
+    )
 
     # Global index callout
     global_idx = get_global_equipment_index()
     if global_idx >= 85:
-        idx_label, idx_color = "TIGHT", C_LOW
+        idx_label, idx_action = "TIGHT", "Caution"
     elif global_idx >= 70:
-        idx_label, idx_color = "NORMAL", C_MOD
+        idx_label, idx_action = "NORMAL", "Monitor"
     else:
-        idx_label, idx_color = "SURPLUS", C_HIGH
+        idx_label, idx_action = "SURPLUS", "Prioritize"
+
+    # Map utilization (0–100%) to a 0.0–1.0 score
+    idx_score = max(0.0, min(1.0, global_idx / 100.0))
 
     st.markdown(
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-left:4px solid {idx_color};"
-        f"border-radius:6px;padding:14px 18px;margin-top:8px;'>"
-        f"<span style='font-size:0.80rem;font-weight:700;color:{C_TEXT2};"
-        f"text-transform:uppercase;letter-spacing:0.06em;'>"
-        f"Current Global Equipment Index: </span>"
-        f"<span style='font-size:1.15rem;font-weight:800;color:{idx_color};'>"
-        f"{global_idx:.1f}% &nbsp;</span>"
-        f"<span style='display:inline-block;padding:2px 10px;border-radius:3px;"
-        f"font-size:0.72rem;font-weight:700;"
-        f"background:rgba({_hex_to_rgb(idx_color)},0.15);color:{idx_color};"
-        f"border:1px solid rgba({_hex_to_rgb(idx_color)},0.38);'>{idx_label}</span>"
-        f"<div style='font-size:0.80rem;color:{C_TEXT2};margin-top:6px;'>"
-        f"Weighted-average utilization across all 6 regions and 5 container types. "
-        f"Above 85% = tight market with rate pressure; below 70% = surplus conditions."
-        f"</div></div>", unsafe_allow_html=True)
+        insight_card_html(
+            title=f"Current Global Equipment Index: {global_idx:.1f}% ({idx_label})",
+            score=idx_score,
+            action=idx_action,
+            rationale=(
+                "Weighted-average utilization across all 6 regions and 5 container types. "
+                "Above 85% = tight market with rate pressure; below 70% = surplus conditions."
+            ),
+            category="MACRO",
+        ),
+        unsafe_allow_html=True,
+    )
 
     # CSV export
     timeline_rows = []
