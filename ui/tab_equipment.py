@@ -1374,19 +1374,19 @@ def _render_reefer_section() -> None:
     dry_avg  = 0.88
     premium_x = round(avg_rate / dry_avg, 1) if dry_avg > 0 and avg_rate > 0 else 0.0
     crit_regions = reefer_data.get("regions_critical", [])
-    high_regions = reefer_data.get("regions_high",     [])
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    kpis = [
-        (c1, "Avg Reefer Utilization",  f"{avg_util}%",          "capacity-weighted",         C_LOW),
-        (c2, "Total Reefer Units",      f"{total_k:.0f}K",       "units tracked",              C_ACCENT),
-        (c3, "Avg Daily Lease Rate",    f"${avg_rate:.2f}/day",  "per 40ft reefer unit",       C_MOD),
-        (c4, "Premium vs Dry Box",      f"{premium_x}×",         "daily lease rate multiple",  C_CONV),
-        (c5, "Critical Regions",        str(len(crit_regions)),  "CRITICAL shortage",          _ROSE),
-    ]
-    for col, label, value, subtitle, color in kpis:
-        with col:
-            st.markdown(_kpi_card(label, value, subtitle, color), unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "Avg Reefer Utilization", "value": f"{avg_util}%",
+         "accent": C_LOW,    "sublabel": "capacity-weighted"},
+        {"label": "Total Reefer Units",     "value": f"{total_k:.0f}K",
+         "accent": C_ACCENT, "sublabel": "units tracked"},
+        {"label": "Avg Daily Lease Rate",   "value": f"${avg_rate:.2f}/day",
+         "accent": C_MOD,    "sublabel": "per 40ft reefer unit"},
+        {"label": "Premium vs Dry Box",     "value": f"{premium_x}×",
+         "accent": C_CONV,   "sublabel": "daily lease rate multiple"},
+        {"label": "Critical Regions",       "value": str(len(crit_regions)),
+         "accent": _ROSE,    "sublabel": "CRITICAL shortage"},
+    ], columns=5)
 
     st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
 
@@ -1398,9 +1398,8 @@ def _render_reefer_section() -> None:
         reg_names  = [e.region for e in reefers]
         util_vals  = [e.utilization_pct for e in reefers]
         rate_vals  = [e.daily_lease_rate_usd for e in reefers]
-        deficit_vals = [abs(e.days_surplus_deficit) if e.days_surplus_deficit < 0 else 0 for e in reefers]
         bar_colors = [
-            _RISK_COLOR.get(e.shortage_risk, C_TEXT2) for e in reefers
+            RISK_COLORS.get(e.shortage_risk, C_TEXT2) for e in reefers
         ]
 
         fig.add_trace(go.Bar(
@@ -1432,19 +1431,20 @@ def _render_reefer_section() -> None:
             secondary_y=False,
         )
 
-        layout = dark_layout(
+        apply_dark_layout(
+            fig,
             title="Reefer Utilization (bars) & Daily Lease Rate (line) by Region",
             height=320,
         )
-        layout["yaxis"]  = {**layout.get("yaxis", {}),
-                             "title": "Utilization %", "range": [70, 100],
-                             "tickfont": {"color": C_TEXT3, "size": 10}}
-        layout["yaxis2"] = {"title": "USD/day", "range": [2.5, 5.0],
-                             "tickfont": {"color": C_MOD, "size": 10},
-                             "titlefont": {"color": C_MOD}}
-        layout["margin"] = {"l": 50, "r": 60, "t": 45, "b": 30}
-        layout["legend"] = {"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}}
-        fig.update_layout(**layout)
+        fig.update_layout(
+            yaxis={"title": "Utilization %", "range": [70, 100],
+                   "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis2={"title": "USD/day", "range": [2.5, 5.0],
+                    "tickfont": {"color": C_MOD, "size": 10},
+                    "titlefont": {"color": C_MOD}},
+            margin={"l": 50, "r": 60, "t": 45, "b": 30},
+            legend={"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}},
+        )
         st.plotly_chart(fig, use_container_width=True, key="equip_reefer_util")
 
         # Seasonal demand chart
@@ -1474,12 +1474,22 @@ def _render_reefer_section() -> None:
                        line={"color": "rgba(255,255,255,0.18)", "dash": "dash", "width": 1},
                        annotation_text="Annual avg", annotation_position="right",
                        annotation_font={"color": C_TEXT3, "size": 10})
-        layout2 = dark_layout(title="Reefer Seasonal Demand Index (100 = annual avg)", height=270)
-        layout2["yaxis"]["range"] = [60, 145]
-        layout2["margin"] = {"l": 40, "r": 60, "t": 40, "b": 20}
-        layout2["legend"] = {"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}}
-        fig2.update_layout(**layout2)
+        apply_dark_layout(
+            fig2,
+            title="Reefer Seasonal Demand Index (100 = annual avg)",
+            height=270,
+        )
+        fig2.update_layout(
+            yaxis={"range": [60, 145]},
+            margin={"l": 40, "r": 60, "t": 40, "b": 20},
+            legend={"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}},
+        )
         st.plotly_chart(fig2, use_container_width=True, key="equip_reefer_seasonal")
+
+        st.markdown(source_footer([
+            {"name": "Drewry Reefer Container Forecast", "kind": "modeled", "quality": "demo"},
+            {"name": "USDA / IFPRI seasonal trade flows", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_right:
         # Reefer commodity breakdown
@@ -1488,44 +1498,35 @@ def _render_reefer_section() -> None:
             f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
             f"Top Reefer Commodities</div>", unsafe_allow_html=True)
         for comm in _REEFER_COMMODITIES:
-            color = comm["color"]
-            rgb   = _hex_to_rgb(color)
-            bar_w = min(int(comm["share_pct"] * 4.2), 100)
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:6px;"
-                f"padding:10px 13px;margin-bottom:6px;'>"
-                f"<div style='display:flex;justify-content:space-between;"
-                f"align-items:center;margin-bottom:5px;'>"
-                f"<span style='font-size:0.82rem;font-weight:600;color:{C_TEXT};'>"
-                f"{comm['name']}</span>"
-                f"<span style='font-size:0.80rem;font-weight:800;color:{color};'>"
-                f"{comm['share_pct']}%</span></div>"
-                f"<div style='background:rgba({rgb},0.12);border-radius:3px;height:4px;margin-bottom:6px;'>"
-                f"<div style='background:{color};width:{bar_w}%;height:4px;border-radius:3px;'></div></div>"
-                f"<div style='font-size:0.70rem;color:{C_TEXT3};'>"
-                f"{comm['peak_months']} &nbsp;|&nbsp; {comm['key_origins']}</div>"
-                f"</div>", unsafe_allow_html=True)
+            score = min(comm["share_pct"] / 25.0, 1.0)
+            st.markdown(insight_card_html(
+                title=f"{comm['name']} — {comm['share_pct']}%",
+                score=score,
+                action="Watch",
+                rationale=f"Peak: {comm['peak_months']} · Origins: {comm['key_origins']}",
+                category="REEFER",
+            ), unsafe_allow_html=True)
 
         # Deficit days by region summary
         st.markdown(
             f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
             f"text-transform:uppercase;letter-spacing:0.07em;margin-top:14px;margin-bottom:8px;'>"
             f"Reefer Deficit Days by Region</div>", unsafe_allow_html=True)
+        deficit_rows = []
         for e in reefers:
             d = e.days_surplus_deficit
-            color = _RISK_COLOR.get(e.shortage_risk, C_TEXT2)
-            rgb   = _hex_to_rgb(color)
             label = f"{abs(d)}d deficit" if d < 0 else f"{d}d surplus"
             sign_color = C_LOW if d < 0 else C_HIGH
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;"
-                f"align-items:center;padding:6px 12px;"
-                f"background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-radius:6px;margin-bottom:4px;'>"
-                f"<span style='font-size:0.78rem;color:{C_TEXT};'>{e.region}</span>"
-                f"<span style='font-size:0.78rem;font-weight:700;color:{sign_color};'>{label}</span>"
-                f"</div>", unsafe_allow_html=True)
+            deficit_rows.append([
+                _sans(e.region, color=C_TEXT, weight=600),
+                _mono(label, color=sign_color),
+            ])
+        wsj_market_table(["Region", "Reefer Status"], deficit_rows)
+
+    st.markdown(source_footer([
+        {"name": "Drewry Reefer Container Forecast",  "kind": "modeled", "quality": "demo"},
+        {"name": "Internal regional shortage tracker", "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
