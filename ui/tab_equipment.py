@@ -700,17 +700,19 @@ def _render_global_pool_overview() -> None:
         idx_label, idx_color = "SURPLUS", C_HIGH
 
     # ── Row 1: KPI cards ─────────────────────────────────────────────────
-    c1, c2, c3, c4, c5 = st.columns(5)
-    kpis = [
-        (c1, "Total World Fleet",     f"{pool['total_teu_m']}M TEU",  "all container types",           C_ACCENT,   ""),
-        (c2, "Active in Service",     f"{pool['active_pct']}%",       f"{pool['total_teu_m']*pool['active_pct']/100:.1f}M TEU loaded/moving", C_HIGH,  ""),
-        (c3, "Empty Repositioning",   f"{pool['repositioning_pct']}%","TEU currently in empty transit", C_MOD,  ""),
-        (c4, "Idle / Awaiting",       f"{pool['idle_pct']}%",         "parked, not yet deployed",       C_LOW,    ""),
-        (c5, "Weighted Utilization",  f"{global_idx}%",               idx_label,                        idx_color, ""),
-    ]
-    for col, label, value, subtitle, color, icon in kpis:
-        with col:
-            st.markdown(_kpi_card(label, value, subtitle, color, icon), unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "Total World Fleet",    "value": f"{pool['total_teu_m']}M TEU",
+         "accent": C_ACCENT,  "sublabel": "all container types"},
+        {"label": "Active in Service",    "value": f"{pool['active_pct']}%",
+         "accent": C_HIGH,
+         "sublabel": f"{pool['total_teu_m']*pool['active_pct']/100:.1f}M TEU loaded/moving"},
+        {"label": "Empty Repositioning",  "value": f"{pool['repositioning_pct']}%",
+         "accent": C_MOD,     "sublabel": "TEU currently in empty transit"},
+        {"label": "Idle / Awaiting",      "value": f"{pool['idle_pct']}%",
+         "accent": C_LOW,     "sublabel": "parked, not yet deployed"},
+        {"label": "Weighted Utilization", "value": f"{global_idx}%",
+         "accent": idx_color, "sublabel": idx_label},
+    ], columns=5)
 
     st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
 
@@ -733,11 +735,16 @@ def _render_global_pool_overview() -> None:
             x=0.5, y=0.5, showarrow=False,
             font={"color": C_TEXT2, "size": 11},
         )
-        layout = dark_layout(height=230, showlegend=False)
-        layout["margin"] = {"l": 10, "r": 10, "t": 20, "b": 10}
-        layout["paper_bgcolor"] = C_CARD
-        fig_own.update_layout(**layout)
+        apply_dark_layout(fig_own, height=230, showlegend=False)
+        fig_own.update_layout(
+            margin={"l": 10, "r": 10, "t": 20, "b": 10},
+            paper_bgcolor=C_CARD,
+        )
         st.plotly_chart(fig_own, use_container_width=True, key="equip_own_donut")
+        st.markdown(source_footer([
+            {"name": "Alphaliner Fleet Database",      "kind": "modeled", "quality": "demo"},
+            {"name": "Drewry Container Forecast",      "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_fleet:
         # Fleet status donut
@@ -755,11 +762,16 @@ def _render_global_pool_overview() -> None:
             x=0.5, y=0.5, showarrow=False,
             font={"color": C_TEXT2, "size": 11},
         )
-        layout2 = dark_layout(height=230, showlegend=False)
-        layout2["margin"] = {"l": 10, "r": 10, "t": 20, "b": 10}
-        layout2["paper_bgcolor"] = C_CARD
-        fig_status.update_layout(**layout2)
+        apply_dark_layout(fig_status, height=230, showlegend=False)
+        fig_status.update_layout(
+            margin={"l": 10, "r": 10, "t": 20, "b": 10},
+            paper_bgcolor=C_CARD,
+        )
         st.plotly_chart(fig_status, use_container_width=True, key="equip_status_donut")
+        st.markdown(source_footer([
+            {"name": "Alphaliner Fleet Database",      "kind": "modeled", "quality": "demo"},
+            {"name": "Drewry Container Forecast",      "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_reposition:
         # Repositioning need by region — bar chart using available_units_k and utilization
@@ -801,52 +813,46 @@ def _render_global_pool_overview() -> None:
             marker_opacity=0.85,
             hovertemplate="%{y}: %{x:.1f}K TEU deficit-days<extra></extra>",
         ))
-        layout3 = dark_layout(
+        apply_dark_layout(
+            fig_repo,
             title="Surplus / Deficit by Region (TEU-days index)",
             height=230,
         )
-        layout3["barmode"] = "overlay"
-        layout3["xaxis"]["title"] = "← Deficit  |  Surplus →"
-        layout3["xaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-        layout3["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
-        layout3["margin"] = {"l": 100, "r": 20, "t": 35, "b": 30}
-        layout3["legend"] = {"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}}
-        layout3["shapes"] = [{"type": "line", "x0": 0, "x1": 0, "y0": -0.5,
-                               "y1": len(REGIONS) - 0.5,
-                               "line": {"color": "rgba(255,255,255,0.3)", "width": 1}}]
-        fig_repo.update_layout(**layout3)
+        fig_repo.update_layout(
+            barmode="overlay",
+            xaxis={"title": "← Deficit  |  Surplus →",
+                   "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
+            margin={"l": 100, "r": 20, "t": 35, "b": 30},
+            legend={"orientation": "h", "y": -0.22,
+                    "font": {"color": C_TEXT3, "size": 10}},
+            shapes=[{"type": "line", "x0": 0, "x1": 0, "y0": -0.5,
+                      "y1": len(REGIONS) - 0.5,
+                      "line": {"color": "rgba(255,255,255,0.3)", "width": 1}}],
+        )
         st.plotly_chart(fig_repo, use_container_width=True, key="equip_repo_bar")
+        st.markdown(source_footer([
+            {"name": "Alphaliner Fleet Database",      "kind": "modeled", "quality": "demo"},
+            {"name": "Drewry Container Forecast",      "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     # ── Fleet growth strip ─────────────────────────────────────────────
-    st.markdown(
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:6px;padding:14px 20px;display:flex;gap:48px;flex-wrap:wrap;'>"
-        f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>YoY Fleet Growth"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_HIGH};margin-top:4px;'>"
-        f"+{pool['yoy_fleet_growth']}%</div></div>"
-        f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Newbuild Deliveries"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_ACCENT};margin-top:4px;'>"
-        f"{pool['newbuild_delivery_m']}M TEU</div></div>"
-        f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Scrappings"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MOD};margin-top:4px;'>"
-        f"{pool['scrapping_m']}M TEU</div></div>"
-        f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Net Fleet Addition"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MACRO};margin-top:4px;'>"
-        f"+{pool['newbuild_delivery_m']-pool['scrapping_m']:.1f}M TEU</div></div>"
-        f"<div style='font-size:0.70rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Global Utilization Index"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{idx_color};margin-top:4px;'>"
-        f"{global_idx}% &nbsp;"
-        f"<span style='display:inline-block;padding:1px 8px;border-radius:3px;"
-        f"font-size:0.65rem;font-weight:700;"
-        f"background:rgba({_hex_to_rgb(idx_color)},0.18);color:{idx_color};"
-        f"border:1px solid rgba({_hex_to_rgb(idx_color)},0.38);'>{idx_label}</span>"
-        f"</div></div>"
-        f"</div>", unsafe_allow_html=True)
+    yoy_growth = pool["yoy_fleet_growth"]
+    net_add    = pool["newbuild_delivery_m"] - pool["scrapping_m"]
+    metric_card_row([
+        {"label": "YoY Fleet Growth",      "value": f"+{yoy_growth}%",
+         "accent": C_HIGH if yoy_growth >= 0 else C_LOW},
+        {"label": "Newbuild Deliveries",   "value": f"{pool['newbuild_delivery_m']}M TEU",
+         "accent": C_ACCENT},
+        {"label": "Scrappings",            "value": f"{pool['scrapping_m']}M TEU",
+         "accent": C_MOD},
+        {"label": "Net Fleet Addition",    "value": f"+{net_add:.1f}M TEU",
+         "accent": C_MACRO if net_add >= 0 else C_LOW},
+        {"label": "Global Utilization Idx","value": f"{global_idx}%",
+         "accent": idx_color, "sublabel": idx_label},
+        {"label": "Empty Repositioning %", "value": f"{pool['repositioning_pct']}%",
+         "accent": C_MOD if pool["repositioning_pct"] >= 18 else C_HIGH},
+    ], columns=6)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
