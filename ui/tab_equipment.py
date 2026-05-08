@@ -14,7 +14,7 @@ Function signature: render(route_results, freight_data, macro_data) -> None
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -27,7 +27,6 @@ from processing.equipment_tracker import (
     REGIONS,
     REGIONAL_EQUIPMENT_STATUS,
     TRADE_IMBALANCE_DATA,
-    EquipmentStatus,
     compute_equipment_adjusted_rate,
     get_global_equipment_index,
     get_reefer_summary,
@@ -50,17 +49,12 @@ from ui.styles import (
     RISK_COLORS,
     apply_dark_layout,
     badge,
-    dark_layout,
     insight_card_html,
-    kpi_card,
-    live_data_badge,
     metric_card_row,
     page_header,
-    regime_pill,
     section_divider,
     section_header,
     source_footer,
-    status_badge,
     wsj_market_table,
 )
 
@@ -78,13 +72,6 @@ _UTIL_COLORSCALE = [
     [0.80, "#c0392b"],
     [1.00, "#7f1d1d"],
 ]
-
-_RISK_COLOR: Dict[str, str] = {
-    "CRITICAL": "#b91c1c",
-    "HIGH":     "#c0392b",
-    "MODERATE": "#c9962b",
-    "LOW":      "#2e9e6e",
-}
 
 _TYPE_LABELS: Dict[str, str] = {
     "20FT_DRY":    "20ft Dry",
@@ -237,65 +224,6 @@ _REEFER_COMMODITIES: List[Dict[str, Any]] = [
     {"name": "Wine & Beer",      "share_pct":  6, "peak_months": "Sep–Dec",         "key_origins": "France, Australia, Chile",      "color": C_CONV},
     {"name": "Other Perishables","share_pct": 17, "peak_months": "Variable",        "key_origins": "Global",                        "color": C_TEXT3},
 ]
-
-
-# ── Utility helpers ────────────────────────────────────────────────────────
-
-def _hex_to_rgb(hex_color: str) -> str:
-    """Convert #rrggbb to 'r,g,b' string."""
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"{r},{g},{b}"
-
-
-def _risk_badge(risk: str) -> str:
-    color = _RISK_COLOR.get(risk, C_TEXT2)
-    rgb = _hex_to_rgb(color)
-    return (
-        f"<span style='display:inline-block;padding:2px 9px;border-radius:3px;"
-        f"font-size:0.65rem;font-weight:700;text-transform:uppercase;"
-        f"letter-spacing:0.05em;"
-        f"background:rgba({rgb},0.18);color:{color};"
-        f"border:1px solid rgba({rgb},0.40);'>{risk}</span>"
-    )
-
-
-def _trend_badge(trend: str) -> str:
-    cfg = {
-        "improving": ("↗", C_HIGH),
-        "stable":    ("→", C_MOD),
-        "worsening": ("↘", C_LOW),
-    }
-    arrow, color = cfg.get(trend, ("–", C_TEXT3))
-    rgb = _hex_to_rgb(color)
-    return (
-        f"<span style='display:inline-block;padding:2px 8px;border-radius:3px;"
-        f"font-size:0.65rem;font-weight:700;"
-        f"background:rgba({rgb},0.15);color:{color};"
-        f"border:1px solid rgba({rgb},0.35);'>{arrow} {trend.title()}</span>"
-    )
-
-
-def _kpi_card(label: str, value: str, subtitle: str, color: str, icon: str = "") -> str:
-    rgb = _hex_to_rgb(color)
-    icon_html = f"<div style='font-size:1.4rem;margin-bottom:6px;'>{icon}</div>" if icon else ""
-    return (
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-top:3px solid {color};border-radius:6px;"
-        f"padding:20px 16px;text-align:center;height:100%;'>"
-        f"{icon_html}"
-        f"<div style='font-family:Libre Franklin,sans-serif;font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.08em;margin-bottom:8px;'>{label}</div>"
-        f"<div style='font-family:JetBrains Mono,monospace;font-size:1.9rem;font-weight:800;color:{C_TEXT};"
-        f"line-height:1.1;'>{value}</div>"
-        f"<div style='font-family:Libre Franklin,sans-serif;font-size:0.72rem;color:{C_TEXT3};margin-top:6px;'>{subtitle}</div>"
-        f"</div>"
-    )
-
-
-def _section_divider() -> None:
-    st.markdown(
-        "<div style='margin:28px 0;border-top:1px solid rgba(232,230,225,0.05);'></div>", unsafe_allow_html=True)
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────
@@ -749,7 +677,7 @@ def _render_global_pool_overview() -> None:
             hovertemplate="%{label}: %{value}%<extra></extra>",
         ))
         fig_own.add_annotation(
-            text=f"<b>Fleet<br>Ownership</b>",
+            text="<b>Fleet<br>Ownership</b>",
             x=0.5, y=0.5, showarrow=False,
             font={"color": C_TEXT2, "size": 11},
         )
@@ -962,7 +890,6 @@ def _render_shortage_surplus_map() -> None:
 
     with col_detail:
         # Per-region summary cards
-        idx_map = {(e.region, e.container_type): e for e in REGIONAL_EQUIPMENT_STATUS}
         for region in REGIONS:
             region_equip = [e for e in REGIONAL_EQUIPMENT_STATUS if e.region == region]
             avg_util = (sum(e.utilization_pct for e in region_equip) / len(region_equip)
@@ -1111,8 +1038,11 @@ def _render_repositioning_costs() -> None:
                 color = "rgba(100,116,139,0.28)"
                 label = (f"Empty repositioning — {m.repositioning_days}d | "
                          f"${m.empty_container_repositioning_cost_per_feu:,}/FEU")
-            sources.append(src); targets.append(tgt)
-            values.append(vol); link_colors.append(color); link_labels.append(label)
+            sources.append(src)
+            targets.append(tgt)
+            values.append(vol)
+            link_colors.append(color)
+            link_labels.append(label)
 
         if sources:
             fig_sk = go.Figure(go.Sankey(
@@ -2247,7 +2177,7 @@ def render(
         logger.exception("tab_equipment: error in global pool overview")
         st.error("Error rendering Global Equipment Pool section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_shortage_surplus_map()
@@ -2255,7 +2185,7 @@ def render(
         logger.exception("tab_equipment: error in shortage/surplus map")
         st.error("Error rendering Shortage/Surplus Map section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_repositioning_costs()
@@ -2263,7 +2193,7 @@ def render(
         logger.exception("tab_equipment: error in repositioning costs")
         st.error("Error rendering Repositioning Cost section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_dwell_times()
@@ -2271,7 +2201,7 @@ def render(
         logger.exception("tab_equipment: error in dwell times")
         st.error("Error rendering Equipment Turn Time section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_reefer_section()
@@ -2279,7 +2209,7 @@ def render(
         logger.exception("tab_equipment: error in reefer section")
         st.error("Error rendering Reefer Availability section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_shortage_alerts()
@@ -2287,7 +2217,7 @@ def render(
         logger.exception("tab_equipment: error in shortage alerts")
         st.error("Error rendering Shortage Alert System section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_age_distribution()
@@ -2295,7 +2225,7 @@ def render(
         logger.exception("tab_equipment: error in age distribution")
         st.error("Error rendering Fleet Age Distribution section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_lease_vs_own()
@@ -2303,7 +2233,7 @@ def render(
         logger.exception("tab_equipment: error in lease vs own")
         st.error("Error rendering Leasing vs Owned Economics section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_cost_calculator(route_results)
@@ -2311,7 +2241,7 @@ def render(
         logger.exception("tab_equipment: error in cost calculator")
         st.error("Error rendering Equipment Cost Calculator section.", icon="⚠️")
 
-    _section_divider()
+    section_divider()
 
     try:
         _render_balance_timeline()
