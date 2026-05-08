@@ -1649,11 +1649,16 @@ def _render_age_distribution() -> None:
             x=0.5, y=0.5, showarrow=False,
             font={"color": C_TEXT2, "size": 12},
         )
-        layout = dark_layout(height=300, showlegend=False)
-        layout["margin"] = {"l": 10, "r": 10, "t": 30, "b": 10}
-        layout["title"] = {"text": "Global Fleet Age Profile", "font": {"size": 12, "color": C_TEXT2}, "x": 0.01}
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, height=300, showlegend=False)
+        fig.update_layout(
+            margin={"l": 10, "r": 10, "t": 30, "b": 10},
+            title={"text": "Global Fleet Age Profile", "font": {"size": 12, "color": C_TEXT2}, "x": 0.01},
+        )
         st.plotly_chart(fig, use_container_width=True, key="equip_age_donut")
+        st.markdown(
+            source_footer([{"name": "BRS Alphaliner Fleet Database", "kind": "modeled", "quality": "demo"}]),
+            unsafe_allow_html=True,
+        )
 
     with col_table:
         st.markdown(
@@ -1661,25 +1666,17 @@ def _render_age_distribution() -> None:
             f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
             f"Age Bracket Details</div>", unsafe_allow_html=True)
         global_fleet = _GLOBAL_TEU_POOL["total_teu_m"]
-        for b in _FLEET_AGE_DIST:
-            color = b["color"]
-            rgb   = _hex_to_rgb(color)
-            teu_m = global_fleet * b["pct"] / 100
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:6px;"
-                f"padding:10px 14px;margin-bottom:6px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-                f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{b['bracket']}</span>"
-                f"<span style='font-size:0.82rem;font-weight:800;color:{color};'>{b['pct']}%</span></div>"
-                f"<div style='background:rgba({rgb},0.12);border-radius:3px;height:3px;margin:6px 0;'>"
-                f"<div style='background:{color};width:{min(b['pct']*3, 100)}%;height:3px;border-radius:3px;'>"
-                f"</div></div>"
-                f"<div style='display:flex;justify-content:space-between;'>"
-                f"<span style='font-size:0.70rem;color:{C_TEXT3};'>{b['status']}</span>"
-                f"<span style='font-size:0.70rem;color:{C_TEXT3};'>{teu_m:.2f}M TEU</span></div>"
-                f"<div style='font-size:0.70rem;color:{C_TEXT3};margin-top:3px;'>{b['note']}</div>"
-                f"</div>", unsafe_allow_html=True)
+        age_metrics = [
+            {
+                "label":    b["bracket"],
+                "value":    f"{b['pct']}%",
+                "accent":   b["color"],
+                "delta":    f"{global_fleet * b['pct'] / 100:.2f}M TEU",
+                "sublabel": f"{b['status']} · {b['note']}",
+            }
+            for b in _FLEET_AGE_DIST
+        ]
+        metric_card_row(age_metrics, columns=6)
 
     with col_timeline:
         # Scrapping and renewal demand bar chart
@@ -1708,35 +1705,45 @@ def _render_age_distribution() -> None:
             hovertemplate="%{x}: urgency score %{y}<extra></extra>",
         ), secondary_y=True)
 
-        layout2 = dark_layout(
+        apply_dark_layout(
+            fig2,
             title="Fleet Volume (bars) & Replacement Urgency Score (line)",
             height=300,
         )
-        layout2["yaxis"]  = {"title": "M TEU", "tickfont": {"color": C_TEXT3, "size": 10}}
-        layout2["yaxis2"] = {"title": "Urgency (0–100)", "range": [0, 120],
-                              "tickfont": {"color": _ROSE, "size": 10},
-                              "titlefont": {"color": _ROSE}}
-        layout2["margin"] = {"l": 50, "r": 60, "t": 45, "b": 50}
-        layout2["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
-        layout2["legend"] = {"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}}
-        fig2.update_layout(**layout2)
+        fig2.update_layout(
+            yaxis={"title": "M TEU", "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis2={"title": "Urgency (0–100)", "range": [0, 120],
+                    "tickfont": {"color": _ROSE, "size": 10},
+                    "titlefont": {"color": _ROSE}},
+            margin={"l": 50, "r": 60, "t": 45, "b": 50},
+            xaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
+            legend={"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}},
+        )
         st.plotly_chart(fig2, use_container_width=True, key="equip_age_bars")
+        st.markdown(
+            source_footer([{"name": "BRS Alphaliner Fleet Database", "kind": "modeled", "quality": "demo"}]),
+            unsafe_allow_html=True,
+        )
 
         # Replacement need callout
         eol_pct = _FLEET_AGE_DIST[-1]["pct"] + _FLEET_AGE_DIST[-2]["pct"]
         eol_teu = _GLOBAL_TEU_POOL["total_teu_m"] * eol_pct / 100
+        urgency_score = max(0.0, min(1.0, eol_pct / 30.0))
         st.markdown(
-            f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {_ORANGE};border-radius:6px;"
-            f"padding:12px 16px;margin-top:8px;'>"
-            f"<span style='font-size:0.80rem;font-weight:700;color:{_ORANGE};'>"
-            f"Fleet Replacement Pipeline: </span>"
-            f"<span style='font-size:0.80rem;color:{C_TEXT2};'>"
-            f"{eol_pct:.1f}% of global fleet ({eol_teu:.2f}M TEU) is 20+ years old "
-            f"and represents near-term scrapping/replacement demand. "
-            f"At current newbuild pricing ($3,800–$28,000/unit), total replacement "
-            f"capex across the aging bracket is estimated at $80–120B over 5 years."
-            f"</span></div>", unsafe_allow_html=True)
+            insight_card_html(
+                title="Fleet Replacement Urgency",
+                score=urgency_score,
+                action="Caution",
+                rationale=(
+                    f"{eol_pct:.1f}% of global fleet ({eol_teu:.2f}M TEU) is 20+ years old "
+                    f"and represents near-term scrapping/replacement demand. "
+                    f"At current newbuild pricing ($3,800–$28,000/unit), total replacement "
+                    f"capex across the aging bracket is estimated at $80–120B over 5 years."
+                ),
+                category="MACRO",
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
