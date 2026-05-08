@@ -419,8 +419,9 @@ _SHORTAGE_ALERT_ROUTES: List[Dict[str, Any]] = [
 
 def _render_enhanced_equipment_overview() -> None:
     """
-    New pre-existing sections: KPI hero cards, scattergeo map, repositioning
-    cost bar chart, turn-time table, and shortage alert panel.
+    KPI hero strip, scattergeo balance map, repositioning cost bar, port dwell
+    table, and shortage alert panel — all rendered through the shared design
+    system (metric_card_row, apply_dark_layout, wsj_market_table, insight_card_html).
     """
     # ── KPI HERO CARDS ───────────────────────────────────────────────────
     section_header(
@@ -438,17 +439,21 @@ def _render_enhanced_equipment_overview() -> None:
         global_util = 74.5
 
     reposition_count_k = round(pool["total_teu_m"] * pool["repositioning_pct"] / 100 * 1000)
+    crit_high_count = sum(
+        1 for a in _SHORTAGE_ALERT_ROUTES if a["risk"] in ("CRITICAL", "HIGH")
+    )
 
-    c1, c2, c3, c4 = st.columns(4)
-    for col, label, value, subtitle, color, icon in [
-        (c1, "Global TEU Pool",       f"{pool['total_teu_m']}M TEU", "world fleet all types",           C_ACCENT,   ""),
-        (c2, "Active Utilization",    f"{global_util:.1f}%",         "loaded + in-service containers",  C_HIGH if global_util < 80 else C_MOD, ""),
-        (c3, "Repositioning (Empty)", f"{reposition_count_k:,}K TEU","currently in empty transit",       C_MOD, ""),
-        (c4, "Shortage Risk Routes",  str(sum(1 for a in _SHORTAGE_ALERT_ROUTES if a["risk"] in ("CRITICAL","HIGH"))),
-                                      "CRITICAL or HIGH shortage",    C_LOW,    ""),
-    ]:
-        with col:
-            st.markdown(_kpi_card(label, value, subtitle, color, icon), unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "Global TEU Pool",       "value": f"{pool['total_teu_m']}M TEU",
+         "accent": C_ACCENT, "sublabel": "world fleet all types"},
+        {"label": "Active Utilization",    "value": f"{global_util:.1f}%",
+         "accent": C_HIGH if global_util < 80 else C_MOD,
+         "sublabel": "loaded + in-service containers"},
+        {"label": "Repositioning (Empty)", "value": f"{reposition_count_k:,}K TEU",
+         "accent": C_MOD, "sublabel": "currently in empty transit"},
+        {"label": "Shortage Risk Routes",  "value": str(crit_high_count),
+         "accent": C_LOW, "sublabel": "CRITICAL or HIGH shortage"},
+    ], columns=4)
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
@@ -496,6 +501,7 @@ def _render_enhanced_equipment_overview() -> None:
         customdata=hover_texts,
         hovertemplate="%{customdata}<extra></extra>",
     ))
+    apply_dark_layout(fig_geo, height=380, showlegend=False)
     fig_geo.update_layout(
         geo=dict(
             showland=True, landcolor="#12151e",
@@ -506,9 +512,6 @@ def _render_enhanced_equipment_overview() -> None:
             bgcolor=C_BG,
             projection_type="natural earth",
         ),
-        paper_bgcolor=C_BG,
-        font=dict(color=C_TEXT, family="Libre Franklin, sans-serif"),
-        height=380,
         margin=dict(l=0, r=0, t=10, b=0),
     )
     st.plotly_chart(fig_geo, use_container_width=True, key="new_equip_geo_map")
@@ -529,7 +532,12 @@ def _render_enhanced_equipment_overview() -> None:
         )
         + "</div>", unsafe_allow_html=True)
 
-    _section_divider()
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+        {"name": "Internal regional balance model",  "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
+
+    section_divider()
 
     # ── REPOSITIONING COST BAR CHART ──────────────────────────────────────
     section_header(
@@ -554,15 +562,21 @@ def _render_enhanced_equipment_overview() -> None:
         textfont=dict(color=C_TEXT2, size=10),
         hovertemplate="<b>%{y}</b><br>Cost: $%{x:,}/FEU<extra></extra>",
     ))
-    layout_rb = dark_layout(height=320, showlegend=False)
-    layout_rb["xaxis"]["title"] = "Repositioning Cost (USD/FEU)"
-    layout_rb["xaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-    layout_rb["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
-    layout_rb["margin"] = {"l": 230, "r": 80, "t": 25, "b": 30}
-    fig_repo2.update_layout(**layout_rb)
+    apply_dark_layout(fig_repo2, height=320, showlegend=False)
+    fig_repo2.update_layout(
+        xaxis={"title": "Repositioning Cost (USD/FEU)",
+               "tickfont": {"color": C_TEXT3, "size": 10}},
+        yaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
+        margin={"l": 230, "r": 80, "t": 25, "b": 30},
+    )
     st.plotly_chart(fig_repo2, use_container_width=True, key="new_equip_repo_cost_bar")
 
-    _section_divider()
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index",            "kind": "modeled", "quality": "demo"},
+        {"name": "Carrier-disclosed repositioning surcharges",  "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
+
+    section_divider()
 
     # ── EQUIPMENT TURN TIME TABLE ─────────────────────────────────────────
     section_header(
@@ -602,34 +616,38 @@ def _render_enhanced_equipment_overview() -> None:
             annotation_text="Global avg 4.15d",
             annotation_font={"color": C_TEXT3, "size": 10},
         )
-        layout_tt = dark_layout(height=340, showlegend=False)
-        layout_tt["xaxis"]["title"] = "Dwell Days"
-        layout_tt["xaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-        layout_tt["yaxis"]["tickfont"] = {"color": C_TEXT2, "size": 10}
-        layout_tt["margin"] = {"l": 110, "r": 70, "t": 20, "b": 30}
-        fig_tt.update_layout(**layout_tt)
+        apply_dark_layout(fig_tt, height=340, showlegend=False)
+        fig_tt.update_layout(
+            xaxis={"title": "Dwell Days",
+                   "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
+            margin={"l": 110, "r": 70, "t": 20, "b": 30},
+        )
         st.plotly_chart(fig_tt, use_container_width=True, key="new_equip_turntime_bar")
 
     with col_tt_cards:
         st.markdown(
             f"<div style='font-size:0.70rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px'>Port Detail</div>", unsafe_allow_html=True)
+            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px'>Port Detail</div>",
+            unsafe_allow_html=True,
+        )
+        port_rows = []
         for p in _TURN_TIME_HIGHLIGHT:
-            rc = _RISK_COLOR.get(p["risk"], C_TEXT2)
-            rgb = _hex_to_rgb(rc)
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {rc};border-radius:6px;"
-                f"padding:8px 12px;margin-bottom:5px;'>"
-                f"<div style='display:flex;justify-content:space-between;'>"
-                f"<span style='font-size:0.80rem;font-weight:700;color:{C_TEXT}'>{p['port']}</span>"
-                f"<span style='font-size:0.85rem;font-weight:800;color:{rc}'>{p['dwell']}d</span></div>"
-                f"<div style='display:flex;justify-content:space-between;margin-top:3px;'>"
-                f"<span style='font-size:0.68rem;color:{C_TEXT3}'>{p['region']}</span>"
-                f"{_risk_badge(p['risk'])}</div>"
-                f"</div>", unsafe_allow_html=True)
+            rc = RISK_COLORS.get(p["risk"], C_TEXT2)
+            port_rows.append([
+                _sans(p["port"], color=C_TEXT, weight=700),
+                _sans(p["region"], color=C_TEXT3),
+                _mono(f"{p['dwell']}d", color=rc),
+                badge(p["risk"], color=rc),
+            ])
+        wsj_market_table(["Port", "Region", "Dwell", "Risk"], port_rows)
 
-    _section_divider()
+    st.markdown(source_footer([
+        {"name": "S&P Global Port Performance",  "kind": "modeled", "quality": "demo"},
+        {"name": "Internal dwell tracking",      "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
+
+    section_divider()
 
     # ── SHORTAGE ALERT PANEL ──────────────────────────────────────────────
     section_header(
@@ -651,31 +669,31 @@ def _render_enhanced_equipment_overview() -> None:
         desc = ", ".join(a["route"] for a in high_alerts)
         st.warning(f"HIGH risk: {desc} — book within 48 hours to secure equipment.", icon="⚠️")
 
+    risk_to_action = {"CRITICAL": "Avoid", "HIGH": "Caution", "MODERATE": "Monitor", "LOW": "Watch"}
+
     alert_cols = st.columns(2)
     for i, alert in enumerate(_SHORTAGE_ALERT_ROUTES):
-        col = alert_cols[i % 2]
-        rc = _RISK_COLOR.get(alert["risk"], C_TEXT2)
-        rgb = _hex_to_rgb(rc)
-        with col:
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:4px solid {rc};border-radius:6px;"
-                f"padding:14px 16px;margin-bottom:10px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>"
-                f"<span style='font-size:0.88rem;font-weight:700;color:{C_TEXT}'>{alert['route']}</span>"
-                f"{_risk_badge(alert['risk'])}</div>"
-                f"<div style='display:flex;gap:20px;flex-wrap:wrap;margin-bottom:8px'>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Utilization</div>"
-                f"<div style='font-size:1.0rem;font-weight:700;color:{rc};margin-top:2px'>{alert['util']}%</div></div>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Shortfall</div>"
-                f"<div style='font-size:1.0rem;font-weight:700;color:{C_LOW};margin-top:2px'>{alert['shortfall_teu']:,} TEU</div></div>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em'>Rate Premium</div>"
-                f"<div style='font-size:1.0rem;font-weight:700;color:{C_MOD};margin-top:2px'>+{alert['rate_premium_pct']}%</div></div>"
-                f"</div>"
-                f"<div style='font-size:0.72rem;color:{C_TEXT2};line-height:1.45'>{alert['detail']}</div>"
-                f"</div>", unsafe_allow_html=True)
+        action = risk_to_action.get(alert["risk"], "Monitor")
+        score = max(0.0, min(1.0, alert["util"] / 100.0))
+        rationale = (
+            f"{alert['util']}% util · {alert['shortfall_teu']:,} TEU shortfall · "
+            f"+{alert['rate_premium_pct']}% rate premium. {alert['detail']}"
+        )
+        with alert_cols[i % 2]:
+            st.markdown(insight_card_html(
+                title=alert["route"],
+                score=score,
+                action=action,
+                rationale=rationale,
+                category="ROUTE",
+            ), unsafe_allow_html=True)
 
-    _section_divider()
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+        {"name": "Internal route shortage model",    "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
+
+    section_divider()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
