@@ -2001,47 +2001,30 @@ def _render_cost_calculator(route_results: Any) -> None:
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
 
     # KPI output row
-    c1, c2, c3, c4 = st.columns(4)
-    for col, label, value, subtitle, color in [
-        (c1, "Base Freight Cost",     f"${total_base:,.0f}",       f"{feu_count:,.0f} FEU × ${base_rate_per_feu:,}",       C_ACCENT),
-        (c2, "Repositioning Charge",  f"${total_reposition:,.0f}", f"${reposition_per_feu:,}/FEU embedded surcharge",       C_LOW),
-        (c3, "Equipment-Adj. Total",  f"${total_adjusted:,.0f}",   f"full cost for {feu_count:,.0f} FEU",                   C_MOD),
-        (c4, "Rate Uplift",           f"{uplift_pct:.1f}%",        "repositioning as % of base rate",                       C_CONV),
-    ]:
-        with col:
-            st.markdown(_kpi_card(label, value, subtitle, color), unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "Base Freight Cost",    "value": f"${total_base:,.0f}",
+         "accent": C_ACCENT, "sublabel": f"{feu_count:,.0f} FEU × ${base_rate_per_feu:,}"},
+        {"label": "Repositioning Charge", "value": f"${total_reposition:,.0f}",
+         "accent": C_LOW,    "sublabel": f"${reposition_per_feu:,}/FEU embedded surcharge"},
+        {"label": "Equipment-Adj. Total", "value": f"${total_adjusted:,.0f}",
+         "accent": C_MOD,    "sublabel": f"full cost for {feu_count:,.0f} FEU"},
+        {"label": "Rate Uplift",          "value": f"{uplift_pct:.1f}%",
+         "accent": C_CONV,   "sublabel": "repositioning as % of base rate"},
+    ], columns=4)
 
     st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
 
-    # Detail card
-    st.markdown(
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:6px;padding:18px 22px;'>"
-        f"<div style='display:flex;gap:36px;flex-wrap:wrap;'>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Trade Imbalance Ratio</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{imb_color};margin-top:4px;'>"
-        f"{metrics.imbalance_ratio:.2f}:1</div>"
-        f"<div style='font-size:0.75rem;color:{imb_color};margin-top:2px;'>{imb_label}</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Repositioning Days</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_TEXT};margin-top:4px;'>"
-        f"{metrics.repositioning_days} days</div>"
-        f"<div style='font-size:0.75rem;color:{C_TEXT2};margin-top:2px;'>"
-        f"empty transit back to origin</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Reposition per FEU</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_MOD};margin-top:4px;'>"
-        f"${reposition_per_feu:,.0f}</div>"
-        f"<div style='font-size:0.75rem;color:{C_TEXT2};margin-top:2px;'>"
-        f"adds to eastbound rate</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Adjusted Rate / FEU</div>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{C_LOW};margin-top:4px;'>"
-        f"${adjusted_rate:,.0f}</div>"
-        f"<div style='font-size:0.75rem;color:{C_TEXT2};margin-top:2px;'>"
-        f"vs base ${base_rate_per_feu:,}/FEU</div></div>"
-        f"</div></div>", unsafe_allow_html=True)
+    # Detail strip
+    metric_card_row([
+        {"label": "Trade Imbalance Ratio", "value": f"{metrics.imbalance_ratio:.2f}:1",
+         "accent": imb_color, "sublabel": imb_label},
+        {"label": "Repositioning Days",    "value": f"{metrics.repositioning_days} days",
+         "accent": C_TEXT,    "sublabel": "empty transit back to origin"},
+        {"label": "Reposition per FEU",    "value": f"${reposition_per_feu:,.0f}",
+         "accent": C_MOD,     "sublabel": "adds to eastbound rate"},
+        {"label": "Adjusted Rate / FEU",   "value": f"${adjusted_rate:,.0f}",
+         "accent": C_LOW,     "sublabel": f"vs base ${base_rate_per_feu:,}/FEU"},
+    ], columns=4)
 
     # Cost waterfall chart
     fig_wf = go.Figure(go.Waterfall(
@@ -2058,14 +2041,22 @@ def _render_cost_calculator(route_results: Any) -> None:
         decreasing={"marker": {"color": C_HIGH}},
         hovertemplate="%{x}: $%{y:,}/FEU<extra></extra>",
     ))
-    layout_wf = dark_layout(
+    apply_dark_layout(
+        fig_wf,
         title="Rate Build-Up Waterfall (USD/FEU)",
-        height=280, showlegend=False,
+        height=280,
+        showlegend=False,
     )
-    layout_wf["yaxis"]["title"] = "USD/FEU"
-    layout_wf["margin"] = {"l": 60, "r": 40, "t": 45, "b": 30}
-    fig_wf.update_layout(**layout_wf)
+    fig_wf.update_layout(
+        yaxis={"title": "USD/FEU"},
+        margin={"l": 60, "r": 40, "t": 45, "b": 30},
+    )
     st.plotly_chart(fig_wf, use_container_width=True, key="equip_waterfall")
+
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index",        "kind": "modeled", "quality": "demo"},
+        {"name": "Internal trade-imbalance / route model",  "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
 
     # CSV export
     calc_csv = pd.DataFrame([{
