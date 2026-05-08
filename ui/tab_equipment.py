@@ -1583,53 +1583,36 @@ def _render_shortage_alerts() -> None:
         f"Rate premiums of 15–45% above baseline are typical in CRITICAL conditions.</div></div>"
         f"</div>", unsafe_allow_html=True)
 
+    risk_to_action = {"CRITICAL": "Avoid", "HIGH": "Caution", "MODERATE": "Monitor", "LOW": "Watch"}
+
     col_a, col_b = st.columns(2)
+    cols = [col_a, col_b]
     for i, alert in enumerate(alerts):
-        col = col_a if i % 2 == 0 else col_b
-        risk_color = _RISK_COLOR.get(alert["risk"], C_TEXT2)
-        rgb = _hex_to_rgb(risk_color)
-        yoy_sign  = "+" if alert["yoy"] >= 0 else ""
-        yoy_color = C_LOW if alert["yoy"] > 0 else C_HIGH
+        action = risk_to_action.get(alert["risk"], "Monitor")
+        score = max(0.0, min(1.0, alert["util"] / 100.0))
+        yoy_sign = "+" if alert["yoy"] >= 0 else ""
         deficit_label = (
-            f"{abs(alert['deficit_d'])}d DEFICIT" if alert["deficit_d"] < 0
+            f"{abs(alert['deficit_d'])}d deficit" if alert["deficit_d"] < 0
             else f"{alert['deficit_d']}d surplus"
         )
-        deficit_color = C_LOW if alert["deficit_d"] < 0 else C_HIGH
+        rationale = (
+            f"Primary exposure: {alert['route']} — "
+            f"{alert['util']:.0f}% util, {deficit_label}, "
+            f"${alert['rate']:.2f}/day lease ({yoy_sign}{alert['yoy']:.1f}pp YoY)"
+        )
+        with cols[i % 2]:
+            st.markdown(insight_card_html(
+                title=f"{alert['region']} — {alert['type']}",
+                score=score,
+                action=action,
+                rationale=rationale,
+                category="ROUTE",
+            ), unsafe_allow_html=True)
 
-        with col:
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:4px solid {risk_color};"
-                f"border-radius:6px;padding:14px 16px;margin-bottom:10px;'>"
-                f"<div style='display:flex;justify-content:space-between;"
-                f"align-items:flex-start;margin-bottom:8px;'>"
-                f"<div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_TEXT};'>"
-                f"{alert['region']} — {alert['type']}</div>"
-                f"<div style='font-size:0.72rem;color:{C_TEXT3};margin-top:2px;'>"
-                f"Primary exposure: {alert['route']}</div>"
-                f"</div>"
-                f"{_risk_badge(alert['risk'])}"
-                f"</div>"
-                f"<div style='display:flex;gap:24px;flex-wrap:wrap;'>"
-                f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Utilization</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{risk_color};margin-top:2px;'>"
-                f"{alert['util']:.0f}%</div></div>"
-                f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Supply Status</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{deficit_color};margin-top:2px;'>"
-                f"{deficit_label}</div></div>"
-                f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Lease Rate</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{C_MOD};margin-top:2px;'>"
-                f"${alert['rate']:.2f}/day</div></div>"
-                f"<div><div style='font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>YoY Change</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{yoy_color};margin-top:2px;'>"
-                f"{yoy_sign}{alert['yoy']:.1f}pp</div></div>"
-                f"</div>"
-                f"</div>", unsafe_allow_html=True)
+    st.markdown(source_footer([
+        {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
+        {"name": "Internal route congestion model",  "kind": "modeled", "quality": "demo"},
+    ]), unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
