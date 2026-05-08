@@ -1824,20 +1824,22 @@ def _render_lease_vs_own() -> None:
             annotation_font={"color": C_TEXT3, "size": 10},
         )
 
-        layout = dark_layout(
+        apply_dark_layout(
+            fig,
             title="Daily Cost: Own vs Lease (bars) + Premium % (line)",
             height=340,
         )
-        layout["barmode"] = "group"
-        layout["yaxis"]   = {"title": "USD/day", "tickfont": {"color": C_TEXT3, "size": 10}}
-        layout["yaxis2"]  = {"title": "Lease Premium %",
-                              "tickfont": {"color": C_MOD, "size": 10},
-                              "titlefont": {"color": C_MOD},
-                              "zeroline": False}
-        layout["margin"]  = {"l": 50, "r": 60, "t": 45, "b": 50}
-        layout["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
-        layout["legend"]  = {"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}}
-        fig.update_layout(**layout)
+        fig.update_layout(
+            barmode="group",
+            yaxis={"title": "USD/day", "tickfont": {"color": C_TEXT3, "size": 10}},
+            yaxis2={"title": "Lease Premium %",
+                    "tickfont": {"color": C_MOD, "size": 10},
+                    "titlefont": {"color": C_MOD},
+                    "zeroline": False},
+            margin={"l": 50, "r": 60, "t": 45, "b": 50},
+            xaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
+            legend={"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}},
+        )
         st.plotly_chart(fig, use_container_width=True, key="equip_lease_own_chart")
 
         # Breakeven years chart
@@ -1857,16 +1859,23 @@ def _render_lease_vs_own() -> None:
             annotation_text="5yr threshold",
             annotation_font={"color": C_HIGH, "size": 10},
         )
-        layout_be = dark_layout(
+        apply_dark_layout(
+            fig_be,
             title="Ownership Break-Even vs Leasing (years)",
-            height=210, showlegend=False,
+            height=210,
+            showlegend=False,
         )
-        layout_be["yaxis"]["title"] = "Years"
-        layout_be["yaxis"]["tickfont"] = {"color": C_TEXT3, "size": 10}
-        layout_be["xaxis"]["tickfont"] = {"color": C_TEXT2, "size": 11}
-        layout_be["margin"] = {"l": 40, "r": 20, "t": 40, "b": 30}
-        fig_be.update_layout(**layout_be)
+        fig_be.update_layout(
+            yaxis={"title": "Years", "tickfont": {"color": C_TEXT3, "size": 10}},
+            xaxis={"tickfont": {"color": C_TEXT2, "size": 11}},
+            margin={"l": 40, "r": 20, "t": 40, "b": 30},
+        )
         st.plotly_chart(fig_be, use_container_width=True, key="equip_breakeven_chart")
+
+        st.markdown(source_footer([
+            {"name": "Drewry Container Census",            "kind": "modeled", "quality": "demo"},
+            {"name": "Triton / Textainer fleet disclosures", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
 
     with col_table:
         st.markdown(
@@ -1875,58 +1884,38 @@ def _render_lease_vs_own() -> None:
             f"Lease/Own Detail by Type</div>", unsafe_allow_html=True)
         for r in _LEASE_VS_OWN:
             prem = r["lease_premium"]
-            prem_color = C_LOW if prem > 30 else (C_MOD if prem > 0 else C_HIGH)
-            own_c = r["own_capex_usd"]
-            pref  = "Leasing preferred" if prem < 0 else ("Ownership preferred" if prem > 35 else "Market-dependent")
-            pref_color = C_HIGH if prem < 0 else (C_LOW if prem > 35 else C_MOD)
-
-            st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-radius:6px;padding:13px 15px;margin-bottom:8px;'>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_TEXT};"
-                f"margin-bottom:8px;'>{r['type']}</div>"
-                f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>New Unit Cost</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_TEXT};margin-top:2px;'>"
-                f"${own_c:,}</div></div>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Break-Even</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_ACCENT};margin-top:2px;'>"
-                f"{r['breakeven_yrs']}y</div></div>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Own Daily</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_ACCENT};margin-top:2px;'>"
-                f"${r['own_daily_usd']:.2f}</div></div>"
-                f"<div><div style='font-size:0.62rem;color:{C_TEXT3};text-transform:uppercase;"
-                f"letter-spacing:0.06em;'>Lease Daily</div>"
-                f"<div style='font-size:0.88rem;font-weight:700;color:{C_CONV};margin-top:2px;'>"
-                f"${r['lease_daily']:.2f}</div></div>"
-                f"</div>"
-                f"<div style='margin-top:8px;border-top:1px solid {C_BORDER};padding-top:7px;'>"
-                f"<span style='font-size:0.70rem;font-weight:700;color:{prem_color};'>"
-                f"Lease premium: {'+' if prem >= 0 else ''}{prem}%</span>"
-                f"<span style='font-size:0.68rem;color:{C_TEXT3};'> · </span>"
-                f"<span style='font-size:0.70rem;font-weight:700;color:{pref_color};'>{pref}</span>"
-                f"<div style='font-size:0.68rem;color:{C_TEXT3};margin-top:4px;'>{r['market_trend']}</div>"
-                f"</div>"
-                f"</div>", unsafe_allow_html=True)
+            pref = (
+                "Leasing preferred" if prem < 0
+                else ("Ownership preferred" if prem > 35 else "Market-dependent")
+            )
+            score = max(0.0, min(1.0, (prem + 50) / 100.0))
+            rationale = (
+                f"Capex ${r['own_capex_usd']:,} · Own ${r['own_daily_usd']:.2f}/d · "
+                f"Lease ${r['lease_daily']:.2f}/d · Break-even {r['breakeven_yrs']}y · "
+                f"{r['market_trend']}"
+            )
+            st.markdown(insight_card_html(
+                title=f"{r['type']} — lease premium {'+' if prem >= 0 else ''}{prem}%",
+                score=score,
+                action=pref,
+                rationale=rationale,
+                category="EQUIP",
+            ), unsafe_allow_html=True)
 
         # Fleet strategy callout
-        st.markdown(
-            f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-            f"border-left:4px solid {C_MACRO};border-radius:6px;"
-            f"padding:12px 14px;margin-top:6px;'>"
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_MACRO};"
-            f"text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;'>"
-            f"Fleet Strategy Note</div>"
-            f"<div style='font-size:0.76rem;color:{C_TEXT2};line-height:1.55;'>"
-            f"Major carriers (MSC, Maersk, CMA CGM) own 45–60% of their fleets "
-            f"for cost control. Lessors (Triton, Textainer, CAI) provide market "
-            f"flexibility. Post-2022 oversupply has pushed dry box lease rates to "
-            f"multi-year lows — favouring short-term lease strategies for shippers "
-            f"and carriers seeking to avoid overcapitalization."
-            f"</div></div>", unsafe_allow_html=True)
+        st.markdown(insight_card_html(
+            title="Fleet Strategy Note",
+            score=0.5,
+            action="Watch",
+            rationale=(
+                "Major carriers (MSC, Maersk, CMA CGM) own 45–60% of their fleets "
+                "for cost control. Lessors (Triton, Textainer, CAI) provide market "
+                "flexibility. Post-2022 oversupply has pushed dry box lease rates to "
+                "multi-year lows — favouring short-term lease strategies for shippers "
+                "and carriers seeking to avoid overcapitalization."
+            ),
+            category="MACRO",
+        ), unsafe_allow_html=True)
 
     # Export
     lease_rows = [{
