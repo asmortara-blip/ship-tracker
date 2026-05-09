@@ -11,18 +11,46 @@ import streamlit as st
 from loguru import logger
 from scipy import stats as scipy_stats
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
+
+
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_rate_analytics.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 SIGNAL_TYPES = [
     "Momentum", "Mean Reversion", "BDI Divergence", "Rate Breakout",
@@ -522,6 +550,13 @@ def _instrument_table_html(inst_df: pd.DataFrame) -> str:
 def render(stock_data, insights, freight_data=None):
     try:
         logger.info("tab_results: render start")
+
+        page_header(
+            title="Signal Performance & Backtest Results",
+            subtitle="Aggregate alpha generation across all signal types, instruments, and freight routes.",
+            badge_text="ALPHA SIGNALS",
+            badge_color=C_ACCENT,
+        )
 
         # ── Build signal log ───────────────────────────────────────────────
         try:
