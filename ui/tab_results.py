@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-import random
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 from loguru import logger
 from scipy import stats as scipy_stats
 
 from ui.styles import (
     C_ACCENT,
-    C_BG,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -74,47 +68,6 @@ INSTRUMENTS = ["ZIM", "MATX", "DAC", "SBLK", "GOGL", "STNG",
 ROUTES = ["SHNG-ROTT", "SHNG-LOSA", "SING-ROTT", "BUEN-HBUR", "ROTT-NYBA"]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _card_wrap(inner: str, accent: str = C_ACCENT) -> str:
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-top:2px solid {accent};border-radius:6px;padding:20px 24px;'
-        f'box-shadow:0 4px 24px rgba(0,0,0,0.25);margin-bottom:12px">'
-        f'{inner}</div>'
-    )
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-top:3px">'
-           f'{subtitle}</div>') if subtitle else ""
-    st.markdown(
-        f'<div style="margin:28px 0 14px 0">'
-        f'<div style="font-size:0.68rem;font-weight:800;color:{C_ACCENT};'
-        f'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:4px">'
-        f'ALPHA SIGNALS</div>'
-        f'<div style="font-size:1.05rem;font-weight:800;color:{C_TEXT};'
-        f'letter-spacing:-0.01em">{title}</div>{sub}</div>', unsafe_allow_html=True)
-
-
-def _kpi(label: str, value: str, delta: str = "", accent: str = C_ACCENT) -> str:
-    delta_html = (
-        f'<div style="font-size:0.72rem;color:{C_HIGH if not delta.startswith("-") else C_LOW};'
-        f'margin-top:4px">{delta}</div>'
-    ) if delta else ""
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-top:2px solid {accent};border-radius:6px;padding:16px 18px">'
-        f'<div style="font-size:0.68rem;font-weight:700;color:{C_TEXT3};'
-        f'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px">{label}</div>'
-        f'<div style="font-size:1.55rem;font-weight:800;color:{C_TEXT};'
-        f'letter-spacing:-0.02em">{value}</div>'
-        f'{delta_html}</div>'
-    )
-
-
-def _color_pct(v: float) -> str:
-    return C_HIGH if v >= 0 else C_LOW
-
 
 def _fmt_pct(v: float, decimals: int = 1) -> str:
     sign = "+" if v >= 0 else ""
@@ -357,175 +310,6 @@ def _plotly_decay(decay_df: pd.DataFrame) -> go.Figure:
         yaxis={"title": "Avg Return %", "zeroline": True, "zerolinecolor": C_TEXT3},
     )
     return fig
-
-
-# ── Monthly attribution HTML table ─────────────────────────────────────────────
-
-def _monthly_attr_html(pivot: pd.DataFrame) -> str:
-    def cell_bg(v: float) -> str:
-        if v > 8:
-            return f"rgba(46,158,110,0.55)"
-        if v > 3:
-            return f"rgba(46,158,110,0.30)"
-        if v > 0:
-            return f"rgba(46,158,110,0.12)"
-        if v > -3:
-            return f"rgba(192,57,43,0.12)"
-        if v > -8:
-            return f"rgba(192,57,43,0.30)"
-        return f"rgba(192,57,43,0.55)"
-
-    th_style = (f'style="padding:8px 10px;font-size:0.65rem;font-weight:700;'
-                f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;'
-                f'border-bottom:1px solid {C_BORDER};white-space:nowrap;background:{C_CARD}"')
-    rows_html = ""
-    for month, row in pivot.iterrows():
-        cells = f'<td style="padding:8px 10px;font-size:0.72rem;color:{C_TEXT2};white-space:nowrap">{month}</td>'
-        for col in pivot.columns:
-            v = row[col]
-            bg = cell_bg(v)
-            color = C_HIGH if v >= 0 else C_LOW
-            sign = "+" if v >= 0 else ""
-            cells += (
-                f'<td style="padding:8px 10px;text-align:right;font-size:0.72rem;'
-                f'font-weight:600;color:{color};background:{bg};'
-                f'border:1px solid rgba(232,230,225,0.03)">'
-                f'{sign}{v:.1f}%</td>'
-            )
-        rows_html += f'<tr style="border-bottom:1px solid {C_BORDER}">{cells}</tr>'
-
-    cols_header = f'<th {th_style}>Month</th>' + "".join(
-        f'<th {th_style}>{c}</th>' for c in pivot.columns
-    )
-    return (
-        f'<div style="overflow-x:auto;border-radius:6px;border:1px solid {C_BORDER}">'
-        f'<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>{cols_header}</tr></thead>'
-        f'<tbody>{rows_html}</tbody>'
-        f'</table></div>'
-    )
-
-
-# ── Signal log table ───────────────────────────────────────────────────────────
-
-def _signal_log_html(df: pd.DataFrame, n: int = 50) -> str:
-    sample = df.head(n)
-    headers = ["Date", "Instrument", "Signal Type", "Dir", "Conv", "Entry", "Exit", "Return", "Status"]
-    th_s = (f'style="padding:9px 12px;font-size:0.65rem;font-weight:700;'
-            f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;'
-            f'border-bottom:1px solid {C_BORDER};background:{C_CARD};white-space:nowrap"')
-    head_html = "".join(f'<th {th_s}>{h}</th>' for h in headers)
-
-    rows_html = ""
-    for _, r in sample.iterrows():
-        ret = r["return_pct"]
-        ret_color = C_HIGH if ret >= 0 else C_LOW
-        ret_sign = "+" if ret >= 0 else ""
-        dir_color = C_HIGH if r["direction"] == "LONG" else C_LOW
-        status_color = C_ACCENT if r["status"] == "OPEN" else C_TEXT3
-        conv_bar = int(r["conviction"] * 10)
-        conv_str = f'{"█" * conv_bar}{"░" * (10 - conv_bar)} {r["conviction"]:.2f}'
-
-        td = f'style="padding:8px 12px;font-size:0.72rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
-        date_str = r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
-        rows_html += (
-            f'<tr style="transition:background 0.15s" '
-            f'onmouseover="this.style.background=\'rgba(53,114,176,0.05)\'" '
-            f'onmouseout="this.style.background=\'transparent\'">'
-            f'<td {td}>{date_str}</td>'
-            f'<td {td} style="font-weight:700;color:{C_TEXT}">{r["instrument"]}</td>'
-            f'<td {td}>'
-            f'<span style="background:rgba(53,114,176,0.15);color:{SIGNAL_COLORS.get(r["signal_type"], C_ACCENT)};'
-            f'padding:2px 7px;border-radius:4px;font-size:0.65rem;font-weight:700">'
-            f'{r["signal_type"]}</span></td>'
-            f'<td {td} style="font-weight:700;color:{dir_color}">{r["direction"]}</td>'
-            f'<td {td} style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{C_TEXT3}">{conv_str}</td>'
-            f'<td {td}>${r["entry"]:.2f}</td>'
-            f'<td {td}>${r["exit"]:.2f}</td>'
-            f'<td {td} style="font-weight:700;color:{ret_color}">{ret_sign}{ret:.2f}%</td>'
-            f'<td {td}><span style="color:{status_color};font-weight:700">{r["status"]}</span></td>'
-            f'</tr>'
-        )
-    return (
-        f'<div style="overflow-x:auto;max-height:520px;overflow-y:auto;'
-        f'border-radius:6px;border:1px solid {C_BORDER}">'
-        f'<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>{head_html}</tr></thead>'
-        f'<tbody>{rows_html}</tbody>'
-        f'</table></div>'
-    )
-
-
-# ── Leaderboard table ──────────────────────────────────────────────────────────
-
-def _leaderboard_html(lb: pd.DataFrame) -> str:
-    headers = ["Rank", "Signal Type", "Total Signals", "Win Rate", "Avg Return", "Avg Hold", "Sharpe", "IC"]
-    th_s = (f'style="padding:10px 14px;font-size:0.65rem;font-weight:700;'
-            f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;'
-            f'border-bottom:1px solid {C_BORDER};background:{C_CARD};white-space:nowrap"')
-    head_html = "".join(f'<th {th_s}>{h}</th>' for h in headers)
-
-    medal = {0: "🥇", 1: "🥈", 2: "🥉"}
-    rows_html = ""
-    for i, r in lb.head(10).iterrows():
-        wr_color = C_HIGH if r["Win Rate"] >= 55 else C_MOD if r["Win Rate"] >= 48 else C_LOW
-        ret_color = C_HIGH if r["Avg Return"] >= 0 else C_LOW
-        ret_sign = "+" if r["Avg Return"] >= 0 else ""
-        rank_lbl = medal.get(i, f"#{i+1}")
-        sig_color = SIGNAL_COLORS.get(r["Signal Type"], C_ACCENT)
-        td = f'style="padding:10px 14px;font-size:0.75rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
-        rows_html += (
-            f'<tr>'
-            f'<td {td} style="font-size:0.9rem">{rank_lbl}</td>'
-            f'<td {td} style="font-weight:700;color:{sig_color}">{r["Signal Type"]}</td>'
-            f'<td {td} style="text-align:center">{r["Total Signals"]}</td>'
-            f'<td {td} style="font-weight:800;color:{wr_color}">{r["Win Rate"]:.1f}%</td>'
-            f'<td {td} style="font-weight:700;color:{ret_color}">{ret_sign}{r["Avg Return"]:.2f}%</td>'
-            f'<td {td} style="text-align:center">{r["Avg Hold (d)"]:.1f}d</td>'
-            f'<td {td} style="font-weight:700;color:{C_MOD}">{r["Sharpe"]:.2f}</td>'
-            f'<td {td}>{r["IC"]:.3f}</td>'
-            f'</tr>'
-        )
-    return (
-        f'<div style="border-radius:6px;border:1px solid {C_BORDER};overflow:hidden">'
-        f'<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>{head_html}</tr></thead>'
-        f'<tbody>{rows_html}</tbody>'
-        f'</table></div>'
-    )
-
-
-# ── Instrument table ───────────────────────────────────────────────────────────
-
-def _instrument_table_html(inst_df: pd.DataFrame) -> str:
-    headers = ["Instrument", "Signals", "Win Rate", "Total Alpha", "Best Call", "Worst Call"]
-    th_s = (f'style="padding:9px 12px;font-size:0.65rem;font-weight:700;'
-            f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.08em;'
-            f'border-bottom:1px solid {C_BORDER};background:{C_CARD}"')
-    head_html = "".join(f'<th {th_s}>{h}</th>' for h in headers)
-    rows_html = ""
-    for _, r in inst_df.iterrows():
-        wr_c = C_HIGH if r["Win Rate"] >= 55 else C_MOD if r["Win Rate"] >= 48 else C_LOW
-        ta_c = C_HIGH if r["Total Alpha"] >= 0 else C_LOW
-        ta_s = "+" if r["Total Alpha"] >= 0 else ""
-        td = f'style="padding:9px 12px;font-size:0.73rem;color:{C_TEXT2};border-bottom:1px solid rgba(232,230,225,0.04)"'
-        rows_html += (
-            f'<tr>'
-            f'<td {td} style="font-weight:800;color:{C_TEXT}">{r["Instrument"]}</td>'
-            f'<td {td} style="text-align:center">{r["Signals"]}</td>'
-            f'<td {td} style="font-weight:700;color:{wr_c}">{r["Win Rate"]:.1f}%</td>'
-            f'<td {td} style="font-weight:700;color:{ta_c}">{ta_s}{r["Total Alpha"]:.1f}%</td>'
-            f'<td {td} style="color:{C_HIGH}">+{r["Best Call"]:.2f}%</td>'
-            f'<td {td} style="color:{C_LOW}">{r["Worst Call"]:.2f}%</td>'
-            f'</tr>'
-        )
-    return (
-        f'<div style="border-radius:6px;border:1px solid {C_BORDER};overflow:hidden">'
-        f'<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>{head_html}</tr></thead>'
-        f'<tbody>{rows_html}</tbody>'
-        f'</table></div>'
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
