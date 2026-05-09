@@ -17,20 +17,50 @@ import streamlit as st
 from loguru import logger
 from scipy import stats as scipy_stats
 
-# ── Palette ──────────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
+from ui.styles import (
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
+
+# Domain-specific accent colors for scenario overlays. Kept local because
+# their semantics ("Red Sea" = green, "China surge" = purple) are unique to
+# this tab; not promoted to ui.styles.
+C_PURPLE = "#7c6eaf"
+
+
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 
 # ── Simulation engine ─────────────────────────────────────────────────────────
@@ -145,7 +175,7 @@ def _dark_layout() -> dict:
 
 def _render_config_form() -> dict | None:
     """Render simulation parameter form. Returns params dict on submit, else None."""
-    _section_header(
+    section_header(
         "Monte Carlo Configuration",
         "Configure simulation parameters and run forecast paths.",
     )
@@ -194,8 +224,8 @@ def _render_config_form() -> dict | None:
 
 # ── Section 2: Fan chart ──────────────────────────────────────────────────────
 
-def _render_fan_chart(paths: np.ndarray, target: str, s0: float) -> None:
-    _section_header("Simulation Fan Chart", "100 sample paths with confidence bands.")
+def _render_fan_chart(paths: np.ndarray, target: str, s0: float, n_paths_total: int) -> None:
+    section_header("Simulation Fan Chart", "100 sample paths with confidence bands.")
     try:
         T = paths.shape[1] - 1
         days = np.arange(T + 1)
@@ -242,15 +272,16 @@ def _render_fan_chart(paths: np.ndarray, target: str, s0: float) -> None:
             annotation_text="Start",
             annotation_font_color=C_TEXT3,
         )
-        layout = _dark_layout()
-        layout.update(dict(
-            title=dict(text=f"{target} — Simulated Paths", font=dict(size=13, color=C_TEXT), x=0.02),
-            xaxis=dict(title="Days", gridcolor=C_BORDER, zeroline=False),
-            yaxis=dict(title="Value", gridcolor=C_BORDER, zeroline=False),
-            height=420,
-        ))
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, title=f"{target} — Simulated Paths", height=420)
+        fig.update_layout(
+            xaxis=dict(title="Days", zeroline=False),
+            yaxis=dict(title="Value", zeroline=False),
+        )
         st.plotly_chart(fig, use_container_width=True, key="mc_fan_chart")
+        st.markdown(source_footer([
+            {"name": f"Monte Carlo simulation ({n_paths_total:,} runs)",
+             "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Fan chart render failed")
         st.warning("Fan chart unavailable.")
@@ -258,8 +289,8 @@ def _render_fan_chart(paths: np.ndarray, target: str, s0: float) -> None:
 
 # ── Section 3: Horizon distribution ──────────────────────────────────────────
 
-def _render_horizon_dist(paths: np.ndarray, s0: float, target: str) -> None:
-    _section_header(
+def _render_horizon_dist(paths: np.ndarray, s0: float, target: str, n_paths_total: int) -> None:
+    section_header(
         "Distribution at Horizon",
         "Histogram of final simulated values across all paths.",
     )
@@ -302,16 +333,17 @@ def _render_horizon_dist(paths: np.ndarray, s0: float, target: str) -> None:
                 annotation_font_color=col,
                 annotation_position="top",
             )
-        layout = _dark_layout()
-        layout.update(dict(
-            title=dict(text=f"{target} — Final Value Distribution", font=dict(size=13, color=C_TEXT), x=0.02),
-            xaxis=dict(title="Final Value", gridcolor=C_BORDER),
-            yaxis=dict(title="Frequency", gridcolor=C_BORDER),
+        apply_dark_layout(fig, title=f"{target} — Final Value Distribution", height=380)
+        fig.update_layout(
+            xaxis=dict(title="Final Value"),
+            yaxis=dict(title="Frequency"),
             barmode="overlay",
-            height=380,
-        ))
-        fig.update_layout(**layout)
+        )
         st.plotly_chart(fig, use_container_width=True, key="mc_horizon_dist")
+        st.markdown(source_footer([
+            {"name": f"Monte Carlo simulation ({n_paths_total:,} runs)",
+             "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Horizon distribution render failed")
         st.warning("Distribution chart unavailable.")
@@ -319,8 +351,8 @@ def _render_horizon_dist(paths: np.ndarray, s0: float, target: str) -> None:
 
 # ── Section 4: Statistics table ───────────────────────────────────────────────
 
-def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float) -> None:
-    _section_header("Simulation Statistics", "Summary metrics across all simulated paths.")
+def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float, n_paths_total: int) -> None:
+    section_header("Simulation Statistics", "Summary metrics across all simulated paths.")
     try:
         finals = paths[:, -1]
         mean_v  = float(np.mean(finals))
@@ -334,39 +366,29 @@ def _render_stats_table(paths: np.ndarray, s0: float, horizon: int, sigma: float
         dt_ann   = horizon / 252
         sharpe   = ((mean_v / s0 - 1) / max(sigma * np.sqrt(dt_ann), 1e-9))
 
-        def row(label: str, value: str) -> str:
-            return (
-                f'<tr>'
-                f'<td style="padding:8px 16px; color:{C_TEXT2}; font-size:0.82rem; border-bottom:1px solid {C_BORDER}; font-family:Libre Franklin, sans-serif">{label}</td>'
-                f'<td style="padding:8px 16px; color:{C_TEXT}; font-size:0.85rem; font-weight:600; border-bottom:1px solid {C_BORDER}; text-align:right">{value}</td>'
-                f'</tr>'
-            )
+        prob_up_color = C_HIGH if prob_up >= 50 else C_LOW
+        prob_dn_color = C_LOW if prob_dn >= 50 else C_HIGH
+        sharpe_color  = C_HIGH if sharpe >= 0 else C_LOW
 
-        rows = "".join([
-            row("Mean", f"{mean_v:,.2f}"),
-            row("Median", f"{med_v:,.2f}"),
-            row("Std Dev", f"{std_v:,.2f}"),
-            row("Skewness", f"{skew_v:.3f}"),
-            row("Kurtosis", f"{kurt_v:.3f}"),
-            row("5th Percentile", f"{p5_v:,.2f}"),
-            row("25th Percentile", f"{p25_v:,.2f}"),
-            row("75th Percentile", f"{p75_v:,.2f}"),
-            row("95th Percentile", f"{p95_v:,.2f}"),
-            row("Prob(> start)", f"{prob_up:.1f}%"),
-            row("Prob(< start)", f"{prob_dn:.1f}%"),
-            row("Sharpe (annualized)", f"{sharpe:.3f}"),
-        ])
-        html = (
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px; overflow:hidden; margin-bottom:24px">'
-            f'<table style="width:100%; border-collapse:collapse">'
-            f'<thead><tr>'
-            f'<th style="padding:10px 16px; text-align:left; font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; background:{C_SURFACE}; border-bottom:1px solid {C_BORDER}">Metric</th>'
-            f'<th style="padding:10px 16px; text-align:right; font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase; letter-spacing:0.1em; background:{C_SURFACE}; border-bottom:1px solid {C_BORDER}">Value</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows}</tbody>'
-            f'</table></div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
+        stat_rows = [
+            [_sans("Mean",                color=C_TEXT2), _mono(f"{mean_v:,.2f}")],
+            [_sans("Median",              color=C_TEXT2), _mono(f"{med_v:,.2f}")],
+            [_sans("Std Dev",             color=C_TEXT2), _mono(f"{std_v:,.2f}")],
+            [_sans("Skewness",            color=C_TEXT2), _mono(f"{skew_v:.3f}")],
+            [_sans("Kurtosis",            color=C_TEXT2), _mono(f"{kurt_v:.3f}")],
+            [_sans("5th Percentile",      color=C_TEXT2), _mono(f"{p5_v:,.2f}",  color=C_LOW)],
+            [_sans("25th Percentile",     color=C_TEXT2), _mono(f"{p25_v:,.2f}", color=C_MOD)],
+            [_sans("75th Percentile",     color=C_TEXT2), _mono(f"{p75_v:,.2f}", color=C_MOD)],
+            [_sans("95th Percentile",     color=C_TEXT2), _mono(f"{p95_v:,.2f}", color=C_HIGH)],
+            [_sans("Prob(> start)",       color=C_TEXT2), _mono(f"{prob_up:.1f}%", color=prob_up_color)],
+            [_sans("Prob(< start)",       color=C_TEXT2), _mono(f"{prob_dn:.1f}%", color=prob_dn_color)],
+            [_sans("Sharpe (annualized)", color=C_TEXT2), _mono(f"{sharpe:.3f}",   color=sharpe_color)],
+        ]
+        wsj_market_table(["Metric", "Value"], stat_rows)
+        st.markdown(source_footer([
+            {"name": f"Monte Carlo simulation ({n_paths_total:,} runs)",
+             "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Stats table render failed")
         st.warning("Statistics table unavailable.")
@@ -381,17 +403,32 @@ def _render_scenario_overlays(
     horizon: int,
     model: str,
     target: str,
+    n_paths_total: int,
 ) -> None:
-    _section_header(
+    section_header(
         "Scenario Overlays",
         "Median paths for macro event scenarios compared to base case.",
     )
     try:
         scenarios = [
-            ("Red Sea normalization", 0.10,  C_HIGH,   "dot"),
-            ("Trade war escalation",  -0.15, C_LOW,    "dash"),
-            ("China demand surge",    0.20,  C_PURPLE, "dashdot"),
+            ("Red Sea normalization",  0.10, C_HIGH,
+             "Caution",
+             "Suez throughput recovers; westbound capacity unwinds and rates "
+             "normalize from current premia."),
+            ("Trade war escalation",  -0.15, C_LOW,
+             "Avoid",
+             "Tariff regime tightens demand; volumes contract on Transpac and "
+             "Asia-Europe lanes."),
+            ("China demand surge",     0.20, C_PURPLE,
+             "Monitor",
+             "Stimulus-led restock pulls forward demand; rates spike on "
+             "container and dry-bulk routes."),
         ]
+        scenario_dashes = {
+            "Red Sea normalization":  "dot",
+            "Trade war escalation":   "dash",
+            "China demand surge":     "dashdot",
+        }
         T = base_paths.shape[1] - 1
         days = np.arange(T + 1)
         base_mu = st.session_state.get("mc_params", {}).get("mu", 0.05)
@@ -405,28 +442,44 @@ def _render_scenario_overlays(
             line=dict(color=C_TEXT, width=2.5),
             name="Base case",
         ))
-        for name, delta_mu, color, dash in scenarios:
+        for name, delta_mu, color, _action, _rationale in scenarios:
             try:
                 s_paths = _simulate(s0, base_mu + delta_mu, base_sigma, T, 500, model, seed=99)
                 s_median = np.median(s_paths, axis=0)
                 fig.add_trace(go.Scatter(
                     x=days, y=s_median,
                     mode="lines",
-                    line=dict(color=color, width=2.0, dash=dash),
+                    line=dict(color=color, width=2.0, dash=scenario_dashes[name]),
                     name=name,
                 ))
             except Exception:
                 logger.warning(f"Scenario '{name}' failed to simulate")
         fig.add_hline(y=s0, line_dash="dot", line_color=C_TEXT3, line_width=1)
-        layout = _dark_layout()
-        layout.update(dict(
-            title=dict(text=f"{target} — Scenario Comparison (Median Paths)", font=dict(size=13, color=C_TEXT), x=0.02),
-            xaxis=dict(title="Days", gridcolor=C_BORDER, zeroline=False),
-            yaxis=dict(title="Value", gridcolor=C_BORDER, zeroline=False),
-            height=400,
-        ))
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, title=f"{target} — Scenario Comparison (Median Paths)", height=400)
+        fig.update_layout(
+            xaxis=dict(title="Days", zeroline=False),
+            yaxis=dict(title="Value", zeroline=False),
+        )
         st.plotly_chart(fig, use_container_width=True, key="mc_scenario_chart")
+
+        # Scenario insight cards: one per scenario with directional impact.
+        cols = st.columns(len(scenarios))
+        for col, (name, delta_mu, _color, action, rationale) in zip(cols, scenarios):
+            score = min(1.0, max(0.0, abs(delta_mu) / 0.25))
+            with col:
+                st.markdown(insight_card_html(
+                    title=name,
+                    score=score,
+                    action=action,
+                    rationale=f"Drift shock {delta_mu:+.0%}. {rationale}",
+                    category="SCENARIO",
+                ), unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": f"Monte Carlo simulation ({n_paths_total:,} runs)",
+             "kind": "modeled", "quality": "demo"},
+            {"name": "Scenario overlays (500 runs each)",
+             "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Scenario overlay render failed")
         st.warning("Scenario overlays unavailable.")
@@ -434,8 +487,8 @@ def _render_scenario_overlays(
 
 # ── Section 6: VaR / CVaR cards ──────────────────────────────────────────────
 
-def _render_var_cards(paths: np.ndarray, s0: float) -> None:
-    _section_header(
+def _render_var_cards(paths: np.ndarray, s0: float, n_paths_total: int) -> None:
+    section_header(
         "Value at Risk (VaR)",
         "95% confidence VaR and Expected Shortfall based on simulated returns.",
     )
@@ -448,12 +501,18 @@ def _render_var_cards(paths: np.ndarray, s0: float) -> None:
         tail = daily_returns[daily_returns <= np.percentile(daily_returns, 5)]
         cvar_pct = float(np.mean(tail))
         cvar_pts = cvar_pct * s0
-        cards = [
-            _kpi_card("1-Day VaR (95%)", f"{var_1d_pts:+,.1f}", f"{var_1d_pct*100:.2f}%", C_LOW),
-            _kpi_card("10-Day VaR (95%)", f"{var_10d_pts:+,.1f}", f"{var_10d_pct*100:.2f}%", C_LOW),
-            _kpi_card("Expected Shortfall (CVaR)", f"{cvar_pts:+,.1f}", f"Worst 5% avg: {cvar_pct*100:.2f}%", C_LOW),
-        ]
-        _kpi_row(cards)
+        metric_card_row([
+            {"label": "1-Day VaR (95%)",            "value": f"{var_1d_pts:+,.1f}",
+             "accent": C_LOW, "sublabel": f"{var_1d_pct*100:.2f}%"},
+            {"label": "10-Day VaR (95%)",           "value": f"{var_10d_pts:+,.1f}",
+             "accent": C_LOW, "sublabel": f"{var_10d_pct*100:.2f}%"},
+            {"label": "Expected Shortfall (CVaR)",  "value": f"{cvar_pts:+,.1f}",
+             "accent": C_LOW, "sublabel": f"Worst 5% avg: {cvar_pct*100:.2f}%"},
+        ], columns=3)
+        st.markdown(source_footer([
+            {"name": f"Monte Carlo simulation ({n_paths_total:,} runs)",
+             "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("VaR cards render failed")
         st.warning("VaR metrics unavailable.")
@@ -549,15 +608,12 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
 def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Monte Carlo simulation dashboard for shipping market forecasting."""
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD} 0%,{C_SURFACE} 100%);'
-            f'border:1px solid {C_BORDER}; border-radius:6px; padding:24px 28px; margin-bottom:28px">'
-            f'<h2 style="margin:0 0 6px; font-size:1.4rem; font-weight:800; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">'
-            f'Monte Carlo Simulation</h2>'
-            f'<p style="margin:0; color:{C_TEXT2}; font-size:0.88rem; font-family:Libre Franklin, sans-serif">'
-            f'Stochastic path simulation for shipping indices and equities '
-            f'using GBM and Jump-Diffusion models.</p>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Monte Carlo Simulation",
+            subtitle="Stochastic path simulation for shipping indices and equities using GBM and Jump-Diffusion models.",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
+        )
     except Exception:
         logger.exception("Header render failed")
 
