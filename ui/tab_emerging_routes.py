@@ -18,7 +18,6 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
-    apply_dark_layout,
     badge,
     insight_card_html,
     metric_card_row,

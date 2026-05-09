@@ -24,12 +24,10 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
-    badge,
     insight_card_html,
     metric_card_row,
     page_header,
@@ -528,8 +526,7 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
     try:
         up_thresh  = s0 * 1.20
         dn_thresh  = s0 * 0.80
-        n_paths, T_plus1 = paths.shape
-        T = T_plus1 - 1
+        n_paths, _T_plus1 = paths.shape
 
         # Time to first breach +20%
         breach_up_days = []
@@ -649,7 +646,6 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     target  = params.get("target", "BDI")
     s0      = params.get("s0", 1000.0)
     sigma   = params.get("sigma", 0.35)
-    mu      = params.get("mu", 0.05)
     horizon = params.get("horizon", 90)
     model   = params.get("model", "GBM")
 

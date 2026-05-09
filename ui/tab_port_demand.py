@@ -9,7 +9,6 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BG,
     C_BORDER,
     C_CARD,
     C_HIGH,
@@ -21,7 +20,6 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
-    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
