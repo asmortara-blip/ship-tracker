@@ -21,24 +21,50 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 
-# ── Color palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
-C_ORANGE  = "#f97316"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_SURFACE,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
 
 
-# ── Layout helper ─────────────────────────────────────────────────────────────
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+# ── Layout helper (legacy — Phase B will migrate callers to apply_dark_layout) ─
 
 def _dark_layout(height: int = 360, l: int = 52, r: int = 24, t: int = 36, b: int = 44) -> dict:
     return dict(
@@ -106,7 +132,7 @@ def _render_composition() -> None:
             try:
                 types   = ["Container", "Dry Bulk", "Tanker", "LNG", "Other"]
                 shares  = [34, 29, 18, 6, 13]
-                colors  = [C_ACCENT, C_HIGH, C_MOD, C_PURPLE, C_TEXT3]
+                colors  = [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_TEXT3]
                 fig = go.Figure(go.Pie(
                     labels=types,
                     values=shares,
@@ -250,7 +276,7 @@ def _render_orderbook() -> None:
         )
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.markdown(
-            f'<div style="color:{C_PURPLE};font-size:12px;margin-top:6px;">'
+            f'<div style="color:{C_CONV};font-size:12px;margin-top:6px;">'
             f'Trend: LNG dual-fuel vessels now represent the largest single category in the global orderbook, '
             f'driven by IMO 2030 carbon-intensity targets and EU ETS compliance pressure.</div>', unsafe_allow_html=True)
     except Exception:
@@ -665,14 +691,16 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Global Fleet Analytics tab."""
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,rgba(10,15,26,0.8) 100%);'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:20px;font-weight:800;letter-spacing:0.3px;">Global Fleet Analytics</div>'
-            f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
-            f'Comprehensive supply-side analysis — fleet composition, orderbook, scrapping dynamics, '
-            f'capacity vs demand, and trade lane deployment. Data as of Q1 2026.</div>'
-            f'</div>', unsafe_allow_html=True)
+        page_header(
+            title="Global Fleet Analytics",
+            subtitle=(
+                "Comprehensive supply-side analysis — fleet composition, orderbook, "
+                "scrapping dynamics, capacity vs demand, and trade lane deployment. "
+                "Data as of Q1 2026."
+            ),
+            badge_text="FLEET",
+            badge_color=C_ACCENT,
+        )
     except Exception:
         logger.exception("Fleet header failed")
 
