@@ -11,14 +11,16 @@ import streamlit as st
 from loguru import logger
 
 from ui.styles import (
-    C_SURFACE, C_CARD, C_BORDER,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
-    dark_layout,
     apply_dark_layout,
-    section_header,
-    metric_card_row,
-    wsj_market_table,
+    badge,
+    insight_card_html,
     live_data_badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
 )
 
 from engine.carrier_factor_model import (
@@ -85,6 +87,22 @@ _MOCK_DAY_CHANGE = {
 _HR = "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:20px 0'>"
 
 
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -147,22 +165,12 @@ def _init_positions() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_hero() -> None:
-    st.markdown("""
-    <div style="padding:28px 0 18px 0;">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
-        <div style="width:44px;height:44px;background:linear-gradient(135deg,#3572b0,#1d4ed8);
-                    border-radius:6px;display:flex;align-items:center;justify-content:center;
-                    font-size:22px;">💼</div>
-        <div>
-          <div style="font-size:26px;font-weight:800;color:#e8e6e1;letter-spacing:-0.5px;
-                      font-family:'Libre Franklin',sans-serif;">Portfolio Tracker</div>
-          <div style="font-size:13px;color:#9a968e;font-weight:500;margin-top:1px;">
-            Shipping Sector Position Management
-          </div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    page_header(
+        title="Portfolio Tracker",
+        subtitle="Shipping sector position management — P&L, risk metrics, and factor attribution.",
+        badge_text="PORTFOLIO",
+        badge_color=C_ACCENT,
+    )
 
 
 def _build_snapshot(positions: list[dict], stock_data) -> pd.DataFrame:
@@ -211,49 +219,16 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
         total_ret   = (total_pnl / cost_total * 100) if cost_total > 0 else 0.0
         port_beta   = (df["Beta"] * df["Weight %"] / 100).sum() if not df.empty else 1.0
 
-        day_color   = _color(day_pnl)
-        ret_color   = _color(total_ret)
-
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Total Portfolio Value</div>
-            <div style="font-size:26px;font-weight:800;color:{C_TEXT};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_dollar_abs(total_val)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Shipping Sector Exposure</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Day P&amp;L</div>
-            <div style="font-size:26px;font-weight:800;color:{day_color};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_dollar(day_pnl)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Today's unrealized change</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Total Return</div>
-            <div style="font-size:26px;font-weight:800;color:{ret_color};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_pct(total_ret)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">{_fmt_dollar(total_pnl)} unrealized P&amp;L</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Portfolio Beta</div>
-            <div style="font-size:26px;font-weight:800;color:{C_ACCENT};font-family:'Libre Franklin',sans-serif;">
-              {port_beta:.2f}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Weighted avg vs. SPY</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "Total Portfolio Value", "value": _fmt_dollar_abs(total_val),
+             "accent": C_TEXT,         "sublabel": "Shipping Sector Exposure"},
+            {"label": "Day P&L",               "value": _fmt_dollar(day_pnl),
+             "accent": _color(day_pnl), "sublabel": "Today's unrealized change"},
+            {"label": "Total Return",          "value": _fmt_pct(total_ret),
+             "accent": _color(total_ret), "sublabel": f"{_fmt_dollar(total_pnl)} unrealized P&L"},
+            {"label": "Portfolio Beta",        "value": f"{port_beta:.2f}",
+             "accent": C_ACCENT,        "sublabel": "Weighted avg vs. SPY"},
+        ], columns=4)
     except Exception as e:
         logger.warning(f"summary metrics error: {e}")
 
@@ -261,10 +236,6 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
 def _render_add_position_form() -> None:
     """Expander form to add a new position."""
     with st.expander("➕  Add / Edit Position", expanded=False):
-        st.markdown(f"""
-        <div style="background:{C_SURFACE};border-radius:6px;padding:4px 0 8px 0;">
-        </div>
-        """, unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1:
             ticker_in = st.text_input("Ticker Symbol", placeholder="e.g. ZIM", key="add_ticker").upper().strip()
@@ -327,117 +298,55 @@ def _render_add_position_form() -> None:
 
 
 def _render_holdings_table(df: pd.DataFrame) -> None:
-    """Color-coded holdings table."""
-    st.markdown(section_header("Holdings", icon="📋"), unsafe_allow_html=True)
+    """Sector-coded holdings table."""
+    section_header("Holdings", "Sector-coded position table with P&L and weight allocation")
     if df.empty:
         st.info("No positions in portfolio. Add one above.")
         return
 
     try:
-        rows_html = ""
+        rows = []
         for _, row in df.iterrows():
-            pnl_color   = _color(row["P&L $"])
-            day_color   = _color(row["Day Chg %"])
-            sector_col  = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
+            pnl_color  = _color(row["P&L $"])
+            day_color  = _color(row["Day Chg %"])
+            sector_col = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
+            rows.append([
+                _sans(row["Ticker"], color=C_TEXT, weight=700),
+                badge(row["Sector"], color=sector_col),
+                _mono(f"{int(row['Shares']):,}"),
+                _mono(f"${row['Avg Cost']:.2f}"),
+                _mono(f"${row['Price']:.2f}", color=C_TEXT),
+                _mono(_fmt_dollar_abs(row["Market Value"]), color=C_TEXT),
+                _mono(_fmt_dollar(row["P&L $"]), color=pnl_color),
+                _mono(_fmt_pct(row["P&L %"]), color=pnl_color),
+                _mono(_fmt_pct(row["Day Chg %"]), color=day_color),
+                _mono(f"{row['Weight %']:.1f}%"),
+            ])
 
-            rows_html += f"""
-            <tr style="border-bottom:1px solid rgba(232,230,225,0.04);">
-              <td style="padding:12px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
-                {row['Ticker']}
-              </td>
-              <td style="padding:12px 8px;">
-                <span style="background:{sector_col}22;color:{sector_col};border-radius:4px;
-                             padding:3px 8px;font-size:11px;font-weight:600;">
-                  {row['Sector']}
-                </span>
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                {int(row['Shares']):,}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                ${row['Avg Cost']:.2f}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT};text-align:right;font-size:13px;font-weight:600;">
-                ${row['Price']:.2f}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT};text-align:right;font-size:13px;font-weight:600;">
-                {_fmt_dollar_abs(row['Market Value'])}
-              </td>
-              <td style="padding:12px 8px;color:{pnl_color};text-align:right;font-size:13px;font-weight:700;">
-                {_fmt_dollar(row['P&L $'])}
-              </td>
-              <td style="padding:12px 8px;color:{pnl_color};text-align:right;font-size:13px;font-weight:700;">
-                {_fmt_pct(row['P&L %'])}
-              </td>
-              <td style="padding:12px 8px;color:{day_color};text-align:right;font-size:13px;font-weight:600;">
-                {_fmt_pct(row['Day Chg %'])}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                {row['Weight %']:.1f}%
-              </td>
-            </tr>"""
-
+        # Footer totals row (rendered as a final row)
         total_val  = df["Market Value"].sum()
         total_pnl  = df["P&L $"].sum()
         total_day  = df["Day P&L $"].sum()
         tot_color  = _color(total_pnl)
         day_color2 = _color(total_day)
+        rows.append([
+            _sans("TOTAL", color=C_TEXT, weight=800),
+            "", "", "", "",
+            _mono(_fmt_dollar_abs(total_val), color=C_TEXT),
+            _mono(_fmt_dollar(total_pnl), color=tot_color),
+            "",
+            _mono(f"Day: {_fmt_dollar(total_day)}", color=day_color2),
+            _mono("100%"),
+        ])
 
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                    overflow:hidden;margin-bottom:24px;">
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-family:'Libre Franklin',sans-serif;">
-              <thead>
-                <tr style="background:rgba(232,230,225,0.03);border-bottom:1px solid rgba(255,255,255,0.1);">
-                  <th style="padding:11px 14px;text-align:left;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
-                  <th style="padding:11px 8px;text-align:left;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Sector</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Shares</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Avg Cost</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Price</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Mkt Value</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">P&amp;L $</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">P&amp;L %</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Day Chg</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Weight</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows_html}
-              </tbody>
-              <tfoot>
-                <tr style="background:rgba(53,114,176,0.06);border-top:1px solid rgba(255,255,255,0.1);">
-                  <td colspan="5" style="padding:11px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
-                    TOTAL
-                  </td>
-                  <td style="padding:11px 8px;font-weight:800;color:{C_TEXT};text-align:right;font-size:13px;">
-                    {_fmt_dollar_abs(total_val)}
-                  </td>
-                  <td style="padding:11px 8px;font-weight:800;color:{tot_color};text-align:right;font-size:13px;">
-                    {_fmt_dollar(total_pnl)}
-                  </td>
-                  <td colspan="2" style="padding:11px 8px;font-weight:700;color:{day_color2};
-                                         text-align:right;font-size:13px;">
-                    Day: {_fmt_dollar(total_day)}
-                  </td>
-                  <td style="padding:11px 8px;font-weight:700;color:{C_TEXT2};
-                              text-align:right;font-size:13px;">100%</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        wsj_market_table(
+            ["Ticker", "Sector", "Shares", "Avg Cost", "Price",
+             "Mkt Value", "P&L $", "P&L %", "Day Chg", "Weight"],
+            rows,
+        )
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"holdings table error: {e}")
         st.error(f"Holdings table error: {e}")
@@ -469,8 +378,11 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
             font=dict(size=15, color="#e8e6e1"),
         )
 
-        fig.update_layout(**dark_layout(title="Sector Allocation", height=360))
+        apply_dark_layout(fig, title="Sector Allocation", height=360)
         st.plotly_chart(fig, use_container_width=True, key="portfolio_donut")
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"composition chart error: {e}")
 
@@ -511,11 +423,13 @@ def _render_performance_chart(df: pd.DataFrame) -> None:
             hovertemplate="<b>Index</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
         ))
 
-        layout = dark_layout(title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
-        layout["yaxis"]["title"] = dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
+        fig.update_layout(yaxis={"title": dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))})
 
         st.plotly_chart(fig, use_container_width=True, key="portfolio_nav")
+        st.markdown(source_footer([
+            {"name": "Simulated 90-day NAV path", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"performance chart error: {e}")
 
@@ -548,51 +462,21 @@ def _render_risk_metrics(df: pd.DataFrame) -> None:
 
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
         dd_color     = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
-        corr_color   = C_ACCENT
 
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                    padding:20px 24px;margin-bottom:24px;">
-          <div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:16px;
-                      text-transform:uppercase;letter-spacing:0.06em;">Risk Metrics</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">VaR (95%, 1-Day)</div>
-              <div style="font-size:22px;font-weight:800;color:{C_LOW};">
-                {_fmt_dollar_abs(var_dollar)}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">
-                {abs(var_95)*100:.2f}% of portfolio
-              </div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Sharpe Ratio</div>
-              <div style="font-size:22px;font-weight:800;color:{sharpe_color};">
-                {sharpe:.2f}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Annualised, rf=4.5%</div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Max Drawdown</div>
-              <div style="font-size:22px;font-weight:800;color:{dd_color};">
-                {max_dd:.1f}%
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Trailing 252 days</div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Corr. to BDI</div>
-              <div style="font-size:22px;font-weight:800;color:{corr_color};">
-                {bdi_corr:.2f}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Baltic Dry Index</div>
-            </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        section_header("Risk Metrics", "VaR, Sharpe, drawdown, and BDI correlation — trailing 252 days")
+        metric_card_row([
+            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(var_dollar),
+             "accent": C_LOW,         "sublabel": f"{abs(var_95)*100:.2f}% of portfolio"},
+            {"label": "Sharpe Ratio",    "value": f"{sharpe:.2f}",
+             "accent": sharpe_color,   "sublabel": "Annualised, rf=4.5%"},
+            {"label": "Max Drawdown",    "value": f"{max_dd:.1f}%",
+             "accent": dd_color,       "sublabel": "Trailing 252 days"},
+            {"label": "Corr. to BDI",    "value": f"{bdi_corr:.2f}",
+             "accent": C_ACCENT,       "sublabel": "Baltic Dry Index"},
+        ], columns=4)
+        st.markdown(source_footer([
+            {"name": "Simulated daily P&L (252-day Monte Carlo)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"risk metrics error: {e}")
 
@@ -606,48 +490,37 @@ def _render_top_movers(df: pd.DataFrame) -> None:
         best = sorted_df.iloc[0]
         worst = sorted_df.iloc[-1]
 
-        def _mover_block(row, label, label_color):
-            chg = row["Day Chg %"]
-            chg_color = _color(chg)
-            sector_col = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
-            return f"""
-            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;
-                        padding:16px 18px;">
-              <div style="font-size:10px;font-weight:700;color:{label_color};text-transform:uppercase;
-                          letter-spacing:0.08em;margin-bottom:8px;">{label}</div>
-              <div style="display:flex;align-items:center;justify-content:space-between;">
-                <div>
-                  <div style="font-size:20px;font-weight:800;color:{C_TEXT};">{row['Ticker']}</div>
-                  <div style="font-size:11px;margin-top:2px;">
-                    <span style="background:{sector_col}22;color:{sector_col};border-radius:4px;
-                                 padding:2px 7px;font-size:10px;font-weight:600;">{row['Sector']}</span>
-                  </div>
-                </div>
-                <div style="text-align:right;">
-                  <div style="font-size:22px;font-weight:800;color:{chg_color};">{_fmt_pct(chg)}</div>
-                  <div style="font-size:12px;color:{chg_color};margin-top:2px;">{_fmt_dollar(row['Day P&L $'])}</div>
-                </div>
-              </div>
-              <div style="margin-top:10px;display:flex;gap:16px;">
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Price</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">${row['Price']:.2f}</div>
-                </div>
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Mkt Value</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">{_fmt_dollar_abs(row['Market Value'])}</div>
-                </div>
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Weight</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">{row['Weight %']:.1f}%</div>
-                </div>
-              </div>
-            </div>"""
+        section_header("Top Movers", "Best and worst single-day performers across the portfolio")
 
-        best_block  = _mover_block(best, "Best Performer Today", C_HIGH)
-        worst_block = _mover_block(worst, "Worst Performer Today", C_LOW)
+        col_best, col_worst = st.columns(2)
+        with col_best:
+            st.markdown(insight_card_html(
+                title=f"{best['Ticker']} — {best['Sector']}",
+                score=max(0.0, min(1.0, (best['Day Chg %'] + 5) / 10)),
+                action="Watch",
+                rationale=(
+                    f"Best Performer Today · {_fmt_pct(best['Day Chg %'])} "
+                    f"({_fmt_dollar(best['Day P&L $'])}). "
+                    f"Price ${best['Price']:.2f} · Mkt Value {_fmt_dollar_abs(best['Market Value'])} · "
+                    f"Weight {best['Weight %']:.1f}%."
+                ),
+                category="GAINER",
+            ), unsafe_allow_html=True)
+        with col_worst:
+            st.markdown(insight_card_html(
+                title=f"{worst['Ticker']} — {worst['Sector']}",
+                score=max(0.0, min(1.0, (worst['Day Chg %'] + 5) / 10)),
+                action="Caution",
+                rationale=(
+                    f"Worst Performer Today · {_fmt_pct(worst['Day Chg %'])} "
+                    f"({_fmt_dollar(worst['Day P&L $'])}). "
+                    f"Price ${worst['Price']:.2f} · Mkt Value {_fmt_dollar_abs(worst['Market Value'])} · "
+                    f"Weight {worst['Weight %']:.1f}%."
+                ),
+                category="LOSER",
+            ), unsafe_allow_html=True)
 
-        # Also build a small bar chart for all positions
+        # Bar chart for all positions
         bar_colors = [_color(v) for v in df["Day Chg %"]]
         fig = go.Figure(go.Bar(
             x=df["Ticker"],
@@ -658,18 +531,12 @@ def _render_top_movers(df: pd.DataFrame) -> None:
             textfont=dict(size=11, color="#e8e6e1"),
             hovertemplate="<b>%{x}</b><br>Day Change: %{y:+.2f}%<extra></extra>",
         ))
-        layout = dark_layout(title="Today's Returns by Position", height=280, showlegend=False)
-        layout["yaxis"]["ticksuffix"] = "%"
-        fig.update_layout(**layout)
-
-        st.markdown(section_header("Top Movers", icon="📈"), unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-          {best_block}
-          {worst_block}
-        </div>
-        """, unsafe_allow_html=True)
+        apply_dark_layout(fig, title="Today's Returns by Position", height=280, showlegend=False)
+        fig.update_layout(yaxis={"ticksuffix": "%"})
         st.plotly_chart(fig, use_container_width=True, key="top_movers_bar")
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"top movers error: {e}")
 
@@ -679,7 +546,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
     try:
         if df.empty:
             return
-        st.markdown(section_header("Position Detail", icon="🔍"), unsafe_allow_html=True)
+        section_header("Position Detail", "Per-position price chart, key stats, and sector context")
 
         np.random.seed(0)
         dates = pd.date_range(end=datetime.date.today(), periods=60, freq="B")
@@ -719,64 +586,33 @@ def _render_position_details(df: pd.DataFrame) -> None:
                     annotation_font=dict(color=C_MOD, size=10),
                 )
 
-                mini_layout = dark_layout(title=f"{ticker} — 60-Day Price", height=220, showlegend=False)
-                mini_layout["margin"] = {"l": 10, "r": 10, "t": 36, "b": 20}
-                mini_fig.update_layout(**mini_layout)
+                apply_dark_layout(mini_fig, title=f"{ticker} — 60-Day Price", height=220, showlegend=False)
+                mini_fig.update_layout(margin={"l": 10, "r": 10, "t": 36, "b": 20})
                 st.plotly_chart(mini_fig, use_container_width=True, key=f"detail_{ticker}")
 
-                # Key stats grid
                 cost_basis = row["Shares"] * row["Avg Cost"]
                 day_pnl_row = row["Day P&L $"]
 
-                st.markdown(f"""
-                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;
-                            margin-top:8px;padding-top:4px;">
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Shares</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_TEXT};">{int(row['Shares']):,}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Cost Basis</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_TEXT};">{_fmt_dollar_abs(cost_basis)}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Total P&amp;L</div>
-                    <div style="font-size:15px;font-weight:700;color:{pnl_color};">{_fmt_dollar(row["P&L $"])}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Day P&amp;L</div>
-                    <div style="font-size:15px;font-weight:700;color:{_color(day_pnl_row)};">
-                      {_fmt_dollar(day_pnl_row)}
-                    </div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Beta</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_ACCENT};">{row['Beta']:.2f}</div>
-                  </div>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px;">
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Sector</div>
-                    <div style="font-size:14px;font-weight:700;color:{sector_col};">{row['Sector']}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Portfolio Weight</div>
-                    <div style="font-size:14px;font-weight:700;color:{C_TEXT};">{row['Weight %']:.1f}%</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Return %</div>
-                    <div style="font-size:14px;font-weight:700;color:{pnl_color};">{_fmt_pct(row['P&L %'])}</div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+                metric_card_row([
+                    {"label": "Shares",     "value": f"{int(row['Shares']):,}",
+                     "accent": C_TEXT,    "sublabel": ""},
+                    {"label": "Cost Basis", "value": _fmt_dollar_abs(cost_basis),
+                     "accent": C_TEXT,    "sublabel": f"avg ${row['Avg Cost']:.2f}"},
+                    {"label": "Total P&L",  "value": _fmt_dollar(row['P&L $']),
+                     "accent": pnl_color, "sublabel": _fmt_pct(row['P&L %'])},
+                    {"label": "Day P&L",    "value": _fmt_dollar(day_pnl_row),
+                     "accent": _color(day_pnl_row), "sublabel": _fmt_pct(row['Day Chg %'])},
+                    {"label": "Beta",       "value": f"{row['Beta']:.2f}",
+                     "accent": C_ACCENT,  "sublabel": "vs SPY"},
+                ], columns=5)
+                metric_card_row([
+                    {"label": "Sector",            "value": row['Sector'],
+                     "accent": sector_col, "sublabel": "shipping sub-sector"},
+                    {"label": "Portfolio Weight",  "value": f"{row['Weight %']:.1f}%",
+                     "accent": C_TEXT,    "sublabel": "of total AUM"},
+                    {"label": "Return %",          "value": _fmt_pct(row['P&L %']),
+                     "accent": pnl_color, "sublabel": "since entry"},
+                ], columns=3)
     except Exception as e:
         logger.warning(f"position detail error: {e}")
 
@@ -905,7 +741,7 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
         if not fits:
             return
 
-        st.markdown(section_header("Carrier Factor Lens", icon="🧮"), unsafe_allow_html=True)
+        section_header("Carrier Factor Lens", "Ridge-fit factor exposures and residual signal back-test")
         st.markdown(
             live_data_badge(
                 source=source_name,
@@ -1052,10 +888,10 @@ def render(stock_data, macro_data, insights) -> None:
         if not df.empty:
             col_left, col_right = st.columns([1, 1.6])
             with col_left:
-                st.markdown(section_header("Sector Allocation", icon="🥧"), unsafe_allow_html=True)
+                section_header("Sector Allocation", "Donut: market-value share by shipping sub-sector")
                 _render_composition_chart(df)
             with col_right:
-                st.markdown(section_header("Performance", icon="📊"), unsafe_allow_html=True)
+                section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
                 _render_performance_chart(df)
 
         st.markdown(_HR, unsafe_allow_html=True)
