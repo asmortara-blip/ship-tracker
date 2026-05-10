@@ -15,19 +15,18 @@ except ImportError:
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
+    badge,
     metric_card_row,
     page_header,
-    section_divider,
+    section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -82,6 +81,12 @@ _DRIVERS = [
     {"factor": "EU Demand Softness",         "impact": "–2.1% import volumes","type": "demand",  "dir": "down"},
 ]
 
+# Mock data sources — every chart/table uses these for source_footer().
+ROUTE_SOURCES = [
+    {"name": "Synthetic global lane rates",   "kind": "modeled", "quality": "demo"},
+    {"name": "Internal forecast / volatility", "kind": "modeled", "quality": "demo"},
+]
+
 
 # ── Tab-local helpers ─────────────────────────────────────────────────────────
 
@@ -102,25 +107,17 @@ def _usd(val: float) -> str:
     return f"${val:,.0f}"
 
 
-def _pill(text: str, color: str) -> str:
-    return (
-        f'<span style="display:inline-block;padding:2px 10px;border-radius:3px;'
-        f'background:{color}15;color:{color};font-family:var(--sans);font-size:0.72rem;font-weight:600;'
-        f'border:1px solid {color}33;margin:2px 3px">{text}</span>'
-    )
-
-
 def _mono(value: str, color: str = C_TEXT, weight: int = 400) -> str:
     return (
         f'<span style="font-family:var(--mono);color:{color};'
-        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
     )
 
 
-def _sans(value: str, color: str = C_TEXT, weight: int = 400) -> str:
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     return (
         f'<span style="font-family:var(--sans);color:{color};'
-        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+        f'font-weight:{weight};">{value}</span>'
     )
 
 
@@ -146,7 +143,10 @@ def _get_routes(freight_data, route_results) -> list[dict]:
 # ── Section 1: Freight Rate Pulse ─────────────────────────────────────────────
 
 def _section_pulse(routes: list[dict]) -> None:
-    section_divider("FREIGHT RATE PULSE")
+    section_header(
+        "Freight Rate Pulse",
+        "Global freight index and weekly gainers / losers across all lanes",
+    )
     try:
         avg_rate = sum(r["rate"] for r in routes) / len(routes)
         avg_w    = sum(r.get("w", 0) for r in routes) / len(routes)
@@ -180,22 +180,33 @@ def _section_pulse(routes: list[dict]) -> None:
             columns=4,
         )
 
+        # Top gainers / losers as a 6-card row (3 green + 3 red), all WoW.
         sorted_w = sorted(routes, key=lambda r: r.get("w", 0), reverse=True)
         gainers  = sorted_w[:3]
         losers   = sorted_w[-3:][::-1]
 
-        pills_gain = " ".join(_pill(f'{r["route"]} {_pct(r.get("w",0))}', C_HIGH) for r in gainers)
-        pills_loss = " ".join(_pill(f'{r["route"]} {_pct(r.get("w",0))}', C_LOW)  for r in losers)
-
-        st.html(
-            f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin:16px 0 8px">'
-            f'<div style="background:{C_SURFACE};border:1px solid {C_HIGH}22;border-top:3px solid {C_HIGH};border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
-            f'<div style="font-family:var(--sans);font-size:0.68rem;color:{C_HIGH};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;font-weight:700;">Top Gainers (WoW)</div>'
-            f'<div>{pills_gain}</div></div>'
-            f'<div style="background:{C_SURFACE};border:1px solid {C_LOW}22;border-top:3px solid {C_LOW};border-radius:3px;padding:14px 18px;flex:1;min-width:280px">'
-            f'<div style="font-family:var(--sans);font-size:0.68rem;color:{C_LOW};text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;font-weight:700;">Top Losers (WoW)</div>'
-            f'<div>{pills_loss}</div></div></div>'
+        metric_card_row(
+            [
+                dict(
+                    label=f"Gainer #{i + 1}",
+                    value=_pct(r.get("w", 0)),
+                    sublabel=r["route"],
+                    accent=C_HIGH,
+                )
+                for i, r in enumerate(gainers)
+            ] + [
+                dict(
+                    label=f"Loser #{i + 1}",
+                    value=_pct(r.get("w", 0)),
+                    sublabel=r["route"],
+                    accent=C_LOW,
+                )
+                for i, r in enumerate(losers)
+            ],
+            columns=6,
         )
+
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_routes _section_pulse: {exc}")
         st.warning("Pulse metrics unavailable.")
@@ -204,7 +215,10 @@ def _section_pulse(routes: list[dict]) -> None:
 # ── Section 2: Rate League Table ──────────────────────────────────────────────
 
 def _section_league_table(routes: list[dict]) -> None:
-    section_divider("RATE LEAGUE TABLE")
+    section_header(
+        "Rate League Table",
+        "Per-lane spot rate, change horizons, 30-day forecast and direction",
+    )
     try:
         rows = []
         for r in routes:
@@ -227,13 +241,14 @@ def _section_league_table(routes: list[dict]) -> None:
                 _mono(f"{_chg_arrow(q_v)} {_pct(q_v)}", color=_chg_color(q_v), weight=600),
                 _mono(f"{_chg_arrow(y_v)} {_pct(y_v)}", color=_chg_color(y_v), weight=600),
                 _mono(_usd(fc30), color=fc_c, weight=600),
-                _sans(direction, color=dir_c, weight=700),
+                badge(direction, color=dir_c),
                 _mono(f"{conf:.0f}%", color=C_TEXT2),
             ])
         wsj_market_table(
             ["Route", "Rate/TEU", "1W Chg", "1M Chg", "3M Chg", "YoY", "Fcst 30D", "Direction", "Conf%"],
             rows,
         )
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_routes _section_league_table: {exc}")
         st.warning("League table unavailable.")
@@ -242,48 +257,45 @@ def _section_league_table(routes: list[dict]) -> None:
 # ── Section 3: ML Forecast Panel ─────────────────────────────────────────────
 
 def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
-    section_divider("ML FORECAST PANEL")
+    section_header(
+        "ML Forecast Panel",
+        "7/30/90-day forecasts across featured lanes plus model quality metrics",
+    )
     try:
         featured_routes = routes[:5]
         fc_source = rate_forecasts if isinstance(rate_forecasts, dict) else {}
 
-        cards_html = ""
-        for r in featured_routes:
-            name  = r["route"]
-            cur   = r["rate"]
-            d7    = fc_source.get(name, {}).get("d7",  cur * (1 + r.get("w", 0) / 100))
-            d30   = fc_source.get(name, {}).get("d30", cur * (1 + r.get("m", 0) / 100))
-            d90   = fc_source.get(name, {}).get("d90", cur * (1 + r.get("q", 0) / 100))
-            d7p   = (d7  - cur) / cur * 100
-            d30p  = (d30 - cur) / cur * 100
-            d90p  = (d90 - cur) / cur * 100
-            ci_lo = d30 * 0.92
-            ci_hi = d30 * 1.08
-            conf  = min(95, max(55, 75 + abs(r.get("m", 0)) * 1.5))
-            drivers_chips = " ".join([
-                _pill("Trade Volume", C_ACCENT),
-                _pill("Fleet Util", C_MOD),
-                _pill("Blank Sailings", C_TEXT3),
-            ])
+        # Featured forecasts as a WSJ table — replaces 5 inline forecast cards.
+        try:
+            fc_rows = []
+            for r in featured_routes:
+                name  = r["route"]
+                cur   = r["rate"]
+                d7    = fc_source.get(name, {}).get("d7",  cur * (1 + r.get("w", 0) / 100))
+                d30   = fc_source.get(name, {}).get("d30", cur * (1 + r.get("m", 0) / 100))
+                d90   = fc_source.get(name, {}).get("d90", cur * (1 + r.get("q", 0) / 100))
+                d7p   = (d7  - cur) / cur * 100
+                d30p  = (d30 - cur) / cur * 100
+                d90p  = (d90 - cur) / cur * 100
+                ci_lo = d30 * 0.92
+                ci_hi = d30 * 1.08
+                conf  = min(95, max(55, 75 + abs(r.get("m", 0)) * 1.5))
 
-            cards_html += (
-                f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;padding:16px 18px;flex:1;min-width:220px">'
-                f'<div style="font-family:var(--serif);font-size:0.82rem;font-weight:700;color:{C_TEXT};margin-bottom:4px">{name}</div>'
-                f'<div style="font-family:var(--mono);font-size:1.4rem;font-weight:800;color:{C_ACCENT};margin-bottom:10px">{_usd(cur)}</div>'
-                f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">'
-                f'<div style="text-align:center"><div style="font-family:var(--sans);font-size:0.60rem;color:{C_TEXT3}">7D</div>'
-                f'<div style="font-family:var(--mono);font-size:0.85rem;font-weight:700;color:{_chg_color(d7p)}">{_chg_arrow(d7p)} {_pct(d7p)}</div></div>'
-                f'<div style="text-align:center"><div style="font-family:var(--sans);font-size:0.60rem;color:{C_TEXT3}">30D</div>'
-                f'<div style="font-family:var(--mono);font-size:0.85rem;font-weight:700;color:{_chg_color(d30p)}">{_chg_arrow(d30p)} {_pct(d30p)}</div></div>'
-                f'<div style="text-align:center"><div style="font-family:var(--sans);font-size:0.60rem;color:{C_TEXT3}">90D</div>'
-                f'<div style="font-family:var(--mono);font-size:0.85rem;font-weight:700;color:{_chg_color(d90p)}">{_chg_arrow(d90p)} {_pct(d90p)}</div></div>'
-                f'</div>'
-                f'<div style="font-family:var(--sans);font-size:0.68rem;color:{C_TEXT3};margin-bottom:6px">CI 30D: {_usd(ci_lo)} – {_usd(ci_hi)} &nbsp;|&nbsp; Conf {conf:.0f}%</div>'
-                f'<div style="margin-top:6px">{drivers_chips}</div>'
-                f'</div>'
+                fc_rows.append([
+                    _sans(name, color=C_TEXT, weight=700),
+                    _mono(_usd(cur), color=C_ACCENT, weight=700),
+                    _mono(f"{_chg_arrow(d7p)} {_pct(d7p)}", color=_chg_color(d7p), weight=600),
+                    _mono(f"{_chg_arrow(d30p)} {_pct(d30p)}", color=_chg_color(d30p), weight=600),
+                    _mono(f"{_chg_arrow(d90p)} {_pct(d90p)}", color=_chg_color(d90p), weight=600),
+                    _mono(f"{_usd(ci_lo)} – {_usd(ci_hi)}", color=C_TEXT2),
+                    _mono(f"{conf:.0f}%", color=C_MOD),
+                ])
+            wsj_market_table(
+                ["Route", "Current", "7D Fcst", "30D Fcst", "90D Fcst", "30D 95% CI", "Conf%"],
+                fc_rows,
             )
-
-        st.html(f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">{cards_html}</div>')
+        except Exception as exc:
+            logger.warning(f"tab_routes ML featured forecasts: {exc}")
 
         try:
             top10 = routes[:10]
@@ -330,6 +342,8 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
         except Exception as exc:
             logger.warning(f"tab_routes model quality table: {exc}")
 
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
+
     except Exception as exc:
         logger.error(f"tab_routes _section_ml_forecast: {exc}")
         st.warning("ML Forecast panel unavailable.")
@@ -338,7 +352,10 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
 # ── Section 4: Rate Volatility Analysis ──────────────────────────────────────
 
 def _section_volatility(routes: list[dict]) -> None:
-    section_divider("RATE VOLATILITY ANALYSIS")
+    section_header(
+        "Rate Volatility Analysis",
+        "Rolling 30-day annualized volatility — high values flag disruption risk",
+    )
     try:
         random.seed(42)
         vols = []
@@ -368,14 +385,12 @@ def _section_volatility(routes: list[dict]) -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px;padding:12px 18px;font-family:var(--sans);font-size:0.76rem;color:{C_TEXT2}">'
-            f'Rolling 30-day annualized volatility. '
-            f'<span style="color:{C_LOW};font-weight:600">Red (&gt;30%)</span> = high disruption risk &nbsp;|&nbsp; '
-            f'<span style="color:{C_MOD};font-weight:600">Amber (18–30%)</span> = elevated &nbsp;|&nbsp; '
-            f'<span style="color:{C_HIGH};font-weight:600">Green (&lt;18%)</span> = stable'
-            f'</div>'
+        st.caption(
+            "Red (>30%) = high disruption risk  |  "
+            "Amber (18–30%) = elevated  |  "
+            "Green (<18%) = stable"
         )
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_routes _section_volatility: {exc}")
         st.warning("Volatility analysis unavailable.")
@@ -384,7 +399,10 @@ def _section_volatility(routes: list[dict]) -> None:
 # ── Section 5: Seasonal Pattern ───────────────────────────────────────────────
 
 def _section_seasonal() -> None:
-    section_divider("SEASONAL RATE PATTERNS (2020–2025)")
+    section_header(
+        "Seasonal Rate Patterns",
+        "Monthly average $/TEU 2020–2025 — peak-season build, CNY dip, COVID surge",
+    )
     try:
         years  = list(range(2020, 2026))
         months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -424,16 +442,20 @@ def _section_seasonal() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.html(
-            f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">'
-            f'{_pill("Chinese New Year dip: Feb", C_LOW)}'
-            f'{_pill("Pre-CNY build: Jan", C_MOD)}'
-            f'{_pill("Peak season: Aug–Sep", C_HIGH)}'
-            f'{_pill("Post-peak slide: Oct–Nov", C_TEXT3)}'
-            f'{_pill("2021: pandemic demand surge", C_LOW)}'
-            f'{_pill("2023: post-COVID correction", C_ACCENT)}'
-            f'</div>'
+        # Seasonal annotations as `badge()` chips, no inline div wrapper.
+        annotations = [
+            ("Chinese New Year dip: Feb",     C_LOW),
+            ("Pre-CNY build: Jan",            C_MOD),
+            ("Peak season: Aug–Sep",          C_HIGH),
+            ("Post-peak slide: Oct–Nov",      C_TEXT3),
+            ("2021: pandemic demand surge",   C_LOW),
+            ("2023: post-COVID correction",   C_ACCENT),
+        ]
+        st.markdown(
+            " ".join(badge(label, color=color) for label, color in annotations),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_routes _section_seasonal: {exc}")
         st.warning("Seasonal heatmap unavailable.")
@@ -442,43 +464,32 @@ def _section_seasonal() -> None:
 # ── Section 6: Rate Drivers ───────────────────────────────────────────────────
 
 def _section_rate_drivers() -> None:
-    section_divider("RATE DRIVERS")
+    section_header(
+        "Rate Drivers",
+        "Supply, demand and disruption forces shaping global lane economics",
+    )
     try:
-        supply  = [d for d in _DRIVERS if d["type"] == "supply"]
-        demand  = [d for d in _DRIVERS if d["type"] == "demand"]
-        disrupt = [d for d in _DRIVERS if d["type"] == "disrupt"]
-
-        def _block(title: str, color: str, items: list[dict]) -> str:
-            rows = ""
-            for item in items:
-                arrow = "▲" if item["dir"] == "up" else "▼"
-                ac    = C_HIGH if item["dir"] == "up" else C_LOW
-                rows += (
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                    f'padding:9px 0;border-bottom:1px solid {C_BORDER}">'
-                    f'<span style="font-family:var(--sans);color:{C_TEXT};font-size:0.78rem">{item["factor"]}</span>'
-                    f'<span style="display:flex;align-items:center;gap:6px">'
-                    f'<span style="font-family:var(--mono);font-size:0.75rem;color:{C_TEXT2}">{item["impact"]}</span>'
-                    f'<span style="font-size:0.80rem;font-weight:700;color:{ac}">{arrow}</span>'
-                    f'</span></div>'
-                )
-            return (
-                f'<div style="background:{C_SURFACE};border:1px solid {color}33;border-top:3px solid {color};border-radius:3px;'
-                f'padding:16px 18px;flex:1;min-width:240px">'
-                f'<div style="font-family:var(--serif);font-size:0.72rem;font-weight:700;color:{color};text-transform:uppercase;'
-                f'letter-spacing:0.10em;margin-bottom:10px">{title}</div>'
-                f'{rows}</div>'
-            )
-
-        supply_block  = _block("Supply Factors",     C_ACCENT, supply)
-        demand_block  = _block("Demand Factors",     C_MOD,    demand)
-        disrupt_block = _block("Disruptions",        C_LOW,    disrupt)
-
-        st.html(
-            f'<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px">'
-            f'{supply_block}{demand_block}{disrupt_block}'
-            f'</div>'
+        type_label = {
+            "supply":  ("Supply",     C_ACCENT),
+            "demand":  ("Demand",     C_MOD),
+            "disrupt": ("Disruption", C_LOW),
+        }
+        rows = []
+        for d in _DRIVERS:
+            label, group_color = type_label.get(d["type"], ("Other", C_TEXT3))
+            arrow_color = C_HIGH if d["dir"] == "up" else C_LOW
+            arrow = _chg_arrow(1 if d["dir"] == "up" else -1)
+            rows.append([
+                badge(label, color=group_color),
+                _sans(d["factor"], color=C_TEXT, weight=600),
+                _mono(d["impact"], color=C_TEXT2),
+                _sans(arrow, color=arrow_color, weight=700),
+            ])
+        wsj_market_table(
+            ["Group", "Factor", "Impact", "Direction"],
+            rows,
         )
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_routes _section_rate_drivers: {exc}")
         st.warning("Rate drivers unavailable.")
@@ -487,7 +498,10 @@ def _section_rate_drivers() -> None:
 # ── Section 7: Route Profile Cards ───────────────────────────────────────────
 
 def _section_route_profiles(routes: list[dict]) -> None:
-    section_divider("ROUTE PROFILE CARDS")
+    section_header(
+        "Route Profile Cards",
+        "Per-lane 12-month price action, transit time, top carriers and seasonal index",
+    )
     try:
         featured = routes[:8]
         for r in featured:
@@ -534,23 +548,38 @@ def _section_route_profiles(routes: list[dict]) -> None:
                         carriers = _CARRIERS.get(name, ["MSC", "Maersk", "CMA CGM"])
                         hi_52    = r["rate"] * 1.15
                         lo_52    = r["rate"] * 0.82
-                        carrier_pills = " ".join(_pill(c, C_ACCENT) for c in carriers)
+                        q_chg    = r.get("q", 0)
 
-                        st.html(
-                            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:14px 16px">'
-                            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-                            f'<div><div style="font-family:var(--sans);font-size:0.62rem;color:{C_TEXT3}">52W High</div>'
-                            f'<div style="font-family:var(--mono);font-size:0.88rem;font-weight:700;color:{C_HIGH}">{_usd(hi_52)}</div></div>'
-                            f'<div><div style="font-family:var(--sans);font-size:0.62rem;color:{C_TEXT3}">52W Low</div>'
-                            f'<div style="font-family:var(--mono);font-size:0.88rem;font-weight:700;color:{C_LOW}">{_usd(lo_52)}</div></div>'
-                            f'<div><div style="font-family:var(--sans);font-size:0.62rem;color:{C_TEXT3}">Transit Time</div>'
-                            f'<div style="font-family:var(--mono);font-size:0.88rem;font-weight:700;color:{C_TEXT}">{transit} days</div></div>'
-                            f'<div><div style="font-family:var(--sans);font-size:0.62rem;color:{C_TEXT3}">3M Change</div>'
-                            f'<div style="font-family:var(--mono);font-size:0.88rem;font-weight:700;color:{_chg_color(r.get("q",0))}">{_pct(r.get("q",0))}</div></div>'
-                            f'</div>'
-                            f'<div style="font-family:var(--sans);font-size:0.62rem;color:{C_TEXT3};margin-bottom:6px">Top Carriers</div>'
-                            f'<div>{carrier_pills}</div>'
-                            f'</div>'
+                        metric_card_row(
+                            [
+                                dict(
+                                    label="52W High",
+                                    value=_usd(hi_52),
+                                    accent=C_HIGH,
+                                ),
+                                dict(
+                                    label="52W Low",
+                                    value=_usd(lo_52),
+                                    accent=C_LOW,
+                                ),
+                                dict(
+                                    label="Transit",
+                                    value=f"{transit} days",
+                                    accent=C_ACCENT,
+                                ),
+                                dict(
+                                    label="3M Change",
+                                    value=_pct(q_chg),
+                                    accent=_chg_color(q_chg),
+                                ),
+                            ],
+                            columns=2,
+                        )
+
+                        st.caption("Top Carriers")
+                        st.markdown(
+                            " ".join(badge(c, color=C_ACCENT) for c in carriers),
+                            unsafe_allow_html=True,
                         )
 
                         try:
@@ -577,6 +606,8 @@ def _section_route_profiles(routes: list[dict]) -> None:
             except Exception as exc:
                 logger.warning(f"tab_routes expander {name}: {exc}")
 
+        st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
+
     except Exception as exc:
         logger.error(f"tab_routes _section_route_profiles: {exc}")
         st.warning("Route profiles unavailable.")
@@ -590,9 +621,8 @@ def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> 
         page_header(
             title="Freight Rate Analytics",
             subtitle="Real-time rates · ML forecasting · Volatility · Seasonal patterns · Route profiles",
-            icon="🌍",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="ROUTES",
+            badge_color=C_ACCENT,
         )
 
         routes = _get_routes(freight_data, route_results)
