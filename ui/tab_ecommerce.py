@@ -18,25 +18,31 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
-    C_TEXT3,
     apply_dark_layout,
-    badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
 # Single tab-local color — semantic (e-commerce branding), not a palette alias.
 C_PURPLE = "#7c6eaf"
+
+
+# ── Provenance ────────────────────────────────────────────────────────────────
+
+_SOURCES = [
+    {"name": "Company filings · Bloomberg · eMarketer", "kind": "modeled", "quality": "good"},
+    {"name": "US CBP · USITC (de minimis)", "kind": "static", "quality": "good"},
+    {"name": "Composite peak-season indices", "kind": "modeled", "quality": "demo"},
+]
 
 
 # ── Static data ────────────────────────────────────────────────────────────────
@@ -192,23 +198,28 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     )
 
 
-def _signal_color(signal: str) -> str:
+def _signal_action(signal: str) -> str:
+    """Map e-commerce signal labels to insight_card_html ACTION_COLORS keys."""
     s = signal.upper()
     return {
-        "BULLISH": C_HIGH,
-        "BEARISH": C_LOW,
-        "NEUTRAL": C_MOD,
-        "RISK": C_LOW,
-        "AT RISK": C_LOW,
-    }.get(s, C_TEXT3)
+        "BULLISH":  "Prioritize",
+        "BEARISH":  "Avoid",
+        "NEUTRAL":  "Monitor",
+        "RISK":     "Caution",
+        "AT RISK":  "Caution",
+    }.get(s, "Watch")
 
 
-def _pct_bar_html(pct: float, color: str, height: str = "8px") -> str:
-    return (
-        f'<div style="background:{C_SURFACE};border-radius:4px;height:{height};width:100%;margin-top:4px;">'
-        f'<div style="background:{color};width:{min(pct,100):.1f}%;height:100%;border-radius:4px;"></div>'
-        f'</div>'
-    )
+def _signal_score(signal: str) -> float:
+    """Map signal label to a 0-1 score for insight_card_html progress bar."""
+    s = signal.upper()
+    return {
+        "BULLISH":  0.85,
+        "BEARISH":  0.15,
+        "NEUTRAL":  0.50,
+        "RISK":     0.30,
+        "AT RISK":  0.30,
+    }.get(s, 0.50)
 
 
 def _month_color(idx: float) -> str:
@@ -233,7 +244,7 @@ def _render_kpi_dashboard() -> None:
         metric_card_row(
             [
                 {"label": "Global E-Commerce Market", "value": "$6.8T", "accent": C_HIGH, "delta": "+9.8% YoY", "delta_color": C_HIGH},
-                {"label": "YoY E-Commerce Growth", "value": "+9.8%", "accent": C_MOD, "delta": "vs +8.1% prior year", "delta_color": C_TEXT3},
+                {"label": "YoY E-Commerce Growth", "value": "+9.8%", "accent": C_MOD, "delta": "vs +8.1% prior year", "delta_color": C_TEXT2},
                 {"label": "E-Com Share of Retail", "value": "20.1%", "accent": C_ACCENT, "delta": "+1.3pp YoY", "delta_color": C_HIGH},
                 {"label": "Cross-Border Parcels", "value": "7.1B", "accent": C_PURPLE, "delta": "+22% YoY", "delta_color": C_HIGH},
                 {"label": "Chinese E-Com Exports", "value": "~$300B", "accent": C_LOW, "delta": "Regulatory risk ↑", "delta_color": C_LOW},
@@ -241,21 +252,21 @@ def _render_kpi_dashboard() -> None:
             columns=5,
         )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}44;border-radius:6px;'
-            f'padding:16px 20px;margin:4px 0 16px;">'
-            f'<div style="font-family:var(--sans);font-size:0.78rem;font-weight:700;color:{C_ACCENT};'
-            f'margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em">Market Context</div>'
-            f'<div style="font-family:var(--sans);font-size:0.85rem;color:{C_TEXT2};line-height:1.7;">'
-            f'Global e-commerce reached <span style="color:{C_HIGH};font-weight:600;">$6.8 trillion</span> in 2024, '
-            f'representing <span style="color:{C_HIGH};font-weight:600;">20.1%</span> of all retail sales. '
-            f'Cross-border e-commerce is growing at <span style="color:{C_MOD};font-weight:600;">2x</span> the rate of domestic e-commerce, '
-            f'driven overwhelmingly by Chinese platforms — Temu, Shein, and AliExpress — which collectively account for '
-            f'<span style="color:{C_LOW};font-weight:600;">~40%</span> of global cross-border parcel volume. '
-            f'This structural shift is fundamentally reshaping transpacific freight demand, air cargo pricing, and '
-            f'last-mile infrastructure across North America and Europe.'
-            f'</div></div>'
-        )
+        st.markdown(insight_card_html(
+            title="Market Context — $6.8T global e-commerce",
+            score=0.80,
+            action="Prioritize",
+            rationale=(
+                "Global e-commerce reached $6.8 trillion in 2024 — 20.1% of all retail sales. "
+                "Cross-border e-commerce is growing at 2x the rate of domestic e-commerce, driven "
+                "overwhelmingly by Chinese platforms (Temu, Shein, AliExpress) which account for "
+                "~40% of global cross-border parcel volume. This structural shift is reshaping "
+                "transpacific freight demand, air cargo pricing, and last-mile infrastructure."
+            ),
+            category="MACRO",
+        ), unsafe_allow_html=True)
+
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("KPI dashboard render failed")
         st.error("Failed to render KPI dashboard.")
@@ -286,6 +297,7 @@ def _render_platform_table() -> None:
             headers=["Company", "GMV ($B)", "Ship Vol (B parcels)", "Primary Routes", "Carrier Strategy", "Rate Impact"],
             rows=rows,
         )
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Platform table render failed")
         st.error("Failed to render platform table.")
@@ -294,55 +306,55 @@ def _render_platform_table() -> None:
 def _render_de_minimis() -> None:
     try:
         section_header(
-            "🇨🇳 Chinese E-Commerce Export Effect",
+            "Chinese E-Commerce Export Effect",
             subtitle="De Minimis Risk Analysis",
         )
 
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}55;border-radius:6px;'
-                f'padding:18px 20px;margin-bottom:16px;">'
-                f'<div style="font-family:var(--sans);font-size:0.82rem;font-weight:700;color:{C_ACCENT};'
-                f'margin-bottom:12px">What is De Minimis?</div>'
-                f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.7;margin-bottom:12px;">'
-                f'De minimis thresholds allow imports below a set value to enter duty-free and with minimal customs scrutiny. '
-                f'This rule is the legal backbone of the Temu/Shein business model.'
-                f'</div>'
-                f'<div style="display:flex;gap:16px;margin-top:8px;">'
-                f'<div style="flex:1;background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-                f'<div style="font-family:var(--sans);font-size:1.5rem;font-weight:800;color:{C_HIGH};">$800</div>'
-                f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT3};">US threshold per shipment</div>'
-                f'</div>'
-                f'<div style="flex:1;background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-                f'<div style="font-family:var(--sans);font-size:1.5rem;font-weight:800;color:{C_MOD};">€150</div>'
-                f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT3};">EU threshold per shipment</div>'
-                f'</div></div></div>'
+            metric_card_row(
+                [
+                    {"label": "US Threshold per Shipment", "value": "$800", "accent": C_HIGH,
+                     "delta": "Duty-free ceiling", "delta_color": C_TEXT2},
+                    {"label": "EU Threshold per Shipment", "value": "€150", "accent": C_MOD,
+                     "delta": "Duty-free ceiling", "delta_color": C_TEXT2},
+                ],
+                columns=2,
             )
 
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_LOW}44;border-radius:6px;'
-                f'padding:18px 20px;margin-bottom:16px;">'
-                f'<div style="font-family:var(--sans);font-size:0.82rem;font-weight:700;color:{C_LOW};'
-                f'margin-bottom:10px">⚠ Trump Admin Proposal: Eliminate De Minimis</div>'
-                f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.7;">'
-                f'The Trump administration proposed <strong style="color:{C_LOW};">eliminating the $800 de minimis exemption</strong> for Chinese-origin goods. '
-                f'If enacted, every Temu/Shein parcel would face tariffs, duties, and full customs scrutiny — effectively breaking the '
-                f'direct-to-consumer China model.'
-                f'</div>'
-                f'<div style="margin-top:12px;padding:8px;background:{C_SURFACE};border-radius:6px;">'
-                f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT3};">Current status (Mar 2026)</div>'
-                f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_MOD};font-weight:600;">Executive order signed; legal challenges ongoing</div>'
-                f'</div></div>'
-            )
+            st.markdown(insight_card_html(
+                title="What is De Minimis?",
+                score=0.70,
+                action="Monitor",
+                rationale=(
+                    "De minimis thresholds allow imports below a set value to enter duty-free and "
+                    "with minimal customs scrutiny. This rule is the legal backbone of the Temu/Shein "
+                    "business model."
+                ),
+                category="MACRO",
+            ), unsafe_allow_html=True)
+
+            st.markdown(insight_card_html(
+                title="Trump Admin Proposal — Eliminate De Minimis",
+                score=0.85,
+                action="Caution",
+                rationale=(
+                    "The Trump administration proposed eliminating the $800 de minimis exemption for "
+                    "Chinese-origin goods. If enacted, every Temu/Shein parcel would face tariffs, "
+                    "duties, and full customs scrutiny — effectively breaking the direct-to-consumer "
+                    "China model. Current status (Mar 2026): executive order signed; legal challenges "
+                    "ongoing."
+                ),
+                category="MACRO",
+            ), unsafe_allow_html=True)
 
         with col2:
             metric_card_row(
                 [
                     {"label": "Parcels entering US /yr", "value": "~1.4B", "accent": C_HIGH,
-                     "delta": "+35% YoY; majority China-origin", "delta_color": C_TEXT3},
+                     "delta": "+35% YoY; majority China-origin", "delta_color": C_TEXT2},
                     {"label": "Share from Chinese platforms", "value": "~60%", "accent": C_MOD,
-                     "delta": "Temu, Shein, AliExpress", "delta_color": C_TEXT3},
+                     "delta": "Temu, Shein, AliExpress", "delta_color": C_TEXT2},
                 ],
                 columns=1,
             )
@@ -362,6 +374,7 @@ def _render_de_minimis() -> None:
                 headers=["If De Minimis Eliminated — Projected Impact", "Estimate"],
                 rows=rows,
             )
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("De minimis section render failed")
         st.error("Failed to render de minimis analysis.")
@@ -370,7 +383,7 @@ def _render_de_minimis() -> None:
 def _render_peak_calendar() -> None:
     try:
         section_header(
-            "📅 Peak Season Calendar",
+            "Peak Season Calendar",
             subtitle="E-Commerce Shipping Demand Index (Nov=100)",
         )
 
@@ -388,27 +401,37 @@ def _render_peak_calendar() -> None:
             hovertemplate="<b>%{x}</b>: %{y}<br>%{customdata}<extra></extra>",
         ))
         apply_dark_layout(fig, height=260)
-        fig.update_yaxes(range=[0, 115], title="Demand Index")
+        fig.update_layout(yaxis=dict(range=[0, 115], title="Demand Index"))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         key_events = [
-            ("🧨 Chinese New Year (Feb)", "Supply disruption — factory shutdowns cause 2–4 week shipping delays. Pre-CNY surge in Jan.", C_MOD),
-            ("🔥 Amazon Prime Day (Jul)", "Single-day demand spike; pre-positioning drives June–July container bookings premium.", C_LOW),
-            ("🛍 Singles Day 11/11 (Nov)", "World's largest shopping event. $150B+ GMV. Massive transpacific and air cargo surge.", C_LOW),
-            ("🦃 Black Friday / Cyber Monday", "US demand peak. Combined with Singles Day aftermath creates Nov container shortage.", C_LOW),
-            ("🎁 Holiday Peak (Nov–Dec)", "Sustained high demand. Last-mile capacity exhaustion, rate premiums of 20–40%.", C_MOD),
+            ("Chinese New Year (Feb)",
+             "Supply disruption — factory shutdowns cause 2–4 week shipping delays. Pre-CNY surge in Jan.",
+             "Caution", 0.65),
+            ("Amazon Prime Day (Jul)",
+             "Single-day demand spike; pre-positioning drives June–July container bookings premium.",
+             "Prioritize", 0.85),
+            ("Singles Day 11/11 (Nov)",
+             "World's largest shopping event. $150B+ GMV. Massive transpacific and air cargo surge.",
+             "Prioritize", 0.95),
+            ("Black Friday / Cyber Monday",
+             "US demand peak. Combined with Singles Day aftermath creates Nov container shortage.",
+             "Prioritize", 0.90),
+            ("Holiday Peak (Nov–Dec)",
+             "Sustained high demand. Last-mile capacity exhaustion, rate premiums of 20–40%.",
+             "Caution", 0.80),
         ]
         cols = st.columns(len(key_events))
-        for col, (title, desc, color) in zip(cols, key_events):
+        for col, (title, desc, action, score) in zip(cols, key_events):
             with col:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {color}44;border-radius:6px;'
-                    f'padding:12px;margin-bottom:16px">'
-                    f'<div style="font-family:var(--sans);font-size:0.78rem;font-weight:700;color:{color};'
-                    f'margin-bottom:6px">{title}</div>'
-                    f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT2};line-height:1.5;">{desc}</div>'
-                    f'</div>'
-                )
+                st.markdown(insight_card_html(
+                    title=title,
+                    score=score,
+                    action=action,
+                    rationale=desc,
+                    category="ROUTE",
+                ), unsafe_allow_html=True)
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Peak calendar render failed")
         st.error("Failed to render peak calendar.")
@@ -417,27 +440,20 @@ def _render_peak_calendar() -> None:
 def _render_b2c_b2b_split() -> None:
     try:
         section_header(
-            "📦 B2C vs B2B Freight Split",
+            "B2C vs B2B Freight Split",
             subtitle="By route — showing secular rise of B2C share",
         )
 
         rows = []
         for r in _ROUTE_SPLIT:
-            b2c_bar = _pct_bar_html(r["b2c"], C_ACCENT, "6px")
             trend_color = (
                 C_HIGH if "↑" in r["trend"]
                 else C_MOD if "stable" in r["trend"].lower()
                 else C_TEXT2
             )
-            b2c_cell = (
-                f'<div style="display:flex;align-items:center;gap:8px;">'
-                f'<span style="font-family:var(--mono);color:{C_ACCENT};font-weight:700;min-width:32px;">{r["b2c"]}%</span>'
-                f'<div style="flex:1;">{b2c_bar}</div>'
-                f'</div>'
-            )
             rows.append([
                 _sans(r["route"], color=C_TEXT, weight=600),
-                b2c_cell,
+                _mono(f'{r["b2c"]}%', color=C_ACCENT),
                 _mono(f'{r["b2b"]}%', color=C_MOD),
                 _sans(r["avg_size"], color=C_TEXT2),
                 _sans(r["mode"], color=C_TEXT2),
@@ -449,17 +465,19 @@ def _render_b2c_b2b_split() -> None:
             rows=rows,
         )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_ACCENT}33;border-radius:6px;'
-            f'padding:14px 18px;margin:4px 0 16px;">'
-            f'<div style="font-family:var(--sans);font-size:0.8rem;color:{C_TEXT2};line-height:1.6;">'
-            f'<strong style="color:{C_ACCENT};">Key Structural Shift:</strong> The transpacific route has seen B2C share grow from '
-            f'<span style="color:{C_MOD};font-weight:600;">~15% in 2020</span> to '
-            f'<span style="color:{C_HIGH};font-weight:600;">35% in 2025</span>, driven entirely by Chinese platform exports. '
-            f'This B2C growth favors <strong>LCL consolidation, air freight, and smaller, more frequent ocean bookings</strong> '
-            f'over traditional full-container-load (FCL) B2B flows.'
-            f'</div></div>'
-        )
+        st.markdown(insight_card_html(
+            title="Key Structural Shift — Transpacific B2C share",
+            score=0.80,
+            action="Prioritize",
+            rationale=(
+                "Transpacific B2C share grew from ~15% in 2020 to 35% in 2025, driven entirely by "
+                "Chinese platform exports. This favors LCL consolidation, air freight, and smaller, "
+                "more frequent ocean bookings over traditional FCL B2B flows."
+            ),
+            category="ROUTE",
+        ), unsafe_allow_html=True)
+
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("B2C/B2B split render failed")
         st.error("Failed to render B2C/B2B split.")
@@ -468,7 +486,7 @@ def _render_b2c_b2b_split() -> None:
 def _render_returns() -> None:
     try:
         section_header(
-            "🔄 Last Mile & Returns",
+            "Last Mile & Returns",
             subtitle="Reverse logistics and the cost of e-commerce returns",
         )
 
@@ -476,16 +494,9 @@ def _render_returns() -> None:
         with col1:
             rows = []
             for r in _RETURN_RATES:
-                bar = _pct_bar_html(r["return_rate"], C_LOW, "6px")
-                rate_cell = (
-                    f'<div style="display:flex;align-items:center;gap:8px;">'
-                    f'<span style="font-family:var(--mono);color:{C_LOW};font-weight:700;min-width:30px;">{r["return_rate"]}%</span>'
-                    f'<div style="flex:1;">{bar}</div>'
-                    f'</div>'
-                )
                 rows.append([
                     _sans(r["category"], color=C_TEXT, weight=600),
-                    rate_cell,
+                    _mono(f'{r["return_rate"]}%', color=C_LOW),
                     _mono(r["shipped_back"], color=C_MOD),
                     _sans(r["note"], color=C_TEXT2),
                 ])
@@ -497,17 +508,18 @@ def _render_returns() -> None:
         with col2:
             metrics = [
                 {"label": "Global Return Cost /yr", "value": "$816B", "accent": C_LOW,
-                 "delta": "~10–15% of retail GMV", "delta_color": C_TEXT3},
+                 "delta": "~10–15% of retail GMV", "delta_color": C_TEXT2},
                 {"label": "Container Utilization Hit", "value": "−3 to −5%", "accent": C_MOD,
-                 "delta": "Returns reduce effective capacity", "delta_color": C_TEXT3},
+                 "delta": "Returns reduce effective capacity", "delta_color": C_TEXT2},
                 {"label": "Last-Mile Cost Inflation", "value": "+22%", "accent": C_LOW,
-                 "delta": "Since 2020 — labor, fuel, failures", "delta_color": C_TEXT3},
+                 "delta": "Since 2020 — labor, fuel, failures", "delta_color": C_TEXT2},
                 {"label": "Apparel Returns (Temu/Shein)", "value": "25–35%", "accent": C_LOW,
-                 "delta": "Quality mismatch drives high returns", "delta_color": C_TEXT3},
+                 "delta": "Quality mismatch drives high returns", "delta_color": C_TEXT2},
                 {"label": "Returns going back to China", "value": "<5%", "accent": C_HIGH,
-                 "delta": "Most landfilled/donated locally", "delta_color": C_TEXT3},
+                 "delta": "Most landfilled/donated locally", "delta_color": C_TEXT2},
             ]
             metric_card_row(metrics, columns=1)
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Returns section render failed")
         st.error("Failed to render returns analysis.")
@@ -516,7 +528,7 @@ def _render_returns() -> None:
 def _render_rate_impact_chart() -> None:
     try:
         section_header(
-            "📈 Rate Impact of E-Commerce Growth",
+            "Rate Impact of E-Commerce Growth",
             subtitle="Volume vs air/ocean rate indices (2019=100)",
         )
 
@@ -544,26 +556,35 @@ def _render_rate_impact_chart() -> None:
             apply_dark_layout(fig, height=300)
             fig.update_layout(
                 legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0},
+                xaxis=dict(dtick=1),
+                yaxis=dict(title="Index (2019=100)"),
             )
-            fig.update_xaxes(dtick=1)
-            fig.update_yaxes(title="Index (2019=100)")
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         with col2:
             insights = [
-                ("Smaller, More Frequent Orders", "E-commerce drives JIT inventory replenishment. Average order size down 18% since 2019. Favors LCL, air, and express.", C_ACCENT),
-                ("Temu/Shein Air Cargo Boom", "Ultra-fast fashion model requires air freight. Transpacific air demand up 40%+ YoY from Chinese platforms alone.", C_LOW),
-                ("Inventory Strategy Shift", "B2C e-commerce breaks traditional quarterly bulk ordering. Importers now book 4–6x per year vs 1–2x previously.", C_MOD),
-                ("LCL vs FCL Rebalancing", "LCL market growing 2x FCL growth rate. Parcel consolidation hubs in Yiwu, Guangzhou becoming critical nodes.", C_HIGH),
+                ("Smaller, More Frequent Orders",
+                 "E-commerce drives JIT inventory replenishment. Average order size down 18% since 2019. Favors LCL, air, and express.",
+                 "Monitor", 0.65),
+                ("Temu/Shein Air Cargo Boom",
+                 "Ultra-fast fashion model requires air freight. Transpacific air demand up 40%+ YoY from Chinese platforms alone.",
+                 "Prioritize", 0.90),
+                ("Inventory Strategy Shift",
+                 "B2C e-commerce breaks traditional quarterly bulk ordering. Importers now book 4–6x per year vs 1–2x previously.",
+                 "Caution", 0.70),
+                ("LCL vs FCL Rebalancing",
+                 "LCL market growing 2x FCL growth rate. Parcel consolidation hubs in Yiwu, Guangzhou becoming critical nodes.",
+                 "Prioritize", 0.80),
             ]
-            for title, text, color in insights:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {color}33;border-radius:6px;'
-                    f'padding:12px;margin-bottom:10px">'
-                    f'<div style="font-family:var(--sans);font-size:0.78rem;font-weight:700;color:{color};margin-bottom:5px">{title}</div>'
-                    f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT2};line-height:1.5;">{text}</div>'
-                    f'</div>'
-                )
+            for title, text, action, score in insights:
+                st.markdown(insight_card_html(
+                    title=title,
+                    score=score,
+                    action=action,
+                    rationale=text,
+                    category="ROUTE",
+                ), unsafe_allow_html=True)
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Rate impact chart render failed")
         st.error("Failed to render rate impact chart.")
@@ -572,39 +593,24 @@ def _render_rate_impact_chart() -> None:
 def _render_leading_indicators() -> None:
     try:
         section_header(
-            "🔍 Key Metrics to Watch",
+            "Key Metrics to Watch",
             subtitle="Quarterly leading indicators for e-commerce shipping demand",
         )
 
-        for i, ind in enumerate(_LEADING_INDICATORS, start=1):
-            color = _signal_color(ind["signal"])
-            chip = badge(ind["signal"], color=color)
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {color}33;border-radius:6px;'
-                f'padding:16px 20px;margin-bottom:12px">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
-                f'<div style="display:flex;align-items:center;gap:10px;">'
-                f'<div style="background:{color}22;color:{color};width:26px;height:26px;border-radius:50%;'
-                f'display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.78rem;font-weight:800;">{i}</div>'
-                f'<div style="font-family:var(--sans);font-size:0.92rem;font-weight:700;color:{C_TEXT};">{ind["metric"]}</div>'
-                f'</div>'
-                f'{chip}'
-                f'</div>'
-                f'<div style="display:flex;gap:24px;margin-bottom:8px;">'
-                f'<div>'
-                f'<div style="font-family:var(--sans);font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">Source</div>'
-                f'<div style="font-family:var(--sans);font-size:0.78rem;color:{C_TEXT2};">{ind["source"]}</div>'
-                f'</div>'
-                f'<div>'
-                f'<div style="font-family:var(--sans);font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;">Current Reading</div>'
-                f'<div style="font-family:var(--sans);font-size:0.85rem;font-weight:700;color:{color};">{ind["current"]}</div>'
-                f'</div>'
-                f'</div>'
-                f'<div style="font-family:var(--sans);font-size:0.78rem;color:{C_TEXT2};line-height:1.5;padding-left:36px;">'
-                f'<strong style="color:{C_TEXT3};">Why it matters:</strong> {ind["why"]}'
-                f'</div>'
-                f'</div>'
+        for ind in _LEADING_INDICATORS:
+            rationale = (
+                f"Source: {ind['source']}. Current reading: {ind['current']}. "
+                f"Why it matters: {ind['why']}"
             )
+            st.markdown(insight_card_html(
+                title=ind["metric"],
+                score=_signal_score(ind["signal"]),
+                action=_signal_action(ind["signal"]),
+                rationale=rationale,
+                category="MACRO",
+            ), unsafe_allow_html=True)
+
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Leading indicators render failed")
         st.error("Failed to render leading indicators.")
@@ -621,9 +627,8 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
                 "How global e-commerce platforms — Amazon, Temu, Shein, AliExpress — are reshaping "
                 "freight demand, air cargo pricing, container routes, and last-mile logistics worldwide."
             ),
-            icon="🛒",
-            badge_text="BULLISH · Mar 2026",
-            badge_color=C_HIGH,
+            badge_text="E-COMMERCE",
+            badge_color=C_ACCENT,
         )
     except Exception:
         logger.exception("Header render failed")
@@ -638,15 +643,6 @@ def render(macro_data=None, freight_data=None, insights=None) -> None:
     _render_leading_indicators()
 
     try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:12px 16px;margin-top:8px">'
-            f'<div style="font-family:var(--sans);font-size:0.7rem;color:{C_TEXT3};line-height:1.6;">'
-            f'<strong style="color:{C_TEXT2};">Sources & Methodology:</strong> '
-            f'GMV and volume estimates from company filings, Bloomberg, eMarketer, and industry reports. '
-            f'De minimis data from US CBP and USITC. Peak season indices are proprietary composite indicators. '
-            f'Rate indices normalized to 2019=100 baseline. All figures approximate; verify before trading decisions.'
-            f'</div></div>'
-        )
+        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Footer render failed")
