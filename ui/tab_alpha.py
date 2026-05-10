@@ -6,31 +6,62 @@ import random
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-from engine.alpha_engine import AlphaSignal, generate_all_signals
+from data.quality import DataSource
+from engine.alpha_engine import generate_all_signals
 from ui.styles import (
-    C_BG, C_SURFACE, C_CARD, C_BORDER,
-    C_HIGH, C_MOD, C_LOW, C_ACCENT,
-    C_TEXT, C_TEXT2, C_TEXT3,
-    dark_layout,
+    C_ACCENT,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    wsj_market_table,
 )
 
 # ---------------------------------------------------------------------------
-# Local color aliases
+# Local color aliases (domain-specific direction semantics)
 # ---------------------------------------------------------------------------
 
 C_LONG    = C_HIGH       # "#2e9e6e"
 C_SHORT   = C_LOW        # "#c0392b"
 C_NEUTRAL = C_TEXT2      # "#9a968e"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
+C_PURPLE  = C_CONV       # muted purple from shared palette
+C_CYAN    = C_MACRO      # teal from shared palette
+
 
 # ---------------------------------------------------------------------------
-# Mock / fallback data
+# Cell formatters for wsj_market_table()
+# ---------------------------------------------------------------------------
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mock / fallback data — kept verbatim (legitimate alpha-signal scaffolding)
 # ---------------------------------------------------------------------------
 
 _MOCK_SIGNALS = [
@@ -58,36 +89,45 @@ _SIG_TYPES  = ["Momentum", "Mean Reversion", "BDI Divergence", "Macro Overlay", 
 # Conviction matrix: category × signal_type → (label, color)
 _MATRIX_DATA = {
     ("Container Ships", "Momentum"):      ("HIGH", C_HIGH),
-    ("Container Ships", "Mean Reversion"):("MOD",  "#16a34a"),
+    ("Container Ships", "Mean Reversion"):("MOD",  C_HIGH),
     ("Container Ships", "BDI Divergence"):("HIGH", C_HIGH),
-    ("Container Ships", "Macro Overlay"): ("MOD",  "#16a34a"),
-    ("Container Ships", "Sentiment"):     ("MOD",  "#16a34a"),
+    ("Container Ships", "Macro Overlay"): ("MOD",  C_HIGH),
+    ("Container Ships", "Sentiment"):     ("MOD",  C_HIGH),
     ("Dry Bulk",        "Momentum"):      ("HIGH", C_HIGH),
-    ("Dry Bulk",        "Mean Reversion"):("LOW",  "#dc2626"),
+    ("Dry Bulk",        "Mean Reversion"):("LOW",  C_LOW),
     ("Dry Bulk",        "BDI Divergence"):("HIGH", C_HIGH),
     ("Dry Bulk",        "Macro Overlay"): ("HIGH", C_HIGH),
-    ("Dry Bulk",        "Sentiment"):     ("MOD",  "#16a34a"),
-    ("Tankers",         "Momentum"):      ("LOW",  "#dc2626"),
+    ("Dry Bulk",        "Sentiment"):     ("MOD",  C_HIGH),
+    ("Tankers",         "Momentum"):      ("LOW",  C_LOW),
     ("Tankers",         "Mean Reversion"):("MOD",  C_MOD),
     ("Tankers",         "BDI Divergence"):("NONE", C_TEXT3),
-    ("Tankers",         "Macro Overlay"): ("LOW",  "#dc2626"),
-    ("Tankers",         "Sentiment"):     ("LOW",  "#dc2626"),
+    ("Tankers",         "Macro Overlay"): ("LOW",  C_LOW),
+    ("Tankers",         "Sentiment"):     ("LOW",  C_LOW),
     ("LNG",             "Momentum"):      ("MOD",  C_MOD),
     ("LNG",             "Mean Reversion"):("HIGH", C_HIGH),
     ("LNG",             "BDI Divergence"):("NONE", C_TEXT3),
     ("LNG",             "Macro Overlay"): ("MOD",  C_MOD),
     ("LNG",             "Sentiment"):     ("HIGH", C_HIGH),
-    ("Port Operators",  "Momentum"):      ("MOD",  "#16a34a"),
+    ("Port Operators",  "Momentum"):      ("MOD",  C_HIGH),
     ("Port Operators",  "Mean Reversion"):("MOD",  C_MOD),
-    ("Port Operators",  "BDI Divergence"):("LOW",  "#dc2626"),
+    ("Port Operators",  "BDI Divergence"):("LOW",  C_LOW),
     ("Port Operators",  "Macro Overlay"): ("HIGH", C_HIGH),
     ("Port Operators",  "Sentiment"):     ("MOD",  C_MOD),
     ("Mixed",           "Momentum"):      ("MOD",  C_MOD),
     ("Mixed",           "Mean Reversion"):("MOD",  C_MOD),
-    ("Mixed",           "BDI Divergence"):("MOD",  "#16a34a"),
+    ("Mixed",           "BDI Divergence"):("MOD",  C_HIGH),
     ("Mixed",           "Macro Overlay"): ("MOD",  C_MOD),
-    ("Mixed",           "Sentiment"):     ("LOW",  "#dc2626"),
+    ("Mixed",           "Sentiment"):     ("LOW",  C_LOW),
 }
+
+# ---------------------------------------------------------------------------
+# Provenance — sources used across this tab
+# ---------------------------------------------------------------------------
+
+_ALPHA_SOURCES = [
+    DataSource.modeled("Internal alpha-signal engine"),
+    DataSource.demo("Synthetic signal log"),
+]
 
 # ---------------------------------------------------------------------------
 # Cache helpers
@@ -128,39 +168,11 @@ def _conv_color(conv: str) -> str:
     return {
         "HIGH": C_HIGH,
         "MODERATE": C_MOD,
-        "MODERATE": C_MOD,
         "MOD": C_MOD,
         "LOW": C_LOW,
         "MEDIUM": C_MOD,
     }.get(conv, C_TEXT3)
 
-def _badge(text: str, color: str) -> str:
-    return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}55;'
-        f'border-radius:6px;padding:2px 8px;font-size:0.65rem;font-weight:700;'
-        f'letter-spacing:0.07em;white-space:nowrap">{text}</span>'
-    )
-
-def _hr() -> None:
-    st.markdown(
-        "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:28px 0'>", unsafe_allow_html=True)
-
-def _section_title(label: str, sub: str = "") -> None:
-    sub_html = f'<div style="font-size:0.75rem;color:{C_TEXT3};margin-top:3px;font-family:Libre Franklin,sans-serif">{sub}</div>' if sub else ""
-    st.markdown(
-        f'<div style="margin-bottom:16px">'
-        f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT2};letter-spacing:0.08em;'
-        f'text-transform:uppercase;font-family:Libre Baskerville,Georgia,serif">{label}</span>'
-        f'{sub_html}</div>', unsafe_allow_html=True)
-
-def _card_open(extra_style: str = "") -> str:
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-radius:3px;padding:20px 22px;{extra_style}">'
-    )
-
-def _card_close() -> str:
-    return "</div>"
 
 # ---------------------------------------------------------------------------
 # Section 1 — Alpha Signal Hub (hero KPIs)
@@ -168,7 +180,6 @@ def _card_close() -> str:
 
 def _render_hero(signals: list[dict]) -> None:
     try:
-        today_str = datetime.date.today().strftime("%B %d, %Y")
         n_total   = len(signals)
         n_high    = sum(1 for s in signals if s.get("conviction") in ("HIGH",))
         strengths = [s.get("strength", 0.5) for s in signals]
@@ -177,40 +188,19 @@ def _render_hero(signals: list[dict]) -> None:
         avg_rr    = float(np.mean([s.get("rr", 2.0) for s in signals])) if signals else 2.0
         est_alpha = round(avg_str * avg_rr * 0.18 * 100, 1)  # rough annualized %
 
-        kpis = [
-            (str(n_total), "ACTIVE SIGNALS", "total generated", C_ACCENT),
-            (str(n_high),  "HIGH CONVICTION", "strong edge signals", C_HIGH),
-            (f"{avg_str:.2f}", "AVG SIGNAL STRENGTH", "scale 0.00 – 1.00", C_MOD),
-            (f"{est_alpha:.1f}%", "EST. ALPHA P.A.", "backtest-based estimate", C_PURPLE),
-        ]
-
-        kpi_html = "".join([
-            f'<div style="background:rgba(0,0,0,0.28);border:1px solid rgba(232,230,225,0.06);'
-            f'border-radius:3px;padding:22px 18px;text-align:center">'
-            f'<div style="font-size:2.4rem;font-weight:900;color:{col};line-height:1;'
-            f'font-variant-numeric:tabular-nums;font-family:JetBrains Mono,monospace">{val}</div>'
-            f'<div style="font-size:0.6rem;font-weight:800;color:{col};opacity:0.8;'
-            f'text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;font-family:Libre Franklin,sans-serif">{label}</div>'
-            f'<div style="font-size:0.63rem;color:{C_TEXT3};margin-top:3px;font-family:Libre Franklin,sans-serif">{sub}</div>'
-            f'</div>'
-            for val, label, sub, col in kpis
-        ])
-
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,#0d1826 0%,#111f35 50%,#0a1520 100%);'
-            f'border:1px solid rgba(53,114,176,0.22);border-radius:3px;padding:32px 36px 28px;'
-            f'margin-bottom:8px;position:relative;overflow:hidden">'
-            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:24px">'
-            f'<div style="width:9px;height:9px;border-radius:3px;background:{C_HIGH}"></div>'
-            f'<span style="font-size:0.85rem;font-weight:700;color:{C_TEXT};letter-spacing:0.10em;'
-            f'text-transform:uppercase;font-family:Libre Baskerville,Georgia,serif">Alpha Signal Generator</span>'
-            f'<span style="margin-left:auto;font-size:0.65rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">'
-            f'{today_str}</span>'
-            f'</div>'
-            f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">'
-            f'{kpi_html}'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        metric_card_row(
+            [
+                {"label": "Active Signals",       "value": str(n_total),
+                 "accent": C_ACCENT, "sublabel": "total generated"},
+                {"label": "High Conviction",      "value": str(n_high),
+                 "accent": C_HIGH,   "sublabel": "strong edge signals"},
+                {"label": "Avg Signal Strength",  "value": f"{avg_str:.2f}",
+                 "accent": C_MOD,    "sublabel": "scale 0.00 – 1.00"},
+                {"label": "Est. Alpha p.a.",      "value": f"{est_alpha:.1f}%",
+                 "accent": C_PURPLE, "sublabel": "backtest-based estimate"},
+            ],
+            columns=4,
+        )
     except Exception as exc:
         logger.warning(f"[tab_alpha] hero render failed: {exc}")
         st.info("Alpha Signal Hub unavailable.")
@@ -221,49 +211,25 @@ def _render_hero(signals: list[dict]) -> None:
 
 def _render_conviction_matrix() -> None:
     try:
-        _section_title("Signal Conviction Matrix", "Bloomberg-style heat map: category × signal type")
+        section_header(
+            "Signal Conviction Matrix",
+            "Conviction by category and signal type",
+        )
 
-        col_w = f"repeat({len(_SIG_TYPES)}, 1fr)"
-        header_cells = "".join([
-            f'<div style="font-size:0.6rem;font-weight:700;color:{C_TEXT2};'
-            f'text-transform:uppercase;letter-spacing:0.1em;text-align:center;'
-            f'padding:8px 4px;background:rgba(0,0,0,0.2);border-radius:3px;font-family:Libre Franklin,sans-serif">{t}</div>'
-            for t in _SIG_TYPES
-        ])
-
-        rows_html = ""
+        headers = ["Category"] + _SIG_TYPES
+        rows = []
         for cat in _CATEGORIES:
-            row_cells = ""
+            row_cells = [_sans(cat, color=C_TEXT, weight=700)]
             for sig in _SIG_TYPES:
                 label, color = _MATRIX_DATA.get((cat, sig), ("NONE", C_TEXT3))
-                text_color = C_BG if label in ("HIGH",) else C_TEXT
                 if label == "NONE":
-                    text_color = C_TEXT3
-                row_cells += (
-                    f'<div style="background:{color}33;border:1px solid {color}55;'
-                    f'border-radius:3px;text-align:center;padding:10px 4px;'
-                    f'font-size:0.62rem;font-weight:800;color:{color};'
-                    f'letter-spacing:0.06em;font-family:Libre Franklin,sans-serif">{label}</div>'
-                )
-            cat_label = (
-                f'<div style="font-size:0.65rem;font-weight:700;color:{C_TEXT};'
-                f'padding:10px 0;white-space:nowrap;font-family:Libre Franklin,sans-serif">{cat}</div>'
-            )
-            rows_html += (
-                f'<div style="display:contents">'
-                f'<div style="display:flex;align-items:center;padding-right:12px">{cat_label}</div>'
-                f'{row_cells}'
-                f'</div>'
-            )
+                    row_cells.append(_sans("—", color=C_TEXT3))
+                else:
+                    row_cells.append(badge(label, color=color))
+            rows.append(row_cells)
 
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
-            f'<div style="display:grid;grid-template-columns:160px {col_w};gap:8px;align-items:center">'
-            f'<div></div>'
-            f'{header_cells}'
-            f'{rows_html}'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] conviction matrix failed: {exc}")
         st.info("Conviction matrix unavailable.")
@@ -274,20 +240,16 @@ def _render_conviction_matrix() -> None:
 
 def _render_signals_table(signals: list[dict]) -> None:
     try:
-        _section_title("Top Signals Table", "Actionable long/short signals — ranked by conviction × strength")
+        section_header(
+            "Top Signals Table",
+            "Actionable long/short signals — ranked by conviction × strength",
+        )
 
-        headers = ["INSTRUMENT", "DIRECTION", "CONVICTION", "STRENGTH",
-                   "SIGNAL TYPE", "BASIS", "ENTRY", "STOP", "TARGET", "R/R", "AGE"]
-        col_w   = "90px 90px 90px 70px 110px 1fr 70px 70px 70px 45px 70px"
+        headers = ["Instrument", "Direction", "Conviction", "Strength",
+                   "Signal Type", "Basis", "Entry", "Stop", "Target", "R/R", "Age"]
 
-        header_html = "".join([
-            f'<div style="font-size:0.58rem;font-weight:700;color:{C_TEXT3};'
-            f'text-transform:uppercase;letter-spacing:0.09em;padding:6px 8px;font-family:Libre Franklin,sans-serif">{h}</div>'
-            for h in headers
-        ])
-
-        rows_html = ""
-        for i, s in enumerate(signals):
+        rows = []
+        for s in signals:
             ticker    = s.get("ticker", "—")
             direction = s.get("direction", "FLAT")
             conv      = s.get("conviction", "LOW")
@@ -300,49 +262,26 @@ def _render_signals_table(signals: list[dict]) -> None:
             rr        = s.get("rr", 0.0)
             mins_ago  = s.get("mins_ago", 999)
 
-            d_col  = _dir_color(direction)
-            c_col  = _conv_color(conv)
-            row_bg = "rgba(255,255,255,0.02)" if i % 2 == 0 else "transparent"
-
+            d_col = _dir_color(direction)
+            c_col = _conv_color(conv)
             age_str = f"{mins_ago}m" if mins_ago < 60 else f"{mins_ago // 60}h {mins_ago % 60}m"
 
-            rows_html += (
-                f'<div style="display:contents">'
-                f'<div style="padding:10px 8px;background:{row_bg};border-radius:3px 0 0 3px;'
-                f'font-size:0.75rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace">{ticker}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.72rem;font-weight:700;color:{d_col};'
-                f'font-family:Libre Franklin,sans-serif">'
-                f'{_dir_arrow(direction)}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg}">{_badge(conv, c_col)}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.72rem;font-weight:700;'
-                f'color:{C_TEXT};font-family:JetBrains Mono,monospace">{strength:.2f}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.65rem;color:{C_ACCENT};'
-                f'font-weight:600;font-family:Libre Franklin,sans-serif">{sig_type}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.63rem;color:{C_TEXT2};'
-                f'font-family:Libre Franklin,sans-serif">{basis}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_TEXT};'
-                f'font-family:JetBrains Mono,monospace">${entry:.2f}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_SHORT};'
-                f'font-family:JetBrains Mono,monospace">${stop:.2f}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_HIGH};'
-                f'font-family:JetBrains Mono,monospace">${target:.2f}</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};font-size:0.68rem;color:{C_MOD};'
-                f'font-family:JetBrains Mono,monospace">{rr:.1f}x</div>'
-                f'<div style="padding:10px 8px;background:{row_bg};border-radius:0 3px 3px 0;'
-                f'font-size:0.63rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">{age_str}</div>'
-                f'</div>'
-            )
+            rows.append([
+                _mono(ticker, color=C_TEXT),
+                _sans(_dir_arrow(direction), color=d_col, weight=700),
+                badge(conv, color=c_col),
+                _mono(f"{strength:.2f}"),
+                _sans(sig_type, color=C_ACCENT, weight=600),
+                _sans(basis, color=C_TEXT2),
+                _mono(f"${entry:.2f}"),
+                _mono(f"${stop:.2f}", color=C_SHORT),
+                _mono(f"${target:.2f}", color=C_HIGH),
+                _mono(f"{rr:.1f}x", color=C_MOD),
+                _sans(age_str, color=C_TEXT3),
+            ])
 
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
-            f'<div style="display:grid;grid-template-columns:{col_w};gap:2px;'
-            f'border-bottom:1px solid rgba(232,230,225,0.05);margin-bottom:8px">'
-            f'{header_html}'
-            f'</div>'
-            f'<div style="display:grid;grid-template-columns:{col_w};gap:2px">'
-            f'{rows_html}'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] signals table failed: {exc}")
         st.info("Signals table unavailable.")
@@ -353,85 +292,52 @@ def _render_signals_table(signals: list[dict]) -> None:
 
 def _render_engine_diagram() -> None:
     try:
-        _section_title("Signal Generation Engine", "Transparency into how each signal is constructed")
+        section_header(
+            "Signal Generation Engine",
+            "Transparency into how each signal is constructed",
+        )
 
         inputs = [
-            ("BDI / Baltic Indices", C_CYAN),
-            ("WCI / Freightos WCI", C_CYAN),
-            ("Stock Price History", C_ACCENT),
+            ("BDI / Baltic Indices",  C_CYAN),
+            ("WCI / Freightos WCI",   C_CYAN),
+            ("Stock Price History",   C_ACCENT),
             ("Macro Data (CPI, PMI)", C_MOD),
             ("Port Congestion Index", C_PURPLE),
-            ("Options Sentiment", C_HIGH),
-            ("Insider Filings", C_TEXT2),
+            ("Options Sentiment",     C_HIGH),
+            ("Insider Filings",       C_TEXT2),
         ]
         engine_steps = [
-            ("① Factor Scoring", "Score each input 0–1"),
-            ("② Regime Detection", "Bull/Bear/High-Vol"),
-            ("③ Signal Fusion", "Weighted ensemble"),
-            ("④ Conviction Filter", "Threshold: >0.6 HIGH"),
-            ("⑤ Risk Adjustment", "Stop/Target placement"),
+            ("(1) Factor Scoring",    "Score each input 0–1"),
+            ("(2) Regime Detection",  "Bull / Bear / High-Vol"),
+            ("(3) Signal Fusion",     "Weighted ensemble"),
+            ("(4) Conviction Filter", "Threshold: > 0.6 = HIGH"),
+            ("(5) Risk Adjustment",   "Stop / Target placement"),
         ]
         outputs = [
             ("HIGH conviction signals", C_HIGH),
-            ("MODERATE signals", C_MOD),
-            ("LOW / monitor", C_TEXT3),
-            ("Factor attribution", C_ACCENT),
-            ("Entry / Stop / Target", C_CYAN),
+            ("MODERATE signals",        C_MOD),
+            ("LOW / monitor",           C_TEXT3),
+            ("Factor attribution",      C_ACCENT),
+            ("Entry / Stop / Target",   C_CYAN),
         ]
 
-        inp_html = "".join([
-            f'<div style="background:rgba(0,0,0,0.25);border-left:3px solid {col};'
-            f'border-radius:0 3px 3px 0;padding:7px 12px;margin-bottom:6px;'
-            f'font-size:0.65rem;color:{C_TEXT};font-family:Libre Franklin,sans-serif">{label}</div>'
-            for label, col in inputs
-        ])
-        eng_html = "".join([
-            f'<div style="background:rgba(53,114,176,0.10);border:1px solid rgba(53,114,176,0.25);'
-            f'border-radius:3px;padding:8px 12px;margin-bottom:6px">'
-            f'<div style="font-size:0.66rem;font-weight:700;color:{C_ACCENT};font-family:Libre Franklin,sans-serif">{step}</div>'
-            f'<div style="font-size:0.60rem;color:{C_TEXT3};margin-top:2px;font-family:Libre Franklin,sans-serif">{desc}</div>'
-            f'</div>'
-            for step, desc in engine_steps
-        ])
-        out_html = "".join([
-            f'<div style="background:rgba(0,0,0,0.25);border-left:3px solid {col};'
-            f'border-radius:0 3px 3px 0;padding:7px 12px;margin-bottom:6px;'
-            f'font-size:0.65rem;color:{C_TEXT};font-family:Libre Franklin,sans-serif">{label}</div>'
-            for label, col in outputs
-        ])
+        # Each pipeline column → a single wsj_market_table for crisp alignment.
+        c_in, c_eng, c_out = st.columns([1, 1, 1])
 
-        arrow = (
-            f'<div style="display:flex;align-items:center;justify-content:center;height:100%">'
-            f'<div style="font-size:2rem;color:{C_TEXT3}">→</div>'
-            f'</div>'
-        )
+        with c_in:
+            in_rows = [[_sans(label, color=col, weight=600)] for label, col in inputs]
+            wsj_market_table(["Data Inputs"], in_rows)
+        with c_eng:
+            eng_rows = [
+                [_sans(step, color=C_ACCENT, weight=700), _sans(desc, color=C_TEXT3)]
+                for step, desc in engine_steps
+            ]
+            wsj_market_table(["Stage", "Description"], eng_rows)
+        with c_out:
+            out_rows = [[_sans(label, color=col, weight=600)] for label, col in outputs]
+            wsj_market_table(["Output"], out_rows)
 
-        col_labels = ["DATA INPUTS", "→ SIGNAL ENGINE →", "OUTPUT"]
-        label_html = "".join([
-            f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};'
-            f'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:12px;text-align:center">{l}</div>'
-            for l in col_labels
-        ])
-
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:20px 22px">'
-            f'<div style="display:grid;grid-template-columns:1fr 60px 1fr 60px 1fr;gap:0;align-items:start">'
-            f'<div>'
-            f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">DATA INPUTS</div>'
-            f'{inp_html}</div>'
-            f'{arrow}'
-            f'<div>'
-            f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">SIGNAL ENGINE</div>'
-            f'{eng_html}</div>'
-            f'{arrow}'
-            f'<div>'
-            f'<div style="font-size:0.6rem;font-weight:800;color:{C_TEXT2};text-transform:uppercase;'
-            f'letter-spacing:0.12em;margin-bottom:12px;text-align:center;font-family:Libre Baskerville,Georgia,serif">OUTPUT</div>'
-            f'{out_html}</div>'
-            f'</div>'
-            f'</div>', unsafe_allow_html=True)
+        st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] engine diagram failed: {exc}")
         st.info("Engine diagram unavailable.")
@@ -447,17 +353,10 @@ _FACTOR_SCORES = {
     "DAC-HIGH-FND":  {"Momentum": 0.65, "Fundamental": 0.90, "Sentiment": 0.62, "Technical": 0.70, "Macro": 0.58},
 }
 
-def _factor_bar(score: float) -> str:
-    pct = int(score * 100)
-    col = C_HIGH if score >= 0.75 else (C_MOD if score >= 0.55 else C_LOW)
-    return (
-        f'<div style="display:flex;align-items:center;gap:8px">'
-        f'<div style="flex:1;background:rgba(232,230,225,0.05);border-radius:4px;height:6px">'
-        f'<div style="width:{pct}%;height:6px;border-radius:4px;background:{col}"></div>'
-        f'</div>'
-        f'<span style="font-size:0.63rem;color:{col};font-family:JetBrains Mono,monospace;width:32px">{score:.2f}</span>'
-        f'</div>'
-    )
+
+def _factor_score_color(score: float) -> str:
+    return C_HIGH if score >= 0.75 else (C_MOD if score >= 0.55 else C_LOW)
+
 
 def _render_factor_breakdown(signals: list[dict]) -> None:
     try:
@@ -465,44 +364,41 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
         if not high_signals:
             return
 
-        _section_title("Multi-Factor Signal Breakdown", "Factor decomposition for HIGH conviction signals")
+        section_header(
+            "Multi-Factor Signal Breakdown",
+            "Factor decomposition for HIGH conviction signals",
+        )
 
-        cols = st.columns(min(len(high_signals), 4))
         factors = ["Momentum", "Fundamental", "Sentiment", "Technical", "Macro"]
+        factor_keys = list(_FACTOR_SCORES.keys())
 
-        for col_obj, s in zip(cols, high_signals):
-            ticker  = s.get("ticker", "—")
-            sig_key = list(_FACTOR_SCORES.keys())[high_signals.index(s) % len(_FACTOR_SCORES)]
-            scores  = _FACTOR_SCORES[sig_key]
-            combined = round(float(np.mean(list(scores.values()))), 2)
-            d_col   = _dir_color(s.get("direction", "FLAT"))
-            dir_lbl = _dir_arrow(s.get("direction", "FLAT"))
+        # Build one row per factor; columns = ticker/HIGH-conviction signals.
+        ticker_labels: list[str] = []
+        score_lookup: list[dict] = []
+        for idx, s in enumerate(high_signals):
+            ticker = s.get("ticker", "—")
+            sig_key = factor_keys[idx % len(factor_keys)]
+            ticker_labels.append(f"{ticker} {_dir_arrow(s.get('direction', 'FLAT'))}")
+            score_lookup.append(_FACTOR_SCORES[sig_key])
 
-            rows = "".join([
-                f'<tr>'
-                f'<td style="font-size:0.63rem;color:{C_TEXT2};padding:6px 0;white-space:nowrap;font-family:Libre Franklin,sans-serif">{f}</td>'
-                f'<td style="padding:6px 0 6px 10px;width:120px">{_factor_bar(scores[f])}</td>'
-                f'</tr>'
-                for f in factors
-            ])
+        headers = ["Factor", *ticker_labels]
+        rows: list[list[str]] = []
+        for f in factors:
+            row = [_sans(f, color=C_TEXT2, weight=600)]
+            for scores in score_lookup:
+                v = scores[f]
+                row.append(_mono(f"{v:.2f}", color=_factor_score_color(v)))
+            rows.append(row)
 
-            with col_obj:
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                    f'padding:16px 18px;height:100%">'
-                    f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
-                    f'<span style="font-size:0.8rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace">{ticker}</span>'
-                    f'<span style="font-size:0.65rem;font-weight:700;color:{d_col}">{dir_lbl}</span>'
-                    f'</div>'
-                    f'<table style="width:100%;border-collapse:collapse">'
-                    f'{rows}'
-                    f'</table>'
-                    f'<div style="border-top:1px solid rgba(232,230,225,0.06);margin-top:10px;padding-top:10px;'
-                    f'display:flex;justify-content:space-between;align-items:center">'
-                    f'<span style="font-size:0.6rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.1em">Combined</span>'
-                    f'<span style="font-size:0.78rem;font-weight:800;color:{C_HIGH};font-family:JetBrains Mono,monospace">{combined:.2f}</span>'
-                    f'</div>'
-                    f'</div>', unsafe_allow_html=True)
+        # Combined avg row
+        combined_row = [_sans("Combined", color=C_TEXT, weight=700)]
+        for scores in score_lookup:
+            avg = round(float(np.mean(list(scores.values()))), 2)
+            combined_row.append(_mono(f"{avg:.2f}", color=C_HIGH))
+        rows.append(combined_row)
+
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] factor breakdown failed: {exc}")
         st.info("Factor breakdown unavailable.")
@@ -513,7 +409,10 @@ def _render_factor_breakdown(signals: list[dict]) -> None:
 
 def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
     try:
-        _section_title("Signal vs Price Chart", "ZIM & MATX price history with signal entry/exit markers")
+        section_header(
+            "Signal vs Price Chart",
+            "ZIM & MATX price history with signal entry/exit markers",
+        )
 
         tab1, tab2 = st.tabs(["ZIM", "MATX"])
 
@@ -530,7 +429,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                             x_vals = list(range(len(df)))
                         y_vals = df["close"].tolist()
                     else:
-                        # Generate synthetic price series
+                        # Generate synthetic price series (legitimate fallback)
                         rng = np.random.default_rng(42 + hash(ticker) % 100)
                         n = 120
                         base = 19.4 if ticker == "ZIM" else 24.1
@@ -591,10 +490,9 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                         fig.add_hline(y=tgt, line=dict(color=C_HIGH, dash="dot", width=1),
                                       annotation_text="Target", annotation_font_color=C_HIGH)
 
-                    fig.update_layout(
-                        **dark_layout(title=f"{ticker} — Price + Signal Markers", height=340),
-                    )
+                    apply_dark_layout(fig, title=f"{ticker} — Price + Signal Markers", height=340)
                     st.plotly_chart(fig, use_container_width=True)
+                    st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
 
                 except Exception as inner_exc:
                     logger.warning(f"[tab_alpha] chart {ticker} failed: {inner_exc}")
@@ -609,7 +507,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
 
 def _render_live_monitor(signals: list[dict]) -> None:
     try:
-        _section_title(
+        section_header(
             "Live Signal Monitor",
             "Signals generated in last 24 h — newest first — auto-refreshes every 60 s",
         )
@@ -622,7 +520,9 @@ def _render_live_monitor(signals: list[dict]) -> None:
             st.info("No signals in the last 24 hours.")
             return
 
-        rows_html = ""
+        headers = ["", "Instrument", "Direction", "Conviction", "Signal Type",
+                   "Basis", "Strength", "Age"]
+        rows: list[list[str]] = []
         for s in live_24h:
             ticker    = s.get("ticker", "—")
             direction = s.get("direction", "FLAT")
@@ -635,34 +535,24 @@ def _render_live_monitor(signals: list[dict]) -> None:
             c_col     = _conv_color(conv)
             age_str   = f"{mins_ago}m ago" if mins_ago < 60 else f"{mins_ago // 60}h {mins_ago % 60}m ago"
             dot_col   = C_HIGH if mins_ago < 15 else (C_MOD if mins_ago < 60 else C_TEXT3)
-
-            rows_html += (
-                f'<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;'
-                f'border-bottom:1px solid rgba(232,230,225,0.04);'
-                f'background:{"rgba(46,158,110,0.04)" if mins_ago < 15 else "transparent"}">'
-                f'<div style="width:7px;height:7px;border-radius:3px;background:{dot_col};flex-shrink:0"></div>'
-                f'<span style="font-size:0.72rem;font-weight:800;color:{C_TEXT};font-family:JetBrains Mono,monospace;width:48px">{ticker}</span>'
-                f'<span style="font-size:0.7rem;font-weight:700;color:{d_col};width:72px;font-family:Libre Franklin,sans-serif">{_dir_arrow(direction)}</span>'
-                f'<span style="width:80px">{_badge(conv, c_col)}</span>'
-                f'<span style="font-size:0.65rem;color:{C_ACCENT};width:110px;font-family:Libre Franklin,sans-serif">{sig_type}</span>'
-                f'<span style="font-size:0.63rem;color:{C_TEXT2};flex:1;font-family:Libre Franklin,sans-serif">{basis}</span>'
-                f'<span style="font-size:0.65rem;color:{C_TEXT};font-family:JetBrains Mono,monospace;width:38px">{strength:.2f}</span>'
-                f'<span style="font-size:0.62rem;color:{C_TEXT3};width:72px;text-align:right;font-family:Libre Franklin,sans-serif">{age_str}</span>'
-                f'</div>'
+            dot       = (
+                f'<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:50%;background:{dot_col};"></span>'
             )
 
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;overflow:hidden">'
-            f'<div style="background:rgba(0,0,0,0.2);padding:12px 16px;'
-            f'border-bottom:1px solid rgba(232,230,225,0.05);'
-            f'display:flex;align-items:center;gap:8px">'
-            f'<div style="width:7px;height:7px;border-radius:3px;background:{C_HIGH}"></div>'
-            f'<span style="font-size:0.62rem;font-weight:700;color:{C_TEXT2};'
-            f'text-transform:uppercase;letter-spacing:0.12em;font-family:Libre Baskerville,Georgia,serif">LIVE — {len(live_24h)} signals / 24 h</span>'
-            f'<span style="margin-left:auto;font-size:0.60rem;color:{C_TEXT3};font-family:Libre Franklin,sans-serif">Cache: 60 s</span>'
-            f'</div>'
-            f'{rows_html}'
-            f'</div>', unsafe_allow_html=True)
+            rows.append([
+                dot,
+                _mono(ticker, color=C_TEXT),
+                _sans(_dir_arrow(direction), color=d_col, weight=700),
+                badge(conv, color=c_col),
+                _sans(sig_type, color=C_ACCENT, weight=600),
+                _sans(basis, color=C_TEXT2),
+                _mono(f"{strength:.2f}"),
+                _sans(age_str, color=C_TEXT3),
+            ])
+
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] live monitor failed: {exc}")
         st.info("Live signal monitor unavailable.")
@@ -679,6 +569,13 @@ def render(
 ) -> None:
     """Render the Alpha Signal Generator tab."""
     try:
+        page_header(
+            title="Alpha Signal Generator",
+            subtitle="Multi-factor alpha signals across container ships, dry bulk, tankers, and ports.",
+            badge_text="ALPHA",
+            badge_color=C_ACCENT,
+        )
+
         # ── Resolve signals ──────────────────────────────────────────────────
         signals: list[dict] = []
 
@@ -725,27 +622,21 @@ def render(
 
         # ── Section 1: Hero KPIs ─────────────────────────────────────────────
         _render_hero(signals)
-        _hr()
 
         # ── Section 2: Conviction Matrix ─────────────────────────────────────
         _render_conviction_matrix()
-        _hr()
 
         # ── Section 3: Top Signals Table ─────────────────────────────────────
         _render_signals_table(signals)
-        _hr()
 
         # ── Section 4: Engine Diagram ─────────────────────────────────────────
         _render_engine_diagram()
-        _hr()
 
         # ── Section 5: Factor Breakdown ───────────────────────────────────────
         _render_factor_breakdown(signals)
-        _hr()
 
         # ── Section 6: Price + Signal Chart ──────────────────────────────────
         _render_price_signal_chart(stock_data or {}, signals)
-        _hr()
 
         # ── Section 7: Live Monitor ───────────────────────────────────────────
         _render_live_monitor(signals)
