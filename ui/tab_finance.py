@@ -32,6 +32,7 @@ from plotly.subplots import make_subplots
 from loguru import logger
 import streamlit as st
 
+from data.quality import DataSource
 from processing.trade_finance import (
     TradeFinanceIndicator,
     TradeFinanceRiskScore,
@@ -41,10 +42,23 @@ from processing.trade_finance import (
     compute_interest_rate_impact_on_shipping,
 )
 from ui.styles import (
-    C_CARD, C_BORDER, C_TEXT, C_TEXT2, C_TEXT3,
-    C_HIGH, C_LOW, C_ACCENT, C_MOD, C_MACRO,
+    C_ACCENT,
+    C_BORDER,
+    C_CARD,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
     _hex_to_rgba as _rgba,
+    apply_dark_layout,
+    metric_card_row,
+    page_header,
     section_header,
+    source_footer,
+    wsj_market_table,
 )
 
 # ---------------------------------------------------------------------------
@@ -77,15 +91,39 @@ _SEVERITY_COLOR: dict[str, str] = {
 }
 
 
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _risk_badge(severity: str) -> str:
+    """Severity pill for CRITICAL/HIGH/MODERATE/LOW labels (raw HTML, no st.markdown)."""
+    rc = _SEVERITY_COLOR.get(severity, C_TEXT3)
+    return (
+        f'<span style="background:{_rgba(rc, 0.15)};color:{rc};'
+        f'border:1px solid {_rgba(rc, 0.3)};padding:2px 8px;border-radius:3px;'
+        f'font-size:0.60rem;font-weight:700;font-family:var(--sans);'
+        f'letter-spacing:0.04em;text-transform:uppercase;">{severity}</span>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared layout helpers
 # ---------------------------------------------------------------------------
-
-def _hr() -> None:
-    st.markdown(
-        "<hr style='border:none; border-top:1px solid rgba(232,230,225,0.06);"
-        " margin:32px 0'>", unsafe_allow_html=True)
-
 
 def _subheading(text: str, color: str = "") -> None:
     c = color or C_TEXT2
@@ -93,37 +131,6 @@ def _subheading(text: str, color: str = "") -> None:
         f'<div style="font-size:0.72rem; font-weight:700; color:{c};'
         f' text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px">'
         f'{text}</div>', unsafe_allow_html=True)
-
-
-def _kpi_card(
-    label: str,
-    value: str,
-    sub: str = "",
-    accent: str = "",
-    full_width: bool = False,
-) -> None:
-    acc = accent or C_ACCENT
-    width_style = "width:100%;" if full_width else ""
-    st.markdown(
-        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-        f' border-top:2px solid {acc}; border-radius:6px; padding:16px 18px;'
-        f' text-align:center; {width_style}">'
-        f'<div style="font-size:0.62rem; font-weight:700; color:{C_TEXT3};'
-        f' text-transform:uppercase; letter-spacing:0.07em; margin-bottom:4px">{label}</div>'
-        f'<div style="font-size:1.95rem; font-weight:800; color:{C_TEXT};'
-        f' font-variant-numeric:tabular-nums; line-height:1.1">{value}</div>'
-        f'<div style="font-size:0.70rem; color:{C_TEXT3}; margin-top:3px">{sub}</div>'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _insight_box(text: str, color: str = "", label: str = "Key Insight") -> None:
-    c = color or C_ACCENT
-    st.markdown(
-        f'<div style="background:{_rgba(c, 0.06)}; border:1px solid {_rgba(c, 0.22)};'
-        f' border-left:3px solid {c}; border-radius:8px; padding:12px 16px;'
-        f' font-size:0.82rem; color:{C_TEXT2}; margin-top:10px">'
-        f'<strong style="color:{c}">{label}:</strong>&nbsp;{text}'
-        f'</div>', unsafe_allow_html=True)
 
 
 def _latest_macro_value(macro_data: dict, series_id: str) -> float | None:
@@ -136,30 +143,53 @@ def _latest_macro_value(macro_data: dict, series_id: str) -> float | None:
 
 
 def _plotly_defaults(fig: go.Figure, height: int = 340) -> go.Figure:
-    """Apply consistent dark theme layout to a plotly figure."""
-    fig.update_layout(
-        template="plotly_dark",
-        height=height,
-        paper_bgcolor=C_CARD,
-        plot_bgcolor=C_CARD,
-        margin=dict(t=24, b=24, l=10, r=10),
-        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2),
-        hoverlabel=dict(
-            bgcolor="#181c28",
-            bordercolor="rgba(255,255,255,0.15)",
-            font=dict(color=C_TEXT, size=12),
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom", y=1.02,
-            xanchor="center", x=0.5,
-            font=dict(size=11),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-    )
-    fig.update_xaxes(gridcolor="rgba(232,230,225,0.04)", tickfont=dict(color=C_TEXT2, size=11))
-    fig.update_yaxes(gridcolor="rgba(232,230,225,0.04)", tickfont=dict(color=C_TEXT2, size=11))
+    """Apply the shared design-system dark layout to a plotly figure.
+
+    Thin wrapper around ``apply_dark_layout`` that preserves the prior return
+    contract (``fig = _plotly_defaults(fig, ...)``) used throughout this tab.
+    """
+    apply_dark_layout(fig, height=height)
     return fig
+
+
+def _hr() -> None:
+    """Subtle horizontal rule between sections."""
+    st.markdown(
+        "<hr style='border:none; border-top:1px solid rgba(232,230,225,0.06);"
+        " margin:32px 0'>", unsafe_allow_html=True)
+
+
+def _insight_box(text: str, color: str = "", label: str = "Key Insight") -> None:
+    """Render a contextual callout / insight box.
+
+    Kept as a slim helper because ``insight_card_html`` is shaped for
+    action/score/category insights, while this tab's callouts are
+    label+body context tiles. Uses design-system tokens via ``_rgba``.
+    """
+    c = color or C_ACCENT
+    st.markdown(
+        f'<div style="background:{_rgba(c, 0.06)}; border:1px solid {_rgba(c, 0.22)};'
+        f' border-left:3px solid {c}; border-radius:8px; padding:12px 16px;'
+        f' font-size:0.82rem; color:{C_TEXT2}; margin-top:10px">'
+        f'<strong style="color:{c}">{label}:</strong>&nbsp;{text}'
+        f'</div>', unsafe_allow_html=True)
+
+
+# ── Data-source provenance pills ──────────────────────────────────────────
+_FRED_SOURCE = DataSource.live(
+    "FRED · 10Y Treasury (DGS10)",
+    url="https://fred.stlouisfed.org/series/DGS10",
+)
+_TRADE_FINANCE_SOURCES = [
+    DataSource.modeled("ICC Banking Commission · BIS · McKinsey Global Payments"),
+    DataSource.modeled("Synthetic projections (2025-2026)"),
+]
+_BANK_TF_SOURCES = [DataSource.modeled("ICC Trade Register · Bank annual reports")]
+_FX_SOURCES      = [DataSource.modeled("Forward curve estimates · 30-day vol")]
+_SCF_SOURCES     = [DataSource.modeled("McKinsey SCF Survey · Vendor disclosures")]
+_SANCTIONS_SOURCES = [
+    DataSource.modeled("US OFAC · EU sanctions list · UK HMT consolidated list"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -347,23 +377,18 @@ def _render_finance_banner(macro_data: dict) -> None:
     compact overview before the full detail sections below."""
 
     # ── Page header ──────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="padding: 16px 0 24px 0; border-bottom: 1px solid rgba(232,230,225,0.05); margin-bottom: 24px">
-        <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.15em;
-                    color:#475569; margin-bottom:6px">TRADE FINANCE INTELLIGENCE</div>
-        <div style="font-size:1.6rem; font-weight:900; color:#e8e6e1; letter-spacing:-0.03em; line-height:1.1">
-            Trade Finance Dashboard
-        </div>
-        <div style="font-size:0.85rem; color:#6b6760; margin-top:6px">
-            Letter of credit volumes, financing costs, FX hedging, credit availability — and their impact on global shipping demand
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    page_header(
+        title="Trade Finance Dashboard",
+        subtitle=(
+            "Letter of credit volumes, financing costs, FX hedging, credit"
+            " availability — and their impact on global shipping demand"
+        ),
+        badge_text="TRADE FINANCE INTELLIGENCE",
+        badge_color=C_ACCENT,
+    )
 
     # ── KPI Row 1: headline metrics ───────────────────────────────────────────
-    st.markdown(
-        "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#6b6760; margin-bottom:10px; font-weight:700'>Key Trade Finance Metrics</div>", unsafe_allow_html=True)
+    section_header("Key Trade Finance Metrics")
 
     dgs10_val = _latest_macro_value(macro_data, "DGS10")
     current_rate = dgs10_val if dgs10_val is not None else 4.45
@@ -381,31 +406,29 @@ def _render_finance_banner(macro_data: dict) -> None:
     # Blended financing cost
     avg_bps = round(sum(r["cost_bps"] for r in _ROUTE_FINANCE_DATA) / len(_ROUTE_FINANCE_DATA))
 
-    # Highest-cost route
-    worst_route = max(_ROUTE_FINANCE_DATA, key=lambda x: x["cost_bps"])
-
-    b1, b2, b3, b4, b5, b6 = st.columns(6)
-    with b1:
-        _kpi_card("Global LC Volume", f"${lc_vol_latest}T", f"2026 proj. · {lc_yoy} YoY", C_ACCENT)
-    with b2:
-        _kpi_card("Avg Financing Cost", f"{avg_bps} bps", "blended, over SOFR", C_MOD)
-    with b3:
-        rate_src = "FRED live" if dgs10_val else "estimate"
-        _kpi_card("10Y Treasury", f"{current_rate:.2f}%", rate_src, C_ACCENT)
-    with b4:
-        _kpi_card("Added LC Cost", f"+${added_lc_cost}B", "vs 2.0% neutral rate/yr", C_LOW)
-    with b5:
-        _kpi_card("Credit Availability", f"{avail_idx_latest}/100", "Q1-2026 bank index", avail_color)
-    with b6:
-        _kpi_card("Finance Gap (SME)", "$1.95T", "unmet global demand", C_LOW)
+    rate_src = "FRED live" if dgs10_val else "estimate"
+    metric_card_row(
+        [
+            {"label": "Global LC Volume",     "value": f"${lc_vol_latest}T",
+             "sublabel": f"2026 proj. · {lc_yoy} YoY",        "accent": C_ACCENT},
+            {"label": "Avg Financing Cost",   "value": f"{avg_bps} bps",
+             "sublabel": "blended, over SOFR",                "accent": C_MOD},
+            {"label": "10Y Treasury",         "value": f"{current_rate:.2f}%",
+             "sublabel": rate_src,                            "accent": C_ACCENT},
+            {"label": "Added LC Cost",        "value": f"+${added_lc_cost}B",
+             "sublabel": "vs 2.0% neutral rate/yr",           "accent": C_LOW},
+            {"label": "Credit Availability",  "value": f"{avail_idx_latest}/100",
+             "sublabel": "Q1-2026 bank index",                "accent": avail_color},
+            {"label": "Finance Gap (SME)",    "value": "$1.95T",
+             "sublabel": "unmet global demand",               "accent": C_LOW},
+        ],
+        columns=6,
+    )
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
     # ── Financing cost by route — compact bar chart ───────────────────────────
-    st.markdown(
-        "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#6b6760; margin-bottom:10px; font-weight:700'>"
-        "Financing Cost by Route (bps over SOFR) vs Cargo Value Cost (%)</div>", unsafe_allow_html=True)
+    section_header("Financing Cost by Route (bps over SOFR) vs Cargo Value Cost (%)")
 
     routes_sorted = sorted(_ROUTE_FINANCE_DATA, key=lambda x: x["cost_bps"])
     route_labels  = [r["route"] for r in routes_sorted]
@@ -443,20 +466,18 @@ def _render_finance_banner(macro_data: dict) -> None:
         hovertemplate="<b>%{y}</b><br>Cost: %{x:.2f}% of cargo value<extra></extra>",
         showlegend=False,
     ), row=1, col=2)
-    fig_route = _plotly_defaults(fig_route, height=380)
+    apply_dark_layout(fig_route, height=380)
     fig_route.update_xaxes(title="bps over SOFR", row=1, col=1, ticksuffix=" bps")
     fig_route.update_xaxes(title="% of cargo value", row=1, col=2, ticksuffix="%")
     fig_route.update_yaxes(tickfont=dict(size=10))
     fig_route.update_layout(margin=dict(t=36, b=10, l=10, r=80))
     st.plotly_chart(fig_route, use_container_width=True, key="banner_route_cost_chart")
+    st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
     # ── Interest rate impact over time ────────────────────────────────────────
-    st.markdown(
-        "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-        " color:#6b6760; margin-bottom:10px; font-weight:700'>"
-        "Interest Rate Impact on Trade Finance Costs (2019–2026)</div>", unsafe_allow_html=True)
+    section_header("Interest Rate Impact on Trade Finance Costs (2019-2026)")
 
     hist_years  = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
     hist_rates  = [2.09, 0.91, 1.45, 2.97, 3.96, 4.23, 4.38, 4.45]
@@ -486,7 +507,7 @@ def _render_finance_banner(macro_data: dict) -> None:
         line=dict(color=C_MOD, width=1.8, dash="dot"),
         hovertemplate="Year: %{x}<br>All-In Cost: %{y:.0f} bps<extra></extra>",
     ), secondary_y=True)
-    fig_rate_ts = _plotly_defaults(fig_rate_ts, height=300)
+    apply_dark_layout(fig_rate_ts, height=300)
     fig_rate_ts.update_yaxes(
         title_text="10Y Treasury (%)", secondary_y=False,
         ticksuffix="%", gridcolor="rgba(232,230,225,0.04)",
@@ -497,6 +518,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     )
     fig_rate_ts.update_layout(margin=dict(t=16, b=24, l=10, r=10))
     st.plotly_chart(fig_rate_ts, use_container_width=True, key="banner_rate_impact_ts")
+    st.markdown(source_footer([_FRED_SOURCE]), unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
@@ -504,10 +526,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     col_lc, col_fx = st.columns([3, 2])
 
     with col_lc:
-        st.markdown(
-            "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-            " color:#6b6760; margin-bottom:10px; font-weight:700'>"
-            "Documentary Credit vs Open Account (2015–2026)</div>", unsafe_allow_html=True)
+        section_header("Documentary Credit vs Open Account (2015-2026)")
         years_lc = _LC_OA_DATA["year"]
         lc_pct   = _LC_OA_DATA["lc_pct"]
         oa_pct   = _LC_OA_DATA["open_acc"]
@@ -536,52 +555,47 @@ def _render_finance_banner(macro_data: dict) -> None:
             marker=dict(size=6),
             hovertemplate="Year: %{x}<br>Letter of Credit: %{y}%<extra></extra>",
         ))
-        fig_lc_oa = _plotly_defaults(fig_lc_oa, height=280)
+        apply_dark_layout(fig_lc_oa, height=280)
         fig_lc_oa.update_yaxes(title="Share (%)", ticksuffix="%", range=[0, 80])
         fig_lc_oa.update_xaxes(title="Year", dtick=2)
         fig_lc_oa.update_layout(margin=dict(t=16, b=24, l=10, r=10))
         st.plotly_chart(fig_lc_oa, use_container_width=True, key="banner_lc_oa_trend")
+        st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     with col_fx:
-        st.markdown(
-            "<div style='font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em;"
-            " color:#6b6760; margin-bottom:10px; font-weight:700'>"
-            "FX Hedging Cost — Forward vs Spot (Major Trade Currencies)</div>", unsafe_allow_html=True)
+        section_header("FX Hedging Cost - Forward vs Spot")
         trend_color = {"STABLE": C_HIGH, "TIGHTENING": C_CYAN, "WIDENING": C_LOW, "PEGGED": C_TEXT3}
-        trend_icon  = {"STABLE": "→", "TIGHTENING": "↘", "WIDENING": "↗", "PEGGED": "="}
-        # Table header
-        st.markdown(
-            "<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
-            " gap:4px; padding:4px 6px; background:rgba(232,230,225,0.04);"
-            " border-radius:6px; margin-bottom:6px'>"
-            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>PAIR</span>"
-            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>SPOT</span>"
-            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>3M FWD</span>"
-            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>COST%</span>"
-            "<span style='font-size:0.60rem; color:#6b6760; font-weight:700'>TREND</span>"
-            "</div>", unsafe_allow_html=True)
+        trend_icon  = {"STABLE": "->", "TIGHTENING": "v", "WIDENING": "^", "PEGGED": "="}
+        fx_rows = []
         for h in sorted(_FX_HEDGE_DATA, key=lambda x: x["hedge_cost_pct"], reverse=True):
             tc = trend_color.get(h["trend"], C_TEXT3)
             ti = trend_icon.get(h["trend"], "?")
             cost_c = C_LOW if h["hedge_cost_pct"] > 3 else C_MOD if h["hedge_cost_pct"] > 1.5 else C_HIGH
-            # format spot/fwd nicely
-            spot_str = f"{h['spot']}" if isinstance(h["spot"], float) and h["spot"] < 10 else f"{h['spot']:.1f}" if isinstance(h["spot"], float) and h["spot"] < 200 else f"{h['spot']:.0f}"
-            fwd_str  = f"{h['fwd_3m']}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 10 else f"{h['fwd_3m']:.1f}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 200 else f"{h['fwd_3m']:.0f}"
-            st.markdown(
-                f"<div style='display:grid; grid-template-columns:80px 70px 70px 60px 80px;"
-                f" gap:4px; padding:6px 6px; border-bottom:1px solid rgba(232,230,225,0.04)'>"
-                f"<span style='font-size:0.73rem; font-weight:700; color:{C_TEXT}'>{h['pair']}</span>"
-                f"<span style='font-size:0.72rem; color:{C_TEXT2}'>{spot_str}</span>"
-                f"<span style='font-size:0.72rem; color:{C_TEXT2}'>{fwd_str}</span>"
-                f"<span style='font-size:0.72rem; font-weight:700; color:{cost_c}'>{h['hedge_cost_pct']:.2f}%</span>"
-                f"<span style='font-size:0.68rem; color:{tc}; font-weight:600'>{ti} {h['trend']}</span>"
-                f"</div>", unsafe_allow_html=True)
+            spot_str = (
+                f"{h['spot']}" if isinstance(h["spot"], float) and h["spot"] < 10
+                else f"{h['spot']:.1f}" if isinstance(h["spot"], float) and h["spot"] < 200
+                else f"{h['spot']:.0f}"
+            )
+            fwd_str = (
+                f"{h['fwd_3m']}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 10
+                else f"{h['fwd_3m']:.1f}" if isinstance(h["fwd_3m"], float) and h["fwd_3m"] < 200
+                else f"{h['fwd_3m']:.0f}"
+            )
+            fx_rows.append([
+                _sans(h["pair"], color=C_TEXT, weight=700),
+                _mono(spot_str),
+                _mono(fwd_str),
+                _mono(f"{h['hedge_cost_pct']:.2f}%", color=cost_c),
+                _sans(f"{ti} {h['trend']}", color=tc, weight=600),
+            ])
+        wsj_market_table(["Pair", "Spot", "3M Fwd", "Cost%", "Trend"], fx_rows)
+        st.markdown(source_footer(_FX_SOURCES), unsafe_allow_html=True)
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     _insight_box(
         f"With the 10Y Treasury at <strong style='color:{C_ACCENT}'>{current_rate:.2f}%</strong>,"
         f" global L/C costs are running <strong style='color:{C_LOW}'>+${added_lc_cost}B/yr</strong>"
-        f" above neutral (2.0%) — pressuring emerging-market routes most, where financing costs"
+        f" above neutral (2.0%) - pressuring emerging-market routes most, where financing costs"
         f" already exceed <strong>2.5%</strong> of cargo value (Africa-Europe, Hormuz corridor)."
         f" The 20 pp shift from L/C to open-account since 2015 amplifies cancellation risk"
         f" when credit tightens.",
@@ -601,17 +615,21 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
     )
 
     # Top-line KPI row
-    c1, c2, c3, c4, c5 = st.columns(5)
-    kpis = [
-        (c1, "Global LC Volume", "$3.4T", "annualised, 2026 proj.", C_ACCENT),
-        (c2, "Trade Credit Growth", "+4.8%", "YoY, March 2026", C_HIGH),
-        (c3, "All-In Finance Cost", "SOFR+112bps", "blended average", C_MOD),
-        (c4, "Finance Gap (SME)", "$1.95T", "unmet demand globally", C_LOW),
-        (c5, "SCF Adoption", "58%", "of Fortune 500 cos.", C_CYAN),
-    ]
-    for col, label, val, sub, accent in kpis:
-        with col:
-            _kpi_card(label, val, sub, accent)
+    metric_card_row(
+        [
+            {"label": "Global LC Volume",     "value": "$3.4T",
+             "sublabel": "annualised, 2026 proj.",  "accent": C_ACCENT},
+            {"label": "Trade Credit Growth",  "value": "+4.8%",
+             "sublabel": "YoY, March 2026",         "accent": C_HIGH},
+            {"label": "All-In Finance Cost",  "value": "SOFR+112bps",
+             "sublabel": "blended average",         "accent": C_MOD},
+            {"label": "Finance Gap (SME)",    "value": "$1.95T",
+             "sublabel": "unmet demand globally",   "accent": C_LOW},
+            {"label": "SCF Adoption",         "value": "58%",
+             "sublabel": "of Fortune 500 cos.",     "accent": C_CYAN},
+        ],
+        columns=5,
+    )
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
@@ -674,31 +692,29 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
             font=dict(size=9, color=C_MOD),
             bgcolor=_rgba(C_CARD, 0.9), borderpad=3,
         )
-        fig_lc = _plotly_defaults(fig_lc, height=280)
+        apply_dark_layout(fig_lc, height=280)
         fig_lc.update_yaxes(title="Volume ($T)", tickprefix="$", ticksuffix="T")
         fig_lc.update_xaxes(title="Year", dtick=1)
         fig_lc.update_layout(showlegend=False, margin=dict(t=16, b=24, l=10, r=10))
         st.plotly_chart(fig_lc, use_container_width=True, key="finance_lc_volume_trend")
         _subheading("Global Letter of Credit Outstanding Volume ($T)")
+        st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     with col_info:
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         items = [
-            ("Documentary LC", "$1.82T", C_ACCENT),
-            ("Standby LC", "$1.12T", C_CYAN),
-            ("Guarantees", "$0.41T", C_MOD),
-            ("ICC Uniform Rules", "UCP 600", C_TEXT3),
-            ("Avg LC Tenor", "90 days", C_TEXT3),
-            ("Top Issuer", "HSBC / Citi", C_TEXT3),
+            ("Documentary LC",      "$1.82T",       C_ACCENT),
+            ("Standby LC",          "$1.12T",       C_CYAN),
+            ("Guarantees",          "$0.41T",       C_MOD),
+            ("ICC Uniform Rules",   "UCP 600",      C_TEXT3),
+            ("Avg LC Tenor",        "90 days",      C_TEXT3),
+            ("Top Issuer",          "HSBC / Citi",  C_TEXT3),
         ]
-        for lbl, val, c in items:
-            st.markdown(
-                f'<div style="display:flex; justify-content:space-between;'
-                f' align-items:center; padding:7px 0;'
-                f' border-bottom:1px solid rgba(232,230,225,0.04)">'
-                f'<span style="font-size:0.73rem; color:{C_TEXT2}">{lbl}</span>'
-                f'<span style="font-size:0.73rem; font-weight:700; color:{c}">{val}</span>'
-                f'</div>', unsafe_allow_html=True)
+        info_rows = [
+            [_sans(lbl, color=C_TEXT2), _sans(val, color=c, weight=700)]
+            for lbl, val, c in items
+        ]
+        wsj_market_table(["Metric", "Value"], info_rows)
 
     # Indicator detail expander
     if indicators:
@@ -768,7 +784,7 @@ def _render_route_financing() -> None:
         showlegend=False,
     ), row=1, col=2)
 
-    fig = _plotly_defaults(fig, height=380)
+    apply_dark_layout(fig, height=380)
     fig.update_xaxes(title="bps over SOFR", row=1, col=1, ticksuffix=" bps")
     fig.update_xaxes(title="YoY change (bps)", row=1, col=2)
     fig.update_yaxes(tickfont=dict(size=10))
@@ -777,37 +793,23 @@ def _render_route_financing() -> None:
 
     # Route detail table with styled risk badges
     _subheading("Route Financing Detail")
-    cols = st.columns([3, 1, 1, 1, 1])
-    for hdr, col in zip(["Route", "Cost (bps)", "YoY Change", "Risk Level", "LC Share"], cols):
-        col.html(
-            f'<div style="font-size:0.62rem; font-weight:700; color:{C_TEXT3};'
-            f' text-transform:uppercase; letter-spacing:0.06em">{hdr}</div>'
-        )
-
+    detail_rows = []
     for r in sorted(_ROUTE_FINANCE_DATA, key=lambda x: x["cost_bps"], reverse=True):
         rc = _SEVERITY_COLOR.get(r["risk"], C_TEXT3)
-        chg_str = f'+{r["change_bps"]}' if r["change_bps"] >= 0 else str(r["change_bps"])
         chg_color = C_LOW if r["change_bps"] > 0 else C_HIGH
-        c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
-        c1.html(
-            f'<div style="font-size:0.75rem; color:{C_TEXT}; padding:4px 0">'
-            f'{r["route"]}</div>')
-        c2.html(
-            f'<div style="font-size:0.75rem; color:{rc}; font-weight:700; padding:4px 0">'
-            f'{r["cost_bps"]} bps</div>')
-        c3.html(
-            f'<div style="font-size:0.75rem; color:{chg_color}; font-weight:600;'
-            f' padding:4px 0">{chg_str} bps</div>')
-        c4.html(
-            f'<div style="padding:4px 0"><span style="background:{_rgba(rc,0.15)};'
-            f' color:{rc}; border:1px solid {_rgba(rc,0.3)}; padding:2px 8px;'
-            f' border-radius:3px; font-size:0.60rem; font-weight:700">'
-            f'{r["risk"]}</span></div>')
-        c5.html(
-            f'<div style="font-size:0.75rem; color:{C_TEXT2}; padding:4px 0">'
-            f'{r["lc_share_pct"]}%</div>')
-        st.markdown(
-            f'<div style="border-bottom:1px solid rgba(232,230,225,0.04)"></div>', unsafe_allow_html=True)
+        chg_str = f'+{r["change_bps"]}' if r["change_bps"] >= 0 else str(r["change_bps"])
+        detail_rows.append([
+            _sans(r["route"], color=C_TEXT, weight=600),
+            _mono(f"{r['cost_bps']} bps", color=rc),
+            _mono(f"{chg_str} bps", color=chg_color),
+            _risk_badge(r["risk"]),
+            _mono(f"{r['lc_share_pct']}%", color=C_TEXT2),
+        ])
+    wsj_market_table(
+        ["Route", "Cost (bps)", "YoY Change", "Risk Level", "LC Share"],
+        detail_rows,
+    )
+    st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     _insight_box(
         "Emerging-market routes (Africa-Europe, Middle East-Asia) carry financing premiums"
@@ -841,16 +843,22 @@ def _render_rate_impact(macro_data: dict) -> None:
 
     impact_color = C_LOW if impact_val < 0 else C_HIGH
     cum_color    = C_LOW if cum_val < 0 else C_HIGH
+    delta_rate   = max(0, current_rate - 2.0)
+    lc_cost_add  = round(delta_rate * 28, 0)
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: _kpi_card("10Y Treasury (DGS10)", f"{round(current_rate, 2)}%", rate_source, C_ACCENT)
-    with c2: _kpi_card("Demand Suppression", f"{impact_val}%", "vs neutral rate baseline", impact_color)
-    with c3: _kpi_card("Cumulative (since Mar 2022)", f"{cum_val}%", "vs 0.08% pre-hike", cum_color)
-    with c4:
-        # Derived: incremental LC cost at current rate vs 2% neutral
-        delta_rate = max(0, current_rate - 2.0)
-        lc_cost_add = round(delta_rate * 28, 0)
-        _kpi_card("Added Annual LC Cost", f"+${int(lc_cost_add)}B", "vs 2.0% neutral rate", C_LOW)
+    metric_card_row(
+        [
+            {"label": "10Y Treasury (DGS10)",     "value": f"{round(current_rate, 2)}%",
+             "sublabel": rate_source,                       "accent": C_ACCENT},
+            {"label": "Demand Suppression",       "value": f"{impact_val}%",
+             "sublabel": "vs neutral rate baseline",        "accent": impact_color},
+            {"label": "Cumulative (since Mar 2022)", "value": f"{cum_val}%",
+             "sublabel": "vs 0.08% pre-hike",                "accent": cum_color},
+            {"label": "Added Annual LC Cost",     "value": f"+${int(lc_cost_add)}B",
+             "sublabel": "vs 2.0% neutral rate",            "accent": C_LOW},
+        ],
+        columns=4,
+    )
 
     _insight_box(
         f"Fed rate hikes since March 2022 have suppressed container demand by an estimated"
@@ -865,7 +873,6 @@ def _render_rate_impact(macro_data: dict) -> None:
     # ── Dual-axis chart: rate history + demand impact ────────────────────────
     hist_years  = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
     hist_rates  = [2.09, 0.91, 1.45, 2.97, 3.96, 4.23, 4.38, 4.45]
-    hist_impact = [r - 2.0 for r in hist_rates]
     hist_lc_add = [max(0, (r - 2.0) * 28) for r in hist_rates]
 
     fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
@@ -883,7 +890,7 @@ def _render_rate_impact(macro_data: dict) -> None:
         marker_color=[_rgba(C_LOW, 0.5) if v > 0 else _rgba(C_HIGH, 0.4) for v in hist_lc_add],
         hovertemplate="Year: %{x}<br>Added LC Cost: $%{y:.0f}B<extra></extra>",
     ), secondary_y=True)
-    fig_hist = _plotly_defaults(fig_hist, height=300)
+    apply_dark_layout(fig_hist, height=300)
     fig_hist.update_yaxes(
         title_text="10Y Treasury (%)", secondary_y=False,
         ticksuffix="%", gridcolor="rgba(232,230,225,0.04)",
@@ -894,11 +901,10 @@ def _render_rate_impact(macro_data: dict) -> None:
     )
     fig_hist.update_layout(margin=dict(t=16, b=24, l=10, r=10))
     st.plotly_chart(fig_hist, use_container_width=True, key="finance_rate_history_chart")
+    st.markdown(source_footer([_FRED_SOURCE]), unsafe_allow_html=True)
 
     # ── Interactive what-if slider ────────────────────────────────────────────
-    st.markdown(
-        f'<div style="margin-top:4px; margin-bottom:8px; font-size:0.78rem;'
-        f' font-weight:600; color:{C_TEXT2}">What-If Rate Scenario Modeller</div>', unsafe_allow_html=True)
+    section_header("What-If Rate Scenario Modeller")
     scenario_rate = st.slider(
         "Model rate cut/hike to (%)",
         min_value=0.5, max_value=7.0,
@@ -915,21 +921,22 @@ def _render_rate_impact(macro_data: dict) -> None:
         delta_lc        = round((scenario_rate - current_rate) * 28, 1)
         delta_color     = C_HIGH if delta_demand >= 0 else C_LOW
 
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            _kpi_card(
-                f"Demand Impact at {scenario_rate:.2f}%",
-                f"{scenario_impact['estimated_demand_impact_pct']}%",
-                f"Delta vs current: {'+'if delta_demand>=0 else''}{delta_demand} pp",
-                delta_color,
-            )
-        with sc2:
-            _kpi_card(
-                f"LC Cost Change",
-                f"{'+'if delta_lc>=0 else''}{delta_lc}B/yr",
-                scenario_impact["scenario_label"],
-                C_LOW if delta_lc > 0 else C_HIGH,
-            )
+        metric_card_row(
+            [
+                {"label": f"Demand Impact at {scenario_rate:.2f}%",
+                 "value": f"{scenario_impact['estimated_demand_impact_pct']}%",
+                 "sublabel": (
+                     f"Delta vs current: "
+                     f"{'+' if delta_demand >= 0 else ''}{delta_demand} pp"
+                 ),
+                 "accent": delta_color},
+                {"label": "LC Cost Change",
+                 "value": f"{'+' if delta_lc >= 0 else ''}{delta_lc}B/yr",
+                 "sublabel": scenario_impact["scenario_label"],
+                 "accent": C_LOW if delta_lc > 0 else C_HIGH},
+            ],
+            columns=2,
+        )
 
     # Rate sensitivity bar chart
     rate_points = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0]
@@ -950,12 +957,13 @@ def _render_rate_impact(macro_data: dict) -> None:
         fig_rate.add_vline(x=scenario_rate, line_dash="dash", line_color=C_MOD, line_width=2,
                            annotation_text="Scenario", annotation_font=dict(color=C_MOD, size=10),
                            annotation_position="top right")
-    fig_rate = _plotly_defaults(fig_rate, height=260)
+    apply_dark_layout(fig_rate, height=260)
     fig_rate.update_xaxes(title="Benchmark Rate (%)", ticksuffix="%")
     fig_rate.update_yaxes(title="Container Demand Impact (%)", ticksuffix="%",
                            zeroline=True, zerolinecolor="rgba(255,255,255,0.18)")
     fig_rate.update_layout(showlegend=False, margin=dict(t=16, b=24, l=10, r=10))
     st.plotly_chart(fig_rate, use_container_width=True, key="finance_rate_sensitivity_chart")
+    st.markdown(source_footer([_FRED_SOURCE]), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -973,11 +981,20 @@ def _render_bank_availability() -> None:
     high_avail = sum(1 for b in _BANK_TF_DATA if b["credit_avail"] == "HIGH")
     avg_yoy    = round(sum(b["yoy_chg"] for b in _BANK_TF_DATA) / len(_BANK_TF_DATA), 1)
 
-    k1, k2, k3, k4 = st.columns(4)
-    with k1: _kpi_card("Total TF Volume (Top 10)", f"${total_vol:,}B", "annualised", C_ACCENT)
-    with k2: _kpi_card("High Availability Banks", str(high_avail), "of top 10 lenders", C_HIGH)
-    with k3: _kpi_card("Avg YoY Volume Growth", f"{avg_yoy:+.1f}%", "across top 10", C_HIGH if avg_yoy > 0 else C_LOW)
-    with k4: _kpi_card("Market Concentration", "Top 5 = 68%", "of global TF volumes", C_MOD)
+    metric_card_row(
+        [
+            {"label": "Total TF Volume (Top 10)", "value": f"${total_vol:,}B",
+             "sublabel": "annualised",                 "accent": C_ACCENT},
+            {"label": "High Availability Banks",  "value": str(high_avail),
+             "sublabel": "of top 10 lenders",          "accent": C_HIGH},
+            {"label": "Avg YoY Volume Growth",    "value": f"{avg_yoy:+.1f}%",
+             "sublabel": "across top 10",
+             "accent": C_HIGH if avg_yoy > 0 else C_LOW},
+            {"label": "Market Concentration",     "value": "Top 5 = 68%",
+             "sublabel": "of global TF volumes",       "accent": C_MOD},
+        ],
+        columns=4,
+    )
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
@@ -1024,30 +1041,29 @@ def _render_bank_availability() -> None:
                 showlegend=True,
             ))
 
-        fig_banks = _plotly_defaults(fig_banks, height=360)
+        apply_dark_layout(fig_banks, height=360)
         fig_banks.update_xaxes(title="TF Volume ($B)", tickprefix="$", ticksuffix="B")
         fig_banks.update_layout(margin=dict(t=16, b=24, l=10, r=10))
         st.plotly_chart(fig_banks, use_container_width=True, key="finance_bank_volume_chart")
+        st.markdown(source_footer(_BANK_TF_SOURCES), unsafe_allow_html=True)
 
     with col_table:
         _subheading("Lender Detail")
+        bank_rows = []
         for b in sorted(_BANK_TF_DATA, key=lambda x: x["tf_vol_bn"], reverse=True):
             ac = avail_color_map.get(b["credit_avail"], C_TEXT3)
             yoy_c = C_HIGH if b["yoy_chg"] > 0 else C_LOW
-            st.markdown(
-                f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-                f' border-left:3px solid {ac}; border-radius:8px;'
-                f' padding:9px 12px; margin-bottom:7px">'
-                f'<div style="display:flex; justify-content:space-between; align-items:center">'
-                f'<span style="font-size:0.78rem; font-weight:700; color:{C_TEXT}">{b["bank"]}</span>'
-                f'<span style="font-size:0.68rem; font-weight:600; color:{yoy_c}">{b["yoy_chg"]:+.1f}%</span>'
-                f'</div>'
-                f'<div style="font-size:0.67rem; color:{C_TEXT2}; margin-top:2px">'
-                f'${b["tf_vol_bn"]}B · {b["region"]}'
-                f'</div>'
-                f'<div style="font-size:0.65rem; color:{C_TEXT3}; margin-top:1px">'
-                f'{b["specialty"]}</div>'
-                f'</div>', unsafe_allow_html=True)
+            bank_rows.append([
+                _sans(b["bank"], color=C_TEXT, weight=700),
+                _mono(f"${b['tf_vol_bn']}B", color=C_TEXT),
+                _sans(b["region"], color=C_TEXT2),
+                _mono(f"{b['yoy_chg']:+.1f}%", color=yoy_c),
+                _sans(b["credit_avail"], color=ac, weight=700),
+            ])
+        wsj_market_table(
+            ["Bank", "Volume", "Region", "YoY", "Avail."],
+            bank_rows,
+        )
 
     # Credit availability trend mini chart (simulated quarterly)
     quarters = ["Q1-24", "Q2-24", "Q3-24", "Q4-24", "Q1-25", "Q2-25", "Q3-25", "Q4-25", "Q1-26"]
@@ -1067,11 +1083,12 @@ def _render_bank_availability() -> None:
     fig_avail.add_hline(y=50, line_dash="dot", line_color=C_TEXT3, line_width=1,
                         annotation_text="Neutral (50)", annotation_position="right",
                         annotation_font=dict(color=C_TEXT3, size=9))
-    fig_avail = _plotly_defaults(fig_avail, height=220)
+    apply_dark_layout(fig_avail, height=220)
     fig_avail.update_layout(showlegend=False, margin=dict(t=16, b=24, l=10, r=10))
     fig_avail.update_yaxes(title="Availability Index", range=[30, 100])
     st.plotly_chart(fig_avail, use_container_width=True, key="finance_credit_avail_trend")
     _subheading("Quarterly Bank Credit Availability Index (0 = Frozen, 100 = Open)")
+    st.markdown(source_footer(_BANK_TF_SOURCES), unsafe_allow_html=True)
 
     _insight_box(
         "Emerging-market specialist lenders (Standard Chartered, DBS) are growing"
@@ -1139,11 +1156,12 @@ def _render_lc_oa_trend() -> None:
                            font=dict(size=9, color=C_ACCENT),
                            bgcolor=_rgba(C_CARD, 0.9), borderpad=3)
 
-        fig = _plotly_defaults(fig, height=360)
+        apply_dark_layout(fig, height=360)
         fig.update_xaxes(title="Year", dtick=2)
         fig.update_yaxes(title="Share of Global Trade Financing (%)", ticksuffix="%", range=[0, 82])
         fig.update_layout(margin=dict(t=24, b=24, l=10, r=10))
         st.plotly_chart(fig, use_container_width=True, key="finance_lc_oa_trend")
+        st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     with col_stats:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1151,22 +1169,19 @@ def _render_lc_oa_trend() -> None:
         oa_change  = oa[-1] - oa[0]
         rate_str   = f"{abs(lc_change)/len(years):.1f} pp/yr"
         items = [
-            ("LC 2015", f"{lc[0]}%", C_ACCENT),
-            ("LC 2026", f"{lc[-1]}%", C_ACCENT),
-            ("LC Change", f"{lc_change:+d} pp", C_LOW),
-            ("Open Acct 2026", f"{oa[-1]}%", C_HIGH),
-            ("OA Change", f"{oa_change:+d} pp", C_HIGH),
-            ("Shift Rate", rate_str, C_TEXT2),
-            ("Doc. Coll. 2026", f"{dc[-1]}%", C_MOD),
+            ("LC 2015",          f"{lc[0]}%",          C_ACCENT),
+            ("LC 2026",          f"{lc[-1]}%",         C_ACCENT),
+            ("LC Change",        f"{lc_change:+d} pp", C_LOW),
+            ("Open Acct 2026",   f"{oa[-1]}%",         C_HIGH),
+            ("OA Change",        f"{oa_change:+d} pp", C_HIGH),
+            ("Shift Rate",       rate_str,             C_TEXT2),
+            ("Doc. Coll. 2026",  f"{dc[-1]}%",         C_MOD),
         ]
-        for lbl, val, c in items:
-            st.markdown(
-                f'<div style="display:flex; justify-content:space-between;'
-                f' align-items:center; padding:8px 0;'
-                f' border-bottom:1px solid rgba(232,230,225,0.04)">'
-                f'<span style="font-size:0.72rem; color:{C_TEXT2}">{lbl}</span>'
-                f'<span style="font-size:0.72rem; font-weight:700; color:{c}">{val}</span>'
-                f'</div>', unsafe_allow_html=True)
+        stats_rows = [
+            [_sans(lbl, color=C_TEXT2), _sans(val, color=c, weight=700)]
+            for lbl, val, c in items
+        ]
+        wsj_market_table(["Metric", "Value"], stats_rows)
 
     st.caption(
         "Sources: ICC Banking Commission · BIS Payment Statistics · McKinsey Global"
@@ -1240,11 +1255,12 @@ def _render_finance_gap() -> None:
         hovertemplate="Year: %{x}<br>Rejection Rate: %{y}%<extra></extra>",
     ), row=1, col=2)
 
-    fig = _plotly_defaults(fig, height=340)
+    apply_dark_layout(fig, height=340)
     fig.update_yaxes(title="$B Unmet", tickprefix="$", ticksuffix="B", row=1, col=1)
     fig.update_yaxes(title="Access / Rejection Rate (%)", ticksuffix="%", range=[30, 100], row=1, col=2)
     fig.update_layout(margin=dict(t=36, b=24, l=10, r=10))
     st.plotly_chart(fig, use_container_width=True, key="finance_gap_chart")
+    st.markdown(source_footer(_TRADE_FINANCE_SOURCES), unsafe_allow_html=True)
 
     # Access gap KPI row
     gap_now     = sme[-1]
@@ -1252,45 +1268,44 @@ def _render_finance_gap() -> None:
     rej_now     = rej[-1]
     access_delta = corp_now - gap_now
 
-    k1, k2, k3, k4 = st.columns(4)
-    with k1: _kpi_card("SME Finance Access Rate", f"{gap_now}%", "of financing need met", C_LOW)
-    with k2: _kpi_card("Large Corp Access Rate", f"{corp_now}%", "of financing need met", C_HIGH)
-    with k3: _kpi_card("Access Gap", f"{access_delta:.0f} pp", "Corp minus SME", C_MOD)
-    with k4: _kpi_card("SME Rejection Rate", f"{rej_now}%", "of applicants rejected", C_LOW)
+    metric_card_row(
+        [
+            {"label": "SME Finance Access Rate", "value": f"{gap_now}%",
+             "sublabel": "of financing need met",      "accent": C_LOW},
+            {"label": "Large Corp Access Rate",  "value": f"{corp_now}%",
+             "sublabel": "of financing need met",      "accent": C_HIGH},
+            {"label": "Access Gap",              "value": f"{access_delta:.0f} pp",
+             "sublabel": "Corp minus SME",             "accent": C_MOD},
+            {"label": "SME Rejection Rate",      "value": f"{rej_now}%",
+             "sublabel": "of applicants rejected",     "accent": C_LOW},
+        ],
+        columns=4,
+    )
 
     # Breakdown by region
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     _subheading("Regional SME Finance Access Rates (2026 estimate)")
 
     region_access = [
-        ("North America",    72, 18, C_HIGH),
-        ("Europe",           68, 21, C_HIGH),
-        ("East Asia",        61, 28, C_MOD),
-        ("Southeast Asia",   51, 36, C_MOD),
-        ("South Asia",       41, 44, C_MOD),
-        ("Latin America",    35, 51, C_LOW),
-        ("Middle East/N.Af.", 38, 48, C_LOW),
-        ("Sub-Saharan Africa",28, 59, C_LOW),
+        ("North America",        72, 18, C_HIGH),
+        ("Europe",               68, 21, C_HIGH),
+        ("East Asia",            61, 28, C_MOD),
+        ("Southeast Asia",       51, 36, C_MOD),
+        ("South Asia",           41, 44, C_MOD),
+        ("Latin America",        35, 51, C_LOW),
+        ("Middle East/N.Af.",    38, 48, C_LOW),
+        ("Sub-Saharan Africa",   28, 59, C_LOW),
     ]
-    cols_reg = st.columns(4)
-    for i, (region, access_pct, rej_pct, col_c) in enumerate(region_access):
-        with cols_reg[i % 4]:
-            fill_pct = access_pct
-            st.markdown(
-                f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-                f' border-radius:8px; padding:10px 12px; margin-bottom:8px">'
-                f'<div style="font-size:0.65rem; font-weight:700; color:{C_TEXT3};'
-                f' text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px">'
-                f'{region}</div>'
-                f'<div style="font-size:1.2rem; font-weight:800; color:{col_c}">{access_pct}%</div>'
-                f'<div style="font-size:0.62rem; color:{C_TEXT3}; margin-bottom:5px">'
-                f'access · {rej_pct}% rejected</div>'
-                f'<div style="background:rgba(232,230,225,0.05); border-radius:4px;'
-                f' height:4px; overflow:hidden">'
-                f'<div style="width:{fill_pct}%; height:100%; background:{col_c};'
-                f' border-radius:4px"></div>'
-                f'</div>'
-                f'</div>', unsafe_allow_html=True)
+    metric_card_row(
+        [
+            {"label": region,
+             "value": f"{access_pct}%",
+             "sublabel": f"access · {rej_pct}% rejected",
+             "accent": col_c}
+            for region, access_pct, rej_pct, col_c in region_access
+        ],
+        columns=4,
+    )
 
     _insight_box(
         "Sub-Saharan Africa's 28% SME access rate and 59% rejection rate are the"
@@ -1343,36 +1358,33 @@ def _render_fx_hedging() -> None:
             hovertemplate="<b>%{y}</b><br>30d Vol: %{text}<extra></extra>",
             text=[f"{h['vol_30d']:.1f}%" for h in pairs_sorted],
         ))
-        fig_fx = _plotly_defaults(fig_fx, height=340)
+        apply_dark_layout(fig_fx, height=340)
         fig_fx.update_xaxes(title="Annual Hedge Cost (% of notional)", ticksuffix="%")
         fig_fx.update_layout(margin=dict(t=16, b=24, l=10, r=10))
         st.plotly_chart(fig_fx, use_container_width=True, key="finance_fx_hedge_chart")
+        st.markdown(source_footer(_FX_SOURCES), unsafe_allow_html=True)
 
     with col_detail:
         _subheading("Currency Pair Detail")
         trend_color = {"STABLE": C_HIGH, "TIGHTENING": C_CYAN, "WIDENING": C_LOW, "PEGGED": C_TEXT3}
-        trend_icon  = {"STABLE": "→", "TIGHTENING": "↘", "WIDENING": "↗", "PEGGED": "="}
+        trend_icon  = {"STABLE": "->", "TIGHTENING": "v", "WIDENING": "^", "PEGGED": "="}
+        detail_rows = []
         for h in sorted(_FX_HEDGE_DATA, key=lambda x: x["hedge_cost_pct"], reverse=True):
             tc = trend_color.get(h["trend"], C_TEXT3)
             ti = trend_icon.get(h["trend"], "?")
             cost_c = C_LOW if h["hedge_cost_pct"] > 3 else C_MOD if h["hedge_cost_pct"] > 1.5 else C_HIGH
-            st.markdown(
-                f'<div style="background:{C_CARD}; border:1px solid {C_BORDER};'
-                f' border-radius:8px; padding:9px 12px; margin-bottom:6px">'
-                f'<div style="display:flex; justify-content:space-between; align-items:center">'
-                f'<span style="font-size:0.78rem; font-weight:700; color:{C_TEXT}">{h["pair"]}</span>'
-                f'<span style="font-size:0.78rem; font-weight:700; color:{cost_c}">'
-                f'{h["hedge_cost_pct"]:.2f}% p.a.</span>'
-                f'</div>'
-                f'<div style="display:flex; justify-content:space-between; margin-top:3px">'
-                f'<span style="font-size:0.67rem; color:{C_TEXT2}">'
-                f'Spot: {h["spot"]} · 3M Fwd: {h["fwd_3m"]}</span>'
-                f'<span style="font-size:0.67rem; color:{tc}; font-weight:600">'
-                f'{ti} {h["trend"]}</span>'
-                f'</div>'
-                f'<div style="font-size:0.62rem; color:{C_TEXT3}; margin-top:2px">'
-                f'30d Vol: {h["vol_30d"]:.1f}%</div>'
-                f'</div>', unsafe_allow_html=True)
+            detail_rows.append([
+                _sans(h["pair"], color=C_TEXT, weight=700),
+                _mono(f"{h['spot']}", color=C_TEXT2),
+                _mono(f"{h['fwd_3m']}", color=C_TEXT2),
+                _mono(f"{h['hedge_cost_pct']:.2f}%", color=cost_c),
+                _mono(f"{h['vol_30d']:.1f}%", color=C_TEXT3),
+                _sans(f"{ti} {h['trend']}", color=tc, weight=600),
+            ])
+        wsj_market_table(
+            ["Pair", "Spot", "3M Fwd", "Cost", "30d Vol", "Trend"],
+            detail_rows,
+        )
 
     # Hedging cost impact on trade margin
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1385,18 +1397,24 @@ def _render_fx_hedging() -> None:
         key="finance_fx_notional_slider",
         help="Drag to see absolute hedging cost for a shipment of this value",
     )
-    hedge_cols = st.columns(4)
-    for i, h in enumerate(sorted(_FX_HEDGE_DATA, key=lambda x: x["hedge_cost_pct"], reverse=True)[:4]):
-        abs_cost = round(notional_m * 1_000_000 * h["hedge_cost_pct"] / 100 / 1000, 1)  # in $K
+    top_pairs = sorted(_FX_HEDGE_DATA, key=lambda x: x["hedge_cost_pct"], reverse=True)[:4]
+    hedge_metrics = []
+    for h in top_pairs:
+        abs_cost = round(notional_m * 1_000_000 * h["hedge_cost_pct"] / 100 / 1000, 1)
         cost_c = C_LOW if h["hedge_cost_pct"] > 3 else C_MOD if h["hedge_cost_pct"] > 1.5 else C_HIGH
-        with hedge_cols[i]:
-            _kpi_card(h["pair"], f"${abs_cost}K", f"annual hedge cost on ${notional_m}M", cost_c)
+        hedge_metrics.append({
+            "label": h["pair"],
+            "value": f"${abs_cost}K",
+            "sublabel": f"annual hedge cost on ${notional_m}M",
+            "accent": cost_c,
+        })
+    metric_card_row(hedge_metrics, columns=4)
 
     _insight_box(
-        f"USD/BRL hedging at 9.8% p.a. adds $980K to the annual cost of hedging a"
-        f" $10M Brazil-China commodity shipment — often exceeding the shipper's profit margin."
-        f" This structural barrier explains Brazil's preference for CNY invoicing on"
-        f" agricultural exports and contributes to de-dollarization trends.",
+        "USD/BRL hedging at 9.8% p.a. adds $980K to the annual cost of hedging a"
+        " $10M Brazil-China commodity shipment — often exceeding the shipper's profit margin."
+        " This structural barrier explains Brazil's preference for CNY invoicing on"
+        " agricultural exports and contributes to de-dollarization trends.",
         color=C_MOD, label="FX Margin Squeeze",
     )
 
@@ -1465,11 +1483,16 @@ def _render_scf_programs() -> None:
     st.plotly_chart(fig_scf, use_container_width=True, key="finance_scf_trend_chart")
 
     # KPI bar
-    k1, k2, k3, k4 = st.columns(4)
-    with k1: _kpi_card("SCF Adoption (Fortune 500)", f"{adopt[-1]}%", "2026 estimate", C_HIGH)
-    with k2: _kpi_card("Outstanding Volume", f"${vol[-1]:,}B", "global SCF programs", C_ACCENT)
-    with k3: _kpi_card("Avg Cost Saving", f"{saving[-1]} bps", "vs traditional credit", C_HIGH)
-    with k4: _kpi_card("Supplier Onboarding", f"{supp[-1]}%", "of eligible suppliers", C_CYAN)
+    metric_card_row([
+        {"label": "SCF Adoption (Fortune 500)", "value": f"{adopt[-1]}%",
+         "accent": C_HIGH,   "sublabel": "2026 estimate"},
+        {"label": "Outstanding Volume",         "value": f"${vol[-1]:,}B",
+         "accent": C_ACCENT, "sublabel": "global SCF programs"},
+        {"label": "Avg Cost Saving",            "value": f"{saving[-1]} bps",
+         "accent": C_HIGH,   "sublabel": "vs traditional credit"},
+        {"label": "Supplier Onboarding",        "value": f"{supp[-1]}%",
+         "accent": C_MACRO,  "sublabel": "of eligible suppliers"},
+    ], columns=4)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
     _subheading("Major SCF Programs — Volume & Savings")
@@ -1693,10 +1716,14 @@ def _render_dedollarization() -> None:
     usd_drop = round(usd[0] - usd[-1], 1)
     cny_rise = round(cny[-1] - cny[0], 1)
 
-    k1, k2, k3 = st.columns(3)
-    with k1: _kpi_card("USD Share 2026", f"{usd[-1]}%", f"Down {usd_drop} pp since 2015", C_LOW)
-    with k2: _kpi_card("CNY Share 2026", f"{cny[-1]}%", f"Up {cny_rise} pp since 2015", C_HIGH)
-    with k3: _kpi_card("Non-USD Share", f"{round(100-usd[-1],1)}%", "2026 estimate", C_MOD)
+    metric_card_row([
+        {"label": "USD Share 2026",  "value": f"{usd[-1]}%",
+         "accent": C_LOW,  "sublabel": f"Down {usd_drop} pp since 2015"},
+        {"label": "CNY Share 2026",  "value": f"{cny[-1]}%",
+         "accent": C_HIGH, "sublabel": f"Up {cny_rise} pp since 2015"},
+        {"label": "Non-USD Share",   "value": f"{round(100-usd[-1],1)}%",
+         "accent": C_MOD,  "sublabel": "2026 estimate"},
+    ], columns=3)
 
     _insight_box(
         f"USD trade-settlement share has fallen ~{usd_drop} pp since 2015. CNY has gained"
@@ -1723,12 +1750,14 @@ def _render_sanctions_tracker() -> None:
     critical_count = sum(1 for s in _SANCTIONS_DATA if s["severity"] == "CRITICAL")
     high_count     = sum(1 for s in _SANCTIONS_DATA if s["severity"] == "HIGH")
 
-    k1, k2, k3 = st.columns(3)
-    with k1: _kpi_card("Active Regimes", str(len(_SANCTIONS_DATA)),
-                        f"{critical_count} Critical · {high_count} High", C_LOW)
-    with k2: _kpi_card("Diverted Trade Volume", f"{round(total_diverted, 1)}%",
-                        "of affected route volumes rerouted", C_MOD)
-    with k3: _kpi_card("Longest Running", "64y", "Cuba (since 1962)", C_ACCENT)
+    metric_card_row([
+        {"label": "Active Regimes",        "value": str(len(_SANCTIONS_DATA)),
+         "accent": C_LOW,    "sublabel": f"{critical_count} Critical · {high_count} High"},
+        {"label": "Diverted Trade Volume", "value": f"{round(total_diverted, 1)}%",
+         "accent": C_MOD,    "sublabel": "of affected route volumes rerouted"},
+        {"label": "Longest Running",       "value": "64y",
+         "accent": C_ACCENT, "sublabel": "Cuba (since 1962)"},
+    ], columns=3)
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
