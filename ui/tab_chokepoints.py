@@ -15,15 +15,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
     C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -33,6 +32,7 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -46,6 +46,27 @@ except Exception as _ce:
 
 # ── Local semantic colors ───────────────────────────────────────────────────
 C_ORANGE = "#f97316"  # "HIGH" tier risk — visually between MOD and LOW
+
+
+# ── Provenance / data sources ───────────────────────────────────────────────
+_SRC_CANAL_FEED = DataSource.modeled(
+    "Panama Canal Authority · Suez Canal Authority composite"
+)
+_SRC_HOUTHI = DataSource.modeled(
+    "USCENTCOM bulletins · UKMTO incident database"
+)
+_SRC_CARRIER_POL = DataSource.modeled(
+    "Carrier route advisories (Maersk · MSC · CMA CGM · Hapag-Lloyd · ONE)"
+)
+_SRC_INSURANCE = DataSource.modeled(
+    "Lloyd's of London · marine war risk underwriters"
+)
+_SRC_RATE_PREMIUM = DataSource.modeled(
+    "SCFI · Drewry WCI · Freightos Baltic Index composite"
+)
+_SRC_HISTORICAL = DataSource.modeled(
+    "Maritime incident archive · academic + trade-press"
+)
 
 
 # ── Static data ─────────────────────────────────────────────────────────────
@@ -252,6 +273,7 @@ def _render_status_board() -> None:
             ],
             rows=rows,
         )
+        st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"status_board render error: {e}")
         st.error("Chokepoint status board unavailable.")
@@ -259,35 +281,13 @@ def _render_status_board() -> None:
 
 # ── Section 2: Canal Deep Dives ─────────────────────────────────────────────
 
-def _water_level_gauge(level_m: float) -> str:
-    try:
-        pct = min(100, max(0, (level_m - 22) / (30 - 22) * 100))
-        if level_m < 25.9:
-            bar_color, label = C_LOW,  "CRITICAL"
-        elif level_m < 27.0:
-            bar_color, label = C_MOD,  "LOW"
-        else:
-            bar_color, label = C_HIGH, "NORMAL"
-        return (
-            f'<div style="margin:8px 0;">'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
-            f'<span style="font-size:11px;color:{C_TEXT2};">Gatun Lake Level</span>'
-            f'<span style="font-size:11px;color:{bar_color};font-weight:600;">{level_m:.1f} m — {label}</span>'
-            f'</div>'
-            f'<div style="background:{C_BORDER};border-radius:4px;height:8px;position:relative;">'
-            f'<div style="background:{bar_color};width:{pct:.1f}%;height:8px;border-radius:4px;"></div>'
-            f'</div>'
-            f'<div style="display:flex;justify-content:space-between;margin-top:2px;">'
-            f'<span style="font-size:10px;color:{C_TEXT3};">22 m (floor)</span>'
-            f'<span style="font-size:10px;color:{C_LOW};">25.9 m</span>'
-            f'<span style="font-size:10px;color:{C_MOD};">27.0 m</span>'
-            f'<span style="font-size:10px;color:{C_TEXT3};">30 m (full)</span>'
-            f'</div>'
-            f'</div>'
-        )
-    except Exception as e:
-        logger.error(f"water_level_gauge error: {e}")
-        return ""
+def _gatun_label(level_m: float) -> tuple[str, str]:
+    """Return (color, label) for Gatun Lake water level."""
+    if level_m < 25.9:
+        return C_LOW, "CRITICAL"
+    if level_m < 27.0:
+        return C_MOD, "LOW"
+    return C_HIGH, "NORMAL"
 
 
 def _render_panama_card() -> None:
@@ -303,54 +303,51 @@ def _render_panama_card() -> None:
         nb_wait        = panama_data.get("northbound_wait_days", 8)
         sb_wait        = panama_data.get("southbound_wait_days", 6)
         lake_level     = panama_data.get("gatun_lake_level_m", 26.4)
-        gauge_html     = _water_level_gauge(lake_level)
+        lake_color, lake_label = _gatun_label(lake_level)
 
-        fees_rows = (
-            f'<tr><td style="padding:6px 8px;color:{C_TEXT2};font-size:12px;">Neopanamax Container</td>'
-            f'<td style="padding:6px 8px;color:{C_MOD};font-size:12px;font-weight:600;">$800,000–1.2M</td></tr>'
-            f'<tr><td style="padding:6px 8px;color:{C_TEXT2};font-size:12px;">Panamax Container</td>'
-            f'<td style="padding:6px 8px;color:{C_MOD};font-size:12px;font-weight:600;">$350,000–500,000</td></tr>'
-            f'<tr><td style="padding:6px 8px;color:{C_TEXT2};font-size:12px;">LNG Carrier</td>'
-            f'<td style="padding:6px 8px;color:{C_MOD};font-size:12px;font-weight:600;">$600,000–900,000</td></tr>'
-            f'<tr><td style="padding:6px 8px;color:{C_TEXT2};font-size:12px;">Bulk Carrier (Panamax)</td>'
-            f'<td style="padding:6px 8px;color:{C_MOD};font-size:12px;font-weight:600;">$200,000–320,000</td></tr>'
+        section_header(
+            "Panama Canal — Deep Dive",
+            subtitle="Transit throughput, queue depth, and Gatun Lake water levels",
         )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px;height:100%;">'
-            f'<div style="font-size:14px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">Panama Canal — Deep Dive</div>'
-            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-            f'<div style="font-size:22px;font-weight:700;color:{C_MOD};">{daily_transits}</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">Transits/Day</div></div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-            f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{nb_wait}d</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">Northbound Wait</div></div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-            f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{sb_wait}d</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">Southbound Wait</div></div>'
-            f'</div>'
-            f'{gauge_html}'
-            f'<div style="margin:14px 0 8px;font-size:12px;font-weight:600;color:{C_TEXT2};">Vessel Size Restrictions</div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;margin-bottom:14px;">'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Neopanamax max beam</span>'
-            f'<span style="font-size:12px;color:{C_TEXT};font-weight:600;">49 m</span></div>'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Max draft (DFET)</span>'
-            f'<span style="font-size:12px;color:{C_MOD};font-weight:600;">14.86 m (drought reduced)</span></div>'
-            f'<div style="display:flex;justify-content:space-between;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Max LOA</span>'
-            f'<span style="font-size:12px;color:{C_TEXT};font-weight:600;">366 m</span></div>'
-            f'</div>'
-            f'<div style="font-size:12px;font-weight:600;color:{C_TEXT2};margin-bottom:8px;">Transit Fees by Vessel Class</div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;overflow:hidden;">'
-            f'<table style="width:100%;border-collapse:collapse;">'
-            f'<tbody>{fees_rows}</tbody>'
-            f'</table>'
-            f'</div>'
-            f'</div>'
+        metric_card_row(
+            [
+                {"label": "Transits / Day", "value": f"{daily_transits}",
+                 "accent": C_MOD, "sublabel": "vs ~36 normal"},
+                {"label": "Northbound Wait", "value": f"{nb_wait}d",
+                 "accent": C_LOW, "sublabel": "queue at Cristóbal"},
+                {"label": "Southbound Wait", "value": f"{sb_wait}d",
+                 "accent": C_LOW, "sublabel": "queue at Balboa"},
+                {"label": "Gatun Lake Level", "value": f"{lake_level:.1f} m",
+                 "accent": lake_color, "sublabel": f"{lake_label} (22 m floor / 30 m full)"},
+            ],
+            columns=4,
         )
+
+        # Vessel-size / draft restrictions table
+        size_rows = [
+            [_sans("Neopanamax max beam", color=C_TEXT2),
+             _mono("49 m", color=C_TEXT)],
+            [_sans("Max draft (DFET)", color=C_TEXT2),
+             _mono("14.86 m (drought reduced)", color=C_MOD)],
+            [_sans("Max LOA", color=C_TEXT2),
+             _mono("366 m", color=C_TEXT)],
+        ]
+        wsj_market_table(["Vessel Size Restriction", "Limit"], size_rows)
+
+        # Transit fees table
+        fees_rows = [
+            [_sans("Neopanamax Container", color=C_TEXT2),
+             _mono("$800,000–1.2M", color=C_MOD)],
+            [_sans("Panamax Container", color=C_TEXT2),
+             _mono("$350,000–500,000", color=C_MOD)],
+            [_sans("LNG Carrier", color=C_TEXT2),
+             _mono("$600,000–900,000", color=C_MOD)],
+            [_sans("Bulk Carrier (Panamax)", color=C_TEXT2),
+             _mono("$200,000–320,000", color=C_MOD)],
+        ]
+        wsj_market_table(["Transit Fee Class", "Fee Range"], fees_rows)
+        st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"panama_card render error: {e}")
         st.error("Panama Canal card unavailable.")
@@ -370,49 +367,53 @@ def _render_suez_card() -> None:
         rerouted_vessels = suez_data.get("rerouted_vessels_per_month", 420)
         revenue_impact   = suez_data.get("revenue_loss_usd_m_monthly", 700)
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px;height:100%;">'
-            f'<div style="font-size:14px;font-weight:700;color:{C_TEXT};margin-bottom:16px;">Suez Canal — Deep Dive</div>'
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-            f'<div style="font-size:22px;font-weight:700;color:{C_MOD};">{daily_transits}</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">Transits/Day (reduced)</div></div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;text-align:center;">'
-            f'<div style="font-size:22px;font-weight:700;color:{C_LOW};">{rerouted_pct}%</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">Rerouted via Cape</div></div>'
-            f'</div>'
-            f'<div style="background:{C_LOW}11;border:1px solid {C_LOW}44;border-radius:8px;padding:12px;margin-bottom:14px;">'
-            f'<div style="font-size:12px;font-weight:700;color:{C_LOW};margin-bottom:6px;">Red Sea Security Situation</div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};line-height:1.6;">'
-            f'Houthi forces continue missile, drone, and naval mine attacks targeting vessels transiting '
-            f'Bab-el-Mandeb and the southern Red Sea corridor. Operation Prosperity Guardian (US-led) '
-            f'and Operation Aspides (EU) provide partial escort; most major carriers avoid entirely.'
-            f'</div></div>'
-            f'<div style="font-size:12px;font-weight:600;color:{C_TEXT2};margin-bottom:8px;">Cape of Good Hope Rerouting Impact</div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;margin-bottom:14px;">'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Vessels rerouting/month</span>'
-            f'<span style="font-size:12px;color:{C_LOW};font-weight:600;">{rerouted_vessels:,}</span></div>'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Extra transit time</span>'
-            f'<span style="font-size:12px;color:{C_MOD};font-weight:600;">+10–14 days</span></div>'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Extra fuel cost per vessel</span>'
-            f'<span style="font-size:12px;color:{C_MOD};font-weight:600;">+$2,500–3,500/day</span></div>'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Extra distance (nm)</span>'
-            f'<span style="font-size:12px;color:{C_TEXT};font-weight:600;">+3,500–4,000 nm</span></div>'
-            f'<div style="display:flex;justify-content:space-between;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">SCA monthly revenue loss</span>'
-            f'<span style="font-size:12px;color:{C_LOW};font-weight:600;">-${revenue_impact}M+</span></div>'
-            f'</div>'
-            f'<div style="background:{C_SURFACE};border-radius:8px;padding:12px;">'
-            f'<div style="font-size:12px;font-weight:600;color:{C_TEXT2};margin-bottom:6px;">Convoy Schedule</div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};">2 convoys/day: Northbound 06:00 local, '
-            f'Southbound 04:00 local. Average transit: 12–16 hours.</div>'
-            f'</div>'
-            f'</div>'
+        section_header(
+            "Suez Canal — Deep Dive",
+            subtitle="Throughput, Cape rerouting, and SCA revenue impact under Red Sea threat",
         )
+
+        metric_card_row(
+            [
+                {"label": "Transits / Day", "value": f"{daily_transits}",
+                 "accent": C_MOD, "sublabel": "reduced from ~75 normal"},
+                {"label": "Rerouted via Cape", "value": f"{rerouted_pct}%",
+                 "accent": C_LOW, "sublabel": "of pre-crisis Suez volume"},
+                {"label": "Vessels Rerouting / Month", "value": f"{rerouted_vessels:,}",
+                 "accent": C_LOW, "sublabel": "transiting Cape of Good Hope"},
+                {"label": "SCA Monthly Revenue Loss", "value": f"-${revenue_impact}M+",
+                 "accent": C_LOW, "sublabel": "vs. baseline"},
+            ],
+            columns=4,
+        )
+
+        # Cape rerouting impact table
+        impact_rows = [
+            [_sans("Extra transit time", color=C_TEXT2),
+             _mono("+10–14 days", color=C_MOD)],
+            [_sans("Extra fuel cost per vessel", color=C_TEXT2),
+             _mono("+$2,500–3,500/day", color=C_MOD)],
+            [_sans("Extra distance", color=C_TEXT2),
+             _mono("+3,500–4,000 nm", color=C_TEXT)],
+            [_sans("Convoy schedule", color=C_TEXT2),
+             _mono("2/day (NB 06:00 / SB 04:00)", color=C_TEXT)],
+            [_sans("Average transit duration", color=C_TEXT2),
+             _mono("12–16 hours", color=C_TEXT)],
+        ]
+        wsj_market_table(["Cape Rerouting Metric", "Value"], impact_rows)
+
+        # Brief security note (kept terse — this is a single inline div)
+        st.markdown(
+            f'<div class="sub-section-header" style="margin-top:14px;">'
+            f'Red Sea Security Situation</div>'
+            f'<div style="font-size:12px;color:{C_TEXT2};line-height:1.6;'
+            f'margin-bottom:10px;">'
+            f'Houthi forces continue missile, drone, and naval mine attacks targeting vessels '
+            f'transiting Bab-el-Mandeb and the southern Red Sea corridor. Operation Prosperity '
+            f'Guardian (US-led) and Operation Aspides (EU) provide partial escort; most major '
+            f'carriers avoid entirely.</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"suez_card render error: {e}")
         st.error("Suez Canal card unavailable.")
@@ -420,11 +421,8 @@ def _render_suez_card() -> None:
 
 def _render_canal_deep_dives() -> None:
     try:
-        col_l, col_r = st.columns(2)
-        with col_l:
-            _render_panama_card()
-        with col_r:
-            _render_suez_card()
+        _render_panama_card()
+        _render_suez_card()
     except Exception as e:
         logger.error(f"canal_deep_dives render error: {e}")
         st.error("Canal deep dives unavailable.")
@@ -434,36 +432,24 @@ def _render_canal_deep_dives() -> None:
 
 def _render_red_sea_timeline() -> None:
     try:
-        parts = []
-        for i, inc in enumerate(_HOUTHI_INCIDENTS):
-            dot_color = C_LOW if ("sink" in inc["outcome"].lower() or "kill" in inc["outcome"].lower()) else C_MOD
-            connector = (
-                f'<div style="width:2px;flex:1;background:{C_BORDER};margin-top:4px;"></div>'
-                if i < len(_HOUTHI_INCIDENTS) - 1 else ""
+        rows = []
+        for inc in _HOUTHI_INCIDENTS:
+            severe = (
+                "sink" in inc["outcome"].lower()
+                or "kill" in inc["outcome"].lower()
             )
-            parts.append(
-                f'<div style="display:flex;gap:16px;margin-bottom:16px;">'
-                f'<div style="display:flex;flex-direction:column;align-items:center;">'
-                f'<div style="width:12px;height:12px;border-radius:50%;background:{dot_color};flex-shrink:0;margin-top:3px;"></div>'
-                f'{connector}'
-                f'</div>'
-                f'<div style="background:{C_CARD};border-radius:8px;padding:12px;flex:1;">'
-                f'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
-                f'<span style="font-size:12px;font-weight:600;color:{C_TEXT};">{inc["vessel"]}</span>'
-                f'<span style="font-size:11px;color:{C_TEXT3};">{inc["date"]}</span>'
-                f'</div>'
-                f'<div style="display:flex;gap:8px;margin-bottom:4px;">'
-                f'<span style="background:{C_MOD}22;color:{C_MOD};padding:2px 8px;border-radius:6px;'
-                f'font-size:10px;font-weight:600;">{inc["type"]}</span>'
-                f'</div>'
-                f'<div style="font-size:12px;color:{C_TEXT2};">{inc["outcome"]}</div>'
-                f'</div>'
-                f'</div>'
-            )
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:20px;max-height:480px;overflow-y:auto;">{"".join(parts)}</div>'
+            type_color = C_LOW if severe else C_MOD
+            rows.append([
+                _mono(inc["date"], color=C_TEXT3),
+                _sans(inc["vessel"], color=C_TEXT, weight=600),
+                badge(inc["type"], color=type_color),
+                _sans(inc["outcome"], color=C_TEXT2),
+            ])
+        wsj_market_table(
+            headers=["Date", "Vessel", "Attack Type", "Outcome"],
+            rows=rows,
         )
+        st.markdown(source_footer([_SRC_HOUTHI]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"houthi timeline render error: {e}")
         st.error("Timeline unavailable.")
@@ -485,6 +471,7 @@ def _render_carrier_policies() -> None:
             headers=["Carrier", "Policy", "Since", "Naval Escort"],
             rows=rows,
         )
+        st.markdown(source_footer([_SRC_CARRIER_POL]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"carrier_policies render error: {e}")
         st.error("Carrier policies unavailable.")
@@ -534,6 +521,7 @@ def _render_insurance_panel() -> None:
             headers=["Trade Lane", "Normal Route", "Current Route", "Extra Days", "Extra Cost"],
             rows=rows,
         )
+        st.markdown(source_footer([_SRC_INSURANCE]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"insurance tab render error: {e}")
         st.error("Insurance data unavailable.")
@@ -609,11 +597,11 @@ def _render_traffic_map() -> None:
             hovertemplate="<b>%{text}</b><extra></extra>",
         ))
 
-        apply_dark_layout(
-            fig,
-            title=dict(text="Strategic Maritime Chokepoints & Trade Routes", font=dict(color=C_TEXT, size=14), x=0.02),
+        apply_dark_layout(fig, height=440)
+        fig.update_layout(
+            title=dict(text="Strategic Maritime Chokepoints & Trade Routes",
+                       font=dict(color=C_TEXT, size=14), x=0.02),
             margin=dict(l=0, r=0, t=40, b=0),
-            height=440,
             geo=dict(
                 projection_type="natural earth",
                 bgcolor=C_BG,
@@ -634,6 +622,7 @@ def _render_traffic_map() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"traffic_map render error: {e}")
         st.error("Chokepoint traffic map unavailable.")
@@ -660,6 +649,7 @@ def _render_rate_premiums() -> None:
             headers=["Trade Route", "Baseline Rate", "Current Rate", "Chokepoint Premium", "Primary Driver"],
             rows=rows,
         )
+        st.markdown(source_footer([_SRC_RATE_PREMIUM]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"rate_premiums render error: {e}")
         st.error("Rate premium table unavailable.")
@@ -686,6 +676,7 @@ def _render_historical_comparison() -> None:
             headers=["Incident", "Date", "Duration", "Route Affected", "Rate Impact", "Vessels Affected"],
             rows=rows,
         )
+        st.markdown(source_footer([_SRC_HISTORICAL]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"historical_comparison render error: {e}")
         st.error("Historical disruption comparison unavailable.")
@@ -710,14 +701,15 @@ def _render_panama_transit_chart() -> None:
         fig.add_hrect(y0=0,  y1=26, fillcolor=C_LOW, opacity=0.07, line_width=0, annotation_text="Critical",   annotation_font_color=C_LOW)
         fig.add_hrect(y0=26, y1=30, fillcolor=C_MOD, opacity=0.07, line_width=0, annotation_text="Restricted", annotation_font_color=C_MOD)
 
-        apply_dark_layout(
-            fig,
-            title=dict(text="Panama Canal — Monthly Transits (Daily Avg)", font=dict(color=C_TEXT, size=13), x=0.02),
-            height=300,
+        apply_dark_layout(fig, height=300)
+        fig.update_layout(
+            title=dict(text="Panama Canal — Monthly Transits (Daily Avg)",
+                       font=dict(color=C_TEXT, size=13), x=0.02),
             xaxis=dict(gridcolor=C_BORDER, tickfont=dict(color=C_TEXT2)),
             yaxis=dict(gridcolor=C_BORDER, tickfont=dict(color=C_TEXT2), title="Transits/Day"),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
     except Exception as e:
         logger.error(f"panama_transit_chart render error: {e}")
         st.error("Panama transit chart unavailable.")
@@ -731,9 +723,8 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
         page_header(
             title="Strategic Waterway & Chokepoint Intelligence",
             subtitle="Real-time status, disruption analysis, and rate impact for the world's critical maritime chokepoints",
-            icon="⚓",
-            badge_text="2 CRITICAL",
-            badge_color=C_LOW,
+            badge_text="CHOKEPOINTS",
+            badge_color=C_ACCENT,
         )
 
         metric_card_row(
