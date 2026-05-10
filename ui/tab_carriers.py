@@ -17,8 +17,6 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -27,12 +25,35 @@ from ui.styles import (
     C_TEXT2,
     C_TEXT3,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+try:
+    from data.quality import DataSource
+    _CARRIER_SOURCE = DataSource.modeled(
+        "Carrier intelligence — Q1 2026 (modeled)",
+        notes="Aggregated public filings and alliance disclosures",
+    )
+    _NEWS_SOURCE = DataSource.scraped(
+        "Carrier RSS feeds",
+        notes="Live carrier press releases via feedparser",
+    )
+    _CARRIER_SOURCES = [_CARRIER_SOURCE]
+    _NEWS_SOURCES = [_NEWS_SOURCE]
+except Exception:
+    _CARRIER_SOURCES = [
+        {"name": "Carrier intelligence — Q1 2026 (modeled)",
+         "kind": "modeled", "quality": "modeled"},
+    ]
+    _NEWS_SOURCES = [
+        {"name": "Carrier RSS feeds", "kind": "scraped", "quality": "good"},
+    ]
 
 try:
     from data.carrier_intelligence import (
@@ -207,7 +228,8 @@ def _render_header(profiles: list) -> None:
         page_header(
             title="Carrier Intelligence Dashboard",
             subtitle="Q1 2026 · Top 12 global container carriers · Alliance structure, reliability & market concentration",
-            icon="🚢",
+            badge_text="CARRIERS",
+            badge_color=C_ACCENT,
         )
         metric_card_row(
             [
@@ -248,42 +270,25 @@ def _render_alliance_panel(profiles: list) -> None:
         for p in profiles:
             profile_map.setdefault(p.alliance, []).append(p)
 
-        cards_html = []
+        rows = []
         for adef in alliance_defs:
             members = profile_map.get(adef["key"], [])
             color = adef["color"]
             combined_share = sum(m.market_share_pct for m in members)
             combined_teu   = sum(m.teu_capacity for m in members)
-            member_tags = "".join(
-                f'<span style="display:inline-block;padding:3px 9px;margin:3px 3px 0 0;'
-                f'background:{color}22;color:{color};border:1px solid {color}44;'
-                f'border-radius:3px;font-size:11px;font-family:var(--sans);font-weight:600;">'
-                f'{_short_name(m.name)}</span>'
-                for m in members
-            )
-            cards_html.append(
-                f'<div style="flex:1;min-width:220px;background:{C_CARD};'
-                f'border:1px solid {C_BORDER};border-radius:6px;padding:18px 16px;'
-                f'border-top:3px solid {color};">'
-                f'<div style="font-size:15px;font-weight:700;color:{color};'
-                f'font-family:var(--serif);margin-bottom:6px;">{adef["name"]}</div>'
-                f'<div style="font-size:11px;font-family:var(--sans);color:{C_TEXT3};'
-                f'margin-bottom:12px;line-height:1.5;">{adef["desc"]}</div>'
-                f'<div style="margin-bottom:10px;">{member_tags}</div>'
-                f'<div style="display:flex;gap:16px;margin-top:10px;padding-top:10px;'
-                f'border-top:1px solid {C_BORDER};">'
-                f'<div><div style="font-size:10px;font-family:var(--sans);color:{C_TEXT3};'
-                f'text-transform:uppercase;letter-spacing:0.08em;">Combined Share</div>'
-                f'<div style="font-size:18px;font-weight:700;font-family:var(--mono);color:{color};">'
-                f'{combined_share:.1f}%</div></div>'
-                f'<div><div style="font-size:10px;font-family:var(--sans);color:{C_TEXT3};'
-                f'text-transform:uppercase;letter-spacing:0.08em;">TEU Capacity</div>'
-                f'<div style="font-size:18px;font-weight:700;font-family:var(--mono);color:{C_TEXT};">'
-                f'{_teu_str(combined_teu)}</div></div>'
-                f'</div></div>'
-            )
-
-        st.html(f'<div style="display:flex;flex-wrap:wrap;gap:12px;">{"".join(cards_html)}</div>')
+            member_badges = " ".join(badge(_short_name(m.name), color=color) for m in members) or "—"
+            rows.append([
+                _sans(adef["name"], color=color, weight=700),
+                member_badges,
+                _sans(adef["desc"], color=C_TEXT3),
+                _mono(f"{combined_share:.1f}%", color=color),
+                _mono(_teu_str(combined_teu), color=C_TEXT),
+            ])
+        wsj_market_table(
+            headers=["Alliance", "Members", "Description", "Combined Share", "TEU Capacity"],
+            rows=rows,
+        )
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_alliance_panel: {exc}")
         st.warning("Alliance panel unavailable.")
@@ -315,6 +320,7 @@ def _render_performance_table(profiles: list) -> None:
             ],
             rows=rows,
         )
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_performance_table: {exc}")
         st.warning("Performance table unavailable.")
@@ -356,6 +362,7 @@ def _render_reliability_rankings(profiles: list) -> None:
             headers=["#", "Carrier", "Reliability", "On-time %", "QoQ Δ", "Outlook"],
             rows=rows,
         )
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_reliability_rankings: {exc}")
         st.warning("Reliability rankings unavailable.")
@@ -380,11 +387,20 @@ def _render_market_concentration() -> None:
         total   = conc.get("total_tracked_share_pct", 0)
 
         hhi_color = C_LOW if hhi >= 2500 else (C_MOD if hhi >= 1500 else C_HIGH)
-        hhi_bar_w = int(280 * min(hhi, 10000) / 10000)
         hhi_desc = (
-            "Market is highly concentrated — regulatory scrutiny likely" if hhi >= 2500
-            else "Moderately concentrated market with oligopolistic dynamics" if hhi >= 1500
+            "Highly concentrated — regulatory scrutiny likely" if hhi >= 2500
+            else "Moderately concentrated — oligopolistic dynamics" if hhi >= 1500
             else "Competitive market structure with distributed capacity"
+        )
+
+        metric_card_row(
+            [
+                {"label": "HHI Score",     "value": f"{hhi:,.0f}", "accent": hhi_color,
+                 "sublabel": hhi_cat},
+                {"label": "Market Regime", "value": hhi_cat,        "accent": hhi_color,
+                 "sublabel": hhi_desc},
+            ],
+            columns=2,
         )
 
         ratios = [
@@ -395,42 +411,16 @@ def _render_market_concentration() -> None:
         ]
         ratio_rows = []
         for label, share, color in ratios:
-            bar_w = int(200 * share / 100)
-            ratio_rows.append(
-                f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">'
-                f'<div style="width:110px;font-size:12px;font-family:var(--sans);color:{C_TEXT2};">{label}</div>'
-                f'<div style="width:200px;height:6px;background:{C_SURFACE};border-radius:3px;">'
-                f'<div style="width:{bar_w}px;height:6px;background:{color};border-radius:3px;"></div></div>'
-                f'<div style="font-size:14px;font-weight:700;font-family:var(--mono);color:{color};">{share:.1f}%</div>'
-                f'</div>'
-            )
-
-        st.html(
-            f'<div style="display:flex;gap:16px;flex-wrap:wrap;">'
-            f'<div style="flex:1;min-width:260px;background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:6px;padding:20px;border-top:3px solid {hhi_color};">'
-            f'<div style="font-size:10px;font-weight:700;font-family:var(--sans);color:{C_TEXT3};'
-            f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px;">HHI Score</div>'
-            f'<div style="font-size:42px;font-weight:900;font-family:var(--serif);color:{hhi_color};line-height:1;">'
-            f'{hhi:,.0f}</div>'
-            f'<div style="font-size:13px;font-weight:700;font-family:var(--sans);color:{hhi_color};margin:6px 0;">'
-            f'{hhi_cat}</div>'
-            f'<div style="margin:12px 0 4px;">'
-            f'<div style="height:8px;width:280px;background:{C_SURFACE};border-radius:3px;">'
-            f'<div style="height:8px;width:{hhi_bar_w}px;background:{hhi_color};border-radius:3px;"></div></div>'
-            f'<div style="display:flex;justify-content:space-between;font-size:10px;'
-            f'font-family:var(--sans);color:{C_TEXT3};margin-top:3px;">'
-            f'<span>0</span><span>1,500</span><span>2,500</span><span>10,000</span></div>'
-            f'</div>'
-            f'<div style="font-size:12px;font-family:var(--sans);color:{C_TEXT3};margin-top:10px;line-height:1.5;">'
-            f'{hhi_desc}</div>'
-            f'</div>'
-            f'<div style="flex:1;min-width:260px;background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:6px;padding:20px;">'
-            f'<div style="font-size:10px;font-weight:700;font-family:var(--sans);color:{C_TEXT3};'
-            f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:16px;">Concentration Ratios</div>'
-            f'{"".join(ratio_rows)}</div></div>'
+            ratio_rows.append([
+                _sans(label, color=C_TEXT2, weight=600),
+                _progress_bar_html(share, color, width_px=160),
+                _mono(f"{share:.1f}%", color=color),
+            ])
+        wsj_market_table(
+            headers=["Concentration", "Share", "% of capacity"],
+            rows=ratio_rows,
         )
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_market_concentration: {exc}")
         st.warning("Market concentration data unavailable.")
@@ -483,6 +473,7 @@ def _render_blank_sailing_tracker(alerts: list[dict]) -> None:
             headers=["Carrier", "Trade Lane", "Departure Week", "TEUs Removed", "Impact"],
             rows=rows,
         )
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_blank_sailing_tracker: {exc}")
         st.warning("Blank sailing tracker unavailable.")
@@ -502,16 +493,13 @@ def _render_carrier_news() -> None:
             updates_map = {}
 
         if not updates_map or all(len(v) == 0 for v in updates_map.values()):
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-radius:6px;padding:20px;text-align:center;'
-                f'font-family:var(--sans);color:{C_TEXT3};">'
-                f'News feeds unavailable — feedparser library may not be installed '
-                f'or RSS sources are unreachable.</div>'
+            st.info(
+                "News feeds unavailable — feedparser library may not be installed "
+                "or RSS sources are unreachable."
             )
             return
 
-        items_html = []
+        rows = []
         for carrier, updates in updates_map.items():
             for upd in updates:
                 try:
@@ -524,31 +512,27 @@ def _render_carrier_news() -> None:
                     url         = getattr(upd, "url", "#") or "#"
                     category    = (getattr(upd, "category", "general") or "general").upper()
 
-                    items_html.append(
-                        f'<div style="padding:14px 16px;border-bottom:1px solid {C_BORDER};">'
-                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-                        f'<span style="font-size:11px;font-weight:700;color:{carrier_color};'
-                        f'font-family:var(--sans);padding:2px 7px;background:{carrier_color}22;'
-                        f'border-radius:3px;">{carrier}</span>'
-                        f'<span style="font-size:10px;color:{C_TEXT3};font-family:var(--sans);'
-                        f'background:{C_SURFACE};padding:2px 6px;border-radius:3px;">{category}</span>'
-                        f'<span style="font-size:10px;font-weight:700;font-family:var(--sans);'
-                        f'color:{sent_color};margin-left:auto;">{sent_label}</span>'
-                        f'<span style="font-size:10px;font-family:var(--sans);color:{C_TEXT3};">{ts}</span>'
-                        f'</div>'
-                        f'<div style="font-size:13px;font-family:var(--serif);color:{C_TEXT};line-height:1.5;">'
-                        f'<a href="{url}" target="_blank" style="color:{C_TEXT};text-decoration:none;">'
-                        f'{headline}</a></div>'
-                        f'</div>'
+                    headline_cell = (
+                        f'<a href="{url}" target="_blank" '
+                        f'style="font-family:var(--serif);color:{C_TEXT};'
+                        f'text-decoration:none;font-size:13px;line-height:1.5;">{headline}</a>'
                     )
+                    rows.append([
+                        badge(carrier, color=carrier_color),
+                        _sans(category, color=C_TEXT3, weight=600),
+                        headline_cell,
+                        badge(sent_label, color=sent_color),
+                        _mono(ts, color=C_TEXT3),
+                    ])
                 except Exception as item_exc:
                     logger.debug(f"tab_carriers: news item render error: {item_exc}")
 
-        if items_html:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-radius:6px;overflow:hidden;">{"".join(items_html)}</div>'
+        if rows:
+            wsj_market_table(
+                headers=["Carrier", "Category", "Headline", "Sentiment", "Published"],
+                rows=rows,
             )
+            st.markdown(source_footer(_NEWS_SOURCES), unsafe_allow_html=True)
         else:
             st.info("No news items available.")
     except Exception as exc:
@@ -575,27 +559,20 @@ def _render_deep_dives(profiles: list) -> None:
                     rel_color    = _reliability_color(p.schedule_reliability)
 
                     ticker = p.ticker if hasattr(p, "ticker") and p.ticker != "private" else None
-                    ticker_html = (
-                        f'<span style="font-size:11px;font-family:var(--mono);background:{C_ACCENT}22;'
-                        f'color:{C_ACCENT};padding:2px 8px;border-radius:3px;'
-                        f'border:1px solid {C_ACCENT}44;margin-left:8px;">{p.ticker}</span>'
-                        if ticker
-                        else f'<span style="font-size:11px;font-family:var(--sans);color:{C_TEXT3};margin-left:8px;">Private</span>'
-                    )
+                    ticker_badge = badge(p.ticker, color=C_ACCENT) if ticker else badge("PRIVATE", color=C_TEXT3)
 
-                    st.html(
-                        f'<div style="margin-bottom:6px;">'
-                        f'<span style="font-size:16px;font-weight:700;font-family:var(--serif);color:{carrier_color};">{p.name}</span>'
-                        f'{ticker_html}'
-                        f'<span style="font-size:11px;font-family:var(--sans);color:{_alliance_color(p.alliance)};'
-                        f'margin-left:10px;font-weight:600;">{p.alliance}</span>'
-                        f'</div>'
-                        f'<div style="font-size:12px;font-family:var(--sans);color:{C_TEXT3};margin-bottom:14px;">'
-                        f'Fleet: {p.fleet_size} vessels &nbsp;|&nbsp; '
-                        f'Capacity: {_teu_str(p.teu_capacity)} TEU &nbsp;|&nbsp; '
-                        f'YTD Rate: {_rate_cell(p.ytd_rate_change)}'
-                        f'</div>'
-                    )
+                    header_row = " &nbsp; · &nbsp; ".join([
+                        _sans(p.name, color=carrier_color, weight=700),
+                        ticker_badge,
+                        _sans(p.alliance, color=_alliance_color(p.alliance), weight=600),
+                    ])
+                    meta_row = " &nbsp; | &nbsp; ".join([
+                        _sans(f"Fleet: {p.fleet_size} vessels", color=C_TEXT3),
+                        _sans(f"Capacity: {_teu_str(p.teu_capacity)} TEU", color=C_TEXT3),
+                        _sans("YTD Rate: ", color=C_TEXT3) + _rate_cell(p.ytd_rate_change),
+                    ])
+                    st.markdown(header_row, unsafe_allow_html=True)
+                    st.markdown(meta_row, unsafe_allow_html=True)
 
                     metric_card_row(
                         [
@@ -611,25 +588,33 @@ def _render_deep_dives(profiles: list) -> None:
 
                     risks     = list(getattr(p, "key_risks",     []) or [])
                     strengths = list(getattr(p, "key_strengths", []) or [])
-                    risk_items     = "".join(f'<li style="margin-bottom:5px;color:{C_TEXT2};">{r}</li>' for r in risks)
-                    strength_items = "".join(f'<li style="margin-bottom:5px;color:{C_TEXT2};">{s}</li>' for s in strengths)
-                    st.html(
-                        f'<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:14px;">'
-                        f'<div style="flex:1;min-width:220px;background:{C_LOW}0a;'
-                        f'border:1px solid {C_LOW}44;border-radius:6px;padding:14px;">'
-                        f'<div style="font-size:11px;font-weight:700;font-family:var(--sans);color:{C_LOW};'
-                        f'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Key Risks</div>'
-                        f'<ul style="margin:0;padding-left:18px;font-family:var(--sans);">{risk_items}</ul></div>'
-                        f'<div style="flex:1;min-width:220px;background:{C_HIGH}0a;'
-                        f'border:1px solid {C_HIGH}44;border-radius:6px;padding:14px;">'
-                        f'<div style="font-size:11px;font-weight:700;font-family:var(--sans);color:{C_HIGH};'
-                        f'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Key Strengths</div>'
-                        f'<ul style="margin:0;padding-left:18px;font-family:var(--sans);">{strength_items}</ul></div>'
-                        f'</div>'
-                    )
+                    col_r, col_s = st.columns(2)
+                    with col_r:
+                        st.markdown(
+                            insight_card_html(
+                                title="Key Risks",
+                                score=0.6,
+                                action="Caution",
+                                rationale=" · ".join(risks) if risks else "No risks flagged.",
+                                category="RISK",
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    with col_s:
+                        st.markdown(
+                            insight_card_html(
+                                title="Key Strengths",
+                                score=0.8,
+                                action="Prioritize",
+                                rationale=" · ".join(strengths) if strengths else "No strengths flagged.",
+                                category="STRENGTH",
+                            ),
+                            unsafe_allow_html=True,
+                        )
                 except Exception as inner_exc:
                     logger.error(f"tab_carriers._render_deep_dives [{sname}]: {inner_exc}")
                     st.warning(f"Deep-dive unavailable for {sname}.")
+        st.markdown(source_footer(_CARRIER_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.error(f"tab_carriers._render_deep_dives: {exc}")
         st.warning("Deep-dive section unavailable.")
