@@ -23,20 +23,21 @@ import streamlit as st
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
+    status_badge,
+    wsj_market_table,
 )
 
 try:
@@ -93,6 +94,25 @@ except Exception:
     def _save_report(html, obj): return None
 
 
+# ── Cell formatters for wsj_market_table() ────────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _now_utc() -> str:
@@ -144,6 +164,21 @@ def _data_live_count(api_status: dict[str, bool]) -> int:
     return sum(1 for v in api_status.values() if v)
 
 
+def _report_sources(api_status: dict[str, bool]) -> list[dict]:
+    """Build a list of provenance dicts that source_footer accepts."""
+    live_count = _data_live_count(api_status)
+    if live_count >= 6:
+        kind, quality = "live", "good"
+    elif live_count >= 3:
+        kind, quality = "cached", "stale"
+    else:
+        kind, quality = "modeled", "demo"
+    return [
+        {"name": "Investor report engine", "kind": "modeled", "quality": "modeled"},
+        {"name": f"{live_count}/{len(api_status)} external feeds", "kind": kind, "quality": quality},
+    ]
+
+
 # ── Section 1: Hero ────────────────────────────────────────────────────────────
 
 def _render_hero(last_generated: str | None) -> None:
@@ -153,8 +188,8 @@ def _render_hero(last_generated: str | None) -> None:
     )
     page_header(
         title="Investor Report Generator",
-        subtitle=f"Institutional-grade briefing · {subtitle}",
-        badge_text="MULTI-FACTOR ANALYSIS",
+        subtitle=f"Institutional-grade briefing - {subtitle}",
+        badge_text="REPORT",
         badge_color=C_ACCENT,
     )
     metric_card_row(
@@ -175,30 +210,26 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
     """Render configuration panel. Returns config dict."""
     live_count = _data_live_count(api_status)
     total = len(api_status)
-    quality_color = C_HIGH if live_count >= 6 else (C_MOD if live_count >= 3 else C_LOW)
     quality_label = "LIVE" if live_count >= 6 else ("PARTIAL" if live_count >= 3 else "MOCK")
+    quality_status = "success" if live_count >= 6 else ("warning" if live_count >= 3 else "danger")
 
     section_header(
         "Report Configuration",
-        f"{quality_label} data — {live_count}/{total} sources configured",
+        f"{quality_label} data - {live_count}/{total} sources configured",
     )
 
     col_left, col_right = st.columns([1, 1], gap="large")
     config: dict[str, Any] = {}
 
     with col_left:
-        st.html(
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">REPORT SCOPE</div>'
-        )
+        st.markdown('<div class="sub-section-header">Report Scope</div>', unsafe_allow_html=True)
         config["scope"] = st.radio(
             "scope",
             ["Full Report", "Quick Digest", "Signal Focus", "Freight Focus"],
             label_visibility="collapsed",
             key="rep_scope",
         )
-        st.html(
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin:12px 0 6px;">NARRATIVE TONE</div>'
-        )
+        st.markdown('<div class="sub-section-header">Narrative Tone</div>', unsafe_allow_html=True)
         config["tone"] = st.radio(
             "tone",
             ["Formal", "Analytical", "Summary"],
@@ -207,9 +238,7 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
         )
 
     with col_right:
-        st.html(
-            f'<div style="font-size:11px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:6px;">INCLUDE SECTIONS</div>'
-        )
+        st.markdown('<div class="sub-section-header">Include Sections</div>', unsafe_allow_html=True)
         sections = {}
         for key, label in [
             ("exec_summary",    "Executive Summary"),
@@ -223,13 +252,10 @@ def _render_config_panel(api_status: dict[str, bool]) -> dict:
             sections[key] = st.checkbox(label, value=True, key=f"rep_sec_{key}")
         config["sections"] = sections
 
-    # Discreet data-quality indicator row
-    st.html(
-        f'<div style="display:flex;align-items:center;gap:8px;margin-top:12px;">'
-        f'<div style="width:8px;height:8px;border-radius:50%;background:{quality_color};'
-        f'box-shadow:0 0 6px {quality_color};"></div>'
-        f'<span style="font-size:11px;color:{quality_color};font-weight:700;letter-spacing:1px;">'
-        f'{quality_label} — {live_count}/{total} sources</span></div>'
+    # Discreet data-quality indicator using shared status_badge
+    st.markdown(
+        status_badge(f"{quality_label} - {live_count}/{total} sources", status=quality_status),
+        unsafe_allow_html=True,
     )
     return config
 
@@ -243,11 +269,18 @@ def _render_generate_button(
     section_header("Generate Report", "Runs the multi-factor pipeline and builds the institutional briefing.")
 
     if not _ENGINE_OK:
-        st.html(
-            f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.3);'
-            f'border-radius:8px;padding:14px 18px;color:{C_LOW};font-size:13px;margin-bottom:16px;">'
-            f'<strong>Engine unavailable.</strong> The report engine could not be loaded. '
-            f'Check that <code>processing.investor_report_engine</code> is installed.</div>'
+        st.markdown(
+            insight_card_html(
+                title="Engine Unavailable",
+                score=0.05,
+                action="OFFLINE",
+                rationale=(
+                    "The report engine could not be loaded. Check that "
+                    "<code>processing.investor_report_engine</code> is installed."
+                ),
+                category="SYSTEM",
+            ),
+            unsafe_allow_html=True,
         )
         return
 
@@ -268,9 +301,9 @@ def _render_generate_button(
         status_box = st.empty()
         try:
             for i, step in enumerate(steps):
-                status_box.html(
-                    f'<div style="text-align:center;color:{C_TEXT2};font-size:13px;padding:8px;">'
-                    f'<span style="color:{C_ACCENT};font-weight:700;">&#9654;</span> {step}</div>'
+                status_box.markdown(
+                    status_badge(step, status="info"),
+                    unsafe_allow_html=True,
                 )
                 progress_bar.progress((i + 1) / len(steps))
 
@@ -295,22 +328,31 @@ def _render_generate_button(
             progress_bar.empty()
             status_box.empty()
             logger.error(f"Report generation failed: {exc}")
-            st.html(
-                f'<div style="background:rgba(192,57,43,0.1);border:1px solid rgba(192,57,43,0.35);'
-                f'border-radius:8px;padding:16px 20px;margin-top:12px;">'
-                f'<div style="color:{C_LOW};font-weight:700;font-size:13px;margin-bottom:4px;">Generation Failed</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;">{exc}</div></div>'
+            st.markdown(
+                insight_card_html(
+                    title="Generation Failed",
+                    score=0.05,
+                    action="ERROR",
+                    rationale=str(exc),
+                    category="SYSTEM",
+                ),
+                unsafe_allow_html=True,
             )
 
 
 # ── Section 4: Report preview ──────────────────────────────────────────────────
 
-def _render_report_preview(report: Any, ts: str) -> None:
+def _render_report_preview(report: Any, ts: str, api_status: dict[str, bool]) -> None:
     if report is None:
-        st.html(
-            f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
-            f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;">'
-            f'<strong>No report data.</strong> Generation may have failed silently.</div>'
+        st.markdown(
+            insight_card_html(
+                title="No Report Data",
+                score=0.05,
+                action="EMPTY",
+                rationale="Generation may have failed silently.",
+                category="SYSTEM",
+            ),
+            unsafe_allow_html=True,
         )
         return
 
@@ -349,47 +391,47 @@ def _render_report_preview(report: Any, ts: str) -> None:
         columns=5,
     )
 
+    section_header("Report Sections", "Modules included in this build")
     section_names = [
         "Cover Page", "Executive Summary", "Alpha Signals", "Freight Rates",
         "Macro Environment", "Equity Analysis", "Risk Assessment",
         "Recommendations", "Data Appendix", "Methodology",
     ]
-    pills_html = "".join(
-        f'<span style="background:rgba(53,114,176,0.12);border:1px solid rgba(53,114,176,0.25);'
-        f'color:{C_TEXT2};font-size:11px;padding:4px 10px;border-radius:20px;">{s}</span>'
-        for s in section_names
+    pills_html = " ".join(badge(s, color=C_ACCENT) for s in section_names)
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">{pills_html}</div>',
+        unsafe_allow_html=True,
     )
-    st.html(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:16px 20px;margin-bottom:20px;">'
-        f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">REPORT SECTIONS</div>'
-        f'<div style="display:flex;flex-wrap:wrap;gap:6px;">{pills_html}</div></div>'
-    )
+    st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
 
     if exec_summary:
-        preview = exec_summary[:300] + ("…" if len(exec_summary) > 300 else "")
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:18px 22px;margin-bottom:20px;">'
-            f'<div style="font-size:10px;color:{C_TEXT3};letter-spacing:1px;margin-bottom:10px;">'
-            f'EXECUTIVE SUMMARY — PREVIEW</div>'
-            f'<div style="font-size:13px;color:{C_TEXT};line-height:1.7;font-style:italic;">{preview}</div></div>'
+        preview = exec_summary[:300] + ("..." if len(exec_summary) > 300 else "")
+        section_header("Executive Summary - Preview", "")
+        st.markdown(
+            insight_card_html(
+                title="Executive Summary",
+                score=max(0.0, min(1.0, score_val)),
+                action=str(sentiment_label).upper(),
+                rationale=preview,
+                category="REPORT",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
 
 
 # ── Section 5: Downloads ───────────────────────────────────────────────────────
 
 def _dl_error(exc: Exception) -> None:
-    st.html(
-        f'<div style="color:{C_LOW};font-size:11px;padding:4px;">Error: {exc}</div>'
-    )
+    st.markdown(status_badge(f"Error: {exc}", status="danger"), unsafe_allow_html=True)
+
+
+def _dl_unavailable(message: str) -> None:
+    st.markdown(status_badge(message, status="neutral"), unsafe_allow_html=True)
 
 
 def _render_downloads(report: Any) -> None:
-    st.html(
-        f'<div style="font-size:12px;font-weight:700;letter-spacing:2px;color:{C_TEXT};'
-        f'margin-bottom:12px;">DOWNLOAD REPORT</div>'
-    )
+    section_header("Download Report", "Pick a format to export the latest build.")
     col_pdf, col_html, col_xl = st.columns([2, 1, 1], gap="medium")
     with col_pdf:
         if _PDF_OK and report is not None:
@@ -407,13 +449,9 @@ def _render_downloads(report: Any) -> None:
                 logger.error(f"PDF render failed: {exc}")
                 _dl_error(exc)
         elif not _PDF_OK:
-            st.html(
-                f'<div style="background:rgba(100,116,139,0.1);border:1px solid rgba(100,116,139,0.2);'
-                f'border-radius:8px;padding:12px 16px;color:{C_TEXT3};font-size:12px;">'
-                f'PDF unavailable — install <code>fpdf2</code>.</div>'
-            )
+            _dl_unavailable("PDF unavailable - install fpdf2.")
         else:
-            st.html(f'<div style="color:{C_TEXT3};font-size:12px;padding:12px;">Generate a report first.</div>')
+            _dl_unavailable("Generate a report first.")
 
     with col_html:
         if _HTML_OK and report is not None:
@@ -430,9 +468,9 @@ def _render_downloads(report: Any) -> None:
                 logger.error(f"HTML render failed: {exc}")
                 _dl_error(exc)
         elif not _HTML_OK:
-            st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">HTML renderer unavailable.</div>')
+            _dl_unavailable("HTML renderer unavailable.")
         else:
-            st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Generate a report first.</div>')
+            _dl_unavailable("Generate a report first.")
 
     with col_xl:
         if _EXCEL_OK and report is not None:
@@ -450,9 +488,9 @@ def _render_downloads(report: Any) -> None:
                 logger.error(f"Excel export failed: {exc}")
                 _dl_error(exc)
         elif not _EXCEL_OK:
-            st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Excel export unavailable.</div>')
+            _dl_unavailable("Excel export unavailable.")
         else:
-            st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:4px;">Generate a report first.</div>')
+            _dl_unavailable("Generate a report first.")
 
 
 # ── Section 6: Report history ─────────────────────────────────────────────────
@@ -461,10 +499,9 @@ def _render_history() -> None:
     section_header("Report History", "Previously generated reports")
 
     if not _HISTORY_OK:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-            f'padding:14px 18px;color:{C_TEXT3};font-size:12px;">'
-            f'Report history unavailable — <code>utils.report_history</code> not loaded.</div>'
+        st.markdown(
+            status_badge("Report history unavailable - utils.report_history not loaded.", status="neutral"),
+            unsafe_allow_html=True,
         )
         return
 
@@ -475,12 +512,16 @@ def _render_history() -> None:
         reports = []
 
     if not reports:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-            f'padding:14px 18px;color:{C_TEXT3};font-size:12px;">No historical reports saved yet.</div>'
+        st.markdown(
+            status_badge("No historical reports saved yet.", status="neutral"),
+            unsafe_allow_html=True,
         )
         return
 
+    # Build a wsj_market_table so the row width tracks the rest of the design system.
+    headers = ["Date", "Sentiment", "Quality", "Size"]
+    rows: list[list[str]] = []
+    download_specs: list[dict] = []
     for i, rep in enumerate(reports[:10]):
         try:
             rep_id   = rep.get("id", f"rep_{i}")
@@ -488,37 +529,40 @@ def _render_history() -> None:
             rep_sent = rep.get("sentiment_label", rep.get("sentiment", "—"))
             rep_qual = rep.get("data_quality", "—")
             rep_size = rep.get("file_size_kb", rep.get("size_kb", "—"))
-            sent_color = C_HIGH if "BULL" in str(rep_sent).upper() else (C_LOW if "BEAR" in str(rep_sent).upper() else C_MOD)
-
-            col_info, col_btn = st.columns([4, 1], gap="small")
-            with col_info:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-                    f'padding:12px 16px;display:flex;align-items:center;gap:16px;">'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--mono);">{rep_date}</span>'
-                    f'{badge(str(rep_sent), color=sent_color)}'
-                    f'<span style="font-size:11px;color:{C_TEXT3};">Quality: {rep_qual}</span>'
-                    f'<span style="font-size:11px;color:{C_TEXT3};margin-left:auto;">{rep_size} KB</span>'
-                    f'</div>'
-                )
-            with col_btn:
-                try:
-                    html_content = _load_report_html(rep_id)
-                    if html_content:
-                        st.download_button(
-                            label="Download",
-                            data=html_content.encode("utf-8") if isinstance(html_content, str) else html_content,
-                            file_name=f"report_{rep_id}.html",
-                            mime="text/html",
-                            key=f"dl_hist_{rep_id}_{i}",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">Unavailable</div>')
-                except Exception:
-                    st.html(f'<div style="color:{C_TEXT3};font-size:11px;padding:8px;">—</div>')
+            sent_color = (
+                C_HIGH if "BULL" in str(rep_sent).upper()
+                else (C_LOW if "BEAR" in str(rep_sent).upper() else C_MOD)
+            )
+            rows.append([
+                _mono(str(rep_date), color=C_TEXT2),
+                badge(str(rep_sent), color=sent_color),
+                _sans(str(rep_qual), color=C_TEXT3),
+                _mono(f"{rep_size} KB", color=C_TEXT3),
+            ])
+            download_specs.append({"id": rep_id, "index": i})
         except Exception as exc:
             logger.warning(f"Could not render history row {i}: {exc}")
+
+    if rows:
+        wsj_market_table(headers, rows)
+
+        # Per-row download buttons stacked beneath the table.
+        for spec in download_specs:
+            rep_id = spec["id"]
+            i = spec["index"]
+            try:
+                html_content = _load_report_html(rep_id)
+                if html_content:
+                    st.download_button(
+                        label=f"Download {rep_id}",
+                        data=html_content.encode("utf-8") if isinstance(html_content, str) else html_content,
+                        file_name=f"report_{rep_id}.html",
+                        mime="text/html",
+                        key=f"dl_hist_{rep_id}_{i}",
+                        use_container_width=True,
+                    )
+            except Exception:
+                continue
 
 
 # ── Section 7: Data source status ─────────────────────────────────────────────
@@ -526,45 +570,32 @@ def _render_history() -> None:
 def _render_data_sources(api_status: dict[str, bool]) -> None:
     live_count = _data_live_count(api_status)
     total = len(api_status)
-    summary_color = C_HIGH if live_count >= 6 else (C_MOD if live_count >= 3 else C_LOW)
     section_header(
         "Data Source Status",
-        f"{live_count} of {total} sources live — full diagnostics in Data Health tab",
+        f"{live_count} of {total} sources live - full diagnostics in Data Health tab",
     )
-    items_html = ""
+    headers = ["Source", "Status"]
+    rows = []
     for name, is_live in api_status.items():
-        dot_color = C_HIGH if is_live else C_LOW
-        label = "LIVE" if is_live else "OFFLINE"
-        items_html += (
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;'
-            f'padding:12px 14px;display:flex;align-items:center;gap:10px;">'
-            f'<div style="width:8px;height:8px;border-radius:50%;background:{dot_color};'
-            f'box-shadow:0 0 5px {dot_color};flex-shrink:0;"></div>'
-            f'<div style="flex:1;">'
-            f'<div style="font-size:12px;color:{C_TEXT};font-weight:600;">{name}</div>'
-            f'<div style="font-size:10px;color:{dot_color};letter-spacing:1px;">{label}</div>'
-            f'</div></div>'
-        )
-    st.html(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:22px 26px;">'
-        f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">'
-        f'<div style="font-size:12px;font-weight:700;letter-spacing:2px;color:{C_TEXT};">SOURCES</div>'
-        f'<span style="font-size:12px;font-weight:700;color:{summary_color};">'
-        f'{live_count} of {total} live</span></div>'
-        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">{items_html}</div>'
-        f'</div>'
-    )
+        rows.append([
+            _sans(name, color=C_TEXT, weight=600),
+            badge("LIVE" if is_live else "OFFLINE", color=C_HIGH if is_live else C_LOW),
+        ])
+    wsj_market_table(headers, rows)
+    st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
 
 
 # ── Section 8: API config ─────────────────────────────────────────────────────
 
 def _render_api_config(api_status: dict[str, bool]) -> None:
     with st.expander("API Configuration", expanded=False):
-        st.html(
-            f'<div style="font-size:12px;color:{C_TEXT2};margin-bottom:14px;line-height:1.6;">'
-            f'Configure API keys via <code>st.secrets</code> (secrets.toml) or environment variables. '
-            f'Keys are never displayed — only their presence is checked.</div>'
+        st.markdown(
+            _sans(
+                "Configure API keys via st.secrets (secrets.toml) or environment variables. "
+                "Keys are never displayed - only their presence is checked.",
+                color=C_TEXT2,
+            ),
+            unsafe_allow_html=True,
         )
         key_map = {
             "Baltic Exchange":  "BALTIC_API_KEY",
@@ -576,29 +607,24 @@ def _render_api_config(api_status: dict[str, bool]) -> None:
             "IEX Cloud":        "IEX_CLOUD_KEY",
             "Quandl / Nasdaq":  "QUANDL_API_KEY",
         }
-        rows_html = ""
+        rows = []
         for name, env_key in key_map.items():
             is_set = api_status.get(name, False)
             status_color = C_HIGH if is_set else C_LOW
             status_txt   = "Configured" if is_set else "Missing"
-            rows_html += (
-                f'<div style="display:flex;align-items:center;gap:12px;padding:8px 0;'
-                f'border-bottom:1px solid {C_BORDER};">'
-                f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0;"></div>'
-                f'<div style="flex:1;font-size:12px;color:{C_TEXT};">{name}</div>'
-                f'<code style="font-size:11px;color:{C_TEXT3};">{env_key}</code>'
-                f'<span style="font-size:11px;color:{status_color};font-weight:600;">{status_txt}</span>'
-                f'</div>'
-            )
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;'
-            f'padding:12px 16px;">{rows_html}</div>'
-        )
-        st.html(
-            f'<div style="margin-top:12px;font-size:11px;color:{C_TEXT3};line-height:1.7;">'
-            f'Add keys to <code>.streamlit/secrets.toml</code>:<br>'
-            f'<code>ALPHA_VANTAGE_KEY = "your-key-here"</code><br>'
-            f'Or set environment variables before launching the app.</div>'
+            rows.append([
+                _sans(name, color=C_TEXT, weight=600),
+                _mono(env_key, color=C_TEXT3),
+                _sans(status_txt, color=status_color, weight=700),
+            ])
+        wsj_market_table(["Source", "Env Var", "Status"], rows)
+        st.markdown(
+            _sans(
+                "Add keys to .streamlit/secrets.toml: ALPHA_VANTAGE_KEY = \"your-key-here\". "
+                "Or set environment variables before launching the app.",
+                color=C_TEXT3,
+            ),
+            unsafe_allow_html=True,
         )
 
 
@@ -641,7 +667,7 @@ def render(
     if report is not None:
         section_divider()
         try:
-            _render_report_preview(report, last_ts or _now_utc())
+            _render_report_preview(report, last_ts or _now_utc(), api_status)
         except Exception as exc:
             logger.error(f"Report preview error: {exc}")
             st.error("Could not render report preview.")
@@ -651,11 +677,15 @@ def render(
             logger.error(f"Download section error: {exc}")
             st.error("Could not render download buttons.")
     elif last_ts is not None:
-        st.html(
-            f'<div style="background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);'
-            f'border-radius:8px;padding:16px 20px;color:{C_LOW};font-size:13px;margin-top:16px;">'
-            f'<strong>Report data is None.</strong> The engine ran but returned no data. '
-            f'Check logs for details.</div>'
+        st.markdown(
+            insight_card_html(
+                title="Report Data Is None",
+                score=0.05,
+                action="EMPTY",
+                rationale="The engine ran but returned no data. Check logs for details.",
+                category="SYSTEM",
+            ),
+            unsafe_allow_html=True,
         )
     else:
         try:
