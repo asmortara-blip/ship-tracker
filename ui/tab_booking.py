@@ -17,7 +17,6 @@ from loguru import logger
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
-    C_CARD,
     C_CONV,
     C_HIGH,
     C_LOW,
@@ -28,11 +27,23 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+
+# ── Provenance ────────────────────────────────────────────────────────────────
+# All sections in this tab use synthetic mock booking data driven by seeded
+# random.Random. Mark every source pill accordingly so users know not to trust
+# the numbers as live data.
+_BOOKING_SOURCES = [
+    {"name": "Internal booking-intelligence mock", "kind": "modeled", "quality": "demo"},
+    {"name": "Synthetic carrier rate sheet",       "kind": "modeled", "quality": "demo"},
+]
 
 
 # ── Reference data ────────────────────────────────────────────────────────────
@@ -142,6 +153,7 @@ def _booking_market_dashboard(freight_data) -> None:
                 "accent":      C_MACRO,
             },
         ], columns=5)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking dashboard error: {exc}")
         st.info("Booking dashboard data unavailable.")
@@ -201,6 +213,7 @@ def _rate_comparison_tool() -> None:
                 badge(r["rec"], color=rec_color),
             ])
         wsj_market_table(headers, table_rows)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
 
         st.caption(
             f"Showing rates for {origin} → {dest} | Cargo: {cargo} | "
@@ -271,22 +284,19 @@ def _optimal_booking_window() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.html(
-            f'<div style="background:{_hex_alpha(C_HIGH, 0.1)};'
-            f'border:1px solid {C_HIGH};border-radius:3px;'
-            f'padding:14px 18px;margin-top:4px;display:flex;align-items:center;gap:12px;">'
-            f'<span style="font-size:22px;">📈</span>'
-            f'<div>'
-            f'<span style="color:{C_HIGH};font-weight:700;font-size:14px;'
-            f'font-family:var(--sans);">INSIGHT: </span>'
-            f'<span style="color:{C_TEXT};font-size:13px;font-family:var(--sans);">'
-            f'Book <b>4-6 weeks ahead</b> for best rates on {route_sel}. '
-            f'Late bookings (1-2 weeks out) carry an <b>18-30% premium</b>. '
-            f'Booking too early (9+ weeks) may incur an 8-12% premium due to '
-            f'uncertainty pricing.</span>'
-            f'</div>'
-            f'</div>'
-        )
+        st.markdown(insight_card_html(
+            title=f"Sweet spot: 4-6 weeks ahead — {route_sel}",
+            score=0.85,
+            action="Prioritize",
+            rationale=(
+                f"Book 4-6 weeks ahead for best rates on {route_sel}. "
+                "Late bookings (1-2 weeks out) carry an 18-30% premium. "
+                "Booking too early (9+ weeks) may incur an 8-12% premium "
+                "due to uncertainty pricing."
+            ),
+            category="ROUTE",
+        ), unsafe_allow_html=True)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking window error: {exc}")
         st.info("Booking window analysis unavailable.")
@@ -333,6 +343,7 @@ def _contract_vs_spot_analysis() -> None:
                 badge(r["rec"], color=r["rec_color"]),
             ])
         wsj_market_table(headers, table_rows)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
 
         st.caption(
             "Spread = Spot minus LTC. Positive spread = spot more expensive = "
@@ -366,38 +377,30 @@ def _booking_calendar() -> None:
                 return C_LOW, "TIGHT"
             return "#c0392b", "FULL"
 
-        cells_html = ""
+        cards = []
         for w in weeks:
             booked = rng.uniform(35, 98)
             color, label = avail_color(booked)
-            wk_label = w.strftime("%b %d")
-            cells_html += (
-                f'<div style="background:{C_CARD};border:1px solid {color}33;'
-                f'border-radius:3px;padding:14px 10px;text-align:center;'
-                f'border-top:3px solid {color};">'
-                f'<div style="font-size:11px;color:{C_TEXT3};'
-                f'font-family:var(--sans);margin-bottom:4px;">{wk_label}</div>'
-                f'<div style="font-size:18px;font-weight:700;color:{color};'
-                f'font-family:var(--mono);">{booked:.0f}%</div>'
-                f'<div style="font-size:10px;color:{color};font-weight:600;'
-                f'font-family:var(--sans);margin-top:2px;">{label}</div>'
-                f'</div>'
-            )
+            cards.append({
+                "label":    w.strftime("%b %d"),
+                "value":    f"{booked:.0f}%",
+                "sublabel": label,
+                "accent":   color,
+            })
 
-        st.html(
-            f'<div style="display:grid;grid-template-columns:repeat(6,1fr);'
-            f'gap:10px;margin-top:8px;">{cells_html}</div>'
-        )
+        # First six weeks
+        metric_card_row(cards[:6], columns=6)
+        # Next six weeks
+        metric_card_row(cards[6:], columns=6)
 
-        st.html(
-            f'<div style="display:flex;gap:18px;margin-top:12px;font-size:12px;'
-            f'color:{C_TEXT2};font-family:var(--sans);">'
-            f'<span><span style="color:{C_HIGH};">■</span> OPEN (&lt;60% booked)</span>'
-            f'<span><span style="color:{C_MOD};">■</span> FILLING (60-80%)</span>'
-            f'<span><span style="color:{C_LOW};">■</span> TIGHT (80-92%)</span>'
-            f'<span><span style="color:#c0392b;">■</span> FULL (&gt;92%)</span>'
-            f'</div>'
-        )
+        legend = " &nbsp; ".join([
+            f"{badge('OPEN', color=C_HIGH)} <60%",
+            f"{badge('FILLING', color=C_MOD)} 60-80%",
+            f"{badge('TIGHT', color=C_LOW)} 80-92%",
+            f"{badge('FULL', color='#c0392b')} >92%",
+        ])
+        st.markdown(legend, unsafe_allow_html=True)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking calendar error: {exc}")
         st.info("Booking calendar unavailable.")
@@ -428,30 +431,22 @@ def _spot_rate_alert() -> None:
         status_label = "ALERT TRIGGERED" if triggered else "MONITORING"
         gap_label = f"${abs(diff):,}/TEU {'BELOW' if diff < 0 else 'above'} threshold"
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:18px 22px;margin-top:10px;'
-            f'display:flex;justify-content:space-between;align-items:center;">'
-            f'<div>'
-            f'<div style="font-size:12px;color:{C_TEXT3};'
-            f'font-family:var(--sans);margin-bottom:4px;">Current Rate — {alert_route}</div>'
-            f'<div style="font-size:28px;font-weight:700;color:{C_TEXT};'
-            f'font-family:var(--mono);">${current_rate:,}'
-            f'<span style="font-size:14px;color:{C_TEXT3};">/TEU</span></div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};'
-            f'font-family:var(--sans);margin-top:4px;">{gap_label}</div>'
-            f'</div>'
-            f'<div style="text-align:right;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};'
-            f'font-family:var(--sans);margin-bottom:6px;">Status</div>'
-            f'<div style="background:{status_color}22;border:1px solid {status_color};'
-            f'border-radius:3px;padding:8px 16px;color:{status_color};'
-            f'font-family:var(--sans);font-weight:700;font-size:13px;">{status_label}</div>'
-            f'<div style="font-size:11px;color:{C_TEXT3};'
-            f'font-family:var(--sans);margin-top:6px;">Threshold: ${threshold:,}/TEU</div>'
-            f'</div>'
-            f'</div>'
-        )
+        metric_card_row([
+            {
+                "label":    f"Current Rate — {alert_route}",
+                "value":    f"${current_rate:,}/TEU",
+                "delta":    gap_label,
+                "delta_color": status_color,
+                "sublabel": f"Threshold: ${threshold:,}/TEU",
+                "accent":   C_ACCENT,
+            },
+            {
+                "label":    "Alert Status",
+                "value":    status_label,
+                "sublabel": f"Type: {alert_type}",
+                "accent":   status_color,
+            },
+        ], columns=2)
 
         active_alerts = []
         for route in _ROUTES:
@@ -462,26 +457,21 @@ def _spot_rate_alert() -> None:
                 active_alerts.append((route, rt, thr))
 
         if active_alerts:
-            items_html = ""
+            section_header("Near-Threshold Routes",
+                           "Routes whose current rate is within $200 of their alert threshold")
+            near_rows = []
             for route, rt, thr in active_alerts[:3]:
-                items_html += (
-                    f'<div style="font-size:12px;color:{C_TEXT2};padding:3px 0;'
-                    f'font-family:var(--sans);">'
-                    f'{route}: ${rt:,} vs threshold ${thr:,}'
-                    f'<span style="color:{C_MOD};"> — within ${abs(rt-thr):,}</span>'
-                    f'</div>'
-                )
-            st.html(
-                f'<div style="margin-top:14px;padding:12px 16px;'
-                f'background:{_hex_alpha(C_MOD, 0.1)};border:1px solid {C_MOD};'
-                f'border-radius:3px;">'
-                f'<div style="font-size:12px;font-weight:700;color:{C_MOD};'
-                f'font-family:var(--sans);margin-bottom:8px;">'
-                f'NEAR-THRESHOLD ROUTES'
-                f'</div>'
-                f'{items_html}'
-                f'</div>'
+                near_rows.append([
+                    _sans(route, color=C_TEXT, weight=600),
+                    _mono(f"${rt:,}", color=C_TEXT),
+                    _mono(f"${thr:,}", color=C_TEXT2),
+                    _mono(f"${abs(rt - thr):,}", color=C_MOD, weight=600),
+                ])
+            wsj_market_table(
+                ["Route", "Current Rate", "Threshold", "Gap"],
+                near_rows,
             )
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Spot rate alert error: {exc}")
         st.info("Spot rate alert unavailable.")
@@ -538,6 +528,7 @@ def _space_availability_by_carrier() -> None:
                 _sans(r["vessel"], color=C_TEXT3),
             ])
         wsj_market_table(headers, table_rows)
+        st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
 
         st.caption(
             f"Space remaining as % of vessel TEU capacity. "
@@ -559,9 +550,8 @@ def render(route_results=None, freight_data=None, port_results=None) -> None:
                 "Market-timed booking decisions · Rate comparison across carriers · "
                 "Contract vs spot analytics · Space availability tracker"
             ),
-            icon="📅",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="BOOKING",
+            badge_color=C_ACCENT,
         )
 
         _booking_market_dashboard(freight_data)
