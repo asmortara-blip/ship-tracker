@@ -36,15 +36,23 @@ from ui.styles import (
     C_MACRO,
     C_MOD,
     C_TEXT,
-    C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+
+# ── Provenance (demo data sources) ────────────────────────────────────────────
+_SCORECARD_SOURCES = [
+    {"name": "Composite scorecard model",    "kind": "modeled", "quality": "demo"},
+    {"name": "Internal market signal blend", "kind": "modeled", "quality": "demo"},
+]
 
 
 # ── Scorecard metric definitions ──────────────────────────────────────────────
@@ -256,50 +264,70 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
                 "demand, while port infrastructure remains broadly functional. Near-term outlook "
                 "is constructive with upside risk to rate forecasts."
             )
+            action = "Buy"
         elif overall >= 40:
             summary += (
                 "Mixed signals persist across freight corridors: demand recovery is uneven and "
                 "supply additions are compressing margins. Operators should monitor blank sailing "
                 "announcements and canal disruption risk closely over the next 30 days."
             )
+            action = "Watch"
         else:
             summary += (
                 "Deteriorating freight conditions, excess supply, and softening demand create "
                 "headwinds across all major trade lanes. Capital discipline and route optimization "
                 "are critical. Watch for further rate erosion and potential carrier consolidation."
             )
+            action = "Caution"
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'padding:32px 36px 28px;margin-bottom:20px;">'
-            f'<div style="display:flex;align-items:flex-start;justify-content:space-between;'
-            f'flex-wrap:wrap;gap:20px;">'
-            f'<div style="flex:1;min-width:260px;">'
-            f'<div style="font-family:var(--sans);font-size:11px;letter-spacing:2px;'
-            f'color:{C_TEXT3};text-transform:uppercase;margin-bottom:6px;">Executive Summary</div>'
-            f'<div style="font-family:var(--serif);font-size:22px;font-weight:700;'
-            f'color:{C_TEXT};letter-spacing:0.5px;margin-bottom:4px;">Composite Market Score</div>'
-            f'<div style="font-family:var(--sans);font-size:12px;color:{C_ACCENT};'
-            f'letter-spacing:1px;">WEEK OF {_week_label()}</div>'
-            f'</div>'
-            f'<div style="text-align:center;min-width:140px;">'
-            f'<div style="font-family:var(--mono);font-size:56px;font-weight:800;'
-            f'color:{rag_color};line-height:1;">{overall}</div>'
-            f'<div style="font-family:var(--sans);font-size:11px;color:{C_TEXT3};'
-            f'margin-top:2px;">/ 100 COMPOSITE</div>'
-            f'<div style="font-family:var(--sans);font-size:13px;font-weight:700;'
-            f'color:{rag_color};margin-top:4px;letter-spacing:2px;">{rag_label}</div>'
-            f'</div>'
-            f'</div>'
-            f'<div style="margin-top:20px;background:rgba(232,230,225,0.04);'
-            f'border-radius:3px;height:6px;">'
-            f'<div style="width:{overall}%;height:100%;background:{rag_color};'
-            f'border-radius:3px;transition:width 0.8s ease;"></div>'
-            f'</div>'
-            f'<div style="margin-top:20px;font-family:var(--sans);font-size:14px;'
-            f'line-height:1.75;color:{C_TEXT2};max-width:900px;">{summary}</div>'
-            f'</div>'
+        section_header(
+            "Executive Summary — Composite Market Score",
+            f"Week of {_week_label()}",
         )
+
+        metric_card_row(
+            [
+                {
+                    "label":    "Composite Score",
+                    "value":    f"{overall}",
+                    "delta":    rag_label,
+                    "delta_color": rag_color,
+                    "sublabel": "/ 100",
+                    "accent":   rag_color,
+                },
+                {
+                    "label":    "Freight Conditions",
+                    "value":    f"{freight_avg}",
+                    "sublabel": "/ 100",
+                    "accent":   C_ACCENT,
+                },
+                {
+                    "label":    "Demand Fundamentals",
+                    "value":    f"{demand_avg}",
+                    "sublabel": "/ 100",
+                    "accent":   C_HIGH,
+                },
+                {
+                    "label":    "Risk Environment",
+                    "value":    f"{risk_avg}",
+                    "sublabel": "/ 100",
+                    "accent":   C_MOD,
+                },
+            ],
+            columns=4,
+        )
+
+        st.markdown(
+            insight_card_html(
+                title="Composite Market Outlook",
+                score=overall / 100.0,
+                action=action,
+                rationale=summary,
+                category="SCORECARD",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Executive summary rendered — overall={}", overall)
     except Exception as exc:
         logger.error("_render_executive_summary: {}", exc)
@@ -332,6 +360,7 @@ def _render_category_bar(rows: list[dict]) -> None:
             })
 
         metric_card_row(metrics, columns=6)
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Category summary bar rendered")
     except Exception as exc:
         logger.error("_render_category_bar: {}", exc)
@@ -423,6 +452,7 @@ def _render_scorecard_matrix(rows: list[dict]) -> None:
             ])
 
         wsj_market_table(headers, table_rows)
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Scorecard matrix rendered — {} rows", len(rows))
     except Exception as exc:
         logger.error("_render_scorecard_matrix: {}", exc)
@@ -433,6 +463,10 @@ def _render_scorecard_matrix(rows: list[dict]) -> None:
 
 def _render_score_history(overall: int) -> None:
     try:
+        section_header(
+            "Composite Score — 12-Month History",
+            "Composite trend with event annotations and RAG threshold guides",
+        )
         today = date.today()
         months = [today - timedelta(days=30 * i) for i in range(12, -1, -1)]
         rng = random.Random(42)
@@ -485,13 +519,14 @@ def _render_score_history(overall: int) -> None:
 
         apply_dark_layout(
             fig,
-            title="Composite Score — 12-Month History",
+            title="",
             height=320,
             showlegend=False,
             xaxis=dict(showgrid=False, tickfont=dict(size=10)),
             yaxis=dict(range=[0, 100], tickfont=dict(size=10), title="Score"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Score history chart rendered")
     except Exception as exc:
         logger.error("_render_score_history: {}", exc)
@@ -502,6 +537,10 @@ def _render_score_history(overall: int) -> None:
 
 def _render_quadrant(rows: list[dict]) -> None:
     try:
+        section_header(
+            "Market Quadrant Analysis — Supply vs Demand Outlook",
+            "Current position vs historical regimes across the supply/demand plane",
+        )
         supply_cats  = ["Supply"]
         demand_cats  = ["Demand", "Freight Markets"]
 
@@ -562,7 +601,7 @@ def _render_quadrant(rows: list[dict]) -> None:
 
         apply_dark_layout(
             fig,
-            title="Market Quadrant Analysis — Supply vs Demand Outlook",
+            title="",
             height=400,
             xaxis=dict(range=[0, 100], title="Supply Outlook →", tickfont=dict(size=9)),
             yaxis=dict(range=[0, 100], title="Demand Outlook →", tickfont=dict(size=9)),
@@ -571,6 +610,7 @@ def _render_quadrant(rows: list[dict]) -> None:
                         bordercolor=C_BORDER, borderwidth=1),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Quadrant chart rendered — cur=({:.0f},{:.0f})", cur_x, cur_y)
     except Exception as exc:
         logger.error("_render_quadrant: {}", exc)
@@ -584,53 +624,49 @@ def _render_winner_loser(rows: list[dict]) -> None:
         if not rows:
             return
 
-        best  = max(rows, key=lambda r: r["score"])
-        worst = min(rows, key=lambda r: r["score"])
+        best    = max(rows, key=lambda r: r["score"])
+        worst   = min(rows, key=lambda r: r["score"])
         biggest = max(rows, key=lambda r: abs(r["score"] - r["prior_score"]))
 
-        def wl_card(title: str, icon: str, metric: str, cat: str, score: int,
-                    prior: int, color: str, note: str) -> str:
-            delta = score - prior
-            delta_str = f"+{delta}" if delta >= 0 else str(delta)
-            delta_color = color if delta >= 0 else C_LOW
-            return (
-                f'<div style="background:{C_CARD};border:1px solid {color};border-radius:3px;'
-                f'padding:22px 24px;flex:1;min-width:200px;">'
-                f'<div style="font-family:var(--sans);font-size:10px;color:{color};'
-                f'letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">{icon} {title}</div>'
-                f'<div style="font-family:var(--sans);font-size:16px;font-weight:600;'
-                f'color:{C_TEXT};margin-bottom:4px;">{metric}</div>'
-                f'<div style="font-family:var(--sans);font-size:10px;color:{C_TEXT3};'
-                f'margin-bottom:14px;">{cat.upper()}</div>'
-                f'<div style="display:flex;align-items:baseline;gap:12px;">'
-                f'<span style="font-family:var(--mono);font-size:40px;font-weight:800;'
-                f'color:{color};">{score}</span>'
-                f'<span style="font-family:var(--sans);font-size:11px;color:{C_TEXT3};">/ 100</span>'
-                f'<span style="font-family:var(--mono);font-size:13px;color:{delta_color};'
-                f'font-weight:600;">{delta_str} vs prior</span>'
-                f'</div>'
-                f'<div style="margin-top:12px;font-family:var(--sans);font-size:12px;'
-                f'color:{C_TEXT3};">{note}</div>'
-                f'</div>'
-            )
+        def _delta_label(score: int, prior: int) -> str:
+            d = score - prior
+            return f"+{d} vs prior" if d >= 0 else f"{d} vs prior"
 
-        best_note  = f"Strongest performer this week across all {len(rows)} tracked metrics."
-        worst_note = "Weakest signal — warrants immediate operational attention."
-        surp_note  = f"Largest week-over-week move: {abs(biggest['score'] - biggest['prior_score'])} pts."
-
-        section_header("Winner / Loser of the Week",
-                       "Strongest, weakest, and largest week-over-week surprise")
-
-        st.html(
-            '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
-            + wl_card("Winner of the Week", "▲", best["metric"], best["category"],
-                      best["score"], best["prior_score"], C_HIGH, best_note)
-            + wl_card("Loser of the Week", "▼", worst["metric"], worst["category"],
-                      worst["score"], worst["prior_score"], C_LOW, worst_note)
-            + wl_card("Biggest Surprise", "◆", biggest["metric"], biggest["category"],
-                      biggest["score"], biggest["prior_score"], C_MOD, surp_note)
-            + '</div>'
+        section_header(
+            "Winner / Loser of the Week",
+            "Strongest, weakest, and largest week-over-week surprise",
         )
+
+        metric_card_row(
+            [
+                {
+                    "label":       f"WINNER — {best['category'].upper()}",
+                    "value":       best["metric"],
+                    "delta":       _delta_label(best["score"], best["prior_score"]),
+                    "delta_color": C_HIGH,
+                    "sublabel":    f"Score {best['score']} / 100 — strongest of {len(rows)} metrics",
+                    "accent":      C_HIGH,
+                },
+                {
+                    "label":       f"LOSER — {worst['category'].upper()}",
+                    "value":       worst["metric"],
+                    "delta":       _delta_label(worst["score"], worst["prior_score"]),
+                    "delta_color": C_LOW,
+                    "sublabel":    f"Score {worst['score']} / 100 — warrants attention",
+                    "accent":      C_LOW,
+                },
+                {
+                    "label":       f"BIGGEST SURPRISE — {biggest['category'].upper()}",
+                    "value":       biggest["metric"],
+                    "delta":       _delta_label(biggest["score"], biggest["prior_score"]),
+                    "delta_color": C_MOD,
+                    "sublabel":    f"Largest WoW move: {abs(biggest['score'] - biggest['prior_score'])} pts",
+                    "accent":      C_MOD,
+                },
+            ],
+            columns=3,
+        )
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Winner/loser section rendered")
     except Exception as exc:
         logger.error("_render_winner_loser: {}", exc)
@@ -704,38 +740,25 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
 
         for i, pred in enumerate(predictions):
             try:
-                conf = pred["confidence"]
-                conf_color = C_HIGH if conf >= 70 else (C_MOD if conf >= 55 else C_LOW)
-                conf_bg = _hex_alpha(conf_color, 0.12)
-
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-radius:3px;padding:18px 22px;margin-bottom:10px;'
-                    f'display:flex;gap:20px;align-items:flex-start;">'
-                    f'<div style="min-width:56px;text-align:center;padding-top:2px;">'
-                    f'<div style="font-family:var(--mono);font-size:22px;font-weight:800;'
-                    f'color:{conf_color};">{conf}%</div>'
-                    f'<div style="font-family:var(--sans);font-size:8px;color:{C_TEXT3};'
-                    f'letter-spacing:1px;margin-top:2px;">CONF.</div>'
-                    f'</div>'
-                    f'<div style="flex:1;">'
-                    f'<div style="font-family:var(--serif);font-size:13px;font-weight:700;'
-                    f'color:{C_TEXT};margin-bottom:6px;">{i+1}. {pred["title"]}</div>'
-                    f'<div style="font-family:var(--sans);font-size:13px;color:{C_TEXT2};'
-                    f'line-height:1.65;margin-bottom:10px;">{pred["body"]}</div>'
-                    f'<div style="display:inline-flex;align-items:center;gap:6px;'
-                    f'background:{conf_bg};border-radius:3px;padding:3px 10px;">'
-                    f'<span style="font-family:var(--sans);font-size:9px;color:{C_TEXT3};'
-                    f'letter-spacing:1px;font-weight:600;">KEY RISK</span>'
-                    f'<span style="font-family:var(--sans);font-size:11px;color:{conf_color};">'
-                    f'{pred["key_risk"]}</span>'
-                    f'</div>'
-                    f'</div>'
-                    f'</div>'
+                conf   = pred["confidence"]
+                action = "Buy" if conf >= 70 else ("Watch" if conf >= 55 else "Caution")
+                rationale = (
+                    f'{pred["body"]} <strong>Key risk:</strong> {pred["key_risk"]}'
+                )
+                st.markdown(
+                    insight_card_html(
+                        title=f"{i+1}. {pred['title']}",
+                        score=conf / 100.0,
+                        action=action,
+                        rationale=rationale,
+                        category="OUTLOOK",
+                    ),
+                    unsafe_allow_html=True,
                 )
             except Exception as exc:
                 logger.debug("outlook prediction {}: {}", i, exc)
 
+        st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Outlook section rendered — {} predictions", len(predictions))
     except Exception as exc:
         logger.error("_render_outlook: {}", exc)
@@ -768,9 +791,8 @@ def render(
         page_header(
             title="Shipping Market Scorecard",
             subtitle=f"Executive scorecard of global shipping market conditions — Week of {_week_label()}",
-            icon="📊",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="SCORECARD",
+            badge_color=C_ACCENT,
         )
 
         _render_executive_summary(overall, rows)
