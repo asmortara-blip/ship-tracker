@@ -3,11 +3,12 @@
 Refactored to use the shared design system in :mod:`ui.styles`. All palette
 constants are imported (not redeclared); ad-hoc inline HTML has been replaced
 with ``page_header``, ``metric_card_row``, ``section_header``,
-``wsj_market_table``, ``badge`` and ``live_data_badge`` helpers.
+``wsj_market_table``, ``insight_card_html``, ``badge``, ``source_footer`` and
+``ticker_tape_html`` helpers.
 
 Every figure/table that consumes data surfaces a provenance pill via
-``live_data_badge`` — synthetic blocks are labeled ``quality="demo"`` so the
-viewer can see the data is not trustworthy.
+``source_footer`` — synthetic blocks are labeled ``kind="modeled"`` /
+``quality="demo"`` so the viewer can see the data is not trustworthy.
 """
 from __future__ import annotations
 
@@ -20,24 +21,22 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
-    live_data_badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
+    ticker_tape_html,
     wsj_market_table,
 )
 
@@ -166,18 +165,6 @@ def _fmt_dt(dt: datetime) -> str:
     return dt.strftime("%H:%M")
 
 
-def _color_for(val: float) -> str:
-    return C_HIGH if val >= 0 else C_LOW
-
-
-def _arrow(val: float) -> str:
-    return "▲" if val >= 0 else "▼"
-
-
-def _sign(val: float) -> str:
-    return "+" if val >= 0 else ""
-
-
 def _pct(val: float, base: float) -> float:
     try:
         return (val / base) * 100
@@ -221,13 +208,25 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 
 
 def _badge_for_severity(sev: str) -> str:
-    color_map = {"HIGH": "red", "MOD": "yellow", "LOW": "blue"}
-    return badge(sev, color=color_map.get(sev, "blue"))
+    color_map = {"HIGH": C_LOW, "MOD": C_MOD, "LOW": C_TEXT3}
+    return badge(sev, color=color_map.get(sev, C_TEXT3))
 
 
-def _render_pill(source: DataSource) -> None:
-    """Render a provenance pill under a section header without an extra div."""
-    st.html(live_data_badge(source))
+# ── Data source provenance (mark all synthetic feed data) ─────────────────────
+# Mock feed content is flagged ``kind="modeled"``, ``quality="demo"`` so the
+# provenance pill renders red and viewers know not to trust the numbers.
+
+def _demo_source(name: str, notes: str = "Mock live-feed data") -> dict:
+    """Build a source-footer-friendly dict for synthetic feed content."""
+    return {"name": name, "kind": "modeled", "quality": "demo", "notes": notes}
+
+
+_SRC_TICKER     = _demo_source("Baltic / Drewry / SCFI composite")
+_SRC_ALERTS     = _demo_source("News + insights composite")
+_SRC_MULTI_FEED = _demo_source("Composite multi-feed (rates + signals + news)")
+_SRC_SIGNAL_HR  = _demo_source("Hourly signal counts (24h)")
+_SRC_FREIGHT    = _demo_source("Rate change ticker")
+_SRC_SENTIMENT  = _demo_source("Headline-derived sentiment scores")
 
 
 # ── Section 1: Page header + status strip ─────────────────────────────────────
@@ -260,53 +259,28 @@ def _render_ticker_strip() -> None:
             "Market Ticker",
             subtitle="Benchmarks, equities and FX — live snapshot",
         )
-        _render_pill(DataSource.demo("Baltic/Drewry/SCFI composite"))
 
-        items = []
+        # Build ticker items in the format `ticker_tape_html` expects.
+        items: list[dict] = []
         for label, val, chg, pct in _MARKET_METRICS:
-            color = _color_for(chg)
-            arrow = _arrow(chg)
-            sign = _sign(chg)
             if label in ("BDI", "WCI", "SCFI"):
                 val_str = f"{val:,.0f}"
-                chg_str = f"{sign}{chg:,.0f}"
+                unit = ""
             elif label in ("USD/CNY", "EUR/USD"):
                 val_str = f"{val:.4f}"
-                chg_str = f"{sign}{chg:.4f}"
-            elif label == "CRUDE":
-                val_str = f"${val:.2f}"
-                chg_str = f"{sign}{chg:.2f}"
+                unit = ""
             else:
-                val_str = f"${val:.2f}"
-                chg_str = f"{sign}{chg:.2f}"
-            items.append(
-                f'<span style="margin:0 28px;white-space:nowrap;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;letter-spacing:1px;">{label}</span> '
-                f'<span style="color:{C_TEXT};font-weight:700;font-size:14px;">{val_str}</span> '
-                f'<span style="color:{color};font-size:12px;">{arrow} {chg_str} ({sign}{pct:.2f}%)</span>'
-                f'</span>'
-            )
+                val_str = f"{val:.2f}"
+                unit = ""
+            items.append({
+                "label":  label,
+                "value":  val_str,
+                "unit":   unit,
+                "change": float(pct),
+            })
 
-        ticker_html = "".join(items)
-        double = ticker_html + ticker_html
-
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-            f'overflow:hidden;padding:10px 0;margin-bottom:16px;">'
-            f'<div style="overflow:hidden;white-space:nowrap;position:relative;">'
-            f'<div style="display:inline-block;animation:scroll-left 45s linear infinite;'
-            f'font-family:var(--mono);">'
-            f'{double}'
-            f'</div>'
-            f'</div>'
-            f'</div>'
-            f'<style>'
-            f'@keyframes scroll-left {{'
-            f'0% {{ transform: translateX(0); }}'
-            f'100% {{ transform: translateX(-50%); }}'
-            f'}}'
-            f'</style>'
-        )
+        st.html(ticker_tape_html(items))
+        st.markdown(source_footer([_SRC_TICKER]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_ticker_strip error: {exc}")
 
@@ -317,8 +291,6 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
     try:
         section_header("Breaking Alerts",
                        subtitle="High-severity events from news + insight feeds")
-
-        _render_pill(DataSource.demo("News + insights (static)"))
 
         alerts: list[str] = []
 
@@ -350,24 +322,30 @@ def _render_breaking_alerts(insights: Any, news_items: Any) -> None:
         alerts = alerts[:3]
 
         if not alerts:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-                f'padding:14px 18px;color:{C_TEXT3};font-size:13px;font-family:var(--sans);">'
-                f'No critical alerts at this time.</div>'
+            st.markdown(
+                insight_card_html(
+                    title="No critical alerts at this time",
+                    score=0.0,
+                    action="Monitor",
+                    rationale="Feed monitored continuously — severity escalates the pill colour automatically.",
+                    category="MACRO",
+                ),
+                unsafe_allow_html=True,
             )
-            return
+        else:
+            for alert in alerts:
+                st.markdown(
+                    insight_card_html(
+                        title=alert,
+                        score=0.95,
+                        action="Prioritize",
+                        rationale="High-severity event flagged in the live feed.",
+                        category="PORT_DEMAND",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
-        for alert in alerts:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_LOW};'
-                f'border-left:4px solid {C_LOW};border-radius:3px;padding:14px 18px;'
-                f'margin-bottom:8px;display:flex;align-items:center;gap:14px;">'
-                f'<span style="background:{C_LOW};color:#fff;font-size:10px;font-weight:800;'
-                f'padding:2px 7px;border-radius:3px;letter-spacing:1px;font-family:var(--sans);">NEW</span>'
-                f'<span style="color:{C_TEXT};font-size:13px;font-weight:500;'
-                f'font-family:var(--sans);">{alert}</span>'
-                f'</div>'
-            )
+        st.markdown(source_footer([_SRC_ALERTS]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_breaking_alerts error: {exc}")
 
@@ -464,7 +442,6 @@ def _render_feed_table() -> None:
             "Live Data Feed",
             subtitle="Unified stream of rates, signals, news and macro updates",
         )
-        _render_pill(DataSource.demo("Composite multi-feed"))
 
         rows = _build_feed_rows()
 
@@ -482,6 +459,7 @@ def _render_feed_table() -> None:
             ])
 
         wsj_market_table(headers, table_rows)
+        st.markdown(source_footer([_SRC_MULTI_FEED]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_feed_table error: {exc}")
 
@@ -494,10 +472,9 @@ def _render_signal_chart() -> None:
             "Signal Activity — Last 24h",
             subtitle="Hourly count of alpha signals, shaded by avg conviction",
         )
-        # Synthetic data: replace with a signal-history feed when wired.
-        _render_pill(DataSource.demo("Hourly signal counts"))
 
         rng = list(range(24))
+        # Synthetic data: replace with a signal-history feed when wired.
         counts = [random.randint(0, 8) for _ in rng]
         convs = [random.randint(50, 95) for _ in rng]
         labels = [f"{h:02d}:00" for h in rng]
@@ -520,17 +497,23 @@ def _render_signal_chart() -> None:
             yaxis=dict(title_text="Signals"),
             bargap=0.25,
         )
+        fig.update_layout(
+            annotations=[
+                dict(
+                    xref="paper", yref="paper", x=0.0, y=1.08, showarrow=False,
+                    align="left", xanchor="left",
+                    font=dict(family="var(--sans)", size=11, color=C_TEXT3),
+                    text=(
+                        f"<span style='color:{C_HIGH};'>■</span> High (≥75%)  "
+                        f"<span style='color:{C_MOD};'>■</span> Moderate (60–74%)  "
+                        f"<span style='color:{C_TEXT3};'>■</span> Low (&lt;60%)"
+                    ),
+                )
+            ]
+        )
 
         st.plotly_chart(fig, use_container_width=True, key="live_feed_signal_chart")
-
-        st.html(
-            f'<div style="display:flex;gap:20px;margin-top:-12px;padding:0 8px;'
-            f'font-family:var(--sans);">'
-            f'<span style="color:{C_HIGH};font-size:11px;">&#9632; High conviction (&ge;75%)</span>'
-            f'<span style="color:{C_MOD};font-size:11px;">&#9632; Moderate (60–74%)</span>'
-            f'<span style="color:{C_TEXT3};font-size:11px;">&#9632; Low (&lt;60%)</span>'
-            f'</div>'
-        )
+        st.markdown(source_footer([_SRC_SIGNAL_HR]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_signal_chart error: {exc}")
 
@@ -543,7 +526,6 @@ def _render_freight_table(freight_data: Any) -> None:
             "Freight Rate Changes",
             subtitle="Recent per-TEU rate moves across primary container lanes",
         )
-        _render_pill(DataSource.demo("Rate change ticker"))
 
         base = _utc_now()
         headers = ["Time", "Route", "Old", "New", "Change", "Pct"]
@@ -564,6 +546,7 @@ def _render_freight_table(freight_data: Any) -> None:
             ])
 
         wsj_market_table(headers, rows)
+        st.markdown(source_footer([_SRC_FREIGHT]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_freight_table error: {exc}")
 
@@ -576,7 +559,6 @@ def _render_sentiment_pulse(news_items: Any) -> None:
             "News Sentiment Pulse",
             subtitle="Rolling sentiment scores derived from headline severity mix",
         )
-        _render_pill(DataSource.demo("Headline-derived sentiment"))
 
         s1h, s4h, s24h = -0.18, 0.04, 0.11
 
@@ -628,6 +610,7 @@ def _render_sentiment_pulse(news_items: Any) -> None:
             ],
             columns=3,
         )
+        st.markdown(source_footer([_SRC_SENTIMENT]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"_render_sentiment_pulse error: {exc}")
 
