@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
@@ -24,7 +25,6 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -33,8 +33,18 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+# ---------------------------------------------------------------------------
+# Data provenance
+# ---------------------------------------------------------------------------
+
+_WEATHER_SOURCES = [
+    DataSource.demo("Global weather feed (synthetic)"),
+    DataSource.demo("Route-risk model (synthetic)"),
+]
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -130,7 +140,10 @@ _STORM_MARKERS = [
 
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
-    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
+    )
 
 
 def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
@@ -157,6 +170,7 @@ def _render_kpis() -> None:
             ],
             columns=4,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("KPI render failed")
         st.warning("KPI cards unavailable.")
@@ -179,6 +193,7 @@ def _render_active_events() -> None:
             ["Event", "Type", "Location", "Affected Routes", "Vessels", "Delay Risk", "Duration"],
             rows,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Active events table failed")
         st.warning("Active weather events unavailable.")
@@ -212,8 +227,10 @@ def _render_risk_map() -> None:
         apply_dark_layout(
             fig,
             height=420,
-            margin=dict(l=0, r=0, t=0, b=0),
             showlegend=True,
+        )
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
             geo=dict(
                 bgcolor=C_BG,
                 showland=True, landcolor=C_CARD,
@@ -226,14 +243,17 @@ def _render_risk_map() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            '<div style="display:flex;gap:20px;padding:8px 0;font-family:var(--sans);">'
-            f'<span style="color:{C_LOW};font-weight:700;">▬ Severe risk</span>'
-            f'<span style="color:{C_MOD};font-weight:700;">▬ Elevated risk</span>'
-            f'<span style="color:{C_HIGH};font-weight:700;">▬ Normal</span>'
-            f'<span style="color:{C_TEXT3};font-size:12px;margin-left:12px;">Markers: T=Typhoon  L=Low pressure  C=Cyclone  S=Storm</span>'
-            '</div>'
+        legend_rows = [[
+            _sans("Severe risk", color=C_LOW, weight=700),
+            _sans("Elevated risk", color=C_MOD, weight=700),
+            _sans("Normal", color=C_HIGH, weight=700),
+            _sans("Markers: T=Typhoon · L=Low pressure · C=Cyclone · S=Storm", color=C_TEXT3, weight=400),
+        ]]
+        wsj_market_table(
+            ["", "", "", "Legend"],
+            legend_rows,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Risk map render failed")
         st.warning("Route weather risk map unavailable.")
@@ -257,6 +277,7 @@ def _render_forecast_table() -> None:
             ["Route", "D+1", "D+3", "D+7", "D+14", "Overall", "Recommended Action"],
             rows,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Forecast table failed")
         st.warning("14-day forecast table unavailable.")
@@ -288,6 +309,9 @@ def _render_historical_delays() -> None:
         apply_dark_layout(
             fig,
             height=360,
+            showlegend=True,
+        )
+        fig.update_layout(
             margin=dict(l=50, r=20, t=20, b=40),
             barmode="group",
             yaxis=dict(title="Avg Delay (hours)", gridcolor=C_BORDER, linecolor=C_BORDER),
@@ -296,12 +320,16 @@ def _render_historical_delays() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            f'<div style="color:{C_TEXT3};font-size:12px;padding:4px 0;font-family:var(--sans);">'
-            'Seasonal patterns: Aug–Oct typhoon peak (Pacific) | Nov–Mar N. Atlantic storms | '
-            'Apr–Jun Bay of Bengal cyclone risk | Year-round fog delays at LA, Rotterdam'
-            '</div>'
-        )
+        caption_rows = [[
+            _sans(
+                "Seasonal patterns: Aug–Oct typhoon peak (Pacific) · Nov–Mar N. Atlantic storms · "
+                "Apr–Jun Bay of Bengal cyclone risk · Year-round fog delays at LA, Rotterdam",
+                color=C_TEXT3,
+                weight=400,
+            ),
+        ]]
+        wsj_market_table(["Seasonal Notes"], caption_rows)
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Historical delays chart failed")
         st.warning("Historical delay chart unavailable.")
@@ -326,6 +354,7 @@ def _render_port_closures() -> None:
             ["Port", "Current Status", "Forecast D+3", "Vessels Delayed", "Est. Reopening"],
             rows,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Port closures table failed")
         st.warning("Port weather closures unavailable.")
@@ -351,6 +380,7 @@ def _render_routing_recs() -> None:
             ["Route", "Standard Path", "Recommended Deviation", "+Distance (nm)", "Extra Fuel", "Delay Avoided (h)"],
             rows,
         )
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Routing recs table failed")
         st.warning("Optimal routing recommendations unavailable.")
@@ -361,23 +391,18 @@ def _render_ice_route() -> None:
         c_info, c_stats = st.columns([1.4, 1])
 
         with c_info:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:20px 22px;font-family:var(--sans);">'
-                f'<div style="color:{C_TEXT};font-family:var(--serif);font-size:16px;font-weight:700;margin-bottom:14px;">Northern Sea Route (NSR) — Arctic Corridor</div>'
-                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
-                f'<div><div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;">Current Ice Extent</div>'
-                f'<div style="color:{C_ACCENT};font-size:20px;font-weight:700;">4.2M km²</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;">Below 10-yr avg — passable</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;">Season Passability</div>'
-                f'<div style="color:{C_HIGH};font-size:20px;font-weight:700;">OPEN</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;">July–October window</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;">Vessels This Season</div>'
-                f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;">28</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;">transits YTD 2026</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;">Icebreaker Required</div>'
-                f'<div style="color:{C_MOD};font-size:20px;font-weight:700;">CLASS 1+</div>'
-                f'<div style="color:{C_TEXT2};font-size:12px;">Rosatom escort ~$180k</div></div>'
-                f'</div></div>'
+            metric_card_row(
+                [
+                    {"label": "Current Ice Extent", "value": "4.2M km²",
+                     "accent": C_ACCENT, "sublabel": "Below 10-yr avg — passable"},
+                    {"label": "Season Passability", "value": "OPEN",
+                     "accent": C_HIGH, "sublabel": "July–October window"},
+                    {"label": "Vessels This Season", "value": "28",
+                     "accent": C_TEXT, "sublabel": "transits YTD 2026"},
+                    {"label": "Icebreaker Required", "value": "CLASS 1+",
+                     "accent": C_MOD, "sublabel": "Rosatom escort ~$180k"},
+                ],
+                columns=2,
             )
 
         with c_stats:
@@ -400,21 +425,27 @@ def _render_ice_route() -> None:
                 fig,
                 title="Asia → Europe Transit Time (days)",
                 height=200,
-                margin=dict(l=10, r=60, t=40, b=30),
                 showlegend=False,
+            )
+            fig.update_layout(
+                margin=dict(l=10, r=60, t=40, b=30),
                 xaxis=dict(gridcolor=C_BORDER, linecolor=C_BORDER, range=[0, 45]),
                 yaxis=dict(gridcolor="rgba(0,0,0,0)", linecolor=C_BORDER),
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:8px;padding:12px 16px;margin-top:10px;font-family:var(--sans);">'
-            f'<span style="color:{C_TEXT3};font-size:12px;">'
-            'NSR saves ~16 transit days vs Suez and ~26 vs Cape on Asia–Europe runs. '
-            'Key constraints: Russian permit (Rosatom), mandatory icebreaker escort in certain sectors, '
-            'limited rescue infrastructure, and narrow seasonal window. Fuel premium offset partly by shorter distance (10,800 nm vs 12,400 nm Suez).'
-            '</span></div>'
-        )
+        note_rows = [[
+            _sans(
+                "NSR saves ~16 transit days vs Suez and ~26 vs Cape on Asia–Europe runs. "
+                "Key constraints: Russian permit (Rosatom), mandatory icebreaker escort in certain sectors, "
+                "limited rescue infrastructure, and narrow seasonal window. "
+                "Fuel premium offset partly by shorter distance (10,800 nm vs 12,400 nm Suez).",
+                color=C_TEXT3,
+                weight=400,
+            ),
+        ]]
+        wsj_market_table(["Operational Notes"], note_rows)
+        st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Ice route panel failed")
         st.warning("Seasonal ice route panel unavailable.")
@@ -432,18 +463,14 @@ def render(port_results=None, route_results=None) -> None:
         page_header(
             title="Weather Risk & Routing Intelligence",
             subtitle="Live disruption events, forecast tables, and deviation recommendations across global shipping lanes",
-            icon="⛈️",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="WEATHER",
+            badge_color=C_ACCENT,
         )
 
-        st.html(
-            f'<div style="background:linear-gradient(135deg,{C_LOW}18,{C_MOD}12);'
-            f'border:1px solid {C_LOW}44;border-radius:6px;padding:14px 20px;margin-bottom:18px;font-family:var(--sans);">'
-            f'<span style="color:{C_LOW};font-family:var(--serif);font-size:14px;font-weight:700;">LIVE WEATHER ALERT</span>'
-            f'<span style="color:{C_TEXT};font-size:13px;margin-left:12px;">'
-            'Typhoon MAWAR-3 active in South China Sea — 34 vessels at risk — rerouting recommended for Intra-Asia and Asia-NA West Coast departures'
-            '</span></div>'
+        section_header(
+            "Live Weather Alert",
+            "Typhoon MAWAR-3 active in South China Sea — 34 vessels at risk — rerouting recommended "
+            "for Intra-Asia and Asia-NA West Coast departures",
         )
 
         section_header("Weather Risk Dashboard", "Current conditions and seasonal status — updated hourly")
