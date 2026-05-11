@@ -12,7 +12,6 @@ from loguru import logger
 from ui.styles import (
     C_ACCENT,
     C_BG,
-    C_BORDER,
     C_CARD,
     C_CONV,
     C_HIGH,
@@ -25,15 +24,31 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
 C_PURPLE = C_CONV
 C_CYAN   = C_MACRO
+
+
+# ---------------------------------------------------------------------------
+# Data provenance
+# ---------------------------------------------------------------------------
+#
+# Network topology figures are illustrative demos (port lists, centrality,
+# carrier service counts, stress scenarios). Mark them as demo so the
+# provenance pill is honest.
+
+_NETWORK_SOURCES = [
+    {"name": "Vessel scheduling & AIS (demo)",      "kind": "modeled", "quality": "demo"},
+    {"name": "Carrier service announcements (demo)", "kind": "modeled", "quality": "demo"},
+]
 
 # ---------------------------------------------------------------------------
 # Static network data
@@ -201,6 +216,7 @@ def _render_hero_stats() -> None:
             ],
             columns=4,
         )
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"hero stats error: {exc}")
         st.info("Network stats unavailable.")
@@ -269,6 +285,7 @@ def _render_network_map() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"network map error: {exc}")
         st.info("Network map unavailable.")
@@ -301,6 +318,7 @@ def _render_centrality() -> None:
                 _sans(f"{description[:60]}…", color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"centrality error: {exc}")
         st.info("Centrality data unavailable.")
@@ -327,6 +345,7 @@ def _render_hub_spoke() -> None:
                 _sans(note, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"hub spoke error: {exc}")
         st.info("Hub-and-spoke data unavailable.")
@@ -359,6 +378,7 @@ def _render_carrier_services() -> None:
                 _sans(flagship, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"carrier services error: {exc}")
         st.info("Carrier service data unavailable.")
@@ -371,37 +391,23 @@ def _render_stress_test() -> None:
             "Port Closure Scenarios (30-Day Simulation) — rate, routing, and recovery impact",
         )
 
+        headers = [
+            "Port Closure", "Scenario", "Affected Routes",
+            "Alternative Routing", "Rate Impact", "Add. Days", "Recovery",
+        ]
+        rows = []
         for port, scenario, affected, alternative, rate_impact, add_days, recovery in _STRESS_TESTS:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:4px solid {C_LOW};'
-                f'border-radius:6px;padding:16px 20px;margin-bottom:12px;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
-                f'<div>'
-                f'<span style="font-size:14px;font-weight:800;color:{C_LOW};">{port} Closure</span>'
-                f'<div style="font-size:11px;color:{C_TEXT3};margin-top:3px;">{scenario}</div>'
-                f'</div>'
-                f'<div style="text-align:right;">'
-                f'<div style="font-size:18px;font-weight:800;color:{C_LOW};">{rate_impact}</div>'
-                f'<div style="font-size:10px;color:{C_TEXT3};">rate impact</div>'
-                f'</div>'
-                f'</div>'
-                f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">AFFECTED ROUTES</div>'
-                f'<div style="font-size:11px;color:{C_TEXT2};">{affected}</div>'
-                f'</div>'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">ALTERNATIVE ROUTING</div>'
-                f'<div style="font-size:11px;color:{C_TEXT2};">{alternative}</div>'
-                f'</div>'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">ADDITIONAL DAYS / RECOVERY</div>'
-                f'<div style="font-size:11px;color:{C_MOD};font-weight:700;">{add_days}</div>'
-                f'<div style="font-size:10px;color:{C_TEXT3};">Recovery: {recovery}</div>'
-                f'</div>'
-                f'</div>'
-                f'</div>'
-            )
+            rows.append([
+                _sans(f"{port} Closure", color=C_LOW, weight=800),
+                _sans(scenario, color=C_TEXT3),
+                _sans(affected, color=C_TEXT2),
+                _sans(alternative, color=C_TEXT2),
+                _mono(rate_impact, color=C_LOW, weight=800),
+                _mono(add_days, color=C_MOD, weight=700),
+                _sans(recovery, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"stress test error: {exc}")
         st.info("Stress test data unavailable.")
@@ -454,6 +460,7 @@ def _render_centrality_chart() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"centrality chart error: {exc}")
 
@@ -468,9 +475,8 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         page_header(
             title="Shipping Network Topology & Resilience",
             subtitle="Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing",
-            icon="🕸️",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="NETWORK",
+            badge_color=C_ACCENT,
         )
     except Exception as exc:
         logger.warning(f"header error: {exc}")
@@ -501,14 +507,25 @@ def render(port_results=None, route_results=None, insights=None) -> None:
 
     _render_stress_test()
 
+    section_divider()
+
     try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
-            f'Network topology derived from vessel scheduling data, AIS tracking, and carrier service announcements. '
-            f'Centrality scores calculated using betweenness centrality weighted by TEU throughput. '
-            f'Stress test scenarios are modelled simulations — actual outcomes depend on market conditions and carrier response.'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title="Methodology & Provenance",
+                score=0.0,
+                action="Watch",
+                category="ROUTE",
+                rationale=(
+                    "Network topology derived from vessel scheduling data, AIS tracking, "
+                    "and carrier service announcements. Centrality scores calculated using "
+                    "betweenness centrality weighted by TEU throughput. Stress test scenarios "
+                    "are modelled simulations — actual outcomes depend on market conditions "
+                    "and carrier response."
+                ),
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"footer error: {exc}")
