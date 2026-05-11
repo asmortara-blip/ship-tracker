@@ -9,10 +9,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_CONV,
     C_HIGH,
     C_LOW,
@@ -28,12 +27,23 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
 # Local aliases for single-purpose accents
 C_PURPLE = C_CONV
 C_CYAN   = C_MACRO
+
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+
+_VIS_SOURCES = [
+    DataSource.demo("AIS Feed (mock)"),
+    DataSource.demo("Carrier APIs (mock)"),
+    DataSource.demo("Port EDI Streams (mock)"),
+]
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -133,11 +143,14 @@ _CARRIER_RANKINGS = [
 
 
 # ---------------------------------------------------------------------------
-# Cell formatters
+# Cell / content formatters
 # ---------------------------------------------------------------------------
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
-    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
+    )
 
 
 def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
@@ -145,18 +158,18 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _score_bar(score: int, color: str, width: int = 120) -> str:
+    """Inline progress bar used as a cell content widget."""
     pct = max(0, min(100, score))
     return (
-        f'<div style="background:{C_SURFACE};border-radius:4px;height:8px;width:{width}px;display:inline-block;vertical-align:middle;">'
-        f'<div style="background:{color};width:{pct}%;height:100%;border-radius:4px;"></div>'
-        f'</div>'
+        f'<span style="display:inline-block;background:{C_SURFACE};border-radius:4px;'
+        f'height:8px;width:{width}px;vertical-align:middle;overflow:hidden;">'
+        f'<span style="display:block;background:{color};width:{pct}%;height:100%;"></span>'
+        f'</span>'
     )
 
 
 def _score_cell(score: int, color: str) -> str:
-    return (
-        f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
-    )
+    return f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
 
 
 def _overall_cell(score: int, color: str) -> str:
@@ -190,6 +203,7 @@ def _render_hero_kpis() -> None:
             ],
             columns=6,
         )
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"hero kpis error: {exc}")
         st.info("KPI data unavailable.")
@@ -214,21 +228,24 @@ def _render_pipeline() -> None:
             cards_html = ""
             for sid, route, teu in shipments:
                 cards_html += (
-                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:8px 10px;margin-bottom:6px;'
-                    f'border-left:3px solid {color};">'
-                    f'<div style="font-size:10px;color:{C_TEXT};font-weight:700;">{sid}</div>'
-                    f'<div style="font-size:9px;color:{C_TEXT2};margin-top:2px;">{route}</div>'
+                    f'<div style="background:var(--surface);border-radius:6px;'
+                    f'padding:8px 10px;margin-bottom:6px;border-left:3px solid {color};">'
+                    f'<div style="font-size:10px;color:var(--text);font-weight:700;">{sid}</div>'
+                    f'<div style="font-size:9px;color:var(--text2);margin-top:2px;">{route}</div>'
                     f'<div style="font-size:9px;color:{color};margin-top:2px;">{teu}</div>'
                     f'</div>'
                 )
             with col:
                 st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px;">'
-                    f'<div style="font-size:10px;font-weight:800;color:{color};letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
-                    f'<div style="font-size:20px;font-weight:800;color:{C_TEXT};margin-bottom:10px;">{len(shipments)}</div>'
+                    f'<div class="wsj-card" style="padding:12px;">'
+                    f'<div style="font-size:10px;font-weight:800;color:{color};'
+                    f'letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
+                    f'<div style="font-size:20px;font-weight:800;color:var(--text);'
+                    f'margin-bottom:10px;">{len(shipments)}</div>'
                     f'{cards_html}'
                     f'</div>'
                 )
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"pipeline error: {exc}")
         st.info("Pipeline data unavailable.")
@@ -250,6 +267,7 @@ def _render_visibility_scores() -> None:
                 _overall_cell(overall, color),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"visibility scores error: {exc}")
         st.info("Visibility score data unavailable.")
@@ -266,12 +284,13 @@ def _render_exception_management() -> None:
             rows.append([
                 _sans(ref, weight=700),
                 _sans(vessel, color=C_TEXT2),
-                badge(issue, color_name),
+                badge(issue, severity_color),
                 _mono(duration, color=severity_color, weight=700),
                 _sans(location, color=C_TEXT2),
                 _sans(detail, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"exception mgmt error: {exc}")
         st.info("Exception data unavailable.")
@@ -288,19 +307,26 @@ def _render_milestone_tracking() -> None:
         total = len(_MILESTONE_STEPS)
         pct = int(completed_count / total * 100)
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-bottom:14px;">'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Journey Progress</span>'
-            f'<span style="font-size:12px;color:{C_HIGH};font-weight:700;">{completed_count}/{total} milestones complete ({pct}%)</span>'
-            f'</div>'
-            f'<div style="background:{C_CARD};border-radius:6px;height:12px;">'
-            f'<div style="background:linear-gradient(90deg,{C_ACCENT},{C_HIGH});width:{pct}%;height:100%;border-radius:6px;"></div>'
-            f'</div>'
-            f'</div>'
+        # Journey-progress KPI row (replaces inline progress card)
+        metric_card_row(
+            [
+                {"label": "Milestones Complete", "value": f"{completed_count}/{total}", "accent": C_HIGH,
+                 "sublabel": f"{pct}% of journey"},
+                {"label": "Current Stage", "value": "Indian Ocean", "accent": C_ACCENT,
+                 "sublabel": "In transit — vessel on schedule"},
+                {"label": "Next Milestone", "value": "Arrive Rotterdam", "accent": C_MOD,
+                 "sublabel": "ETA 2026-03-15 07:00"},
+            ],
+            columns=3,
         )
 
-        timeline_html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;">'
+        # Timeline rendering — a custom domain visualization (similar to a chart).
+        # Kept as inline HTML because it's a bespoke widget with no shared
+        # equivalent in ui.styles. CSS vars used instead of hard-coded constants.
+        timeline_html = (
+            '<div style="background:var(--surface);border:1px solid var(--rule);'
+            'border-radius:6px;padding:20px 24px;margin-top:10px;">'
+        )
         for i, (name, ts, done, color, note) in enumerate(_MILESTONE_STEPS):
             is_last = i == len(_MILESTONE_STEPS) - 1
             connector = "" if is_last else (
@@ -312,7 +338,7 @@ def _render_milestone_tracking() -> None:
                 f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
             ) if done else (
                 f'width:24px;height:24px;border-radius:50%;border:2px solid {C_TEXT3};'
-                f'background:{C_CARD};flex-shrink:0;'
+                f'background:var(--card);flex-shrink:0;'
             )
             checkmark = '<span style="color:#fff;font-size:11px;font-weight:900;">✓</span>' if done else ""
             timeline_html += (
@@ -332,6 +358,7 @@ def _render_milestone_tracking() -> None:
             )
         timeline_html += "</div>"
         st.html(timeline_html)
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"milestone tracking error: {exc}")
         st.info("Milestone data unavailable.")
@@ -356,6 +383,7 @@ def _render_carrier_rankings() -> None:
                 _sans(caps, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"carrier rankings error: {exc}")
         st.info("Carrier ranking data unavailable.")
@@ -373,10 +401,8 @@ def _render_visibility_chart() -> None:
         fig.add_trace(go.Bar(name="Milestone Tracking", x=lanes, y=ms_vals,   marker_color=C_HIGH,   opacity=0.85))
         fig.add_trace(go.Bar(name="Predictive ETA",     x=lanes, y=pred_vals, marker_color=C_MOD,    opacity=0.85))
 
-        apply_dark_layout(
-            fig,
-            title="Visibility Scores by Trade Lane",
-            height=320,
+        apply_dark_layout(fig, title="Visibility Scores by Trade Lane", height=320)
+        fig.update_layout(
             margin=dict(l=10, r=10, t=46, b=80),
             barmode="group",
             legend=dict(
@@ -387,6 +413,7 @@ def _render_visibility_chart() -> None:
             yaxis=dict(range=[0, 100], title="Score (%)"),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"visibility chart error: {exc}")
 
@@ -401,9 +428,8 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         page_header(
             title="Supply Chain Visibility & Tracking",
             subtitle="Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking",
-            icon="🛰️",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="VISIBILITY",
+            badge_color=C_ACCENT,
         )
     except Exception as exc:
         logger.warning(f"header error: {exc}")
@@ -433,15 +459,3 @@ def render(port_results=None, route_results=None, insights=None) -> None:
         _render_carrier_rankings()
     with col_b:
         _render_milestone_tracking()
-
-    try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
-            f'Data refreshed every 15 minutes from AIS feeds, carrier APIs, and port EDI streams. '
-            f'Visibility scores calculated as rolling 30-day averages. '
-            f'Exception alerts generated when deviations exceed configured thresholds.'
-            f'</div>'
-        )
-    except Exception as exc:
-        logger.warning(f"footer error: {exc}")
