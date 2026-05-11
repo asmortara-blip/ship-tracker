@@ -14,10 +14,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -26,9 +25,11 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -61,6 +62,26 @@ _VESSEL_CONSUMPTION = {
 }
 
 _GLOBAL_AVG = {"VLSFO": 628, "HFO": 480, "MGO": 875}
+
+# ── Data sources (provenance pills) ────────────────────────────────────────────
+_BUNKER_SRC = DataSource(
+    name="Bunker Price Model (synthetic)",
+    kind="modeled",
+    quality="demo",
+    notes="Demo bunker hub prices and history - replace with Ship & Bunker / Platts feed",
+)
+_SPREAD_SRC = DataSource(
+    name="VLSFO-HFO Spread Model (synthetic)",
+    kind="modeled",
+    quality="demo",
+    notes="Demo scrubber spread series",
+)
+_HEDGE_SRC = DataSource(
+    name="Bunker Hedging Model (synthetic)",
+    kind="modeled",
+    quality="demo",
+    notes="Demo correlation, vol, and swap quotes",
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -154,6 +175,7 @@ def _bunker_dashboard() -> None:
             ],
             columns=5,
         )
+        st.markdown(source_footer([_BUNKER_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker dashboard error: {exc}")
         st.info("Bunker dashboard unavailable.")
@@ -194,6 +216,7 @@ def _bunker_price_by_port() -> None:
             f"Global averages: VLSFO ${_GLOBAL_AVG['VLSFO']}/MT | "
             f"HFO ${_GLOBAL_AVG['HFO']}/MT | MGO ${_GLOBAL_AVG['MGO']}/MT"
         )
+        st.markdown(source_footer([_BUNKER_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Port price table error: {exc}")
         st.info("Port price table unavailable.")
@@ -254,6 +277,7 @@ def _bunker_price_chart() -> None:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([_BUNKER_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker chart error: {exc}")
         st.info("Bunker price chart unavailable.")
@@ -335,15 +359,22 @@ def _bunker_optimization_calculator() -> None:
             columns=4,
         )
 
-        st.html(
-            f'<div style="background:rgba(46,158,110,0.08);border:1px solid {C_HIGH};border-radius:6px;'
-            f'padding:13px 18px;margin-top:14px;">'
-            f'<span style="color:{C_HIGH};font-weight:700;">SLOW STEAMING RULE OF THUMB: </span>'
-            f'<span style="color:{C_TEXT};font-size:13px;">Reducing speed by 10% cuts fuel consumption by '
-            f'approximately <b>27%</b> (cubic relationship). On this voyage, that saves '
-            f'<b>${cost_save:,.0f}</b> in bunker cost at the cost of <b>{extra_days:.1f} extra days</b> at sea.</span>'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title="Slow Steaming Rule of Thumb",
+                score=min(fuel_save_pct / 30.0, 1.0),
+                action="Prioritize",
+                rationale=(
+                    f"Reducing speed by 10% cuts fuel consumption by approximately 27% "
+                    f"(cubic relationship). On this voyage, that saves "
+                    f"${cost_save:,.0f} in bunker cost at the cost of "
+                    f"{extra_days:.1f} extra days at sea."
+                ),
+                category="ROUTE",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer([_BUNKER_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker calculator error: {exc}")
         st.info("Bunker calculator unavailable.")
@@ -397,22 +428,30 @@ def _fuel_spread_analysis() -> None:
 
         payback_color = C_HIGH if current_spread > 200 else C_MOD
         verdict = "MARGINAL — monitor spread" if current_spread < 200 else "ECONOMIC — scrubber pays"
-        st.html(
-            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px;">'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px;">CURRENT SPREAD</div>'
-            f'<div style="font-size:24px;font-weight:700;color:{C_ACCENT};font-family:var(--mono);">${current_spread}/MT</div>'
-            f'</div>'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px;">SCRUBBER PAYBACK</div>'
-            f'<div style="font-size:24px;font-weight:700;color:{payback_color};font-family:var(--mono);">{voyages_to_payback:.0f} voyages</div>'
-            f'</div>'
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:14px 16px;text-align:center;">'
-            f'<div style="font-size:11px;color:{C_TEXT3};margin-bottom:6px;">SCRUBBER VERDICT</div>'
-            f'<div style="font-size:16px;font-weight:700;color:{payback_color};">{verdict}</div>'
-            f'</div>'
-            f'</div>'
+        metric_card_row(
+            [
+                {
+                    "label": "Current Spread",
+                    "value": f"${current_spread}/MT",
+                    "accent": C_ACCENT,
+                    "sublabel": "VLSFO − HFO 3.5%",
+                },
+                {
+                    "label": "Scrubber Payback",
+                    "value": f"{voyages_to_payback:.0f} voyages",
+                    "accent": payback_color,
+                    "sublabel": "$3.5M CAPEX / spread × 200 MT",
+                },
+                {
+                    "label": "Scrubber Verdict",
+                    "value": verdict,
+                    "accent": payback_color,
+                    "sublabel": "Threshold ≈ $200/MT spread",
+                },
+            ],
+            columns=3,
         )
+        st.markdown(source_footer([_SPREAD_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Spread analysis error: {exc}")
         st.info("Spread analysis unavailable.")
@@ -471,30 +510,25 @@ def _alternative_fuels_comparison() -> None:
             },
         ]
 
+        headers = ["Fuel", "Cost ($/MT)", "Availability", "Fleet", "Pros", "Cons"]
+        rows = []
         for f in fuels:
-            bar_width = min(f["avail_score"] * 10, 100)
-            avail_color = C_HIGH if f["avail_score"] > 7 else (C_MOD if f["avail_score"] > 4 else C_LOW)
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-                f'padding:16px 20px;margin-bottom:10px;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
-                f'<div>'
-                f'<span style="font-size:15px;font-weight:700;color:{f["color"]};">{f["name"]}</span>'
-                f'<span style="margin-left:12px;font-size:13px;color:{C_TEXT};font-weight:600;font-family:var(--mono);">'
-                f'${f["cost"]}/MT equiv.</span>'
-                f'<span style="margin-left:12px;font-size:11px;color:{C_TEXT3};">{f["vessels"]}</span>'
-                f'</div>'
-                f'<div style="text-align:right;min-width:120px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};margin-bottom:3px;">Availability {f["avail_score"]}/10</div>'
-                f'<div style="height:5px;background:{C_BORDER};border-radius:3px;width:120px;">'
-                f'<div style="height:5px;width:{bar_width}%;background:{avail_color};border-radius:3px;"></div>'
-                f'</div></div>'
-                f'</div>'
-                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;">'
-                f'<div><span style="color:{C_HIGH};">+ </span><span style="color:{C_TEXT2};">{f["pros"]}</span></div>'
-                f'<div><span style="color:{C_LOW};">− </span><span style="color:{C_TEXT2};">{f["cons"]}</span></div>'
-                f'</div></div>'
-            )
+            if f["avail_score"] > 7:
+                avail_color = C_HIGH
+            elif f["avail_score"] > 4:
+                avail_color = C_MOD
+            else:
+                avail_color = C_LOW
+            rows.append([
+                _sans(f["name"], color=f["color"], weight=700),
+                _mono(f"${f['cost']}", color=C_TEXT),
+                badge(f"{f['avail_score']:.1f}/10", avail_color),
+                _sans(f["vessels"], color=C_TEXT3),
+                _sans(f["pros"], color=C_TEXT2),
+                _sans(f["cons"], color=C_TEXT2),
+            ])
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer([_BUNKER_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Alternative fuels error: {exc}")
         st.info("Alternative fuels comparison unavailable.")
@@ -544,69 +578,84 @@ def _bunker_hedging() -> None:
 
         strategies = [
             {
-                "name": "Crude Oil Futures (ICE Brent)",
-                "color": C_ACCENT,
-                "desc": "Hedge bunker exposure using ICE Brent futures. Correlation of "
-                        f"{brent_corr:.2f} means Brent captures ~{int(brent_corr*100)}% of VLSFO price moves. "
-                        "Cost-effective: liquid market, tight spreads. Best for 1-6 month horizons.",
-                "rating": "PREFERRED",
-                "rating_color": C_HIGH,
+                "title": "Crude Oil Futures (ICE Brent)",
+                "score": brent_corr,
+                "action": "Prioritize",
+                "category": "MACRO",
+                "rationale": (
+                    f"Hedge bunker exposure using ICE Brent futures. Correlation of "
+                    f"{brent_corr:.2f} means Brent captures ~{int(brent_corr * 100)}% of VLSFO "
+                    f"price moves. Cost-effective: liquid market, tight spreads. "
+                    f"Best for 1-6 month horizons."
+                ),
             },
             {
-                "name": "Bunker Fuel Swaps (OTC)",
-                "color": C_MOD,
-                "desc": "Direct VLSFO or HFO 380 swaps settled against Platts assessments. "
-                        "Eliminates basis risk vs crude hedges. Available at Singapore, "
-                        "Rotterdam, and Houston. Typical tenor: 1-12 months. Min size: 500 MT.",
-                "rating": "MOST PRECISE",
-                "rating_color": C_ACCENT,
+                "title": "Bunker Fuel Swaps (OTC)",
+                "score": 0.85,
+                "action": "Monitor",
+                "category": "ROUTE",
+                "rationale": (
+                    "Direct VLSFO or HFO 380 swaps settled against Platts assessments. "
+                    "Eliminates basis risk vs crude hedges. Available at Singapore, "
+                    "Rotterdam, and Houston. Typical tenor: 1-12 months. Min size: 500 MT."
+                ),
             },
             {
-                "name": "Bunker Call Options",
-                "color": C_PURPLE,
-                "desc": "Buy call options on bunker swaps to cap downside with unlimited upside. "
-                        "Premium paid upfront — no margin calls. Useful when vol is low. "
-                        f"At {vlsfo_vol:.0f}% vol, ATM 6-month call premium ≈ $45-60/MT.",
-                "rating": "PROTECTION ONLY",
-                "rating_color": C_PURPLE,
+                "title": "Bunker Call Options",
+                "score": min(vlsfo_vol / 40.0, 1.0),
+                "action": "Watch",
+                "category": "CONVERGENCE",
+                "rationale": (
+                    "Buy call options on bunker swaps to cap downside with unlimited upside. "
+                    "Premium paid upfront — no margin calls. Useful when vol is low. "
+                    f"At {vlsfo_vol:.0f}% vol, ATM 6-month call premium ≈ $45-60/MT."
+                ),
             },
             {
-                "name": "Collar Strategy",
-                "color": C_CYAN,
-                "desc": "Buy call + sell put to finance hedge at zero net premium. "
-                        "Caps maximum cost but limits benefit if prices fall. "
-                        "Typical: buy $700 call, sell $550 put. Common for annual budgets.",
-                "rating": "BUDGET CERTAINTY",
-                "rating_color": C_CYAN,
+                "title": "Collar Strategy",
+                "score": 0.65,
+                "action": "Caution",
+                "category": "PORT_DEMAND",
+                "rationale": (
+                    "Buy call + sell put to finance hedge at zero net premium. "
+                    "Caps maximum cost but limits benefit if prices fall. "
+                    "Typical: buy $700 call, sell $550 put. Common for annual budgets."
+                ),
             },
         ]
 
-        cards = "".join(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:3px solid {s["color"]};'
-            f'border-radius:6px;padding:16px 18px;">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-            f'<span style="font-size:14px;font-weight:700;color:{s["color"]};">{s["name"]}</span>'
-            f'<span style="background:{s["rating_color"]}22;color:{s["rating_color"]};border-radius:5px;'
-            f'padding:2px 8px;font-size:10px;font-weight:700;">{s["rating"]}</span>'
-            f'</div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};line-height:1.6;">{s["desc"]}</div>'
-            f'</div>'
-            for s in strategies
-        )
-        st.html(
-            f'<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;">{cards}</div>'
-        )
+        c1, c2 = st.columns(2)
+        for i, s in enumerate(strategies):
+            target = c1 if i % 2 == 0 else c2
+            with target:
+                st.markdown(
+                    insight_card_html(
+                        title=s["title"],
+                        score=s["score"],
+                        action=s["action"],
+                        rationale=s["rationale"],
+                        category=s["category"],
+                    ),
+                    unsafe_allow_html=True,
+                )
 
-        st.html(
-            f'<div style="background:rgba(99,102,241,0.08);border:1px solid {C_PURPLE};border-radius:6px;'
-            f'padding:14px 18px;margin-top:12px;font-size:12px;color:{C_TEXT2};line-height:1.7;">'
-            f'<span style="color:{C_PURPLE};font-weight:700;">HEDGING RULE OF THUMB: </span>'
-            f'Hedge 50-80% of expected bunker consumption 3-6 months forward using a blended strategy: '
-            f'50% in Brent futures (low cost, high liquidity) and 30% in direct bunker swaps (precision). '
-            f'Leave 20% unhedged to benefit from any price declines. Review hedge ratio monthly '
-            f'against consumption actuals.'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title="Hedging Rule of Thumb",
+                score=0.75,
+                action="Prioritize",
+                rationale=(
+                    "Hedge 50-80% of expected bunker consumption 3-6 months forward using "
+                    "a blended strategy: 50% in Brent futures (low cost, high liquidity) and "
+                    "30% in direct bunker swaps (precision). Leave 20% unhedged to benefit "
+                    "from any price declines. Review hedge ratio monthly against consumption "
+                    "actuals."
+                ),
+                category="CONVERGENCE",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer([_HEDGE_SRC]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Bunker hedging error: {exc}")
         st.info("Bunker hedging section unavailable.")
@@ -623,9 +672,8 @@ def render(macro_data=None, freight_data=None) -> None:
                 "Real-time bunker prices & port comparison · Optimization calculator · "
                 "Scrubber spread economics · Alternative fuels · Hedging strategy"
             ),
-            icon="⛽",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="BUNKER",
+            badge_color=C_ACCENT,
         )
     except Exception:
         st.subheader("Bunker Fuel Intelligence")
