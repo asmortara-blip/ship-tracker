@@ -28,8 +28,6 @@ from data.freight_scraper import fetch_baltic_daily
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -39,10 +37,11 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
-    live_data_badge,
+    metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -230,73 +229,75 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
     )
 
 
-# ── Card renderer ──────────────────────────────────────────────────────────────
+# ── Card builders ──────────────────────────────────────────────────────────────
 
-def _pct_badge(pct: float) -> str:
-    color = C_HIGH if pct > 0 else (C_LOW if pct < 0 else C_TEXT3)
-    arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "—")
-    return f'<span style="color:{color};font-size:11px;">{arrow} {abs(pct):.1f}%</span>'
+def _pct_arrow(pct: float) -> tuple[str, str]:
+    """Return (arrow_glyph, color) for a percent change."""
+    if pct > 0:
+        return "▲", C_HIGH
+    if pct < 0:
+        return "▼", C_LOW
+    return "—", C_TEXT3
 
 
-def _kpi_card_html(idx: dict, stats: dict) -> str:
-    if not stats:
-        return (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:14px;min-height:130px;">'
-            f'<div style="color:{C_TEXT2};font-size:11px;font-family:var(--sans);'
-            f'text-transform:uppercase;letter-spacing:1px;">{idx["label"]}</div>'
-            f'<div style="color:{C_TEXT3};margin-top:12px;font-size:13px;">No data</div>'
-            f'</div>'
-        )
-    now = stats["now"]
-    day_pct = stats["day_pct"]
-    color = C_HIGH if day_pct > 0 else (C_LOW if day_pct < 0 else C_TEXT3)
-    arrow = "▲" if day_pct > 0 else ("▼" if day_pct < 0 else "—")
+def _kpi_card_dict(idx: dict, stats: dict) -> dict:
+    """Build a metric_card_row dict for one shipping index."""
     accent = _INDEX_COLORS.get(idx["id"], C_ACCENT)
-    unit = idx["unit"]
-    val_str = f"{now:,.0f}" if now >= 100 else f"{now:,.1f}"
-    day_str = f'{arrow} {abs(stats["day_chg"]):.0f} ({abs(day_pct):.1f}%)'
-    wow = _pct_badge(stats["wow_pct"])
-    mom = _pct_badge(stats["mom_pct"])
-    yoy = _pct_badge(stats["yoy_pct"])
-    above_str = f'{stats["above_avg_pct"]:+.1f}% vs 5Y avg'
-    above_color = C_HIGH if stats["above_avg_pct"] > 0 else C_LOW
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-        f'padding:14px 16px;border-top:3px solid {accent};font-family:var(--sans);">'
-        f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-        f'letter-spacing:1.2px;margin-bottom:4px;">{idx["group"]}</div>'
-        f'<div style="color:{C_TEXT};font-size:12px;font-weight:600;margin-bottom:8px;">'
-        f'{idx["label"]}</div>'
-        f'<div style="color:{C_TEXT};font-size:22px;font-weight:700;line-height:1;'
-        f'font-family:var(--mono);">{val_str}'
-        f'<span style="color:{C_TEXT3};font-size:11px;margin-left:4px;font-family:var(--sans);">'
-        f'{unit}</span></div>'
-        f'<div style="color:{color};font-size:11px;margin-top:4px;font-family:var(--mono);">'
-        f'{day_str}</div>'
-        f'<div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">'
-        f'<span style="color:{C_TEXT3};font-size:10px;">WoW {wow}</span>'
-        f'<span style="color:{C_TEXT3};font-size:10px;">MoM {mom}</span>'
-        f'<span style="color:{C_TEXT3};font-size:10px;">YoY {yoy}</span>'
-        f'</div>'
-        f'<div style="color:{above_color};font-size:10px;margin-top:6px;">{above_str}</div>'
-        f'</div>'
+    label = f'{idx["group"]} · {idx["label"]}'
+    if not stats:
+        return {
+            "label": label,
+            "value": "—",
+            "accent": accent,
+            "sublabel": "No data",
+        }
+    now = stats["now"]
+    val_str = f'{now:,.0f}' if now >= 100 else f'{now:,.1f}'
+    value_html = (
+        f'{val_str}<span style="color:{C_TEXT3};font-size:0.7rem;'
+        f'margin-left:4px;font-family:var(--sans);font-weight:500;">{idx["unit"]}</span>'
     )
+    arrow, day_color = _pct_arrow(stats["day_pct"])
+    delta_html = (
+        f'{arrow} {abs(stats["day_chg"]):.0f} '
+        f'({abs(stats["day_pct"]):.1f}%)'
+    )
+    wow_arrow, wow_c = _pct_arrow(stats["wow_pct"])
+    mom_arrow, mom_c = _pct_arrow(stats["mom_pct"])
+    yoy_arrow, yoy_c = _pct_arrow(stats["yoy_pct"])
+    above_color = C_HIGH if stats["above_avg_pct"] > 0 else C_LOW
+    sub_html = (
+        f'<span style="color:{wow_c};">WoW {wow_arrow} {abs(stats["wow_pct"]):.1f}%</span> · '
+        f'<span style="color:{mom_c};">MoM {mom_arrow} {abs(stats["mom_pct"]):.1f}%</span> · '
+        f'<span style="color:{yoy_c};">YoY {yoy_arrow} {abs(stats["yoy_pct"]):.1f}%</span>'
+        f'<br><span style="color:{above_color};">'
+        f'{stats["above_avg_pct"]:+.1f}% vs 5Y avg</span>'
+    )
+    return {
+        "label": label,
+        "value": value_html,
+        "accent": accent,
+        "delta": delta_html,
+        "delta_color": day_color,
+        "sublabel": sub_html,
+    }
 
 
 # ── Section 1: Index Dashboard ─────────────────────────────────────────────────
 
-def _baltic_badge_html(
+def _baltic_sources_list(
     baltic_sources: dict[str, DataSource] | None,
-    family: str = "BDI",
-) -> str:
-    """Return the ``live_data_badge`` HTML for a Baltic family (empty if unknown)."""
+    families: tuple[str, ...] = ("BDI",),
+) -> list[DataSource]:
+    """Return DataSource objects for the requested Baltic families, in order."""
     if not baltic_sources:
-        return ""
-    src = baltic_sources.get(family)
-    if src is None:
-        return ""
-    return live_data_badge(src)
+        return []
+    out: list[DataSource] = []
+    for fam in families:
+        src = baltic_sources.get(fam)
+        if src is not None:
+            out.append(src)
+    return out
 
 
 def _render_index_dashboard(
@@ -304,32 +305,30 @@ def _render_index_dashboard(
     baltic_sources: dict[str, DataSource] | None = None,
 ) -> None:
     section_header("Index Dashboard", "Live snapshot of major shipping benchmarks")
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
-    rows = [
-        [m for m in _INDICES if m["group"] == "Dry Bulk"],
-        [m for m in _INDICES if m["group"] == "Container"],
-        [m for m in _INDICES if m["group"] == "Tanker"],
+    groups = [
+        ("Dry Bulk",  [m for m in _INDICES if m["group"] == "Dry Bulk"]),
+        ("Container", [m for m in _INDICES if m["group"] == "Container"]),
+        ("Tanker",    [m for m in _INDICES if m["group"] == "Tanker"]),
     ]
-    for row_indices in rows:
-        cols = st.columns(len(row_indices))
-        for col, idx in zip(cols, row_indices):
+    for _group_name, row_indices in groups:
+        cards: list[dict] = []
+        for idx in row_indices:
             try:
                 series = all_series.get(idx["id"], pd.Series(dtype=float))
                 stats = _get_stats(series)
-                col.html(_kpi_card_html(idx, stats))
+                cards.append(_kpi_card_dict(idx, stats))
             except Exception as exc:
                 logger.warning("Card render error {}: {}", idx["id"], exc)
-                col.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-radius:3px;padding:14px;">'
-                    f'<div style="color:{C_TEXT2};">{idx["label"]}</div>'
-                    f'<div style="color:{C_LOW};font-size:11px;">Error</div></div>'
-                )
+                cards.append({
+                    "label": idx["label"],
+                    "value": "—",
+                    "accent": C_LOW,
+                    "sublabel": "Error",
+                })
+        metric_card_row(cards, columns=len(cards))
+    sources = _baltic_sources_list(baltic_sources, _BALTIC_FAMILIES)
+    if sources:
+        st.markdown(source_footer(sources), unsafe_allow_html=True)
 
 
 # ── Section 2: Multi-Index Chart ───────────────────────────────────────────────
@@ -340,12 +339,6 @@ def _render_multi_index_chart(
 ) -> None:
     section_header("Multi-Index Comparison",
                    "Normalized to 100 at start date — overlay up to 5 indices")
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
     all_ids = [idx["id"] for idx in _INDICES]
     default_sel = ["BDI", "WCI", "BDTI", "SCFI", "BCI"]
     ca, cb = st.columns([3, 1])
@@ -390,6 +383,9 @@ def _render_multi_index_chart(
             yaxis=dict(title="Index (base = 100)"),
         )
         st.plotly_chart(fig, use_container_width=True)
+        sources = _baltic_sources_list(baltic_sources, ("BDI",))
+        if sources:
+            st.markdown(source_footer(sources), unsafe_allow_html=True)
     except Exception as exc:
         logger.error("Multi-index chart error: {}", exc)
         st.error(f"Chart error: {exc}")
@@ -403,16 +399,6 @@ def _render_bdi_deep_dive(
 ) -> None:
     section_header("BDI Deep Dive",
                    "Component breakdown, historical context, and macro correlation")
-    if baltic_sources:
-        pills = "".join(
-            _baltic_badge_html(baltic_sources, fam)
-            for fam in ("BDI", "BCI", "BPI", "BSI", "BHSI")
-        )
-        if pills:
-            st.html(
-                f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-                f'flex-wrap:wrap;">{pills}</div>'
-            )
     bdi = all_series.get("BDI", pd.Series(dtype=float)).dropna()
     bci = all_series.get("BCI", pd.Series(dtype=float)).dropna()
     bpi = all_series.get("BPI", pd.Series(dtype=float)).dropna()
@@ -420,41 +406,41 @@ def _render_bdi_deep_dive(
     bhsi = all_series.get("BHSI", pd.Series(dtype=float)).dropna()
 
     components = [
-        dict(name="Capesize (BCI)",  weight="40%", value=bci.iloc[-1] if len(bci) else 1800, color=C_ACCENT),
-        dict(name="Panamax (BPI)",   weight="30%", value=bpi.iloc[-1] if len(bpi) else 1200, color="#7c6eaf"),
-        dict(name="Supramax (BSI)",  weight="15%", value=bsi.iloc[-1] if len(bsi) else 900,  color=C_MOD),
+        dict(name="Capesize (BCI)",   weight="40%", value=bci.iloc[-1] if len(bci) else 1800,  color=C_ACCENT),
+        dict(name="Panamax (BPI)",    weight="30%", value=bpi.iloc[-1] if len(bpi) else 1200,  color="#7c6eaf"),
+        dict(name="Supramax (BSI)",   weight="15%", value=bsi.iloc[-1] if len(bsi) else 900,   color=C_MOD),
         dict(name="Handysize (BHSI)", weight="15%", value=bhsi.iloc[-1] if len(bhsi) else 600, color="#f97316"),
     ]
-    cols = st.columns(4)
-    for col, comp in zip(cols, components):
-        col.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:12px 14px;border-left:4px solid {comp["color"]};'
-            f'font-family:var(--sans);">'
-            f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;">'
-            f'{comp["name"]}</div>'
-            f'<div style="color:{C_TEXT};font-size:20px;font-weight:700;margin-top:4px;'
-            f'font-family:var(--mono);">{comp["value"]:,.0f}</div>'
-            f'<div style="color:{C_TEXT3};font-size:10px;">Weight: {comp["weight"]}</div>'
-            f'</div>'
-        )
+    metric_card_row(
+        [
+            {
+                "label": comp["name"],
+                "value": f'{comp["value"]:,.0f}',
+                "accent": comp["color"],
+                "sublabel": f'Weight {comp["weight"]}',
+            }
+            for comp in components
+        ],
+        columns=4,
+    )
 
     try:
         avg_5y = float(bdi.mean()) if len(bdi) > 0 else 1000
         current = float(bdi.iloc[-1]) if len(bdi) > 0 else 1000
         pct_vs_avg = _pct(current, avg_5y)
-        avg_color = C_HIGH if pct_vs_avg > 0 else C_LOW
         direction = "above" if pct_vs_avg >= 0 else "below"
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:12px 16px;margin:16px 0;'
-            f'display:flex;align-items:center;gap:16px;font-family:var(--sans);">'
-            f'<div><span style="color:{C_TEXT2};font-size:12px;">'
-            f'BDI Historical Context: </span>'
-            f'<span style="color:{avg_color};font-size:13px;font-weight:600;">'
-            f'Currently {pct_vs_avg:+.1f}% {direction} 5-year average</span>'
-            f' &nbsp;<span style="color:{C_TEXT3};font-size:11px;">'
-            f'(5Y avg: {avg_5y:,.0f} pts)</span></div></div>'
+        metric_card_row(
+            [
+                {
+                    "label": "BDI vs 5Y Average",
+                    "value": f"{pct_vs_avg:+.1f}%",
+                    "accent": C_HIGH if pct_vs_avg > 0 else C_LOW,
+                    "delta": f"Currently {direction} 5-year mean",
+                    "delta_color": C_HIGH if pct_vs_avg > 0 else C_LOW,
+                    "sublabel": f"5Y avg: {avg_5y:,.0f} pts · spot: {current:,.0f} pts",
+                },
+            ],
+            columns=1,
         )
     except Exception as exc:
         logger.debug("BDI context error: {}", exc)
@@ -517,6 +503,10 @@ def _render_bdi_deep_dive(
             logger.error("BDI/SP500 scatter error: {}", exc)
             st.info("Correlation chart unavailable.")
 
+    sources = _baltic_sources_list(baltic_sources, ("BDI", "BCI", "BPI", "BSI", "BHSI"))
+    if sources:
+        st.markdown(source_footer(sources), unsafe_allow_html=True)
+
 
 # ── Section 4: Spread Analysis ─────────────────────────────────────────────────
 
@@ -526,12 +516,6 @@ def _render_spread_analysis(
 ) -> None:
     section_header("Index Spread Analysis",
                    "Key spreads with historical percentile ranking")
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
     spread_defs = [
         dict(name="BCI – BPI Spread",   a="BCI",  b="BPI",  desc="Capesize premium over Panamax"),
         dict(name="BSI – BHSI Spread",  a="BSI",  b="BHSI", desc="Supramax premium over Handysize"),
@@ -596,6 +580,9 @@ def _render_spread_analysis(
             pctile_cell,
         ])
     wsj_market_table(headers, table_rows)
+    sources = _baltic_sources_list(baltic_sources, ("BDI", "BCI", "BPI", "BSI", "BHSI"))
+    if sources:
+        st.markdown(source_footer(sources), unsafe_allow_html=True)
 
 
 # ── Section 4b: Cross-Index Cointegration ─────────────────────────────────────
@@ -622,12 +609,6 @@ def _render_cointegration(
         "Cross-Index Cointegration",
         "Pair-wise Engle-Granger on log-levels — surfaces mean-reversion opportunities",
     )
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
     try:
         from engine.cointegration import pair_report  # noqa: PLC0415
     except Exception as exc:
@@ -725,6 +706,10 @@ def _render_cointegration(
         except Exception as exc:
             logger.debug("coint spotlight error: {}", exc)
 
+    sources = _baltic_sources_list(baltic_sources, ("BDI",))
+    if sources:
+        st.markdown(source_footer(sources), unsafe_allow_html=True)
+
 
 # ── Section 5: Forward Curve ───────────────────────────────────────────────────
 
@@ -734,12 +719,6 @@ def _render_forward_curve(
 ) -> None:
     section_header("BDI Forward Curve",
                    "FFA-implied curve — 12-month outlook (modeled when live unavailable)")
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
     try:
         bdi = all_series.get("BDI", pd.Series(dtype=float)).dropna()
         spot = float(bdi.iloc[-1]) if len(bdi) else 1200
@@ -749,21 +728,33 @@ def _render_forward_curve(
         scenario = rng.choice(["contango", "backwardation", "flat"])
         if scenario == "contango":
             curve = [spot * (1 + 0.012 * m + rng.normal(0, 0.005)) for m in months]
-            scenario_label = "Mild Contango (market expects higher rates)"
+            scenario_label = "Mild Contango"
+            scenario_sub = "Market expects higher rates"
         elif scenario == "backwardation":
             curve = [spot * (1 - 0.008 * m + rng.normal(0, 0.005)) for m in months]
-            scenario_label = "Backwardation (market expects rate softening)"
+            scenario_label = "Backwardation"
+            scenario_sub = "Market expects rate softening"
         else:
             curve = [spot * (1 + rng.normal(0, 0.007)) for _ in months]
-            scenario_label = "Flat Curve (market neutral)"
-        scenario_color = C_MOD if scenario == "contango" else (C_LOW if scenario == "backwardation" else C_TEXT2)
+            scenario_label = "Flat Curve"
+            scenario_sub = "Market neutral"
+        scenario_color = (
+            C_MOD if scenario == "contango"
+            else (C_LOW if scenario == "backwardation" else C_TEXT2)
+        )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-            f'border-radius:3px;padding:10px 14px;margin-bottom:12px;'
-            f'color:{scenario_color};font-size:12px;font-family:var(--sans);">'
-            f'Scenario: <b>{scenario_label}</b> &nbsp; '
-            f'<span style="color:{C_TEXT3};">(Spot: {spot:,.0f} pts)</span></div>'
+        metric_card_row(
+            [
+                {
+                    "label": "FFA Scenario",
+                    "value": scenario_label,
+                    "accent": scenario_color,
+                    "delta": scenario_sub,
+                    "delta_color": scenario_color,
+                    "sublabel": f"Spot: {spot:,.0f} pts",
+                },
+            ],
+            columns=1,
         )
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -792,6 +783,9 @@ def _render_forward_curve(
             "Source: Modeled FFA curve based on current spot. "
             "Live FFA data requires subscription API."
         )
+        sources = _baltic_sources_list(baltic_sources, ("BDI",))
+        if sources:
+            st.markdown(source_footer(sources), unsafe_allow_html=True)
     except Exception as exc:
         logger.error("Forward curve error: {}", exc)
         st.error(f"Forward curve error: {exc}")
@@ -813,12 +807,6 @@ def _render_cross_asset(
     baltic_sources: dict[str, DataSource] | None = None,
 ) -> None:
     section_header("Cross-Asset Dashboard", "Shipping indices vs macro drivers — 2Y history")
-    badge_html = _baltic_badge_html(baltic_sources, "BDI")
-    if badge_html:
-        st.html(
-            f'<div style="margin:-8px 0 10px 0;display:flex;gap:6px;'
-            f'flex-wrap:wrap;">{badge_html}</div>'
-        )
     try:
         bdi = all_series.get("BDI", _mock_macro_series("BDI", 1200)).dropna().iloc[-504:]
         wci = all_series.get("WCI", _mock_macro_series("WCI", 3200)).dropna().iloc[-504:]
@@ -873,11 +861,17 @@ def _render_cross_asset(
         fig.update_annotations(font_color=C_TEXT2, font_size=11)
         for axis in fig.layout:
             if axis.startswith("xaxis") or axis.startswith("yaxis"):
-                fig.layout[axis].update(gridcolor=C_BORDER, zerolinecolor=C_BORDER)
+                fig.layout[axis].update(
+                    gridcolor="rgba(232,230,225,0.04)",
+                    zerolinecolor="rgba(232,230,225,0.06)",
+                )
         st.plotly_chart(fig, use_container_width=True)
         st.caption(
             "Blue = shipping index (left axis)  |  Amber dashed = macro indicator (right axis)"
         )
+        sources = _baltic_sources_list(baltic_sources, ("BDI",))
+        if sources:
+            st.markdown(source_footer(sources), unsafe_allow_html=True)
     except Exception as exc:
         logger.error("Cross-asset dashboard error: {}", exc)
         st.error(f"Cross-asset error: {exc}")
@@ -915,9 +909,8 @@ def render(freight_data=None, macro_data=None, stock_data=None) -> None:
     page_header(
         title="Shipping Indices",
         subtitle="Baltic Exchange · Drewry · Freightos · Shanghai Shipping Exchange",
-        icon="📊",
-        badge_text="Modeled (live: BDI only)",
-        badge_color=C_MOD,
+        badge_text="INDICES",
+        badge_color=C_ACCENT,
     )
 
     try:
@@ -932,6 +925,12 @@ def render(freight_data=None, macro_data=None, stock_data=None) -> None:
             except Exception:
                 pass
 
+    try:
+        baltic_sources = _cached_baltic_sources()
+    except Exception as exc:
+        logger.debug("Baltic sources unavailable: {}", exc)
+        baltic_sources = {}
+
     sections = [
         ("Index dashboard",  _render_index_dashboard),
         ("Multi-index",      _render_multi_index_chart),
@@ -943,7 +942,7 @@ def render(freight_data=None, macro_data=None, stock_data=None) -> None:
     ]
     for i, (name, fn) in enumerate(sections):
         try:
-            fn(all_series)
+            fn(all_series, baltic_sources)
         except Exception as exc:
             logger.error("{} error: {}", name, exc)
             st.error(f"{name} error: {exc}")
