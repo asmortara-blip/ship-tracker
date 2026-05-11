@@ -26,7 +26,6 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -35,6 +34,7 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -157,7 +157,6 @@ NEWS: dict[str, list] = {
 }
 
 _SECTOR_PE_AVG = 7.2
-_SECTOR_EVEB_AVG = 5.6
 
 
 # ── Helper functions ────────────────────────────────────────────────────────────
@@ -287,6 +286,13 @@ def _render_screening_table(df: pd.DataFrame) -> None:
                       color=C_HIGH if upside >= 0 else C_LOW, weight=700),
             ])
         wsj_market_table(headers, table_rows)
+        st.markdown(
+            source_footer([
+                {"name": "Static coverage universe", "kind": "modeled", "quality": "demo"},
+                {"name": "Sell-side consensus ratings", "kind": "modeled", "quality": "demo"},
+            ]),
+            unsafe_allow_html=True,
+        )
     except Exception:
         logger.exception("screening table render failed")
 
@@ -367,6 +373,13 @@ def _render_valuation_matrix(df: pd.DataFrame) -> None:
             except Exception:
                 logger.exception("scatter chart failed")
                 st.info("Scatter chart unavailable")
+
+        st.markdown(
+            source_footer([
+                {"name": "Static valuation multiples", "kind": "modeled", "quality": "demo"},
+            ]),
+            unsafe_allow_html=True,
+        )
     except Exception:
         logger.exception("valuation matrix render failed")
 
@@ -388,12 +401,10 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                     with c1:
                         quarters = QUARTERLY.get(tk, [])
                         if quarters:
-                            st.html(
-                                f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};'
-                                f'letter-spacing:1px;font-family:var(--sans);'
-                                f'text-transform:uppercase;margin-bottom:8px;">'
-                                f'Quarterly Income Statement ($M)'
-                                f'</div>'
+                            st.markdown(
+                                '<div class="sub-section-header">'
+                                'Quarterly Income Statement ($M)</div>',
+                                unsafe_allow_html=True,
                             )
                             q_headers = ["Quarter", "Revenue", "EBITDA", "Net Income"]
                             q_rows = []
@@ -408,45 +419,33 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
                             wsj_market_table(q_headers, q_rows)
 
                     with c2:
-                        pe_str = f'{r["pe"]:.1f}x' if r["pe"] else "—"
-                        st.html(
-                            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                            f'border-radius:3px;padding:14px;font-family:var(--sans);">'
-                            f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};'
-                            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">'
-                            f'Key Ratios'
-                            f'</div>'
-                            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">P/E</div>'
-                            f'<div style="color:{C_TEXT};font-weight:600;font-size:12px;'
-                            f'font-family:var(--mono);">{pe_str}</div>'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">EV/EBITDA</div>'
-                            f'<div style="color:{C_TEXT};font-weight:600;font-size:12px;'
-                            f'font-family:var(--mono);">{r["ev_ebitda"]:.1f}x</div>'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">P/NAV</div>'
-                            f'<div style="color:{C_TEXT};font-weight:600;font-size:12px;'
-                            f'font-family:var(--mono);">{r["p_nav"]:.2f}x</div>'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">Div Yield</div>'
-                            f'<div style="color:{C_HIGH};font-weight:600;font-size:12px;'
-                            f'font-family:var(--mono);">{r["div"]:.1f}%</div>'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">Mkt Cap</div>'
-                            f'<div style="color:{C_TEXT};font-weight:600;font-size:12px;'
-                            f'font-family:var(--mono);">${r["mktcap"]:.2f}B</div>'
-                            f'<div style="color:{C_TEXT3};font-size:11px;">Segment</div>'
-                            f'<div style="color:{_sub_color(r["sub"])};font-weight:600;font-size:11px;">'
-                            f'{str(r["sub"]).upper()}</div>'
-                            f'</div>'
-                            f'</div>'
+                        st.markdown(
+                            '<div class="sub-section-header">Key Ratios</div>',
+                            unsafe_allow_html=True,
                         )
+                        pe_str = f'{r["pe"]:.1f}x' if r["pe"] else "—"
+                        kr_rows = [
+                            [_sans("P/E", color=C_TEXT3),
+                             _mono(pe_str, color=C_TEXT, weight=600)],
+                            [_sans("EV/EBITDA", color=C_TEXT3),
+                             _mono(f'{r["ev_ebitda"]:.1f}x', color=C_TEXT, weight=600)],
+                            [_sans("P/NAV", color=C_TEXT3),
+                             _mono(f'{r["p_nav"]:.2f}x', color=C_TEXT, weight=600)],
+                            [_sans("Div Yield", color=C_TEXT3),
+                             _mono(f'{r["div"]:.1f}%', color=C_HIGH, weight=600)],
+                            [_sans("Mkt Cap", color=C_TEXT3),
+                             _mono(f'${r["mktcap"]:.2f}B', color=C_TEXT, weight=600)],
+                            [_sans("Segment", color=C_TEXT3),
+                             _sans(str(r["sub"]).upper(),
+                                   color=_sub_color(r["sub"]), weight=600)],
+                        ]
+                        wsj_market_table(["Ratio", "Value"], kr_rows)
 
                     consensus = CONSENSUS.get(tk, [])
                     if consensus:
-                        st.html(
-                            f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};'
-                            f'letter-spacing:1px;font-family:var(--sans);'
-                            f'text-transform:uppercase;margin:12px 0 6px;">'
-                            f'Analyst Consensus'
-                            f'</div>'
+                        st.markdown(
+                            '<div class="sub-section-header">Analyst Consensus</div>',
+                            unsafe_allow_html=True,
                         )
                         c_headers = ["Bank", "Target", "Upside", "Rating"]
                         c_rows_tbl = []
@@ -462,19 +461,26 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
 
                     news_items = NEWS.get(tk, [])
                     if news_items:
+                        st.markdown(
+                            '<div class="sub-section-header">Recent Newsflow</div>',
+                            unsafe_allow_html=True,
+                        )
                         news_html = "".join(
-                            f'<div style="padding:6px 0;border-bottom:1px solid {C_BORDER};'
-                            f'color:{C_TEXT2};font-size:12px;font-family:var(--sans);">'
-                            f'› {item}</div>'
+                            f'<div class="wsj-news-item">'
+                            f'<span class="wsj-news-bullet"></span>'
+                            f'<span class="wsj-news-text">{item}</span>'
+                            f'</div>'
                             for item in news_items
                         )
-                        st.html(
-                            f'<div style="font-size:11px;font-weight:600;color:{C_TEXT3};'
-                            f'letter-spacing:1px;font-family:var(--sans);'
-                            f'text-transform:uppercase;margin:12px 0 6px;">Recent Newsflow</div>'
-                            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-                            f'border-radius:3px;padding:10px 14px;">{news_html}</div>'
-                        )
+                        st.markdown(news_html, unsafe_allow_html=True)
+
+                    st.markdown(
+                        source_footer([
+                            {"name": f"{tk} company filings", "kind": "modeled", "quality": "demo"},
+                            {"name": "Sell-side consensus aggregator", "kind": "modeled", "quality": "demo"},
+                        ]),
+                        unsafe_allow_html=True,
+                    )
                 except Exception:
                     logger.exception(f"deep-dive for {tk} failed")
                     st.info(f"Deep-dive data unavailable for {tk}")
@@ -525,6 +531,12 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
                 stability_cell,
             ])
         wsj_market_table(headers, table_rows)
+        st.markdown(
+            source_footer([
+                {"name": "Static dividend history", "kind": "modeled", "quality": "demo"},
+            ]),
+            unsafe_allow_html=True,
+        )
     except Exception:
         logger.exception("dividend tracker render failed")
 
@@ -597,6 +609,12 @@ def _render_relative_value(df: pd.DataFrame) -> None:
             "Green = relatively cheap vs peers | Red = relatively expensive vs peers. "
             "For yield, green = high yield. For valuation multiples, green = low multiple."
         )
+        st.markdown(
+            source_footer([
+                {"name": "Cross-sectional valuation z-scores", "kind": "modeled", "quality": "demo"},
+            ]),
+            unsafe_allow_html=True,
+        )
     except Exception:
         logger.exception("relative value heatmap failed")
 
@@ -625,8 +643,7 @@ def render(stock_data: Any = None, insights: Any = None) -> None:
         page_header(
             title="Shipping Equity Coverage",
             subtitle="Goldman Sachs-style equity research universe — 20 global shipping names",
-            icon="📈",
-            badge_text="Static Universe",
+            badge_text="FUNDAMENTALS",
             badge_color=C_ACCENT,
         )
 
