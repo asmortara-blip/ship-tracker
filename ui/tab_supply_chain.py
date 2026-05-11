@@ -7,35 +7,69 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Data sources (provenance pills)
+# ══════════════════════════════════════════════════════════════════════════
+
+_SCHI_SOURCE       = DataSource.modeled(
+    "Supply Chain Health Composite",
+    notes="Composite across freight, port, intermodal, carrier sub-indices",
+)
+_DISRUPTION_SOURCE = DataSource.modeled(
+    "Global Disruption Monitor",
+    notes="Curated active events affecting trade routes",
+)
+_IS_SOURCE         = DataSource.modeled(
+    "US Census Wholesale I/S Ratio + Container Volume Index",
+    notes="Inventory-to-sales ratio paired with container volume index",
+)
+_NEARSHORE_SOURCE  = DataSource.modeled(
+    "Nearshoring / Reshoring Tracker",
+    notes="Company-announced production shifts",
+)
+_LEADTIME_SOURCE   = DataSource.modeled(
+    "Lead Time Tracker",
+    notes="Origin-to-destination transit times by commodity",
+)
+_RESILIENCE_SOURCE = DataSource.modeled(
+    "Industry Resilience Scorecard",
+    notes="Five-dimension resilience assessment per industry",
+)
+_JIT_SOURCE        = DataSource.modeled(
+    "JIT vs JIC Inventory Strategy Survey",
+    notes="Sector safety-stock months — pre-COVID vs current",
+)
+_FORECAST_SOURCE   = DataSource.modeled(
+    "90-day Supply Chain Forecast",
+    notes="Forward look at easing and worsening conditions",
 )
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # Tab-local semantic helpers
 # ══════════════════════════════════════════════════════════════════════════
-
-def _rgba(hex_color: str, alpha: float) -> str:
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
 
 def _score_color(v: float) -> str:
     if v >= 70:
@@ -56,17 +90,32 @@ def _sev_color(sev: str) -> str:
     return C_HIGH
 
 
+def _confidence_color(conf: str) -> str:
+    c = conf.upper()
+    if c == "HIGH":
+        return C_HIGH
+    if c == "MODERATE":
+        return C_MOD
+    return C_TEXT3
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _mono(value: str, color: str = C_TEXT) -> str:
     return (
         f'<span style="font-family:var(--mono);color:{color};'
-        f'font-size:0.82rem;">{value}</span>'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
     )
 
 
-def _sans(value: str, color: str = C_TEXT, weight: int = 400) -> str:
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     return (
         f'<span style="font-family:var(--sans);color:{color};'
-        f'font-weight:{weight};font-size:0.82rem;">{value}</span>'
+        f'font-weight:{weight};">{value}</span>'
     )
 
 
@@ -113,7 +162,8 @@ def _render_health_index(rng: random.Random) -> None:
                 ),
                 title=dict(text="SCHI Score", font=dict(color=C_TEXT2, size=13)),
             ))
-            apply_dark_layout(gauge, height=220, margin=dict(l=10, r=10, t=10, b=10))
+            apply_dark_layout(gauge, height=220)
+            gauge.update_layout(margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(gauge, use_container_width=True, key="schi_gauge")
 
             metric_card_row(
@@ -139,28 +189,23 @@ def _render_health_index(rng: random.Random) -> None:
                 ("Intermodal Connectivity", intermodal_raw, 25, "Rail on-time, truck capacity, inland depot fill"),
                 ("Carrier Reliability",     carrier_raw,    25, "Schedule reliability, blank sailing rate, port calls met"),
             ]
-            rows_html = ""
+
+            rows = []
             for label, val, cap, desc in sub_scores:
                 pct = val / cap
                 bar_color = C_HIGH if pct >= 0.70 else (C_MOD if pct >= 0.45 else C_LOW)
-                bar_w = int(pct * 100)
-                rows_html += (
-                    f'<div style="margin-bottom:14px;">'
-                    f'<div style="display:flex; justify-content:space-between; margin-bottom:4px;">'
-                    f'<span style="color:{C_TEXT}; font-size:0.88rem; font-weight:600;">{label}</span>'
-                    f'<span style="color:{bar_color}; font-weight:700; font-size:0.88rem; font-family:var(--mono);">{val:.1f} / {cap}</span>'
-                    f'</div>'
-                    f'<div style="background:rgba(232,230,225,0.05); border-radius:4px; height:7px;">'
-                    f'<div style="width:{bar_w}%; background:{bar_color}; border-radius:4px; height:7px;"></div>'
-                    f'</div>'
-                    f'<div style="color:{C_TEXT3}; font-size:0.73rem; margin-top:3px;">{desc}</div>'
-                    f'</div>'
-                )
-            st.html(
-                f'<div style="background:{C_SURFACE}; border:1px solid {C_BORDER}; border-radius:6px; padding:18px 20px;">'
-                f'{rows_html}'
-                f'</div>'
+                rows.append([
+                    _sans(label, color=C_TEXT, weight=600),
+                    _mono(f"{val:.1f} / {cap}", color=bar_color),
+                    badge(f"{int(pct * 100)}%", color=bar_color),
+                    _sans(desc, color=C_TEXT3),
+                ])
+            wsj_market_table(
+                ["Sub-Index", "Score", "% of Cap", "Detail"],
+                rows,
             )
+
+        st.markdown(source_footer([_SCHI_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"SCHI render error: {exc}")
         st.warning("Supply Chain Health Index unavailable.")
@@ -241,6 +286,7 @@ def _render_disruption_monitor() -> None:
             ["Disruption", "Cause", "Severity", "Affected Routes", "Duration", "Est. Resolution", "Rate Impact"],
             rows,
         )
+        st.markdown(source_footer([_DISRUPTION_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Disruption monitor error: {exc}")
         st.warning("Disruption monitor unavailable.")
@@ -272,9 +318,8 @@ def _render_inventory_sales(rng: random.Random) -> None:
             line=dict(color=C_ACCENT, width=2.5, dash="dot"),
             yaxis="y2",
         ))
-        apply_dark_layout(
-            fig,
-            height=280,
+        apply_dark_layout(fig, height=280)
+        fig.update_layout(
             yaxis=dict(title="I/S Ratio", color=C_MOD, gridcolor="rgba(232,230,225,0.04)"),
             yaxis2=dict(title="Volume Index", color=C_ACCENT, overlaying="y", side="right", gridcolor="rgba(0,0,0,0)"),
             legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
@@ -303,11 +348,17 @@ def _render_inventory_sales(rng: random.Random) -> None:
             ],
             columns=3,
         )
-        st.html(
-            f'<div style="background:{_rgba(C_ACCENT, 0.08)}; border-left:3px solid {C_ACCENT}; border-radius:0 8px 8px 0;'
-            f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
-            f'<strong style="color:{C_TEXT};">Implication:</strong> {implication}</div>'
+        st.markdown(
+            insight_card_html(
+                title="Implication",
+                score=0.75 if is_bullish else 0.45,
+                action="BUY" if is_bullish else "HOLD",
+                rationale=implication,
+                category="DEMAND",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer([_IS_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"I/S ratio render error: {exc}")
         st.warning("Inventory-to-Sales chart unavailable.")
@@ -388,6 +439,7 @@ def _render_nearshoring() -> None:
             ["Company", "Current Production", "New / Additional", "Timeline", "TEU Volume Shift", "Route Gains", "Route Loses"],
             rows,
         )
+        st.markdown(source_footer([_NEARSHORE_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Nearshoring tracker error: {exc}")
         st.warning("Nearshoring tracker unavailable.")
@@ -432,6 +484,7 @@ def _render_lead_times() -> None:
             ["Commodity", "2019 Baseline", "2021 Peak", "2023 Normalized", "Current (wks)", "Trend"],
             rows,
         )
+        st.markdown(source_footer([_LEADTIME_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Lead time tracker error: {exc}")
         st.warning("Lead time tracker unavailable.")
@@ -468,12 +521,11 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
                 name=name,
                 line=dict(color=clr, width=2),
                 fill="toself",
-                fillcolor=_rgba(clr, 0.15),
+                fillcolor=_hex_to_rgba(clr, 0.15),
             ))
 
-        apply_dark_layout(
-            fig,
-            height=380,
+        apply_dark_layout(fig, height=380)
+        fig.update_layout(
             polar=dict(
                 bgcolor="rgba(255,255,255,0.02)",
                 radialaxis=dict(range=[0, 100], gridcolor="rgba(255,255,255,0.1)", tickfont=dict(color=C_TEXT3, size=9)),
@@ -497,6 +549,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
             ["Industry", "Geo Divers.", "Single-Src Risk", "Inventory Buffer", "Carrier Diversity", "Score"],
             rows,
         )
+        st.markdown(source_footer([_RESILIENCE_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Resilience scorecard error: {exc}")
         st.warning("Resilience scorecard unavailable.")
@@ -531,9 +584,8 @@ def _render_jit_vs_jic() -> None:
             marker_color=C_ACCENT,
             opacity=0.9,
         ))
-        apply_dark_layout(
-            fig,
-            height=300,
+        apply_dark_layout(fig, height=300)
+        fig.update_layout(
             barmode="group",
             yaxis=dict(title="Months of Stock", gridcolor="rgba(232,230,225,0.04)"),
             legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
@@ -567,15 +619,23 @@ def _render_jit_vs_jic() -> None:
             columns=3,
         )
 
-        st.html(
-            f'<div style="background:{_rgba(C_HIGH, 0.08)}; border-left:3px solid {C_HIGH}; border-radius:0 8px 8px 0;'
-            f' padding:10px 14px; margin-top:12px; color:{C_TEXT2}; font-size:0.83rem;">'
-            f'<strong style="color:{C_TEXT};">Structural Tailwind:</strong> The JIT-to-JIC shift represents '
-            f'a permanent increase in safety-stock requirements across most industrial sectors. This elevates '
-            f'baseline container shipping demand by an estimated 8–12% above pre-COVID trend, independent of '
-            f'cyclical economic conditions. Pharma and automotive show the most durable increases.'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title="Structural Tailwind",
+                score=0.80,
+                action="BUY",
+                rationale=(
+                    "The JIT-to-JIC shift represents a permanent increase in safety-stock "
+                    "requirements across most industrial sectors. This elevates baseline "
+                    "container shipping demand by an estimated 8–12% above pre-COVID trend, "
+                    "independent of cyclical economic conditions. Pharma and automotive show "
+                    "the most durable increases."
+                ),
+                category="DEMAND",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer([_JIT_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"JIT/JIC render error: {exc}")
         st.warning("JIT vs JIC analysis unavailable.")
@@ -636,32 +696,32 @@ def _render_forecast() -> None:
 
         col_ease, col_worse = st.columns(2, gap="large")
 
-        def _forecast_block(container, title: str, items: list, color: str) -> None:
-            rows = ""
+        def _forecast_rows(items: list, effect_color: str) -> list[list[str]]:
+            rows = []
             for it in items:
-                conf_c = C_HIGH if it["confidence"] == "HIGH" else (C_MOD if it["confidence"] == "MODERATE" else C_TEXT3)
-                rows += (
-                    f'<div style="border-bottom:1px solid {C_BORDER}; padding:12px 0;">'
-                    f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">'
-                    f'<span style="color:{C_TEXT}; font-weight:600; font-size:0.87rem;">{it["item"]}</span>'
-                    f'<span style="background:{_rgba(conf_c, 0.13)}; color:{conf_c}; border:1px solid {_rgba(conf_c, 0.27)};'
-                    f' border-radius:5px; padding:2px 7px; font-size:0.68rem; font-weight:700;">{it["confidence"]} CONF</span>'
-                    f'</div>'
-                    f'<div style="color:{C_TEXT2}; font-size:0.80rem; margin-bottom:5px;">{it["detail"]}</div>'
-                    f'<div style="color:{color}; font-size:0.78rem; font-weight:600; font-family:var(--mono);">{it["rate_effect"]}</div>'
-                    f'</div>'
-                )
-            container.html(
-                f'<div style="background:{C_SURFACE}; border:1px solid {_rgba(color, 0.27)}; border-top:3px solid {color};'
-                f' border-radius:0 0 6px 6px; padding:14px 16px;">'
-                f'<div style="color:{color}; font-size:0.80rem; font-weight:700; text-transform:uppercase;'
-                f' letter-spacing:0.06em; margin-bottom:10px;">{title}</div>'
-                f'{rows}'
-                f'</div>'
+                rows.append([
+                    _sans(it["item"], color=C_TEXT, weight=600),
+                    _sans(it["detail"], color=C_TEXT2),
+                    badge(it["confidence"], color=_confidence_color(it["confidence"])),
+                    _mono(it["rate_effect"], color=effect_color),
+                ])
+            return rows
+
+        with col_ease:
+            section_header("Conditions Easing")
+            wsj_market_table(
+                ["Item", "Detail", "Confidence", "Rate Effect"],
+                _forecast_rows(easing, C_HIGH),
             )
 
-        _forecast_block(col_ease,  "Conditions Easing", easing,    C_HIGH)
-        _forecast_block(col_worse, "Conditions Worsening", worsening, C_LOW)
+        with col_worse:
+            section_header("Conditions Worsening")
+            wsj_market_table(
+                ["Item", "Detail", "Confidence", "Rate Effect"],
+                _forecast_rows(worsening, C_LOW),
+            )
+
+        st.markdown(source_footer([_FORECAST_SOURCE]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Forecast render error: {exc}")
         st.warning("Supply chain forecast unavailable.")
@@ -683,9 +743,8 @@ def render(port_results=None, route_results=None, insights=None, macro_data=None
         page_header(
             title="Supply Chain Resilience & Visibility",
             subtitle="End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times",
-            icon="🔗",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="SUPPLY CHAIN",
+            badge_color=C_ACCENT,
         )
 
         _render_health_index(rng)
