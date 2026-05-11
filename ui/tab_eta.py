@@ -21,7 +21,6 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -34,8 +33,15 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+# ETA tab data is wholly modeled / mock fleet — surface that in every footer.
+_ETA_SOURCES = [
+    {"name": "Synthetic vessel telemetry", "kind": "modeled", "quality": "demo"},
+    {"name": "Mock voyage delay log",      "kind": "modeled", "quality": "demo"},
+]
 
 # ---------------------------------------------------------------------------
 # Static data helpers
@@ -204,6 +210,7 @@ def _render_kpis() -> None:
             {"label": "WORST DELAY",         "value": f"{worst}h",      "accent": C_LOW,    "sublabel": "max delay in fleet"},
             {"label": "UNKNOWN ETA",         "value": str(unknown),     "accent": C_TEXT2,  "sublabel": "vessels with no ETA"},
         ], columns=5)
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("ETA KPI render failed")
         st.warning("KPI data unavailable.")
@@ -243,6 +250,7 @@ def _render_voyage_tracker() -> None:
                 _mono(pos, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Voyage tracker render failed")
         st.error("Voyage tracker unavailable.")
@@ -286,7 +294,7 @@ def _render_eta_calculator() -> None:
                 weather_risk    = random.choice(["Low", "Moderate", "High"])
                 canal_wait_hrs  = random.randint(0, 48)
 
-                risk_badge_color = {"Low": "green", "Moderate": "yellow", "High": "red"}
+                risk_accent = {"Low": C_HIGH, "Moderate": C_MOD, "High": C_LOW}
 
                 section_header(f"Route: {origin} → {destination}", "")
                 metric_card_row([
@@ -296,19 +304,17 @@ def _render_eta_calculator() -> None:
                     {"label": "EST. BUNKER COST","value": f"${bunker_cost:,}",    "accent": C_HIGH},
                 ], columns=4)
 
-                st.html(
-                    f'<div style="margin-top:14px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
-                    f'Historical accuracy: <span style="color:{C_ACCENT};font-weight:600;">±{accuracy_pct}%</span> '
-                    f'based on <span style="color:{C_TEXT};font-weight:600;">{voyage_count:,} voyages</span></span>'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
-                    f'Port Congestion: {badge(congestion_risk, risk_badge_color[congestion_risk])}</span>'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
-                    f'Weather Risk: {badge(weather_risk, risk_badge_color[weather_risk])}</span>'
-                    f'<span style="font-size:12px;color:{C_TEXT2};font-family:var(--sans);">'
-                    f'Canal Wait: <span style="color:{C_MOD};font-weight:600;font-family:var(--mono);">{canal_wait_hrs}h</span></span>'
-                    f'</div>'
-                )
+                metric_card_row([
+                    {"label": "HISTORICAL ACCURACY", "value": f"±{accuracy_pct}%",
+                     "accent": C_ACCENT, "sublabel": f"based on {voyage_count:,} voyages"},
+                    {"label": "PORT CONGESTION",     "value": congestion_risk,
+                     "accent": risk_accent[congestion_risk], "sublabel": "current outlook"},
+                    {"label": "WEATHER RISK",        "value": weather_risk,
+                     "accent": risk_accent[weather_risk],    "sublabel": "voyage window"},
+                    {"label": "CANAL WAIT",          "value": f"{canal_wait_hrs}h",
+                     "accent": C_MOD, "sublabel": "estimated queue"},
+                ], columns=4)
+                st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
             except Exception:
                 logger.exception("ETA calculation inner error")
                 st.error("Calculation failed.")
@@ -431,6 +437,7 @@ def _render_delay_analysis() -> None:
             yaxis=dict(title="Voyage Count"),
         )
         st.plotly_chart(fig_h, use_container_width=True, key="eta_delay_distribution")
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Delay analysis render failed")
         st.error("Delay analysis unavailable.")
@@ -485,6 +492,7 @@ def _render_reliability_trends() -> None:
             yaxis=dict(range=[35, 90], title="On-Time %"),
         )
         st.plotly_chart(fig, use_container_width=True, key="eta_reliability_trends")
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Reliability trends render failed")
         st.error("Reliability trends unavailable.")
@@ -515,6 +523,7 @@ def _render_weather_forecast() -> None:
                 _mono(f"{affected} vessels", color=C_ACCENT),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Weather forecast render failed")
         st.error("Weather forecast unavailable.")
@@ -544,12 +553,12 @@ def _render_port_queue() -> None:
                     bar_clr, wait_clr = C_MOD, C_MOD
                 else:
                     bar_clr, wait_clr = C_HIGH, C_HIGH
+                filled = int(round(bar_pct / 10))
+                bar_str = "█" * filled + "░" * (10 - filled)
                 vessels_cell = (
-                    f'<span style="color:{bar_clr};font-weight:700;font-size:0.95rem;font-family:var(--mono);">{vessels}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:0.7rem;font-family:var(--sans);"> vessels</span>'
-                    f'<div style="background:{C_BORDER};border-radius:3px;height:6px;width:140px;margin-top:4px;">'
-                    f'<div style="background:{bar_clr};width:{bar_pct}%;height:6px;border-radius:3px;"></div>'
-                    f'</div>'
+                    _mono(f"{vessels} ", color=bar_clr, weight=700)
+                    + _sans("vessels  ", color=C_TEXT3, weight=400)
+                    + _mono(bar_str, color=bar_clr, weight=500)
                 )
                 rows.append([
                     _sans(port, weight=600),
@@ -578,6 +587,8 @@ def _render_port_queue() -> None:
                 xaxis=dict(title="Vessel Count"),
             )
             st.plotly_chart(fig_q, use_container_width=True, key="eta_port_queue_chart")
+
+        st.markdown(source_footer(_ETA_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Port queue render failed")
         st.error("Port queue tracker unavailable.")
@@ -592,9 +603,8 @@ def render(port_results=None, route_results=None) -> None:
         page_header(
             title="ETA Intelligence & Voyage Tracking",
             subtitle="Vessel ETA prediction, delay analysis, carrier reliability, and port queue monitoring.",
-            icon="🚢",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="ETA",
+            badge_color=C_ACCENT,
         )
 
         section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
