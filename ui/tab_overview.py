@@ -18,18 +18,22 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
+    C_CONV,
     C_HIGH,
     C_LOW,
     C_MACRO,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
+    badge,
     metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
+    status_badge,
+    wsj_market_table,
 )
 
 try:
@@ -46,22 +50,25 @@ except Exception:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
+# HELPERS — cell formatters + domain colors
 # ══════════════════════════════════════════════════════════════════════════════
-
-_SANS = "var(--sans)"
-_MONO = "var(--mono)"
-C_PURPLE = "#7c6eaf"
-C_CYAN = C_MACRO
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py and tab_rate_analytics.py.
 
 
-def _rgba(h: str, a: float) -> str:
-    try:
-        h2 = h.lstrip("#")
-        r, g, b = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-        return f"rgba({r},{g},{b},{a})"
-    except Exception:
-        return f"rgba(255,255,255,{a})"
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 
 def _score_color(score: float) -> str:
@@ -91,27 +98,37 @@ def _fv(d: dict, *keys, fmt="{}", default="--"):
     return default
 
 
-def _card_open(title: str = "", subtitle: str = "", accent: str = "") -> str:
-    border_left = f"border-left:3px solid {accent};" if accent else ""
-    hdr = ""
-    if title:
-        sub = (
-            f'<div style="font-family:{_SANS};font-size:0.68rem;color:{C_TEXT3};margin-top:2px">{subtitle}</div>'
-            if subtitle else ""
-        )
-        hdr = (
-            f'<div style="margin-bottom:12px">'
-            f'<div style="font-family:{_SANS};font-size:0.78rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.01em">{title}</div>'
-            f'{sub}</div>'
-        )
-    return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:8px;'
-        f'padding:16px 20px;{border_left}margin-bottom:12px">{hdr}'
-    )
+# Local domain colors used by the signal-conviction matrix (kept local because
+# they're semantic only for this tab).
+_CONVICTION_PALETTE: dict[str, str] = {
+    "Strong":   C_HIGH,
+    "Bullish":  C_HIGH,
+    "Neutral":  C_TEXT2,
+    "Caution":  C_MOD,
+    "Avoid":    C_LOW,
+}
 
 
-def _card_close() -> str:
-    return "</div>"
+def _conviction_label(score: float) -> str:
+    if score >= 0.80:
+        return "Strong"
+    if score >= 0.65:
+        return "Bullish"
+    if score >= 0.50:
+        return "Neutral"
+    if score >= 0.35:
+        return "Caution"
+    return "Avoid"
+
+
+# Sources used by the dashboard's composite sections.
+_DASHBOARD_SOURCES = [
+    {"name": "Port demand engine",   "kind": "modeled",  "quality": "modeled"},
+    {"name": "Route optimizer",      "kind": "modeled",  "quality": "modeled"},
+    {"name": "Insight engine",       "kind": "modeled",  "quality": "modeled"},
+    {"name": "Freight indices",      "kind": "scraped",  "quality": "good"},
+    {"name": "Macro / FX",           "kind": "live",     "quality": "good"},
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -122,55 +139,59 @@ def _render_status_bar(
     port_results: list, route_results: list, insights: list,
     freight_data: dict, macro_data: dict, stock_data: dict,
 ) -> None:
+    """Render the dashboard tone + data-health pill row.
+
+    A compact strip is the right idiom here (market tone + per-feed dots).
+    We surface the underlying tone via ``status_badge`` and the per-feed
+    health via the shared ``live_data_badge``/``source_footer`` family.
+    """
     try:
         has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
         avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
 
         if avg_demand >= 0.65:
-            tone, tone_color = "Bullish", C_HIGH
+            tone, tone_status = "Bullish", "success"
         elif avg_demand >= 0.45:
-            tone, tone_color = "Neutral", C_MOD
+            tone, tone_status = "Neutral", "warning"
         elif avg_demand > 0:
-            tone, tone_color = "Bearish", C_LOW
+            tone, tone_status = "Bearish", "danger"
         else:
-            tone, tone_color = "Awaiting Data", C_TEXT3
+            tone, tone_status = "Awaiting Data", "neutral"
 
-        sources = [
-            ("Ports", bool(has_data)),
-            ("Routes", bool(route_results)),
-            ("Signals", bool(insights)),
-            ("Freight", bool(freight_data)),
-            ("Macro", bool(macro_data)),
-            ("Equities", bool(stock_data)),
+        feeds = [
+            ("Ports",    bool(has_data),       "modeled"),
+            ("Routes",   bool(route_results),  "modeled"),
+            ("Signals",  bool(insights),       "modeled"),
+            ("Freight",  bool(freight_data),   "scraped"),
+            ("Macro",    bool(macro_data),     "live"),
+            ("Equities", bool(stock_data),     "live"),
         ]
 
-        dots_html = ""
-        for name, ok in sources:
-            color = C_HIGH if ok else C_LOW
-            dots_html += (
-                f'<div style="display:flex;align-items:center;gap:4px">'
-                f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{color}"></span>'
-                f'<span style="font-size:0.64rem;color:{C_TEXT3}">{name}</span>'
-                f'</div>'
-            )
+        feed_sources = []
+        for name, ok, kind in feeds:
+            feed_sources.append({
+                "name":    name,
+                "kind":    kind if ok else "demo",
+                "quality": "good" if ok else "demo",
+            })
 
-        st.html(
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:8px 16px;background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:8px;margin-bottom:16px;flex-wrap:wrap;gap:8px">'
-            f'<div style="display:flex;align-items:center;gap:12px">'
-            f'<span style="font-family:{_SANS};font-size:0.92rem;font-weight:700;color:{C_TEXT};letter-spacing:-0.02em">Dashboard</span>'
-            f'<span style="background:{_rgba(tone_color, 0.1)};color:{tone_color};'
-            f'border:1px solid {_rgba(tone_color, 0.2)};'
-            f'padding:2px 10px;border-radius:12px;font-size:0.64rem;font-weight:600;'
-            f'font-family:{_SANS};letter-spacing:0.02em">{tone}</span>'
-            f'</div>'
-            f'<div style="display:flex;align-items:center;gap:12px">'
-            f'{dots_html}'
-            f'<span style="font-family:{_MONO};font-size:0.64rem;color:{C_TEXT3};margin-left:4px">{_now_utc()}</span>'
-            f'</div>'
-            f'</div>'
+        st.markdown(
+            (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'flex-wrap:wrap;gap:12px;margin-bottom:12px;">'
+                f'<div style="display:flex;align-items:center;gap:12px;">'
+                f'<span style="font-family:var(--sans);font-size:0.92rem;'
+                f'font-weight:700;color:{C_TEXT};letter-spacing:-0.02em;">Dashboard</span>'
+                f'{status_badge(tone, tone_status)}'
+                f'</div>'
+                f'<span style="font-family:var(--mono);font-size:0.66rem;'
+                f'color:{C_TEXT3};">{_now_utc()}</span>'
+                f'</div>'
+            ),
+            unsafe_allow_html=True,
         )
+
+        st.markdown(source_footer(feed_sources, align="left"), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Status bar render failed: {exc}")
 
@@ -228,20 +249,24 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
             ("USD/CNY",   _fv(md, "usdcny", "USD/CNY", fmt="{:.3f}", default="7.243"), "+0.2%", C_MOD),
         ]
 
-        rows_html = ""
-        for name, value, delta, delta_color in rates:
-            rows_html += (
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:8px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
-                f'<span style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT2}">{name}</span>'
-                f'<div style="display:flex;align-items:center;gap:10px">'
-                f'<span style="font-family:{_MONO};font-size:0.82rem;font-weight:600;color:{C_TEXT}">{value}</span>'
-                f'<span style="font-family:{_MONO};font-size:0.7rem;color:{delta_color};min-width:48px;text-align:right">{delta}</span>'
-                f'</div>'
-                f'</div>'
-            )
+        section_header("Market Pulse", "Key indices and rates")
 
-        st.html(_card_open("Market Pulse", "Key indices and rates") + rows_html + _card_close())
+        rows = []
+        for name, value, delta, delta_color in rates:
+            rows.append([
+                _sans(name, color=C_TEXT, weight=600),
+                _mono(value, color=C_TEXT),
+                _mono(delta, color=delta_color),
+            ])
+        wsj_market_table(["Indicator", "Value", "Δ"], rows)
+
+        st.markdown(
+            source_footer([
+                {"name": "Baltic Exchange",  "kind": "scraped", "quality": "good"},
+                {"name": "FRED / macro",     "kind": "live",    "quality": "good"},
+            ]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Market pulse render failed: {exc}")
 
@@ -279,58 +304,24 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
                     return getattr(r, "opportunity_score", 0.45)
             return 0.35
 
-        def _cell_style(s: float) -> tuple[str, str, str]:
-            if s >= 0.80:
-                return (_rgba("#064e3b", 0.6), C_HIGH, "Strong")
-            if s >= 0.65:
-                return (_rgba("#065f46", 0.35), "#6ee7b7", "Bullish")
-            if s >= 0.50:
-                return (_rgba("#1e2a3a", 0.5), C_TEXT2, "Neutral")
-            if s >= 0.35:
-                return (_rgba("#450a0a", 0.35), "#e8a0a0", "Caution")
-            return (_rgba("#7f1d1d", 0.4), C_LOW, "Avoid")
+        section_header("Signal Conviction", "Corridor x commodity scores")
 
-        hdr = (
-            f'<th style="text-align:left;font-family:{_SANS};font-size:0.62rem;font-weight:600;'
-            f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;'
-            f'border-bottom:1px solid {_rgba(C_TEXT, 0.08)}"></th>'
-        )
-        for comm in COMMODITIES:
-            hdr += (
-                f'<th style="text-align:center;font-family:{_SANS};font-size:0.62rem;font-weight:600;'
-                f'color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.06em;padding:8px 10px;'
-                f'border-bottom:1px solid {_rgba(C_TEXT, 0.08)}">{comm}</th>'
-            )
-
-        rows = ""
+        rows = []
         for corridor in CORRIDORS:
-            row = (
-                f'<td style="font-family:{_SANS};font-size:0.76rem;font-weight:600;color:{C_TEXT};'
-                f'padding:8px 10px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">{corridor}</td>'
-            )
+            row = [_sans(corridor, color=C_TEXT, weight=700)]
             for commodity in COMMODITIES:
                 score = _cell_score(corridor, commodity)
-                bg, fg, label = _cell_style(score)
+                label = _conviction_label(score)
+                color = _CONVICTION_PALETTE.get(label, C_TEXT2)
                 pct = int(score * 100)
-                row += (
-                    f'<td style="text-align:center;padding:6px 4px;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
-                    f'<div style="background:{bg};border-radius:6px;padding:6px 4px">'
-                    f'<div style="font-family:{_MONO};font-size:0.88rem;font-weight:700;color:{fg}">{pct}%</div>'
-                    f'<div style="font-family:{_SANS};font-size:0.56rem;font-weight:600;color:{fg};'
-                    f'text-transform:uppercase;letter-spacing:0.04em;margin-top:1px;opacity:0.75">{label}</div>'
-                    f'</div>'
-                    f'</td>'
+                row.append(
+                    f'{_mono(f"{pct}%", color=color)}'
+                    f'<br>{badge(label, color=color)}'
                 )
-            rows += f"<tr>{row}</tr>"
+            rows.append(row)
 
-        table = (
-            f'<table style="width:100%;border-collapse:collapse">'
-            f'<thead><tr>{hdr}</tr></thead>'
-            f'<tbody>{rows}</tbody>'
-            f'</table>'
-        )
-
-        st.html(_card_open("Signal Conviction", "Corridor x commodity scores") + table + _card_close())
+        wsj_market_table(["Corridor", *COMMODITIES], rows)
+        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Signal matrix render failed: {exc}")
 
@@ -341,17 +332,19 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
 
 def _render_top_signals(insights: list) -> None:
     try:
+        section_header("Top Signals", f"{len(insights)} active signals")
+
         if not insights:
-            empty = (
-                f'<div style="font-family:{_SANS};font-size:0.8rem;color:{C_TEXT3};padding:8px 0">No signals generated</div>'
+            st.markdown(
+                _sans("No signals generated", color=C_TEXT3),
+                unsafe_allow_html=True,
             )
-            st.html(_card_open("Top Signals", "Highest conviction opportunities") + empty + _card_close())
             return
 
         ACTION_COLOR = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
         top5 = sorted(insights, key=lambda i: getattr(i, "score", 0), reverse=True)[:5]
 
-        items_html = ""
+        rows = []
         for ins in top5:
             score = getattr(ins, "score", 0.5)
             title = (getattr(ins, "title", "--") or "--")[:80]
@@ -360,24 +353,14 @@ def _render_top_signals(insights: list) -> None:
             sc = _score_color(score)
             ac = ACTION_COLOR.get(action, C_ACCENT)
 
-            items_html += (
-                f'<div style="display:flex;align-items:center;gap:10px;padding:8px 0;'
-                f'border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
-                f'<div style="flex-shrink:0;width:36px;text-align:center">'
-                f'<span style="font-family:{_MONO};font-size:0.76rem;font-weight:700;color:{sc}">{pct}%</span>'
-                f'</div>'
-                f'<div style="flex:1;min-width:0">'
-                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT};'
-                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</div>'
-                f'</div>'
-                f'<div style="flex-shrink:0">'
-                f'<span style="background:{_rgba(ac, 0.1)};color:{ac};'
-                f'padding:2px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;font-family:{_SANS}">{action}</span>'
-                f'</div>'
-                f'</div>'
-            )
+            rows.append([
+                _mono(f"{pct}%", color=sc),
+                _sans(title, color=C_TEXT, weight=500),
+                badge(action, color=ac),
+            ])
 
-        st.html(_card_open("Top Signals", f"{len(insights)} active signals") + items_html + _card_close())
+        wsj_market_table(["Score", "Signal", "Action"], rows)
+        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Top signals render failed: {exc}")
 
@@ -403,31 +386,25 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
                 sev = "HIGH" if score >= 0.85 else "MODERATE"
                 alert_items.append((sev, title[:70]))
 
-        SEV_COLOR = {"CRITICAL": "#8b1a1a", "HIGH": C_LOW, "MODERATE": C_MOD, "LOW": C_HIGH}
+        SEV_STATUS = {"CRITICAL": "danger", "HIGH": "danger", "MODERATE": "warning", "LOW": "success"}
+
+        section_header("Risk & Alerts", f"{len(alert_items)} active")
 
         if not alert_items:
-            items_html = (
-                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No active alerts</div>'
+            st.markdown(
+                _sans("No active alerts", color=C_TEXT3),
+                unsafe_allow_html=True,
             )
-        else:
-            items_html = ""
-            for sev, title in alert_items:
-                sc = SEV_COLOR.get(sev, C_MOD)
-                items_html += (
-                    f'<div style="display:flex;align-items:center;gap:8px;padding:7px 0;'
-                    f'border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
-                    f'<span style="background:{_rgba(sc, 0.12)};color:{sc};'
-                    f'padding:1px 7px;border-radius:10px;font-size:0.58rem;font-weight:700;'
-                    f'font-family:{_SANS};text-transform:uppercase;letter-spacing:0.04em;flex-shrink:0">{sev}</span>'
-                    f'<span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT2};'
-                    f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</span>'
-                    f'</div>'
-                )
+            return
 
-        st.html(
-            _card_open("Risk & Alerts", f"{len(alert_items)} active", accent=C_LOW)
-            + items_html + _card_close()
-        )
+        rows = []
+        for sev, title in alert_items:
+            rows.append([
+                status_badge(sev, SEV_STATUS.get(sev, "warning")),
+                _sans(title, color=C_TEXT2, weight=500),
+            ])
+        wsj_market_table(["Severity", "Detail"], rows)
+        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Risk alerts render failed: {exc}")
 
@@ -443,39 +420,33 @@ def _render_route_opps(route_results: list) -> None:
             key=lambda r: getattr(r, "opportunity_score", 0), reverse=True,
         )[:5]
 
+        section_header("Route Opportunities", f"{len(strong)} strong routes")
+
         if not strong:
-            items_html = (
-                f'<div style="font-family:{_SANS};font-size:0.78rem;color:{C_TEXT3};padding:8px 0">No strong routes detected</div>'
+            st.markdown(
+                _sans("No strong routes detected", color=C_TEXT3),
+                unsafe_allow_html=True,
             )
-        else:
-            items_html = ""
-            for r in strong:
-                name = getattr(r, "route_name", "") or getattr(r, "route_id", "") or "--"
-                score = getattr(r, "opportunity_score", 0)
-                pct = int(score * 100)
-                sc = _score_color(score)
-                bar_w = max(8, int(score * 100))
-                rate = getattr(r, "current_rate_usd_feu", None)
-                rate_str = f"${rate:,.0f}/FEU" if rate else ""
+            return
 
-                items_html += (
-                    f'<div style="padding:7px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.04)}">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
-                    f'<span style="font-family:{_SANS};font-size:0.76rem;color:{C_TEXT}">{name[:25]}</span>'
-                    f'<div style="display:flex;align-items:center;gap:6px">'
-                    f'<span style="font-family:{_MONO};font-size:0.68rem;color:{C_TEXT3}">{rate_str}</span>'
-                    f'<span style="font-family:{_MONO};font-size:0.72rem;font-weight:700;color:{sc}">{pct}%</span>'
-                    f'</div>'
-                    f'</div>'
-                    f'<div style="height:3px;background:{_rgba(C_TEXT, 0.06)};border-radius:2px;overflow:hidden">'
-                    f'<div style="height:100%;width:{bar_w}%;background:{_rgba(sc, 0.6)};border-radius:2px"></div>'
-                    f'</div>'
-                    f'</div>'
-                )
+        rows = []
+        for r in strong:
+            name = getattr(r, "route_name", "") or getattr(r, "route_id", "") or "--"
+            score = getattr(r, "opportunity_score", 0)
+            pct = int(score * 100)
+            sc = _score_color(score)
+            rate = getattr(r, "current_rate_usd_feu", None)
+            rate_str = f"${rate:,.0f}/FEU" if rate else "--"
 
-        st.html(
-            _card_open("Route Opportunities", f"{len(strong)} strong routes", accent=C_HIGH)
-            + items_html + _card_close()
+            rows.append([
+                _sans(name[:25], color=C_TEXT, weight=600),
+                _mono(rate_str, color=C_TEXT2),
+                _mono(f"{pct}%", color=sc),
+            ])
+        wsj_market_table(["Route", "Rate", "Score"], rows)
+        st.markdown(
+            source_footer([{"name": "Route optimizer", "kind": "modeled", "quality": "modeled"}]),
+            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"Route opps render failed: {exc}")
@@ -501,26 +472,16 @@ def _render_data_status(
             ("Equities",     bool(stock_data)),
         ]
 
-        items_html = ""
-        for name, ok in sources:
-            color = C_HIGH if ok else C_LOW
-            status = "Live" if ok else "Offline"
-            items_html += (
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:5px 0;border-bottom:1px solid {_rgba(C_TEXT, 0.03)}">'
-                f'<span style="font-family:{_SANS};font-size:0.74rem;color:{C_TEXT2}">{name}</span>'
-                f'<div style="display:flex;align-items:center;gap:5px">'
-                f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{color}"></span>'
-                f'<span style="font-family:{_SANS};font-size:0.66rem;color:{color}">{status}</span>'
-                f'</div>'
-                f'</div>'
-            )
-
         ok_count = sum(1 for _, ok in sources if ok)
-        st.html(
-            _card_open("Data Sources", f"{ok_count}/{len(sources)} active")
-            + items_html + _card_close()
-        )
+        section_header("Data Sources", f"{ok_count}/{len(sources)} active")
+
+        rows = []
+        for name, ok in sources:
+            rows.append([
+                _sans(name, color=C_TEXT2, weight=500),
+                status_badge("Live" if ok else "Offline", "success" if ok else "danger"),
+            ])
+        wsj_market_table(["Feed", "Status"], rows)
     except Exception as exc:
         logger.warning(f"Data status render failed: {exc}")
 
@@ -531,6 +492,7 @@ def _render_data_status(
 
 def _render_sparklines(port_results: list, insights: list, freight_data: dict) -> None:
     try:
+        section_header("Quick Views", "Distribution snapshots across signals and ports")
         cols = st.columns(3)
 
         with cols[0]:
@@ -540,7 +502,7 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                 if scores:
                     fig = go.Figure(go.Histogram(
                         x=scores, nbinsx=12,
-                        marker_color=_rgba(C_ACCENT, 0.6),
+                        marker_color=C_ACCENT,
                         marker_line_width=0,
                     ))
                     apply_dark_layout(
@@ -559,8 +521,8 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                 scores = [getattr(i, "score", 0) for i in insights]
                 cats = [getattr(i, "category", "OTHER") or "OTHER" for i in insights]
                 cat_colors = {
-                    "CONVERGENCE": C_PURPLE, "ROUTE": C_ACCENT,
-                    "PORT_DEMAND": C_HIGH, "MACRO": C_CYAN,
+                    "CONVERGENCE": C_CONV, "ROUTE": C_ACCENT,
+                    "PORT_DEMAND": C_HIGH, "MACRO": C_MACRO,
                 }
                 colors = [cat_colors.get(c, C_TEXT3) for c in cats]
 
@@ -611,6 +573,8 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                     fig.update_xaxes(title_text="Demand", title_font_size=10, range=[0, 1])
                     fig.update_yaxes(title_text="Congestion", title_font_size=10, range=[0, 1])
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Sparklines render failed: {exc}")
 
@@ -621,26 +585,20 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
 
 def _render_cold_start() -> None:
     try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:10px;'
-            f'padding:40px;margin:24px 0;text-align:center">'
-            f'<div style="font-family:{_SANS};font-size:1.2rem;font-weight:700;color:{C_TEXT};margin-bottom:8px">'
-            f'Welcome to Ship Tracker</div>'
-            f'<div style="font-family:{_SANS};font-size:0.84rem;color:{C_TEXT2};'
-            f'max-width:480px;margin:0 auto 28px;line-height:1.7">'
-            f'No data loaded yet. Configure your API credentials and refresh to populate the dashboard.</div>'
-            f'<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">'
-            f'<div style="background:{_rgba(C_ACCENT, 0.08)};border:1px solid {_rgba(C_ACCENT, 0.15)};'
-            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
-            f'<span style="color:{C_ACCENT};font-weight:700">1</span>&ensp;Add API keys to <code style="color:{C_TEXT}">.env</code></div>'
-            f'<div style="background:{_rgba(C_HIGH, 0.08)};border:1px solid {_rgba(C_HIGH, 0.15)};'
-            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
-            f'<span style="color:{C_HIGH};font-weight:700">2</span>&ensp;Click <b style="color:{C_TEXT}">Refresh Data</b></div>'
-            f'<div style="background:{_rgba(C_MOD, 0.08)};border:1px solid {_rgba(C_MOD, 0.15)};'
-            f'border-radius:8px;padding:10px 18px;font-size:0.8rem;color:{C_TEXT2};font-family:{_SANS}">'
-            f'<span style="color:{C_MOD};font-weight:700">3</span>&ensp;Data loads in ~30-60s</div>'
-            f'</div>'
-            f'</div>'
+        section_header(
+            "Welcome to Ship Tracker",
+            "No data loaded yet. Configure your API credentials and refresh to populate the dashboard.",
+        )
+        metric_card_row(
+            [
+                {"label": "Step 1", "value": "Add API keys",
+                 "accent": C_ACCENT, "sublabel": "Update .env with credentials"},
+                {"label": "Step 2", "value": "Refresh Data",
+                 "accent": C_HIGH,   "sublabel": "Click the sidebar refresh button"},
+                {"label": "Step 3", "value": "Wait 30-60s",
+                 "accent": C_MOD,    "sublabel": "Live feeds populate the tabs"},
+            ],
+            columns=3,
         )
     except Exception as exc:
         logger.warning(f"Cold start splash failed: {exc}")
@@ -669,6 +627,13 @@ def render(
         macro_data    = macro_data    or {}
         stock_data    = stock_data    or {}
         alerts        = alerts        or []
+
+        page_header(
+            title="Overview",
+            subtitle="Market tone, live KPIs, signals, alerts, and data-feed health at a glance.",
+            badge_text="DASHBOARD",
+            badge_color=C_ACCENT,
+        )
 
         all_empty = not port_results and not route_results and not insights
 
