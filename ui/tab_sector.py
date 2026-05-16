@@ -14,19 +14,18 @@ from loguru import logger
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_RULE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     badge,
-    live_data_badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -50,6 +49,16 @@ _MOMENTUM_COLOR: dict[str, str] = {
     "Negative": C_LOW,
 }
 
+# Map sector outlook → insight_card action label so the action chip uses the
+# shared ACTION_COLORS palette in ``ui/styles.py``.
+_OUTLOOK_TO_ACTION: dict[str, str] = {
+    "Bullish":  "Prioritize",
+    "Positive": "Monitor",
+    "Neutral":  "Watch",
+    "Negative": "Caution",
+    "Bearish":  "Avoid",
+}
+
 
 def _outlook_color(outlook: str) -> str:
     """Map an outlook label to a palette color (handles partial matches)."""
@@ -57,6 +66,14 @@ def _outlook_color(outlook: str) -> str:
         if key in outlook:
             return color
     return C_TEXT3
+
+
+def _outlook_to_action(outlook: str) -> str:
+    """Map an outlook label to a shared-design action label."""
+    for key, action in _OUTLOOK_TO_ACTION.items():
+        if key in outlook:
+            return action
+    return "Watch"
 
 
 def _momentum_color(momentum: str) -> str:
@@ -80,6 +97,16 @@ def _fmt_pct(val: float | None) -> str:
     return f"{sign}{val:.1f}%"
 
 
+def _ret_to_score(val: float | None) -> float:
+    """Map a percent return to a 0..1 score for ``insight_card_html``.
+
+    Anchors: -10% → 0.0, 0% → 0.5, +10% → 1.0. Clamped at the extremes.
+    """
+    if val is None:
+        return 0.5
+    return max(0.0, min(1.0, (val + 10.0) / 20.0))
+
+
 # ── Cell formatters for WSJ market tables ───────────────────────────────────
 
 def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
@@ -97,15 +124,22 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _sector_name_cell(name: str, description: str) -> str:
-    """Two-line sector cell: serif name + sans description."""
+    """Two-line sector cell: serif name + sans description (content-only)."""
     desc = (description or "")[:50]
     return (
-        f'<div>'
-        f'<div style="font-family:var(--serif);font-size:0.84rem;'
-        f'font-weight:700;color:{C_TEXT};">{name}</div>'
-        f'<div style="font-family:var(--sans);font-size:0.68rem;'
-        f'color:{C_TEXT3};margin-top:2px;">{desc}</div>'
-        f'</div>'
+        f'<span style="font-family:var(--serif);font-size:0.84rem;'
+        f'font-weight:700;color:{C_TEXT};display:block;">{name}</span>'
+        f'<span style="font-family:var(--sans);font-size:0.68rem;'
+        f'color:{C_TEXT3};display:block;margin-top:2px;">{desc}</span>'
+    )
+
+
+def _ticker_price_cell(ticker: str, price: float) -> str:
+    """Single-line constituent cell: bold ticker + mono price (content-only)."""
+    return (
+        f'{_sans(ticker, color=C_TEXT, weight=700)}'
+        f'<span style="margin:0 4px;color:{C_TEXT3};">·</span>'
+        f'{_mono(f"${price:.2f}", color=C_TEXT2, weight=500)}'
     )
 
 
@@ -120,10 +154,8 @@ def _render_hero(sectors: list[dict], source: DataSource) -> None:
             "and LNG segments. Data reflects latest available market prices "
             "and freight indices."
         ),
-    )
-
-    st.html(
-        f'<div style="margin-bottom:14px;">{live_data_badge(source)}</div>'
+        badge_text="SECTOR",
+        badge_color=C_ACCENT,
     )
 
     # Aggregate roll-ups for the KPI strip.
@@ -170,6 +202,7 @@ def _render_hero(sectors: list[dict], source: DataSource) -> None:
         ],
         columns=4,
     )
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 def _render_performance_table(sectors: list[dict], source: DataSource) -> None:
@@ -177,9 +210,6 @@ def _render_performance_table(sectors: list[dict], source: DataSource) -> None:
     section_header(
         "Sector Performance",
         subtitle="Ranked by trailing returns, index level, and forward outlook",
-    )
-    st.html(
-        f'<div style="margin-bottom:10px;">{live_data_badge(source)}</div>'
     )
 
     ranked = sorted(
@@ -219,6 +249,7 @@ def _render_performance_table(sectors: list[dict], source: DataSource) -> None:
         ],
         rows=rows,
     )
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 def _render_sector_profiles(sectors: list[dict], source: DataSource) -> None:
@@ -230,58 +261,45 @@ def _render_sector_profiles(sectors: list[dict], source: DataSource) -> None:
         "Sector Profiles",
         subtitle="Key drivers and constituent equities",
     )
-    st.html(
-        f'<div style="margin-bottom:10px;">{live_data_badge(source)}</div>'
-    )
 
     cols = st.columns(len(sectors))
     for col, s in zip(cols, sectors):
         with col:
-            olc = _outlook_color(s.get("outlook", "N/A"))
             ret30 = s.get("avg_return_30d")
-            ret30_color = _chg_color(ret30)
-
-            # Constituent price rows.
-            price_rows_html = ""
-            for p in s.get("stock_prices", []):
-                price_rows_html += (
-                    f'<div style="display:flex;justify-content:space-between;'
-                    f'padding:3px 0;border-bottom:1px dotted rgba(232,230,225,0.05);">'
-                    f'<span style="font-family:var(--sans);font-size:0.76rem;'
-                    f'font-weight:600;color:{C_TEXT};">{p["ticker"]}</span>'
-                    f'<span style="font-family:var(--mono);font-size:0.76rem;'
-                    f'color:{C_TEXT2};">${p["price"]:.2f}</span>'
-                    f'</div>'
-                )
-            if not price_rows_html:
-                price_rows_html = (
-                    f'<div style="font-size:0.76rem;color:{C_TEXT3};'
-                    f'padding:4px 0;font-family:var(--sans);">'
-                    f'No tracked equities</div>'
-                )
-
-            # Card body.
-            st.html(
-                f'<div style="border:1px solid {C_RULE};'
-                f'border-top:2px solid {olc};'
-                f'border-radius:0 0 6px 6px;padding:16px;background:{C_CARD};">'
-                f'<div style="font-family:var(--serif);font-size:0.95rem;'
-                f'font-weight:700;color:{C_TEXT};margin-bottom:4px;">'
-                f'{s["name"]}</div>'
-                f'<div style="font-family:var(--sans);font-size:0.72rem;'
-                f'color:{C_TEXT3};margin-bottom:10px;line-height:1.4;">'
-                f'{s.get("key_driver", "")}</div>'
-                f'<div class="sub-section-header" style="margin-bottom:6px;">'
-                f'30d Return</div>'
-                f'<div style="font-family:var(--mono);font-size:1.15rem;'
-                f'font-weight:700;color:{ret30_color};margin-bottom:10px;">'
-                f'{_fmt_pct(ret30)}</div>'
-                f'{price_rows_html}'
-                f'<div style="margin-top:10px;text-align:center;">'
-                f'{badge(s.get("outlook", "N/A"), color=olc)}'
-                f'</div>'
-                f'</div>'
+            outlook = s.get("outlook", "N/A")
+            key_driver = s.get("key_driver", "")
+            rationale = (
+                f"{key_driver} 30-day return: {_fmt_pct(ret30)}."
+                if key_driver else f"30-day return: {_fmt_pct(ret30)}."
             )
+
+            st.markdown(
+                insight_card_html(
+                    title=s["name"],
+                    score=_ret_to_score(ret30),
+                    action=_outlook_to_action(outlook),
+                    rationale=rationale,
+                    category="SECTOR",
+                ),
+                unsafe_allow_html=True,
+            )
+
+            # Constituent equities — render as a compact WSJ table per column
+            # so each price row reuses shared CSS instead of inline divs.
+            stock_prices = s.get("stock_prices", []) or []
+            if stock_prices:
+                price_rows = [
+                    [
+                        _sans(p["ticker"], color=C_TEXT, weight=700),
+                        _mono(f"${p['price']:.2f}", color=C_TEXT2, weight=500),
+                    ]
+                    for p in stock_prices
+                ]
+                wsj_market_table(["Ticker", "Price"], price_rows)
+            else:
+                st.caption("No tracked equities")
+
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 def _render_trade_flows(trade_data: dict, port_results: list,
@@ -298,17 +316,10 @@ def _render_trade_flows(trade_data: dict, port_results: list,
         "Global Trade Flows",
         subtitle="Regional breakdown of tracked trade volumes",
     )
-    st.html(
-        f'<div style="margin-bottom:10px;">{live_data_badge(source)}</div>'
-    )
 
     narrative = summary.get("narrative", "")
     if narrative:
-        st.html(
-            f'<div style="font-family:var(--sans);font-size:0.88rem;'
-            f'color:{C_TEXT2};line-height:1.65;margin-bottom:16px;'
-            f'max-width:720px;">{narrative}</div>'
-        )
+        st.markdown(narrative)
 
     regions = summary.get("regions", {})
     active = [(k, v) for k, v in regions.items() if v.get("ports")]
@@ -360,6 +371,7 @@ def _render_trade_flows(trade_data: dict, port_results: list,
         headers=["Region", "Ports", "Trade Volume", "Share"],
         rows=rows,
     )
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
