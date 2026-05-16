@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
@@ -35,8 +36,14 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+# ── Data provenance ──────────────────────────────────────────────────────────
+_PORT_SRC   = DataSource.demo("Top-25 Port Master List")
+_EVENTS_SRC = DataSource.demo("Port Events Feed")
+_LANES_SRC  = DataSource.demo("Lane Spot Rate Reference")
 
 # ── Master port dataset ───────────────────────────────────────────────────────
 TOP_PORTS = [
@@ -138,14 +145,6 @@ def _growth_cell(v: float) -> str:
     return _mono(f"{arrow} {abs(v):.1f}%", color=color, weight=600)
 
 
-def _rank_cell(rank: int) -> str:
-    return (
-        f'<span style="background:{C_ACCENT};color:#fff;border-radius:50%;'
-        f'width:24px;height:24px;display:inline-flex;align-items:center;'
-        f'justify-content:center;font-size:11px;font-weight:700;">{rank}</span>'
-    )
-
-
 # ── Section 1: KPI Header ─────────────────────────────────────────────────────
 
 def _render_kpi_header(ports: list[dict]) -> None:
@@ -160,9 +159,8 @@ def _render_kpi_header(ports: list[dict]) -> None:
         page_header(
             title="Port Operations Intelligence",
             subtitle=f"Real-time monitoring across {total} major global ports · Updated {now_str}",
-            icon="⚓",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="PORT MONITOR",
+            badge_color=C_ACCENT,
         )
 
         metric_card_row(
@@ -175,6 +173,7 @@ def _render_kpi_header(ports: list[dict]) -> None:
             ],
             columns=5,
         )
+        st.markdown(source_footer([_PORT_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("KPI header render failed")
         st.error("KPI header unavailable")
@@ -200,7 +199,7 @@ def _render_rankings_table(ports: list[dict]) -> None:
             dwell_color = C_LOW if p["dwell"] > 4 else (C_MOD if p["dwell"] > 3 else C_HIGH)
             crane_color = C_HIGH if p["crane_moves"] >= 30 else (C_MOD if p["crane_moves"] >= 24 else C_LOW)
             rows.append([
-                _rank_cell(p["rank"]),
+                _mono(f"#{p['rank']}", color=C_ACCENT, weight=700),
                 _sans(p["port"], weight=600),
                 _sans(p["country"], color=C_TEXT2),
                 _mono(f"{p['teu_m']:.0f}M", color=C_ACCENT, weight=700),
@@ -213,6 +212,7 @@ def _render_rankings_table(ports: list[dict]) -> None:
                 badge(p["status"], _STATUS_BADGE[p["status"]]),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer([_PORT_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Rankings table render failed")
         st.error("Rankings table unavailable")
@@ -255,6 +255,7 @@ def _render_efficiency_chart(ports: list[dict]) -> None:
             yaxis=dict(title="Crane Moves / Hour", range=[0, max(moves) + 5]),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([_PORT_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Efficiency chart render failed")
         st.error("Efficiency chart unavailable")
@@ -316,6 +317,7 @@ def _render_port_map(ports: list[dict]) -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([_PORT_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Port map render failed")
         st.error("Port map unavailable")
@@ -378,6 +380,7 @@ def _render_regional_dashboard(ports: list[dict]) -> None:
                         continue
                     _render_regional_highlight(region_ports)
                     _render_regional_table(region_ports)
+                    st.markdown(source_footer([_PORT_SRC]), unsafe_allow_html=True)
                 except Exception:
                     logger.exception(f"Regional tab render failed: {region}")
                     st.error(f"{region} data unavailable")
@@ -409,6 +412,7 @@ def _render_events_feed(events: list[dict]) -> None:
                 _sans(e["impact"], color=impact_color, weight=600),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer([_EVENTS_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Events feed render failed")
         st.error("Events feed unavailable")
@@ -423,36 +427,29 @@ def _render_rate_cards(lanes: list[dict]) -> None:
             "Top 10 trade lanes — spot rates, transit times, weekly services",
         )
 
-        card_blocks = []
+        headers = [
+            "Lane", "Spot Rate ($/TEU)", "Transit (days)",
+            "Weekly Services", "Weekly Capacity (TEU)",
+        ]
+        rows = []
         for lane in lanes:
             rate = lane["spot_rate"]
             rate_color = C_LOW if rate > 4000 else (C_MOD if rate > 2500 else C_HIGH)
-            card_blocks.append(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:18px;">'
-                f'<div style="font-weight:700;font-size:14px;color:{C_TEXT};margin-bottom:12px;">'
-                f'{lane["from_port"]} <span style="color:{C_TEXT3};">→</span> {lane["to_port"]}'
-                f'</div>'
-                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1px;">Spot Rate</div>'
-                f'<div style="color:{rate_color};font-size:22px;font-weight:800;">${rate:,}</div>'
-                f'<div style="color:{C_TEXT3};font-size:11px;">per TEU</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1px;">Transit</div>'
-                f'<div style="color:{C_TEXT};font-size:22px;font-weight:800;">{lane["transit_days"]}</div>'
-                f'<div style="color:{C_TEXT3};font-size:11px;">days</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1px;">Weekly Services</div>'
-                f'<div style="color:{C_ACCENT};font-size:18px;font-weight:700;">{lane["weekly_svcs"]}</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;letter-spacing:1px;">Weekly Capacity</div>'
-                f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;">{lane["cap_teu"]:,}</div>'
-                f'<div style="color:{C_TEXT3};font-size:11px;">TEU</div></div>'
-                f'</div>'
-                f'</div>'
+            transit_color = C_LOW if lane["transit_days"] > 25 else (
+                C_MOD if lane["transit_days"] > 18 else C_HIGH
             )
-        grid_html = (
-            '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;">'
-            + "".join(card_blocks)
-            + "</div>"
-        )
-        st.html(grid_html)
+            rows.append([
+                _sans(
+                    f"{lane['from_port']} → {lane['to_port']}",
+                    color=C_TEXT, weight=700,
+                ),
+                _mono(f"${rate:,}", color=rate_color, weight=700),
+                _mono(f"{lane['transit_days']}", color=transit_color, weight=600),
+                _mono(str(lane["weekly_svcs"]), color=C_ACCENT, weight=600),
+                _mono(f"{lane['cap_teu']:,}", color=C_TEXT2),
+            ])
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer([_LANES_SRC]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Rate cards render failed")
         st.error("Rate cards unavailable")
@@ -499,11 +496,6 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None
         _render_events_feed(PORT_EVENTS)
         _render_rate_cards(LANE_RATES)
 
-        st.html(
-            f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;padding:24px 0 8px 0;">'
-            f'Port Operations Intelligence · {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}'
-            f'</div>'
-        )
         logger.success("Port monitor tab rendered successfully")
     except Exception:
         logger.exception("Port monitor tab render failed")
