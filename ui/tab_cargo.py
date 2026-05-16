@@ -7,16 +7,28 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
-    C_ACCENT, C_BORDER, C_CARD, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
-    C_SURFACE, C_TEXT, C_TEXT2, C_TEXT3,
+    C_ACCENT, C_BORDER, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
+    C_TEXT, C_TEXT2, C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+
+# ---------------------------------------------------------------------------
+# Data provenance — demo/modeled signals for this tab
+# ---------------------------------------------------------------------------
+_CARGO_SOURCES = [
+    DataSource.demo("Cargo intelligence demo dataset"),
+    DataSource.modeled("Commodity routing model"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +140,8 @@ def _render_hero() -> None:
         page_header(
             title="Cargo Intelligence Hub",
             subtitle="Global commodity flows · Equipment balance · Specialised cargo monitoring",
-            icon="📦",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
+            badge_text="CARGO",
+            badge_color=C_ACCENT,
         )
         metric_card_row([
             {"label": "Global Container Throughput", "value": "842M TEU",
@@ -142,6 +153,7 @@ def _render_hero() -> None:
             {"label": "Reefer Volume", "value": "51.2M TEU",
              "accent": C_MACRO, "sublabel": "▲ 4.8% YoY"},
         ])
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Cargo hero render failed")
         st.error("Hero section unavailable.")
@@ -162,12 +174,9 @@ def _render_cargo_breakdown() -> None:
                 textfont_color=C_TEXT,
                 textfont_size=12,
             ))
-            apply_dark_layout(
-                fig,
-                title="Volume Share",
-                height=300,
+            apply_dark_layout(fig, title="Volume Share", height=300, showlegend=True)
+            fig.update_layout(
                 margin=dict(t=40, b=10, l=10, r=10),
-                showlegend=True,
                 legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)"),
             )
             st.plotly_chart(fig, use_container_width=True, key="cargo_vol_pie")
@@ -182,15 +191,13 @@ def _render_cargo_breakdown() -> None:
                 textfont_color=C_TEXT,
                 textfont_size=12,
             ))
-            apply_dark_layout(
-                fig2,
-                title="Value Share",
-                height=300,
+            apply_dark_layout(fig2, title="Value Share", height=300, showlegend=True)
+            fig2.update_layout(
                 margin=dict(t=40, b=10, l=10, r=10),
-                showlegend=True,
                 legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)"),
             )
             st.plotly_chart(fig2, use_container_width=True, key="cargo_val_pie")
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Cargo breakdown render failed")
         st.error("Cargo breakdown unavailable.")
@@ -213,6 +220,7 @@ def _render_commodity_table() -> None:
             for (comm, origin, dest, vessel, days, rate) in _COMMODITIES
         ]
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Commodity table render failed")
         st.error("Commodity routing table unavailable.")
@@ -235,6 +243,7 @@ def _render_hazmat() -> None:
             for (cargo, cls, port, risk, carriers, restriction) in _HAZMAT
         ]
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Hazmat tracker render failed")
         st.error("Dangerous goods tracker unavailable.")
@@ -252,7 +261,6 @@ def _render_reefer() -> None:
             {"label": "Reefer Fleet Utilisation", "value": "87%",
              "accent": C_HIGH, "sublabel": "▲ 3 pts vs LY"},
         ], columns=3)
-        st.html("<div style='height:12px;'></div>")
         headers = ["Route", "Cargo", "Temp", "Transit", "Rate $/FEU", "Premium"]
         rows = [
             [
@@ -266,6 +274,7 @@ def _render_reefer() -> None:
             for (route, cargo, temp, transit, rate, prem) in _REEFER_ROUTES
         ]
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Reefer monitor render failed")
         st.error("Reefer monitor unavailable.")
@@ -298,37 +307,44 @@ def _render_lcl_fcl_optimizer() -> None:
 
         if cbm <= 15:
             rec = "LCL"
-            rec_color = C_ACCENT
-            rec_reason = f"At {cbm} CBM, LCL saves you ${fcl20_cost - lcl_cost:,} vs a 20ft FCL."
+            rec_score = 0.85
+            rec_reason = f"At {cbm} CBM, LCL saves ${fcl20_cost - lcl_cost:,} vs a 20ft FCL."
         elif cbm <= 28:
             rec = "20ft FCL"
-            rec_color = C_HIGH
-            rec_reason = f"At {cbm} CBM, a 20ft FCL (${fcl20_cost:,}) is more efficient than LCL (${lcl_cost:,})."
+            rec_score = 0.72
+            rec_reason = f"At {cbm} CBM, a 20ft FCL (${fcl20_cost:,}) beats LCL (${lcl_cost:,})."
         else:
             rec = "40ft FCL"
-            rec_color = C_MOD
+            rec_score = 0.58
             rec_reason = f"At {cbm} CBM, a 40ft FCL gives best per-CBM rate at ${fcl40_cost/67:.0f}/CBM."
 
         with c2:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {rec_color};'
-                f'border-radius:6px;padding:20px 24px;">'
-                f'<div style="font-size:0.75rem;color:{C_TEXT3};'
-                f'text-transform:uppercase;margin-bottom:6px;">Recommendation</div>'
-                f'<div style="font-size:1.8rem;font-weight:700;color:{rec_color};">{rec}</div>'
-                f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:8px;">{rec_reason}</div>'
-                f'<div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">'
-                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                f'<div style="font-size:0.7rem;color:{C_TEXT3};">LCL</div>'
-                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${lcl_cost:,}</div></div>'
-                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                f'<div style="font-size:0.7rem;color:{C_TEXT3};">20ft FCL</div>'
-                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl20_cost:,}</div></div>'
-                f'<div style="background:{C_SURFACE};border-radius:8px;padding:10px;text-align:center;">'
-                f'<div style="font-size:0.7rem;color:{C_TEXT3};">40ft FCL</div>'
-                f'<div style="font-size:1.1rem;font-weight:600;color:{C_TEXT};">${fcl40_cost:,}</div></div>'
-                f'</div></div>'
+            st.markdown(
+                insight_card_html(
+                    title=f"Recommendation: {rec}",
+                    score=rec_score,
+                    action="BUY",
+                    rationale=rec_reason,
+                    category="LCL/FCL",
+                ),
+                unsafe_allow_html=True,
             )
+            cost_rows = [
+                [
+                    _sans("LCL",       color=C_TEXT,  weight=700),
+                    _mono(f"${lcl_cost:,}",  color=(C_HIGH if rec == "LCL" else C_TEXT)),
+                ],
+                [
+                    _sans("20ft FCL",  color=C_TEXT,  weight=700),
+                    _mono(f"${fcl20_cost:,}", color=(C_HIGH if rec == "20ft FCL" else C_TEXT)),
+                ],
+                [
+                    _sans("40ft FCL",  color=C_TEXT,  weight=700),
+                    _mono(f"${fcl40_cost:,}", color=(C_HIGH if rec == "40ft FCL" else C_TEXT)),
+                ],
+            ]
+            wsj_market_table(["Option", "Cost"], cost_rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("LCL/FCL optimizer render failed")
         st.error("LCL/FCL optimizer unavailable.")
@@ -346,7 +362,6 @@ def _render_theft_tracker() -> None:
             {"label": "Insurance Rate Impact", "value": "+0.3–0.8%",
              "accent": C_TEXT2, "sublabel": "High-risk route surcharge"},
         ], columns=3)
-        st.html("<div style='height:12px;'></div>")
         headers = ["Route", "Cargo at Risk", "Risk Level", "Incidents/Mo", "Insurance Add-on"]
         rows = [
             [
@@ -359,6 +374,7 @@ def _render_theft_tracker() -> None:
             for (route, cargo, risk, incidents, insur) in _THEFT_ROUTES
         ]
         wsj_market_table(headers, rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Theft tracker render failed")
         st.error("Cargo theft tracker unavailable.")
@@ -379,9 +395,8 @@ def _render_equipment_balance() -> None:
             textposition="outside",
             textfont=dict(color=C_TEXT2, size=11),
         ))
-        apply_dark_layout(
-            fig,
-            height=320,
+        apply_dark_layout(fig, height=320)
+        fig.update_layout(
             margin=dict(t=20, b=10, l=10, r=10),
             yaxis=dict(
                 title="TEU Surplus / Deficit",
@@ -391,13 +406,25 @@ def _render_equipment_balance() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True, key="cargo_equipment_bar")
-        st.html(
-            f'<div style="display:flex;gap:20px;margin-top:4px;padding:0 4px;">'
-            f'<span style="font-size:0.78rem;color:{C_HIGH};">&#9646; Surplus — excess empty boxes available for export</span>'
-            f'<span style="font-size:0.78rem;color:{C_LOW};">&#9646; Deficit — repositioning cost pressure on importers</span>'
-            f'<span style="font-size:0.78rem;color:{C_MOD};">&#9646; Balanced — within ±2,500 TEU tolerance</span>'
-            f'</div>'
-        )
+        legend_rows = [
+            [
+                badge("Surplus", color=C_HIGH),
+                _sans("Excess empty boxes available for export",
+                      color=C_TEXT2, weight=500),
+            ],
+            [
+                badge("Deficit", color=C_LOW),
+                _sans("Repositioning cost pressure on importers",
+                      color=C_TEXT2, weight=500),
+            ],
+            [
+                badge("Balanced", color=C_MOD),
+                _sans("Within ±2,500 TEU tolerance",
+                      color=C_TEXT2, weight=500),
+            ],
+        ]
+        wsj_market_table(["State", "Interpretation"], legend_rows)
+        st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Equipment balance render failed")
         st.error("Equipment balance chart unavailable.")
