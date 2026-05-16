@@ -9,10 +9,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
     C_CARD,
+    C_CONV,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -21,10 +23,12 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    live_data_badge,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -75,16 +79,16 @@ _ROUTES = [
 ]
 
 _CONVICTION_COLOR: dict[str, str] = {
-    "HIGH":     "green",
-    "MODERATE": "yellow",
-    "LOW":      "gray",
+    "HIGH":     C_HIGH,
+    "MODERATE": C_MOD,
+    "LOW":      C_TEXT3,
 }
 
 _TYPE_COLOR: dict[str, str] = {
     "MOMENTUM":       C_ACCENT,
     "MEAN REVERSION": C_HIGH,
     "BDI DIVERGENCE": C_MOD,
-    "MACRO OVERLAY":  "#7a6e9b",
+    "MACRO OVERLAY":  C_CONV,
 }
 
 
@@ -152,6 +156,10 @@ def _render_signal_hero(signals: list) -> None:
             {"label": "MODERATE CONVICTION", "value": f"{mod_n}",  "accent": C_MOD},
             {"label": "LOW CONVICTION",      "value": f"{low_n}",  "accent": C_TEXT3},
         ], columns=5)
+        st.markdown(
+            source_footer([DataSource.demo("Signal Posture KPIs")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"signal hero error: {exc}")
         st.warning("Signal hero unavailable.")
@@ -168,13 +176,17 @@ def _render_signal_table(signals: list) -> None:
             rows.append([
                 _mono(instrument, weight=700),
                 _sans(signal_type, color=C_ACCENT, weight=600),
-                badge(conviction, _CONVICTION_COLOR.get(conviction, "gray")),
+                badge(conviction, _CONVICTION_COLOR.get(conviction, C_TEXT3)),
                 _direction_cell(direction),
                 _change_cell(change),
                 _sans(time_ago, color=C_TEXT3),
                 _sans(basis, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(
+            source_footer([DataSource.demo("Mock Signal Intelligence")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"signal table error: {exc}")
         st.warning("Signal table unavailable.")
@@ -197,7 +209,7 @@ def _render_multi_index_chart() -> None:
             "BDI":  (_gen_index(0.018), C_ACCENT),
             "WCI":  (_gen_index(0.014), C_HIGH),
             "SCFI": (_gen_index(0.012), C_MOD),
-            "CCFI": (_gen_index(0.010), "#7a6e9b"),
+            "CCFI": (_gen_index(0.010), C_CONV),
         }
 
         fig = go.Figure()
@@ -226,6 +238,10 @@ def _render_multi_index_chart() -> None:
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Index Series · 90-day")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"multi-index chart error: {exc}")
         st.warning("Multi-index chart unavailable.")
@@ -272,6 +288,10 @@ def _render_freight_heatmap(freight_data) -> None:
             yaxis=dict(showgrid=False, autorange="reversed"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Freight Rate Heatmap")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"freight heatmap error: {exc}")
         st.warning("Freight heatmap unavailable.")
@@ -324,6 +344,10 @@ def _render_correlation_matrix() -> None:
             yaxis=dict(showgrid=False, autorange="reversed"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Correlation Matrix")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"correlation matrix error: {exc}")
         st.warning("Correlation matrix unavailable.")
@@ -362,6 +386,10 @@ def _render_conviction_chart(signals: list) -> None:
             barmode="group",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Signal Conviction Counts")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"conviction chart error: {exc}")
         st.warning("Conviction chart unavailable.")
@@ -381,21 +409,27 @@ def _render_type_breakdown(signals: list) -> None:
         for stype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
             pct   = count / total_sigs * 100
             bar_c = _TYPE_COLOR.get(stype, C_TEXT3)
+            label_span = _sans(stype, color=C_TEXT2, weight=600)
+            count_span = _mono(f"{count} ({pct:.0f}%)", color=C_TEXT3)
             rows_html += (
-                f"<div style='margin-bottom:14px'>"
-                f"<div style='display:flex;justify-content:space-between;margin-bottom:5px'>"
-                f"<span style='font-size:0.78rem;color:{C_TEXT2};font-weight:600;"
-                f"font-family:var(--sans);'>{stype}</span>"
-                f"<span style='font-size:0.78rem;color:{C_TEXT3};font-family:var(--mono);'>"
-                f"{count} ({pct:.0f}%)</span>"
-                f"</div>"
-                f"<div style='height:4px;background:{C_BORDER};overflow:hidden;'>"
-                f"<div style='height:100%;width:{pct:.1f}%;background:{bar_c};transition:width 0.4s ease'></div>"
-                f"</div></div>"
+                f'<div class="signal-type-row">'
+                f'<div class="signal-type-label">{label_span}{count_span}</div>'
+                f'<div class="progress-bar-custom">'
+                f'<div class="progress-bar-fill" style="width:{pct:.1f}%;background:{bar_c};"></div>'
+                f'</div></div>'
             )
-        st.html(
-            f"<div style='background:{C_CARD};border:1px solid {C_BORDER};padding:20px 24px;'>"
-            f"{rows_html}</div>"
+        # wsj-card uses class-based background/border from global CSS — no inline style needed
+        st.markdown(
+            f'<div class="wsj-card" style="padding:20px 24px;">'
+            f'<style>.signal-type-row{{margin-bottom:14px;}}'
+            f'.signal-type-label{{display:flex;justify-content:space-between;margin-bottom:5px;}}'
+            f'</style>'
+            f'{rows_html}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            source_footer([DataSource.demo("Mock Signal Distribution")]),
+            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"signal type breakdown error: {exc}")
