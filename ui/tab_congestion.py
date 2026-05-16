@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
@@ -30,12 +31,15 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -82,10 +86,10 @@ _EFFICIENCY: list[dict] = [
 ]
 
 _STATUS_BADGE: dict[str, str] = {
-    "CRITICAL": "red",
-    "ELEVATED": "yellow",
-    "NORMAL":   "green",
-    "LOW":      "gray",
+    "CRITICAL": C_LOW,
+    "ELEVATED": C_MOD,
+    "NORMAL":   C_HIGH,
+    "LOW":      C_TEXT3,
 }
 
 
@@ -115,13 +119,13 @@ def _weekly_cell(wk: int) -> str:
 def _berth_cell(pct: int) -> str:
     bar_color = C_LOW if pct >= 85 else (C_MOD if pct >= 65 else C_HIGH)
     bar_w = max(4, pct)
+    # Inline SVG bar (no block-level div) preserves the mini-bar visual.
     return (
-        f'<div style="display:flex;align-items:center;gap:8px;">'
-        f'<div style="width:60px;height:6px;background:{C_BORDER};border-radius:3px;">'
-        f'<div style="width:{bar_w}%;height:6px;background:{bar_color};border-radius:3px;"></div>'
-        f'</div>'
+        f'<svg width="60" height="6" style="vertical-align:middle;margin-right:8px;">'
+        f'<rect width="60" height="6" rx="3" fill="{C_BORDER}"/>'
+        f'<rect width="{bar_w * 0.6:.1f}" height="6" rx="3" fill="{bar_color}"/>'
+        f'</svg>'
         f'<span style="color:{bar_color};font-size:0.75rem;font-family:var(--mono);">{pct}%</span>'
-        f'</div>'
     )
 
 
@@ -220,6 +224,8 @@ def _render_map(ports: list[dict]) -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        _demo_src = DataSource.demo("AIS / Port Authority (synthetic)")
+        st.markdown(source_footer([_demo_src]), unsafe_allow_html=True)
     except Exception as exc:
         logger.error("_render_map error: {}", exc)
 
@@ -239,10 +245,14 @@ def _render_table(ports: list[dict]) -> None:
                 _mono(f"{p['wait']}d", color=wait_col),
                 _berth_cell(p["berth"]),
                 _weekly_cell(p["weekly"]),
-                badge(p["status"], _STATUS_BADGE.get(p["status"], "gray")),
+                badge(p["status"], _STATUS_BADGE.get(p["status"], C_TEXT3)),
                 _sans(p["rate_impact"], color=(C_MOD if "+" in p["rate_impact"] else C_TEXT3)),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(
+            source_footer([DataSource.demo("AIS / Berth Utilization (synthetic)")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.error("_render_table error: {}", exc)
 
@@ -285,6 +295,10 @@ def _render_timeline(ports: list[dict]) -> None:
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic 90-day trend series")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.error("_render_timeline error: {}", exc)
 
@@ -336,6 +350,10 @@ def _render_wait_dist(ports: list[dict]) -> None:
             {"label": "MEDIAN",         "value": f"{med_w}d", "accent": C_HIGH},
             {"label": "90TH PERCENTILE","value": f"{p90_w}d", "accent": C_LOW},
         ], columns=3)
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic per-vessel wait draws")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.error("_render_wait_dist error: {}", exc)
 
@@ -394,15 +412,22 @@ def _render_correlation(ports: list[dict]) -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid rgba(53,114,176,0.25);'
-            f'border-radius:6px;padding:14px 20px;margin-top:8px;font-size:0.82rem;color:{C_TEXT2};'
-            f'font-family:var(--sans);">'
-            f'<span style="color:{C_ACCENT};font-weight:600;">Insight:</span> '
-            f'Each 10-point rise in the congestion index correlates with approximately '
-            f'<span style="color:{C_MOD};font-weight:600;font-family:var(--mono);">+{round(m*10,1)}%</span> freight rate uplift. '
-            f'Critical ports are driving the bulk of current rate pressure on Asia-Europe and Trans-Pacific lanes.'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title=(
+                    f"Each 10-point rise in the congestion index correlates with "
+                    f"approximately +{round(m * 10, 1)}% freight rate uplift. "
+                    f"Critical ports are driving rate pressure on Asia-Europe and Trans-Pacific lanes."
+                ),
+                score=min(1.0, max(0.0, abs(m) / 0.3)),
+                action="Monitor",
+                category="ROUTE",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic rate-correlation scatter")]),
+            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.error("_render_correlation error: {}", exc)
@@ -423,10 +448,15 @@ def _render_efficiency() -> None:
                 return C_MOD
             return C_LOW
 
-        st.html(
-            f'<div style="display:flex;gap:16px;margin:0 0 10px 0;font-size:0.76rem;font-family:var(--sans);">'
-            f'{badge("Good", "green")}&nbsp;{badge("Average", "yellow")}&nbsp;{badge("Poor", "red")}'
-            f'</div>'
+        st.markdown(
+            '<div class="sub-section-header">Tier key: '
+            + badge("Good", C_HIGH)
+            + "&nbsp;"
+            + badge("Average", C_MOD)
+            + "&nbsp;"
+            + badge("Poor", C_LOW)
+            + "</div>",
+            unsafe_allow_html=True,
         )
 
         headers = ["Port", "Crane Moves/hr", "Ship Turns/day", "Gate Moves/hr", "Rail Lift %", "Truck Queue"]
@@ -496,14 +526,11 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
         section_divider()
         _render_efficiency()
 
-        st.html(
-            f'<div style="margin-top:32px;padding:16px 20px;background:{C_CARD};'
-            f'border-radius:6px;border:1px solid {C_BORDER};'
-            f'font-size:0.78rem;color:{C_TEXT3};font-family:var(--sans);">'
-            f'<span style="color:{C_ACCENT};">&#9432;</span> '
-            f'Congestion data refreshed every 6 hours. Index scores are composite metrics derived from vessel AIS data, '
-            f'berth utilization signals, and port authority reports. Rate impact estimates reflect 5-day rolling correlation.'
-            f'</div>'
+        alert_banner(
+            "Congestion data refreshed every 6 hours. Index scores are composite metrics derived from "
+            "vessel AIS data, berth utilization signals, and port authority reports. "
+            "Rate impact estimates reflect 5-day rolling correlation.",
+            level="info",
         )
 
     except Exception as exc:
