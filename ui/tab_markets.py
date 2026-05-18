@@ -405,27 +405,21 @@ def _render_type_breakdown(signals: list) -> None:
             type_counts[t] = type_counts.get(t, 0) + 1
 
         total_sigs = max(len(signals), 1)
-        rows_html = ""
+        rows = []
         for stype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
             pct   = count / total_sigs * 100
             bar_c = _TYPE_COLOR.get(stype, C_TEXT3)
-            label_span = _sans(stype, color=C_TEXT2, weight=600)
-            count_span = _mono(f"{count} ({pct:.0f}%)", color=C_TEXT3)
-            rows_html += (
-                f'<div class="signal-type-row">'
-                f'<div class="signal-type-label">{label_span}{count_span}</div>'
+            bar = (
                 f'<div class="progress-bar-custom">'
                 f'<div class="progress-bar-fill" style="width:{pct:.1f}%;background:{bar_c};"></div>'
-                f'</div></div>'
+                f'</div>'
             )
-        st.markdown(
-            f'<div class="wsj-card">'
-            f'<style>.signal-type-row{{margin-bottom:14px;}}'
-            f'.signal-type-label{{display:flex;justify-content:space-between;margin-bottom:5px;}}'
-            f'</style>'
-            f'{rows_html}</div>',
-            unsafe_allow_html=True,
-        )
+            rows.append([
+                _sans(stype, color=C_TEXT2, weight=600),
+                _mono(f"{count} ({pct:.0f}%)", color=C_TEXT3),
+                bar,
+            ])
+        wsj_market_table(["Signal Type", "Count", "Share"], rows)
         st.markdown(
             source_footer([DataSource.demo("Mock Signal Distribution")]),
             unsafe_allow_html=True,
