@@ -565,12 +565,10 @@ def _render_spread_analysis(
         pc = _pctile_color(p)
         bar_w = int(p)
         pctile_cell = (
-            f'<div style="display:flex;align-items:center;gap:6px;">'
-            f'<div style="flex:1;background:{C_SURFACE};border-radius:2px;height:6px;min-width:60px;">'
-            f'<div style="width:{bar_w}%;background:{pc};border-radius:2px;height:6px;"></div>'
+            f'<div class="progress-bar-custom">'
+            f'<div class="progress-bar-fill" style="width:{bar_w}%;background:{pc};"></div>'
             f'</div>'
-            f'<span style="color:{pc};font-size:11px;min-width:32px;'
-            f'font-family:var(--mono);">{p:.0f}th</span></div>'
+            f'{_mono(f"{p:.0f}th", color=pc)}'
         )
         table_rows.append([
             _sans(row["Spread"], color=C_TEXT, weight=600),
@@ -663,10 +661,8 @@ def _render_cointegration(
             sig_color = C_TEXT3
 
         pair_cell = (
-            f'<div><span style="color:{C_TEXT};font-family:var(--sans);'
-            f'font-size:12px;font-weight:600;">{eg.y_name} – {eg.x_name}</span>'
-            f'<span style="color:{C_TEXT3};font-family:var(--sans);'
-            f'font-size:10px;margin-left:6px;">n={r.n_obs}</span></div>'
+            _sans(f"{eg.y_name} – {eg.x_name}", color=C_TEXT, weight=600)
+            + _sans(f" n={r.n_obs}", color=C_TEXT3, weight=400)
         )
         table_rows.append([
             pair_cell,
