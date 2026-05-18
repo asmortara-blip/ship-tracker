@@ -9,9 +9,9 @@ rank,file,roi_score,palette_redecls,inline_divs,unsafe_html,random_calls,imports
 8,tab_data_health.py,13.5,0,0,7,5,1,732
 9,tab_deep_dive.py,13.0,0,0,14,3,1,917
 10,tab_supply_chain.py,13.0,0,0,10,4,1,769
-11,tab_markets.py,12.0,0,0,8,4,1,535
-12,tab_finance.py,11.5,0,0,23,0,1,1884
-13,tab_indices.py,11.5,0,0,7,4,1,955
+11,tab_finance.py,11.5,0,0,23,0,1,1884
+12,tab_indices.py,11.5,0,0,7,4,1,955
+13,tab_markets.py,11.5,0,0,7,4,1,529
 14,tab_alpha.py,11.0,0,0,6,4,1,647
 15,tab_scorecard.py,10.5,0,0,9,3,1,811
 16,tab_attribution.py,10.5,0,0,1,5,1,559
