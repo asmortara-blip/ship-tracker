@@ -59,7 +59,7 @@ _ACTIVE_EVENTS = [
     {"event": "Baltic Ice Edge",   "type": "Ice",         "location": "Gulf of Finland (60°N 27°E)",  "affected_routes": "Baltic / Intra-Europe",           "vessels_at_risk": 4,  "delay_risk": "LOW",      "duration": "Ongoing"},
 ]
 
-_DELAY_BADGE = {"SEVERE": "red", "ELEVATED": "yellow", "MODERATE": "yellow", "LOW": "green"}
+_DELAY_BADGE = {"SEVERE": C_LOW, "ELEVATED": C_MOD, "MODERATE": C_MOD, "LOW": C_HIGH}
 
 _FORECAST_TABLE = [
     {"route": "Transpacific (Asia → USWC)",     "d1": "MODERATE", "d3": "ROUGH",    "d7": "MODERATE", "d14": "CALM",     "overall": "MODERATE", "action": "Monitor L-07 track"},
@@ -71,8 +71,14 @@ _FORECAST_TABLE = [
 ]
 
 _COND_BADGE = {
-    "SEVERE": "red", "ROUGH": "yellow", "MODERATE": "yellow", "CALM": "green",
-    "ELEVATED": "yellow", "HIGH": "red", "NORMAL": "green", "LOW": "green",
+    "SEVERE":   C_LOW,
+    "ROUGH":    C_MOD,
+    "MODERATE": C_MOD,
+    "CALM":     C_HIGH,
+    "ELEVATED": C_MOD,
+    "HIGH":     C_LOW,
+    "NORMAL":   C_HIGH,
+    "LOW":      C_HIGH,
 }
 
 _PORT_CLOSURES = [
@@ -151,7 +157,7 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _cond_cell(cond: str) -> str:
-    return f'<div style="text-align:center;">{badge(cond, _COND_BADGE.get(cond.upper(), "gray"))}</div>'
+    return badge(cond, _COND_BADGE.get(cond.upper(), C_TEXT3))
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +192,7 @@ def _render_active_events() -> None:
                 _sans(ev["location"], color=C_TEXT2),
                 _sans(ev["affected_routes"], color=C_TEXT2),
                 _mono(str(ev["vessels_at_risk"]), weight=700),
-                badge(ev["delay_risk"], _DELAY_BADGE.get(ev["delay_risk"], "gray")),
+                badge(ev["delay_risk"], _DELAY_BADGE.get(ev["delay_risk"], C_TEXT3)),
                 _sans(ev["duration"], color=C_TEXT3),
             ])
         wsj_market_table(
