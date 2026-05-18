@@ -44,10 +44,6 @@ except Exception as _ce:
     logger.warning(f"canal_feed unavailable: {_ce}")
 
 
-# ── Local semantic colors ───────────────────────────────────────────────────
-C_ORANGE = "#f97316"  # "HIGH" tier risk — visually between MOD and LOW
-
-
 # ── Provenance / data sources ───────────────────────────────────────────────
 _SRC_CANAL_FEED = DataSource.modeled(
     "Panama Canal Authority · Suez Canal Authority composite"
@@ -128,9 +124,12 @@ _CHOKEPOINTS = [
     },
 ]
 
+# HIGH-risk tier — orange, sits between MODERATE amber and CRITICAL red
+_C_ORANGE = "#f97316"
+
 _STATUS_COLORS = {
     "CRITICAL":  C_LOW,
-    "HIGH":      C_ORANGE,
+    "HIGH":      _C_ORANGE,
     "ELEVATED":  C_MOD,
     "RESTRICTED": C_MOD,
     "NORMAL":    C_HIGH,
@@ -139,7 +138,7 @@ _STATUS_COLORS = {
 
 _RISK_COLORS = {
     "CRITICAL":  C_LOW,
-    "HIGH":      C_ORANGE,
+    "HIGH":      _C_ORANGE,
     "MODERATE":  C_MOD,
     "LOW":       C_HIGH,
 }
@@ -401,16 +400,14 @@ def _render_suez_card() -> None:
         ]
         wsj_market_table(["Cape Rerouting Metric", "Value"], impact_rows)
 
-        # Brief security note (kept terse — this is a single inline div)
+        # Brief security note
         st.markdown(
-            f'<div class="sub-section-header" style="margin-top:14px;">'
-            f'Red Sea Security Situation</div>'
-            f'<div style="font-size:12px;color:{C_TEXT2};line-height:1.6;'
-            f'margin-bottom:10px;">'
-            f'Houthi forces continue missile, drone, and naval mine attacks targeting vessels '
-            f'transiting Bab-el-Mandeb and the southern Red Sea corridor. Operation Prosperity '
-            f'Guardian (US-led) and Operation Aspides (EU) provide partial escort; most major '
-            f'carriers avoid entirely.</div>',
+            '<div class="sub-section-header">Red Sea Security Situation</div>'
+            '<div class="wsj-body">'
+            'Houthi forces continue missile, drone, and naval mine attacks targeting vessels '
+            'transiting Bab-el-Mandeb and the southern Red Sea corridor. Operation Prosperity '
+            'Guardian (US-led) and Operation Aspides (EU) provide partial escort; most major '
+            'carriers avoid entirely.</div>',
             unsafe_allow_html=True,
         )
         st.markdown(source_footer([_SRC_CANAL_FEED]), unsafe_allow_html=True)
