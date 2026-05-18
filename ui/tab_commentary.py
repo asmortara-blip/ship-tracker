@@ -147,12 +147,8 @@ def _render_header_and_lede(wrap: dict) -> None:
 
     body = wrap.get("body") or []
     if body:
-        paras = "".join(
-            f'<p style="font-family:var(--sans);font-size:0.88rem;color:var(--text2);'
-            f'line-height:1.7;margin:0 0 12px 0;">{p}</p>'
-            for p in body
-        )
-        st.html(f'<section style="margin:14px 0 4px;">{paras}</section>')
+        for p in body:
+            st.markdown(p)
 
 
 def _render_key_movers(movers: list[dict]) -> None:
@@ -267,10 +263,7 @@ def _render_forward_outlook(outlook: dict) -> None:
 
     narrative = outlook.get("narrative", "")
     if narrative:
-        st.html(
-            f'<p style="font-family:var(--sans);font-size:0.88rem;color:var(--text2);'
-            f'line-height:1.65;margin:8px 0 16px 0;">{narrative}</p>'
-        )
+        st.markdown(narrative)
 
     opportunities = outlook.get("opportunities", []) or []
     risks = outlook.get("risks", []) or []
@@ -304,29 +297,34 @@ def _render_signal_column(
 ) -> None:
     """Render a titled column of signal rows (Opportunities / Risks)."""
     if not items:
-        st.html(
-            f'<div class="sub-section-header" style="color:{accent};">{heading}</div>'
-            f'<p style="font-family:var(--sans);font-size:0.8rem;color:var(--text3);'
-            f'padding:8px 0;margin:0;">No items to report.</p>'
+        st.markdown(
+            f'<div class="sub-section-header">{heading}</div>',
+            unsafe_allow_html=True,
         )
+        st.markdown("No items to report.")
         return
 
-    st.html(f'<div class="sub-section-header" style="color:{accent};">{heading}</div>')
+    st.markdown(
+        f'<div class="sub-section-header">{heading}</div>',
+        unsafe_allow_html=True,
+    )
 
     rows_html = []
     for it in items:
         title = str(it.get("title", ""))[:80]
         meta = value_fn(it)
         rows_html.append(
-            f'<li style="list-style:none;padding:8px 0;'
-            f'border-bottom:1px dotted rgba(232,230,225,0.04);">'
+            f'<div class="wsj-news-item">'
             f'<span style="display:block;font-family:var(--serif);font-size:0.84rem;'
             f'font-weight:700;color:var(--text);line-height:1.3;">{title}</span>'
             f'<span style="display:block;font-family:var(--mono);font-size:0.7rem;'
             f'color:{value_color};margin-top:3px;">{meta}</span>'
-            f'</li>'
+            f'</div>'
         )
-    st.html(f'<ul style="margin:0;padding:0;">{"".join(rows_html)}</ul>')
+    st.markdown(
+        f'<div class="wsj-whats-news">{"".join(rows_html)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
