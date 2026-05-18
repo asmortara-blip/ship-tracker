@@ -513,11 +513,9 @@ def _space_availability_by_carrier() -> None:
             bar_color = C_HIGH if sp > 25 else (C_MOD if sp > 10 else C_LOW)
             bar_pct   = min(sp * 2.2, 100)
             space_cell = (
-                f'<div style="font-family:var(--mono);font-size:12px;'
-                f'color:{bar_color};font-weight:600;margin-bottom:3px;">{sp:.0f}%</div>'
-                f'<div style="height:4px;background:{C_BORDER};border-radius:2px;">'
-                f'<div style="height:4px;width:{bar_pct}%;background:{bar_color};'
-                f'border-radius:2px;"></div>'
+                _mono(f"{sp:.0f}%", color=bar_color, weight=600)
+                + f'<div class="progress-bar-custom">'
+                f'<span class="progress-bar-fill" style="display:block;width:{bar_pct}%;background:{bar_color};"></span>'
                 f'</div>'
             )
             table_rows.append([
