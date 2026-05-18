@@ -18,6 +18,7 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -84,7 +85,6 @@ _MOCK_DAY_CHANGE = {
     "HAFNI": +2.88,
 }
 
-_HR = "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:20px 0'>"
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────
@@ -252,7 +252,6 @@ def _render_add_position_form() -> None:
             beta_in = st.number_input("Beta", min_value=0.1, max_value=5.0, value=1.2,
                                        step=0.05, format="%.2f", key="add_beta")
         with c6:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             add_btn = st.button("Add Position", type="primary", use_container_width=True)
 
         if add_btn:
@@ -284,7 +283,6 @@ def _render_add_position_form() -> None:
                 st.error(f"Error adding position: {e}")
 
         # Remove position
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
         positions = st.session_state.get("portfolio_positions", [])
         if positions:
             tickers_list = [p["ticker"] for p in positions]
@@ -880,7 +878,7 @@ def render(stock_data, macro_data, insights) -> None:
 
         _render_add_position_form()
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        section_divider()
 
         _render_holdings_table(df)
 
@@ -894,19 +892,19 @@ def render(stock_data, macro_data, insights) -> None:
                 section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
                 _render_performance_chart(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        section_divider()
 
         _render_risk_metrics(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        section_divider()
 
         _render_carrier_factor_lens(stock_data, macro_data)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        section_divider()
 
         _render_top_movers(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+        section_divider()
 
         _render_position_details(df)
 
