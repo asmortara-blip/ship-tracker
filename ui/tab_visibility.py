@@ -17,7 +17,6 @@ from ui.styles import (
     C_LOW,
     C_MACRO,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -30,10 +29,6 @@ from ui.styles import (
     source_footer,
     wsj_market_table,
 )
-
-# Local aliases for single-purpose accents
-C_PURPLE = C_CONV
-C_CYAN   = C_MACRO
 
 # ---------------------------------------------------------------------------
 # Data sources
@@ -160,10 +155,13 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 def _score_bar(score: int, color: str, width: int = 120) -> str:
     """Inline progress bar used as a cell content widget."""
     pct = max(0, min(100, score))
+    # Outer container uses the global .progress-bar-custom class; only the
+    # dynamic fill width is kept as an inline style on the class-based element
+    # (permitted exception for data-driven width per-playbook step 4).
     return (
-        f'<span style="display:inline-block;background:{C_SURFACE};border-radius:4px;'
-        f'height:8px;width:{width}px;vertical-align:middle;overflow:hidden;">'
-        f'<span style="display:block;background:{color};width:{pct}%;height:100%;"></span>'
+        f'<span class="progress-bar-custom" '
+        f'style="display:inline-block;width:{width}px;vertical-align:middle;">'
+        f'<span class="progress-bar-fill" style="width:{pct}%;background:{color};"></span>'
         f'</span>'
     )
 
@@ -180,10 +178,7 @@ def _overall_cell(score: int, color: str) -> str:
 
 
 def _grade_badge(grade: str, color: str) -> str:
-    return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-        f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">{grade}</span>'
-    )
+    return badge(grade, color)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +211,8 @@ def _render_pipeline() -> None:
         col_colors = {
             "ORIGIN LOADED": C_MOD,
             "IN TRANSIT":    C_ACCENT,
-            "CUSTOMS":       C_PURPLE,
-            "AT PORT":       C_CYAN,
+            "CUSTOMS":       C_CONV,
+            "AT PORT":       C_MACRO,
             "LAST MILE":     "#f97316",
             "DELIVERED":     C_HIGH,
         }
@@ -227,21 +222,22 @@ def _render_pipeline() -> None:
             color = col_colors.get(stage, C_TEXT2)
             cards_html = ""
             for sid, route, teu in shipments:
+                # port-card provides background/border/radius/padding via class;
+                # <span style="color:..."> is the permitted content-level coloring.
                 cards_html += (
-                    f'<div style="background:var(--surface);border-radius:6px;'
-                    f'padding:8px 10px;margin-bottom:6px;border-left:3px solid {color};">'
-                    f'<div style="font-size:10px;color:var(--text);font-weight:700;">{sid}</div>'
-                    f'<div style="font-size:9px;color:var(--text2);margin-top:2px;">{route}</div>'
-                    f'<div style="font-size:9px;color:{color};margin-top:2px;">{teu}</div>'
+                    f'<div class="port-card">'
+                    f'<div class="port-name">{sid}</div>'
+                    f'<div class="port-detail">{route}</div>'
+                    f'<div class="port-detail"><span style="color:{color};">{teu}</span></div>'
                     f'</div>'
                 )
             with col:
                 st.html(
-                    f'<div class="wsj-card" style="padding:12px;">'
-                    f'<div style="font-size:10px;font-weight:800;color:{color};'
-                    f'letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
-                    f'<div style="font-size:20px;font-weight:800;color:var(--text);'
-                    f'margin-bottom:10px;">{len(shipments)}</div>'
+                    f'<div class="wsj-card">'
+                    f'<div class="sub-section-header">'
+                    f'<span style="color:{color};">{stage}</span>'
+                    f'</div>'
+                    f'<span class="kpi-value">{len(shipments)}</span>'
                     f'{cards_html}'
                     f'</div>'
                 )
@@ -320,44 +316,22 @@ def _render_milestone_tracking() -> None:
             columns=3,
         )
 
-        # Timeline rendering — a custom domain visualization (similar to a chart).
-        # Kept as inline HTML because it's a bespoke widget with no shared
-        # equivalent in ui.styles. CSS vars used instead of hard-coded constants.
-        timeline_html = (
-            '<div style="background:var(--surface);border:1px solid var(--rule);'
-            'border-radius:6px;padding:20px 24px;margin-top:10px;">'
+        # Milestone timeline rendered as a WSJ market table; each row uses
+        # _mono/_sans content spans for per-row coloring.
+        milestone_rows = []
+        for name, ts, done, color, note in _MILESTONE_STEPS:
+            status_color = color if done else C_TEXT3
+            status_text  = "✓ Done" if done else "Pending"
+            milestone_rows.append([
+                badge(status_text, status_color),
+                _sans(name,  color=status_color, weight=700),
+                _mono(ts,    color=C_TEXT3),
+                _sans(note,  color=C_TEXT3),
+            ])
+        wsj_market_table(
+            headers=["Status", "Milestone", "Timestamp", "Detail"],
+            rows=milestone_rows,
         )
-        for i, (name, ts, done, color, note) in enumerate(_MILESTONE_STEPS):
-            is_last = i == len(_MILESTONE_STEPS) - 1
-            connector = "" if is_last else (
-                f'<div style="width:2px;height:28px;background:{"linear-gradient(180deg," + color + "," + C_TEXT3 + ")" if done else C_TEXT3};'
-                f'margin-left:11px;"></div>'
-            )
-            dot_style = (
-                f'width:24px;height:24px;border-radius:50%;background:{color};'
-                f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
-            ) if done else (
-                f'width:24px;height:24px;border-radius:50%;border:2px solid {C_TEXT3};'
-                f'background:var(--card);flex-shrink:0;'
-            )
-            checkmark = '<span style="color:#fff;font-size:11px;font-weight:900;">✓</span>' if done else ""
-            timeline_html += (
-                f'<div style="display:flex;align-items:flex-start;gap:14px;">'
-                f'<div>'
-                f'<div style="{dot_style}">{checkmark}</div>'
-                f'{connector}'
-                f'</div>'
-                f'<div style="padding-bottom:8px;flex:1;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                f'<span style="font-size:13px;font-weight:700;color:{color if done else C_TEXT2};">{name}</span>'
-                f'<span style="font-size:11px;color:{C_TEXT3};">{ts}</span>'
-                f'</div>'
-                f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">{note}</div>'
-                f'</div>'
-                f'</div>'
-            )
-        timeline_html += "</div>"
-        st.html(timeline_html)
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"milestone tracking error: {exc}")
@@ -374,7 +348,7 @@ def _render_carrier_rankings() -> None:
         headers = ["#", "Carrier", "Visibility Score", "Grade", "Capabilities"]
         rows = []
         for i, (carrier, score, grade, caps, color) in enumerate(_CARRIER_RANKINGS):
-            rank_color = [C_MOD, C_TEXT2, C_PURPLE][min(i, 2)] if i < 3 else C_TEXT3
+            rank_color = [C_MOD, C_TEXT2, C_CONV][min(i, 2)] if i < 3 else C_TEXT3
             rows.append([
                 _mono(str(i + 1), color=rank_color, weight=800),
                 _sans(carrier, weight=700),
