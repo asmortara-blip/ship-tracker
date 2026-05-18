@@ -399,7 +399,7 @@ def _render_report_preview(report: Any, ts: str, api_status: dict[str, bool]) ->
     ]
     pills_html = " ".join(badge(s, color=C_ACCENT) for s in section_names)
     st.markdown(
-        f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">{pills_html}</div>',
+        f'<div class="wsj-card">{pills_html}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
