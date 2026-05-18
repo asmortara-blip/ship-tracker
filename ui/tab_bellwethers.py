@@ -162,7 +162,7 @@ def render(macro_data=None, **kwargs) -> None:
         ],
         columns=3,
     )
-    st.html(live_data_badge(_FRED_SRC))
+    st.markdown(live_data_badge(_FRED_SRC), unsafe_allow_html=True)
 
     # Editorial narrative (insight card pattern)
     st.markdown(
@@ -207,7 +207,7 @@ def render(macro_data=None, **kwargs) -> None:
             headers=["Indicator", "Reading", "Score", "Signal"],
             rows=rows,
         )
-        st.html(live_data_badge(_FRED_SRC))
+        st.markdown(live_data_badge(_FRED_SRC), unsafe_allow_html=True)
 
     # ── 4. Yield curve analysis ────────────────────────────────────────────
     yc = compute_yield_curve_analysis(macro_data)
@@ -246,7 +246,7 @@ def render(macro_data=None, **kwargs) -> None:
                 config={"displayModeBar": False},
                 key="bellwethers_yield_curve",
             )
-            st.html(live_data_badge(_FRED_SRC))
+            st.markdown(live_data_badge(_FRED_SRC), unsafe_allow_html=True)
         except Exception as exc:
             logger.warning(f"Yield curve chart failed: {exc}")
 
@@ -278,7 +278,7 @@ def render(macro_data=None, **kwargs) -> None:
                 ],
                 columns=min(len(spreads), 4),
             )
-            st.html(live_data_badge(_FRED_SRC))
+            st.markdown(live_data_badge(_FRED_SRC), unsafe_allow_html=True)
 
     # ── 5. Earnings calendar ───────────────────────────────────────────────
     calendar = compute_earnings_calendar()
@@ -312,4 +312,4 @@ def render(macro_data=None, **kwargs) -> None:
             headers=["Company", "Ticker", "Sector", "Quarter", "Date", "Days Until"],
             rows=rows,
         )
-        st.html(source_footer([_EARNINGS_SRC, _FRED_SRC]))
+        st.markdown(source_footer([_EARNINGS_SRC, _FRED_SRC]), unsafe_allow_html=True)
