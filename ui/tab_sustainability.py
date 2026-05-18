@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
@@ -19,6 +20,7 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -146,6 +148,8 @@ def _render_hero_kpis() -> None:
             ],
             columns=5,
         )
+        _src = DataSource.demo("IMO / EU ETS / Industry Reports (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Hero KPIs render error")
         st.error("Could not render sustainability dashboard KPIs.")
@@ -181,6 +185,8 @@ def _render_cii_tracker() -> None:
             ],
             rows=rows,
         )
+        _src = DataSource.demo("IMO / Carrier ESG Reports (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("CII tracker render error")
         st.error("Could not render compliance tracker.")
@@ -216,6 +222,8 @@ def _render_route_carbon() -> None:
             ],
             rows=rows,
         )
+        _src = DataSource.demo("IMO 2030 Target / Sea Intelligence (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Route carbon render error")
         st.error("Could not render carbon intensity by route.")
@@ -245,7 +253,7 @@ def _render_green_fuel() -> None:
                 ))
                 apply_dark_layout(
                     fig_pie,
-                    title=dict(text="Current Fleet Fuel Mix", font=dict(color=C_TEXT, size=14), x=0.02),
+                    title="Current Fleet Fuel Mix",
                     showlegend=False, height=300,
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
@@ -271,7 +279,7 @@ def _render_green_fuel() -> None:
                 ))
                 apply_dark_layout(
                     fig_bar,
-                    title=dict(text="Newbuild Orderbook by Fuel Type (%)", font=dict(color=C_TEXT, size=14), x=0.02),
+                    title="Newbuild Orderbook by Fuel Type (%)",
                     barmode="stack", height=300,
                     yaxis=dict(ticksuffix="%"),
                 )
@@ -311,6 +319,8 @@ def _render_green_fuel() -> None:
             headers=["Port", "LNG Stations", "Methanol Terminals", "Ammonia Ready", "Green Shore Power"],
             rows=rows,
         )
+        _src = DataSource.demo("SGMF / Port Authority Reports (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Green fuel section render error")
         st.error("Could not render green fuel transition section.")
@@ -353,7 +363,7 @@ def _render_eu_ets() -> None:
                 )
                 apply_dark_layout(
                     fig,
-                    title=dict(text="EU Carbon Price (€/tonne CO₂)", font=dict(color=C_TEXT, size=14), x=0.02),
+                    title="EU Carbon Price (€/tonne CO₂)",
                     showlegend=False, height=280,
                     yaxis=dict(tickprefix="€"),
                 )
@@ -363,10 +373,8 @@ def _render_eu_ets() -> None:
                 st.warning("EU ETS price chart unavailable.")
 
         with col_calc:
-            st.html(
-                f'<div style="color:{C_TEXT};font-size:13px;font-weight:700;'
-                f'margin-bottom:10px;">ETS Cost Estimator</div>'
-            )
+            st.markdown('<div class="sub-section-header">ETS Cost Estimator</div>',
+                        unsafe_allow_html=True)
             distance_nm  = st.number_input("Route distance (nm)", min_value=100, max_value=25000, value=11200, step=100)
             vessel_teu   = st.number_input("Vessel capacity (TEU)", min_value=500, max_value=24000, value=15000, step=500)
             load_factor  = st.slider("Load factor (%)", min_value=50, max_value=100, value=85)
@@ -408,6 +416,8 @@ def _render_eu_ets() -> None:
             headers=["Carrier", "EU Revenue %", "Carbon Intensity", "Est. Annual ETS Cost"],
             rows=rows,
         )
+        _src = DataSource.demo("EU ETS / ICE Carbon (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("EU ETS section render error")
         st.error("Could not render EU ETS section.")
@@ -443,6 +453,8 @@ def _render_esg_scores() -> None:
             headers=["Company", "Overall", "Env", "Social", "Gov", "CDP", "DJSI", "Carbon Disclosure"],
             rows=rows,
         )
+        _src = DataSource.demo("MSCI ESG / CDP / DJSI (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("ESG scores render error")
         st.error("Could not render ESG score comparison.")
@@ -504,7 +516,7 @@ def _render_speed_optimization() -> None:
                 ))
                 apply_dark_layout(
                     fig,
-                    title=dict(text="Speed vs Fuel / Opex / CO₂ Trade-off", font=dict(color=C_TEXT, size=14), x=0.02),
+                    title="Speed vs Fuel / Opex / CO₂ Trade-off",
                     height=340,
                     xaxis=dict(title="Speed (kn)", autorange="reversed"),
                     yaxis=dict(title="Fuel / CO₂"),
@@ -528,6 +540,8 @@ def _render_speed_optimization() -> None:
             ],
             columns=3,
         )
+        _src = DataSource.demo("MEPC / Vessel Performance (synthetic)")
+        st.markdown(source_footer([_src]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Speed optimization render error")
         st.error("Could not render speed optimization section.")
