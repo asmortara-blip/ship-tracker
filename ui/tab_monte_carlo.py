@@ -19,8 +19,6 @@ from scipy import stats as scipy_stats
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,

@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import traceback
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 

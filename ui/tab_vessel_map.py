@@ -9,7 +9,6 @@ D. Live Metrics Strip          — Total tracked, avg speed, busiest port, conta
 """
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import pandas as pd
@@ -20,7 +19,6 @@ from loguru import logger
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
-    C_LOW,
     C_MOD,
     C_TEXT,
     C_TEXT2,
@@ -450,7 +448,6 @@ def _render_fleet_donut(vessel_map: dict[str, list[dict]], selected_locode: str)
             hovertemplate="<b>%{label}</b><br>%{value} vessels (%{percent})<extra></extra>",
         ))
 
-        port_name = next((p["name"] for p in _PORTS if p["locode"] == selected_locode), selected_locode)
         total = sum(values)
 
         # Apply design-system dark theme; pass additional layout overrides as kwargs.

@@ -19,7 +19,6 @@ from loguru import logger
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
     C_CARD,
     C_CONV,
     C_HIGH,

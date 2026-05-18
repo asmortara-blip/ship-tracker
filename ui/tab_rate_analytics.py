@@ -13,7 +13,6 @@ Sections:
 from __future__ import annotations
 
 import streamlit as st
-from loguru import logger
 
 # Single source of truth for palette, typography, and component helpers.
 # Never redeclare color constants in a tab module — always import them.

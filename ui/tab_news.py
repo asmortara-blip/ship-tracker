@@ -21,7 +21,7 @@ import streamlit as st
 
 from ui.styles import (
     C_ACCENT, C_BG, C_BORDER, C_CARD, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
-    C_RULE, C_SURFACE, C_TEXT, C_TEXT2, C_TEXT3,
+    C_TEXT, C_TEXT2, C_TEXT3,
     apply_dark_layout,
     badge,
     insight_card_html,
@@ -400,7 +400,6 @@ def _render_breaking_news(articles: list[dict]) -> None:
 
         for a in top5:
             label, _lcolor = _sentiment_label(a["sentiment_score"])
-            urgency_pct    = int(a["urgency"] * 100)
             ago            = _time_ago(a["published_at"])
             action         = _SENTIMENT_ACTION.get(label, "Watch")
             rationale      = (

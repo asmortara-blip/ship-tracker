@@ -23,7 +23,6 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_RULE,
     C_SURFACE,
     C_TEXT,
     C_TEXT2,
@@ -39,14 +38,14 @@ from ui.styles import (
     wsj_market_table,
 )
 
-# Domain-specific risk level → palette color.
-# Note: "HIGH" severity (between MODERATE and CRITICAL) ideally maps to an
-# orange (#f97316) that is absent from the shared palette. Using C_MOD (amber)
-# as the nearest available constant; flag to styles.py maintainer to add C_HIGH2
-# or C_ORANGE if the product team wants a true orange tier.
+# HIGH-risk tier — orange, sits between MODERATE amber and CRITICAL red
+_C_ORANGE = "#f97316"
+
+# Domain-specific risk level → palette color (orange tier kept local — the
+# shared palette has no orange).
 _LEVEL_COLOR: dict[str, str] = {
     "CRITICAL": C_LOW,
-    "HIGH":     "#f97316",   # orange — no palette constant; see note above
+    "HIGH":     _C_ORANGE,
     "MODERATE": C_MOD,
     "LOW":      C_HIGH,
 }

@@ -16,7 +16,6 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
     C_CONV,
     C_HIGH,
     C_LOW,
