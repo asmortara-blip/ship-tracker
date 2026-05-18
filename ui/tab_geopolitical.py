@@ -23,24 +23,30 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
+    C_RULE,
     C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
+    gradient_card,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
-C_ORANGE = "#f97316"
-
+# Domain-specific risk level → palette color.
+# Note: "HIGH" severity (between MODERATE and CRITICAL) ideally maps to an
+# orange (#f97316) that is absent from the shared palette. Using C_MOD (amber)
+# as the nearest available constant; flag to styles.py maintainer to add C_HIGH2
+# or C_ORANGE if the product team wants a true orange tier.
 _LEVEL_COLOR: dict[str, str] = {
     "CRITICAL": C_LOW,
-    "HIGH":     C_ORANGE,
+    "HIGH":     "#f97316",   # orange — no palette constant; see note above
     "MODERATE": C_MOD,
     "LOW":      C_HIGH,
 }
@@ -440,10 +446,10 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
         if insights:
             for ins in insights[:2]:
                 try:
-                    st.html(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-                        f'padding:14px 18px;margin-top:10px;font-size:0.85rem;color:{C_TEXT2}">'
-                        f'📌 {ins}</div>'
+                    st.markdown(
+                        f'<div class="wsj-card">📌 '
+                        f'<span style="font-size:0.85rem;color:{C_TEXT2}">{ins}</span></div>',
+                        unsafe_allow_html=True,
                     )
                 except Exception:
                     pass
@@ -581,13 +587,14 @@ def _render_risk_map() -> None:
 
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            f'<div style="display:flex;gap:20px;margin-top:6px;margin-bottom:16px;flex-wrap:wrap">'
-            f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_LOW}">Red</span> = Critical risk (80–100)</span>'
-            f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_MOD}">Amber</span> = Moderate risk (40–69)</span>'
-            f'<span style="font-size:0.75rem;color:{C_TEXT3}">■ <span style="color:{C_HIGH}">Green</span> = Lower risk (0–39)</span>'
-            f'<span style="font-size:0.75rem;color:{C_TEXT3}">— Lines = key shipping lanes</span>'
-            f'</div>'
+        st.markdown(
+            f'<div class="sub-section-header">'
+            f'<span style="font-size:0.75rem;color:{C_LOW}">■ Critical (80–100)</span>'
+            f'&emsp;<span style="font-size:0.75rem;color:{C_MOD}">■ Moderate (40–69)</span>'
+            f'&emsp;<span style="font-size:0.75rem;color:{C_HIGH}">■ Lower (0–39)</span>'
+            f'&emsp;<span style="font-size:0.75rem;color:{C_TEXT3}">— Key shipping lanes</span>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
 
     except Exception as exc:
@@ -610,7 +617,8 @@ def _render_hotspot_monitor() -> None:
             level = hs["level"]
             lvl_color = _LEVEL_COLOR.get(level, C_TEXT2)
 
-            fields_html = ""
+            # Labeled fields → a compact "·"-separated run of content-styled spans
+            field_bits = []
             for label, key in [
                 ("Affected Routes", "routes"),
                 ("Rate Premium", "rate_premium"),
@@ -620,25 +628,26 @@ def _render_hotspot_monitor() -> None:
             ]:
                 val = hs.get(key, "N/A")
                 if val and val != "N/A":
-                    fields_html += (
-                        f'<div style="margin-top:8px">'
-                        f'<span style="color:{C_TEXT3};font-size:0.75rem">{label}:&nbsp;</span>'
-                        f'<span style="color:{C_TEXT};font-size:0.8rem;font-weight:600">{val}</span>'
-                        f'</div>'
+                    field_bits.append(
+                        f'<span style="color:{C_TEXT3};">{label}:</span> '
+                        f'<span style="color:{C_TEXT};font-weight:600;">{val}</span>'
                     )
 
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {lvl_color}33;border-left:3px solid {lvl_color};border-radius:6px;'
-                f'padding:20px 22px;margin-bottom:14px">'
-                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
-                f'<span style="font-size:1.3rem">{hs["icon"]}</span>'
-                f'<span style="font-size:1.0rem;font-weight:700;color:{C_TEXT}">{hs["name"]}</span>'
-                f'&nbsp;{badge(level, color=lvl_color)}'
-                f'</div>'
-                f'<div style="font-size:0.83rem;color:{C_TEXT2};line-height:1.55;margin-bottom:4px">'
-                f'{hs["situation"]}</div>'
-                + fields_html +
-                '</div>'
+            content = (
+                f'<div class="wsj-headline-sm">{hs["icon"]}&nbsp; {hs["name"]}'
+                f'&nbsp;&nbsp;{badge(level, color=lvl_color)}</div>'
+                f'<div class="wsj-body">{hs["situation"]}</div>'
+            )
+            if field_bits:
+                content += (
+                    '<div class="wsj-body">'
+                    + '&nbsp;&nbsp;·&nbsp;&nbsp;'.join(field_bits)
+                    + '</div>'
+                )
+
+            st.markdown(
+                gradient_card(content, border_color=lvl_color),
+                unsafe_allow_html=True,
             )
 
     except Exception as exc:
@@ -706,14 +715,15 @@ def _render_trade_war_monitor() -> None:
             rows,
         )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:12px;font-size:0.82rem;color:{C_TEXT2}">'
-            f'<b style="color:{C_MOD}">Key insight:</b> US-China tariff escalation to 145%/125% is the primary '
-            f'structural shock. Trans-Pacific container demand has fallen ~35% YoY on direct lanes, '
-            f'but transshipment via Vietnam and Mexico is surging, creating secondary port congestion. '
-            f'Carriers are deploying blank sailings to manage capacity utilisation.'
-            f'</div>'
+        st.markdown(
+            f'<div class="wsj-card">'
+            f'<span class="wsj-body"><b style="color:{C_MOD}">Key insight:</b>'
+            f' US-China tariff escalation to 145%/125% is the primary structural shock.'
+            f' Trans-Pacific container demand has fallen ~35% YoY on direct lanes,'
+            f' but transshipment via Vietnam and Mexico is surging, creating secondary port congestion.'
+            f' Carriers are deploying blank sailings to manage capacity utilisation.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
 
     except Exception as exc:
@@ -816,14 +826,15 @@ def _render_war_risk_premiums() -> None:
             rows,
         )
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:12px;font-size:0.82rem;color:{C_TEXT2}">'
-            f"<b style=\"color:{C_ACCENT}\">JWC Note:</b> The Joint War Committee (Lloyd's Market Association) "
-            f'maintains a Listed Areas schedule. Vessels transiting listed areas must notify their war risk '
-            f'underwriter and may face additional premium calls of 0.025–0.75% of vessel value per breach. '
-            f'Red Sea and Black Sea areas currently attract highest additional premium calls.'
-            f'</div>'
+        st.markdown(
+            f'<div class="wsj-card">'
+            f'<span class="wsj-body"><b style="color:{C_ACCENT}">JWC Note:</b>'
+            f" The Joint War Committee (Lloyd's Market Association) maintains a Listed Areas schedule."
+            f' Vessels transiting listed areas must notify their war risk underwriter'
+            f' and may face additional premium calls of 0.025–0.75% of vessel value per breach.'
+            f' Red Sea and Black Sea areas currently attract highest additional premium calls.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
 
     except Exception as exc:
@@ -862,12 +873,14 @@ def render(macro_data=None, insights=None, news_items=None) -> None:
         section_divider()
         _render_war_risk_premiums()
 
-        st.html(
-            f'<div style="margin-top:32px;padding-top:16px;border-top:1px solid {C_BORDER};'
-            f'font-size:0.73rem;color:{C_TEXT3};text-align:center">'
-            f"Data: IMO, Lloyd's MIU, BIMCO, US OFAC, EU Sanctions Map, Joint War Committee — "
-            f'Updated 2026-03-22 | For institutional use only. Not financial advice.'
-            f'</div>'
+        st.markdown(
+            source_footer([
+                {"name": "IMO / BIMCO", "kind": "demo", "quality": "demo"},
+                {"name": "Lloyd's MIU", "kind": "demo", "quality": "demo"},
+                {"name": "US OFAC / EU Sanctions Map", "kind": "demo", "quality": "demo"},
+                {"name": "Joint War Committee", "kind": "demo", "quality": "demo"},
+            ], align="center"),
+            unsafe_allow_html=True,
         )
 
     except Exception as exc:
