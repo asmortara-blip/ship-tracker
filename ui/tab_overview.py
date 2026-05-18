@@ -175,21 +175,20 @@ def _render_status_bar(
                 "quality": "good" if ok else "demo",
             })
 
-        st.markdown(
-            (
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'flex-wrap:wrap;gap:12px;margin-bottom:12px;">'
-                f'<div style="display:flex;align-items:center;gap:12px;">'
-                f'<span style="font-family:var(--sans);font-size:0.92rem;'
-                f'font-weight:700;color:{C_TEXT};letter-spacing:-0.02em;">Dashboard</span>'
-                f'{status_badge(tone, tone_status)}'
-                f'</div>'
-                f'<span style="font-family:var(--mono);font-size:0.66rem;'
-                f'color:{C_TEXT3};">{_now_utc()}</span>'
-                f'</div>'
-            ),
-            unsafe_allow_html=True,
-        )
+        _sb_left, _sb_right = st.columns([6, 2])
+        with _sb_left:
+            st.markdown(
+                f'<div class="section-banner">'
+                f'<span class="section-banner-title">Dashboard</span>'
+                f'&nbsp;&nbsp;{status_badge(tone, tone_status)}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with _sb_right:
+            st.markdown(
+                _mono(_now_utc(), color=C_TEXT3),
+                unsafe_allow_html=True,
+            )
 
         st.markdown(source_footer(feed_sources, align="left"), unsafe_allow_html=True)
     except Exception as exc:
