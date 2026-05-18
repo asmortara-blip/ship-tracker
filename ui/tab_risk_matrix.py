@@ -41,6 +41,7 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -65,12 +66,12 @@ _LEVEL_LABEL: dict[str, str] = {
     "CRITICAL": "CRITICAL",
 }
 
-# Badge color tokens accepted by `badge(text, color)` helper.
+# Badge color tokens accepted by `badge(text, color)` helper — hex required.
 _LEVEL_BADGE_COLOR: dict[str, str] = {
-    "LOW":      "green",
-    "MOD":      "yellow",
-    "HIGH":     "yellow",
-    "CRITICAL": "red",
+    "LOW":      C_HIGH,
+    "MOD":      C_MOD,
+    "HIGH":     C_MOD,
+    "CRITICAL": C_LOW,
 }
 
 _VOL_REGIME_COLOR: dict[str, str] = {
@@ -88,10 +89,10 @@ _SEVERITY_COLOR: dict[str, str] = {
 }
 
 _SEVERITY_BADGE_COLOR: dict[str, str] = {
-    "CRITICAL": "red",
-    "HIGH":     "yellow",
-    "MODERATE": "blue",
-    "LOW":      "green",
+    "CRITICAL": C_LOW,
+    "HIGH":     C_MOD,
+    "MODERATE": C_ACCENT,
+    "LOW":      C_HIGH,
 }
 
 
@@ -124,8 +125,8 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 def _sans_with_sub(value: str, sub: str, color: str = C_TEXT) -> str:
     return (
         f'<span style="font-family:var(--sans);color:{color};font-weight:600;">{value}</span>'
-        f'<div style="font-family:var(--sans);color:{C_TEXT3};font-size:0.74rem;'
-        f'font-weight:400;margin-top:2px;">{sub}</div>'
+        f'<span style="display:block;font-family:var(--sans);color:{C_TEXT3};font-size:0.74rem;'
+        f'font-weight:400;margin-top:2px;">{sub}</span>'
     )
 
 
@@ -162,11 +163,8 @@ def _risk_score_color(score: float) -> str:
 
 
 def _render_badge_row(source: DataSource) -> None:
-    """Render a single `live_data_badge` pill aligned to the right."""
-    st.html(
-        f'<div style="display:flex;justify-content:flex-end;margin-bottom:6px;">'
-        f'{live_data_badge(source)}</div>'
-    )
+    """Render a single provenance pill right-aligned via source_footer."""
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,7 +350,7 @@ def _render_risk_factor_matrix(source: DataSource) -> None:
         for rf in _RISK_FACTORS:
             lv      = rf["level"]
             lv_lbl  = _LEVEL_LABEL.get(lv, lv)
-            lv_bdg  = _LEVEL_BADGE_COLOR.get(lv, "blue")
+            lv_bdg  = _LEVEL_BADGE_COLOR.get(lv, C_ACCENT)
             chg     = rf["change"]
             chg_clr = C_LOW if chg.startswith("+") else C_HIGH
 
@@ -730,13 +728,10 @@ def render(stock_data, macro_data, insights, freight_data=None):
         alerts = _build_alerts(insights, macro_data, freight_data, rng)
         _render_alert_queue(alerts, alert_source)
 
-        # Footer timestamp (uses sub-section-header class + thin rule).
+        # Footer timestamp — divider provides the thin top rule; caption handles muted text.
         now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        st.html(
-            f'<div style="text-align:right;color:{C_TEXT3};font-family:var(--sans);'
-            f'font-size:0.72rem;margin-top:24px;padding-top:10px;'
-            f'border-top:1px solid {C_RULE};">Last updated: {now}</div>'
-        )
+        st.divider()
+        st.caption(f"Last updated: {now}")
 
     except Exception as exc:
         logger.error(f"tab_risk_matrix render error: {exc}")
