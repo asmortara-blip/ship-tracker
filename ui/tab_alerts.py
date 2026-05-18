@@ -45,9 +45,9 @@ _SEV_COLOR: dict[str, str] = {
 }
 
 _SEV_BADGE: dict[str, str] = {
-    "Critical": "red",
-    "Warning":  "yellow",
-    "Info":     "blue",
+    "Critical": C_LOW,
+    "Warning":  C_MOD,
+    "Info":     C_ACCENT,
 }
 
 _METRIC_ICONS: dict[str, str] = {
@@ -93,7 +93,7 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 
 
 def _sev_badge(sev: str) -> str:
-    return badge(sev, _SEV_BADGE.get(sev, "blue"))
+    return badge(sev, _SEV_BADGE.get(sev, C_ACCENT))
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +602,6 @@ def _render_active_alerts(visible_alerts: list[dict]) -> None:
         wsj_market_table(headers, rows)
 
         # Dismissal controls
-        st.html("<div style='height:8px;'></div>")
         cols = st.columns(min(4, len(visible_alerts)))
         for idx, alert in enumerate(visible_alerts):
             with cols[idx % len(cols)]:
@@ -653,7 +652,7 @@ def _render_history() -> None:
             ts       = _fmt_dt(alert.get("triggered_at", ""))
             dismissed = alert.get("dismissed", False)
             status_badge = (
-                badge("Dismissed", "blue") if dismissed else badge("Active", "green")
+                badge("Dismissed", C_ACCENT) if dismissed else badge("Active", C_HIGH)
             )
 
             rows.append([
@@ -707,7 +706,7 @@ def _render_notifications() -> None:
                     help="Bundle multiple alerts into a single email digest.",
                 )
                 st.html(
-                    '<div class="sub-section-header" style="margin-top:10px;">'
+                    '<div class="sub-section-header">'
                     'Digest emails summarise all triggered alerts into a single '
                     'message at the configured frequency. Critical alerts are '
                     'always sent immediately when Immediate is selected.'
