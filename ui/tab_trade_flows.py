@@ -38,6 +38,7 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    gradient_card,
     live_data_badge,
     page_header,
     section_header,
@@ -455,14 +456,14 @@ def _render_commodity_cards() -> None:
             insight = _key_insight(cat_key, yoy, signal)
             color = COMMODITY_COLORS.get(cat_key, C_ACCENT)
             label = cat_meta["label"]
-            st.html(
-                f'<div style="border-left:2px solid {color};padding:6px 12px;'
-                f'margin-bottom:6px;font-family:var(--sans);font-size:0.82rem;'
+            content_html = (
+                f'<span style="font-family:var(--sans);font-size:0.82rem;'
                 f'color:{C_TEXT2};line-height:1.5;">'
                 f'<span style="color:{C_TEXT};font-weight:600;">{label}.</span> '
                 f'{insight}'
-                f'</div>'
+                f'</span>'
             )
+            st.html(gradient_card(content_html, border_color=color))
 
     except Exception as exc:
         logger.warning(f"Commodity cards render failed: {exc}")
