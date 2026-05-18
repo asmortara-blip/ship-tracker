@@ -49,6 +49,7 @@ from ui.styles import (
     RISK_COLORS,
     apply_dark_layout,
     badge,
+    gradient_card,
     insight_card_html,
     metric_card_row,
     page_header,
@@ -383,7 +384,7 @@ def _render_enhanced_equipment_overview() -> None:
          "accent": C_LOW, "sublabel": "CRITICAL or HIGH shortage"},
     ], columns=4)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.write("")
 
     # ── SCATTERGEO — equipment balance by region ──────────────────────────
     section_header(
@@ -444,21 +445,24 @@ def _render_enhanced_equipment_overview() -> None:
     )
     st.plotly_chart(fig_geo, use_container_width=True, key="new_equip_geo_map")
 
-    # Color legend
+    # Color legend — dot markers with class-based layout, only color is inline
+    legend_items = "".join(
+        f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;">'
+        f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+        f'background:{col};flex-shrink:0;"></span>'
+        f'<span class="wsj-byline" style="text-transform:none;letter-spacing:0;">{lbl}</span>'
+        f'</span>'
+        for col, lbl in [
+            (C_HIGH, "Large surplus (>+20)"),
+            (_TEAL,  "Slight surplus"),
+            (C_MOD, "Slight deficit"),
+            (C_LOW,   "Large deficit (<-20)"),
+        ]
+    )
     st.markdown(
-        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:-4px;margin-bottom:8px">'
-        + "".join(
-            f'<div style="display:flex;align-items:center;gap:6px">'
-            f'<div style="width:10px;height:10px;border-radius:50%;background:{col}"></div>'
-            f'<span style="font-size:0.70rem;color:{C_TEXT2}">{lbl}</span></div>'
-            for col, lbl in [
-                (C_HIGH, "Large surplus (>+20)"),
-                (_TEAL,  "Slight surplus"),
-                (C_MOD, "Slight deficit"),
-                (C_LOW,   "Large deficit (<-20)"),
-            ]
-        )
-        + "</div>", unsafe_allow_html=True)
+        f'<div class="wsj-body">{legend_items}</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown(source_footer([
         {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
@@ -554,11 +558,8 @@ def _render_enhanced_equipment_overview() -> None:
         st.plotly_chart(fig_tt, use_container_width=True, key="new_equip_turntime_bar")
 
     with col_tt_cards:
-        st.markdown(
-            f"<div style='font-size:0.70rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px'>Port Detail</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="sub-section-header">Port Detail</div>',
+                    unsafe_allow_html=True)
         port_rows = []
         for p in _TURN_TIME_HIGHLIGHT:
             rc = RISK_COLORS.get(p["risk"], C_TEXT2)
@@ -660,7 +661,7 @@ def _render_global_pool_overview() -> None:
          "accent": idx_color, "sublabel": idx_label},
     ], columns=5)
 
-    st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
+    st.write("")
 
     # ── Row 2: Fleet composition donut + YoY metrics ─────────────────────
     col_donut, col_fleet, col_reposition = st.columns([2, 2, 3])
@@ -881,8 +882,9 @@ def _render_shortage_surplus_map() -> None:
         # Risk legend
         legend_html = " &nbsp; ".join(badge(r, color=RISK_COLORS[r]) for r in ["LOW","MODERATE","HIGH","CRITICAL"])
         st.markdown(
-            f"<div style='font-size:0.76rem;color:{C_TEXT3};margin-top:-6px;'>"
-            f"Shortage Risk: {legend_html}</div>", unsafe_allow_html=True)
+            f'<div class="wsj-byline">Shortage Risk: {legend_html}</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown(source_footer([
             {"name": "Drewry Container Equipment Index", "kind": "modeled", "quality": "demo"},
             {"name": "Alphaliner Fleet Database",        "kind": "modeled", "quality": "demo"},
@@ -900,18 +902,18 @@ def _render_shortage_surplus_map() -> None:
             worst_risk = worst.shortage_risk if worst else "LOW"
             risk_tag   = badge(worst_risk, color=RISK_COLORS.get(worst_risk, C_TEXT2))
 
+            region_content = (
+                f'<span class="port-name" style="font-size:0.82rem;">{region}</span>'
+                f'<span style="float:right;font-family:var(--sans);font-size:0.78rem;'
+                f'font-weight:700;color:{color};">{avg_util:.0f}% avg util</span>'
+                f'<span class="port-detail" style="display:block;margin-top:5px;">'
+                f'<span>{total_k:.0f}K TEU tracked</span>'
+                f'<span style="float:right;">{risk_tag}</span></span>'
+            )
             st.markdown(
-                f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-                f"border-left:3px solid {color};border-radius:6px;"
-                f"padding:10px 14px;margin-bottom:6px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-                f"<span style='font-size:0.82rem;font-weight:700;color:{C_TEXT};'>{region}</span>"
-                f"<span style='font-size:0.78rem;font-weight:700;color:{color};'>"
-                f"{avg_util:.0f}% avg util</span></div>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:5px;'>"
-                f"<span style='font-size:0.72rem;color:{C_TEXT3};'>{total_k:.0f}K TEU tracked</span>"
-                f"{risk_tag}</div>"
-                f"</div>", unsafe_allow_html=True)
+                gradient_card(region_content, border_color=color),
+                unsafe_allow_html=True,
+            )
 
     # CSV export
     rows = [{"Region": e.region,
@@ -1072,23 +1074,21 @@ def _render_repositioning_costs() -> None:
     max_route = max(TRADE_IMBALANCE_DATA, key=lambda m: m.empty_container_repositioning_cost_per_feu)
     avg_days  = sum(m.repositioning_days for m in TRADE_IMBALANCE_DATA) / len(TRADE_IMBALANCE_DATA)
 
-    st.markdown(
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-radius:6px;padding:14px 20px;display:flex;gap:40px;flex-wrap:wrap;margin-top:8px;'>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-        f"Avg Repositioning Cost</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{C_MOD};margin-top:4px;'>${avg_cost:,.0f}/FEU</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-        f"Highest Cost Route</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{C_LOW};margin-top:4px;'>"
-        f"{max_route.route_id.replace('_',' ').title()} — ${max_route.empty_container_repositioning_cost_per_feu:,}</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-        f"Avg Reposition Days</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{C_ACCENT};margin-top:4px;'>{avg_days:.0f} days</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;letter-spacing:0.07em;'>"
-        f"Routes Tracked</div>"
-        f"<div style='font-size:1.1rem;font-weight:700;color:{C_TEXT};margin-top:4px;'>{len(TRADE_IMBALANCE_DATA)}</div></div>"
-        f"</div>", unsafe_allow_html=True)
+    metric_card_row([
+        {"label": "Avg Repositioning Cost",
+         "value": f"${avg_cost:,.0f}/FEU",
+         "accent": C_MOD},
+        {"label": "Highest Cost Route",
+         "value": f"${max_route.empty_container_repositioning_cost_per_feu:,}",
+         "accent": C_LOW,
+         "sublabel": max_route.route_id.replace("_", " ").title()},
+        {"label": "Avg Reposition Days",
+         "value": f"{avg_days:.0f} days",
+         "accent": C_ACCENT},
+        {"label": "Routes Tracked",
+         "value": str(len(TRADE_IMBALANCE_DATA)),
+         "accent": C_TEXT},
+    ], columns=4)
 
     # Per-route table
     table_rows = []
@@ -1213,10 +1213,8 @@ def _render_dwell_times() -> None:
         st.plotly_chart(fig, use_container_width=True, key="equip_dwell_bar")
 
     with col_cards:
-        st.markdown(
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
-            f"Port Detail</div>", unsafe_allow_html=True)
+        st.markdown('<div class="sub-section-header">Port Detail</div>',
+                    unsafe_allow_html=True)
         _trend_color_map = {"improving": C_HIGH, "stable": C_MOD, "worsening": C_LOW}
         rows: List[List[str]] = []
         for p in filtered_sorted[:10]:  # show top 10
@@ -1318,7 +1316,7 @@ def _render_reefer_section() -> None:
          "accent": _ROSE,    "sublabel": "CRITICAL shortage"},
     ], columns=5)
 
-    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+    st.write("")
 
     col_left, col_right = st.columns([3, 2])
 
@@ -1423,10 +1421,8 @@ def _render_reefer_section() -> None:
 
     with col_right:
         # Reefer commodity breakdown
-        st.markdown(
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
-            f"Top Reefer Commodities</div>", unsafe_allow_html=True)
+        st.markdown('<div class="sub-section-header">Top Reefer Commodities</div>',
+                    unsafe_allow_html=True)
         for comm in _REEFER_COMMODITIES:
             score = min(comm["share_pct"] / 25.0, 1.0)
             st.markdown(insight_card_html(
@@ -1438,10 +1434,8 @@ def _render_reefer_section() -> None:
             ), unsafe_allow_html=True)
 
         # Deficit days by region summary
-        st.markdown(
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-top:14px;margin-bottom:8px;'>"
-            f"Reefer Deficit Days by Region</div>", unsafe_allow_html=True)
+        st.markdown('<div class="sub-section-header">Reefer Deficit Days by Region</div>',
+                    unsafe_allow_html=True)
         deficit_rows = []
         for e in reefers:
             d = e.days_surplus_deficit
@@ -1509,28 +1503,19 @@ def _render_shortage_alerts() -> None:
     crit_count = sum(1 for a in alerts if a["risk"] == "CRITICAL")
     high_count = sum(1 for a in alerts if a["risk"] == "HIGH")
 
+    metric_card_row([
+        {"label": "Active Alerts", "value": str(len(alerts)), "accent": C_LOW},
+        {"label": "Critical",      "value": str(crit_count),  "accent": C_LOW},
+        {"label": "High Risk",     "value": str(high_count),  "accent": C_MOD},
+    ], columns=3)
     st.markdown(
-        f"<div style='background:{C_CARD};border:1px solid {C_BORDER};"
-        f"border-left:4px solid {C_LOW};border-radius:6px;"
-        f"padding:14px 20px;display:flex;gap:32px;flex-wrap:wrap;margin-bottom:16px;'>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Active Alerts</div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:{C_LOW};margin-top:2px;'>"
-        f"{len(alerts)}</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>Critical</div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:#b91c1c;margin-top:2px;'>"
-        f"{crit_count}</div></div>"
-        f"<div><div style='font-size:0.68rem;color:{C_TEXT2};text-transform:uppercase;"
-        f"letter-spacing:0.07em;'>High Risk</div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:{C_LOW};margin-top:2px;'>"
-        f"{high_count}</div></div>"
-        f"<div style='flex:1;display:flex;align-items:center;'>"
-        f"<div style='font-size:0.80rem;color:{C_TEXT3};'>"
-        f"Alerts represent region × container-type combinations where "
-        f"utilization and deficit days indicate shortage risk to booked cargo. "
-        f"Rate premiums of 15–45% above baseline are typical in CRITICAL conditions.</div></div>"
-        f"</div>", unsafe_allow_html=True)
+        '<div class="wsj-body">'
+        'Alerts represent region × container-type combinations where '
+        'utilization and deficit days indicate shortage risk to booked cargo. '
+        'Rate premiums of 15–45% above baseline are typical in CRITICAL conditions.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     risk_to_action = {"CRITICAL": "Avoid", "HIGH": "Caution", "MODERATE": "Monitor", "LOW": "Watch"}
 
@@ -1610,10 +1595,8 @@ def _render_age_distribution() -> None:
         )
 
     with col_table:
-        st.markdown(
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;'>"
-            f"Age Bracket Details</div>", unsafe_allow_html=True)
+        st.markdown('<div class="sub-section-header">Age Bracket Details</div>',
+                    unsafe_allow_html=True)
         global_fleet = _GLOBAL_TEU_POOL["total_teu_m"]
         age_metrics = [
             {
@@ -1808,10 +1791,8 @@ def _render_lease_vs_own() -> None:
         ]), unsafe_allow_html=True)
 
     with col_table:
-        st.markdown(
-            f"<div style='font-size:0.72rem;font-weight:700;color:{C_TEXT2};"
-            f"text-transform:uppercase;letter-spacing:0.07em;margin-bottom:12px;'>"
-            f"Lease/Own Detail by Type</div>", unsafe_allow_html=True)
+        st.markdown('<div class="sub-section-header">Lease/Own Detail by Type</div>',
+                    unsafe_allow_html=True)
         for r in _LEASE_VS_OWN:
             prem = r["lease_premium"]
             pref = (
@@ -1928,7 +1909,7 @@ def _render_cost_calculator(route_results: Any) -> None:
     else:
         imb_label, imb_color = "Near-balanced trade flow", C_HIGH
 
-    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+    st.write("")
 
     # KPI output row
     metric_card_row([
@@ -1942,7 +1923,7 @@ def _render_cost_calculator(route_results: Any) -> None:
          "accent": C_CONV,   "sublabel": "repositioning as % of base rate"},
     ], columns=4)
 
-    st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+    st.write("")
 
     # Detail strip
     metric_card_row([
