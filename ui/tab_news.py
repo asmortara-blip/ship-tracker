@@ -456,8 +456,7 @@ def _render_news_feed(articles: list[dict]) -> None:
                 ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
                 st.markdown(
                     f'<div class="wsj-card">'
-                    f'<p class="wsj-news-text" style="font-size:0.84rem;'
-                    f'color:{C_TEXT};line-height:1.7;margin:0 0 10px 0;">'
+                    f'<p class="wsj-news-text">'
                     f'{a["summary"]}</p>'
                     f'<span class="section-label">Entities mentioned: </span>'
                     f'<span style="font-family:var(--sans);font-size:0.78rem;'
