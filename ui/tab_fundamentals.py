@@ -512,15 +512,12 @@ def _render_dividend_tracker(df: pd.DataFrame) -> None:
             hist_str = " / ".join(f"${v:.2f}" for v in hist)
             payout_disp = min(total_ttm / r["price"] * 100, 99)
             stability_cell = (
-                f'<div style="display:flex;align-items:center;gap:6px;">'
-                f'<div style="background:{C_BORDER};border-radius:2px;'
-                f'height:6px;width:80px;overflow:hidden;">'
-                f'<div style="background:{stab_color};height:100%;width:{stab_pct}%;'
-                f'border-radius:2px;"></div>'
+                f'<div class="progress-bar-custom">'
+                f'<div class="progress-bar-fill"'
+                f' style="width:{stab_pct}%;background:{stab_color};"></div>'
                 f'</div>'
-                f'<span style="color:{stab_color};font-size:11px;font-weight:600;'
-                f'font-family:var(--mono);">{stab_pct}%</span>'
-                f'</div>'
+                f'<span style="font-family:var(--mono);color:{stab_color};">'
+                f'{stab_pct}%</span>'
             )
             table_rows.append([
                 _sans(tk, color=C_ACCENT, weight=700),
