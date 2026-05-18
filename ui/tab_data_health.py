@@ -38,12 +38,15 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    live_data_badge,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+from data.quality import DataSource
 
 try:
     from data.cache_manager import CacheManager
@@ -54,14 +57,8 @@ except Exception:
 _CACHE_DIR = Path(__file__).parent.parent / "cache"
 
 # ── Status maps ───────────────────────────────────────────────────────────────
-_STATUS_BADGE: dict[str, str] = {
-    "LIVE":           "green",
-    "STALE":          "yellow",
-    "EXPIRED":        "red",
-    "UNAVAILABLE":    "red",
-    "NOT CONFIGURED": "gray",
-}
-
+# Keep domain-specific status → hex color mapping local to this tab.
+# Pass hex values directly to badge(); named CSS colors are not accepted.
 _STATUS_HEX: dict[str, str] = {
     "LIVE":           C_HIGH,
     "STALE":          C_MOD,
@@ -240,7 +237,7 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _status_pill(status: str) -> str:
-    return badge(status, _STATUS_BADGE.get(status, "gray"))
+    return badge(status, _STATUS_HEX.get(status, C_TEXT3))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -331,6 +328,11 @@ def _render_overview(source_rows: list[dict]) -> None:
         {"label": "FAILING / UNCFG",  "value": f"{failing}",    "accent": C_LOW,    "sublabel": "Expired / unavailable"},
         {"label": "DATA COVERAGE",    "value": f"{coverage}%",  "accent": C_ACCENT, "sublabel": "Healthy / total"},
     ], columns=5)
+    # Status is derived from disk scan + seeded fallback for sources with no cache file.
+    st.markdown(
+        source_footer([DataSource.live("Cache Scan", notes="Disk + env"), DataSource.demo("Age / Records (fallback synthetic)")]),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_source_table(source_rows: list[dict]) -> None:
@@ -352,6 +354,11 @@ def _render_source_table(source_rows: list[dict]) -> None:
             _mono(r["endpoint"], color=C_TEXT3),
         ])
     wsj_market_table(headers, rows)
+    # Record counts are synthetic fallback when no cache file is present.
+    st.markdown(
+        source_footer([DataSource.live("Cache Scan", notes="Disk + env"), DataSource.demo("Records (synthetic fallback)")]),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_cache_performance(source_rows: list[dict]) -> None:
@@ -373,6 +380,11 @@ def _render_cache_performance(source_rows: list[dict]) -> None:
             _mono(f"{hit_pct}%", color=hit_col, weight=700),
         ])
     wsj_market_table(headers, rows)
+    # Fetches, avg fetch time, and hit rate are synthetic (seeded random); cache size reflects disk.
+    st.markdown(
+        source_footer([DataSource.demo("Fetches / Avg ms / Hit Rate (synthetic)"), DataSource.live("Cache Size", notes="Disk scan")]),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_api_keys() -> None:
@@ -381,7 +393,7 @@ def _render_api_keys() -> None:
     rows: list[list[str]] = []
     for k in _API_KEYS:
         configured = _key_configured(k["env"])
-        cfg_pill = badge("CONFIGURED", "green") if configured else badge("MISSING", "red")
+        cfg_pill = badge("CONFIGURED", C_HIGH) if configured else badge("MISSING", C_LOW)
         rng = random.Random(_seed_from_name(k["service"]))
         usage = rng.randint(0, 80) if configured else 0
         pct = usage
@@ -395,6 +407,11 @@ def _render_api_keys() -> None:
             _mono(f"{pct}%", color=pct_col, weight=700),
         ])
     wsj_market_table(headers, rows)
+    # Usage-today column is synthetic (seeded random); key presence is live env check.
+    st.markdown(
+        source_footer([DataSource.demo("Usage Today (synthetic)"), DataSource.live("Key Presence", notes="os.environ / st.secrets")]),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_staleness_heatmap(source_rows: list[dict]) -> None:
@@ -444,6 +461,10 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
             yaxis=dict(tickfont=dict(size=10, color=C_TEXT2), showgrid=False),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            live_data_badge(DataSource.demo("Staleness pattern (synthetic — awaiting live telemetry)")),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Staleness heatmap error: {exc}")
         st.warning("Heatmap unavailable.")
@@ -462,7 +483,7 @@ def _render_error_log() -> None:
     rows: list[list[str]] = []
     for e in mock_errors:
         ts_str = e["ts"].strftime("%Y-%m-%d %H:%M")
-        status_pill = badge("RESOLVED", "green") if e["resolved"] else badge("OPEN", "red")
+        status_pill = badge("RESOLVED", C_HIGH) if e["resolved"] else badge("OPEN", C_LOW)
         rows.append([
             _mono(ts_str, color=C_TEXT2),
             _sans(e["source"], weight=600),
@@ -471,6 +492,10 @@ def _render_error_log() -> None:
             status_pill,
         ])
     wsj_market_table(headers, rows)
+    st.markdown(
+        live_data_badge(DataSource.demo("Error log (demo — awaiting log wiring)")),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_manual_refresh(source_rows: list[dict]) -> None:
@@ -571,6 +596,10 @@ def _render_data_quality(
             _sans(anom_txt, color=anom_col),
         ])
     wsj_market_table(headers, rows)
+    st.markdown(
+        live_data_badge(DataSource.live("In-Memory Datasets", notes="Null % / anomaly computed at render time")),
+        unsafe_allow_html=True,
+    )
 
 
 # ── Build source rows ─────────────────────────────────────────────────────────
