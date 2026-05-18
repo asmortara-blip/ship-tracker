@@ -18,23 +18,35 @@ import streamlit as st
 from loguru import logger
 
 from ui.styles import (
-    C_BG, C_CARD, C_BORDER, C_TEXT, C_TEXT2, C_TEXT3,
-    C_HIGH, C_MOD, C_LOW, C_ACCENT,
-    _hex_to_rgba, section_header, dark_layout,
+    C_ACCENT,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    metric_card_row,
+    page_header,
+    section_header,
+    source_footer,
 )
 
-# ── Colours ───────────────────────────────────────────────────────────────────
+# ── Domain-specific color aliases ─────────────────────────────────────────────
+# These are vessel/region-domain color overrides — kept local to the tab.
+# They are NOT module-level palette redeclarations; the palette lives in
+# ui/styles.py. Several happen to reuse palette hex values (by design) so
+# the vessel/region color maps stay self-contained and readable.
 
-_C_BLUE    = "#3572b0"
-_C_ORANGE  = "#f97316"
-_C_RED     = "#c0392b"
-_C_AMBER   = "#c9962b"
-_C_GREEN   = "#2e9e6e"
-_C_PURPLE  = "#7c6eaf"
-_C_CYAN    = "#4a90a4"
-_C_GRAY    = "#475569"
-_C_INDIGO  = "#6366f1"
-_C_BG_SURF = "#12151e"
+_C_BLUE    = "#3572b0"   # same as C_ACCENT — used for container & Asia East
+_C_ORANGE  = "#f97316"   # Bulk Carrier / Africa
+_C_RED     = "#c0392b"   # same as C_LOW — Tanker
+_C_AMBER   = "#c9962b"   # same as C_MOD — LNG / Middle East
+_C_GREEN   = "#2e9e6e"   # same as C_HIGH — Passenger / NA West
+_C_PURPLE  = "#7c6eaf"   # same as C_CONV — Fishing / Europe
+_C_CYAN    = "#4a90a4"   # same as C_MACRO — SE Asia
+_C_GRAY    = "#475569"   # Other / Unknown
+_C_INDIGO  = "#6366f1"   # Cargo
 
 _TYPE_COLOR: dict[str, str] = {
     "Container":   _C_BLUE,
@@ -208,7 +220,7 @@ def _render_global_map(
         ),
         text=port_names,
         textposition="top center",
-        textfont=dict(color="#9a968e", size=9),
+        textfont=dict(color=C_TEXT2, size=9),
         name="Ports",
         hovertext=port_hover,
         hoverinfo="text",
@@ -265,7 +277,15 @@ def _render_global_map(
             showlegend=True,
         ))
 
-    fig.update_layout(
+    # Apply base dark theme from design system, then overlay geo-specific colors.
+    # NOTE: geo landcolor/oceancolor/bgcolor are NOT covered by apply_dark_layout;
+    # using explicit values that match the dark palette is correct and expected.
+    apply_dark_layout(
+        fig,
+        height=620,
+        showlegend=True,
+        legend_orientation="v",
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
         geo=dict(
             showframe=False,
             showcoastlines=True,
@@ -281,16 +301,11 @@ def _render_global_map(
             projection_type="natural earth",
             bgcolor="rgba(10,15,26,1)",
         ),
-        paper_bgcolor="rgba(10,15,26,1)",
-        plot_bgcolor="rgba(10,15,26,1)",
-        height=620,
-        margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=True,
         legend=dict(
             bgcolor="rgba(17,24,39,0.85)",
             bordercolor="rgba(232,230,225,0.06)",
             borderwidth=1,
-            font=dict(color="#9a968e", size=11),
+            font=dict(color=C_TEXT2, size=11),
             x=0.01, y=0.01,
             xanchor="left", yanchor="bottom",
         ),
@@ -304,6 +319,19 @@ def _render_global_map(
         st.caption(f"Data source: {src_label} · {len(all_vessels)} vessels tracked across {len(_PORTS)} ports")
     except Exception as e:
         st.error(f"Map render error: {e}")
+
+    # Provenance pill — synthetic fallback when AISSTREAM_KEY is not set
+    try:
+        from data.aisstream_feed import aisstream_available
+        from data.quality import DataSource
+        if aisstream_available():
+            ds_map = DataSource.live("AISstream.io", url="https://aisstream.io", sla_hours=0.5)
+        else:
+            ds_map = DataSource.demo("Synthetic AIS")
+    except Exception:
+        from data.quality import DataSource
+        ds_map = DataSource.demo("Synthetic AIS")
+    st.markdown(source_footer([ds_map]), unsafe_allow_html=True)
 
 
 # ── Section B: Port vessel table ──────────────────────────────────────────────
@@ -372,6 +400,19 @@ def _render_port_vessel_table(vessel_map: dict[str, list[dict]]) -> str:
     except Exception as e:
         st.error(f"Vessel table error: {e}")
 
+    # Provenance pill
+    try:
+        from data.aisstream_feed import aisstream_available
+        from data.quality import DataSource
+        if aisstream_available():
+            ds_tbl = DataSource.live("AISstream.io", url="https://aisstream.io", sla_hours=0.5)
+        else:
+            ds_tbl = DataSource.demo("Synthetic AIS")
+    except Exception:
+        from data.quality import DataSource
+        ds_tbl = DataSource.demo("Synthetic AIS")
+    st.markdown(source_footer([ds_tbl]), unsafe_allow_html=True)
+
     return selected_locode
 
 
@@ -405,33 +446,50 @@ def _render_fleet_donut(vessel_map: dict[str, list[dict]], selected_locode: str)
                 line=dict(color="rgba(10,15,26,1)", width=2),
             ),
             textinfo="label+percent",
-            textfont=dict(color="#e8e6e1", size=11),
+            textfont=dict(color=C_TEXT, size=11),
             hovertemplate="<b>%{label}</b><br>%{value} vessels (%{percent})<extra></extra>",
         ))
 
         port_name = next((p["name"] for p in _PORTS if p["locode"] == selected_locode), selected_locode)
         total = sum(values)
-        fig.update_layout(
-            **dark_layout(title="", height=320),
+
+        # Apply design-system dark theme; pass additional layout overrides as kwargs.
+        apply_dark_layout(
+            fig,
+            height=320,
+            showlegend=True,
+            legend_orientation="v",
+            margin={"l": 10, "r": 120, "t": 20, "b": 10},
             annotations=[dict(
                 text=f"<b>{total}</b><br><span style='font-size:10px'>vessels</span>",
                 x=0.5, y=0.5,
-                font=dict(size=20, color="#e8e6e1"),
+                font=dict(size=20, color=C_TEXT),
                 showarrow=False,
             )],
-            showlegend=True,
             legend=dict(
                 bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#9a968e", size=11),
+                font=dict(color=C_TEXT2, size=11),
                 orientation="v",
                 x=1.02, y=0.5,
             ),
-            margin=dict(l=10, r=120, t=20, b=10),
         )
 
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="vessel_map_donut")
     except Exception as e:
         st.error(f"Fleet composition chart error: {e}")
+
+    # Provenance pill
+    try:
+        from data.aisstream_feed import aisstream_available
+        from data.quality import DataSource
+        if aisstream_available():
+            ds_donut = DataSource.live("AISstream.io", url="https://aisstream.io", sla_hours=0.5)
+        else:
+            ds_donut = DataSource.demo("Synthetic AIS")
+    except Exception:
+        from data.quality import DataSource
+        ds_donut = DataSource.demo("Synthetic AIS")
+    st.markdown(source_footer([ds_donut]), unsafe_allow_html=True)
 
 
 # ── Section D: Live metrics strip ─────────────────────────────────────────────
@@ -469,32 +527,50 @@ def _render_metrics_strip(vessel_map: dict[str, list[dict]]) -> None:
     except Exception:
         live_label = "Synthetic"
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    metric_style = (
-        "background:#181c28;border:1px solid rgba(232,230,225,0.06);border-radius:6px;"
-        "padding:14px 16px;text-align:center;"
+    metric_card_row(
+        [
+            {
+                "label":  "Vessels Tracked",
+                "value":  str(total),
+                "accent": C_ACCENT,
+            },
+            {
+                "label":  "Avg Speed",
+                "value":  f"{avg_speed:.1f} kts",
+                "accent": C_HIGH,
+            },
+            {
+                "label":  f"Busiest Port ({busiest_count})",
+                "value":  busiest_name,
+                "accent": C_MOD,
+            },
+            {
+                "label":  "Container/Cargo Share",
+                "value":  f"{container_pct:.0f}%",
+                "accent": _C_INDIGO,
+            },
+            {
+                "label":  "Data Source",
+                "value":  live_label,
+                "accent": C_ACCENT if live_label == "Live AIS" else C_TEXT3,
+            },
+        ],
+        columns=5,
     )
-
-    def _metric_card(col, value: str, label: str, color: str = _C_BLUE) -> None:
-        col.html(
-            f'<div style="{metric_style}">'
-            f'<div style="font-size:1.5rem;font-weight:800;color:{color};line-height:1">{value}</div>'
-            f'<div style="font-size:0.68rem;color:#6b6760;text-transform:uppercase;'
-            f'letter-spacing:0.08em;margin-top:4px">{label}</div>'
-            f"</div>"
-        )
-
-    _metric_card(c1, str(total), "Vessels Tracked", _C_BLUE)
-    _metric_card(c2, f"{avg_speed:.1f} kts", "Avg Speed", _C_GREEN)
-    _metric_card(c3, busiest_name, f"Busiest Port ({busiest_count})", _C_AMBER)
-    _metric_card(c4, f"{container_pct:.0f}%", "Container/Cargo Share", _C_INDIGO)
-    _metric_card(c5, live_label, "Data Source", _C_CYAN if live_label == "Live AIS" else _C_GRAY)
 
 
 # ── Public render entry-point ─────────────────────────────────────────────────
 
 def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     """Render the full Live Vessel Tracking Map tab."""
+
+    # ── Page header ───────────────────────────────────────────────────────────
+    page_header(
+        title="Live Vessel Tracking",
+        subtitle="Global AIS vessel positions, port traffic, and fleet composition",
+        badge_text="AIS",
+        badge_color=C_ACCENT,
+    )
 
     # ── Load vessel data ──────────────────────────────────────────────────────
     vessel_map: dict[str, list[dict]] = {}
@@ -525,7 +601,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Metrics strip error: {e}")
 
-    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+    st.divider()
 
     # ── A. Global map ─────────────────────────────────────────────────────────
     try:
@@ -533,7 +609,7 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     except Exception as e:
         st.error(f"Global map error: {e}")
 
-    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+    st.divider()
 
     # ── B + C. Port table and donut side by side ──────────────────────────────
     col_left, col_right = st.columns([3, 2], gap="large")
