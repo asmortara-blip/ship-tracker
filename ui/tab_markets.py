@@ -418,9 +418,8 @@ def _render_type_breakdown(signals: list) -> None:
                 f'<div class="progress-bar-fill" style="width:{pct:.1f}%;background:{bar_c};"></div>'
                 f'</div></div>'
             )
-        # wsj-card uses class-based background/border from global CSS — no inline style needed
         st.markdown(
-            f'<div class="wsj-card" style="padding:20px 24px;">'
+            f'<div class="wsj-card">'
             f'<style>.signal-type-row{{margin-bottom:14px;}}'
             f'.signal-type-label{{display:flex;justify-content:space-between;margin-bottom:5px;}}'
             f'</style>'
