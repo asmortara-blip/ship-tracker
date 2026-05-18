@@ -10,81 +10,102 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
-    C_BG, C_SURFACE, C_CARD, C_BORDER,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
-    C_CONV, C_MACRO,
-    dark_layout,
+    C_CONV, C_MACRO, C_SURFACE,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    metric_card_row,
+    page_header,
     section_header,
+    source_footer,
+    wsj_market_table,
 )
 
 # ---------------------------------------------------------------------------
-# Color aliases
+# Domain-specific color mappings — kept local to the tab
 # ---------------------------------------------------------------------------
 
-_C_WIN   = C_HIGH    # green
-_C_LOSS  = C_LOW     # red
-_C_NEUT  = C_ACCENT  # blue
-_C_AMB   = C_MOD     # amber
-_C_PURP  = C_CONV    # purple
-_C_CYAN  = C_MACRO   # cyan
-_C_BG    = C_BG
-_C_SURF  = C_SURFACE
-_C_CARD  = C_CARD
-
-_CONVICTION_COLORS = {
-    "HIGH":   _C_WIN,
-    "MEDIUM": _C_AMB,
-    "LOW":    _C_LOSS,
+_CONVICTION_COLORS: dict[str, str] = {
+    "HIGH":   C_HIGH,
+    "MEDIUM": C_MOD,
+    "LOW":    C_LOW,
 }
 
-_TYPE_COLORS = {
-    "MOMENTUM":       _C_NEUT,
-    "MEAN_REVERSION": _C_PURP,
-    "MACRO":          _C_CYAN,
-    "TECHNICAL":      _C_AMB,
-    "FUNDAMENTAL":    _C_WIN,
+_TYPE_COLORS: dict[str, str] = {
+    "MOMENTUM":       C_ACCENT,
+    "MEAN_REVERSION": C_CONV,
+    "MACRO":          C_MACRO,
+    "TECHNICAL":      C_MOD,
+    "FUNDAMENTAL":    C_HIGH,
 }
 
 
 # ---------------------------------------------------------------------------
-# KPI card helper
+# Cell formatters for WSJ market tables
 # ---------------------------------------------------------------------------
 
-def _kpi_card(label: str, value: str, color: str, sub: str = "") -> str:
-    sub_html = f'<div style="font-size:0.68rem;color:{C_TEXT3};margin-top:2px;">{sub}</div>' if sub else ""
-    return f"""
-    <div style="
-        background:{_C_CARD};
-        border:1px solid {C_BORDER};
-        border-top:3px solid {color};
-        border-radius:8px;
-        padding:0.9rem 1.1rem;
-        flex:1;
-        min-width:130px;
-    ">
-        <div style="font-size:0.65rem;color:{C_TEXT3};text-transform:uppercase;
-                    letter-spacing:0.1em;margin-bottom:0.4rem;">{label}</div>
-        <div style="font-size:1.5rem;font-weight:700;color:{color};line-height:1.1;">{value}</div>
-        {sub_html}
-    </div>
-    """
+def _mono(value: str, color: str = C_TEXT) -> str:
+    """Monospace numeric cell content."""
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
 
 
-def _insight_card(title: str, body: str, color: str = _C_NEUT) -> str:
-    return f"""
-    <div style="
-        background:{_C_CARD};
-        border:1px solid {C_BORDER};
-        border-left:3px solid {color};
-        border-radius:8px;
-        padding:0.8rem 1rem;
-        margin-bottom:0.6rem;
-    ">
-        <div style="font-size:0.78rem;font-weight:600;color:{C_TEXT};margin-bottom:0.25rem;">{title}</div>
-        <div style="font-size:0.72rem;color:{C_TEXT2};line-height:1.5;">{body}</div>
-    </div>
-    """
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content."""
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Color helpers
+# ---------------------------------------------------------------------------
+
+def _conviction_color(conv: str) -> str:
+    return _CONVICTION_COLORS.get(conv, C_ACCENT)
+
+
+def _type_color(signal_type: str) -> str:
+    return _TYPE_COLORS.get(signal_type, C_ACCENT)
+
+
+def _return_color(val: float) -> str:
+    if val > 0:
+        return C_HIGH
+    if val < 0:
+        return C_LOW
+    return C_TEXT2
+
+
+def _winrate_color(wr: float) -> str:
+    if wr >= 55:
+        return C_HIGH
+    if wr >= 45:
+        return C_MOD
+    return C_LOW
+
+
+def _sharpe_color(sh: float) -> str:
+    if sh >= 1:
+        return C_HIGH
+    if sh >= 0:
+        return C_MOD
+    return C_LOW
+
+
+def _drawdown_color(dd: float) -> str:
+    """dd is typically negative (e.g. -8.5); more negative = worse."""
+    if dd >= -5:
+        return C_HIGH
+    if dd >= -15:
+        return C_MOD
+    return C_LOW
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +116,7 @@ def _equity_curve_chart(equity_curve: list[dict], stock_data: dict) -> go.Figure
     """Cumulative return of alpha signals vs buy-and-hold SPY proxy."""
     if not equity_curve:
         fig = go.Figure()
-        fig.update_layout(**dark_layout(title="Equity Curve — No Data", height=380))
+        apply_dark_layout(fig, title="Equity Curve — No Data", height=380)
         return fig
 
     df = pd.DataFrame(equity_curve)
@@ -109,9 +130,9 @@ def _equity_curve_chart(equity_curve: list[dict], stock_data: dict) -> go.Figure
         x=df["date"],
         y=df["cumulative_return"],
         name="Alpha Signals",
-        line=dict(color=_C_WIN, width=2.5),
+        line=dict(color=C_HIGH, width=2.5),
         fill="tozeroy",
-        fillcolor=f"rgba(46,158,110,0.08)",
+        fillcolor="rgba(46,158,110,0.08)",
         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Cumulative Return: %{y:.1f}%<extra></extra>",
     ))
 
@@ -143,10 +164,11 @@ def _equity_curve_chart(equity_curve: list[dict], stock_data: dict) -> go.Figure
                         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>B&H Return: %{y:.1f}%<extra></extra>",
                     ))
 
-    fig.update_layout(**dark_layout(
+    apply_dark_layout(
+        fig,
         title="Cumulative Return — Alpha Signals vs Buy & Hold",
         height=380,
-    ))
+    )
     fig.update_yaxes(ticksuffix="%")
     return fig
 
@@ -155,7 +177,7 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
     """Grouped bar: win rate + avg return per conviction tier."""
     if not by_conviction:
         fig = go.Figure()
-        fig.update_layout(**dark_layout(title="Performance by Conviction — No Data", height=340))
+        apply_dark_layout(fig, title="Performance by Conviction — No Data", height=340)
         return fig
 
     convictions = ["HIGH", "MEDIUM", "LOW"]
@@ -163,7 +185,7 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
 
     win_rates = [by_conviction[c]["win_rate"] for c in convictions]
     avg_returns = [by_conviction[c]["avg_return"] for c in convictions]
-    colors = [_CONVICTION_COLORS.get(c, _C_NEUT) for c in convictions]
+    colors = [_CONVICTION_COLORS.get(c, C_ACCENT) for c in convictions]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -182,7 +204,7 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
         name="Avg Return (%)",
         x=convictions,
         y=avg_returns,
-        marker_color=[f"rgba(53,114,176,0.7)"] * len(convictions),
+        marker_color=["rgba(53,114,176,0.7)"] * len(convictions),
         text=[f"{v:+.2f}%" for v in avg_returns],
         textposition="outside",
         textfont=dict(size=11, color=C_TEXT),
@@ -190,18 +212,21 @@ def _conviction_bar_chart(by_conviction: dict) -> go.Figure:
         hovertemplate="<b>%{x}</b><br>Avg Return: %{y:+.2f}%<extra></extra>",
     ))
 
-    layout = dark_layout(title="Performance by Conviction Tier", height=340)
-    layout["barmode"] = "group"
-    layout["yaxis"] = {**layout.get("yaxis", {}), "title": "Win Rate (%)", "ticksuffix": "%"}
-    layout["yaxis2"] = {
-        "title": "Avg Return (%)",
-        "overlaying": "y",
-        "side": "right",
-        "ticksuffix": "%",
-        "gridcolor": "rgba(232,230,225,0.03)",
-        "tickfont": {"color": C_TEXT3, "size": 11},
-    }
-    fig.update_layout(**layout)
+    apply_dark_layout(
+        fig,
+        title="Performance by Conviction Tier",
+        height=340,
+        barmode="group",
+        yaxis={"title": "Win Rate (%)", "ticksuffix": "%"},
+        yaxis2={
+            "title": "Avg Return (%)",
+            "overlaying": "y",
+            "side": "right",
+            "ticksuffix": "%",
+            "gridcolor": "rgba(232,230,225,0.03)",
+            "tickfont": {"color": C_TEXT3, "size": 11},
+        },
+    )
     return fig
 
 
@@ -209,13 +234,13 @@ def _signal_type_chart(by_type: dict) -> go.Figure:
     """Horizontal bar: win rate per signal type."""
     if not by_type:
         fig = go.Figure()
-        fig.update_layout(**dark_layout(title="Performance by Signal Type — No Data", height=300))
+        apply_dark_layout(fig, title="Performance by Signal Type — No Data", height=300)
         return fig
 
     types = sorted(by_type.keys(), key=lambda t: by_type[t]["win_rate"], reverse=True)
     win_rates = [by_type[t]["win_rate"] for t in types]
     avg_rets = [by_type[t]["avg_return"] for t in types]
-    colors = [_TYPE_COLORS.get(t, _C_NEUT) for t in types]
+    colors = [_TYPE_COLORS.get(t, C_ACCENT) for t in types]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -231,10 +256,13 @@ def _signal_type_chart(by_type: dict) -> go.Figure:
         hovertemplate="<b>%{y}</b><br>Win Rate: %{x:.1f}%<extra></extra>",
     ))
 
-    layout = dark_layout(title="Win Rate by Signal Type", height=max(300, len(types) * 55 + 80))
-    layout["xaxis"] = {**layout.get("xaxis", {}), "ticksuffix": "%", "range": [0, 110]}
-    layout["showlegend"] = False
-    fig.update_layout(**layout)
+    apply_dark_layout(
+        fig,
+        title="Win Rate by Signal Type",
+        height=max(300, len(types) * 55 + 80),
+        showlegend=False,
+        xaxis={"ticksuffix": "%", "range": [0, 110]},
+    )
     return fig
 
 
@@ -242,7 +270,7 @@ def _monthly_heatmap(monthly_returns: list[dict]) -> go.Figure:
     """Heatmap of monthly returns — month vs year."""
     if not monthly_returns:
         fig = go.Figure()
-        fig.update_layout(**dark_layout(title="Monthly Returns Heatmap — No Data", height=300))
+        apply_dark_layout(fig, title="Monthly Returns Heatmap — No Data", height=300)
         return fig
 
     df = pd.DataFrame(monthly_returns)
@@ -293,47 +321,41 @@ def _monthly_heatmap(monthly_returns: list[dict]) -> go.Figure:
         colorbar=dict(
             ticksuffix="%",
             tickfont=dict(color=C_TEXT3, size=10),
-            bgcolor=_C_SURF,
+            bgcolor=C_SURFACE,
         ),
         hovertemplate="<b>%{y} %{x}</b><br>Return: %{z:+.2f}%<extra></extra>",
     ))
 
-    layout = dark_layout(title="Monthly Avg Return Heatmap", height=max(280, len(years) * 40 + 120))
-    layout["showlegend"] = False
-    fig.update_layout(**layout)
+    apply_dark_layout(
+        fig,
+        title="Monthly Avg Return Heatmap",
+        height=max(280, len(years) * 40 + 120),
+        showlegend=False,
+    )
     return fig
 
 
 # ---------------------------------------------------------------------------
-# Trade log formatter
+# Trade log WSJ table builder
 # ---------------------------------------------------------------------------
 
-def _build_trade_df(trades: list) -> pd.DataFrame:
-    if not trades:
-        return pd.DataFrame()
-
+def _build_trade_rows(trades: list) -> list[list[str]]:
+    """Convert trade objects to wsj_market_table row lists."""
     rows = []
     for t in trades:
-        rows.append({
-            "Ticker": t.ticker,
-            "Signal": t.signal_name,
-            "Type": t.signal_type,
-            "Dir": t.direction,
-            "Conv": t.conviction,
-            "Entry Date": t.entry_date,
-            "Exit Date": t.exit_date,
-            "Entry $": t.entry_price,
-            "Exit $": t.exit_price,
-            "Return %": t.return_pct,
-            "Expected %": t.signal_expected_pct,
-            "Hit": "✓" if t.hit else "✗",
-            "Hold Days": t.holding_days,
-            "Max DD %": t.max_drawdown_pct,
-        })
-
-    df = pd.DataFrame(rows)
-    df = df.sort_values("Entry Date", ascending=False).reset_index(drop=True)
-    return df
+        ret_color = C_HIGH if t.return_pct > 0 else C_LOW
+        hit_color = C_HIGH if t.hit else C_LOW
+        hit_label = "Hit" if t.hit else "Miss"
+        rows.append([
+            _sans(t.ticker, color=C_TEXT, weight=700),
+            _sans(t.signal_name[:24], color=C_TEXT2),
+            badge(t.conviction, color=_conviction_color(t.conviction)),
+            _mono(str(t.entry_date)[:10], color=C_TEXT2),
+            _mono(f"{t.return_pct:+.2f}%", color=ret_color),
+            _mono(f"{t.holding_days}d", color=C_TEXT2),
+            badge(hit_label, color=hit_color),
+        ])
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +376,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"Across {stats['count']} trades, {best_conv} conviction signals returned an average of "
             f"{stats['avg_return']:+.2f}% per trade. "
             f"{'This is well above the 50% random baseline, indicating strong predictive power.' if stats['win_rate'] > 55 else 'Conviction tiers help filter signal quality — use HIGH conviction signals as primary entries.'}",
-            _CONVICTION_COLORS.get(best_conv, _C_NEUT),
+            _CONVICTION_COLORS.get(best_conv, C_ACCENT),
         ))
 
     # Signal type insight
@@ -368,7 +390,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"{readable} trades averaged {stats['avg_return']:+.2f}% per trade with a "
             f"{stats['win_rate']:.0f}% win rate across {stats['count']} occurrences. "
             f"{'Consider overweighting this signal type during trending periods.' if stats['win_rate'] > 52 else 'Review market regime conditions when deploying this strategy.'}",
-            _TYPE_COLORS.get(best_type, _C_NEUT),
+            _TYPE_COLORS.get(best_type, C_ACCENT),
         ))
 
     # Drawdown / risk insight
@@ -383,7 +405,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"Worst trade: {worst.ticker} {worst.signal_name} returned {worst.return_pct:+.2f}% "
             f"(held {worst.holding_days}d). "
             f"Position sizing and stop-loss discipline are critical given shipping stock volatility.",
-            _C_AMB,
+            C_MOD,
         ))
 
     return insights
@@ -396,7 +418,12 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
 def render(stock_data: dict, macro_data: dict, insights: object) -> None:
     """Render the full Backtesting tab."""
 
-    section_header("Alpha Signal Backtester", "Simulate historical performance of shipping stock signals")
+    page_header(
+        title="Alpha Signal Backtester",
+        subtitle="Simulate historical performance of shipping stock signals",
+        badge_text="DEMO",
+        badge_color=C_LOW,
+    )
 
     # ── Controls ─────────────────────────────────────────────────────────────
     with st.expander("Backtest Settings", expanded=False):
@@ -447,36 +474,59 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
         return
 
     # ── Hero KPIs ─────────────────────────────────────────────────────────────
-    st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
+    _demo_source = DataSource.demo("Backtest Engine (simulated)")
 
-    tr_color = _C_WIN if results.total_return_pct >= 0 else _C_LOSS
-    wr_color = _C_WIN if results.win_rate >= 55 else (_C_AMB if results.win_rate >= 45 else _C_LOSS)
-    sh_color = _C_WIN if results.sharpe_ratio >= 1 else (_C_AMB if results.sharpe_ratio >= 0 else _C_LOSS)
-    dd_color = _C_WIN if results.max_drawdown >= -5 else (_C_AMB if results.max_drawdown >= -15 else _C_LOSS)
-
-    kpi_html = "".join([
-        _kpi_card("Total Return", f"{results.total_return_pct:+.1f}%", tr_color, "sum equal-weight"),
-        _kpi_card("Win Rate", f"{results.win_rate:.1f}%", wr_color, "trades in right direction"),
-        _kpi_card("Sharpe Ratio", f"{results.sharpe_ratio:.2f}", sh_color, "annualized"),
-        _kpi_card("Total Trades", str(results.total_trades), _C_NEUT, f"~{lookback}d window"),
-        _kpi_card("Max Drawdown", f"{results.max_drawdown:.1f}%", dd_color, "worst intraday"),
-    ])
-
-    st.markdown(
-        f'<div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1.5rem;">{kpi_html}</div>', unsafe_allow_html=True)
+    metric_card_row(
+        [
+            {
+                "label":    "Total Return",
+                "value":    f"{results.total_return_pct:+.1f}%",
+                "accent":   _return_color(results.total_return_pct),
+                "sublabel": "sum equal-weight",
+            },
+            {
+                "label":    "Win Rate",
+                "value":    f"{results.win_rate:.1f}%",
+                "accent":   _winrate_color(results.win_rate),
+                "sublabel": "trades in right direction",
+            },
+            {
+                "label":    "Sharpe Ratio",
+                "value":    f"{results.sharpe_ratio:.2f}",
+                "accent":   _sharpe_color(results.sharpe_ratio),
+                "sublabel": "annualized",
+            },
+            {
+                "label":    "Total Trades",
+                "value":    str(results.total_trades),
+                "accent":   C_ACCENT,
+                "sublabel": f"~{lookback}d window",
+            },
+            {
+                "label":    "Max Drawdown",
+                "value":    f"{results.max_drawdown:.1f}%",
+                "accent":   _drawdown_color(results.max_drawdown),
+                "sublabel": "worst intraday",
+            },
+        ],
+        columns=5,
+    )
+    st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
 
     # ── Equity Curve ──────────────────────────────────────────────────────────
-    st.markdown("#### Equity Curve")
+    section_header("Equity Curve")
     try:
         fig_eq = _equity_curve_chart(results.equity_curve, stock_data)
         st.plotly_chart(fig_eq, use_container_width=True, key="bt_equity_curve")
+        st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Equity curve error: {e}")
 
-    # ── Performance by Conviction ─────────────────────────────────────────────
+    # ── Performance by Conviction / Signal Type ───────────────────────────────
+    section_header("Performance Breakdown")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### By Conviction Tier")
+        st.markdown('<div class="sub-section-header">By Conviction Tier</div>', unsafe_allow_html=True)
         try:
             fig_conv = _conviction_bar_chart(results.by_conviction)
             st.plotly_chart(fig_conv, use_container_width=True, key="bt_conviction_bar")
@@ -484,97 +534,81 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
             st.error(f"Conviction chart error: {e}")
 
     with col2:
-        st.markdown("#### By Signal Type")
+        st.markdown('<div class="sub-section-header">By Signal Type</div>', unsafe_allow_html=True)
         try:
             fig_type = _signal_type_chart(results.by_type)
             st.plotly_chart(fig_type, use_container_width=True, key="bt_type_bar")
         except Exception as e:
             st.error(f"Signal type chart error: {e}")
 
+    st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
+
     # ── By Ticker Table ───────────────────────────────────────────────────────
-    st.markdown("#### Performance by Ticker")
+    section_header("Performance by Ticker")
     try:
         if results.by_ticker:
             ticker_rows = []
-            for ticker, stats in results.by_ticker.items():
-                ticker_rows.append({
-                    "Ticker": ticker,
-                    "Trades": stats["count"],
-                    "Win Rate %": stats["win_rate"],
-                    "Avg Return %": stats["avg_return"],
-                    "Total Return %": stats["total_return"],
-                })
-            ticker_df = pd.DataFrame(ticker_rows).sort_values("Win Rate %", ascending=False)
-
-            def _color_ret(val):
-                if isinstance(val, float):
-                    color = "#2e9e6e" if val > 0 else "#c0392b"
-                    return f"color: {color}"
-                return ""
-
-            styled = ticker_df.style.applymap(
-                _color_ret, subset=["Avg Return %", "Total Return %"]
-            ).format({
-                "Win Rate %": "{:.1f}%",
-                "Avg Return %": "{:+.2f}%",
-                "Total Return %": "{:+.2f}%",
-            })
-            st.dataframe(styled, use_container_width=True, key="bt_ticker_table")
+            for ticker, stats in sorted(
+                results.by_ticker.items(),
+                key=lambda kv: kv[1]["win_rate"],
+                reverse=True,
+            ):
+                ticker_rows.append([
+                    _sans(ticker, color=C_TEXT, weight=700),
+                    _mono(str(stats["count"]), color=C_TEXT2),
+                    _mono(f"{stats['win_rate']:.1f}%", color=_winrate_color(stats["win_rate"])),
+                    _mono(f"{stats['avg_return']:+.2f}%", color=_return_color(stats["avg_return"])),
+                    _mono(f"{stats['total_return']:+.2f}%", color=_return_color(stats["total_return"])),
+                ])
+            wsj_market_table(
+                headers=["Ticker", "Trades", "Win Rate", "Avg Return", "Total Return"],
+                rows=ticker_rows,
+            )
+            st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Ticker table error: {e}")
 
     # ── Monthly Heatmap ───────────────────────────────────────────────────────
-    st.markdown("#### Monthly Return Heatmap")
+    section_header("Monthly Return Heatmap")
     try:
         fig_heat = _monthly_heatmap(results.monthly_returns)
         st.plotly_chart(fig_heat, use_container_width=True, key="bt_monthly_heatmap")
+        st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Monthly heatmap error: {e}")
 
     # ── Trade Log ─────────────────────────────────────────────────────────────
-    st.markdown("#### Full Trade Log")
+    section_header("Full Trade Log")
     try:
-        trade_df = _build_trade_df(results.trades)
-        if not trade_df.empty:
-            def _color_return(val):
-                if isinstance(val, (int, float)):
-                    return f"color: {'#2e9e6e' if val > 0 else '#c0392b'}"
-                return ""
-
-            def _color_hit(val):
-                if val == "✓":
-                    return "color: #2e9e6e"
-                if val == "✗":
-                    return "color: #c0392b"
-                return ""
-
-            styled_trades = trade_df.style.applymap(
-                _color_return, subset=["Return %", "Expected %", "Max DD %"]
-            ).applymap(
-                _color_hit, subset=["Hit"]
-            ).format({
-                "Entry $": "{:.2f}",
-                "Exit $": "{:.2f}",
-                "Return %": "{:+.2f}%",
-                "Expected %": "{:+.2f}%",
-                "Max DD %": "{:.2f}%",
-            })
-            st.dataframe(
-                styled_trades,
-                use_container_width=True,
-                height=400,
-                key="bt_trade_log",
+        if results.trades:
+            trade_rows = _build_trade_rows(results.trades)
+            wsj_market_table(
+                headers=["Ticker", "Signal", "Conviction", "Entry Date", "Return %", "Hold", "Result"],
+                rows=trade_rows,
             )
+            st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
         else:
             st.info("No trades to display.")
     except Exception as e:
         st.error(f"Trade log error: {e}")
 
     # ── Key Insights ──────────────────────────────────────────────────────────
-    st.markdown("#### Key Insights")
+    section_header("Key Insights")
     try:
         insight_list = _build_insights(results)
         for title, body, color in insight_list:
-            st.markdown(_insight_card(title, body, color), unsafe_allow_html=True)
+            # Map the domain color → closest action label for insight_card_html
+            if color == C_HIGH:
+                action = "Prioritize"
+            elif color == C_MOD:
+                action = "Monitor"
+            elif color == C_LOW:
+                action = "Caution"
+            else:
+                action = "Watch"
+            st.markdown(
+                insight_card_html(title=title, score=0.0, action=action, rationale=body),
+                unsafe_allow_html=True,
+            )
     except Exception as e:
         st.error(f"Insights error: {e}")
