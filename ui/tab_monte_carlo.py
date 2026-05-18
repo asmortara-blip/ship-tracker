@@ -28,6 +28,7 @@ from ui.styles import (
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
+    gradient_card,
     insight_card_html,
     metric_card_row,
     page_header,
@@ -126,47 +127,7 @@ def _simulate(
     return _run_gbm(S0, mu_annual, sigma_annual, T, n_paths, rng)
 
 
-# ── Section helpers ───────────────────────────────────────────────────────────
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub_html = (
-        f'<p style="margin:4px 0 0; font-size:0.82rem; color:{C_TEXT2}; font-family:Libre Franklin, sans-serif">{subtitle}</p>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin:32px 0 16px">'
-        f'<h3 style="margin:0; font-size:1.05rem; font-weight:700; color:{C_TEXT}; font-family:Libre Baskerville, Georgia, serif">{title}</h3>'
-        f'{sub_html}'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _kpi_card(label: str, value: str, sub: str = "", color: str = C_TEXT) -> str:
-    return (
-        f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px;'
-        f' padding:16px 20px; min-width:160px; flex:1">'
-        f'<div style="font-size:0.72rem; color:{C_TEXT3}; text-transform:uppercase;'
-        f' letter-spacing:0.1em; font-weight:600; margin-bottom:6px; font-family:Libre Franklin, sans-serif">{label}</div>'
-        f'<div style="font-size:1.35rem; font-weight:700; color:{color}">{value}</div>'
-        f'<div style="font-size:0.76rem; color:{C_TEXT2}; margin-top:4px">{sub}</div>'
-        f'</div>'
-    )
-
-
-def _kpi_row(cards: list[str]) -> None:
-    inner = "".join(cards)
-    st.markdown(
-        f'<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px">{inner}</div>', unsafe_allow_html=True)
-
-
-def _dark_layout() -> dict:
-    return dict(
-        template="plotly_dark",
-        paper_bgcolor=C_CARD,
-        plot_bgcolor=C_CARD,
-        font=dict(color=C_TEXT2, size=11),
-        margin=dict(l=48, r=24, t=36, b=40),
-        legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0),
-    )
+# ── (Local helpers removed; use section_header / metric_card_row / apply_dark_layout from ui.styles) ──
 
 
 # ── Section 1: Configuration form ────────────────────────────────────────────
@@ -519,7 +480,7 @@ def _render_var_cards(paths: np.ndarray, s0: float, n_paths_total: int) -> None:
 # ── Section 7: Path analysis ──────────────────────────────────────────────────
 
 def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
-    _section_header(
+    section_header(
         "Path Analysis",
         "Breach timing and maximum drawdown distribution across all paths.",
     )
@@ -555,17 +516,19 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
         med_dd = float(np.median(drawdowns_arr))
         p95_dd = float(np.percentile(drawdowns_arr, 5))   # worst 5th pct
 
-        # KPI cards
         def fmt_days(v: float) -> str:
             return f"{v:.0f}d" if not np.isnan(v) else "N/A"
 
-        cards = [
-            _kpi_card("Median days to +20%",  fmt_days(med_up), f"{prob_up:.1f}% of paths", C_HIGH),
-            _kpi_card("Median days to -20%",  fmt_days(med_dn), f"{prob_dn:.1f}% of paths", C_LOW),
-            _kpi_card("Median Max Drawdown",  f"{med_dd:.1f}%", "across all paths", C_MOD),
-            _kpi_card("95th-pct Max Drawdown", f"{p95_dd:.1f}%", "worst 5% of paths", C_LOW),
-        ]
-        _kpi_row(cards)
+        metric_card_row([
+            {"label": "Median days to +20%",   "value": fmt_days(med_up),
+             "accent": C_HIGH, "sublabel": f"{prob_up:.1f}% of paths"},
+            {"label": "Median days to -20%",   "value": fmt_days(med_dn),
+             "accent": C_LOW,  "sublabel": f"{prob_dn:.1f}% of paths"},
+            {"label": "Median Max Drawdown",   "value": f"{med_dd:.1f}%",
+             "accent": C_MOD,  "sublabel": "across all paths"},
+            {"label": "95th-pct Max Drawdown", "value": f"{p95_dd:.1f}%",
+             "accent": C_LOW,  "sublabel": "worst 5% of paths"},
+        ], columns=4)
 
         # Drawdown distribution chart
         fig = go.Figure()
@@ -586,14 +549,13 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
             annotation_text=f"P5 {p95_dd:.1f}%",
             annotation_font_color=C_LOW,
         )
-        layout = _dark_layout()
-        layout.update(dict(
-            title=dict(text=f"{target} — Maximum Drawdown Distribution", font=dict(size=13, color=C_TEXT), x=0.02),
-            xaxis=dict(title="Max Drawdown (%)", gridcolor=C_BORDER),
-            yaxis=dict(title="Frequency", gridcolor=C_BORDER),
+        apply_dark_layout(
+            fig,
+            title=f"{target} — Maximum Drawdown Distribution",
             height=320,
-        ))
-        fig.update_layout(**layout)
+            xaxis=dict(title="Max Drawdown (%)", zeroline=False),
+            yaxis=dict(title="Frequency", zeroline=False),
+        )
         st.plotly_chart(fig, use_container_width=True, key="mc_drawdown_dist")
     except Exception:
         logger.exception("Path analysis render failed")
@@ -636,11 +598,16 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     params = st.session_state.get("mc_params", {})
 
     if paths is None:
+        placeholder = (
+            '<p class="wsj-subhead">'
+            'Configure parameters above and click '
+            '<strong>Run Simulation</strong> to generate results.'
+            '</p>'
+        )
         st.markdown(
-            f'<div style="background:{C_CARD}; border:1px solid {C_BORDER}; border-radius:6px;'
-            f'padding:40px; text-align:center; color:{C_TEXT3}; margin-top:24px">'
-            f'Configure parameters above and click <strong style="color:{C_TEXT2}">Run Simulation</strong> to generate results.'
-            f'</div>', unsafe_allow_html=True)
+            gradient_card(placeholder, border_color=C_ACCENT),
+            unsafe_allow_html=True,
+        )
         return
 
     target  = params.get("target", "BDI")
@@ -649,28 +616,33 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     horizon = params.get("horizon", 90)
     model   = params.get("model", "GBM")
 
+    n_paths_actual = paths.shape[0]
+
     # Quick run summary
     try:
-        n_paths_actual = paths.shape[0]
         finals = paths[:, -1]
         med_final = float(np.median(finals))
         chg_pct = (med_final / s0 - 1) * 100
         chg_col = C_HIGH if chg_pct >= 0 else C_LOW
-        summary_cards = [
-            _kpi_card("Target",          target,                    f"{model} model",      C_ACCENT),
-            _kpi_card("Paths",           f"{n_paths_actual:,}",     f"Horizon: {horizon}d", C_TEXT),
-            _kpi_card("Start",           f"{s0:,.2f}",              "initial value",       C_TEXT),
-            _kpi_card("Median at T",     f"{med_final:,.2f}",       f"{chg_pct:+.1f}%",    chg_col),
-            _kpi_card("Annualized Vol",  f"{sigma*100:.0f}%",       "input parameter",     C_MOD),
-        ]
-        _kpi_row(summary_cards)
+        metric_card_row([
+            {"label": "Target",         "value": target,
+             "accent": C_ACCENT, "sublabel": f"{model} model"},
+            {"label": "Paths",          "value": f"{n_paths_actual:,}",
+             "accent": C_TEXT,   "sublabel": f"Horizon: {horizon}d"},
+            {"label": "Start",          "value": f"{s0:,.2f}",
+             "accent": C_TEXT,   "sublabel": "initial value"},
+            {"label": "Median at T",    "value": f"{med_final:,.2f}",
+             "accent": chg_col,  "sublabel": f"{chg_pct:+.1f}%"},
+            {"label": "Annualized Vol", "value": f"{sigma*100:.0f}%",
+             "accent": C_MOD,    "sublabel": "input parameter"},
+        ], columns=5)
     except Exception:
         logger.exception("Summary KPI row failed")
 
     # Sections 2–7
-    _render_fan_chart(paths, target, s0)
-    _render_horizon_dist(paths, s0, target)
-    _render_stats_table(paths, s0, horizon, sigma)
-    _render_scenario_overlays(paths, s0, sigma, horizon, model, target)
-    _render_var_cards(paths, s0)
+    _render_fan_chart(paths, target, s0, n_paths_actual)
+    _render_horizon_dist(paths, s0, target, n_paths_actual)
+    _render_stats_table(paths, s0, horizon, sigma, n_paths_actual)
+    _render_scenario_overlays(paths, s0, sigma, horizon, model, target, n_paths_actual)
+    _render_var_cards(paths, s0, n_paths_actual)
     _render_path_analysis(paths, s0, target)
