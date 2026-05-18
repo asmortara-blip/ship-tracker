@@ -9,12 +9,9 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -27,30 +24,26 @@ from ui.styles import (
     wsj_market_table,
 )
 
-# ── Local color tokens for region map (domain-specific) ────────────────────
-C_PURPLE = "#5b4a8a"
-C_CYAN   = "#2e6b7a"
-
-# Typography tokens used by legacy inline-HTML helpers (removed in Phase Z).
-_FONT_HEADLINE = "'Libre Baskerville', 'Georgia', serif"
-_FONT_BODY     = "'Libre Franklin', 'Helvetica Neue', Arial, sans-serif"
-_FONT_MONO     = "'JetBrains Mono', 'Consolas', monospace"
+# ── Local color tokens for region map (domain-specific, not palette globals) ──
+_C_PURPLE = "#5b4a8a"
+_C_CYAN   = "#2e6b7a"
 
 _REGION_COLORS = {
     "Asia-Pacific": C_ACCENT,
     "Europe":       C_HIGH,
     "Americas":     C_MOD,
-    "Middle East":  C_PURPLE,
-    "Africa":       C_CYAN,
+    "Middle East":  _C_PURPLE,
+    "Africa":       _C_CYAN,
 }
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────
 # wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
-# only style content (font + conditional color); table CSS handles alignment
-# and rule lines. Mirrors the pattern in ui/tab_rate_analytics.py.
+# only style *content* (font family + conditional color); table CSS handles
+# alignment and rule lines. Mirrors the pattern in ui/tab_rate_analytics.py.
 
 def _mono(value: str, color: str = C_TEXT) -> str:
+    """Monospace numeric cell content — permitted inline span."""
     return (
         f'<span style="font-family:var(--mono);color:{color};'
         f'font-variant-numeric:tabular-nums;">{value}</span>'
@@ -58,6 +51,7 @@ def _mono(value: str, color: str = C_TEXT) -> str:
 
 
 def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content — permitted inline span."""
     return (
         f'<span style="font-family:var(--sans);color:{color};'
         f'font-weight:{weight};">{value}</span>'
@@ -145,33 +139,6 @@ _ELASTICITIES = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> None:
-    delta_html = (
-        f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
-        if delta else ""
-    )
-    st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;'
-        f'padding:16px 18px;text-align:center;">'
-        f'<div style="font-family:{_FONT_BODY};font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
-        f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-family:{_FONT_MONO};font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
-        f'{delta_html}'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<div style="font-family:{_FONT_BODY};font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin:28px 0 12px;border-bottom:2px solid {C_TEXT};padding-bottom:6px;">'
-        f'<div style="font-family:{_FONT_HEADLINE};font-size:1.05rem;font-weight:700;color:{C_TEXT};">{title}</div>'
-        f'{sub}'
-        f'</div>', unsafe_allow_html=True)
-
-
 def _util_color(pct: int) -> str:
     if pct >= 90:
         return C_LOW
@@ -181,24 +148,21 @@ def _util_color(pct: int) -> str:
 
 
 def _overflow_badge(pct: int) -> str:
+    """Return a design-system badge for utilisation overflow risk."""
     if pct >= 90:
-        label, color = "CRITICAL", C_LOW
-    elif pct >= 80:
-        label, color = "ELEVATED", C_MOD
-    elif pct >= 70:
-        label, color = "MODERATE", C_ACCENT
-    else:
-        label, color = "LOW", C_HIGH
-    return (
-        f'<span style="font-family:{_FONT_BODY};background:{color}18;color:{color};font-size:0.7rem;'
-        f'font-weight:700;padding:2px 8px;border-radius:3px;">{label}</span>'
-    )
+        return badge("CRITICAL", color=C_LOW)
+    if pct >= 80:
+        return badge("ELEVATED", color=C_MOD)
+    if pct >= 70:
+        return badge("MODERATE", color=C_ACCENT)
+    return badge("LOW", color=C_HIGH)
 
 
-def _yoy_html(pct: float) -> str:
+def _yoy_cell(pct: float) -> str:
+    """Return a mono cell string for a YoY % value."""
     color = C_HIGH if pct > 0 else C_LOW
-    arrow = "+" if pct > 0 else "-"
-    return f'<span style="font-family:{_FONT_MONO};color:{color};font-weight:600;">{arrow}{abs(pct):.1f}%</span>'
+    sign  = "+" if pct > 0 else "-"
+    return _mono(f"{sign}{abs(pct):.1f}%", color=color)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +342,10 @@ def _render_seasonal_heatmap() -> None:
 
 def _render_shock_scenarios() -> None:
     try:
-        _section_header("Demand Shock Scenarios", "Simulated throughput impact (% change) if macro shock occurs")
+        section_header(
+            "Demand Shock Scenarios",
+            "Simulated throughput impact (% change) if macro shock occurs",
+        )
         scenario = st.selectbox("Select scenario", list(_SHOCK_SCENARIOS.keys()))
         impacts = _SHOCK_SCENARIOS.get(scenario, {})
         if not impacts:
@@ -395,24 +362,18 @@ def _render_shock_scenarios() -> None:
             textposition="outside",
             textfont=dict(color=C_TEXT2, size=11),
         ))
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color=C_TEXT, family="Libre Franklin, Helvetica Neue, Arial, sans-serif"),
-            xaxis=dict(tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)"),
-            yaxis=dict(
-                tickfont_color=C_TEXT2, gridcolor="rgba(0,0,0,0.06)",
-                title="Throughput %", title_font_color=C_TEXT3,
-                zeroline=True, zerolinecolor=C_BORDER, zerolinewidth=1,
-            ),
-            margin=dict(t=20, b=10, l=10, r=10),
+        apply_dark_layout(
+            fig,
             height=320,
+            showlegend=False,
+            yaxis={"title": "Throughput %"},
         )
+        fig.update_layout(margin=dict(t=20, b=10, l=10, r=10))
         st.plotly_chart(fig, use_container_width=True)
-        st.markdown(
-            f'<div style="font-family:{_FONT_BODY};font-size:0.78rem;color:{C_TEXT3};padding:0 2px;margin-top:2px;">'
-            f'Scenario: <span style="color:{C_TEXT2};">{scenario}</span> — '
-            f'estimated throughput impact on affected ports. Indirect effects not modelled.</div>', unsafe_allow_html=True)
+        st.caption(
+            f"Scenario: {scenario} — "
+            "estimated throughput impact on affected ports. Indirect effects not modelled."
+        )
     except Exception:
         logger.exception("Shock scenarios render failed")
         st.error("Demand shock scenarios unavailable.")
@@ -420,49 +381,38 @@ def _render_shock_scenarios() -> None:
 
 def _render_capacity_headroom() -> None:
     try:
-        _section_header("Capacity Headroom Analysis", "Current utilisation vs max capacity — overflow risk rating per port")
-        cols = "1.4fr 1fr 0.8fr 0.8fr 0.8fr 0.9fr 1fr"
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:{cols};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:3px 3px 0 0;'
-            f'padding:10px 14px;">'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Port</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Region</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Current (M)</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Capacity (M)</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Utilisation</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Headroom (M)</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Overflow Risk</span>'
-            f'</div>'
+        section_header(
+            "Capacity Headroom Analysis",
+            "Current utilisation vs max capacity — overflow risk rating per port",
         )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 3px 3px;overflow:hidden;">'
-        for i, (port, region, curr, f3, f12, util, cap, yoy, driver) in enumerate(_PORTS):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
+        rows = []
+        for port, region, curr, f3, f12, util, cap, yoy, driver in _PORTS:
             headroom = round(cap - curr, 1)
-            uc = _util_color(util)
-            badge = _overflow_badge(util)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:{cols};'
-                f'gap:0;background:{bg};padding:9px 14px;align-items:center;">'
-                f'<span style="font-family:{_FONT_BODY};font-size:0.82rem;font-weight:600;color:{C_TEXT};">{port}</span>'
-                f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{_REGION_COLORS.get(region, C_TEXT3)};">{region}</span>'
-                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_TEXT};">{curr:.1f}</span>'
-                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_TEXT2};">{cap:.1f}</span>'
-                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;font-weight:700;color:{uc};">{util}%</span>'
-                f'<span style="font-family:{_FONT_MONO};font-size:0.82rem;color:{C_HIGH if headroom > 5 else C_MOD};">{headroom:.1f}</span>'
-                f'<span>{badge}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+            rc       = _REGION_COLORS.get(region, C_TEXT3)
+            uc       = _util_color(util)
+            rows.append([
+                _sans(port,            color=C_TEXT,  weight=700),
+                _sans(region,          color=rc),
+                _mono(f"{curr:.1f}",   color=C_TEXT),
+                _mono(f"{cap:.1f}",    color=C_TEXT2),
+                _mono(f"{util}%",      color=uc),
+                _mono(f"{headroom:.1f}", color=C_HIGH if headroom > 5 else C_MOD),
+                _overflow_badge(util),
+            ])
+        wsj_market_table(
+            ["Port", "Region", "Current (M)", "Capacity (M)", "Utilisation", "Headroom (M)", "Overflow Risk"],
+            rows,
+        )
+        # Legend using sub-section-header class (no inline style)
         st.markdown(
-            f'<div style="display:flex;gap:20px;margin-top:8px;padding:0 4px;">'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_LOW};">CRITICAL: 90%+</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_MOD};">ELEVATED: 80%+</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_ACCENT};">MODERATE: 70%+</span>'
-            f'<span style="font-family:{_FONT_BODY};font-size:0.75rem;color:{C_HIGH};">LOW: &lt;70%</span>'
-            f'</div>', unsafe_allow_html=True)
+            '<div class="sub-section-header">'
+            f'{badge("CRITICAL", color=C_LOW)} 90%+&nbsp;&nbsp;'
+            f'{badge("ELEVATED", color=C_MOD)} 80%+&nbsp;&nbsp;'
+            f'{badge("MODERATE", color=C_ACCENT)} 70%+&nbsp;&nbsp;'
+            f'{badge("LOW", color=C_HIGH)} &lt;70%'
+            '</div>',
+            unsafe_allow_html=True,
+        )
     except Exception:
         logger.exception("Capacity headroom render failed")
         st.error("Capacity headroom analysis unavailable.")
