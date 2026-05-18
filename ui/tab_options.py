@@ -185,7 +185,6 @@ def render(stock_data, insights):
             key="opt_moneyness",
         )
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ── Load data ─────────────────────────────────────────────────────────────
     try:
@@ -248,8 +247,6 @@ def render(stock_data, insights):
     else:
         st.info("No unusual activity detected with current filters.")
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-
     # ── 4. Options Chain Table ────────────────────────────────────────────────
     section_header(
         "Options Chain",
@@ -286,8 +283,6 @@ def render(stock_data, insights):
         st.markdown(source_footer([_OPTIONS_SRC]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Options table error: {e}")
-
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
     # ── 5. IV Surface Heatmap ─────────────────────────────────────────────────
     section_header("IV Surface", "Implied volatility by strike and expiry")
@@ -337,8 +332,6 @@ def render(stock_data, insights):
         st.markdown(source_footer([_OPTIONS_SRC]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"IV surface error: {e}")
-
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
     # ── 6. Max Pain Chart ─────────────────────────────────────────────────────
     section_header("Max Pain Analysis", "Open interest by strike — calls vs puts")
@@ -424,8 +417,6 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"Max pain error: {e}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
     # ── 7. Put/Call Ratio ─────────────────────────────────────────────────────
     section_header("Put / Call Ratio", "Sentiment gauge and historical trend")
 
@@ -483,11 +474,9 @@ def render(stock_data, insights):
             st.plotly_chart(fig_gauge, use_container_width=True)
 
             sentiment_html = (
-                f'<div style="text-align:center;margin-top:-12px;">'
-                f'{badge(sentiment_label, color=gauge_color)}'
-                f'<span style="color:{C_TEXT3};font-size:0.8rem;margin-left:10px;'
+                badge(sentiment_label, color=gauge_color)
+                + f'<span style="color:{C_TEXT3};font-size:0.8rem;margin-left:10px;'
                 f'font-family:var(--mono);">OI ratio: {pcr_oi:.2f}</span>'
-                f'</div>'
             )
             st.markdown(sentiment_html, unsafe_allow_html=True)
 
@@ -535,8 +524,6 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"P/C ratio error: {e}")
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
     # ── 8. Strategy Screener ──────────────────────────────────────────────────
     section_header(
         "Strategy Screener",
@@ -570,4 +557,3 @@ def render(stock_data, insights):
     except Exception as e:
         st.error(f"Strategy screener error: {e}")
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
