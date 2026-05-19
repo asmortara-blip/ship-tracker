@@ -158,15 +158,20 @@ def inject_global_css() -> None:
         --text:         {C_TEXT};
         --text2:        {C_TEXT2};
         --text3:        {C_TEXT3};
-        --radius:       6px;
-        --radius-lg:    10px;
-        --radius-xl:    14px;
+        --radius:       7px;
+        --radius-lg:    11px;
+        --radius-xl:    16px;
         --mono:         'JetBrains Mono', 'Fira Code', monospace;
         --sans:         'Libre Franklin', 'Inter', system-ui, -apple-system, sans-serif;
         --serif:        'Libre Baskerville', 'Georgia', 'Times New Roman', serif;
-        --transition:   all 0.2s ease;
-        --shadow-card:  0 2px 12px rgba(0,0,0,0.3);
-        --shadow-lift:  0 4px 20px rgba(0,0,0,0.4);
+        --ease:         cubic-bezier(0.4, 0, 0.2, 1);
+        --ease-out:     cubic-bezier(0.16, 0.84, 0.44, 1);
+        --transition:   all 0.19s cubic-bezier(0.4, 0, 0.2, 1);
+        --shadow-card:  0 1px 2px rgba(0,0,0,0.45), 0 5px 18px -6px rgba(0,0,0,0.5);
+        --shadow-lift:  0 2px 6px rgba(0,0,0,0.5), 0 18px 40px -10px rgba(0,0,0,0.62);
+        --shadow-hover: 0 2px 5px rgba(0,0,0,0.5), 0 14px 32px -8px rgba(0,0,0,0.6);
+        --edge-hi:      inset 0 1px 0 rgba(255,255,255,0.05);
+        --glow-accent:  0 0 24px -6px rgba(53,114,176,0.45);
     }}
 
     /* ── Base Reset ── */
@@ -183,6 +188,20 @@ def inject_global_css() -> None:
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 1400px;
+    }}
+
+    /* ── App canvas — subtle layered depth ── */
+    [data-testid="stAppViewContainer"] {{
+        background:
+            radial-gradient(1100px 520px at 78% -8%, rgba(53,114,176,0.07), transparent 62%),
+            radial-gradient(900px 600px at 12% 108%, rgba(74,144,164,0.045), transparent 60%),
+            var(--bg);
+    }}
+
+    /* ── Text selection ── */
+    ::selection {{
+        background: rgba(53,114,176,0.32);
+        color: var(--text);
     }}
 
     /* ── Hide chrome ── */
@@ -349,10 +368,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px !important;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     [data-testid="stMetric"]:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     [data-testid="stMetricLabel"] {{
         font-size: 0.7rem !important;
@@ -394,15 +416,20 @@ def inject_global_css() -> None:
         font-size: 0.84rem;
         font-family: var(--sans);
         letter-spacing: 0.01em;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .stButton > button:hover {{
         background: rgba(53,114,176,0.1);
         border-color: rgba(53,114,176,0.3);
         color: var(--text);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-1px);
     }}
     .stButton > button:active {{
         background: rgba(53,114,176,0.15);
+        transform: translateY(0);
+        box-shadow: var(--shadow-card), var(--edge-hi);
     }}
 
     /* ════════════════════════════════════════════════
@@ -412,11 +439,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule) !important;
         border-radius: var(--radius) !important;
         background: var(--card) !important;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
         overflow: hidden;
     }}
     [data-testid="stExpander"]:hover {{
         border-color: var(--border-hover) !important;
+        box-shadow: var(--shadow-hover), var(--edge-hi);
     }}
     .streamlit-expanderHeader {{
         background: transparent !important;
@@ -626,10 +655,13 @@ def inject_global_css() -> None:
         border-radius: var(--radius);
         padding: 18px 22px;
         margin-bottom: 12px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .wsj-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .wsj-card-accent {{
         border-top: 2px solid var(--accent);
@@ -643,11 +675,14 @@ def inject_global_css() -> None:
         padding: 18px 20px;
         text-align: center;
         height: 100%;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
         position: relative;
     }}
     .kpi-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .kpi-value {{
         font-size: 1.8rem;
@@ -768,11 +803,14 @@ def inject_global_css() -> None:
         border-radius: var(--radius);
         padding: 16px 20px;
         margin-bottom: 10px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
-        animation: slide-in-up 0.35s ease both;
+        animation: slide-in-up 0.4s var(--ease-out) both;
     }}
     .insight-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .insight-card:nth-child(1) {{ animation-delay: 0.00s; }}
     .insight-card:nth-child(2) {{ animation-delay: 0.04s; }}
@@ -963,6 +1001,7 @@ def inject_global_css() -> None:
         border-radius: 0 0 var(--radius) var(--radius);
         padding: 16px 18px;
         background: var(--card);
+        box-shadow: var(--shadow-card), var(--edge-hi);
     }}
     .wsj-stat-number {{
         font-family: var(--mono);
@@ -1025,10 +1064,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .route-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .route-label {{
         font-size: 0.66rem;
@@ -1059,10 +1101,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .port-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .port-name {{
         font-family: var(--serif);
@@ -1295,12 +1340,14 @@ def live_badge(text: str = "LIVE") -> str:
 
 
 def gradient_card(content_html: str, border_color: str = C_ACCENT, glow: bool = False) -> str:
-    """Wrap content in a WSJ-style card."""
+    """Wrap content in a WSJ-style card with layered depth (optional accent glow)."""
     rgba_border = _hex_to_rgba(border_color, 0.2)
+    glow_shadow = f", 0 0 28px -8px {_hex_to_rgba(border_color, 0.45)}" if glow else ""
     return (
         f'<div style="background:var(--card);'
         f'border:1px solid {rgba_border};border-radius:var(--radius);padding:20px;'
-        f'border-top:2px solid {border_color};">'
+        f'border-top:2px solid {border_color};'
+        f'box-shadow:var(--shadow-card), var(--edge-hi){glow_shadow};">'
         f'{content_html}</div>'
     )
 

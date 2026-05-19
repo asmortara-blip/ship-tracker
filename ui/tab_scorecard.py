@@ -2,15 +2,31 @@
 
 render(port_results, route_results, insights, freight_data, macro_data, stock_data)
 
+A flagship financial-terminal scorecard: a ~30-metric executive summary across
+six market pillars (freight, supply, demand, infrastructure, financial, risk),
+distilled into one composite score with a headline gauge, pillar bars, an
+institutional metric matrix, a 12-month score history, a supply/demand quadrant,
+the week's winner and loser, and a forward 30-day outlook.
+
+Canonical tab pattern (mirrors ``ui/tab_rate_analytics.py`` /
+``ui/tab_disruption_radar.py``):
+  * palette + components imported from ``ui/styles.py`` — never redeclared;
+  * no hand-rolled inline-styled ``<div>`` blocks — every block is a
+    ``ui/styles.py`` helper, or a ``wsj_market_table`` cell formatted with
+    span content;
+  * every section wrapped in try/except + ``logger.exception``;
+  * labeled ``section_divider`` between the five chapters of the page;
+  * ``source_footer`` at the bottom of each data block.
+
 Sections
 --------
-1. Executive Summary Card    — Week-of header, overall score, AI paragraph
-2. Category Summary Bar      — 6-category average scores (metric_card_row)
-3. Scorecard Matrix          — 30-metric institutional table (wsj_market_table)
-4. Score History Chart       — 12-month trend line with event annotations
-5. Quadrant Analysis         — Supply vs Demand scatter with zone labels
-6. Winner / Loser of Week    — Best, worst, biggest-surprise metric cards
-7. Forward 30-day Outlook    — 5 predictions with confidence % and key risk
+1. Executive Summary    — headline gauge, four-pillar KPI strip, AI outlook card
+2. Category Averages    — six-pillar score cards plus a relative heat bar
+3. Scorecard Matrix     — 30-metric institutional table, grouped by pillar
+4. Score History        — 12-month composite trend with event annotations
+5. Quadrant Analysis    — supply vs demand plane, current vs historical regimes
+6. Winner / Loser       — strongest, weakest, biggest week-over-week surprise
+7. Forward 30-Day Outlook — five predictions with confidence bands and key risk
 """
 from __future__ import annotations
 
@@ -36,13 +52,18 @@ from ui.styles import (
     C_MACRO,
     C_MOD,
     C_TEXT,
+    C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
+    gauge_ring,
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    shipping_heat_bar,
     source_footer,
     wsj_market_table,
 )
@@ -105,20 +126,49 @@ _CATEGORY_COLORS = {
     "Risk":            C_LOW,
 }
 
+# One-line editorial framing per pillar — surfaced as the matrix sub-caption so
+# the table reads with context rather than as a bare grid.
+_CATEGORY_GLOSS = {
+    "Freight Markets": "spot and contract rate strength across the major lanes",
+    "Supply":          "vessel capacity, deliveries and scrapping discipline",
+    "Demand":          "underlying trade-volume and consumer pull",
+    "Infrastructure":  "port, canal and inland-network throughput",
+    "Financial":       "carrier earnings power, equity and credit conditions",
+    "Risk":            "geopolitical, weather and regulatory headwinds",
+}
 
-# ── Cell formatters ───────────────────────────────────────────────────────────
+# insight_card_html() colors the action chip from ACTION_COLORS — use only keys
+# that resolve to a palette color so the chip is never a fallback gray.
+_ACTION_BY_BAND = {"GREEN": "Prioritize", "AMBER": "Watch", "RED": "Caution"}
+
+
+# ── Cell formatters for WSJ market tables ─────────────────────────────────────
+# wsj_market_table() renders each cell string as raw HTML inside a <td>. The
+# table CSS already handles alignment, rule lines and hover — these helpers
+# only style *content* (font family, weight, conditional color).
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    """Monospace numeric cell content with tabular figures."""
     return (
         f'<span style="font-family:var(--mono);color:{color};'
-        f'font-weight:{weight};">{value}</span>'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
     )
 
 
 def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
+    """Sans-serif cell content."""
     return (
         f'<span style="font-family:var(--sans);color:{color};'
         f'font-weight:{weight};">{value}</span>'
+    )
+
+
+def _eyebrow(value: str, color: str = C_TEXT3) -> str:
+    """Small uppercase tracking-wide label — used for pillar tags in the matrix."""
+    return (
+        f'<span style="font-family:var(--sans);color:{color};font-weight:700;'
+        f'font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em;">'
+        f'{value}</span>'
     )
 
 
@@ -195,7 +245,7 @@ def _stable_score(seed: int, base: int = 55) -> int:
 
 
 def _rag(score: int) -> tuple[str, str]:
-    """Return (label, color) for score."""
+    """Return (label, color) for a 0-100 score on the GREEN/AMBER/RED scale."""
     if score >= 65:
         return "GREEN", C_HIGH
     if score >= 40:
@@ -208,15 +258,15 @@ def _trend_arrow(series: list[float], prior_score: int, cur_score: int) -> str:
         if len(series) >= 2:
             delta = series[-1] - series[max(0, len(series) - 8)]
             if abs(delta) < 1e-9:
-                return "→"
-            return "↑" if delta > 0 else "↓"
+                return "▬"
+            return "▲" if delta > 0 else "▼"
         if cur_score > prior_score + 2:
-            return "↑"
+            return "▲"
         if cur_score < prior_score - 2:
-            return "↓"
-        return "→"
+            return "▼"
+        return "▬"
     except Exception:
-        return "→"
+        return "▬"
 
 
 def _week_label() -> str:
@@ -233,24 +283,27 @@ def _overall_score(rows: list[dict]) -> int:
         return 50
 
 
+def _category_avg(rows: list[dict], cats: list[str]) -> int:
+    """Mean score across one or more pillars; 50 when no rows match."""
+    s = [r["score"] for r in rows if r["category"] in cats]
+    return int(sum(s) / len(s)) if s else 50
+
+
 def _hex_alpha(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
 
-# ── Section 1: Executive Summary Card ────────────────────────────────────────
+# ── Section 1: Executive Summary ──────────────────────────────────────────────
 
 def _render_executive_summary(overall: int, rows: list[dict]) -> None:
+    """Headline composite gauge, four-pillar KPI strip, and AI outlook card."""
     try:
         rag_label, rag_color = _rag(overall)
-        freight_scores = [r["score"] for r in rows if r["category"] == "Freight Markets"]
-        demand_scores  = [r["score"] for r in rows if r["category"] == "Demand"]
-        risk_scores    = [r["score"] for r in rows if r["category"] == "Risk"]
-
-        freight_avg = int(sum(freight_scores) / len(freight_scores)) if freight_scores else 50
-        demand_avg  = int(sum(demand_scores)  / len(demand_scores))  if demand_scores  else 50
-        risk_avg    = int(sum(risk_scores)    / len(risk_scores))    if risk_scores    else 50
+        freight_avg = _category_avg(rows, ["Freight Markets"])
+        demand_avg  = _category_avg(rows, ["Demand"])
+        risk_avg    = _category_avg(rows, ["Risk"])
 
         summary = (
             f"Global shipping markets are operating at a composite score of {overall}/100 "
@@ -264,58 +317,88 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
                 "demand, while port infrastructure remains broadly functional. Near-term outlook "
                 "is constructive with upside risk to rate forecasts."
             )
-            action = "Buy"
+            banner_level = "success"
+            banner_gloss = "conditions are constructive across most pillars"
         elif overall >= 40:
             summary += (
                 "Mixed signals persist across freight corridors: demand recovery is uneven and "
                 "supply additions are compressing margins. Operators should monitor blank sailing "
                 "announcements and canal disruption risk closely over the next 30 days."
             )
-            action = "Watch"
+            banner_level = "warning"
+            banner_gloss = "signals are mixed and warrant close monitoring"
         else:
             summary += (
                 "Deteriorating freight conditions, excess supply, and softening demand create "
                 "headwinds across all major trade lanes. Capital discipline and route optimization "
                 "are critical. Watch for further rate erosion and potential carrier consolidation."
             )
-            action = "Caution"
+            banner_level = "critical"
+            banner_gloss = "headwinds are broad-based across the network"
+
+        action = _ACTION_BY_BAND.get(rag_label, "Watch")
 
         section_header(
             "Executive Summary — Composite Market Score",
-            f"Week of {_week_label()}",
+            f"Week of {_week_label()} · {len(rows)} tracked metrics across six market pillars",
         )
 
-        metric_card_row(
-            [
-                {
-                    "label":    "Composite Score",
-                    "value":    f"{overall}",
-                    "delta":    rag_label,
-                    "delta_color": rag_color,
-                    "sublabel": "/ 100",
-                    "accent":   rag_color,
-                },
-                {
-                    "label":    "Freight Conditions",
-                    "value":    f"{freight_avg}",
-                    "sublabel": "/ 100",
-                    "accent":   C_ACCENT,
-                },
-                {
-                    "label":    "Demand Fundamentals",
-                    "value":    f"{demand_avg}",
-                    "sublabel": "/ 100",
-                    "accent":   C_HIGH,
-                },
-                {
-                    "label":    "Risk Environment",
-                    "value":    f"{risk_avg}",
-                    "sublabel": "/ 100",
-                    "accent":   C_MOD,
-                },
-            ],
-            columns=4,
+        # ── Headline state banner — reads before the eye reaches the gauge ──
+        alert_banner(
+            f"Composite market score is <b>{overall}/100</b> "
+            f"(<b>{rag_label}</b>) — {banner_gloss}.",
+            level=banner_level,
         )
+
+        # ── Hero row: composite gauge beside the pillar KPI strip ──
+        col_gauge, col_strip = st.columns([2, 5], gap="large")
+
+        with col_gauge:
+            fig = gauge_ring(
+                overall / 100.0,
+                f"{rag_label} · composite",
+                color=rag_color,
+                size=224,
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="scorecard_composite_gauge",
+            )
+
+        with col_strip:
+            metric_card_row(
+                [
+                    {
+                        "label":       "Composite Score",
+                        "value":       f"{overall}",
+                        "delta":       rag_label,
+                        "delta_color": rag_color,
+                        "sublabel":    "0–100 blended market read",
+                        "accent":      rag_color,
+                    },
+                    {
+                        "label":    "Freight Conditions",
+                        "value":    f"{freight_avg}",
+                        "sublabel": "spot & contract rate strength",
+                        "accent":   C_ACCENT,
+                    },
+                    {
+                        "label":    "Demand Fundamentals",
+                        "value":    f"{demand_avg}",
+                        "sublabel": "trade-volume & consumer pull",
+                        "accent":   C_HIGH,
+                    },
+                    {
+                        "label":    "Risk Environment",
+                        "value":    f"{risk_avg}",
+                        "sublabel": "higher reads = calmer seas",
+                        "accent":   C_MOD,
+                    },
+                ],
+                columns=2,
+            )
 
         st.markdown(
             insight_card_html(
@@ -330,15 +413,19 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Executive summary rendered — overall={}", overall)
     except Exception as exc:
-        logger.error("_render_executive_summary: {}", exc)
+        logger.exception("_render_executive_summary: {}", exc)
         st.error("Executive summary unavailable.")
 
 
-# ── Section 2: Category Summary Bar ───────────────────────────────────────────
+# ── Section 2: Category Averages ──────────────────────────────────────────────
 
 def _render_category_bar(rows: list[dict]) -> None:
+    """Six-pillar score cards plus a relative-strength heat bar."""
     try:
-        section_header("Category Averages", "Aggregate scores across the six scorecard pillars")
+        section_header(
+            "Category Averages",
+            "Aggregate scores across the six scorecard pillars — strongest pillars carry the composite",
+        )
 
         cat_avgs: dict[str, float] = {}
         for cat in _CATEGORY_ORDER:
@@ -351,19 +438,25 @@ def _render_category_bar(rows: list[dict]) -> None:
             color = _CATEGORY_COLORS.get(cat, C_TEXT3)
             rag_label, _ = _rag(avg)
             metrics.append({
-                "label":    cat.upper(),
-                "value":    f"{avg}",
-                "delta":    f"{rag_label}",
+                "label":       cat.upper(),
+                "value":       f"{avg}",
+                "delta":       rag_label,
                 "delta_color": color,
-                "sublabel": "/ 100",
-                "accent":   color,
+                "sublabel":    _CATEGORY_GLOSS.get(cat, "/ 100"),
+                "accent":      color,
             })
 
         metric_card_row(metrics, columns=6)
+
+        # ── Relative-strength heat bar — pillars sized by their average score ──
+        heat = {cat: round(cat_avgs[cat] / 100.0, 2) for cat in _CATEGORY_ORDER}
+        shipping_heat_bar(heat, title="Pillar strength — wider = stronger")
+
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Category summary bar rendered")
     except Exception as exc:
-        logger.error("_render_category_bar: {}", exc)
+        logger.exception("_render_category_bar: {}", exc)
+        st.error("Category averages unavailable.")
 
 
 # ── Section 3: Scorecard Matrix ───────────────────────────────────────────────
@@ -420,7 +513,7 @@ def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[
                 "rag_label": "AMBER",
                 "rag_color": C_MOD,
                 "prior_score": 50,
-                "trend": "→",
+                "trend": "▬",
                 "notes": "N/A",
                 "series": [],
             })
@@ -428,44 +521,71 @@ def _build_rows(freight_data: dict, macro_data: dict, stock_data: dict) -> list[
 
 
 def _render_scorecard_matrix(rows: list[dict]) -> None:
+    """30-metric institutional table, grouped pillar-by-pillar for legibility."""
     try:
-        section_header("Scorecard Matrix — 30 Metrics",
-                       "Per-metric score, rating, week-over-week trend")
+        section_header(
+            "Scorecard Matrix — 30 Metrics",
+            "Per-metric score, RAG rating and week-over-week trend, grouped by pillar",
+        )
 
-        headers = ["Category", "Metric", "Score", "Rating", "Prior", "Trend", "Notes"]
+        if not rows:
+            alert_banner("No scorecard metrics available.", level="info")
+            return
+
+        headers = ["Pillar", "Metric", "Score", "Rating", "Prior", "Δ WoW", "Trend", "Read"]
         table_rows = []
-        for row in rows:
-            cat_color = _CATEGORY_COLORS.get(row["category"], C_TEXT3)
-            trend_color = (
-                C_HIGH if row["trend"] == "↑"
-                else C_LOW if row["trend"] == "↓"
-                else C_TEXT3
-            )
-            table_rows.append([
-                _sans(row["category"].upper(), color=cat_color, weight=600),
-                _sans(row["metric"], color=C_TEXT, weight=500),
-                _mono(str(row["score"]), color=row["rag_color"], weight=700),
-                badge(row["rag_label"], color=row["rag_color"]),
-                _mono(str(row["prior_score"]), color=C_TEXT3),
-                _mono(row["trend"], color=trend_color, weight=700),
-                _sans(row["notes"], color=C_TEXT3),
-            ])
+
+        # Render pillar by pillar so the matrix reads as six labeled blocks
+        # rather than one undifferentiated 30-row grid.
+        for cat in _CATEGORY_ORDER:
+            cat_rows = [r for r in rows if r["category"] == cat]
+            if not cat_rows:
+                continue
+            cat_color = _CATEGORY_COLORS.get(cat, C_TEXT3)
+            for j, row in enumerate(sorted(cat_rows, key=lambda r: -r["score"])):
+                trend_color = (
+                    C_HIGH if row["trend"] == "▲"
+                    else C_LOW if row["trend"] == "▼"
+                    else C_TEXT3
+                )
+                delta = row["score"] - row["prior_score"]
+                delta_color = (
+                    C_HIGH if delta > 0 else C_LOW if delta < 0 else C_TEXT3
+                )
+                delta_text = f"+{delta}" if delta > 0 else (str(delta) if delta < 0 else "0")
+                # Pillar tag prints once per group; blank thereafter so the eye
+                # reads each pillar as a contiguous band.
+                pillar_cell = (
+                    _eyebrow(cat.upper(), color=cat_color)
+                    if j == 0 else _sans("", color=C_TEXT3)
+                )
+                table_rows.append([
+                    pillar_cell,
+                    _sans(row["metric"], color=C_TEXT, weight=600),
+                    _mono(str(row["score"]), color=row["rag_color"], weight=700),
+                    badge(row["rag_label"], color=row["rag_color"]),
+                    _mono(str(row["prior_score"]), color=C_TEXT3),
+                    _mono(delta_text, color=delta_color, weight=600),
+                    _mono(row["trend"], color=trend_color, weight=700),
+                    _sans(row["notes"], color=C_TEXT2),
+                ])
 
         wsj_market_table(headers, table_rows)
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
-        logger.debug("Scorecard matrix rendered — {} rows", len(rows))
+        logger.debug("Scorecard matrix rendered — {} rows", len(table_rows))
     except Exception as exc:
-        logger.error("_render_scorecard_matrix: {}", exc)
+        logger.exception("_render_scorecard_matrix: {}", exc)
         st.error("Scorecard matrix unavailable.")
 
 
-# ── Section 4: Score History Chart ───────────────────────────────────────────
+# ── Section 4: Score History Chart ────────────────────────────────────────────
 
 def _render_score_history(overall: int) -> None:
+    """12-month composite trend with event annotations and RAG threshold guides."""
     try:
         section_header(
             "Composite Score — 12-Month History",
-            "Composite trend with event annotations and RAG threshold guides",
+            "Composite trend with market-event annotations and GREEN / RED threshold guides",
         )
         today = date.today()
         months = [today - timedelta(days=30 * i) for i in range(12, -1, -1)]
@@ -479,6 +599,7 @@ def _render_score_history(overall: int) -> None:
         scores[-1] = overall
 
         labels = [m.strftime("%b %Y") for m in months]
+        cur_color = _rag(overall)[1]
 
         events = {
             2: ("Suez Disruption", C_LOW),
@@ -489,67 +610,106 @@ def _render_score_history(overall: int) -> None:
 
         fig = go.Figure()
 
+        # Soft band between the RAG thresholds — gives the trend line a stage.
+        fig.add_hrect(y0=40, y1=65, fillcolor=_hex_alpha(C_MOD, 0.04),
+                      line_width=0, layer="below")
+
         fig.add_trace(go.Scatter(
             x=labels, y=scores,
-            mode="lines+markers",
-            line=dict(color=C_ACCENT, width=2.5),
-            marker=dict(size=6, color=C_ACCENT),
+            mode="lines",
+            line=dict(color=cur_color, width=2.6, shape="spline", smoothing=0.6),
             fill="tozeroy",
-            fillcolor=_hex_alpha(C_ACCENT, 0.08),
+            fillcolor=_hex_alpha(cur_color, 0.08),
             name="Composite Score",
-            hovertemplate="<b>%{x}</b><br>Score: %{y}/100<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Score %{y}/100<extra></extra>",
+        ))
+
+        # Markers as a second trace so only the data points carry dots —
+        # the latest point is enlarged as the "you are here" anchor.
+        marker_sizes = [6] * len(labels)
+        marker_lines = [0] * len(labels)
+        if marker_sizes:
+            marker_sizes[-1] = 12
+            marker_lines[-1] = 1.6
+        fig.add_trace(go.Scatter(
+            x=labels, y=scores,
+            mode="markers",
+            marker=dict(
+                size=marker_sizes,
+                color=cur_color,
+                line=dict(color=C_TEXT, width=marker_lines),
+            ),
+            showlegend=False,
+            hoverinfo="skip",
         ))
 
         for idx, (label, color) in events.items():
             if idx < len(labels):
                 fig.add_vline(x=labels[idx], line=dict(color=color, width=1, dash="dot"))
                 fig.add_annotation(
-                    x=labels[idx], y=scores[idx] + 5,
+                    x=labels[idx], y=scores[idx] + 7,
                     text=label, showarrow=False,
                     font=dict(size=9, color=color),
                     bgcolor=C_CARD,
+                    bordercolor=_hex_alpha(color, 0.4),
+                    borderpad=3,
                 )
 
         fig.add_hline(y=65, line=dict(color=C_HIGH, width=1, dash="dash"),
-                      annotation_text="GREEN threshold",
+                      annotation_text="GREEN 65",
+                      annotation_position="right",
                       annotation_font=dict(color=C_HIGH, size=9))
         fig.add_hline(y=40, line=dict(color=C_LOW, width=1, dash="dash"),
-                      annotation_text="RED threshold",
+                      annotation_text="RED 40",
+                      annotation_position="right",
                       annotation_font=dict(color=C_LOW, size=9))
 
         apply_dark_layout(
             fig,
             title="",
-            height=320,
+            height=340,
             showlegend=False,
             xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-            yaxis=dict(range=[0, 100], tickfont=dict(size=10), title="Score"),
+            yaxis=dict(range=[0, 100], tickfont=dict(size=10),
+                       title="Composite Score", dtick=20),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="scorecard_history_chart",
+        )
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Score history chart rendered")
     except Exception as exc:
-        logger.error("_render_score_history: {}", exc)
+        logger.exception("_render_score_history: {}", exc)
         st.error("Score history chart unavailable.")
 
 
-# ── Section 5: Quadrant Analysis ─────────────────────────────────────────────
+# ── Section 5: Quadrant Analysis ──────────────────────────────────────────────
 
 def _render_quadrant(rows: list[dict]) -> None:
+    """Supply vs demand plane — current position against historical regimes."""
     try:
         section_header(
             "Market Quadrant Analysis — Supply vs Demand Outlook",
-            "Current position vs historical regimes across the supply/demand plane",
+            "Current position against historical regimes across the supply / demand plane",
         )
         supply_cats  = ["Supply"]
         demand_cats  = ["Demand", "Freight Markets"]
 
-        def avg_cat(cats: list[str]) -> float:
-            s = [r["score"] for r in rows if r["category"] in cats]
-            return sum(s) / len(s) if s else 50.0
+        cur_x = float(_category_avg(rows, supply_cats))
+        cur_y = float(_category_avg(rows, demand_cats))
 
-        cur_x = avg_cat(supply_cats)
-        cur_y = avg_cat(demand_cats)
+        # Plain-English read of which quadrant the current point sits in.
+        if cur_x >= 50 and cur_y >= 50:
+            zone_name, zone_color = "GOLDILOCKS", C_HIGH
+        elif cur_x < 50 and cur_y >= 50:
+            zone_name, zone_color = "UNDERSUPPLY", C_LOW
+        elif cur_x >= 50 and cur_y < 50:
+            zone_name, zone_color = "OVERSUPPLY", C_MOD
+        else:
+            zone_name, zone_color = "SLOWDOWN", C_TEXT3
 
         historical = [
             ("2022 Q1", 72, 78, C_HIGH),
@@ -565,35 +725,44 @@ def _render_quadrant(rows: list[dict]) -> None:
             (50, 100, 50, 100, _hex_alpha(C_HIGH, 0.06), 75, 75, "GOLDILOCKS",  C_HIGH),
             (0,  50,  50, 100, _hex_alpha(C_LOW,  0.06), 25, 75, "UNDERSUPPLY", C_LOW),
             (50, 100, 0,  50,  _hex_alpha(C_MOD,  0.06), 75, 25, "OVERSUPPLY",  C_MOD),
-            (0,  50,  0,  50,  "rgba(100,116,139,0.06)", 25, 25, "SLOWDOWN",    C_TEXT3),
+            (0,  50,  0,  50,  _hex_alpha(C_TEXT3, 0.10), 25, 25, "SLOWDOWN",   C_TEXT3),
         ]
 
         for x0, x1, y0, y1, fill, lx, ly, label, lcolor in zone_defs:
             fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
-                          fillcolor=fill, line=dict(width=0))
+                          fillcolor=fill, line=dict(width=0), layer="below")
             fig.add_annotation(x=lx, y=ly, text=label, showarrow=False,
-                               font=dict(size=9, color=lcolor),
-                               opacity=0.6)
+                               font=dict(size=10, color=lcolor),
+                               opacity=0.55)
 
         for hname, hx, hy, hc in historical:
             fig.add_trace(go.Scatter(
                 x=[hx], y=[hy], mode="markers+text",
-                marker=dict(size=10, color=hc, opacity=0.6, symbol="circle"),
+                marker=dict(size=10, color=hc, opacity=0.55, symbol="circle"),
                 text=[hname], textposition="top center",
                 textfont=dict(size=9, color=hc),
                 name=hname, showlegend=True,
-                hovertemplate=f"<b>{hname}</b><br>Supply: {hx}<br>Demand: {hy}<extra></extra>",
+                hovertemplate=f"<b>{hname}</b><br>Supply {hx}<br>Demand {hy}<extra></extra>",
             ))
+
+        # Faint trail connecting the historical regimes in time order.
+        fig.add_trace(go.Scatter(
+            x=[h[1] for h in historical],
+            y=[h[2] for h in historical],
+            mode="lines",
+            line=dict(color=_hex_alpha(C_TEXT3, 0.45), width=1, dash="dot"),
+            showlegend=False, hoverinfo="skip",
+        ))
 
         fig.add_trace(go.Scatter(
             x=[cur_x], y=[cur_y], mode="markers+text",
-            marker=dict(size=18, color=C_ACCENT, symbol="star",
-                        line=dict(color=C_TEXT, width=1.5)),
+            marker=dict(size=20, color=zone_color, symbol="star",
+                        line=dict(color=C_TEXT, width=1.6)),
             text=["NOW"], textposition="top center",
             textfont=dict(size=11, color=C_TEXT),
             name="Current", showlegend=True,
-            hovertemplate=f"<b>Current</b><br>Supply Outlook: {cur_x:.0f}"
-                          f"<br>Demand Outlook: {cur_y:.0f}<extra></extra>",
+            hovertemplate=f"<b>Current — {zone_name}</b><br>Supply Outlook {cur_x:.0f}"
+                          f"<br>Demand Outlook {cur_y:.0f}<extra></extra>",
         ))
 
         fig.add_hline(y=50, line=dict(color=C_BORDER, width=1))
@@ -602,26 +771,47 @@ def _render_quadrant(rows: list[dict]) -> None:
         apply_dark_layout(
             fig,
             title="",
-            height=400,
-            xaxis=dict(range=[0, 100], title="Supply Outlook →", tickfont=dict(size=9)),
-            yaxis=dict(range=[0, 100], title="Demand Outlook →", tickfont=dict(size=9)),
+            height=420,
+            xaxis=dict(range=[0, 100], title="Supply Outlook →",
+                       tickfont=dict(size=9), dtick=25),
+            yaxis=dict(range=[0, 100], title="Demand Outlook →",
+                       tickfont=dict(size=9), dtick=25),
             legend=dict(font=dict(size=9, color=C_TEXT3),
                         bgcolor="rgba(0,0,0,0)",
                         bordercolor=C_BORDER, borderwidth=1),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="scorecard_quadrant_chart",
+        )
+
+        # Editorial read of where the current point landed.
+        alert_banner(
+            f"The market currently sits in the <b>{zone_name}</b> quadrant — "
+            f"supply outlook <b>{cur_x:.0f}</b>, demand outlook <b>{cur_y:.0f}</b>.",
+            level="info",
+        )
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Quadrant chart rendered — cur=({:.0f},{:.0f})", cur_x, cur_y)
     except Exception as exc:
-        logger.error("_render_quadrant: {}", exc)
+        logger.exception("_render_quadrant: {}", exc)
         st.error("Quadrant analysis unavailable.")
 
 
-# ── Section 6: Winner / Loser / Surprise ─────────────────────────────────────
+# ── Section 6: Winner / Loser / Surprise ──────────────────────────────────────
 
 def _render_winner_loser(rows: list[dict]) -> None:
+    """Strongest, weakest and largest week-over-week surprise metric."""
     try:
+        section_header(
+            "Winner / Loser of the Week",
+            "Strongest and weakest metrics, plus the largest week-over-week surprise",
+        )
+
         if not rows:
+            alert_banner("No scorecard metrics available to rank.", level="info")
             return
 
         best    = max(rows, key=lambda r: r["score"])
@@ -630,17 +820,12 @@ def _render_winner_loser(rows: list[dict]) -> None:
 
         def _delta_label(score: int, prior: int) -> str:
             d = score - prior
-            return f"+{d} vs prior" if d >= 0 else f"{d} vs prior"
-
-        section_header(
-            "Winner / Loser of the Week",
-            "Strongest, weakest, and largest week-over-week surprise",
-        )
+            return f"+{d} vs prior week" if d >= 0 else f"{d} vs prior week"
 
         metric_card_row(
             [
                 {
-                    "label":       f"WINNER — {best['category'].upper()}",
+                    "label":       f"WINNER · {best['category'].upper()}",
                     "value":       best["metric"],
                     "delta":       _delta_label(best["score"], best["prior_score"]),
                     "delta_color": C_HIGH,
@@ -648,19 +833,22 @@ def _render_winner_loser(rows: list[dict]) -> None:
                     "accent":      C_HIGH,
                 },
                 {
-                    "label":       f"LOSER — {worst['category'].upper()}",
+                    "label":       f"LOSER · {worst['category'].upper()}",
                     "value":       worst["metric"],
                     "delta":       _delta_label(worst["score"], worst["prior_score"]),
                     "delta_color": C_LOW,
-                    "sublabel":    f"Score {worst['score']} / 100 — warrants attention",
+                    "sublabel":    f"Score {worst['score']} / 100 — weakest pillar, warrants attention",
                     "accent":      C_LOW,
                 },
                 {
-                    "label":       f"BIGGEST SURPRISE — {biggest['category'].upper()}",
+                    "label":       f"BIGGEST SURPRISE · {biggest['category'].upper()}",
                     "value":       biggest["metric"],
                     "delta":       _delta_label(biggest["score"], biggest["prior_score"]),
                     "delta_color": C_MOD,
-                    "sublabel":    f"Largest WoW move: {abs(biggest['score'] - biggest['prior_score'])} pts",
+                    "sublabel":    (
+                        f"{abs(biggest['score'] - biggest['prior_score'])}-point move — "
+                        f"largest week-over-week swing"
+                    ),
                     "accent":      C_MOD,
                 },
             ],
@@ -669,18 +857,17 @@ def _render_winner_loser(rows: list[dict]) -> None:
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Winner/loser section rendered")
     except Exception as exc:
-        logger.error("_render_winner_loser: {}", exc)
+        logger.exception("_render_winner_loser: {}", exc)
         st.error("Winner/loser section unavailable.")
 
 
-# ── Section 7: Forward 30-day Outlook ────────────────────────────────────────
+# ── Section 7: Forward 30-day Outlook ─────────────────────────────────────────
 
 def _render_outlook(rows: list[dict], overall: int) -> None:
+    """Five forward-looking predictions with confidence bands and key risk."""
     try:
-        freight_avg = int(sum(r["score"] for r in rows if r["category"] == "Freight Markets") /
-                          max(1, sum(1 for r in rows if r["category"] == "Freight Markets")))
-        risk_avg    = int(sum(r["score"] for r in rows if r["category"] == "Risk") /
-                          max(1, sum(1 for r in rows if r["category"] == "Risk")))
+        freight_avg = _category_avg(rows, ["Freight Markets"])
+        risk_avg    = _category_avg(rows, ["Risk"])
 
         predictions = [
             {
@@ -735,23 +922,37 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
             },
         ]
 
-        section_header("Forward 30-Day Outlook",
-                       "Five forward-looking predictions with confidence bands and key risk")
+        section_header(
+            "Forward 30-Day Outlook",
+            "Five forward-looking predictions, each with a confidence band and its key risk",
+        )
+
+        # Lead caption — average confidence across the five calls.
+        avg_conf = int(sum(p["confidence"] for p in predictions) / len(predictions))
+        conf_level = "success" if avg_conf >= 70 else ("warning" if avg_conf >= 55 else "critical")
+        alert_banner(
+            f"Average forecast confidence is <b>{avg_conf}%</b> across "
+            f"{len(predictions)} forward calls for the next 30 days.",
+            level=conf_level,
+        )
 
         for i, pred in enumerate(predictions):
             try:
                 conf   = pred["confidence"]
-                action = "Buy" if conf >= 70 else ("Watch" if conf >= 55 else "Caution")
+                action = (
+                    "Prioritize" if conf >= 70
+                    else ("Watch" if conf >= 55 else "Caution")
+                )
                 rationale = (
                     f'{pred["body"]} <strong>Key risk:</strong> {pred["key_risk"]}'
                 )
                 st.markdown(
                     insight_card_html(
-                        title=f"{i+1}. {pred['title']}",
+                        title=f"{i + 1}. {pred['title']}",
                         score=conf / 100.0,
                         action=action,
                         rationale=rationale,
-                        category="OUTLOOK",
+                        category="MACRO",
                     ),
                     unsafe_allow_html=True,
                 )
@@ -761,7 +962,7 @@ def _render_outlook(rows: list[dict], overall: int) -> None:
         st.markdown(source_footer(_SCORECARD_SOURCES), unsafe_allow_html=True)
         logger.debug("Outlook section rendered — {} predictions", len(predictions))
     except Exception as exc:
-        logger.error("_render_outlook: {}", exc)
+        logger.exception("_render_outlook: {}", exc)
         st.error("Forward outlook unavailable.")
 
 
@@ -775,7 +976,18 @@ def render(
     macro_data: dict,
     stock_data: dict,
 ) -> None:
-    """Render the executive shipping market scorecard."""
+    """Render the executive shipping market scorecard.
+
+    Parameters
+    ----------
+    port_results, route_results, insights:
+        Platform-standard inputs computed at the top of ``app.py``; accepted for
+        signature parity and may be empty — the scorecard is self-contained.
+    freight_data, macro_data, stock_data:
+        Keyed time-series dicts. Each may be ``None`` or empty; metrics without a
+        live series fall back to a deterministic modeled score, so the tab
+        renders cleanly with no inputs at all.
+    """
     try:
         logger.info("tab_scorecard.render() — building scorecard rows")
 
@@ -795,12 +1007,27 @@ def render(
             badge_color=C_ACCENT,
         )
 
+        # ── Chapter 1: the headline read ──
         _render_executive_summary(overall, rows)
+
+        section_divider("Pillar Detail")
         _render_category_bar(rows)
+
+        st.divider()
         _render_scorecard_matrix(rows)
+
+        # ── Chapter 2: trends and positioning ──
+        section_divider("Trends & Positioning")
         _render_score_history(overall)
+
+        st.divider()
         _render_quadrant(rows)
+
+        # ── Chapter 3: this week, and the month ahead ──
+        section_divider("Week in Review & Outlook")
         _render_winner_loser(rows)
+
+        st.divider()
         _render_outlook(rows, overall)
 
         logger.success("tab_scorecard.render() complete")

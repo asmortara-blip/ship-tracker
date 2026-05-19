@@ -1,11 +1,25 @@
-"""tab_overview.py — Modern SaaS-style Overview Dashboard.
+"""tab_overview.py — Executive Overview Dashboard (flagship landing page).
 
-Sections:
-  1. Status bar (market tone + timestamp + data health dots)
-  2. KPI strip (6 key metrics)
-  3. Main body — left: market pulse, signal matrix, top signals
-                 right: risk/alerts, route opportunities, data sources
-  4. Quick sparkline charts
+The first screen a user sees. A financial-terminal front page that states the
+market verdict, then fans out into KPIs, signals, risk and feed health.
+
+Canonical tab pattern (mirrors ``ui/tab_rate_analytics.py`` /
+``ui/tab_disruption_radar.py``):
+  * palette + components imported from ``ui/styles.py`` — never redeclared;
+  * no hand-rolled inline-styled divs — every block is a ``ui/styles.py``
+    helper, or a ``wsj_market_table`` cell formatted with span content;
+  * labeled ``section_divider`` rules separate the dashboard's zones;
+  * every section wrapped in try/except + ``logger.exception``.
+
+Sections
+--------
+A. Page header (badge "DASHBOARD")
+B. Market verdict — tone banner + per-feed health row
+C. Headline KPI strip — six key metrics
+D. Markets & Signals — market pulse, signal-conviction matrix, featured
+   signal + top-signals table
+E. Risk & Routes — risk/alert table, route opportunities, data-feed status
+F. Quick Views — three distribution snapshots
 """
 from __future__ import annotations
 
@@ -26,10 +40,13 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     status_badge,
@@ -58,6 +75,7 @@ except Exception:
 
 
 def _mono(value: str, color: str = C_TEXT) -> str:
+    """Monospace numeric cell content."""
     return (
         f'<span style="font-family:var(--mono);color:{color};'
         f'font-variant-numeric:tabular-nums;">{value}</span>'
@@ -65,6 +83,7 @@ def _mono(value: str, color: str = C_TEXT) -> str:
 
 
 def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    """Sans-serif cell content."""
     return (
         f'<span style="font-family:var(--sans);color:{color};'
         f'font-weight:{weight};">{value}</span>'
@@ -121,6 +140,27 @@ def _conviction_label(score: float) -> str:
     return "Avoid"
 
 
+# Plain-English framing for the market tone — surfaced in the verdict banner so
+# the front page reads as an editorial call before the eye reaches the KPIs.
+_TONE_GLOSS: dict[str, str] = {
+    "Bullish": "demand is running hot across the tracked port network — "
+               "conditions favour leaning into capacity",
+    "Neutral": "demand is balanced across the network — no decisive tilt "
+               "either way",
+    "Bearish": "demand is soft across the tracked port network — conditions "
+               "argue for caution on new capacity",
+    "Awaiting Data": "live feeds have not populated yet — figures below are "
+                     "illustrative until a refresh completes",
+}
+
+_TONE_LEVEL: dict[str, str] = {
+    "Bullish": "success",
+    "Neutral": "warning",
+    "Bearish": "critical",
+    "Awaiting Data": "info",
+}
+
+
 # Sources used by the dashboard's composite sections.
 _DASHBOARD_SOURCES = [
     {"name": "Port demand engine",   "kind": "modeled",  "quality": "modeled"},
@@ -131,32 +171,52 @@ _DASHBOARD_SOURCES = [
 ]
 
 
+def _market_tone(port_results: list) -> tuple[str, str]:
+    """Resolve the dashboard's headline tone from average port demand.
+
+    Returns ``(tone, status)`` where ``status`` is a ``status_badge`` key.
+    """
+    has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
+    avg = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
+    if avg >= 0.65:
+        return "Bullish", "success"
+    if avg >= 0.45:
+        return "Neutral", "warning"
+    if avg > 0:
+        return "Bearish", "danger"
+    return "Awaiting Data", "neutral"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ROW 1 — Status Bar
+# SECTION B — Market Verdict (tone banner + feed health)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_status_bar(
+def _render_market_verdict(
     port_results: list, route_results: list, insights: list,
     freight_data: dict, macro_data: dict, stock_data: dict,
 ) -> None:
-    """Render the dashboard tone + data-health pill row.
+    """Render the headline market-tone banner plus the per-feed health row.
 
-    A compact strip is the right idiom here (market tone + per-feed dots).
-    We surface the underlying tone via ``status_badge`` and the per-feed
-    health via the shared ``live_data_badge``/``source_footer`` family.
+    The banner states the editorial call; the ``source_footer`` strip beneath
+    it shows which of the six platform feeds are live versus running on demo
+    defaults — the same idiom every other tab uses for provenance.
     """
     try:
+        tone, _ = _market_tone(port_results)
         has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
         avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
 
-        if avg_demand >= 0.65:
-            tone, tone_status = "Bullish", "success"
-        elif avg_demand >= 0.45:
-            tone, tone_status = "Neutral", "warning"
-        elif avg_demand > 0:
-            tone, tone_status = "Bearish", "danger"
-        else:
-            tone, tone_status = "Awaiting Data", "neutral"
+        level = _TONE_LEVEL.get(tone, "info")
+        gloss = _TONE_GLOSS.get(tone, "fleet conditions are mixed")
+        demand_clause = (
+            f" Average port demand reads <b>{avg_demand:.0%}</b> across "
+            f"<b>{len(has_data)}</b> tracked ports."
+            if has_data else ""
+        )
+        alert_banner(
+            f"Market tone reads <b>{tone}</b> — {gloss}.{demand_clause}",
+            level=level,
+        )
 
         feeds = [
             ("Ports",    bool(has_data),       "modeled"),
@@ -166,37 +226,29 @@ def _render_status_bar(
             ("Macro",    bool(macro_data),     "live"),
             ("Equities", bool(stock_data),     "live"),
         ]
-
-        feed_sources = []
-        for name, ok, kind in feeds:
-            feed_sources.append({
+        feed_sources = [
+            {
                 "name":    name,
                 "kind":    kind if ok else "demo",
                 "quality": "good" if ok else "demo",
-            })
+            }
+            for name, ok, kind in feeds
+        ]
 
-        _sb_left, _sb_right = st.columns([6, 2])
-        with _sb_left:
+        sb_left, sb_right = st.columns([6, 2])
+        with sb_left:
+            st.markdown(source_footer(feed_sources, align="left"), unsafe_allow_html=True)
+        with sb_right:
             st.markdown(
-                f'<div class="section-banner">'
-                f'<span class="section-banner-title">Dashboard</span>'
-                f'&nbsp;&nbsp;{status_badge(tone, tone_status)}'
-                f'</div>',
+                _mono(f"As of {_now_utc()}", color=C_TEXT3),
                 unsafe_allow_html=True,
             )
-        with _sb_right:
-            st.markdown(
-                _mono(_now_utc(), color=C_TEXT3),
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(source_footer(feed_sources, align="left"), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Status bar render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — market verdict render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROW 2 — KPI Strip
+# SECTION C — Headline KPI Strip
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_kpi_strip(
@@ -214,24 +266,43 @@ def _render_kpi_strip(
 
         demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
         alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
+        alert_sub = (
+            "elevated risk load" if n_alerts > 3
+            else "monitoring" if n_alerts > 0
+            else "all clear"
+        )
 
+        section_header(
+            "Headline KPIs",
+            "Six figures that frame the session — freight indices, port demand, "
+            "risk load and conviction",
+        )
         metric_card_row(
             [
-                {"label": "Baltic Dry Index",  "value": _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"), "accent": C_ACCENT},
-                {"label": "Container Index",   "value": _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204"), "accent": C_ACCENT},
-                {"label": "Avg Port Demand",   "value": demand_str, "accent": C_HIGH if avg_demand >= 0.6 else C_TEXT3, "sublabel": f"{len(has_data)} ports"},
-                {"label": "Active Alerts",     "value": str(n_alerts), "accent": alert_color},
-                {"label": "High Conviction",   "value": str(hi_conv), "accent": C_HIGH if hi_conv > 2 else C_TEXT3, "sublabel": f"of {len(insights)}"},
-                {"label": "Strong Routes",     "value": str(strong_rts), "accent": C_HIGH if strong_rts > 2 else C_TEXT3, "sublabel": f"of {len(route_results)}"},
+                {"label": "Baltic Dry Index", "value": _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"),
+                 "accent": C_ACCENT, "sublabel": "dry-bulk benchmark"},
+                {"label": "Container Index", "value": _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204"),
+                 "accent": C_ACCENT, "sublabel": "boxship spot rates"},
+                {"label": "Avg Port Demand", "value": demand_str,
+                 "accent": C_HIGH if avg_demand >= 0.6 else C_TEXT3,
+                 "sublabel": f"{len(has_data)} ports tracked"},
+                {"label": "Active Alerts", "value": str(n_alerts),
+                 "accent": alert_color, "sublabel": alert_sub},
+                {"label": "High Conviction", "value": str(hi_conv),
+                 "accent": C_HIGH if hi_conv > 2 else C_TEXT3,
+                 "sublabel": f"of {len(insights)} signals"},
+                {"label": "Strong Routes", "value": str(strong_rts),
+                 "accent": C_HIGH if strong_rts > 2 else C_TEXT3,
+                 "sublabel": f"of {len(route_results)} lanes"},
             ],
             columns=6,
         )
-    except Exception as exc:
-        logger.warning(f"KPI strip render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — KPI strip render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEFT COLUMN — Market Pulse
+# SECTION D — Market Pulse
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict) -> None:
@@ -248,7 +319,7 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
             ("USD/CNY",   _fv(md, "usdcny", "USD/CNY", fmt="{:.3f}", default="7.243"), "+0.2%", C_MOD),
         ]
 
-        section_header("Market Pulse", "Key indices and rates")
+        section_header("Market Pulse", "Key freight indices, rates and macro markers")
 
         rows = []
         for name, value, delta, delta_color in rates:
@@ -257,7 +328,7 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
                 _mono(value, color=C_TEXT),
                 _mono(delta, color=delta_color),
             ])
-        wsj_market_table(["Indicator", "Value", "Δ"], rows)
+        wsj_market_table(["Indicator", "Value", "Δ 24h"], rows)
 
         st.markdown(
             source_footer([
@@ -266,12 +337,12 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
             ]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.warning(f"Market pulse render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — market pulse render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEFT COLUMN — Signal Conviction Matrix
+# SECTION D — Signal Conviction Matrix
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_signal_matrix(route_results: list, insights: list) -> None:
@@ -303,7 +374,10 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
                     return getattr(r, "opportunity_score", 0.45)
             return 0.35
 
-        section_header("Signal Conviction", "Corridor x commodity scores")
+        section_header(
+            "Signal Conviction",
+            "Composite conviction by trade corridor and commodity class",
+        )
 
         rows = []
         for corridor in CORRIDORS:
@@ -321,51 +395,77 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
 
         wsj_market_table(["Corridor", *COMMODITIES], rows)
         st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Signal matrix render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — signal matrix render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEFT COLUMN — Top Signals
+# SECTION D — Top Signals (featured card + table)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_top_signals(insights: list) -> None:
     try:
-        section_header("Top Signals", f"{len(insights)} active signals")
+        section_header(
+            "Top Signals",
+            f"{len(insights)} active — highest-conviction calls first",
+        )
 
         if not insights:
-            st.markdown(
-                _sans("No signals generated", color=C_TEXT3),
-                unsafe_allow_html=True,
+            alert_banner(
+                "No signals generated yet — refresh live feeds to populate the "
+                "decision engine.",
+                level="info",
             )
             return
 
         ACTION_COLOR = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
-        top5 = sorted(insights, key=lambda i: getattr(i, "score", 0), reverse=True)[:5]
+        ranked = sorted(insights, key=lambda i: getattr(i, "score", 0), reverse=True)
 
-        rows = []
-        for ins in top5:
-            score = getattr(ins, "score", 0.5)
-            title = (getattr(ins, "title", "--") or "--")[:80]
-            action = getattr(ins, "action", "Monitor") or "Monitor"
-            pct = int(score * 100)
-            sc = _score_color(score)
-            ac = ACTION_COLOR.get(action, C_ACCENT)
+        # ─ Featured signal — the single highest-conviction call, promoted to an
+        #   editorial insight card so the front page leads with a verdict, not a
+        #   table row. Mirrors the forecast callout in tab_disruption_radar.
+        lead = ranked[0]
+        lead_score = float(getattr(lead, "score", 0.5) or 0.5)
+        lead_title = (getattr(lead, "title", "--") or "--")[:90]
+        lead_action = getattr(lead, "action", "Monitor") or "Monitor"
+        lead_detail = (getattr(lead, "detail", "") or "").strip()
+        lead_category = (getattr(lead, "category", "") or "").upper()
+        st.markdown(
+            insight_card_html(
+                title=lead_title,
+                score=max(0.0, min(1.0, lead_score)),
+                action=lead_action,
+                rationale=lead_detail[:220],
+                category=lead_category,
+            ),
+            unsafe_allow_html=True,
+        )
 
-            rows.append([
-                _mono(f"{pct}%", color=sc),
-                _sans(title, color=C_TEXT, weight=500),
-                badge(action, color=ac),
-            ])
+        # ─ Remaining high-conviction signals as a compact table ─
+        rest = ranked[1:6]
+        if rest:
+            rows = []
+            for ins in rest:
+                score = getattr(ins, "score", 0.5)
+                title = (getattr(ins, "title", "--") or "--")[:80]
+                action = getattr(ins, "action", "Monitor") or "Monitor"
+                pct = int(score * 100)
+                sc = _score_color(score)
+                ac = ACTION_COLOR.get(action, C_ACCENT)
+                rows.append([
+                    _mono(f"{pct}%", color=sc),
+                    _sans(title, color=C_TEXT, weight=500),
+                    badge(action, color=ac),
+                ])
+            wsj_market_table(["Score", "Signal", "Action"], rows)
 
-        wsj_market_table(["Score", "Signal", "Action"], rows)
         st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Top signals render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — top signals render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RIGHT COLUMN — Risk & Alerts
+# SECTION E — Risk & Alerts
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_risk_alerts(insights: list, alerts: list) -> None:
@@ -387,13 +487,10 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
 
         SEV_STATUS = {"CRITICAL": "danger", "HIGH": "danger", "MODERATE": "warning", "LOW": "success"}
 
-        section_header("Risk & Alerts", f"{len(alert_items)} active")
+        section_header("Risk & Alerts", f"{len(alert_items)} flagged for attention")
 
         if not alert_items:
-            st.markdown(
-                _sans("No active alerts", color=C_TEXT3),
-                unsafe_allow_html=True,
-            )
+            alert_banner("No active alerts — the network is reading clean.", level="success")
             return
 
         rows = []
@@ -404,12 +501,12 @@ def _render_risk_alerts(insights: list, alerts: list) -> None:
             ])
         wsj_market_table(["Severity", "Detail"], rows)
         st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Risk alerts render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — risk alerts render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RIGHT COLUMN — Route Opportunities
+# SECTION E — Route Opportunities
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_route_opps(route_results: list) -> None:
@@ -419,12 +516,13 @@ def _render_route_opps(route_results: list) -> None:
             key=lambda r: getattr(r, "opportunity_score", 0), reverse=True,
         )[:5]
 
-        section_header("Route Opportunities", f"{len(strong)} strong routes")
+        section_header("Route Opportunities", f"{len(strong)} lanes scoring strong")
 
         if not strong:
-            st.markdown(
-                _sans("No strong routes detected", color=C_TEXT3),
-                unsafe_allow_html=True,
+            alert_banner(
+                "No lanes are scoring strong right now — the route optimizer "
+                "found no standout opportunities.",
+                level="info",
             )
             return
 
@@ -438,7 +536,7 @@ def _render_route_opps(route_results: list) -> None:
             rate_str = f"${rate:,.0f}/FEU" if rate else "--"
 
             rows.append([
-                _sans(name[:25], color=C_TEXT, weight=600),
+                _sans(str(name)[:25], color=C_TEXT, weight=600),
                 _mono(rate_str, color=C_TEXT2),
                 _mono(f"{pct}%", color=sc),
             ])
@@ -447,12 +545,12 @@ def _render_route_opps(route_results: list) -> None:
             source_footer([{"name": "Route optimizer", "kind": "modeled", "quality": "modeled"}]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.warning(f"Route opps render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — route opps render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RIGHT COLUMN — Data Sources
+# SECTION E — Data-Feed Status
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_data_status(
@@ -472,7 +570,7 @@ def _render_data_status(
         ]
 
         ok_count = sum(1 for _, ok in sources if ok)
-        section_header("Data Sources", f"{ok_count}/{len(sources)} active")
+        section_header("Data Feeds", f"{ok_count} of {len(sources)} feeds live")
 
         rows = []
         for name, ok in sources:
@@ -481,18 +579,22 @@ def _render_data_status(
                 status_badge("Live" if ok else "Offline", "success" if ok else "danger"),
             ])
         wsj_market_table(["Feed", "Status"], rows)
-    except Exception as exc:
-        logger.warning(f"Data status render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — data status render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROW 4 — Quick Sparkline Charts
+# SECTION F — Quick Views (distribution snapshots)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_sparklines(port_results: list, insights: list, freight_data: dict) -> None:
     try:
-        section_header("Quick Views", "Distribution snapshots across signals and ports")
+        section_header(
+            "Quick Views",
+            "Distribution snapshots across the signal book and port network",
+        )
         cols = st.columns(3)
+        drew_any = False
 
         with cols[0]:
             if port_results:
@@ -514,6 +616,7 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                     fig.update_xaxes(title_text="Score", title_font_size=10)
                     fig.update_yaxes(title_text="Ports", title_font_size=10)
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    drew_any = True
 
         with cols[1]:
             if insights:
@@ -541,6 +644,7 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                 fig.update_xaxes(showticklabels=False, title_text="Signals", title_font_size=10)
                 fig.update_yaxes(title_text="Score", title_font_size=10, range=[0, 1])
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                drew_any = True
 
         with cols[2]:
             if port_results:
@@ -572,10 +676,18 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
                     fig.update_xaxes(title_text="Demand", title_font_size=10, range=[0, 1])
                     fig.update_yaxes(title_text="Congestion", title_font_size=10, range=[0, 1])
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    drew_any = True
+
+        if not drew_any:
+            alert_banner(
+                "Quick Views populate once port and signal data are available.",
+                level="info",
+            )
+            return
 
         st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Sparklines render failed: {exc}")
+    except Exception:
+        logger.exception("Overview — quick views render failed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -584,9 +696,14 @@ def _render_sparklines(port_results: list, insights: list, freight_data: dict) -
 
 def _render_cold_start() -> None:
     try:
+        alert_banner(
+            "<b>No data loaded yet.</b> The dashboard is waiting on its first "
+            "live refresh — follow the three steps below to populate every tab.",
+            level="info",
+        )
         section_header(
-            "Welcome to Ship Tracker",
-            "No data loaded yet. Configure your API credentials and refresh to populate the dashboard.",
+            "Getting Started",
+            "Three steps from a cold start to a fully live dashboard",
         )
         metric_card_row(
             [
@@ -599,8 +716,8 @@ def _render_cold_start() -> None:
             ],
             columns=3,
         )
-    except Exception as exc:
-        logger.warning(f"Cold start splash failed: {exc}")
+    except Exception:
+        logger.exception("Overview — cold start splash failed")
         st.info("Dashboard loading -- configure API credentials to enable live data.")
 
 
@@ -617,7 +734,20 @@ def render(
     stock_data=None,
     alerts=None,
 ) -> None:
-    """Modern SaaS-style Overview Dashboard."""
+    """Render the executive Overview dashboard.
+
+    Parameters
+    ----------
+    port_results, route_results, insights:
+        Platform-standard model outputs computed at the top of ``app.py``.
+    freight_data, macro_data, stock_data, alerts:
+        Optional feed dicts / alert list — each may be ``None`` or empty, in
+        which case the dashboard degrades to a cold-start splash or to
+        illustrative defaults.
+
+    The signature is positional — ``app.py`` calls ``render(...)`` by position,
+    so the parameter order must not change.
+    """
     try:
         port_results  = port_results  or []
         route_results = route_results or []
@@ -627,41 +757,49 @@ def render(
         stock_data    = stock_data    or {}
         alerts        = alerts        or []
 
+        # ── A. Page header ──────────────────────────────────────────────────
         page_header(
             title="Overview",
-            subtitle="Market tone, live KPIs, signals, alerts, and data-feed health at a glance.",
+            subtitle="Market tone, live KPIs, signals, alerts and data-feed "
+            "health at a glance.",
             badge_text="DASHBOARD",
             badge_color=C_ACCENT,
         )
 
+        # ── Cold start — nothing modeled yet ────────────────────────────────
         all_empty = not port_results and not route_results and not insights
-
         if all_empty:
             _render_cold_start()
+            section_divider("Data Feeds")
             _render_data_status(port_results, route_results, insights,
-                               freight_data, macro_data, stock_data)
+                                freight_data, macro_data, stock_data)
             return
 
-        _render_status_bar(port_results, route_results, insights,
-                          freight_data, macro_data, stock_data)
+        # ── B. Market verdict — tone banner + feed health ───────────────────
+        _render_market_verdict(port_results, route_results, insights,
+                               freight_data, macro_data, stock_data)
 
+        # ── C. Headline KPI strip ───────────────────────────────────────────
+        section_divider("Headline KPIs")
         _render_kpi_strip(port_results, route_results, insights,
                          freight_data, macro_data, stock_data, alerts)
 
-        left, right = st.columns([3, 2])
-
+        # ── D. Markets & Signals ────────────────────────────────────────────
+        section_divider("Markets & Signals")
+        left, right = st.columns([3, 2], gap="large")
         with left:
             _render_market_pulse(freight_data, macro_data, stock_data)
             _render_signal_matrix(route_results, insights)
             _render_top_signals(insights)
-
         with right:
             _render_risk_alerts(insights, alerts)
             _render_route_opps(route_results)
             _render_data_status(port_results, route_results, insights,
                                freight_data, macro_data, stock_data)
 
+        # ── F. Quick Views ──────────────────────────────────────────────────
+        section_divider("Quick Views")
         _render_sparklines(port_results, insights, freight_data)
     except Exception as exc:
-        logger.error(f"tab_overview.render fatal: {exc}")
+        logger.exception("tab_overview.render fatal")
         st.error(f"Overview dashboard error: {exc}")
