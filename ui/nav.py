@@ -41,6 +41,14 @@ SECTIONS: list[dict] = [
         "sub_pages": ["Markets", "Sector Dashboard", "Alpha Signals", "Results", "Indices", "Derivatives", "Scenarios", "Monte Carlo", "Backtesting", "Portfolio", "Options & Flow"],
     },
     {
+        "key": "disruption_alpha",
+        "icon": "📡",
+        "label": "Disruption Alpha",
+        "description": "Voyage tracking → disruption → equity ideas",
+        "color": "#3572b0",
+        "sub_pages": ["Voyage Tracker", "Disruption Radar", "Macro Projection", "Supply Linkage", "Equity Signals"],
+    },
+    {
         "key": "ports_routes",
         "icon": "//",
         "label": "Ports & Routes",

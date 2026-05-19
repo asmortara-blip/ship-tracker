@@ -701,6 +701,7 @@ components.html(f"""
 SECTIONS = [
     ("dashboard",    "🏠", "Dashboard",          "Overview, scorecard & live data"),
     ("markets",      "📈", "Markets & Signals",   "Alpha, correlations & derivatives"),
+    ("disruption_alpha", "📡", "Disruption Alpha", "Voyage tracking → disruption → equity ideas"),
     ("ports_routes", "🚢", "Ports & Routes",      "Demand, congestion & ETA"),
     ("carriers",     "🏢", "Carriers & Ops",      "Fleet, cargo & booking"),
     ("trade_macro",  "🌍", "Trade & Macro",       "Geopolitics, tariffs & macro"),
@@ -713,6 +714,7 @@ SECTIONS = [
 SECTION_COLORS = {
     "dashboard":    "#3b82f6",
     "markets":      "#10b981",
+    "disruption_alpha": "#3572b0",
     "ports_routes": "#06b6d4",
     "carriers":     "#8b5cf6",
     "trade_macro":  "#f59e0b",
@@ -902,7 +904,44 @@ elif active_section == "markets":
         except Exception as e:
             st.error(f"Options & Flow error: {e}")
 
-# ── 3. Ports & Routes ─────────────────────────────────────────────────────
+# ── 3. Disruption Alpha ───────────────────────────────────────────────────
+elif active_section == "disruption_alpha":
+    t0, t1, t2, t3, t4 = st.tabs([
+        "Voyage Tracker", "Disruption Radar", "Macro Projection",
+        "Supply Linkage", "Equity Signals",
+    ])
+    with t0:
+        try:
+            from ui.tab_voyage_tracker import render as _r
+            _r(freight_data, route_results)
+        except Exception as e:
+            st.error(f"Voyage Tracker error: {e}")
+    with t1:
+        try:
+            from ui.tab_disruption_radar import render as _r
+            _r(freight_data, macro_data, port_results, route_results)
+        except Exception as e:
+            st.error(f"Disruption Radar error: {e}")
+    with t2:
+        try:
+            from ui.tab_macro_projection import render as _r
+            _r(port_results, freight_data, macro_data, route_results)
+        except Exception as e:
+            st.error(f"Macro Projection error: {e}")
+    with t3:
+        try:
+            from ui.tab_supply_linkage import render as _r
+            _r(stock_data, freight_data, macro_data, port_results, route_results, trade_data)
+        except Exception as e:
+            st.error(f"Supply Linkage error: {e}")
+    with t4:
+        try:
+            from ui.tab_equity_signals import render as _r
+            _r(stock_data, freight_data, macro_data, port_results, route_results, insights)
+        except Exception as e:
+            st.error(f"Equity Signals error: {e}")
+
+# ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
     t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "Port Demand", "Port Monitor", "Routes", "Rate Analytics",
@@ -958,7 +997,7 @@ elif active_section == "ports_routes":
         except Exception as e:
             st.error(f"Vessel Map error: {e}")
 
-# ── 4. Carriers & Ops ────────────────────────────────────────────────────
+# ── 5. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":
     t0, t1, t2, t3, t4, t5 = st.tabs([
         "Carriers", "Fleet", "Equipment",
@@ -1001,7 +1040,7 @@ elif active_section == "carriers":
         except Exception as e:
             st.error(f"Bunker Fuel error: {e}")
 
-# ── 5. Trade & Macro ─────────────────────────────────────────────────────
+# ── 6. Trade & Macro ─────────────────────────────────────────────────────
 elif active_section == "trade_macro":
     t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "Macro", "Bellwethers", "Trade Flows", "Trade War", "Geopolitical",
@@ -1057,7 +1096,7 @@ elif active_section == "trade_macro":
         except Exception as e:
             st.error(f"E-Commerce error: {e}")
 
-# ── 6. Supply Chain ───────────────────────────────────────────────────────
+# ── 7. Supply Chain ───────────────────────────────────────────────────────
 elif active_section == "supply_chain":
     t0, t1, t2, t3, t4 = st.tabs([
         "Supply Chain", "Visibility", "Intermodal",
@@ -1094,7 +1133,7 @@ elif active_section == "supply_chain":
         except Exception as e:
             st.error(f"Attribution error: {e}")
 
-# ── 7. Risk & Compliance ──────────────────────────────────────────────────
+# ── 8. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
     t0, t1, t2, t3, t4 = st.tabs([
         "Risk Matrix", "Weather", "Compliance",
@@ -1131,7 +1170,7 @@ elif active_section == "risk":
         except Exception as e:
             st.error(f"Fundamentals error: {e}")
 
-# ── 8. Intelligence ───────────────────────────────────────────────────────
+# ── 9. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":
     t0, t1, t2, t3, t4 = st.tabs([
         "News & Sentiment", "Deep Dive",
@@ -1173,7 +1212,7 @@ elif active_section == "intelligence":
             st.error(f"Tab error: {e}")
 
 
-# ── 9. Reports ────────────────────────────────────────────────────────────
+# ── 10. Reports ───────────────────────────────────────────────────────────
 elif active_section == "reports":
     from ui import tab_report
     fundamentals_data = get_fundamentals_data()
