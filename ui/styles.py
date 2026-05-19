@@ -71,20 +71,25 @@ def dark_layout(
         margin = {"l": 24, "r": 24, "t": 44 if title else 24, "b": 24}
     return {
         "template": "plotly_dark",
-        "paper_bgcolor": C_BG,
-        "plot_bgcolor": C_SURFACE,
+        # Transparent canvas — charts blend seamlessly into whatever card holds them.
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        # Default multi-series palette — harmonized with the WSJ design system
+        # so any chart that doesn't set explicit colors stays on-brand.
+        "colorway": [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_MACRO, C_LOW, C_TEXT2],
         "font": {"color": C_TEXT2, "family": "'Libre Franklin', 'Inter', system-ui, sans-serif", "size": 12},
         "title": {
             "text": title,
             "font": {"size": 15, "color": C_TEXT, "family": "'Libre Baskerville', 'Georgia', serif", "weight": 700},
             "x": 0.01,
+            "xanchor": "left",
         } if title else {},
         "height": height,
         "margin": margin,
         "showlegend": showlegend,
         "legend": {
             "bgcolor": "rgba(0,0,0,0)",
-            "bordercolor": "rgba(232,230,225,0.05)",
+            "bordercolor": "rgba(0,0,0,0)",
             "font": {"color": C_TEXT2, "size": 11},
             "orientation": legend_orientation,
             "yanchor": "bottom",
@@ -93,21 +98,27 @@ def dark_layout(
             "x": 1,
         },
         "xaxis": {
-            "gridcolor": "rgba(232,230,225,0.04)",
-            "zerolinecolor": "rgba(232,230,225,0.06)",
+            "gridcolor": "rgba(232,230,225,0.05)",
+            "zerolinecolor": "rgba(232,230,225,0.09)",
             "tickfont": {"color": C_TEXT3, "size": 11},
-            "linecolor": "rgba(232,230,225,0.06)",
+            "linecolor": "rgba(232,230,225,0.08)",
         },
         "yaxis": {
-            "gridcolor": "rgba(232,230,225,0.04)",
-            "zerolinecolor": "rgba(232,230,225,0.06)",
+            "gridcolor": "rgba(232,230,225,0.05)",
+            "zerolinecolor": "rgba(232,230,225,0.09)",
             "tickfont": {"color": C_TEXT3, "size": 11},
-            "linecolor": "rgba(232,230,225,0.06)",
+            "linecolor": "rgba(232,230,225,0.08)",
         },
         "hoverlabel": {
             "bgcolor": C_CARD,
-            "bordercolor": "rgba(255,255,255,0.1)",
-            "font": {"color": C_TEXT, "size": 12},
+            "bordercolor": "rgba(232,230,225,0.14)",
+            "font": {"color": C_TEXT, "size": 12, "family": "'Libre Franklin', sans-serif"},
+            "align": "left",
+        },
+        "modebar": {
+            "bgcolor": "rgba(0,0,0,0)",
+            "color": C_TEXT3,
+            "activecolor": C_ACCENT,
         },
     }
 
@@ -489,10 +500,10 @@ def inject_global_css() -> None:
     /* ════════════════════════════════════════════════
        ALERTS
     ════════════════════════════════════════════════ */
-    .stInfo    {{ background: rgba(53,114,176,0.06);  border-color: {C_ACCENT}; border-radius: var(--radius); border-left-width: 2px; }}
-    .stSuccess {{ background: rgba(46,158,110,0.06);  border-color: {C_HIGH};   border-radius: var(--radius); border-left-width: 2px; }}
-    .stWarning {{ background: rgba(201,150,43,0.06);  border-color: {C_MOD};    border-radius: var(--radius); border-left-width: 2px; }}
-    .stError   {{ background: rgba(192,57,43,0.06);   border-color: {C_LOW};    border-radius: var(--radius); border-left-width: 2px; }}
+    .stInfo    {{ background: rgba(53,114,176,0.07);  border-color: {C_ACCENT}; border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stSuccess {{ background: rgba(46,158,110,0.07);  border-color: {C_HIGH};   border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stWarning {{ background: rgba(201,150,43,0.07);  border-color: {C_MOD};    border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stError   {{ background: rgba(192,57,43,0.07);   border-color: {C_LOW};    border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
 
     /* ════════════════════════════════════════════════
        DIVIDERS — WSJ thin rules
@@ -1178,9 +1189,9 @@ def inject_global_css() -> None:
         animation: pulse-dot 2s ease-in-out infinite;
         flex-shrink: 0;
     }}
-    .slide-in      {{ animation: slide-in-up 0.35s ease both; }}
-    .fade-in       {{ animation: fade-in 0.4s ease both; }}
-    .page-enter    {{ animation: page-enter 0.3s ease both; }}
+    .slide-in      {{ animation: slide-in-up 0.4s var(--ease-out) both; }}
+    .fade-in       {{ animation: fade-in 0.45s var(--ease-out) both; }}
+    .page-enter    {{ animation: page-enter 0.4s var(--ease-out) both; }}
 
     /* ════════════════════════════════════════════════
        INPUT WIDGETS
