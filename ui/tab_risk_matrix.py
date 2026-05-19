@@ -33,11 +33,13 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -642,7 +644,7 @@ def _severity_action(sev: str) -> str:
 def _render_alert_queue(alerts: list[dict], source: DataSource) -> None:
     try:
         if not alerts:
-            st.info("No active risk alerts.")
+            alert_banner("No active risk alerts — the queue is clear.", level="success")
             return
 
         _render_badge_row(source)
@@ -688,12 +690,14 @@ def render(stock_data, macro_data, insights, freight_data=None):
         # ── Section 1: KPI hero ─────────────────────────────────────────────
         section_header(
             "Risk Dashboard",
-            "Live risk KPIs across volatility, drawdown, and tail exposure",
+            "Headline risk KPIs across volatility, drawdown, and tail exposure",
         )
         kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
         _render_kpis(kpis, kpi_source)
 
         # ── Section 2: Risk factor matrix ──────────────────────────────────
+        section_divider("Exposures")
+
         section_header(
             "Risk Factor Matrix",
             "Exposure level, recent trend, and mitigation for 10 core risk factors",
@@ -701,17 +705,21 @@ def render(stock_data, macro_data, insights, freight_data=None):
         _render_risk_factor_matrix(matrix_source)
 
         # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
+        section_divider("Correlations & Drawdowns")
+
         section_header(
             "Correlation Heatmap & Historical Drawdowns",
-            "Cross-asset correlations and largest shipping market drawdowns",
+            "Cross-asset correlations and the largest shipping market drawdowns",
         )
-        col_left, col_right = st.columns(2)
+        col_left, col_right = st.columns(2, gap="large")
         with col_left:
             _render_correlation_heatmap(rng, corr_source)
         with col_right:
             _render_drawdown_waterfall(dd_source)
 
         # ── Section 5: Stress test ──────────────────────────────────────────
+        section_divider("Stress Testing")
+
         section_header(
             "Scenario Stress Test",
             "Probability-weighted impact across 6 macro and shipping shock scenarios",
@@ -719,9 +727,11 @@ def render(stock_data, macro_data, insights, freight_data=None):
         _render_stress_test(stress_source)
 
         # ── Section 6: Alert queue ──────────────────────────────────────────
+        section_divider("Alerts")
+
         section_header(
             "Risk Alert Queue",
-            "Current alerts ranked by severity",
+            "Current alerts ranked by severity — most urgent first",
         )
         alerts = _build_alerts(insights, macro_data, freight_data, rng)
         _render_alert_queue(alerts, alert_source)

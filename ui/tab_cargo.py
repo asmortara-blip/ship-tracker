@@ -16,6 +16,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -145,13 +146,17 @@ def _render_hero() -> None:
         )
         metric_card_row([
             {"label": "Global Container Throughput", "value": "842M TEU",
-             "accent": C_HIGH, "sublabel": "▲ 3.1% YoY"},
+             "delta": "▲ 3.1% YoY", "delta_color": C_HIGH,
+             "accent": C_HIGH, "sublabel": "all loaded box moves"},
             {"label": "TEU Demand Index", "value": "108.4",
-             "accent": C_ACCENT, "sublabel": "▲ 2.7 pts MoM"},
+             "delta": "▲ 2.7 pts MoM", "delta_color": C_HIGH,
+             "accent": C_ACCENT, "sublabel": "100 = trailing-year base"},
             {"label": "LCL Share of Bookings", "value": "23%",
-             "accent": C_MOD, "sublabel": "▼ 1.2 pts YoY"},
+             "delta": "▼ 1.2 pts YoY", "delta_color": C_LOW,
+             "accent": C_MOD, "sublabel": "less-than-container load"},
             {"label": "Reefer Volume", "value": "51.2M TEU",
-             "accent": C_MACRO, "sublabel": "▲ 4.8% YoY"},
+             "delta": "▲ 4.8% YoY", "delta_color": C_HIGH,
+             "accent": C_MACRO, "sublabel": "temperature-controlled cargo"},
         ])
         st.markdown(source_footer(_CARGO_SOURCES), unsafe_allow_html=True)
     except Exception:
@@ -255,11 +260,13 @@ def _render_reefer() -> None:
                        "Temperature-sensitive cargo stats, rate premiums, and top routes")
         metric_card_row([
             {"label": "Active Reefer Units", "value": "1.84M TEU",
-             "accent": C_MACRO, "sublabel": "▲ 6.2% YoY"},
+             "delta": "▲ 6.2% YoY", "delta_color": C_HIGH,
+             "accent": C_MACRO, "sublabel": "refrigerated boxes in service"},
             {"label": "Avg Reefer Rate Premium", "value": "+31%",
-             "accent": C_MOD, "sublabel": "vs standard dry rate"},
+             "accent": C_MOD, "sublabel": "vs standard dry-box rate"},
             {"label": "Reefer Fleet Utilisation", "value": "87%",
-             "accent": C_HIGH, "sublabel": "▲ 3 pts vs LY"},
+             "delta": "▲ 3 pts vs LY", "delta_color": C_HIGH,
+             "accent": C_HIGH, "sublabel": "share of fleet on hire"},
         ], columns=3)
         headers = ["Route", "Cargo", "Temp", "Transit", "Rate $/FEU", "Premium"]
         rows = [
@@ -323,7 +330,7 @@ def _render_lcl_fcl_optimizer() -> None:
                 insight_card_html(
                     title=f"Recommendation: {rec}",
                     score=rec_score,
-                    action="BUY",
+                    action="Prioritize",
                     rationale=rec_reason,
                     category="LCL/FCL",
                 ),
@@ -356,11 +363,12 @@ def _render_theft_tracker() -> None:
                        "High-risk routes, stolen cargo categories, and insurance implications")
         metric_card_row([
             {"label": "Annual Cargo Losses", "value": "$22.4B",
-             "accent": C_LOW, "sublabel": "Global estimate 2025"},
+             "accent": C_LOW, "sublabel": "global estimate, 2025"},
             {"label": "Avg Loss per Incident", "value": "$148K",
-             "accent": C_MOD, "sublabel": "▲ 12% vs 2024"},
+             "delta": "▲ 12% vs 2024", "delta_color": C_LOW,
+             "accent": C_MOD, "sublabel": "per reported event"},
             {"label": "Insurance Rate Impact", "value": "+0.3–0.8%",
-             "accent": C_TEXT2, "sublabel": "High-risk route surcharge"},
+             "accent": C_TEXT2, "sublabel": "high-risk route surcharge"},
         ], columns=3)
         headers = ["Route", "Cargo at Risk", "Risk Level", "Incidents/Mo", "Insurance Add-on"]
         rows = [
@@ -443,11 +451,15 @@ def render(
 ) -> None:
     try:
         _render_hero()
+        section_divider("Cargo Mix")
         _render_cargo_breakdown()
         _render_commodity_table()
+        section_divider("Specialised Cargo")
         _render_hazmat()
         _render_reefer()
+        section_divider("Shipper Tools")
         _render_lcl_fcl_optimizer()
+        section_divider("Risk & Equipment")
         _render_theft_tracker()
         _render_equipment_balance()
     except Exception:

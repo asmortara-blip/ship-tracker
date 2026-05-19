@@ -26,7 +26,9 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -149,11 +151,20 @@ def _render_header_and_lede(wrap: dict) -> None:
     if body:
         for p in body:
             st.markdown(p)
+    else:
+        st.markdown(
+            f'<p style="font-family:var(--serif);font-size:0.92rem;'
+            f'color:{C_TEXT2};line-height:1.6;">'
+            f'No narrative copy available for this session — feed coverage is '
+            f'thin or the wrap engine returned an empty body.</p>',
+            unsafe_allow_html=True,
+        )
 
 
 def _render_key_movers(movers: list[dict]) -> None:
     if not movers:
         return
+    section_divider("Market Movers")
     section_header("Key Movers", subtitle="Largest single-day moves across tracked shipping equities")
     st.html(
         live_data_badge(
@@ -185,6 +196,7 @@ def _render_key_movers(movers: list[dict]) -> None:
 def _render_shipping_indices(indices: list[dict]) -> None:
     if not indices:
         return
+    section_divider("Freight Benchmarks")
     section_header(
         "Shipping Indices",
         subtitle="Key freight benchmarks with 52-week context and momentum regime",
@@ -251,6 +263,7 @@ def _render_shipping_indices(indices: list[dict]) -> None:
 
 
 def _render_forward_outlook(outlook: dict) -> None:
+    section_divider("Outlook")
     section_header("Forward Outlook", subtitle="Opportunities and risks over the next 5–20 sessions")
     st.html(
         live_data_badge(
@@ -296,18 +309,21 @@ def _render_signal_column(
     value_color: str,
 ) -> None:
     """Render a titled column of signal rows (Opportunities / Risks)."""
-    if not items:
-        st.markdown(
-            f'<div class="sub-section-header">{heading}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("No items to report.")
-        return
-
     st.markdown(
         f'<div class="sub-section-header">{heading}</div>',
         unsafe_allow_html=True,
     )
+
+    if not items:
+        st.markdown(
+            f'<div class="wsj-whats-news">'
+            f'<div style="font-family:var(--sans);font-size:0.78rem;'
+            f'color:{C_TEXT3};padding:4px 0;">'
+            f'No {heading.lower()} surfaced in the current insight store.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
 
     rows_html = []
     for it in items:
@@ -373,3 +389,22 @@ def render(
     except Exception:
         logger.exception("tab_commentary top-level render failed")
         st.error("Daily Market Commentary encountered an error.")
+        return
+
+    # ── Provenance footer ───────────────────────────────────────────────────
+    try:
+        st.markdown(
+            source_footer([
+                _narration_source(
+                    "Market Commentary Engine",
+                    "Daily wrap and forward outlook",
+                ),
+                DataSource.modeled(
+                    "Index Tracker",
+                    notes="Baltic / Drewry / Freightos composite benchmarks",
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("tab_commentary source footer failed")

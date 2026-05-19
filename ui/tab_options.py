@@ -31,6 +31,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
 )
@@ -154,6 +155,7 @@ def render(stock_data=None, insights=None, *args, **kwargs):
     )
 
     # ── 2. Filter controls ────────────────────────────────────────────────────
+    section_header("Screen Filters", "Narrow the chain by ticker, open interest, and moneyness")
     f1, f2, f3, f4 = st.columns([2, 1.2, 1, 1.2])
 
     with f1:
@@ -221,6 +223,8 @@ def render(stock_data=None, insights=None, *args, **kwargs):
         st.warning("No options matched your filters.")
         return
 
+    section_divider("Order Flow")
+
     # ── 3. Unusual Activity ───────────────────────────────────────────────────
     section_header("Unusual Activity", "Top flow by volume / OI ratio")
 
@@ -284,6 +288,8 @@ def render(stock_data=None, insights=None, *args, **kwargs):
         st.markdown(source_footer([_OPTIONS_SRC]), unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Options table error: {e}")
+
+    section_divider("Volatility & Positioning")
 
     # ── 5. IV Surface Heatmap ─────────────────────────────────────────────────
     section_header("IV Surface", "Implied volatility by strike and expiry")
@@ -532,6 +538,8 @@ def render(stock_data=None, insights=None, *args, **kwargs):
 
     except Exception as e:
         st.error(f"P/C ratio error: {e}")
+
+    section_divider("Strategy Ideas")
 
     # ── 8. Strategy Screener ──────────────────────────────────────────────────
     section_header(

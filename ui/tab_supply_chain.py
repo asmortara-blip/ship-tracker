@@ -9,10 +9,13 @@ from loguru import logger
 
 from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_BORDER,
+    C_CONV,
     C_HIGH,
     C_LOW,
+    C_MACRO,
     C_MOD,
     C_TEXT,
     C_TEXT2,
@@ -97,12 +100,6 @@ def _confidence_color(conf: str) -> str:
     if c == "MODERATE":
         return C_MOD
     return C_TEXT3
-
-
-def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _mono(value: str, color: str = C_TEXT) -> str:
@@ -206,8 +203,8 @@ def _render_health_index(rng: random.Random) -> None:
             )
 
         st.markdown(source_footer([_SCHI_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"SCHI render error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — health index render failed")
         st.warning("Supply Chain Health Index unavailable.")
 
 
@@ -287,8 +284,8 @@ def _render_disruption_monitor() -> None:
             rows,
         )
         st.markdown(source_footer([_DISRUPTION_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Disruption monitor error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — disruption monitor render failed")
         st.warning("Disruption monitor unavailable.")
 
 
@@ -359,8 +356,8 @@ def _render_inventory_sales(rng: random.Random) -> None:
             unsafe_allow_html=True,
         )
         st.markdown(source_footer([_IS_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"I/S ratio render error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — inventory-to-sales render failed")
         st.warning("Inventory-to-Sales chart unavailable.")
 
 
@@ -440,8 +437,8 @@ def _render_nearshoring() -> None:
             rows,
         )
         st.markdown(source_footer([_NEARSHORE_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Nearshoring tracker error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — nearshoring tracker render failed")
         st.warning("Nearshoring tracker unavailable.")
 
 
@@ -485,8 +482,8 @@ def _render_lead_times() -> None:
             rows,
         )
         st.markdown(source_footer([_LEADTIME_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Lead time tracker error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — lead time tracker render failed")
         st.warning("Lead time tracker unavailable.")
 
 
@@ -513,7 +510,7 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
         dims = ["Geo Diversification", "Single-Source Risk", "Inventory Buffer", "Carrier Diversity"]
 
         fig = go.Figure()
-        colors_list = [C_ACCENT, C_HIGH, "#7c6eaf", C_MOD, "#4a90a4", "#f97316"]
+        colors_list = [C_ACCENT, C_HIGH, C_CONV, C_MOD, C_MACRO, "#f97316"]
         for (name, g, s, inv, cd, res), clr in zip(industries, colors_list):
             fig.add_trace(go.Scatterpolar(
                 r=[g, s, inv, cd, g],
@@ -550,8 +547,8 @@ def _render_resilience_scorecard(rng: random.Random) -> None:
             rows,
         )
         st.markdown(source_footer([_RESILIENCE_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Resilience scorecard error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — resilience scorecard render failed")
         st.warning("Resilience scorecard unavailable.")
 
 
@@ -636,8 +633,8 @@ def _render_jit_vs_jic() -> None:
             unsafe_allow_html=True,
         )
         st.markdown(source_footer([_JIT_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"JIT/JIC render error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — JIT vs JIC render failed")
         st.warning("JIT vs JIC analysis unavailable.")
 
 
@@ -708,22 +705,28 @@ def _render_forecast() -> None:
             return rows
 
         with col_ease:
-            section_header("Conditions Easing")
+            section_header(
+                "Conditions Easing",
+                "Disruptions expected to abate — downward rate pressure",
+            )
             wsj_market_table(
                 ["Item", "Detail", "Confidence", "Rate Effect"],
                 _forecast_rows(easing, C_HIGH),
             )
 
         with col_worse:
-            section_header("Conditions Worsening")
+            section_header(
+                "Conditions Worsening",
+                "Disruptions expected to intensify — upward rate pressure",
+            )
             wsj_market_table(
                 ["Item", "Detail", "Confidence", "Rate Effect"],
                 _forecast_rows(worsening, C_LOW),
             )
 
         st.markdown(source_footer([_FORECAST_SOURCE]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"Forecast render error: {exc}")
+    except Exception:
+        logger.exception("Supply Chain — 90-day forecast render failed")
         st.warning("Supply chain forecast unavailable.")
 
 
@@ -748,21 +751,28 @@ def render(port_results=None, route_results=None, insights=None, macro_data=None
         )
 
         _render_health_index(rng)
-        section_divider()
+
+        section_divider("Active Disruptions")
         _render_disruption_monitor()
-        section_divider()
+
+        section_divider("Demand Signals")
         _render_inventory_sales(rng)
-        section_divider()
+
+        st.divider()
         _render_nearshoring()
-        section_divider()
+
+        st.divider()
         _render_lead_times()
-        section_divider()
+
+        section_divider("Resilience")
         _render_resilience_scorecard(rng)
-        section_divider()
+
+        st.divider()
         _render_jit_vs_jic()
-        section_divider()
+
+        section_divider("90-Day Outlook")
         _render_forecast()
 
-    except Exception as exc:
-        logger.error(f"Supply chain tab render failed: {exc}")
-        st.error(f"Supply chain tab failed to render: {exc}")
+    except Exception:
+        logger.exception("Supply chain tab render failed")
+        st.error("Supply chain tab failed to render.")

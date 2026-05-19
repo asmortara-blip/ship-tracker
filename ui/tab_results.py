@@ -22,6 +22,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -388,6 +389,8 @@ def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
             logger.error(f"tab_results: KPI render failed: {exc}")
             st.warning("KPI render error.")
 
+        section_divider("Rankings")
+
         # ══════════════════════════════════════════════════════════════════
         # 2. SIGNAL LEADERBOARD
         # ══════════════════════════════════════════════════════════════════
@@ -455,6 +458,8 @@ def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
         except Exception as exc:
             logger.error(f"tab_results: instrument perf failed: {exc}")
             st.warning("Instrument performance unavailable.")
+
+        section_divider("Return Analytics")
 
         # ══════════════════════════════════════════════════════════════════
         # 4. SIGNAL TIMELINE
@@ -547,6 +552,8 @@ def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
         except Exception as exc:
             logger.error(f"tab_results: monthly attribution failed: {exc}")
             st.warning("Monthly attribution unavailable.")
+
+        section_divider("Signal Log & Decay")
 
         # ══════════════════════════════════════════════════════════════════
         # 7. RECENT SIGNAL LOG

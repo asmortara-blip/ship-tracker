@@ -28,6 +28,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -404,7 +405,7 @@ def _render_rates_credit(data: dict) -> None:
         "How the current rate environment shapes vessel financing, orderbook, and credit spreads",
     )
     try:
-        left, right = st.columns([1, 1])
+        left, right = st.columns([1, 1], gap="large")
 
         with left:
             st.markdown(
@@ -492,8 +493,10 @@ def _render_commodities(rows_in: list[dict]) -> None:
             unit  = r.get("unit", "")
             price_str = f"{price:,.1f}" if price < 1000 else f"{price:,.0f}"
             price_cell = (
-                f'<span style="font-family:var(--mono);color:{C_ACCENT};font-weight:700;">{price_str}</span>'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-weight:400;"> {unit}</span>'
+                f'<span style="font-family:var(--mono);color:{C_ACCENT};font-weight:700;'
+                f'font-variant-numeric:tabular-nums;">{price_str}</span>'
+                f'<span style="font-family:var(--sans);color:{C_TEXT3};'
+                f'font-size:0.7rem;font-weight:400;"> {unit}</span>'
             )
             rows.append([
                 _sans(r["commodity"], color=C_TEXT, weight=600),
@@ -546,6 +549,8 @@ def render(macro_data, stock_data=None, insights=None) -> None:
         logger.error(f"Section 1 (Macro Dashboard) error: {exc}")
         st.error("Macro dashboard unavailable.")
 
+    section_divider("Demand & Leading Signals")
+
     try:
         if isinstance(macro_data, dict) and "demand_drivers" in macro_data:
             drivers = macro_data["demand_drivers"]
@@ -555,6 +560,8 @@ def render(macro_data, stock_data=None, insights=None) -> None:
     except Exception as exc:
         logger.error(f"Section 2 (Demand Drivers) error: {exc}")
         st.error("Demand drivers unavailable.")
+
+    st.divider()
 
     try:
         if isinstance(macro_data, dict) and "leading_indicators" in macro_data:
@@ -566,6 +573,8 @@ def render(macro_data, stock_data=None, insights=None) -> None:
         logger.error(f"Section 3 (Leading Indicators) error: {exc}")
         st.error("Leading indicators unavailable.")
 
+    section_divider("Institutional Forecasts")
+
     try:
         if isinstance(macro_data, dict) and "oecd_imf" in macro_data:
             oecd_imf_data = macro_data["oecd_imf"]
@@ -576,6 +585,8 @@ def render(macro_data, stock_data=None, insights=None) -> None:
         logger.error(f"Section 4 (OECD/IMF) error: {exc}")
         st.error("OECD/IMF panel unavailable.")
 
+    section_divider("Rates, Credit & Commodities")
+
     try:
         if isinstance(macro_data, dict) and "rates_credit" in macro_data:
             rates_data = macro_data["rates_credit"]
@@ -585,6 +596,8 @@ def render(macro_data, stock_data=None, insights=None) -> None:
     except Exception as exc:
         logger.error(f"Section 5 (Rates & Credit) error: {exc}")
         st.error("Interest rate & credit panel unavailable.")
+
+    st.divider()
 
     try:
         if isinstance(macro_data, dict) and "commodities" in macro_data:

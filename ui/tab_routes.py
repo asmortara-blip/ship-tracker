@@ -26,6 +26,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -208,8 +209,8 @@ def _section_pulse(routes: list[dict]) -> None:
         )
 
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error(f"tab_routes _section_pulse: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_pulse failed")
         st.warning("Pulse metrics unavailable.")
 
 
@@ -250,8 +251,8 @@ def _section_league_table(routes: list[dict]) -> None:
             rows,
         )
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error(f"tab_routes _section_league_table: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_league_table failed")
         st.warning("League table unavailable.")
 
 
@@ -345,8 +346,8 @@ def _section_ml_forecast(routes: list[dict], rate_forecasts, forecasts) -> None:
 
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
 
-    except Exception as exc:
-        logger.error(f"tab_routes _section_ml_forecast: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_ml_forecast failed")
         st.warning("ML Forecast panel unavailable.")
 
 
@@ -392,8 +393,8 @@ def _section_volatility(routes: list[dict]) -> None:
             "Green (<18%) = stable"
         )
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error(f"tab_routes _section_volatility: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_volatility failed")
         st.warning("Volatility analysis unavailable.")
 
 
@@ -457,8 +458,8 @@ def _section_seasonal() -> None:
             unsafe_allow_html=True,
         )
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error(f"tab_routes _section_seasonal: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_seasonal failed")
         st.warning("Seasonal heatmap unavailable.")
 
 
@@ -491,8 +492,8 @@ def _section_rate_drivers() -> None:
             rows,
         )
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error(f"tab_routes _section_rate_drivers: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_rate_drivers failed")
         st.warning("Rate drivers unavailable.")
 
 
@@ -610,8 +611,8 @@ def _section_route_profiles(routes: list[dict]) -> None:
 
         st.markdown(source_footer(ROUTE_SOURCES), unsafe_allow_html=True)
 
-    except Exception as exc:
-        logger.error(f"tab_routes _section_route_profiles: {exc}")
+    except Exception:
+        logger.exception("tab_routes _section_route_profiles failed")
         st.warning("Route profiles unavailable.")
 
 
@@ -622,7 +623,7 @@ def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> 
     try:
         page_header(
             title="Freight Rate Analytics",
-            subtitle="Real-time rates · ML forecasting · Volatility · Seasonal patterns · Route profiles",
+            subtitle="Real-time rates, ML forecasting, volatility, seasonal patterns and route profiles",
             badge_text="ROUTES",
             badge_color=C_ACCENT,
         )
@@ -630,13 +631,17 @@ def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> 
         routes = _get_routes(freight_data, route_results)
 
         _section_pulse(routes)
+        section_divider("League Table")
         _section_league_table(routes)
+        section_divider("Forecasting")
         _section_ml_forecast(routes, rate_forecasts, forecasts)
+        section_divider("Volatility & Seasonality")
         _section_volatility(routes)
         _section_seasonal()
+        section_divider("Drivers & Profiles")
         _section_rate_drivers()
         _section_route_profiles(routes)
 
-    except Exception as exc:
-        logger.error(f"tab_routes render: {exc}")
-        st.error(f"Freight Rate tab failed to render: {exc}")
+    except Exception:
+        logger.exception("tab_routes render failed")
+        st.error("Freight Rate tab failed to render.")

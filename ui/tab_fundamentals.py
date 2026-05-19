@@ -33,6 +33,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -303,7 +304,7 @@ def _render_valuation_matrix(df: pd.DataFrame) -> None:
     try:
         section_header("Valuation Matrix",
                        "P/E relative to sector and EV/EBITDA vs P/NAV scatter")
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, gap="large")
 
         with col1:
             try:
@@ -393,10 +394,10 @@ def _render_deep_dive(df: pd.DataFrame) -> None:
         for _, r in df.iterrows():
             tk = r["ticker"]
             upside = (r["target"] - r["price"]) / r["price"] * 100
-            label = f'{tk}  •  ${r["price"]:.2f}  •  {_fmt_pct(upside)} to target  •  {r["rating"]}'
+            label = f'{tk}  ·  ${r["price"]:.2f}  ·  {_fmt_pct(upside)} to target  ·  {r["rating"]}'
             with st.expander(label, expanded=False):
                 try:
-                    c1, c2 = st.columns([3, 2])
+                    c1, c2 = st.columns([3, 2], gap="large")
 
                     with c1:
                         quarters = QUARTERLY.get(tk, [])
@@ -645,9 +646,17 @@ def render(stock_data: Any = None, insights: Any = None, *args, **kwargs) -> Non
         )
 
         _render_header(df)
+
+        section_divider("Screening")
         _render_screening_table(df)
+
+        section_divider("Valuation")
         _render_valuation_matrix(df)
+
+        section_divider("Deep Dive")
         _render_deep_dive(df)
+
+        section_divider("Income & Yield")
         _render_dividend_tracker(df)
         _render_relative_value(df)
 

@@ -199,8 +199,8 @@ def _render_hero_kpis() -> None:
             columns=6,
         )
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"hero kpis error: {exc}")
+    except Exception:
+        logger.exception("Visibility — hero KPI strip render failed")
         st.info("KPI data unavailable.")
 
 
@@ -242,8 +242,8 @@ def _render_pipeline() -> None:
                     f'</div>'
                 )
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"pipeline error: {exc}")
+    except Exception:
+        logger.exception("Visibility — shipment pipeline render failed")
         st.info("Pipeline data unavailable.")
 
 
@@ -264,8 +264,8 @@ def _render_visibility_scores() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"visibility scores error: {exc}")
+    except Exception:
+        logger.exception("Visibility — trade-lane score table render failed")
         st.info("Visibility score data unavailable.")
 
 
@@ -287,8 +287,8 @@ def _render_exception_management() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"exception mgmt error: {exc}")
+    except Exception:
+        logger.exception("Visibility — exception management render failed")
         st.info("Exception data unavailable.")
 
 
@@ -333,8 +333,8 @@ def _render_milestone_tracking() -> None:
             rows=milestone_rows,
         )
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"milestone tracking error: {exc}")
+    except Exception:
+        logger.exception("Visibility — milestone tracking render failed")
         st.info("Milestone data unavailable.")
 
 
@@ -358,8 +358,8 @@ def _render_carrier_rankings() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"carrier rankings error: {exc}")
+    except Exception:
+        logger.exception("Visibility — carrier rankings render failed")
         st.info("Carrier ranking data unavailable.")
 
 
@@ -375,7 +375,7 @@ def _render_visibility_chart() -> None:
         fig.add_trace(go.Bar(name="Milestone Tracking", x=lanes, y=ms_vals,   marker_color=C_HIGH,   opacity=0.85))
         fig.add_trace(go.Bar(name="Predictive ETA",     x=lanes, y=pred_vals, marker_color=C_MOD,    opacity=0.85))
 
-        apply_dark_layout(fig, title="Visibility Scores by Trade Lane", height=320)
+        apply_dark_layout(fig, title="Score Components by Lane", height=320)
         fig.update_layout(
             margin=dict(l=10, r=10, t=46, b=80),
             barmode="group",
@@ -388,8 +388,8 @@ def _render_visibility_chart() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"visibility chart error: {exc}")
+    except Exception:
+        logger.exception("Visibility — score component chart render failed")
 
 
 # ---------------------------------------------------------------------------
@@ -401,34 +401,35 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
     try:
         page_header(
             title="Supply Chain Visibility & Tracking",
-            subtitle="Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking",
+            subtitle="Real-time shipment pipeline, AIS monitoring, exception management, "
+            "milestone tracking and carrier benchmarking",
             badge_text="VISIBILITY",
             badge_color=C_ACCENT,
         )
-    except Exception as exc:
-        logger.warning(f"header error: {exc}")
+    except Exception:
+        logger.exception("Visibility — page header render failed")
 
     _render_hero_kpis()
     _render_pipeline()
 
-    section_divider()
+    section_divider("Lane Visibility")
 
-    col_left, col_right = st.columns([3, 2])
+    col_left, col_right = st.columns([3, 2], gap="large")
     with col_left:
         _render_visibility_scores()
     with col_right:
         try:
             _render_visibility_chart()
-        except Exception as exc:
-            logger.warning(f"chart col error: {exc}")
+        except Exception:
+            logger.exception("Visibility — score component chart column failed")
 
-    section_divider()
+    section_divider("Exceptions")
 
     _render_exception_management()
 
-    section_divider()
+    section_divider("Carriers & Milestones")
 
-    col_a, col_b = st.columns([2, 3])
+    col_a, col_b = st.columns([2, 3], gap="large")
     with col_a:
         _render_carrier_rankings()
     with col_b:

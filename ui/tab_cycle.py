@@ -36,6 +36,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -288,7 +289,7 @@ def _render_cycle_clock(phase: str, position_score: float) -> None:
             f'</svg>'
         )
 
-        left, right = st.columns([1, 2])
+        left, right = st.columns([1, 2], gap="large")
         with left:
             st.html(clock_svg)
         with right:
@@ -612,6 +613,8 @@ def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -
         logger.exception("Hero metrics render failed")
 
     # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
+    section_divider("Cycle Position")
+
     try:
         section_header(
             "Cycle Dashboard",
@@ -634,10 +637,12 @@ def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -
         st.warning("Cycle clock section unavailable.")
 
     # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
+    section_divider("Indicators")
+
     try:
         section_header(
             "Cycle Indicator Scorecard",
-            "10 indicators - current reading, cycle signal, composite score",
+            "10 indicators — current reading, cycle signal, composite score",
         )
         ind_df = _build_indicators()
         _render_indicator_table(ind_df)
@@ -646,10 +651,12 @@ def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -
         st.warning("Cycle indicator section unavailable.")
 
     # ── 4. Historical Cycle Map ───────────────────────────────────────────────
+    section_divider("Historical Context")
+
     try:
         section_header(
             "Historical Cycle Map",
-            "BDI 2000-2025 with cycle phase regions - key events marked",
+            "BDI 2000–2025 with cycle phase regions — key events marked",
         )
         bdi_df = _build_bdi_history()
         _render_historical_cycle_map(bdi_df)
@@ -658,10 +665,12 @@ def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -
         st.warning("Historical cycle map section unavailable.")
 
     # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
+    section_divider("Playbook")
+
     try:
         section_header(
             "Cycle-Based Trade Recommendations",
-            "What to buy / sell in each phase - current phase highlighted",
+            "What to buy / sell in each phase — current phase highlighted",
         )
         _render_trade_recommendations(phase)
     except Exception:

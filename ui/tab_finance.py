@@ -57,6 +57,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -68,11 +69,15 @@ from ui.styles import (
 
 C_CYAN   = C_MACRO
 
+# HIGH-risk tier — orange, sits between MODERATE amber (C_MOD) and CRITICAL
+# red (C_LOW). The shared palette has no orange, so it is kept local.
+_C_ORANGE = "#f97316"
+
 _SEVERITY_COLOR: dict[str, str] = {
-    "CRITICAL": "#c0392b",
-    "HIGH":     "#f97316",
-    "MODERATE": "#c9962b",
-    "LOW":      "#6b6760",
+    "CRITICAL": C_LOW,
+    "HIGH":     _C_ORANGE,
+    "MODERATE": C_MOD,
+    "LOW":      C_TEXT3,
 }
 
 
@@ -159,13 +164,6 @@ def _latest_macro_value(macro_data: dict, series_id: str) -> float | None:
         return None
     v = df["value"].dropna()
     return float(v.iloc[-1]) if not v.empty else None
-
-
-def _hr() -> None:
-    """Subtle horizontal rule between sections."""
-    st.markdown(
-        "<hr style='border:none; border-top:1px solid rgba(232,230,225,0.06);"
-        " margin:32px 0'>", unsafe_allow_html=True)
 
 
 # ── Data-source provenance pills ──────────────────────────────────────────
@@ -510,7 +508,7 @@ def _render_finance_banner(macro_data: dict) -> None:
     st.markdown(source_footer([_FRED_SOURCE]), unsafe_allow_html=True)
 
     # ── Documentary credit vs open account trend ──────────────────────────────
-    col_lc, col_fx = st.columns([3, 2])
+    col_lc, col_fx = st.columns([3, 2], gap="large")
 
     with col_lc:
         section_header("Documentary Credit vs Open Account (2015-2026)")
@@ -653,7 +651,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
     years_lc = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
     lc_vol   = [2.61, 2.18, 2.75, 3.02, 3.15, 3.28, 3.40, 3.55]   # $T outstanding
 
-    col_chart, col_info = st.columns([2, 1])
+    col_chart, col_info = st.columns([2, 1], gap="large")
     with col_chart:
         fig_lc = go.Figure()
         fig_lc.add_trace(go.Scatter(
@@ -987,7 +985,7 @@ def _render_bank_availability() -> None:
     avail_color_map = {"HIGH": C_HIGH, "MODERATE": C_MOD, "LOW": C_LOW}
     b_colors = [avail_color_map.get(b["credit_avail"], C_TEXT3) for b in sorted_banks]
 
-    col_chart, col_table = st.columns([3, 2])
+    col_chart, col_table = st.columns([3, 2], gap="large")
     with col_chart:
         fig_banks = go.Figure()
         fig_banks.add_trace(go.Bar(
@@ -1103,7 +1101,7 @@ def _render_lc_oa_trend() -> None:
     dc    = _LC_OA_DATA["doc_coll"]
     oa    = _LC_OA_DATA["open_acc"]
 
-    col_chart, col_stats = st.columns([3, 1])
+    col_chart, col_stats = st.columns([3, 1], gap="large")
     with col_chart:
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -1326,7 +1324,7 @@ def _render_fx_hedging() -> None:
     hedge_colors = [C_LOW if h["hedge_cost_pct"] > 3 else C_MOD if h["hedge_cost_pct"] > 1.5 else C_HIGH
                     for h in pairs_sorted]
 
-    col_chart, col_detail = st.columns([3, 2])
+    col_chart, col_detail = st.columns([3, 2], gap="large")
     with col_chart:
         fig_fx = go.Figure()
         fig_fx.add_trace(go.Bar(
@@ -1564,10 +1562,10 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
         locations=iso_codes,
         z=scores,
         colorscale=[
-            [0.0,  "#2e9e6e"],
-            [0.4,  "#c9962b"],
-            [0.7,  "#f97316"],
-            [1.0,  "#c0392b"],
+            [0.0,  C_HIGH],
+            [0.4,  C_MOD],
+            [0.7,  _C_ORANGE],
+            [1.0,  C_LOW],
         ],
         zmin=0.0, zmax=1.0,
         colorbar=dict(
@@ -1585,10 +1583,10 @@ def _render_credit_map(risk_scores: List[TradeFinanceRiskScore]) -> None:
     ))
 
     for ann in [
-        dict(lat=61.5, lon=105.3, text="Russia (SWIFT exc.)", color="#c0392b"),
-        dict(lat=32.4, lon=53.7,  text="Iran (sanctions)",    color="#c0392b"),
-        dict(lat=-34.0, lon=-64.0, text="Argentina (FX ctrl)", color="#f97316"),
-        dict(lat=6.4, lon=-66.6,  text="Venezuela (OFAC)",    color="#c0392b"),
+        dict(lat=61.5, lon=105.3, text="Russia (SWIFT exc.)", color=C_LOW),
+        dict(lat=32.4, lon=53.7,  text="Iran (sanctions)",    color=C_LOW),
+        dict(lat=-34.0, lon=-64.0, text="Argentina (FX ctrl)", color=_C_ORANGE),
+        dict(lat=6.4, lon=-66.6,  text="Venezuela (OFAC)",    color=C_LOW),
     ]:
         fig_map.add_trace(go.Scattergeo(
             lat=[ann["lat"]], lon=[ann["lon"]],
@@ -1660,10 +1658,10 @@ def _render_dedollarization() -> None:
     )
 
     for y_vals, name, color in [
-        (usd,   "USD",   "#3572b0"),
-        (eur,   "EUR",   "#2e9e6e"),
-        (cny,   "CNY",   "#c9962b"),
-        (other, "Other", "#6b6760"),
+        (usd,   "USD",   C_ACCENT),
+        (eur,   "EUR",   C_HIGH),
+        (cny,   "CNY",   C_MOD),
+        (other, "Other", C_TEXT3),
     ]:
         fig.add_trace(go.Scatter(
             x=years, y=y_vals, name=name,
@@ -1674,7 +1672,7 @@ def _render_dedollarization() -> None:
         ), row=1, col=1)
 
     latest    = [usd[-1], eur[-1], cny[-1], other[-1]]
-    colors_pie = ["#3572b0", "#2e9e6e", "#c9962b", "#6b6760"]
+    colors_pie = [C_ACCENT, C_HIGH, C_MOD, C_TEXT3]
     fig.add_trace(go.Pie(
         values=latest,
         labels=["USD", "EUR", "CNY", "Other"],
@@ -1688,9 +1686,9 @@ def _render_dedollarization() -> None:
     fig.add_annotation(
         x=2026, y=cny[-1],
         text=f"CNY {cny[-1]}%",
-        showarrow=True, arrowhead=2, arrowcolor="#c9962b",
+        showarrow=True, arrowhead=2, arrowcolor=C_MOD,
         ax=-55, ay=-25,
-        font=dict(size=10, color="#c9962b"),
+        font=dict(size=10, color=C_MOD),
         bgcolor=_rgba(C_CARD, 0.9), borderpad=4,
         row=1, col=1,
     )
@@ -1837,47 +1835,47 @@ def render(
 
     # ── Section 0: Intelligence Banner (NEW) ─────────────────────────────────
     _render_finance_banner(macro_data)
-    _hr()
+    section_divider("Trade Finance Overview")
 
     # ── Section 1: Trade Finance Overview ───────────────────────────────────
     _render_finance_overview(indicators)
-    _hr()
+    section_divider("Financing Cost by Route")
 
     # ── Section 2: Financing Cost by Route ──────────────────────────────────
     _render_route_financing()
-    _hr()
+    section_divider("Interest Rate Impact")
 
     # ── Section 3: Interest Rate Impact Model ────────────────────────────────
     _render_rate_impact(macro_data)
-    _hr()
+    section_divider("Bank Availability")
 
     # ── Section 4: Bank Trade Finance Availability ───────────────────────────
     _render_bank_availability()
-    _hr()
+    section_divider("Credit vs Open Account")
 
     # ── Section 5: Documentary Credit vs Open Account ────────────────────────
     _render_lc_oa_trend()
-    _hr()
+    section_divider("Finance Gap")
 
     # ── Section 6: Trade Finance Gap Analysis ────────────────────────────────
     _render_finance_gap()
-    _hr()
+    section_divider("FX Hedging")
 
     # ── Section 7: FX Hedging Costs ──────────────────────────────────────────
     _render_fx_hedging()
-    _hr()
+    section_divider("Supply Chain Finance")
 
     # ── Section 8: Supply Chain Finance Programs ──────────────────────────────
     _render_scf_programs()
-    _hr()
+    section_divider("Credit Availability Map")
 
     # ── Section 9: Credit Availability Map ──────────────────────────────────
     _render_credit_map(risk_scores)
-    _hr()
+    section_divider("De-Dollarization")
 
     # ── Section 10: De-dollarization Monitor ─────────────────────────────────
     _render_dedollarization()
-    _hr()
+    section_divider("Sanctions Impact")
 
     # ── Section 11: Sanctions Impact Tracker ─────────────────────────────────
     _render_sanctions_tracker()

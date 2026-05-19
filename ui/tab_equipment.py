@@ -385,8 +385,6 @@ def _render_enhanced_equipment_overview() -> None:
          "accent": C_LOW, "sublabel": "CRITICAL or HIGH shortage"},
     ], columns=4)
 
-    st.write("")
-
     # ── SCATTERGEO — equipment balance by region ──────────────────────────
     section_header(
         "Container Equipment Balance Map",
@@ -623,7 +621,7 @@ def _render_enhanced_equipment_overview() -> None:
         {"name": "Internal route shortage model",    "kind": "modeled", "quality": "demo"},
     ]), unsafe_allow_html=True)
 
-    section_divider()
+    section_divider("Global TEU Pool")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2158,7 +2156,7 @@ def render(
         logger.exception("tab_equipment: error in global pool overview")
         st.error("Error rendering Global Equipment Pool section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Shortage & Surplus")
 
     try:
         _render_shortage_surplus_map()
@@ -2166,7 +2164,7 @@ def render(
         logger.exception("tab_equipment: error in shortage/surplus map")
         st.error("Error rendering Shortage/Surplus Map section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Repositioning")
 
     try:
         _render_repositioning_costs()
@@ -2174,7 +2172,7 @@ def render(
         logger.exception("tab_equipment: error in repositioning costs")
         st.error("Error rendering Repositioning Cost section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Turn Time")
 
     try:
         _render_dwell_times()
@@ -2182,7 +2180,7 @@ def render(
         logger.exception("tab_equipment: error in dwell times")
         st.error("Error rendering Equipment Turn Time section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Reefer Equipment")
 
     try:
         _render_reefer_section()
@@ -2190,7 +2188,7 @@ def render(
         logger.exception("tab_equipment: error in reefer section")
         st.error("Error rendering Reefer Availability section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Shortage Alerts")
 
     try:
         _render_shortage_alerts()
@@ -2198,7 +2196,7 @@ def render(
         logger.exception("tab_equipment: error in shortage alerts")
         st.error("Error rendering Shortage Alert System section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Fleet Age")
 
     try:
         _render_age_distribution()
@@ -2206,7 +2204,7 @@ def render(
         logger.exception("tab_equipment: error in age distribution")
         st.error("Error rendering Fleet Age Distribution section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Lease vs Own")
 
     try:
         _render_lease_vs_own()
@@ -2214,7 +2212,7 @@ def render(
         logger.exception("tab_equipment: error in lease vs own")
         st.error("Error rendering Leasing vs Owned Economics section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Cost Calculator")
 
     try:
         _render_cost_calculator(route_results)
@@ -2222,7 +2220,7 @@ def render(
         logger.exception("tab_equipment: error in cost calculator")
         st.error("Error rendering Equipment Cost Calculator section.", icon="⚠️")
 
-    section_divider()
+    section_divider("Balance Timeline")
 
     try:
         _render_balance_timeline()

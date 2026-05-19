@@ -28,6 +28,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -676,12 +677,17 @@ def render(macro_data=None, freight_data=None, *args, **kwargs) -> None:
             badge_color=C_ACCENT,
         )
     except Exception:
-        st.subheader("Bunker Fuel Intelligence")
+        logger.exception("tab_bunker: page header failed")
+        section_header("Bunker Fuel Intelligence")
 
     _bunker_dashboard()
     _bunker_price_by_port()
+    section_divider("Price History")
     _bunker_price_chart()
+    section_divider("Voyage Economics")
     _bunker_optimization_calculator()
     _fuel_spread_analysis()
+    section_divider("Fuel Transition")
     _alternative_fuels_comparison()
+    section_divider("Risk Management")
     _bunker_hedging()

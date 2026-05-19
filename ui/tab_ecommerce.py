@@ -28,6 +28,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -311,7 +312,7 @@ def _render_de_minimis() -> None:
             subtitle="De Minimis Risk Analysis",
         )
 
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([1, 1], gap="large")
         with col1:
             metric_card_row(
                 [
@@ -491,7 +492,7 @@ def _render_returns() -> None:
             subtitle="Reverse logistics and the cost of e-commerce returns",
         )
 
-        col1, col2 = st.columns([3, 2])
+        col1, col2 = st.columns([3, 2], gap="large")
         with col1:
             rows = []
             for r in _RETURN_RATES:
@@ -533,7 +534,7 @@ def _render_rate_impact_chart() -> None:
             subtitle="Volume vs air/ocean rate indices (2019=100)",
         )
 
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([2, 1], gap="large")
         with col1:
             years = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
             ecom_growth = [100, 128, 156, 168, 182, 200, 222]
@@ -635,12 +636,19 @@ def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -
         logger.exception("Header render failed")
 
     _render_kpi_dashboard()
+    section_divider("Platform Landscape")
     _render_platform_table()
+    section_divider("China Export Effect")
     _render_de_minimis()
+    section_divider("Seasonality")
     _render_peak_calendar()
+    section_divider("Freight Mix")
     _render_b2c_b2b_split()
+    section_divider("Reverse Logistics")
     _render_returns()
+    section_divider("Rate Impact")
     _render_rate_impact_chart()
+    section_divider("Indicators to Watch")
     _render_leading_indicators()
 
     try:

@@ -468,7 +468,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     except Exception as exc:
         logger.error(f"signal hero section failed: {exc}")
 
-    section_divider()
+    section_divider("Signal Intelligence")
     try:
         section_header(
             "Signal Intelligence Table",
@@ -478,7 +478,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     except Exception as exc:
         logger.error(f"signal table section failed: {exc}")
 
-    section_divider()
+    section_divider("Index Performance")
     try:
         section_header(
             "Multi-Index Performance",
@@ -488,7 +488,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     except Exception as exc:
         logger.error(f"multi-index section failed: {exc}")
 
-    section_divider()
+    section_divider("Cross-Market Structure")
     try:
         col_heat, col_corr = st.columns([3, 2], gap="medium")
         with col_heat:
@@ -512,7 +512,7 @@ def render(stock_data, macro_data, insights, freight_data=None) -> None:
     except Exception as exc:
         logger.error(f"layout columns failed: {exc}")
 
-    section_divider()
+    section_divider("Signal Composition")
     try:
         col_conv, col_meta = st.columns([2, 3], gap="medium")
         with col_conv:

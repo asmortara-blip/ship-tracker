@@ -32,6 +32,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -662,10 +663,18 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
         logger.warning(f"Derivatives banner error: {exc}")
 
     _render_header()
+
+    section_divider("Forward Market")
     _render_forward_curve()
     _render_quote_board()
+
+    section_divider("Options Pricing")
     _render_options_table()
+
+    section_divider("Basis & Hedging")
     _render_basis_analysis()
     _render_hedging_strategies()
+
+    section_divider("Equity Options")
     _render_options_screen()
     _render_vol_surface()

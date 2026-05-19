@@ -30,6 +30,7 @@ from ui.styles import (
     apply_dark_layout,
     badge,
     gradient_card,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
@@ -446,8 +447,11 @@ def _render_global_risk_heat(macro_data: dict | None, insights: list | None) -> 
             for ins in insights[:2]:
                 try:
                     st.markdown(
-                        f'<div class="wsj-card">📌 '
-                        f'<span style="font-size:0.85rem;color:{C_TEXT2}">{ins}</span></div>',
+                        gradient_card(
+                            f'<span style="font-family:var(--sans);font-size:0.84rem;'
+                            f'color:{C_TEXT2};line-height:1.55;">{ins}</span>',
+                            border_color=C_LOW,
+                        ),
                         unsafe_allow_html=True,
                     )
                 except Exception:
@@ -502,11 +506,11 @@ def _render_risk_map() -> None:
             text=hover_text,
             hovertemplate="%{text}<extra></extra>",
             colorscale=[
-                [0.0,  "#2e9e6e"],
-                [0.35, "#2e9e6e"],
-                [0.50, "#c9962b"],
-                [0.70, "#f97316"],
-                [1.0,  "#c0392b"],
+                [0.0,  C_HIGH],
+                [0.35, C_HIGH],
+                [0.50, C_MOD],
+                [0.70, _C_ORANGE],
+                [1.0,  C_LOW],
             ],
             zmin=0,
             zmax=100,
@@ -715,13 +719,18 @@ def _render_trade_war_monitor() -> None:
         )
 
         st.markdown(
-            f'<div class="wsj-card">'
-            f'<span class="wsj-body"><b style="color:{C_MOD}">Key insight:</b>'
-            f' US-China tariff escalation to 145%/125% is the primary structural shock.'
-            f' Trans-Pacific container demand has fallen ~35% YoY on direct lanes,'
-            f' but transshipment via Vietnam and Mexico is surging, creating secondary port congestion.'
-            f' Carriers are deploying blank sailings to manage capacity utilisation.</span>'
-            f'</div>',
+            insight_card_html(
+                title="US-China escalation is the primary structural shock",
+                score=0.82,
+                action="Caution",
+                rationale=(
+                    "Tariff escalation to 145%/125% has cut trans-Pacific container "
+                    "demand ~35% YoY on direct lanes, but transshipment via Vietnam "
+                    "and Mexico is surging — creating secondary port congestion. "
+                    "Carriers are deploying blank sailings to manage capacity utilisation."
+                ),
+                category="TRADE WAR",
+            ),
             unsafe_allow_html=True,
         )
 
@@ -826,13 +835,19 @@ def _render_war_risk_premiums() -> None:
         )
 
         st.markdown(
-            f'<div class="wsj-card">'
-            f'<span class="wsj-body"><b style="color:{C_ACCENT}">JWC Note:</b>'
-            f" The Joint War Committee (Lloyd's Market Association) maintains a Listed Areas schedule."
-            f' Vessels transiting listed areas must notify their war risk underwriter'
-            f' and may face additional premium calls of 0.025–0.75% of vessel value per breach.'
-            f' Red Sea and Black Sea areas currently attract highest additional premium calls.</span>'
-            f'</div>',
+            insight_card_html(
+                title="Joint War Committee — Listed Areas schedule",
+                score=0.5,
+                action="Monitor",
+                rationale=(
+                    "The Joint War Committee (Lloyd's Market Association) maintains a "
+                    "Listed Areas schedule. Vessels transiting listed areas must notify "
+                    "their war risk underwriter and may face additional premium calls of "
+                    "0.025–0.75% of vessel value per breach. Red Sea and Black Sea areas "
+                    "currently attract the highest additional premium calls."
+                ),
+                category="INSURANCE",
+            ),
             unsafe_allow_html=True,
         )
 
@@ -859,17 +874,17 @@ def render(macro_data=None, insights=None, news_items=None, *args, **kwargs) -> 
         )
 
         _render_global_risk_heat(macro_data, insights)
-        section_divider()
+        section_divider("Risk Geography")
         _render_risk_map()
-        section_divider()
+        section_divider("Active Hotspots")
         _render_hotspot_monitor()
-        section_divider()
+        section_divider("Sanctions & Embargoes")
         _render_sanctions_tracker()
-        section_divider()
+        section_divider("Trade War")
         _render_trade_war_monitor()
-        section_divider()
+        section_divider("Rerouting Impact")
         _render_rerouting_impact()
-        section_divider()
+        section_divider("War Risk Insurance")
         _render_war_risk_premiums()
 
         st.markdown(

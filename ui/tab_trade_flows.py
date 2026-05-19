@@ -41,6 +41,7 @@ from ui.styles import (
     gradient_card,
     live_data_badge,
     page_header,
+    section_divider,
     section_header,
     wsj_market_table,
 )
@@ -505,11 +506,12 @@ def render(
         _render_flow_map()
 
         # 3. Sankey + Route breakdown side by side
+        section_divider("Flow Decomposition")
         section_header(
             "Origin → Commodity → Destination",
             subtitle="How bulk flows resolve through commodity categories",
         )
-        left, right = st.columns([3, 2])
+        left, right = st.columns([3, 2], gap="large")
         with left:
             st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
             _render_sankey()
@@ -518,6 +520,7 @@ def render(
             _render_route_breakdown()
 
         # 4. Commodity deep dive
+        section_divider("Cargo Intelligence")
         section_header(
             "Commodity Intelligence",
             subtitle="Demand signals, seasonal patterns, and key routes by cargo type",

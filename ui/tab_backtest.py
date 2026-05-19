@@ -17,6 +17,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -360,8 +361,13 @@ def _build_trade_rows(trades: list) -> list[list[str]]:
 # Auto-generated key insights
 # ---------------------------------------------------------------------------
 
-def _build_insights(results) -> list[tuple[str, str, str]]:
-    """Return list of (title, body, color) insight tuples."""
+def _build_insights(results) -> list[tuple[str, str, str, float]]:
+    """Return list of (title, body, color, score) insight tuples.
+
+    ``score`` is a 0–1 confidence the insight-card progress bar fills to —
+    win-rate-derived for the conviction/type insights so the bar is meaningful
+    rather than a flat zero.
+    """
     insights = []
 
     # Conviction insight
@@ -375,6 +381,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"{stats['avg_return']:+.2f}% per trade. "
             f"{'This is well above the 50% random baseline, indicating strong predictive power.' if stats['win_rate'] > 55 else 'Conviction tiers help filter signal quality — use HIGH conviction signals as primary entries.'}",
             _CONVICTION_COLORS.get(best_conv, C_ACCENT),
+            max(0.0, min(1.0, stats["win_rate"] / 100.0)),
         ))
 
     # Signal type insight
@@ -389,6 +396,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"{stats['win_rate']:.0f}% win rate across {stats['count']} occurrences. "
             f"{'Consider overweighting this signal type during trending periods.' if stats['win_rate'] > 52 else 'Review market regime conditions when deploying this strategy.'}",
             _TYPE_COLORS.get(best_type, C_ACCENT),
+            max(0.0, min(1.0, stats["win_rate"] / 100.0)),
         ))
 
     # Drawdown / risk insight
@@ -396,6 +404,8 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
         avg_dd = sum(t.max_drawdown_pct for t in results.trades) / len(results.trades)
         worst = results.worst_trade
         best = results.best_trade
+        # Risk score: shallower average drawdown reads as a stronger fill.
+        risk_score = max(0.0, min(1.0, 1.0 + avg_dd / 25.0))
         insights.append((
             f"Risk profile: avg intraday drawdown {avg_dd:.1f}%, worst trade {worst.return_pct:+.1f}% ({worst.ticker})",
             f"Best trade: {best.ticker} {best.signal_name} returned {best.return_pct:+.2f}% "
@@ -404,6 +414,7 @@ def _build_insights(results) -> list[tuple[str, str, str]]:
             f"(held {worst.holding_days}d). "
             f"Position sizing and stop-loss discipline are critical given shipping stock volatility.",
             C_MOD,
+            risk_score,
         ))
 
     return insights
@@ -511,8 +522,10 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
     )
     st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
 
+    section_divider("Performance")
+
     # ── Equity Curve ──────────────────────────────────────────────────────────
-    section_header("Equity Curve")
+    section_header("Equity Curve", "Cumulative alpha vs a buy-and-hold benchmark")
     try:
         fig_eq = _equity_curve_chart(results.equity_curve, stock_data)
         st.plotly_chart(fig_eq, use_container_width=True, key="bt_equity_curve")
@@ -566,8 +579,10 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
     except Exception as e:
         st.error(f"Ticker table error: {e}")
 
+    section_divider("Trade Detail")
+
     # ── Monthly Heatmap ───────────────────────────────────────────────────────
-    section_header("Monthly Return Heatmap")
+    section_header("Monthly Return Heatmap", "Average signal return by calendar month")
     try:
         fig_heat = _monthly_heatmap(results.monthly_returns)
         st.plotly_chart(fig_heat, use_container_width=True, key="bt_monthly_heatmap")
@@ -590,11 +605,13 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
     except Exception as e:
         st.error(f"Trade log error: {e}")
 
+    section_divider("Takeaways")
+
     # ── Key Insights ──────────────────────────────────────────────────────────
-    section_header("Key Insights")
+    section_header("Key Insights", "Auto-generated takeaways from the backtest run")
     try:
         insight_list = _build_insights(results)
-        for title, body, color in insight_list:
+        for title, body, color, score in insight_list:
             # Map the domain color → closest action label for insight_card_html
             if color == C_HIGH:
                 action = "Prioritize"
@@ -605,7 +622,7 @@ def render(stock_data: dict, macro_data: dict, insights: object) -> None:
             else:
                 action = "Watch"
             st.markdown(
-                insight_card_html(title=title, score=0.0, action=action, rationale=body),
+                insight_card_html(title=title, score=score, action=action, rationale=body),
                 unsafe_allow_html=True,
             )
     except Exception as e:

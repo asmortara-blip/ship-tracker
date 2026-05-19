@@ -28,10 +28,12 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -160,6 +162,42 @@ def _cond_cell(cond: str) -> str:
     return badge(cond, _COND_BADGE.get(cond.upper(), C_TEXT3))
 
 
+def _legend_swatch(label: str, color: str) -> str:
+    """A single color-keyed legend entry — dot + label."""
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:6px;">'
+        f'<span style="width:9px;height:9px;border-radius:50%;'
+        f'background:{color};display:inline-block;"></span>'
+        f'<span style="font-family:var(--sans);font-size:0.74rem;font-weight:600;'
+        f'color:{color};">{label}</span></span>'
+    )
+
+
+def _map_legend_html() -> str:
+    """Color-keyed legend for the route-risk map — flush, not a faux table."""
+    swatches = "&nbsp;&nbsp;&nbsp;".join([
+        _legend_swatch("Severe risk", C_LOW),
+        _legend_swatch("Elevated risk", C_MOD),
+        _legend_swatch("Normal", C_HIGH),
+    ])
+    return (
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;'
+        f'padding:8px 0 2px 0;">'
+        f'{swatches}'
+        f'<span style="font-family:var(--sans);font-size:0.72rem;color:{C_TEXT3};">'
+        f'Markers: T=Typhoon · L=Low pressure · C=Cyclone · S=Storm</span>'
+        f'</div>'
+    )
+
+
+def _note_caption(text: str) -> str:
+    """A muted editorial footnote — replaces single-cell faux tables."""
+    return (
+        f'<div style="font-family:var(--sans);font-size:0.74rem;color:{C_TEXT3};'
+        f'line-height:1.55;padding:6px 0 2px 0;">{text}</div>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
@@ -249,16 +287,7 @@ def _render_risk_map() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        legend_rows = [[
-            _sans("Severe risk", color=C_LOW, weight=700),
-            _sans("Elevated risk", color=C_MOD, weight=700),
-            _sans("Normal", color=C_HIGH, weight=700),
-            _sans("Markers: T=Typhoon · L=Low pressure · C=Cyclone · S=Storm", color=C_TEXT3, weight=400),
-        ]]
-        wsj_market_table(
-            ["", "", "", "Legend"],
-            legend_rows,
-        )
+        st.markdown(_map_legend_html(), unsafe_allow_html=True)
         st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Risk map render failed")
@@ -326,15 +355,14 @@ def _render_historical_delays() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        caption_rows = [[
-            _sans(
-                "Seasonal patterns: Aug–Oct typhoon peak (Pacific) · Nov–Mar N. Atlantic storms · "
-                "Apr–Jun Bay of Bengal cyclone risk · Year-round fog delays at LA, Rotterdam",
-                color=C_TEXT3,
-                weight=400,
+        st.markdown(
+            _note_caption(
+                "<b>Seasonal patterns:</b> Aug–Oct typhoon peak (Pacific) · "
+                "Nov–Mar N. Atlantic storms · Apr–Jun Bay of Bengal cyclone risk · "
+                "year-round fog delays at LA and Rotterdam."
             ),
-        ]]
-        wsj_market_table(["Seasonal Notes"], caption_rows)
+            unsafe_allow_html=True,
+        )
         st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Historical delays chart failed")
@@ -394,7 +422,7 @@ def _render_routing_recs() -> None:
 
 def _render_ice_route() -> None:
     try:
-        c_info, c_stats = st.columns([1.4, 1])
+        c_info, c_stats = st.columns([1.4, 1], gap="large")
 
         with c_info:
             metric_card_row(
@@ -440,17 +468,17 @@ def _render_ice_route() -> None:
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        note_rows = [[
-            _sans(
-                "NSR saves ~16 transit days vs Suez and ~26 vs Cape on Asia–Europe runs. "
-                "Key constraints: Russian permit (Rosatom), mandatory icebreaker escort in certain sectors, "
-                "limited rescue infrastructure, and narrow seasonal window. "
-                "Fuel premium offset partly by shorter distance (10,800 nm vs 12,400 nm Suez).",
-                color=C_TEXT3,
-                weight=400,
+        st.markdown(
+            _note_caption(
+                "<b>Operational notes:</b> the NSR saves ~16 transit days vs Suez "
+                "and ~26 vs Cape on Asia–Europe runs. Key constraints — Russian "
+                "permit (Rosatom), mandatory icebreaker escort in certain sectors, "
+                "limited rescue infrastructure, and a narrow seasonal window. The "
+                "fuel premium is partly offset by shorter distance "
+                "(10,800 nm vs 12,400 nm Suez)."
             ),
-        ]]
-        wsj_market_table(["Operational Notes"], note_rows)
+            unsafe_allow_html=True,
+        )
         st.markdown(source_footer(_WEATHER_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("Ice route panel failed")
@@ -473,12 +501,15 @@ def render(port_results=None, route_results=None, *args, **kwargs) -> None:
             badge_color=C_ACCENT,
         )
 
-        section_header(
-            "Live Weather Alert",
-            "Typhoon MAWAR-3 active in South China Sea — 34 vessels at risk — rerouting recommended "
-            "for Intra-Asia and Asia-NA West Coast departures",
+        # Headline disruption alert — the single most urgent active system.
+        alert_banner(
+            "Typhoon <b>MAWAR-3</b> active in the South China Sea — "
+            "<b>34 vessels</b> at risk. Rerouting recommended for Intra-Asia "
+            "and Asia-NA West Coast departures.",
+            level="critical",
         )
 
+        # ── Current conditions ──────────────────────────────────────────────
         section_header("Weather Risk Dashboard", "Current conditions and seasonal status — updated hourly")
         _render_kpis()
 
@@ -488,11 +519,17 @@ def render(port_results=None, route_results=None, *args, **kwargs) -> None:
         section_header("Route Weather Risk Map", "Major shipping lanes colored by current weather risk — storm markers show active systems")
         _render_risk_map()
 
+        # ── Forecast outlook ────────────────────────────────────────────────
+        section_divider("Forecast Outlook")
+
         section_header("14-Day Weather Forecast by Route", "Conditions outlook per route — CALM / MODERATE / ROUGH / SEVERE")
         _render_forecast_table()
 
         section_header("Historical Weather Delays by Month", "Average delay hours by route — reveals seasonal risk patterns")
         _render_historical_delays()
+
+        # ── Ports & routing ─────────────────────────────────────────────────
+        section_divider("Ports & Routing")
 
         section_header("Port Weather Closures & Restrictions", "Current berth closures and forecast restrictions at major ports")
         _render_port_closures()

@@ -35,6 +35,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
 )
@@ -606,7 +607,14 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
         for r in routes:
             util_val = int(r["Utilization Rate"].replace("%", ""))
             util_color = C_HIGH if util_val >= 90 else (C_MOD if util_val >= 80 else C_LOW)
-            section_header(r["Trade Lane"], f"Trend: {r['Trend']} · {r['Disruption Note']}")
+            st.markdown(
+                f'<div class="sub-section-header">{r["Trade Lane"]}</div>'
+                f'<div style="font-size:0.78rem;color:{C_TEXT3};margin:-6px 0 12px;'
+                f'font-family:var(--sans);">Trend: {r["Trend"]}'
+                f'<span style="color:{C_TEXT2};"> &nbsp;·&nbsp; </span>'
+                f'{r["Disruption Note"]}</div>',
+                unsafe_allow_html=True,
+            )
             metric_card_row([
                 {"label": "Deployed Capacity", "value": f"{r['Deployed Capacity (TEU)']} TEU",
                  "accent": C_TEXT,    "sublabel": "active deployment"},
@@ -645,17 +653,17 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
         logger.exception("Fleet header failed")
 
     _render_kpis(insights)
-    st.divider()
+    section_divider("Fleet Composition")
     _render_composition()
-    st.divider()
+    section_divider("Orderbook & Scrapping")
     _render_orderbook()
     st.divider()
     _render_scrapping()
-    st.divider()
+    section_divider("Deployment")
     _render_utilization_map()
     st.divider()
     _render_capacity_vs_demand()
-    st.divider()
+    section_divider("Renewal Risk")
     _render_age_risk()
-    st.divider()
+    section_divider("Trade Lane Detail")
     _render_route_metrics(route_results)

@@ -165,8 +165,8 @@ def _render_hero(stats: dict) -> None:
             {"label": "AVG WAIT TIME",      "value": f"{stats['avg_wait']}d", "accent": C_MOD,
              "sublabel": "Global fleet average"},
         ], columns=4)
-    except Exception as exc:
-        logger.error("_render_hero error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — hero render failed")
 
 
 # ── Section 2: World Port Map ─────────────────────────────────────────────────
@@ -226,8 +226,8 @@ def _render_map(ports: list[dict]) -> None:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         _demo_src = DataSource.demo("AIS / Port Authority (synthetic)")
         st.markdown(source_footer([_demo_src]), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.error("_render_map error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — world map render failed")
 
 
 # ── Section 3: Congestion Table ───────────────────────────────────────────────
@@ -253,8 +253,8 @@ def _render_table(ports: list[dict]) -> None:
             source_footer([DataSource.demo("AIS / Berth Utilization (synthetic)")]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.error("_render_table error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — port table render failed")
 
 
 # ── Section 4: Congestion Timeline ───────────────────────────────────────────
@@ -299,8 +299,8 @@ def _render_timeline(ports: list[dict]) -> None:
             source_footer([DataSource.demo("Synthetic 90-day trend series")]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.error("_render_timeline error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — timeline render failed")
 
 
 # ── Section 5: Wait Time Distribution ────────────────────────────────────────
@@ -354,8 +354,8 @@ def _render_wait_dist(ports: list[dict]) -> None:
             source_footer([DataSource.demo("Synthetic per-vessel wait draws")]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.error("_render_wait_dist error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — wait distribution render failed")
 
 
 # ── Section 6: Congestion-to-Rate Correlation ─────────────────────────────────
@@ -429,8 +429,8 @@ def _render_correlation(ports: list[dict]) -> None:
             source_footer([DataSource.demo("Synthetic rate-correlation scatter")]),
             unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.error("_render_correlation error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — rate correlation render failed")
 
 
 # ── Section 7: Port Efficiency Benchmarks ─────────────────────────────────────
@@ -471,8 +471,8 @@ def _render_efficiency() -> None:
                 _mono(f"{e['truck_min']} min", color=score_color(e["truck_min"], 15, 90, invert=True), weight=700),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.error("_render_efficiency error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — efficiency benchmarks render failed")
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
@@ -510,21 +510,21 @@ def render(port_results=None, freight_data=None, insights=None, *args, **kwargs)
         )
 
         _render_hero(stats)
-        section_divider()
+        section_divider("World Map")
         _render_map(ports)
-        section_divider()
+        section_divider("Port Detail")
         _render_table(ports)
-        section_divider()
+        section_divider("Timeline")
         _render_timeline(ports)
-        section_divider()
+        section_divider("Distribution & Rate Impact")
 
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, gap="large")
         with col1:
             _render_wait_dist(ports)
         with col2:
             _render_correlation(ports)
 
-        section_divider()
+        section_divider("Efficiency Benchmarks")
         _render_efficiency()
 
         alert_banner(
@@ -534,6 +534,6 @@ def render(port_results=None, freight_data=None, insights=None, *args, **kwargs)
             level="info",
         )
 
-    except Exception as exc:
-        logger.error("tab_congestion render error: {}", exc)
-        st.error(f"Congestion dashboard encountered an error: {exc}")
+    except Exception:
+        logger.exception("tab_congestion render failed")
+        st.error("Congestion dashboard encountered an error.")

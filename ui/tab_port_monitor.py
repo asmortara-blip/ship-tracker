@@ -35,6 +35,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -485,14 +486,18 @@ def render(port_results: Any = None, freight_data: Optional[Any] = None, *args, 
                 logger.warning("Could not merge live port_results; using mock data")
 
         _render_kpi_header(ports)
+
+        section_divider("Global Rankings")
         _render_rankings_table(ports)
+        _render_efficiency_chart(ports)
 
-        col_chart, _col_gap = st.columns([3, 1])
-        with col_chart:
-            _render_efficiency_chart(ports)
-
+        section_divider("Status Map")
         _render_port_map(ports)
+
+        section_divider("Regional Breakdown")
         _render_regional_dashboard(ports)
+
+        section_divider("Events & Lanes")
         _render_events_feed(PORT_EVENTS)
         _render_rate_cards(LANE_RATES)
 

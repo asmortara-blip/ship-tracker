@@ -21,6 +21,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -424,6 +425,9 @@ def _render_route_map() -> None:
             margin=dict(t=10, b=10, l=0, r=0),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([
+            {"name": "Emerging route corridor library", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Route map render failed")
         st.error("Route map unavailable.")
@@ -495,15 +499,20 @@ def render(
     try:
         page_header(
             title="Emerging Routes Intelligence",
-            subtitle="12 new corridors identified across macro drivers and carrier adoption tracking.",
+            subtitle="12 new corridors identified across macro drivers and carrier adoption tracking",
             badge_text="EMERGING",
             badge_color=C_ACCENT,
         )
         _render_hero()
+        section_divider("Route Discovery")
         _render_route_discovery_table()
+        section_divider("Strategic Drivers")
         _render_strategic_drivers()
+        section_divider("Corridor Map")
         _render_route_map()
+        section_divider("Carrier Adoption")
         _render_carrier_adoption()
+        section_divider("Risk Assessment")
         _render_risk_assessment()
     except Exception:
         logger.exception("tab_emerging_routes top-level render failed")

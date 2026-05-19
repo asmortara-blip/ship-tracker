@@ -728,6 +728,10 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
             badge_color=C_ACCENT,
         )
 
+        section_header(
+            "Network at a Glance",
+            subtitle="Headline disruption read across the world's critical maritime chokepoints",
+        )
         metric_card_row(
             [
                 {"label": "Critical Chokepoints", "value": "2",      "accent": C_LOW,

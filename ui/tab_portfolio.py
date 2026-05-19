@@ -879,7 +879,7 @@ def render(stock_data, macro_data, insights) -> None:
 
         _render_add_position_form()
 
-        section_divider()
+        section_divider("Holdings")
 
         _render_holdings_table(df)
 
@@ -893,19 +893,17 @@ def render(stock_data, macro_data, insights) -> None:
                 section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
                 _render_performance_chart(df)
 
-        section_divider()
+        section_divider("Risk")
 
         _render_risk_metrics(df)
 
-        section_divider()
+        section_divider("Factor Attribution")
 
         _render_carrier_factor_lens(stock_data, macro_data)
 
-        section_divider()
+        section_divider("Position Detail")
 
         _render_top_movers(df)
-
-        section_divider()
 
         _render_position_details(df)
 

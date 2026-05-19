@@ -26,6 +26,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -626,17 +627,26 @@ def render(
         # ── Section 1: Hero KPIs ─────────────────────────────────────────────
         _render_hero(signals)
 
+        # ── Signal Book ──────────────────────────────────────────────────────
+        section_divider("Signal Book")
+
         # ── Section 2: Conviction Matrix ─────────────────────────────────────
         _render_conviction_matrix()
 
         # ── Section 3: Top Signals Table ─────────────────────────────────────
         _render_signals_table(signals)
 
+        # ── Methodology ──────────────────────────────────────────────────────
+        section_divider("Methodology")
+
         # ── Section 4: Engine Diagram ─────────────────────────────────────────
         _render_engine_diagram()
 
         # ── Section 5: Factor Breakdown ───────────────────────────────────────
         _render_factor_breakdown(signals)
+
+        # ── Live Tape ────────────────────────────────────────────────────────
+        section_divider("Live Tape")
 
         # ── Section 6: Price + Signal Chart ──────────────────────────────────
         _render_price_signal_chart(stock_data or {}, signals)

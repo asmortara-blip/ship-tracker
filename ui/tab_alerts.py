@@ -30,6 +30,7 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     wsj_market_table,
 )
@@ -490,7 +491,7 @@ def _render_hero(visible_alerts: list[dict]) -> None:
 
 def _render_configuration_form() -> None:
     try:
-        with st.expander("Alert Configuration - Create New Rule", expanded=False):
+        with st.expander("Alert Configuration — Create New Rule", expanded=False):
             st.html(
                 '<div class="sub-section-header">'
                 'Define a new threshold rule. Alerts evaluate on each data refresh.'
@@ -602,6 +603,7 @@ def _render_active_alerts(visible_alerts: list[dict]) -> None:
         wsj_market_table(headers, rows)
 
         # Dismissal controls
+        st.caption("Dismiss an alert to move it to history.")
         cols = st.columns(min(4, len(visible_alerts)))
         for idx, alert in enumerate(visible_alerts):
             with cols[idx % len(cols)]:
@@ -816,8 +818,14 @@ def render(
     try:
         _render_hero(visible_alerts)
         _render_configuration_form()
+
+        section_divider("Live Monitoring")
         _render_active_alerts(visible_alerts)
+
+        st.divider()
         _render_history()
+
+        section_divider("Configuration")
         _render_notifications()
         _render_rules_manager()
     except Exception:

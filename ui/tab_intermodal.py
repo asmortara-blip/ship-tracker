@@ -30,11 +30,13 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -437,12 +439,11 @@ def _render_dwell_tracker() -> None:
                     else "LOW", C_ACCENT)),
             ])
         wsj_market_table(headers, rows)
-        st.markdown(
-            '<div class="sub-section-header">'
-            'LA/LB currently at 8.2 days — 2.2 days above critical threshold. '
-            'Primary cause: BNSF slot allocation lag and chassis queue at ICTF.'
-            '</div>',
-            unsafe_allow_html=True,
+        alert_banner(
+            "LA/LB currently at <b>8.2 days</b> — 2.2 days above the critical "
+            "threshold. Primary cause: BNSF slot allocation lag and chassis "
+            "queue at ICTF.",
+            level="warning",
         )
     except Exception:
         logger.exception("Dwell tracker failed")
@@ -526,10 +527,7 @@ def _render_inland_destination() -> None:
                 ("Denver",        55, 45, 17,   820),
                 ("Other Midwest", 45, 55, 21,   950),
             ]
-            st.markdown(
-                '<div class="sub-section-header">Rail vs Truck Split by Destination</div>',
-                unsafe_allow_html=True,
-            )
+            _sub_section("Rail vs Truck Split by Destination")
             tbl_rows = [
                 [
                     _sans(dest, color=C_TEXT, weight=700),
@@ -558,12 +556,7 @@ def _render_cost_comparison() -> None:
         st.markdown(live_data_badge(_SRC_FREIGHTOS), unsafe_allow_html=True)
 
         for pair in _COST_COMPARE:
-            st.markdown(
-                f'<div class="sub-section-header">'
-                f'{pair["origin"]} \u2192 {pair["dest"]}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            _sub_section(f'{pair["origin"]} \u2192 {pair["dest"]}')
             metric_card_row(
                 [
                     {
@@ -713,14 +706,21 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
     _render_port_inland_table()
     _render_network_map()
 
-    c1, c2 = st.columns(2)
+    section_divider("Capacity & Equipment")
+
+    c1, c2 = st.columns(2, gap="large")
     with c1:
         _render_dwell_tracker()
     with c2:
         _render_equipment_availability()
 
+    section_divider("Inland Flows")
     _render_inland_destination()
+
+    section_divider("Routing Economics")
     _render_cost_comparison()
+
+    section_divider("Market Signals")
     _render_market_signals()
 
     try:

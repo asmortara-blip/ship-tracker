@@ -22,6 +22,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     status_badge,
@@ -70,21 +71,22 @@ _CHAT_CSS = """
     width: 32px;
     height: 32px;
     border-radius: 4px;
-    background: #3572b0;
+    background: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
-    color: #fff;
+    letter-spacing: 0.04em;
+    color: #f4f3f0;
     flex-shrink: 0;
     margin-top: 2px;
     font-family: var(--sans);
 }
 .msg-bubble-user {
-    background: #3572b0;
-    color: #fff;
-    border-radius: 6px 2px 6px 6px;
+    background: var(--accent);
+    color: #f4f3f0;
+    border-radius: 7px 2px 7px 7px;
     padding: 10px 15px;
     max-width: 72%;
     font-size: 13px;
@@ -95,8 +97,8 @@ _CHAT_CSS = """
     background: var(--card);
     color: var(--text);
     border: 1px solid var(--rule);
-    border-left: 2px solid #3572b0;
-    border-radius: 2px 6px 6px 6px;
+    border-left: 2px solid var(--accent);
+    border-radius: 2px 7px 7px 7px;
     padding: 12px 16px;
     max-width: 82%;
     font-size: 13px;
@@ -109,12 +111,17 @@ _CHAT_CSS = """
     margin-top: 4px;
     text-align: right;
     font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 .msg-meta-left {
     font-size: 10px;
     color: var(--text3);
     margin-top: 4px;
+    margin-left: 42px;
     font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 </style>
 """
@@ -530,8 +537,10 @@ def render(
         columns=4,
     )
 
+    section_divider("Workspace")
+
     # ── Layout: chat column + sidebar ───────────────────────────────────────
-    col_chat, col_sidebar = st.columns([3, 1], gap="medium")
+    col_chat, col_sidebar = st.columns([3, 1], gap="large")
 
     with col_chat:
         # Quick-question chips render as buttons; section_header gives the WSJ rule.
@@ -553,8 +562,9 @@ def render(
 
         if not messages:
             st.info(
-                "Ask a question about freight rates, shipping stocks, "
-                "geopolitical disruptions, or market signals below."
+                "No questions yet — tap a prompt above or type below. "
+                "The assistant covers freight rates, shipping equities, "
+                "geopolitical disruptions and market signals."
             )
         else:
             # Render all messages
@@ -632,23 +642,28 @@ def render(
         elif send and not question:
             st.warning("Please enter a question before sending.")
 
-        # ── Export button ────────────────────────────────────────────────────
+        # ── Conversation controls ────────────────────────────────────────────
         if st.session_state.asst_messages:
+            st.divider()
             export_text = _export_text(st.session_state.asst_messages)
-            st.download_button(
-                label="Export Chat",
-                data=export_text,
-                file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                mime="text/plain",
-                key="asst_export_btn",
-            )
-
-        # Clear chat
-        if st.session_state.asst_messages:
-            if st.button("Clear Chat", key="asst_clear_btn"):
-                st.session_state.asst_messages = []
-                st.session_state.asst_input_val = ""
-                st.rerun()
+            ctl_export, ctl_clear = st.columns(2, gap="medium")
+            with ctl_export:
+                st.download_button(
+                    label="Export Chat",
+                    data=export_text,
+                    file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    mime="text/plain",
+                    key="asst_export_btn",
+                    use_container_width=True,
+                    help="Download the conversation as plain text.",
+                )
+            with ctl_clear:
+                if st.button("Clear Chat", key="asst_clear_btn",
+                             use_container_width=True,
+                             help="Discard all messages in this session."):
+                    st.session_state.asst_messages = []
+                    st.session_state.asst_input_val = ""
+                    st.rerun()
 
     # ── Right sidebar ────────────────────────────────────────────────────────
     with col_sidebar:

@@ -26,6 +26,7 @@ from ui.styles import (
     apply_dark_layout,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
 )
@@ -315,8 +316,9 @@ def _render_global_map(
         ) else "Synthetic (configure AISSTREAM_KEY for live data)"
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True}, key="vessel_map_global")
         st.caption(f"Data source: {src_label} · {len(all_vessels)} vessels tracked across {len(_PORTS)} ports")
-    except Exception as e:
-        st.error(f"Map render error: {e}")
+    except Exception:
+        logger.exception("Vessel Map — global map chart failed")
+        st.error("Vessel map could not be rendered.")
 
     # Provenance pill — synthetic fallback when AISSTREAM_KEY is not set
     try:
@@ -395,8 +397,9 @@ def _render_port_vessel_table(vessel_map: dict[str, list[dict]]) -> str:
         )
         st.dataframe(styled, use_container_width=True, hide_index=True, key="vessel_map_table")
         st.caption(f"{len(vessels)} vessels tracked near {selected_name}")
-    except Exception as e:
-        st.error(f"Vessel table error: {e}")
+    except Exception:
+        logger.exception("Vessel Map — vessel table failed")
+        st.error("Vessel table could not be rendered.")
 
     # Provenance pill
     try:
@@ -472,8 +475,9 @@ def _render_fleet_donut(vessel_map: dict[str, list[dict]], selected_locode: str)
         )
 
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="vessel_map_donut")
-    except Exception as e:
-        st.error(f"Fleet composition chart error: {e}")
+    except Exception:
+        logger.exception("Vessel Map — fleet donut chart failed")
+        st.error("Fleet composition chart could not be rendered.")
 
     # Provenance pill
     try:
@@ -595,18 +599,20 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     # ── D. Metrics strip (top) ────────────────────────────────────────────────
     try:
         _render_metrics_strip(vessel_map)
-    except Exception as e:
-        st.error(f"Metrics strip error: {e}")
+    except Exception:
+        logger.exception("Vessel Map — metrics strip failed")
+        st.error("Metrics strip unavailable.")
 
-    st.divider()
+    section_divider("Traffic Map")
 
     # ── A. Global map ─────────────────────────────────────────────────────────
     try:
         _render_global_map(vessel_map, demand_scores)
-    except Exception as e:
-        st.error(f"Global map error: {e}")
+    except Exception:
+        logger.exception("Vessel Map — global map failed")
+        st.error("Global vessel map unavailable.")
 
-    st.divider()
+    section_divider("Port Detail")
 
     # ── B + C. Port table and donut side by side ──────────────────────────────
     col_left, col_right = st.columns([3, 2], gap="large")
@@ -615,11 +621,13 @@ def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
         selected_locode = ""
         try:
             selected_locode = _render_port_vessel_table(vessel_map)
-        except Exception as e:
-            st.error(f"Port vessel table error: {e}")
+        except Exception:
+            logger.exception("Vessel Map — port vessel table failed")
+            st.error("Port vessel table unavailable.")
 
     with col_right:
         try:
             _render_fleet_donut(vessel_map, selected_locode or list(vessel_map.keys())[0])
-        except Exception as e:
-            st.error(f"Fleet donut error: {e}")
+        except Exception:
+            logger.exception("Vessel Map — fleet donut failed")
+            st.error("Fleet composition chart unavailable.")

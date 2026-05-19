@@ -928,25 +928,25 @@ def render(freight_data=None, macro_data=None, stock_data=None, *args, **kwargs)
         logger.debug("Baltic sources unavailable: {}", exc)
         baltic_sources = {}
 
+    # Each section carries the editorial label shown on the divider that
+    # *precedes* the next section, so the page reads as a sequence of named
+    # passages rather than an unbroken scroll.
     sections = [
-        ("Index dashboard",  _render_index_dashboard),
-        ("Multi-index",      _render_multi_index_chart),
-        ("BDI deep dive",    _render_bdi_deep_dive),
-        ("Spread analysis",  _render_spread_analysis),
-        ("Cointegration",    _render_cointegration),
-        ("Forward curve",    _render_forward_curve),
-        ("Cross-asset",      _render_cross_asset),
+        ("Index dashboard",  _render_index_dashboard,  "Multi-Index Comparison"),
+        ("Multi-index",      _render_multi_index_chart, "BDI Deep Dive"),
+        ("BDI deep dive",    _render_bdi_deep_dive,     "Spread Analysis"),
+        ("Spread analysis",  _render_spread_analysis,   "Cointegration"),
+        ("Cointegration",    _render_cointegration,     "Forward Curve"),
+        ("Forward curve",    _render_forward_curve,     "Cross-Asset"),
+        ("Cross-asset",      _render_cross_asset,       "Methodology"),
     ]
-    for i, (name, fn) in enumerate(sections):
+    for i, (name, fn, next_label) in enumerate(sections):
         try:
             fn(all_series, baltic_sources)
         except Exception as exc:
             logger.error("{} error: {}", name, exc)
             st.error(f"{name} error: {exc}")
-        if i < len(sections) - 1:
-            section_divider()
-
-    section_divider()
+        section_divider(next_label)
 
     try:
         _render_methodology()

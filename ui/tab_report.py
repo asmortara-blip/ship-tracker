@@ -397,16 +397,25 @@ def _render_report_preview(report: Any, ts: str, api_status: dict[str, bool]) ->
         "Macro Environment", "Equity Analysis", "Risk Assessment",
         "Recommendations", "Data Appendix", "Methodology",
     ]
-    pills_html = " ".join(badge(s, color=C_ACCENT) for s in section_names)
+    pills_html = "".join(
+        f'<span style="display:inline-block;margin:0 6px 6px 0;">{badge(s, color=C_ACCENT)}</span>'
+        for s in section_names
+    )
     st.markdown(
-        f'<div class="wsj-card">{pills_html}</div>',
+        f'<div class="wsj-card">'
+        f'<div class="sub-section-header">{len(section_names)} Modules</div>'
+        f'<div style="margin-top:2px;">{pills_html}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
     st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
 
     if exec_summary:
         preview = exec_summary[:300] + ("..." if len(exec_summary) > 300 else "")
-        section_header("Executive Summary - Preview", "")
+        section_header(
+            "Executive Summary",
+            "First paragraph of the generated briefing - full text in the export",
+        )
         st.markdown(
             insight_card_html(
                 title="Executive Summary",
@@ -434,12 +443,16 @@ def _render_downloads(report: Any) -> None:
     section_header("Download Report", "Pick a format to export the latest build.")
     col_pdf, col_html, col_xl = st.columns([2, 1, 1], gap="medium")
     with col_pdf:
+        st.markdown(
+            '<div class="sub-section-header">PDF &mdash; Print-Ready</div>',
+            unsafe_allow_html=True,
+        )
         if _PDF_OK and report is not None:
             try:
                 pdf_bytes = render_investor_report_pdf(report)
                 size_kb = len(pdf_bytes) // 1024
                 st.download_button(
-                    label=f"Download PDF Report  ({size_kb} KB)",
+                    label=f"Download PDF Report ({size_kb} KB)",
                     data=pdf_bytes,
                     file_name=f"investor_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                     mime="application/pdf",
@@ -454,6 +467,10 @@ def _render_downloads(report: Any) -> None:
             _dl_unavailable("Generate a report first.")
 
     with col_html:
+        st.markdown(
+            '<div class="sub-section-header">HTML &mdash; Web</div>',
+            unsafe_allow_html=True,
+        )
         if _HTML_OK and report is not None:
             try:
                 html_bytes = render_investor_report_html(report).encode("utf-8")
@@ -473,6 +490,10 @@ def _render_downloads(report: Any) -> None:
             _dl_unavailable("Generate a report first.")
 
     with col_xl:
+        st.markdown(
+            '<div class="sub-section-header">Excel &mdash; Data</div>',
+            unsafe_allow_html=True,
+        )
         if _EXCEL_OK and report is not None:
             try:
                 xl_bytes = _export_full_report(report)
@@ -496,9 +517,8 @@ def _render_downloads(report: Any) -> None:
 # ── Section 6: Report history ─────────────────────────────────────────────────
 
 def _render_history() -> None:
-    section_header("Report History", "Previously generated reports")
-
     if not _HISTORY_OK:
+        section_header("Report History", "Previously generated reports")
         st.markdown(
             status_badge("Report history unavailable - utils.report_history not loaded.", status="neutral"),
             unsafe_allow_html=True,
@@ -512,11 +532,16 @@ def _render_history() -> None:
         reports = []
 
     if not reports:
+        section_header("Report History", "Previously generated reports")
         st.markdown(
             status_badge("No historical reports saved yet.", status="neutral"),
             unsafe_allow_html=True,
         )
         return
+
+    shown = min(len(reports), 10)
+    plural = "report" if shown == 1 else "reports"
+    section_header("Report History", f"{shown} most recent {plural} - newest first")
 
     # Build a wsj_market_table so the row width tracks the rest of the design system.
     headers = ["Date", "Sentiment", "Quality", "Size"]
@@ -546,23 +571,37 @@ def _render_history() -> None:
     if rows:
         wsj_market_table(headers, rows)
 
-        # Per-row download buttons stacked beneath the table.
+        # Resolve which archived reports still have downloadable HTML on disk.
+        available: list[tuple[str, int, Any]] = []
         for spec in download_specs:
             rep_id = spec["id"]
             i = spec["index"]
             try:
                 html_content = _load_report_html(rep_id)
                 if html_content:
-                    st.download_button(
-                        label=f"Download {rep_id}",
-                        data=html_content.encode("utf-8") if isinstance(html_content, str) else html_content,
-                        file_name=f"report_{rep_id}.html",
-                        mime="text/html",
-                        key=f"dl_hist_{rep_id}_{i}",
-                        use_container_width=True,
-                    )
+                    available.append((rep_id, i, html_content))
             except Exception:
                 continue
+
+        # Per-row download buttons laid out in a tidy 3-column grid.
+        if available:
+            st.markdown(
+                '<div class="sub-section-header">Re-download Archived Reports</div>',
+                unsafe_allow_html=True,
+            )
+            for base in range(0, len(available), 3):
+                chunk = available[base:base + 3]
+                cols = st.columns(3, gap="medium")
+                for col, (rep_id, i, html_content) in zip(cols, chunk):
+                    with col:
+                        st.download_button(
+                            label=f"Download {rep_id}",
+                            data=html_content.encode("utf-8") if isinstance(html_content, str) else html_content,
+                            file_name=f"report_{rep_id}.html",
+                            mime="text/html",
+                            key=f"dl_hist_{rep_id}_{i}",
+                            use_container_width=True,
+                        )
 
 
 # ── Section 7: Data source status ─────────────────────────────────────────────
@@ -590,7 +629,8 @@ def _render_data_sources(api_status: dict[str, bool]) -> None:
 def _render_api_config(api_status: dict[str, bool]) -> None:
     with st.expander("API Configuration", expanded=False):
         st.markdown(
-            _sans(
+            '<div class="sub-section-header">Premium Feed Keys</div>'
+            + _sans(
                 "Configure API keys via st.secrets (secrets.toml) or environment variables. "
                 "Keys are never displayed - only their presence is checked.",
                 color=C_TEXT2,
@@ -619,11 +659,14 @@ def _render_api_config(api_status: dict[str, bool]) -> None:
             ])
         wsj_market_table(["Source", "Env Var", "Status"], rows)
         st.markdown(
-            _sans(
-                "Add keys to .streamlit/secrets.toml: ALPHA_VANTAGE_KEY = \"your-key-here\". "
-                "Or set environment variables before launching the app.",
-                color=C_TEXT3,
-            ),
+            '<div style="margin-top:8px;">'
+            + _sans("Add keys to ", color=C_TEXT3)
+            + _mono(".streamlit/secrets.toml", color=C_TEXT2)
+            + _sans(" &mdash; e.g. ", color=C_TEXT3)
+            + _mono('ALPHA_VANTAGE_KEY = "your-key-here"', color=C_TEXT2)
+            + _sans(" &mdash; or export the matching environment variable "
+                    "before launching the app.", color=C_TEXT3)
+            + "</div>",
             unsafe_allow_html=True,
         )
 
@@ -651,7 +694,7 @@ def render(
         logger.error(f"Hero render error: {exc}")
         st.error("Could not render header.")
 
-    section_divider()
+    section_divider("Configure")
 
     config: dict = {}
     try:
@@ -667,12 +710,13 @@ def render(
         st.error("Could not render generate button.")
 
     if report is not None:
-        section_divider()
+        section_divider("Briefing")
         try:
             _render_report_preview(report, last_ts or _now_utc(), api_status)
         except Exception as exc:
             logger.error(f"Report preview error: {exc}")
             st.error("Could not render report preview.")
+        section_divider("Export")
         try:
             _render_downloads(report)
         except Exception as exc:
@@ -690,19 +734,20 @@ def render(
             unsafe_allow_html=True,
         )
     else:
+        section_divider("Export")
         try:
             _render_downloads(None)
         except Exception as exc:
             logger.error(f"Download placeholder error: {exc}")
 
-    section_divider()
+    section_divider("History")
     try:
         _render_history()
     except Exception as exc:
         logger.error(f"History render error: {exc}")
         st.error("Could not render report history.")
 
-    section_divider()
+    section_divider("Data Sources")
     try:
         _render_data_sources(api_status)
     except Exception as exc:

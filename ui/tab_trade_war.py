@@ -267,7 +267,7 @@ def _render_diversion_map() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="trade_diversion_map")
 
-        col_l, col_w, col_e = st.columns(3)
+        col_l, col_w, col_e = st.columns(3, gap="medium")
         with col_l:
             st.markdown(insight_card_html(
                 title="Direct China–US transpacific",
@@ -401,7 +401,7 @@ def _render_volume_chart() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="transpacific_volume_chart")
 
-        carrier_col1, carrier_col2 = st.columns(2)
+        carrier_col1, carrier_col2 = st.columns(2, gap="large")
         cut_rows = [("COSCO", -22, C_LOW), ("MSC", -18, C_LOW), ("Evergreen", -14, C_LOW), ("Yang Ming", -8, C_MOD)]
         add_rows = [("Maersk (Vietnam)", 16, C_HIGH), ("CMA CGM (India)", 12, C_HIGH), ("Hapag-Lloyd (SE Asia)", 10, C_HIGH), ("ONE (Indonesia)", 6, C_MOD)]
         with carrier_col1:
@@ -528,7 +528,7 @@ def _render_scenario() -> None:
             ("Brazil→China soy route", "~50% retained"),
             ("India pharma/textile", "~80% retained"),
         ]
-        col_w, col_l = st.columns(2)
+        col_w, col_l = st.columns(2, gap="large")
         with col_w:
             st.markdown('<div class="sub-section-header">Winner Carriers and Routes</div>', unsafe_allow_html=True)
             wsj_market_table(
@@ -566,19 +566,19 @@ def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -
     try:
         logger.info("trade_war | render start")
         _render_hero(macro_data)
-        section_divider()
+        section_divider("Tariff Exposure")
         _render_commodity_table()
-        section_divider()
+        section_divider("Flow Diversion")
         _render_diversion_map()
-        section_divider()
+        section_divider("Supply-Chain Shift")
         _render_nearshoring()
-        section_divider()
+        section_divider("Volume Impact")
         _render_volume_chart()
-        section_divider()
+        section_divider("Negotiation Tracker")
         _render_deal_tracker()
-        section_divider()
+        section_divider("Historical Context")
         _render_history()
-        section_divider()
+        section_divider("Scenario")
         _render_scenario()
         logger.info("trade_war | render complete")
     except Exception:

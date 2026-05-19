@@ -23,7 +23,6 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
-    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
@@ -219,8 +218,8 @@ def _render_hero_stats() -> None:
             columns=4,
         )
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"hero stats error: {exc}")
+    except Exception:
+        logger.exception("Network — hero stats render failed")
         st.info("Network stats unavailable.")
 
 
@@ -288,8 +287,8 @@ def _render_network_map() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"network map error: {exc}")
+    except Exception:
+        logger.exception("Network — global network map render failed")
         st.info("Network map unavailable.")
 
 
@@ -311,18 +310,22 @@ def _render_centrality() -> None:
                 f'<span style="font-size:14px;font-weight:800;color:{impact_color};">{disruption:.1f}%</span>'
                 f'<span style="font-size:10px;color:{C_TEXT3};"> global trade</span>'
             )
+            role_text = (
+                description if len(description) <= 60
+                else f"{description[:59]}…"
+            )
             rows.append([
                 _mono(str(i + 1), color=C_TEXT3, weight=700),
                 _sans(port, weight=700),
                 _score_cell(centrality, color),
                 _mono(str(connections), color=C_TEXT2, weight=600),
                 impact_cell,
-                _sans(f"{description[:60]}…", color=C_TEXT3),
+                _sans(role_text, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"centrality error: {exc}")
+    except Exception:
+        logger.exception("Network — centrality table render failed")
         st.info("Centrality data unavailable.")
 
 
@@ -348,8 +351,8 @@ def _render_hub_spoke() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"hub spoke error: {exc}")
+    except Exception:
+        logger.exception("Network — hub-and-spoke table render failed")
         st.info("Hub-and-spoke data unavailable.")
 
 
@@ -381,8 +384,8 @@ def _render_carrier_services() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"carrier services error: {exc}")
+    except Exception:
+        logger.exception("Network — carrier services table render failed")
         st.info("Carrier service data unavailable.")
 
 
@@ -410,8 +413,8 @@ def _render_stress_test() -> None:
             ])
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"stress test error: {exc}")
+    except Exception:
+        logger.exception("Network — stress test table render failed")
         st.info("Stress test data unavailable.")
 
 
@@ -463,8 +466,8 @@ def _render_centrality_chart() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"centrality chart error: {exc}")
+    except Exception:
+        logger.exception("Network — centrality chart render failed")
 
 
 # ---------------------------------------------------------------------------
@@ -476,58 +479,47 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
     try:
         page_header(
             title="Shipping Network Topology & Resilience",
-            subtitle="Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing",
+            subtitle="Global network map, port centrality, hub-and-spoke analysis, "
+            "alliance coverage and stress testing",
             badge_text="NETWORK",
             badge_color=C_ACCENT,
         )
-    except Exception as exc:
-        logger.warning(f"header error: {exc}")
+    except Exception:
+        logger.exception("Network — page header render failed")
 
     _render_hero_stats()
     _render_network_map()
 
-    section_divider()
+    section_divider("Centrality")
 
-    col_left, col_right = st.columns([3, 2])
+    col_left, col_right = st.columns([3, 2], gap="large")
     with col_left:
         _render_centrality()
     with col_right:
         try:
             _render_centrality_chart()
-        except Exception as exc:
-            logger.warning(f"centrality chart col error: {exc}")
+        except Exception:
+            logger.exception("Network — centrality chart column failed")
 
-    section_divider()
-
+    section_divider("Routing Structure")
     _render_hub_spoke()
 
-    section_divider()
-
+    section_divider("Alliance Coverage")
     _render_carrier_services()
 
-    section_divider()
-
+    section_divider("Stress Testing")
     _render_stress_test()
 
-    section_divider()
+    section_divider("Methodology")
 
     try:
-        st.markdown(
-            insight_card_html(
-                title="Methodology & Provenance",
-                score=0.0,
-                action="Watch",
-                category="ROUTE",
-                rationale=(
-                    "Network topology derived from vessel scheduling data, AIS tracking, "
-                    "and carrier service announcements. Centrality scores calculated using "
-                    "betweenness centrality weighted by TEU throughput. Stress test scenarios "
-                    "are modelled simulations — actual outcomes depend on market conditions "
-                    "and carrier response."
-                ),
-            ),
-            unsafe_allow_html=True,
+        section_header(
+            "Methodology & Provenance",
+            "Topology derived from vessel scheduling data, AIS tracking and carrier "
+            "service announcements. Centrality is betweenness weighted by TEU "
+            "throughput; stress-test scenarios are modeled simulations — actual "
+            "outcomes depend on market conditions and carrier response.",
         )
         st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception as exc:
-        logger.warning(f"footer error: {exc}")
+    except Exception:
+        logger.exception("Network — methodology footer render failed")

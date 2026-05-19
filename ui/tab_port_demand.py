@@ -19,6 +19,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -350,7 +351,7 @@ def _render_shock_scenarios() -> None:
         scenario = st.selectbox("Select scenario", list(_SHOCK_SCENARIOS.keys()))
         impacts = _SHOCK_SCENARIOS.get(scenario, {})
         if not impacts:
-            st.info("No impact data for selected scenario.")
+            st.info("No throughput-impact data for the selected scenario.")
             return
         ports_aff  = list(impacts.keys())
         pct_vals   = list(impacts.values())
@@ -406,10 +407,10 @@ def _render_capacity_headroom() -> None:
         )
         # Legend using sub-section-header class (no inline style)
         st.markdown(
-            '<div class="sub-section-header">'
-            f'{badge("CRITICAL", color=C_LOW)} 90%+&nbsp;&nbsp;'
-            f'{badge("ELEVATED", color=C_MOD)} 80%+&nbsp;&nbsp;'
-            f'{badge("MODERATE", color=C_ACCENT)} 70%+&nbsp;&nbsp;'
+            '<div class="sub-section-header">Overflow risk tiers &nbsp; '
+            f'{badge("CRITICAL", color=C_LOW)} 90%+ &nbsp; '
+            f'{badge("ELEVATED", color=C_MOD)} 80%+ &nbsp; '
+            f'{badge("MODERATE", color=C_ACCENT)} 70%+ &nbsp; '
             f'{badge("LOW", color=C_HIGH)} &lt;70%'
             '</div>',
             unsafe_allow_html=True,
@@ -431,15 +432,18 @@ def render(
     try:
         page_header(
             title="Port Demand Forecasting",
-            subtitle="15 major ports - 3-month and 12-month throughput forecasts, demand drivers, and shock scenarios.",
+            subtitle="15 major ports — 3-month and 12-month throughput forecasts, demand drivers, and shock scenarios",
             badge_text="PORT DEMAND",
             badge_color=C_HIGH,
         )
         _render_hero()
+        section_divider("Forecast")
         _render_forecast_table()
         _render_demand_drivers()
+        section_divider("Regional & Seasonal")
         _render_regional_comparison()
         _render_seasonal_heatmap()
+        section_divider("Scenarios & Capacity")
         _render_shock_scenarios()
         _render_capacity_headroom()
     except Exception:

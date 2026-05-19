@@ -296,7 +296,10 @@ def _render_eta_calculator() -> None:
 
                 risk_accent = {"Low": C_HIGH, "Moderate": C_MOD, "High": C_LOW}
 
-                section_header(f"Route: {origin} → {destination}", "")
+                section_header(
+                    f"Route Estimate — {origin} → {destination}",
+                    f"Modeled at {speed_kn} kn · {cargo_type}",
+                )
                 metric_card_row([
                     {"label": "TRANSIT TIME",   "value": f"{transit_days}d",       "accent": C_ACCENT},
                     {"label": "DISTANCE",       "value": f"{dist_nm:,} nm",        "accent": C_TEXT},
@@ -603,7 +606,7 @@ def render(port_results=None, route_results=None, freight_data=None,
     try:
         page_header(
             title="ETA Intelligence & Voyage Tracking",
-            subtitle="Vessel ETA prediction, delay analysis, carrier reliability, and port queue monitoring.",
+            subtitle="Vessel ETA prediction, delay analysis, carrier reliability and port queue monitoring",
             badge_text="ETA",
             badge_color=C_ACCENT,
         )
@@ -611,17 +614,17 @@ def render(port_results=None, route_results=None, freight_data=None,
         section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
         _render_kpis()
 
-        section_divider()
+        section_divider("Voyage Tracker")
         _render_voyage_tracker()
-        section_divider()
+        section_divider("ETA Calculator")
         _render_eta_calculator()
-        section_divider()
+        section_divider("Delay Analysis")
         _render_delay_analysis()
-        section_divider()
+        section_divider("Reliability Trends")
         _render_reliability_trends()
-        section_divider()
+        section_divider("Weather Forecast")
         _render_weather_forecast()
-        section_divider()
+        section_divider("Port Queues")
         _render_port_queue()
 
     except Exception:

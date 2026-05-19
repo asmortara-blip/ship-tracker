@@ -43,6 +43,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -391,10 +392,14 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
     try:
         col_l, col_r = st.columns(2)
 
+        headers = ["Trade", "Sector", "Impact", "Reason"]
+
         with col_l:
-            st.html('<div class="sub-section-header">Top 5 Best Calls</div>')
-            headers = ["Trade", "Sector", "Impact", "Reason"]
-            rows = [
+            section_header(
+                "Top 5 Best Calls",
+                "Largest positive attribution impact",
+            )
+            best_rows = [
                 [
                     _sans(row["Trade"], color=C_TEXT, weight=600),
                     _sans(row["Sector"], color=C_TEXT3, weight=500),
@@ -403,12 +408,14 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 ]
                 for _, row in best.iterrows()
             ]
-            wsj_market_table(headers, rows)
+            wsj_market_table(headers, best_rows)
 
         with col_r:
-            st.html('<div class="sub-section-header">Top 5 Worst Calls</div>')
-            headers = ["Trade", "Sector", "Impact", "Reason"]
-            rows = [
+            section_header(
+                "Top 5 Worst Calls",
+                "Largest drag on attribution impact",
+            )
+            worst_rows = [
                 [
                     _sans(row["Trade"], color=C_TEXT, weight=600),
                     _sans(row["Sector"], color=C_TEXT3, weight=500),
@@ -417,7 +424,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 ]
                 for _, row in worst.iterrows()
             ]
-            wsj_market_table(headers, rows)
+            wsj_market_table(headers, worst_rows)
     except Exception:
         logger.exception("Best/worst render failed")
         st.error("Best/worst decisions unavailable.")
@@ -474,85 +481,88 @@ def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs) -
 
     page_header(
         title="Performance Attribution",
-        subtitle="Factor decomposition and alpha analysis",
+        subtitle="Brinson-Hood-Beebower factor decomposition and alpha decay analysis",
         badge_text="ATTRIBUTION",
         badge_color=C_ACCENT,
     )
 
-    # ── 1. Attribution Hero ─────────────────────────────────────────────────
+    # ── Return decomposition ────────────────────────────────────────────────
     try:
         section_header(
-            "1. Attribution Hero",
-            subtitle="Total return decomposed into 6 factors",
+            "Attribution Hero",
+            subtitle="Total portfolio return decomposed into six factor contributions",
         )
         contributions = _build_factor_contributions()
         _render_hero(contributions)
         _attribution_footer("Total portfolio return and per-factor contribution (bps).")
     except Exception:
-        logger.exception("Attribution section 1 failed")
-        st.warning("Section 1 unavailable.")
+        logger.exception("Attribution hero section failed")
+        st.warning("Attribution hero unavailable.")
 
-    # ── 2. Factor Attribution Table ─────────────────────────────────────────
     try:
         section_header(
-            "2. Factor Attribution Table",
-            subtitle="Contribution, significance, current vs historical average",
+            "Factor Attribution Table",
+            subtitle="Contribution, significance, and current vs historical average",
         )
         factor_df = _build_factor_table()
         _render_factor_table(factor_df)
         _attribution_footer("Per-factor contribution with t-stat significance.")
     except Exception:
-        logger.exception("Attribution section 2 failed")
-        st.warning("Section 2 unavailable.")
+        logger.exception("Attribution factor-table section failed")
+        st.warning("Factor attribution table unavailable.")
 
-    # ── 3. BHB Attribution ──────────────────────────────────────────────────
     try:
         section_header(
-            "3. Brinson-Hood-Beebower Attribution",
-            subtitle="Allocation + Selection + Interaction by sub-sector (bps)",
+            "Brinson-Hood-Beebower Attribution",
+            subtitle="Allocation, selection, and interaction effects by sub-sector (bps)",
         )
         bhb_df = _build_bhb_data()
         _render_bhb(bhb_df)
         _attribution_footer("Allocation / selection / interaction by sub-sector.")
     except Exception:
-        logger.exception("Attribution section 3 failed")
-        st.warning("Section 3 unavailable.")
+        logger.exception("Attribution BHB section failed")
+        st.warning("BHB attribution table unavailable.")
 
-    # ── 4. Alpha Decay ──────────────────────────────────────────────────────
+    section_divider("Alpha Decay")
+
+    # ── Alpha decay ─────────────────────────────────────────────────────────
     try:
         section_header(
-            "4. Alpha Decay",
-            subtitle="Alpha remaining after 1/5/10/20/30 days - optimal holding period",
+            "Alpha Decay Curve",
+            subtitle="Alpha remaining after 1 / 5 / 10 / 20 / 30 days — optimal holding period",
         )
         decay_df = _build_alpha_decay()
         _render_alpha_decay_chart(decay_df)
         _attribution_footer("Alpha-remaining curve over 1-30 day holding periods.")
     except Exception:
-        logger.exception("Attribution section 4 failed")
-        st.warning("Section 4 unavailable.")
+        logger.exception("Attribution alpha-decay section failed")
+        st.warning("Alpha decay chart unavailable.")
 
-    # ── 5. Best / Worst Decisions ───────────────────────────────────────────
+    section_divider("Decision Quality")
+
+    # ── Decision quality ────────────────────────────────────────────────────
     try:
         section_header(
-            "5. Best / Worst Attribution Decisions",
-            subtitle="Top 5 best calls and top 5 worst calls by attribution impact",
+            "Best / Worst Attribution Decisions",
+            subtitle="The five highest and five lowest trades by attribution impact",
         )
         best_df, worst_df = _build_best_worst()
         _render_best_worst(best_df, worst_df)
         _attribution_footer("Top and bottom 5 trades by attribution impact.")
     except Exception:
-        logger.exception("Attribution section 5 failed")
-        st.warning("Section 5 unavailable.")
+        logger.exception("Attribution best/worst section failed")
+        st.warning("Best/worst decisions unavailable.")
 
-    # ── 6. Attribution over Time ────────────────────────────────────────────
+    st.divider()
+
     try:
         section_header(
-            "6. Attribution over Time",
-            subtitle="Stacked area - factor contributions each month, last 12 months",
+            "Attribution Over Time",
+            subtitle="Stacked factor contributions per month across the trailing 12 months",
         )
         monthly_df = _build_monthly_attribution()
         _render_attribution_over_time(monthly_df)
         _attribution_footer("Rolling 12-month factor contributions (bps).")
     except Exception:
-        logger.exception("Attribution section 6 failed")
-        st.warning("Section 6 unavailable.")
+        logger.exception("Attribution over-time section failed")
+        st.warning("Attribution over time chart unavailable.")

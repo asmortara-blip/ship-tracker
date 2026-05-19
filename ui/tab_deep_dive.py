@@ -542,12 +542,18 @@ def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
 # ── Section renderers ──────────────────────────────────────────────────────────
 
 def _render_selector() -> tuple[str, str]:
-    section_header("Deep Dive Selector", subtitle="Choose a trade lane and commodity")
-    c1, c2 = st.columns(2)
+    section_header("Deep Dive Selector", subtitle="Choose a trade lane and commodity to brief")
+    c1, c2 = st.columns(2, gap="large")
     with c1:
-        route = st.selectbox("Route", list(ROUTES.keys()), key="dd_route")
+        route = st.selectbox(
+            "Route", list(ROUTES.keys()), key="dd_route",
+            help="Trade lane analysed in the route section below.",
+        )
     with c2:
-        commodity = st.selectbox("Commodity", list(COMMODITIES.keys()), key="dd_commodity")
+        commodity = st.selectbox(
+            "Commodity", list(COMMODITIES.keys()), key="dd_commodity",
+            help="Commodity analysed in the flow section below.",
+        )
     return route, commodity
 
 
@@ -575,22 +581,26 @@ def _render_route_card(route_name: str) -> None:
             columns=4,
         )
 
-        section_header("Top 5 Carriers by Capacity Share")
-        carrier_rows = []
-        for carrier, share in rd["carriers"]:
-            carrier_rows.append([
-                _sans(carrier, color=C_TEXT, weight=700),
-                _share_bar_svg(float(share)) + _mono(f"{share}%", color=C_ACCENT),
-            ])
-        wsj_market_table(headers=["Carrier", "Share"], rows=carrier_rows)
-        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
-
-        section_header("Upcoming Capacity Changes")
-        cap_rows = [[_sans(c, color=C_TEXT2)] for c in rd["capacity_changes"]]
-        wsj_market_table(headers=["Note"], rows=cap_rows)
-        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
+        col_car, col_cap = st.columns(2, gap="large")
+        with col_car:
+            section_header("Carriers by Capacity Share",
+                           subtitle="Top 5 operators on the lane")
+            carrier_rows = []
+            for carrier, share in rd["carriers"]:
+                carrier_rows.append([
+                    _sans(carrier, color=C_TEXT, weight=700),
+                    _share_bar_svg(float(share)) + _mono(f"{share}%", color=C_ACCENT),
+                ])
+            wsj_market_table(headers=["Carrier", "Share"], rows=carrier_rows)
+        with col_cap:
+            section_header("Upcoming Capacity Changes",
+                           subtitle="Scheduled deployments and service notes")
+            cap_rows = [[_sans(c, color=C_TEXT2)] for c in rd["capacity_changes"]]
+            wsj_market_table(headers=["Note"], rows=cap_rows)
 
         # Rate history chart
+        section_header("Rate History",
+                       subtitle="Trailing 52 weeks of spot freight, $/TEU")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df["date"], y=df["rate"],
@@ -604,7 +614,7 @@ def _render_route_card(route_name: str) -> None:
             line_color=_hex_rgba(C_MOD, 0.6), line_width=1,
             annotation_text="12-mo avg", annotation_font_color=C_MOD,
         )
-        apply_dark_layout(fig, height=240, title="Rate History — 52 Weeks")
+        apply_dark_layout(fig, height=240)
         fig.update_yaxes(tickprefix="$")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
@@ -624,6 +634,10 @@ def _render_commodity_flow(commodity: str) -> None:
         volumes = [e[2] for e in exporters]
         yoy = [e[3] for e in exporters]
 
+        section_header(
+            f"{commodity} — Global Production",
+            subtitle="Top exporting nations sized by volume, colored by YoY trend",
+        )
         fig_map = go.Figure(go.Scattergeo(
             locationmode="country names",
             locations=country_names,
@@ -639,7 +653,7 @@ def _render_commodity_flow(commodity: str) -> None:
             hovertemplate="<b>%{location}</b><br>Volume: %{customdata[0]:,.0f} MT<br>YoY: %{customdata[1]:+.1f}%<extra></extra>",
             customdata=list(zip(volumes, yoy)),
         ))
-        apply_dark_layout(fig_map, height=320, title=f"{commodity} — Global Production (Top Exporters)")
+        apply_dark_layout(fig_map, height=320)
         fig_map.update_layout(
             geo=dict(
                 bgcolor=C_CARD,
@@ -651,9 +665,8 @@ def _render_commodity_flow(commodity: str) -> None:
             ),
         )
         st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False})
-        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
 
-        c1, c2 = st.columns([3, 2])
+        c1, c2 = st.columns([3, 2], gap="large")
         with c1:
             section_header("Top 5 Trade Flows")
             flow_rows = [
@@ -678,9 +691,11 @@ def _render_commodity_flow(commodity: str) -> None:
                 ],
                 columns=1,
             )
-        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
-
         # Seasonality bar chart
+        section_header(
+            "Seasonal Volume Index",
+            subtitle="Monthly shipping demand, indexed to the annual peak (= 100)",
+        )
         sea = cd["seasonality"]
         fig_sea = go.Figure(go.Bar(
             x=MONTHS, y=sea,
@@ -689,7 +704,7 @@ def _render_commodity_flow(commodity: str) -> None:
             textfont=dict(color=C_ACCENT, size=10),
             hovertemplate="%{x}: %{y}<extra></extra>",
         ))
-        apply_dark_layout(fig_sea, height=240, title="Seasonal Volume Index")
+        apply_dark_layout(fig_sea, height=240)
         fig_sea.update_yaxes(range=[0, max(sea) * 1.15])
         st.plotly_chart(fig_sea, use_container_width=True, config={"displayModeBar": False})
         st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
@@ -702,6 +717,10 @@ def _render_commodity_flow(commodity: str) -> None:
 def _render_pressure_points(route_name: str, commodity: str) -> None:
     try:
         section_divider("Supply Chain Pressure Points")
+        section_header(
+            "Pressure Point Read",
+            subtitle="Stage-by-stage stress across the door-to-door supply chain",
+        )
         levels = _pressure_level(route_name, commodity)
 
         metrics = []
@@ -757,6 +776,10 @@ def _render_shipper_intel(route_name: str, commodity: str) -> None:
 def _render_analyst_commentary(route_name: str, commodity: str) -> None:
     try:
         section_divider("Analyst Commentary")
+        section_header(
+            "Bull / Base / Bear",
+            subtitle="Scenario framing and the watchpoints that move between them",
+        )
         rd = ROUTES[route_name]
         pct = rd["rate_pct"]
         rate = rd["base_rate"]
@@ -809,7 +832,7 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
         def _bulletize(items: list[str]) -> str:
             return " &nbsp;·&nbsp; ".join(items)
 
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns(2, gap="large")
         with c1:
             st.markdown(insight_card_html(
                 title="Bull Case",

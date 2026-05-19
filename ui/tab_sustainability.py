@@ -237,7 +237,7 @@ def _render_green_fuel() -> None:
             "Green Fuel Transition",
             subtitle="Alternative fuel adoption, newbuild orderbook mix, cost premiums, and port infrastructure",
         )
-        col_pie, col_bar = st.columns(2)
+        col_pie, col_bar = st.columns(2, gap="large")
 
         with col_pie:
             try:
@@ -256,7 +256,11 @@ def _render_green_fuel() -> None:
                     title="Current Fleet Fuel Mix",
                     showlegend=False, height=300,
                 )
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(
+                    fig_pie, use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="sustain_fuel_mix_pie",
+                )
             except Exception:
                 logger.exception("Fuel pie chart error")
                 st.warning("Fuel mix chart unavailable.")
@@ -283,7 +287,11 @@ def _render_green_fuel() -> None:
                     barmode="stack", height=300,
                     yaxis=dict(ticksuffix="%"),
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(
+                    fig_bar, use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="sustain_newbuild_orderbook_bar",
+                )
             except Exception:
                 logger.exception("Fuel bar chart error")
                 st.warning("Newbuild orderbook chart unavailable.")
@@ -304,7 +312,10 @@ def _render_green_fuel() -> None:
         )
 
         # Port infrastructure table
-        section_header("Port Green Fuel Infrastructure Readiness")
+        section_header(
+            "Port Green Fuel Infrastructure Readiness",
+            subtitle="Bunkering stations and shore-power readiness at major hubs",
+        )
         rows = []
         for row in _PORT_INFRA:
             lng_color = C_HIGH if row["lng_stations"] >= 7 else (C_MOD if row["lng_stations"] >= 4 else C_LOW)
@@ -334,7 +345,7 @@ def _render_eu_ets() -> None:
             "EU ETS Impact Analysis",
             subtitle="Shipping entered EU Emissions Trading System Jan 2024 — cost exposure and compliance implications",
         )
-        col_chart, col_calc = st.columns([3, 2])
+        col_chart, col_calc = st.columns([3, 2], gap="large")
 
         with col_chart:
             try:
@@ -371,7 +382,11 @@ def _render_eu_ets() -> None:
                     showlegend=False, height=280,
                     yaxis=dict(tickprefix="€"),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(
+                    fig, use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="sustain_eu_carbon_price",
+                )
             except Exception:
                 logger.exception("EU ETS chart error")
                 st.warning("EU ETS price chart unavailable.")
@@ -404,7 +419,10 @@ def _render_eu_ets() -> None:
                 st.warning("Calculation error.")
 
         # Exposure table
-        section_header("Carrier EU ETS Exposure Ranking")
+        section_header(
+            "Carrier EU ETS Exposure Ranking",
+            subtitle="Estimated annual carbon cost, ranked most-exposed first",
+        )
         sorted_ets = sorted(_EU_EXPOSURE, key=lambda r: r["est_ets_cost_mUSD"], reverse=True)
         rows = []
         for row in sorted_ets:
@@ -472,7 +490,7 @@ def _render_speed_optimization() -> None:
             "Speed Optimization — Slow Steaming Analysis",
             subtitle="Reducing speed 10% cuts fuel consumption ~27% but reduces effective capacity; full trade-off breakdown",
         )
-        col_tbl, col_chart = st.columns([2, 3])
+        col_tbl, col_chart = st.columns([2, 3], gap="large")
 
         with col_tbl:
             rows = []
@@ -527,7 +545,11 @@ def _render_speed_optimization() -> None:
                     yaxis2=dict(title="Opex ($k)", overlaying="y", side="right", color=C_MOD, showgrid=False),
                     legend=dict(orientation="h", y=-0.2),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(
+                    fig, use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="sustain_speed_tradeoff",
+                )
             except Exception:
                 logger.exception("Speed chart error")
                 st.warning("Speed optimization chart unavailable.")

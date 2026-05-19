@@ -26,6 +26,7 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -179,6 +180,7 @@ def render(macro_data=None, **kwargs) -> None:
     # ── 3. Indicator breakdown ─────────────────────────────────────────────
     indicators = bell.get("indicators", {})
     if indicators:
+        section_divider("Component Detail")
         section_header(
             "Indicator Breakdown",
             subtitle="Component scores driving the composite reading",
@@ -212,6 +214,7 @@ def render(macro_data=None, **kwargs) -> None:
     # ── 4. Yield curve analysis ────────────────────────────────────────────
     yc = compute_yield_curve_analysis(macro_data)
     if yc.get("curve_points"):
+        section_divider("Rates Signal")
         section_header(
             "Treasury Yield Curve",
             subtitle=f"Curve shape: {yc['shape']}",
@@ -283,6 +286,7 @@ def render(macro_data=None, **kwargs) -> None:
     # ── 5. Earnings calendar ───────────────────────────────────────────────
     calendar = compute_earnings_calendar()
     if calendar:
+        section_divider("Earnings Watch")
         section_header(
             "Shipping Earnings Calendar",
             subtitle=(

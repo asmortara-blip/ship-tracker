@@ -30,6 +30,7 @@ from ui.styles import (
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -539,6 +540,8 @@ def render(macro_data=None, freight_data=None, insights=None):
 
         _render_dashboard(macro_data, freight_data)
 
+        section_divider("Reference Cases")
+
         section_header(
             "Base / Bull / Bear Comparison",
             subtitle="Three reference cases scaled from current BDI and WCI prints",
@@ -547,7 +550,11 @@ def render(macro_data=None, freight_data=None, insights=None):
 
         _render_comparison_table()
 
+        section_divider("Custom Modeling")
+
         _render_scenario_builder()
+
+        section_divider("Events & Simulation")
 
         _render_event_tracker()
 

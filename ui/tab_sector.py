@@ -24,6 +24,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -297,7 +298,12 @@ def _render_sector_profiles(sectors: list[dict], source: DataSource) -> None:
                 ]
                 wsj_market_table(["Ticker", "Price"], price_rows)
             else:
-                st.caption("No tracked equities")
+                st.markdown(
+                    f'<div style="font-family:var(--sans);font-size:0.74rem;'
+                    f'color:{C_TEXT3};padding:8px 0;border-top:1px solid var(--rule);'
+                    f'margin-top:6px;">No tracked equities for this segment.</div>',
+                    unsafe_allow_html=True,
+                )
 
     st.markdown(source_footer([source]), unsafe_allow_html=True)
 
@@ -413,8 +419,13 @@ def render(stock_data=None, freight_data=None, trade_data=None,
     )
 
     _render_hero(sectors, sector_source)
+
+    section_divider("Comparative Performance")
     _render_performance_table(sectors, sector_source)
+
+    section_divider("Segment Detail")
     _render_sector_profiles(sectors, equities_source)
 
     if port_results:
+        section_divider("Trade Flows")
         _render_trade_flows(trade_data or {}, port_results, trade_source)

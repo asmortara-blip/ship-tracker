@@ -30,6 +30,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -597,10 +598,15 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
 
     if paths is None:
         placeholder = (
-            '<p class="wsj-subhead">'
-            'Configure parameters above and click '
-            '<strong>Run Simulation</strong> to generate results.'
-            '</p>'
+            f'<div style="font-family:var(--serif);font-size:1.02rem;'
+            f'font-weight:700;color:{C_TEXT};margin-bottom:6px;">'
+            f'Awaiting simulation</div>'
+            f'<p style="font-family:var(--sans);font-size:0.84rem;'
+            f'color:{C_TEXT3};line-height:1.6;margin:0;">'
+            f'Set a target, horizon and volatility above, then click '
+            f'<strong style="color:{C_TEXT2};">Run Simulation</strong> — the '
+            f'fan chart, horizon distribution, VaR and path analytics will '
+            f'populate below.</p>'
         )
         st.markdown(
             gradient_card(placeholder, border_color=C_ACCENT),
@@ -638,9 +644,12 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
         logger.exception("Summary KPI row failed")
 
     # Sections 2–7
+    section_divider("Path Simulation")
     _render_fan_chart(paths, target, s0, n_paths_actual)
     _render_horizon_dist(paths, s0, target, n_paths_actual)
     _render_stats_table(paths, s0, horizon, sigma, n_paths_actual)
+
+    section_divider("Scenario & Risk")
     _render_scenario_overlays(paths, s0, sigma, horizon, model, target, n_paths_actual)
     _render_var_cards(paths, s0, n_paths_actual)
     _render_path_analysis(paths, s0, target)

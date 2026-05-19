@@ -29,6 +29,7 @@ from ui.styles import (
     insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -455,9 +456,9 @@ def _spot_rate_alert() -> None:
             if abs(rt - thr) < 200:
                 active_alerts.append((route, rt, thr))
 
+        section_header("Near-Threshold Routes",
+                       "Routes whose current rate is within $200 of their alert threshold")
         if active_alerts:
-            section_header("Near-Threshold Routes",
-                           "Routes whose current rate is within $200 of their alert threshold")
             near_rows = []
             for route, rt, thr in active_alerts[:3]:
                 near_rows.append([
@@ -470,6 +471,8 @@ def _spot_rate_alert() -> None:
                 ["Route", "Current Rate", "Threshold", "Gap"],
                 near_rows,
             )
+        else:
+            st.info("No routes are currently within $200 of an alert threshold.")
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Spot rate alert error: {exc}")
@@ -552,9 +555,12 @@ def render(route_results=None, freight_data=None, port_results=None, *args, **kw
         )
 
         _booking_market_dashboard(freight_data)
+        section_divider("Rate Comparison")
         _rate_comparison_tool()
+        section_divider("Timing the Market")
         _optimal_booking_window()
         _contract_vs_spot_analysis()
+        section_divider("Capacity Planning")
         _booking_calendar()
         _spot_rate_alert()
         _space_availability_by_carrier()

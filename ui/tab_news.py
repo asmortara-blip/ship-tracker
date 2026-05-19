@@ -28,6 +28,7 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -395,7 +396,7 @@ def _render_breaking_news(articles: list[dict]) -> None:
     try:
         top5 = sorted(articles, key=lambda a: a["urgency"], reverse=True)[:5]
         if not top5:
-            st.info("No breaking news available.")
+            st.info("No breaking news in the current feed.")
             return
 
         for a in top5:
@@ -425,14 +426,19 @@ def _render_news_feed(articles: list[dict]) -> None:
     try:
         all_topics = sorted({a["topic"] for a in articles})
         topic_opts = ["All Topics"] + all_topics
-        sel_topic  = st.selectbox("Filter by topic", topic_opts, key="news_feed_topic_filter")
+        sel_topic  = st.selectbox(
+            "Filter by topic", topic_opts, key="news_feed_topic_filter",
+            help="Narrow the feed to a single coverage topic.",
+        )
 
         filtered = articles if sel_topic == "All Topics" else [a for a in articles if a["topic"] == sel_topic]
         filtered = sorted(filtered, key=lambda a: a["published_at"], reverse=True)
 
         if not filtered:
-            st.info("No articles match the filter.")
+            st.info(f"No articles tagged “{sel_topic}” in the current feed.")
             return
+
+        st.caption(f"{len(filtered)} articles · newest first")
 
         headers = ["Source", "Headline", "Score", "Topic", "Time"]
         rows: list[list[str]] = []
@@ -451,18 +457,31 @@ def _render_news_feed(articles: list[dict]) -> None:
 
         # Expandable article summaries
         for a in filtered:
-            with st.expander(f"{a['headline'][:70]}…", expanded=False):
-                ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
+            headline_short = a["headline"][:70] + ("…" if len(a["headline"]) > 70 else "")
+            with st.expander(headline_short, expanded=False):
+                label, lcolor = _sentiment_label(a["sentiment_score"])
+                ent_str = (
+                    " · ".join(a["entities"]) if a["entities"]
+                    else "None identified"
+                )
                 st.markdown(
                     f'<div class="wsj-card">'
-                    f'<p class="wsj-news-text">'
+                    f'<div style="display:flex;gap:8px;align-items:center;'
+                    f'margin-bottom:8px;">'
+                    f'{_topic_badge(a["topic"])}{badge(label, color=lcolor)}'
+                    f'<span style="font-family:var(--mono);font-size:0.72rem;'
+                    f'color:{C_TEXT3};">{a["source"]} · {_time_ago(a["published_at"])}'
+                    f'</span></div>'
+                    f'<p class="wsj-news-text" style="margin:0 0 12px;">'
                     f'{a["summary"]}</p>'
-                    f'<span class="section-label">Entities mentioned: </span>'
-                    f'<span style="font-family:var(--sans);font-size:0.78rem;'
-                    f'color:{C_TEXT2};">{ent_str}</span>'
-                    f'<br><br>'
+                    f'<div style="font-family:var(--sans);font-size:0.7rem;'
+                    f'text-transform:uppercase;letter-spacing:0.06em;'
+                    f'color:{C_TEXT3};margin-bottom:2px;">Entities mentioned</div>'
+                    f'<div style="font-family:var(--sans);font-size:0.78rem;'
+                    f'color:{C_TEXT2};margin-bottom:12px;">{ent_str}</div>'
                     f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:0.78rem;'
-                    f'font-family:var(--sans);">Read full article ↗</a>'
+                    f'font-weight:600;font-family:var(--sans);">'
+                    f'Read full article ↗</a>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -638,27 +657,32 @@ def render(news_items: list[dict] | None = None, insights: Any = None, *args, **
     except Exception:
         st.subheader("Shipping News Intelligence")
 
-    section_header("01 · Sentiment Pulse",
+    section_header("Sentiment Pulse",
                    "Tone across the last 24 hours of coverage")
     _render_sentiment_pulse(articles)
 
-    section_header("02 · Topic Heatmap",
-                   "9 topics × 5 days — sentiment and volume")
+    section_header("Topic Heatmap",
+                   "Nine coverage topics across five days — sentiment and volume")
     _render_topic_heatmap(articles)
 
-    section_header("03 · Breaking News",
-                   "Top 5 urgent stories sorted by importance")
+    section_divider("Coverage")
+
+    section_header("Breaking News",
+                   "Five most urgent stories, ranked by importance")
     _render_breaking_news(articles)
 
-    section_header("04 · Full News Feed", "Filterable by topic")
+    section_header("Full News Feed",
+                   "Every tracked article — filterable by topic")
     _render_news_feed(articles)
 
-    section_header("05 · Named Entity Tracker",
-                   "Most-mentioned carriers, ports, regions, commodities")
+    section_divider("Entities & Geography")
+
+    section_header("Named Entity Tracker",
+                   "Most-mentioned carriers, ports, regions and commodities")
     _render_entity_tracker(articles, _MOCK_ENTITIES)
 
-    section_header("06 · Geographic Sentiment Map",
-                   "Regional tone and volume, ocean-basin view")
+    section_header("Geographic Sentiment Map",
+                   "Regional tone and volume on an ocean-basin view")
     _render_geo_map(articles)
 
     # Footer provenance pill

@@ -36,6 +36,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     live_data_badge,
@@ -467,7 +468,7 @@ def _render_staleness_heatmap(source_rows: list[dict]) -> None:
         )
     except Exception as exc:
         logger.warning(f"Staleness heatmap error: {exc}")
-        st.warning("Heatmap unavailable.")
+        alert_banner("Staleness heatmap unavailable.", level="warning")
 
 
 def _render_error_log() -> None:
@@ -506,9 +507,9 @@ def _render_manual_refresh(source_rows: list[dict]) -> None:
         cols = st.columns(len(chunk))
         for col, r in zip(cols, chunk):
             with col:
-                label_html = f"{r['name']} [{r['status']}]"
+                btn_label = f"{r['name']}  ·  {r['status']}"
                 btn_key = f"refresh__{r['name'].replace(' ', '_').replace('/', '_')}"
-                if st.button(label_html, key=btn_key, use_container_width=True):
+                if st.button(btn_label, key=btn_key, use_container_width=True):
                     try:
                         sub = r.get("cache_sub", "")
                         if _CM_OK and sub:
@@ -663,68 +664,91 @@ def render(
     try:
         page_header(
             title="Data Source Health & Freshness",
-            subtitle=f"Real-time monitoring of all data sources, cache status, API keys, and data quality · Last scan {_now_utc().strftime('%Y-%m-%d %H:%M UTC')}",
-            icon="🩺",
-            badge_text="Live Scan",
+            subtitle=(
+                "Cache state, credential coverage and quality checks across "
+                "every data feed · Last scan "
+                f"{_now_utc().strftime('%Y-%m-%d %H:%M UTC')}"
+            ),
+            badge_text="LIVE SCAN",
             badge_color=C_ACCENT,
         )
 
         source_rows = _build_source_rows()
 
+        # ── Movement 1: feed catalog ────────────────────────────────────────
         try:
             _render_overview(source_rows)
         except Exception as exc:
             logger.error(f"Overview render error: {exc}")
             st.error("Overview unavailable.")
 
-        section_divider()
+        section_divider("Source Catalog")
         try:
             _render_source_table(source_rows)
         except Exception as exc:
             logger.error(f"Source table render error: {exc}")
             st.error("Source table unavailable.")
 
-        section_divider()
+        # ── Movement 2: performance & credentials ───────────────────────────
+        section_divider("Cache & Credentials")
         try:
             _render_cache_performance(source_rows)
         except Exception as exc:
             logger.error(f"Cache performance render error: {exc}")
             st.error("Cache performance unavailable.")
 
-        section_divider()
+        st.divider()
         try:
             _render_api_keys()
         except Exception as exc:
             logger.error(f"API key render error: {exc}")
             st.error("API key table unavailable.")
 
-        section_divider()
+        # ── Movement 3: diagnostics ─────────────────────────────────────────
+        section_divider("Diagnostics")
         try:
             _render_staleness_heatmap(source_rows)
         except Exception as exc:
             logger.error(f"Staleness heatmap render error: {exc}")
             st.error("Heatmap unavailable.")
 
-        section_divider()
+        st.divider()
         try:
             _render_error_log()
         except Exception as exc:
             logger.error(f"Error log render error: {exc}")
             st.error("Error log unavailable.")
 
-        section_divider()
+        st.divider()
         try:
             _render_manual_refresh(source_rows)
         except Exception as exc:
             logger.error(f"Manual refresh render error: {exc}")
             st.error("Manual refresh unavailable.")
 
-        section_divider()
+        section_divider("Dataset Quality")
         try:
             _render_data_quality(port_results, route_results, macro_data, stock_data, freight_data, news_items)
         except Exception as exc:
             logger.error(f"Data quality render error: {exc}")
             st.error("Data quality metrics unavailable.")
+
+        # ── Provenance footer ───────────────────────────────────────────────
+        try:
+            st.markdown(
+                source_footer([
+                    DataSource.live(
+                        "Cache Scan",
+                        notes="Parquet disk scan + os.environ / st.secrets check",
+                    ),
+                    DataSource.demo(
+                        "Telemetry Fallback (synthetic where no live feed)"
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+        except Exception as exc:
+            logger.warning(f"Source footer render error: {exc}")
 
     except Exception as exc:
         logger.error(f"tab_data_health.render critical error: {exc}")

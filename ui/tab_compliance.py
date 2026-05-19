@@ -460,7 +460,7 @@ def _section_1_dashboard() -> None:
             "Snapshot of active programs and fleet CII distribution",
         )
 
-        ca, cb = st.columns(2)
+        ca, cb = st.columns(2, gap="large")
         with ca:
             st.markdown(insight_card_html(
                 title="US OFAC — SDN + CAATSA",
@@ -819,7 +819,7 @@ def _section_8_risk_score() -> None:
             category="CALCULATOR",
         ), unsafe_allow_html=True)
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3 = st.columns(3, gap="large")
         with c1:
             route = st.selectbox("Trade Route", _TRADE_ROUTES, key="risk_route")
         with c2:
@@ -864,7 +864,7 @@ def _section_8_risk_score() -> None:
         apply_dark_layout(gauge_fig, height=220)
         gauge_fig.update_layout(margin=dict(l=20, r=20, t=20, b=10))
 
-        cg, cd = st.columns([1, 1])
+        cg, cd = st.columns([1, 1], gap="large")
         with cg:
             st.plotly_chart(gauge_fig, use_container_width=True, config={"displayModeBar": False})
         with cd:
