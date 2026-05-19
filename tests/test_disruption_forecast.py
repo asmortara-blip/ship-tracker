@@ -182,3 +182,93 @@ def test_forecast_all_is_repeatable() -> None:
     b = forecast_all_stress({}, {}, [])
     assert [f.route_id for f in a] == [f.route_id for f in b]
     assert [f.stress_30d for f in a] == [f.stress_30d for f in b]
+
+
+# ── Refinements: volatility scaling, symmetric tails, cross-signal ──────────
+
+
+def _rate_history(rid: str, start: float, end: float, noise_sd: float):
+    """A synthetic ``rate_usd_per_feu`` series: linear trend + Gaussian noise."""
+    import numpy as np
+    import pandas as pd
+
+    dates = pd.date_range("2025-01-01", periods=240, freq="D")
+    rng = np.random.default_rng(abs(hash(rid)) % (2**32))
+    rates = np.linspace(start, end, 240) + rng.normal(0.0, noise_sd, 240)
+    return pd.DataFrame({"date": dates, "rate_usd_per_feu": rates.clip(min=1.0)})
+
+
+def test_added_fields_present_and_bounded() -> None:
+    """The new StressForecast fields exist and carry sane values on empty input."""
+    fc = forecast_route_stress("transpacific_eb", {}, {}, [])
+    assert hasattr(fc, "mc_p10_downside")
+    assert hasattr(fc, "rate_volatility")
+    assert hasattr(fc, "rate_signal_z")
+    assert isinstance(fc.structural_oversupply, bool)
+    # The P10 downside is one-signed: it never adds upside.
+    assert fc.mc_p10_downside <= 0.0
+    assert fc.mc_p90_upside >= 0.0
+    assert fc.rate_volatility >= 0.0
+
+
+def test_rate_signal_is_volatility_scaled() -> None:
+    """An equal % move counts as a larger z-score on a calm lane than a swingy one."""
+    calm = {"transpacific_eb": _rate_history("transpacific_eb", 1900, 2150, 25.0)}
+    swingy = {"asia_europe": _rate_history("asia_europe", 1900, 2150, 350.0)}
+
+    fc_calm = forecast_route_stress("transpacific_eb", calm, {}, [], current_stress=0.5)
+    fc_swingy = forecast_route_stress("asia_europe", swingy, {}, [], current_stress=0.5)
+
+    # The calm lane carries the higher |z| despite a comparable raw % move,
+    # and the swingy lane is measured as the more volatile of the two.
+    assert fc_swingy.rate_volatility > fc_calm.rate_volatility
+    assert abs(fc_calm.rate_signal_z) > abs(fc_swingy.rate_signal_z)
+
+
+def test_p10_downside_can_revise_stress_down() -> None:
+    """A falling-rate route is revised *below* its current stress (symmetric tails)."""
+    falling = {"transpacific_eb": _rate_history("transpacific_eb", 2400, 1700, 25.0)}
+    fc = forecast_route_stress("transpacific_eb", falling, {}, [], current_stress=0.6)
+    # The original module only added an upside tail; falling rates must now be
+    # able to pull projected stress down.
+    assert fc.stress_30d < fc.current_stress
+    assert fc.mc_p10_downside <= 0.0
+
+
+def test_structural_oversupply_thresholds_are_sane() -> None:
+    """The cross-signal trigger reads as 'high congestion AND falling rates'."""
+    from processing.disruption_forecast import (
+        _OVERSUPPLY_CONGESTION_MIN,
+        _OVERSUPPLY_RATE_MAX,
+    )
+
+    # High congestion: clearly above neutral. Falling rates: clearly negative.
+    assert 0.5 < _OVERSUPPLY_CONGESTION_MIN < 1.0
+    assert _OVERSUPPLY_RATE_MAX < 0.0
+
+
+def test_structural_oversupply_surfaces_in_narrative() -> None:
+    """When the flag is set, the narrative explicitly calls out structural oversupply."""
+    from processing.disruption_forecast import _build_narrative
+
+    narrative = _build_narrative(
+        "Trans-Pacific Eastbound",
+        current=0.70, stress_7d=0.68, stress_30d=0.66,
+        trend="Improving", rate_pct=-0.08, mc_p90=0.05,
+        mc_p10=-0.04, structural_oversupply=True,
+    )
+    assert "oversupply" in narrative.lower()
+    # Without the flag, the oversupply clause is absent.
+    plain = _build_narrative(
+        "Trans-Pacific Eastbound",
+        current=0.70, stress_7d=0.68, stress_30d=0.66,
+        trend="Improving", rate_pct=-0.08, mc_p90=0.05,
+        mc_p10=-0.04, structural_oversupply=False,
+    )
+    assert "oversupply" not in plain.lower()
+
+
+def test_structural_oversupply_flag_is_bool_in_batch() -> None:
+    """Every forecast in a batch exposes a boolean structural_oversupply flag."""
+    batch = forecast_all_stress({}, {}, [])
+    assert all(isinstance(f.structural_oversupply, bool) for f in batch)
