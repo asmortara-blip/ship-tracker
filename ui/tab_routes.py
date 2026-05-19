@@ -14,6 +14,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_HIGH,
     C_LOW,
@@ -528,7 +529,7 @@ def _section_route_profiles(routes: list[dict]) -> None:
                                 line=dict(color=C_ACCENT, width=2),
                                 marker=dict(size=4, color=C_ACCENT),
                                 fill="tozeroy",
-                                fillcolor=f"{C_ACCENT}18",
+                                fillcolor=_hex_to_rgba(C_ACCENT, 0.09),
                                 name="Rate/TEU",
                             )
                             apply_dark_layout(
@@ -595,10 +596,11 @@ def _section_route_profiles(routes: list[dict]) -> None:
                                 fig2,
                                 height=110,
                                 margin=dict(l=5, r=5, t=20, b=20),
-                                title=dict(text="Seasonal Index", font=dict(size=10, color=C_TEXT3), x=0.5),
+                                title="Seasonal Index",
                                 xaxis=dict(tickfont=dict(size=8)),
                                 yaxis=dict(tickfont=dict(size=8)),
                             )
+                            fig2.update_layout(title_font=dict(size=10, color=C_TEXT3), title_x=0.5)
                             st.plotly_chart(fig2, use_container_width=True)
                         except Exception as exc:
                             logger.warning(f"tab_routes seasonal mini {name}: {exc}")

@@ -26,6 +26,7 @@ from ui.styles import (
     C_BG,
     C_BORDER,
     C_CARD,
+    C_CONV,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -50,8 +51,9 @@ from ui.styles import (
 _CII_COLOR = {"A": "#065f46", "B": "#2e9e6e", "C": "#c9962b", "D": "#c0392b", "E": "#7f1d1d"}
 _CII_BG    = {"A": "#022c22", "B": "#052e1c", "C": "#451a03", "D": "#450a0a", "E": "#3b0808"}
 
-_SEVERITY_COLOR = {"critical": "red", "high": "orange", "moderate": "yellow"}
-_STATUS_COLOR   = {"past": "green", "current": "blue", "upcoming": "purple"}
+# badge() needs hex colors — map semantic states to the WSJ palette constants.
+_SEVERITY_COLOR = {"critical": C_LOW, "high": C_MOD, "moderate": C_MOD}
+_STATUS_COLOR   = {"past": C_HIGH, "current": C_ACCENT, "upcoming": C_CONV}
 
 # Provenance — illustrative compliance reference data
 _COMPLIANCE_SOURCES = [
@@ -547,7 +549,7 @@ def _section_2_sanctions_table() -> None:
                 _sans(r["trade_lanes"]),
                 _sans(r["effective"]),
                 _sans(r["penalty"], color=C_LOW),
-                badge(r["severity"].upper(), _SEVERITY_COLOR.get(r["severity"], "yellow")),
+                badge(r["severity"].upper(), _SEVERITY_COLOR.get(r["severity"], C_MOD)),
             ]
             for r in rows_data
         ]
@@ -577,7 +579,7 @@ def _section_3_imo_calendar() -> None:
                 _sans(r["vessels"]),
                 _sans(r["cost"]),
                 _sans(r["enforcement"]),
-                badge(r["status"].upper(), _STATUS_COLOR.get(r["status"], "blue")),
+                badge(r["status"].upper(), _STATUS_COLOR.get(r["status"], C_ACCENT)),
             ]
             for r in _IMO_CALENDAR
         ]
@@ -788,7 +790,7 @@ def _section_7_psc() -> None:
                 _sans(r["flag"]),
                 _sans(r["port"]),
                 _sans(r["deficiency"]),
-                badge(r["status"].upper(), "red" if r["status"] == "Detained" else "green"),
+                badge(r["status"].upper(), C_LOW if r["status"] == "Detained" else C_HIGH),
                 _sans(r["release"]),
             ]
             for r in _PSC_DETENTIONS
@@ -929,7 +931,7 @@ def _section_8_risk_score() -> None:
 # Main render
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, insights=None) -> None:
+def render(port_results=None, insights=None, *args, **kwargs) -> None:
     """Render the full Compliance & Sanctions Intelligence tab."""
     try:
         page_header(

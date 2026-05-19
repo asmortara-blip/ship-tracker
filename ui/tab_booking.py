@@ -538,7 +538,7 @@ def _space_availability_by_carrier() -> None:
 
 # ── Main render ────────────────────────────────────────────────────────────────
 
-def render(route_results=None, freight_data=None, port_results=None) -> None:
+def render(route_results=None, freight_data=None, port_results=None, *args, **kwargs) -> None:
     """Render the Booking Intelligence & Optimization tab."""
     try:
         page_header(

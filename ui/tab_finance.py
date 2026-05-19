@@ -699,8 +699,7 @@ def _render_finance_overview(indicators: List[TradeFinanceIndicator]) -> None:
 
     # Indicator detail expander
     if indicators:
-        with st.expander("Live Indicator Details & Sources", expanded=False,
-                         key="finance_overview_indicators"):
+        with st.expander("Live Indicator Details & Sources", expanded=False):
             rows_data = [{
                 "Indicator":   ind.indicator_name,
                 "Value":       ind.current_value,
@@ -1656,6 +1655,7 @@ def _render_dedollarization() -> None:
     fig = make_subplots(
         rows=1, cols=2,
         column_widths=[0.6, 0.4],
+        specs=[[{"type": "xy"}, {"type": "domain"}]],
         subplot_titles=["Trade Settlement Currency Share (% global)", "2026 Currency Share"],
     )
 

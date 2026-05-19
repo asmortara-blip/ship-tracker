@@ -462,7 +462,7 @@ def _render_ice_route() -> None:
 # ---------------------------------------------------------------------------
 
 
-def render(port_results=None, route_results=None) -> None:
+def render(port_results=None, route_results=None, *args, **kwargs) -> None:
     try:
         logger.info("Rendering weather risk tab")
 

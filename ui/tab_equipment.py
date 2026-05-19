@@ -47,6 +47,7 @@ from ui.styles import (
     C_TEXT2,
     C_TEXT3,
     RISK_COLORS,
+    alert_banner,
     apply_dark_layout,
     badge,
     gradient_card,
@@ -593,7 +594,7 @@ def _render_enhanced_equipment_overview() -> None:
             f"{a['route']} ({a['util']}% util, -{a['shortfall_teu']//1000}K TEU short)"
             for a in crit_alerts
         )
-        st.error(f"CRITICAL: {desc} — immediate sourcing action required.", icon="🚨")
+        alert_banner(f"CRITICAL: {desc} — immediate sourcing action required.", level="critical")
     if high_alerts:
         desc = ", ".join(a["route"] for a in high_alerts)
         st.warning(f"HIGH risk: {desc} — book within 48 hours to secure equipment.", icon="⚠️")
@@ -831,7 +832,7 @@ def _render_shortage_surplus_map() -> None:
             f"({int(e.utilization_pct)}% utilized, {abs(e.days_surplus_deficit)}d short)"
             for e in critical_cells
         )
-        st.error(f"CRITICAL shortage: {crit_desc} — expect significant rate premiums and booking delays.", icon="🚨")
+        alert_banner(f"CRITICAL shortage: {crit_desc} — expect significant rate premiums and booking delays.", level="critical")
 
     if high_cells:
         high_desc = ", ".join(
@@ -1367,9 +1368,9 @@ def _render_reefer_section() -> None:
         fig.update_layout(
             yaxis={"title": "Utilization %", "range": [70, 100],
                    "tickfont": {"color": C_TEXT3, "size": 10}},
-            yaxis2={"title": "USD/day", "range": [2.5, 5.0],
-                    "tickfont": {"color": C_MOD, "size": 10},
-                    "titlefont": {"color": C_MOD}},
+            yaxis2={"title": {"text": "USD/day", "font": {"color": C_MOD}},
+                    "range": [2.5, 5.0],
+                    "tickfont": {"color": C_MOD, "size": 10}},
             margin={"l": 50, "r": 60, "t": 45, "b": 30},
             legend={"orientation": "h", "y": -0.22, "font": {"color": C_TEXT3, "size": 10}},
         )
@@ -1644,9 +1645,9 @@ def _render_age_distribution() -> None:
         )
         fig2.update_layout(
             yaxis={"title": "M TEU", "tickfont": {"color": C_TEXT3, "size": 10}},
-            yaxis2={"title": "Urgency (0–100)", "range": [0, 120],
-                    "tickfont": {"color": _ROSE, "size": 10},
-                    "titlefont": {"color": _ROSE}},
+            yaxis2={"title": {"text": "Urgency (0–100)", "font": {"color": _ROSE}},
+                    "range": [0, 120],
+                    "tickfont": {"color": _ROSE, "size": 10}},
             margin={"l": 50, "r": 60, "t": 45, "b": 50},
             xaxis={"tickfont": {"color": C_TEXT2, "size": 10}},
             legend={"orientation": "h", "y": -0.28, "font": {"color": C_TEXT3, "size": 10}},
@@ -1745,9 +1746,8 @@ def _render_lease_vs_own() -> None:
         fig.update_layout(
             barmode="group",
             yaxis={"title": "USD/day", "tickfont": {"color": C_TEXT3, "size": 10}},
-            yaxis2={"title": "Lease Premium %",
+            yaxis2={"title": {"text": "Lease Premium %", "font": {"color": C_MOD}},
                     "tickfont": {"color": C_MOD, "size": 10},
-                    "titlefont": {"color": C_MOD},
                     "zeroline": False},
             margin={"l": 50, "r": 60, "t": 45, "b": 50},
             xaxis={"tickfont": {"color": C_TEXT2, "size": 11}},

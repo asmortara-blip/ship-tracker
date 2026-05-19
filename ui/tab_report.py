@@ -637,6 +637,8 @@ def render(
     freight_data=None,
     macro_data=None,
     stock_data=None,
+    *args,
+    **kwargs,
 ) -> None:
     """Render the Investor Report tab."""
     report     = st.session_state.get("investor_report")

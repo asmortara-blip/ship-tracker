@@ -316,7 +316,7 @@ def _plotly_decay(decay_df: pd.DataFrame) -> go.Figure:
 # MAIN RENDER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render(stock_data, insights, freight_data=None):
+def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
     try:
         logger.info("tab_results: render start")
 

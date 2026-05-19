@@ -101,7 +101,7 @@ LANE_RATES = [
 ]
 
 _STATUS_COLOR = {"NORMAL": C_HIGH, "ELEVATED": C_MOD, "CRITICAL": C_LOW}
-_STATUS_BADGE = {"NORMAL": "green", "ELEVATED": "yellow", "CRITICAL": "red"}
+_STATUS_BADGE = {"NORMAL": C_HIGH, "ELEVATED": C_MOD, "CRITICAL": C_LOW}
 
 _EVENT_COLOR = {
     "Labor Strike":      C_LOW,
@@ -457,7 +457,7 @@ def _render_rate_cards(lanes: list[dict]) -> None:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def render(port_results: Any = None, freight_data: Optional[Any] = None) -> None:
+def render(port_results: Any = None, freight_data: Optional[Any] = None, *args, **kwargs) -> None:
     """Render the Port Operations Intelligence tab."""
     try:
         logger.info("Rendering port monitor tab")

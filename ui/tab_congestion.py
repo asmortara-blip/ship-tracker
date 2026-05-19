@@ -476,7 +476,7 @@ def _render_efficiency() -> None:
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
-def render(port_results=None, freight_data=None, insights=None) -> None:
+def render(port_results=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Port Congestion Intelligence tab."""
     try:
         ports: list[dict] = _PORTS
@@ -492,7 +492,8 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
                     ingested = port_results
                 else:
                     ingested = []
-                if ingested and all(k in ingested[0] for k in ("port", "score", "vessels", "wait")):
+                if (ingested and isinstance(ingested[0], dict)
+                        and all(k in ingested[0] for k in ("port", "score", "vessels", "wait"))):
                     ports = ingested
                     logger.info("tab_congestion: using live port_results ({} ports)", len(ports))
             except Exception as exc:

@@ -628,7 +628,7 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Global Fleet Analytics tab."""
     try:
         page_header(

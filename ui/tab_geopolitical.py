@@ -845,7 +845,7 @@ def _render_war_risk_premiums() -> None:
 # Main render
 # ---------------------------------------------------------------------------
 
-def render(macro_data=None, insights=None, news_items=None) -> None:
+def render(macro_data=None, insights=None, news_items=None, *args, **kwargs) -> None:
     try:
         page_header(
             title="Geopolitical Risk Intelligence",

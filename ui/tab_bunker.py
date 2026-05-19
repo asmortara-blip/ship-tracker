@@ -102,11 +102,11 @@ def _seed_price(port: str, fuel: str) -> float:
 
 def _avail_label(val: float) -> tuple[str, str]:
     if val > 0.6:
-        return "PLENTIFUL", "green"
+        return "PLENTIFUL", C_HIGH
     elif val > 0.35:
-        return "ADEQUATE", "yellow"
+        return "ADEQUATE", C_MOD
     else:
-        return "TIGHT", "red"
+        return "TIGHT", C_LOW
 
 
 # ── Section 1: Bunker Dashboard ────────────────────────────────────────────────
@@ -663,7 +663,7 @@ def _bunker_hedging() -> None:
 
 # ── Main render ────────────────────────────────────────────────────────────────
 
-def render(macro_data=None, freight_data=None) -> None:
+def render(macro_data=None, freight_data=None, *args, **kwargs) -> None:
     """Render the Bunker Fuel Intelligence tab."""
     try:
         page_header(

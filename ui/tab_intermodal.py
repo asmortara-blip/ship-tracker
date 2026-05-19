@@ -18,6 +18,7 @@ from loguru import logger
 
 from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_CARD,
     C_CONV,
@@ -633,7 +634,7 @@ def _render_market_signals() -> None:
             line={"color": C_LOW, "width": 2},
             marker={"size": 5},
             fill="tozeroy",
-            fillcolor=f"{C_LOW}18",
+            fillcolor=_hex_to_rgba(C_LOW, 0.09),
             hovertemplate="Week %{x}<br>Congestion: %{y}<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -695,7 +696,7 @@ def _render_market_signals() -> None:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Intermodal & Supply Chain Connectivity tab."""
     try:
         page_header(

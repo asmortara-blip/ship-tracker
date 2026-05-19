@@ -20,6 +20,7 @@ from loguru import logger
 
 from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_BG,
     C_BORDER,
@@ -367,7 +368,7 @@ def _render_volume_chart() -> None:
         fig.add_trace(go.Scatter(
             x=months, y=post_tariff_2025, name="China→US 2025 (Post-Tariff)",
             line={"color": C_LOW, "width": 3}, mode="lines+markers",
-            marker={"size": 6}, fill="tonexty", fillcolor=f"{C_LOW}15",
+            marker={"size": 6}, fill="tonexty", fillcolor=_hex_to_rgba(C_LOW, 0.08),
             hovertemplate="%{y}K TEUs<extra>China→US 2025</extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -382,16 +383,19 @@ def _render_volume_chart() -> None:
             marker={"size": 5},
             hovertemplate="%{y}K TEUs<extra>Mexico→US 2025</extra>",
         ))
-        fig.add_vline(
-            x="Apr", line_dash="dot", line_color=C_LOW, line_width=2,
-            annotation_text="145% tariff", annotation_font_color=C_LOW,
-            annotation_font_size=11,
+        # add_vline's annotation positioning averages the x-coords, which fails
+        # on a categorical axis — draw the line and annotation separately.
+        fig.add_vline(x="Apr", line_dash="dot", line_color=C_LOW, line_width=2)
+        fig.add_annotation(
+            x="Apr", y=1.0, yref="paper", yanchor="bottom",
+            text="145% tariff", showarrow=False,
+            font={"color": C_LOW, "size": 11},
         )
         apply_dark_layout(fig, title="", height=360, showlegend=True)
         fig.update_layout(
             xaxis={"gridcolor": C_BORDER, "title": "Month 2025"},
             yaxis={"gridcolor": C_BORDER, "title": "TEUs (thousands)"},
-            legend={"bgcolor": "transparent", "font": {"size": 11}},
+            legend={"bgcolor": "rgba(0,0,0,0)", "font": {"size": 11}},
             margin={"l": 50, "r": 20, "t": 20, "b": 40},
             hovermode="x unified",
         )
@@ -557,7 +561,7 @@ def _render_scenario() -> None:
 
 
 # ── Main render ────────────────────────────────────────────────────────────────
-def render(macro_data=None, freight_data=None, insights=None) -> None:
+def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Trade Policy & Tariff Impact Intelligence tab."""
     try:
         logger.info("trade_war | render start")

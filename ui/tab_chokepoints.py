@@ -291,17 +291,18 @@ def _gatun_label(level_m: float) -> tuple[str, str]:
 
 def _render_panama_card() -> None:
     try:
-        panama_data: dict = {}
+        panama_data = None
         if _CANAL_OK:
             try:
-                panama_data = fetch_panama_stats() or {}
+                panama_data = fetch_panama_stats()
             except Exception as pe:
                 logger.warning(f"fetch_panama_stats failed: {pe}")
 
-        daily_transits = panama_data.get("daily_transits", 34)
-        nb_wait        = panama_data.get("northbound_wait_days", 8)
-        sb_wait        = panama_data.get("southbound_wait_days", 6)
-        lake_level     = panama_data.get("gatun_lake_level_m", 26.4)
+        # fetch_panama_stats() returns a CanalStats dataclass — access by attr.
+        daily_transits = getattr(panama_data, "daily_transits", 34)
+        nb_wait        = getattr(panama_data, "northbound_wait_days", 8)
+        sb_wait        = getattr(panama_data, "southbound_wait_days", 6)
+        lake_level     = getattr(panama_data, "water_level_m", 26.4)
         lake_color, lake_label = _gatun_label(lake_level)
 
         section_header(
@@ -354,17 +355,20 @@ def _render_panama_card() -> None:
 
 def _render_suez_card() -> None:
     try:
-        suez_data: dict = {}
+        suez_data = None
         if _CANAL_OK:
             try:
-                suez_data = fetch_suez_stats() or {}
+                suez_data = fetch_suez_stats()
             except Exception as se:
                 logger.warning(f"fetch_suez_stats failed: {se}")
 
-        daily_transits   = suez_data.get("daily_transits", 45)
-        rerouted_pct     = suez_data.get("rerouted_via_cape_pct", 65)
-        rerouted_vessels = suez_data.get("rerouted_vessels_per_month", 420)
-        revenue_impact   = suez_data.get("revenue_loss_usd_m_monthly", 700)
+        # fetch_suez_stats() returns a CanalStats dataclass — access by attr.
+        # The rerouting/revenue figures are not part of CanalStats; keep the
+        # established baseline estimates for those.
+        daily_transits   = getattr(suez_data, "daily_transits", 45)
+        rerouted_pct     = 65
+        rerouted_vessels = 420
+        revenue_impact   = 700
 
         section_header(
             "Suez Canal — Deep Dive",
@@ -788,7 +792,7 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
 
     if _CANAL_OK:
         try:
-            impact = get_canal_shipping_impact()
+            impact = get_canal_shipping_impact(fetch_panama_stats(), fetch_suez_stats())
             if impact:
                 with st.expander("Canal Feed — Live Impact Summary"):
                     st.json(impact)

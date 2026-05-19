@@ -104,10 +104,10 @@ _EQUIPMENT_BALANCE = [
 ]
 
 _RISK_BADGE = {
-    "Very High": "red",
-    "High":      "red",
-    "Medium":    "yellow",
-    "Low":       "green",
+    "Very High": C_LOW,
+    "High":      C_LOW,
+    "Medium":    C_MOD,
+    "Low":       C_HIGH,
 }
 
 
@@ -129,7 +129,7 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 
 
 def _risk_badge(risk: str) -> str:
-    return badge(risk, _RISK_BADGE.get(risk, "blue"))
+    return badge(risk, _RISK_BADGE.get(risk, C_ACCENT))
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +438,8 @@ def render(
     route_results=None,
     freight_data=None,
     insights=None,
+    *args,
+    **kwargs,
 ) -> None:
     try:
         _render_hero()

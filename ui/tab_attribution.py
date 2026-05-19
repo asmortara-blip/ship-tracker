@@ -469,7 +469,7 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
 
 # ── Main render ─────────────────────────────────────────────────────────────
 
-def render(stock_data=None, insights=None, freight_data=None) -> None:
+def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs) -> None:
     """Render the Performance Attribution Analysis tab."""
 
     page_header(

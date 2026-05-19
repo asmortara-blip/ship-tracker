@@ -18,6 +18,7 @@ import plotly.graph_objects as go
 
 from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_HIGH,
     C_LOW,
@@ -132,7 +133,7 @@ def _strategy_ideas(options: list) -> list[dict]:
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
-def render(stock_data, insights):
+def render(stock_data=None, insights=None, *args, **kwargs):
     try:
         from processing.options_screener import (
             screen_options,
@@ -309,9 +310,8 @@ def render(stock_data, insights):
                 [1.00, "#c0392b"],
             ],
             colorbar=dict(
-                title="IV (%)",
+                title=dict(text="IV (%)", font=dict(color=C_TEXT2)),
                 tickfont=dict(color=C_TEXT2),
-                titlefont=dict(color=C_TEXT2),
             ),
             text=[[f"{v:.1f}%" for v in row] for row in z_pct],
             texttemplate="%{text}",
@@ -373,12 +373,21 @@ def render(stock_data, insights):
 
             mp_label = f"${max_pain_strike:.1f}"
             if mp_label in strike_labels:
-                fig_pain.add_vline(
-                    x=mp_label,
-                    line_dash="dash", line_color=C_MOD, line_width=2,
-                    annotation_text=f"Max Pain {mp_label}",
-                    annotation_font_color=C_MOD,
-                    annotation_position="top right",
+                # x-axis is categorical (strike_labels); add_vline does numeric
+                # arithmetic on x, so key the marker to the category index.
+                mp_idx = strike_labels.index(mp_label)
+                fig_pain.add_shape(
+                    type="line",
+                    x0=mp_idx, x1=mp_idx,
+                    y0=0, y1=1, yref="paper",
+                    line=dict(dash="dash", color=C_MOD, width=2),
+                )
+                fig_pain.add_annotation(
+                    x=mp_idx, y=1, yref="paper",
+                    text=f"Max Pain {mp_label}",
+                    showarrow=False,
+                    font=dict(color=C_MOD),
+                    xanchor="left", yanchor="bottom",
                 )
 
             apply_dark_layout(
@@ -496,7 +505,7 @@ def render(stock_data, insights):
                 mode="lines",
                 line=dict(color=C_ACCENT, width=2),
                 fill="tozeroy",
-                fillcolor=f"{C_ACCENT}22",
+                fillcolor=_hex_to_rgba(C_ACCENT, 0.13),
                 name="P/C Ratio",
                 hovertemplate="Date: %{x}<br>P/C: %{y:.2f}<extra></extra>",
             ))

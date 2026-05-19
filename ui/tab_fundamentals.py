@@ -618,7 +618,7 @@ def _render_relative_value(df: pd.DataFrame) -> None:
 
 # ── Main entry point ────────────────────────────────────────────────────────────
 
-def render(stock_data: Any = None, insights: Any = None) -> None:
+def render(stock_data: Any = None, insights: Any = None, *args, **kwargs) -> None:
     """Render the Goldman Sachs equity research quality fundamentals tab."""
     try:
         df = pd.DataFrame(UNIVERSE).sort_values("mktcap", ascending=False).reset_index(drop=True)

@@ -35,10 +35,23 @@ except ImportError:
     logger.warning("feedparser not installed; blank sailing feed unavailable. pip install feedparser")
 
 try:
+    import requests  # type: ignore
+    _REQUESTS_OK = True
+except ImportError:
+    _REQUESTS_OK = False
+    logger.warning("requests not installed; RSS fetches will lack a timeout")
+
+try:
     import streamlit as st
     _ST_OK = True
 except ImportError:
     _ST_OK = False
+
+
+# ── Network timeouts ───────────────────────────────────────────────────────────
+_REQUEST_TIMEOUT = 8            # hard per-feed network timeout (seconds)
+_FETCH_BUDGET_SECONDS = 20      # overall wall-clock cap for fetch_blank_sailings
+_FEED_HEADERS = {"User-Agent": "ShipTracker/1.0 (RSS reader)"}
 
 
 # ── Feed URLs ──────────────────────────────────────────────────────────────────
@@ -233,14 +246,39 @@ def _assign_impact_scores(sailings: list[BlankSailing]) -> list[BlankSailing]:
     return sailings
 
 
+def _parse_feed(feed_url: str):
+    """Fetch a feed URL with a HARD network timeout, then parse it.
+
+    ``feedparser.parse(url)`` does its own fetch with NO timeout — a slow or
+    dead feed blocks the calling thread (and the whole Streamlit app) forever.
+    Always fetch via ``requests`` with a timeout first, then hand the bytes to
+    feedparser. Returns the parsed feed, or ``None`` on any failure.
+    """
+    if not _FEEDPARSER_OK:
+        return None
+    try:
+        if _REQUESTS_OK:
+            resp = requests.get(feed_url, timeout=_REQUEST_TIMEOUT, headers=_FEED_HEADERS)
+            resp.raise_for_status()
+            return feedparser.parse(resp.content)
+        # No requests available — feedparser's own fetch has no timeout, so
+        # this path can still block; it is the documented last resort.
+        return feedparser.parse(feed_url)
+    except Exception as exc:
+        logger.warning(f"blank_sailing_feed: feed fetch failed ({feed_url}): {exc}")
+        return None
+
+
 def _fetch_feed(feed_url: str, max_items: int) -> list[BlankSailing]:
     """Fetch a single RSS feed and return matching BlankSailing objects."""
     if not _FEEDPARSER_OK:
         return []
     results: list[BlankSailing] = []
     source_label = _source_label(feed_url)
+    parsed = _parse_feed(feed_url)
+    if parsed is None:
+        return []
     try:
-        parsed = feedparser.parse(feed_url)
         for entry in parsed.entries[:max_items]:
             title   = getattr(entry, "title", "") or ""
             summary = getattr(entry, "summary", "") or ""
@@ -294,8 +332,17 @@ def fetch_blank_sailings(
 
     all_sailings: list[BlankSailing] = []
     seen_urls: set[str] = set()
+    _start = time.monotonic()
 
     for feed_url in BLANK_SAILING_FEEDS:
+        # Once the overall budget is spent, stop fetching so a slow or dead
+        # feed cluster can never stall the calling tab.
+        if time.monotonic() - _start > _FETCH_BUDGET_SECONDS:
+            logger.warning(
+                "blank_sailing_feed: fetch budget exhausted — skipping "
+                f"{feed_url} and any remaining feeds"
+            )
+            break
         items = _fetch_feed(feed_url, max_items)
         for s in items:
             if s.url not in seen_urls:

@@ -38,6 +38,16 @@ except ImportError:  # pragma: no cover
     _FEEDPARSER_OK = False
     logger.warning("feedparser not installed – RSS fetching disabled")
 
+try:
+    import requests as _requests  # type: ignore
+    _REQUESTS_OK = True
+except ImportError:  # pragma: no cover
+    _REQUESTS_OK = False
+    logger.warning("requests not installed – RSS fetches will lack a timeout")
+
+# Hard per-feed network timeout (seconds) — feedparser.parse(url) has none.
+_FEED_TIMEOUT = 8
+
 # ── RSS Feed Registry ─────────────────────────────────────────────────────────
 
 RSS_FEEDS: dict[str, str] = {
@@ -541,7 +551,19 @@ def _fetch_one_feed(source_name: str, url: str) -> list[NewsArticle]:
 
     try:
         logger.debug("Fetching feed: {} — {}", source_name, url)
-        parsed = _feedparser.parse(url, agent="ShipSentiment/2.0 (RSS reader; research bot)")
+        # feedparser.parse(url) fetches with NO network timeout — a slow or
+        # dead feed would hang the whole app. Fetch via requests with a hard
+        # timeout, then hand the bytes to feedparser.
+        if _REQUESTS_OK:
+            resp = _requests.get(
+                url,
+                timeout=_FEED_TIMEOUT,
+                headers={"User-Agent": "ShipSentiment/2.0 (RSS reader; research bot)"},
+            )
+            resp.raise_for_status()
+            parsed = _feedparser.parse(resp.content)
+        else:
+            parsed = _feedparser.parse(url, agent="ShipSentiment/2.0 (RSS reader; research bot)")
     except Exception as exc:
         logger.warning("Feed fetch error [{}]: {}", source_name, exc)
         return []

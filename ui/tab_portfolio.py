@@ -11,6 +11,7 @@ import streamlit as st
 from loguru import logger
 
 from ui.styles import (
+    _hex_to_rgba,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
     apply_dark_layout,
     badge,
@@ -571,7 +572,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
                     mode="lines",
                     line=dict(color=line_color, width=2),
                     fill="tozeroy",
-                    fillcolor=f"{line_color}18",
+                    fillcolor=_hex_to_rgba(line_color, 0.09),
                     hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>${{y:.2f}}<extra></extra>",
                     showlegend=False,
                 ))

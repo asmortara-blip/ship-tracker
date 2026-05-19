@@ -419,7 +419,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
         for ticker, tab_obj in [("ZIM", tab1), ("MATX", tab2)]:
             with tab_obj:
                 try:
-                    df = stock_data.get(ticker) if stock_data else None
+                    df = stock_data.get(ticker) if isinstance(stock_data, dict) else None
                     if df is not None and not df.empty and "close" in df.columns:
                         df = df.copy()
                         if "date" in df.columns:
@@ -442,7 +442,8 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                         y_vals = prices.tolist()
 
                     # Signal markers
-                    sig_list = [s for s in signals if s.get("ticker") == ticker]
+                    sig_list = [s for s in signals
+                                if isinstance(s, dict) and s.get("ticker") == ticker]
                     long_x, long_y, short_x, short_y = [], [], [], []
                     rng2 = random.Random(hash(ticker))
                     for s in sig_list[:3]:
@@ -562,10 +563,12 @@ def _render_live_monitor(signals: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def render(
-    stock_data: dict | None,
-    insights: Any,
+    stock_data: dict | None = None,
+    insights: Any = None,
     freight_data: Any = None,
     macro_data: Any = None,
+    *args,
+    **kwargs,
 ) -> None:
     """Render the Alpha Signal Generator tab."""
     try:

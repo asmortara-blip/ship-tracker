@@ -599,7 +599,7 @@ def _render_geo_map(articles: list[dict]) -> None:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
+def render(news_items: list[dict] | None = None, insights: Any = None, *args, **kwargs) -> None:
     """Render the Shipping News Intelligence tab."""
 
     try:

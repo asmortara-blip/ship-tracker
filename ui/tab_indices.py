@@ -808,8 +808,10 @@ def _render_cross_asset(
         bdti = all_series.get("BDTI", _mock_macro_series("BDTI", 800)).dropna().iloc[-504:]
         scfi = all_series.get("SCFI", _mock_macro_series("SCFI", 2800)).dropna().iloc[-504:]
 
-        iron_ore = _try_yfinance("SCCO", "2y") or _mock_macro_series("IronOre", 120)
-        oil = _try_yfinance("CL=F", "2y") or _mock_macro_series("Oil", 75)
+        _iron_ore = _try_yfinance("SCCO", "2y")
+        iron_ore = _iron_ore if _iron_ore is not None else _mock_macro_series("IronOre", 120)
+        _oil = _try_yfinance("CL=F", "2y")
+        oil = _oil if _oil is not None else _mock_macro_series("Oil", 75)
         retail = _mock_macro_series("US_Retail", 700000)
         cn_exports = _mock_macro_series("CN_Exports", 300000)
 
@@ -899,7 +901,7 @@ def _render_methodology() -> None:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def render(freight_data=None, macro_data=None, stock_data=None) -> None:
+def render(freight_data=None, macro_data=None, stock_data=None, *args, **kwargs) -> None:
     """Render Bloomberg-style shipping indices dashboard."""
     page_header(
         title="Shipping Indices",

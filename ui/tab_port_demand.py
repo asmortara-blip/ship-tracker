@@ -271,7 +271,8 @@ def _render_regional_comparison() -> None:
         fig = go.Figure()
         fig.add_trace(go.Bar(
             name="Current", x=reg_names, y=curr_vals,
-            marker_color=[c + "99" for c in colors],
+            marker_color=colors,
+            opacity=0.6,
             text=[f"{v:.0f}M" for v in curr_vals],
             textposition="outside", textfont=dict(color=C_TEXT2, size=10),
         ))

@@ -471,7 +471,7 @@ def _render_centrality_chart() -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Shipping Network Topology & Resilience tab."""
     try:
         page_header(

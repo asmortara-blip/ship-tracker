@@ -182,12 +182,12 @@ def _delay_color(hrs: int) -> str:
 
 def _status_badge(hrs: int) -> str:
     if hrs < 0:
-        return badge("AHEAD", "green")
+        return badge("AHEAD", C_HIGH)
     if hrs == 0:
-        return badge("ON TIME", "gray")
+        return badge("ON TIME", C_TEXT3)
     if hrs <= 24:
-        return badge("DELAYED", "yellow")
-    return badge("DIVERTED", "red")
+        return badge("DELAYED", C_MOD)
+    return badge("DIVERTED", C_LOW)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +598,8 @@ def _render_port_queue() -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, route_results=None) -> None:
+def render(port_results=None, route_results=None, freight_data=None,
+           macro_data=None, **kwargs) -> None:
     try:
         page_header(
             title="ETA Intelligence & Voyage Tracking",

@@ -355,11 +355,15 @@ def _render_eu_ets() -> None:
                     hovertemplate="<b>%{x}</b><br>€%{y}/tonne CO₂<extra></extra>",
                     name="EU ETS Price",
                 ))
+                # add_vline with an annotation averages x-coords, which fails on a
+                # categorical axis — add the line and the annotation separately.
                 fig.add_vline(
                     x="Jan-24", line_dash="dash", line_color=C_MOD, line_width=1.5,
-                    annotation_text="Shipping enters EU ETS",
-                    annotation_font=dict(color=C_MOD, size=11),
-                    annotation_position="top right",
+                )
+                fig.add_annotation(
+                    x="Jan-24", yref="paper", y=1.0, yanchor="bottom", xanchor="left",
+                    text="Shipping enters EU ETS", showarrow=False,
+                    font=dict(color=C_MOD, size=11),
                 )
                 apply_dark_layout(
                     fig,

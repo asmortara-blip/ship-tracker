@@ -396,7 +396,7 @@ def _render_visibility_chart() -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Supply Chain Visibility & Tracking tab."""
     try:
         page_header(

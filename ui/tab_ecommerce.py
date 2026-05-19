@@ -17,6 +17,7 @@ import streamlit as st
 from loguru import logger
 
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_HIGH,
     C_LOW,
@@ -543,7 +544,7 @@ def _render_rate_impact_chart() -> None:
             fig.add_trace(go.Scatter(
                 x=years, y=ecom_growth, name="E-Commerce Volume Index",
                 line={"color": C_HIGH, "width": 2},
-                fill="tozeroy", fillcolor=C_HIGH + "15",
+                fill="tozeroy", fillcolor=_hex_to_rgba(C_HIGH, 0.08),
             ))
             fig.add_trace(go.Scatter(
                 x=years, y=air_rates, name="Air Cargo Rate Index",
@@ -618,7 +619,7 @@ def _render_leading_indicators() -> None:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def render(macro_data=None, freight_data=None, insights=None) -> None:
+def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the E-Commerce Driven Shipping Demand Intelligence tab."""
     try:
         page_header(

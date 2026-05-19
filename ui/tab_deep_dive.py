@@ -893,6 +893,8 @@ def render(
     freight_data: Any = None,
     port_results: Any = None,
     insights: Any = None,
+    *args,
+    **kwargs,
 ) -> None:
     """Render the Deep Dive research analyst tab."""
     try:

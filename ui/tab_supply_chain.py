@@ -731,7 +731,7 @@ def _render_forecast() -> None:
 # Main entry point
 # ══════════════════════════════════════════════════════════════════════════
 
-def render(port_results=None, route_results=None, insights=None, macro_data=None) -> None:
+def render(port_results=None, route_results=None, insights=None, macro_data=None, *args, **kwargs) -> None:
     """Render the Supply Chain Resilience & Visibility tab."""
     try:
         port_results  = port_results  or []
