@@ -130,6 +130,18 @@ _CONTAINER_TICKERS: frozenset[str] = frozenset({"ZIM", "MATX", "DAC", "CMRE"})
 # electronics-heavy purely from a generic fallback.
 _SECTOR_TILT: float = 0.35
 
+# Minimum real per-route cargo share for a route to count as "carrying" a
+# commodity in ``routes_for_commodity``. The region-dominance heuristic
+# (``_REGION_DOMINANT_CARGO``) is coarse: it can flag a route whose *actual*
+# cargo mix (``cargo_analyzer.get_route_cargo_mix``) carries little or none of
+# the commodity — e.g. a route flagged for "apparel" by origin region that the
+# mix shows carrying 0%. Cross-checking the region heuristic against the real
+# mix removes that inconsistency, so this module and the cascade scorer agree
+# on which lanes carry a commodity. 0.05 is low enough to keep every genuine
+# exposure while dropping only negligible / zero-share routes. Documented and
+# explicit — a published threshold, not a fitted cut-off.
+_ROUTE_COMMODITY_MIN_SHARE: float = 0.05
+
 # ---------------------------------------------------------------------------
 # Hand-tuned overrides
 # ---------------------------------------------------------------------------
@@ -350,17 +362,45 @@ def _direction_from_change(change_30d: float, threshold: float = 0.03) -> str:
 # ---------------------------------------------------------------------------
 
 def routes_for_commodity(hs_category: str) -> list[str]:
-    """Return registry route_ids where ``hs_category`` is a dominant cargo.
+    """Return registry route_ids that genuinely carry ``hs_category`` cargo.
 
-    Mirrors the dominant-route logic in ``cargo_analyzer.analyze_cargo_flows``:
-    a route counts if the category is dominant for the route's origin region.
+    A route counts when **both** explicit, documented conditions hold:
+
+    1. the category is dominant for the route's origin region — the coarse
+       region heuristic in ``cargo_analyzer._REGION_DOMINANT_CARGO`` (the same
+       logic ``cargo_analyzer.analyze_cargo_flows`` uses); and
+    2. the route's **actual** cargo mix
+       (``cargo_analyzer.get_route_cargo_mix``) carries at least
+       :data:`_ROUTE_COMMODITY_MIN_SHARE` of that commodity.
+
+    Condition 2 was added so the result agrees with the real per-route cargo
+    mix the cascade scorer uses: without it the region heuristic can list a
+    route that in fact carries 0% of the commodity. The check is a transparent
+    threshold comparison — no model, no hidden weighting.
+
+    When ``get_route_cargo_mix`` cannot be consulted for a route (it raises),
+    that route is kept on the region heuristic alone — a conservative degrade
+    that never *adds* a spurious route, only tolerates a missing cross-check.
+    Unknown categories return ``[]``.
     """
     routes: list[str] = []
     for route in ROUTES:
         dominant = cargo_analyzer._REGION_DOMINANT_CARGO.get(
             route.origin_region, []
         )
-        if hs_category in dominant:
+        if hs_category not in dominant:
+            continue
+        # Cross-check the coarse region flag against the route's real mix.
+        try:
+            mix = cargo_analyzer.get_route_cargo_mix(route.id, {})
+        except Exception:
+            # Mix unavailable — fall back to the region heuristic alone.
+            routes.append(route.id)
+            continue
+        if not mix:
+            routes.append(route.id)
+            continue
+        if float(mix.get(hs_category, 0.0)) >= _ROUTE_COMMODITY_MIN_SHARE:
             routes.append(route.id)
     return routes
 

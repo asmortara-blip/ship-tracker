@@ -104,6 +104,30 @@ def test_routes_for_commodity_unknown_category_empty() -> None:
     assert routes_for_commodity("not_a_commodity") == []
 
 
+def test_routes_for_commodity_excludes_zero_share_routes() -> None:
+    """Every route returned genuinely carries a meaningful share of the cargo.
+
+    ``routes_for_commodity`` cross-checks the coarse region heuristic against
+    each route's real cargo mix, so a route is never listed for a commodity
+    its actual mix shows it does not carry.
+    """
+    from processing.exposure_matrix import _ROUTE_COMMODITY_MIN_SHARE
+
+    for category in _HS_CATEGORIES:
+        for route_id in routes_for_commodity(category):
+            mix = cargo_analyzer.get_route_cargo_mix(route_id, {})
+            assert mix.get(category, 0.0) >= _ROUTE_COMMODITY_MIN_SHARE, (
+                f"{category}:{route_id} listed but carries "
+                f"{mix.get(category, 0.0):.3f} share"
+            )
+
+
+def test_every_commodity_keeps_at_least_one_route() -> None:
+    """The real-mix cross-check must not strand any commodity with no routes."""
+    for category in _HS_CATEGORIES:
+        assert len(routes_for_commodity(category)) > 0, category
+
+
 # ── build_exposure_matrix: shape & graceful degradation ─────────────────────
 
 

@@ -210,3 +210,160 @@ def test_score_equity_ideas_is_repeatable() -> None:
     assert [i.ticker for i in a] == [i.ticker for i in b]
     assert [i.conviction_score for i in a] == [i.conviction_score for i in b]
     assert [i.direction for i in a] == [i.direction for i in b]
+
+
+# ── Per-driver conviction weight sets ───────────────────────────────────────
+
+
+def test_every_conviction_weight_set_sums_to_one() -> None:
+    """Each documented per-driver conviction weight set sums to exactly 1.0."""
+    from processing.disruption_cascade import _CONVICTION_WEIGHT_SETS
+
+    assert _CONVICTION_WEIGHT_SETS  # the table is non-empty
+    for name, weight_set in _CONVICTION_WEIGHT_SETS.items():
+        assert abs(sum(weight_set.values()) - 1.0) < 1e-9, name
+        # Every set spans exactly the four named conviction terms.
+        assert set(weight_set) == {
+            "cascade", "agreement", "etf_confirm", "vulnerability"
+        }, name
+
+
+def test_chosen_weight_set_is_named_in_supporting_signals(
+    ideas: list[EquityIdea],
+) -> None:
+    """The conviction weight set used is published on the idea and surfaced."""
+    from processing.disruption_cascade import _CONVICTION_WEIGHT_SETS
+
+    for idea in ideas:
+        assert idea.conviction_weight_set in _CONVICTION_WEIGHT_SETS, idea.ticker
+        # The set name appears verbatim in the decomposed supporting_signals.
+        joined = " ".join(idea.supporting_signals)
+        assert f"'{idea.conviction_weight_set}'" in joined, idea.ticker
+
+
+def test_driver_specific_weight_set_is_selected() -> None:
+    """A chokepoint-driven idea selects the cascade-heavy chokepoint set."""
+    from processing.disruption_cascade import (
+        _CONVICTION_WEIGHT_SETS,
+        _conviction_weights_for,
+    )
+
+    # A rate-driven idea up-weights agreement vs. the chokepoint set, which
+    # up-weights cascade — the published, documented per-driver distinction.
+    chokepoint_name, chokepoint_w = _conviction_weights_for("chokepoint")
+    rate_name, rate_w = _conviction_weights_for("rate")
+    assert chokepoint_name == "chokepoint"
+    assert rate_name == "rate"
+    # Chokepoint ideas trust the physical cascade more; rate ideas trust
+    # independent signal agreement more.
+    assert chokepoint_w["cascade"] > rate_w["cascade"]
+    assert rate_w["agreement"] > chokepoint_w["agreement"]
+    # An unmapped / empty driver falls back to the balanced "default" set.
+    default_name, default_w = _conviction_weights_for("")
+    assert default_name == "default"
+    assert default_w is _CONVICTION_WEIGHT_SETS["default"]
+
+
+# ── Real per-route cargo shares ──────────────────────────────────────────────
+
+
+def test_real_cargo_shares_used_when_mix_available(
+    ideas: list[EquityIdea],
+) -> None:
+    """With cargo-mix data available, links use the real per-route share.
+
+    The real per-route mix gives different routes different shares of the same
+    commodity; the old uniform 1/N split made every route of a commodity carry
+    an identical share. At least one idea must therefore show two links on the
+    same commodity with *different* cargo shares.
+    """
+    saw_varying_share = False
+    for idea in ideas:
+        by_commodity: dict[str, set[float]] = {}
+        for link in idea.cascade_chain:
+            by_commodity.setdefault(link.hs_category, set()).add(link.cargo_share)
+        if any(len(shares) > 1 for shares in by_commodity.values()):
+            saw_varying_share = True
+            break
+    assert saw_varying_share, (
+        "no idea showed route-varying cargo shares — real per-route cargo "
+        "mix does not appear to be in use"
+    )
+
+
+def test_cargo_mix_source_is_surfaced(ideas: list[EquityIdea]) -> None:
+    """Every idea with a cascade states which cargo-share source it used."""
+    for idea in ideas:
+        if not idea.cascade_chain:
+            continue
+        joined = " ".join(idea.supporting_signals)
+        assert (
+            "actual per-route cargo mix" in joined
+            or "uniform 1/N cargo-share fallback" in joined
+        ), idea.ticker
+
+
+def test_route_cargo_shares_falls_back_to_uniform(monkeypatch) -> None:
+    """When the real cargo mix is unavailable the uniform 1/N split is used."""
+    from processing import disruption_cascade as dc
+
+    # Force every get_route_cargo_mix call to yield no usable data.
+    monkeypatch.setattr(
+        dc.cargo_analyzer, "get_route_cargo_mix", lambda route_id, td: {}
+    )
+    routes = ["r1", "r2", "r3", "r4"]
+    shares, used_real = dc._route_cargo_shares("electronics", routes, 0.40)
+    assert used_real is False
+    # Uniform split: exposure_weight / N on every route.
+    for rid in routes:
+        assert shares[rid] == pytest.approx(0.40 / 4, abs=1e-9)
+
+
+def test_real_cargo_mix_is_preferred_over_uniform() -> None:
+    """With real mix data, _route_cargo_shares reports the real-mix path."""
+    from processing import disruption_cascade as dc
+
+    shares, used_real = dc._route_cargo_shares(
+        "electronics", ["transpacific_eb", "asia_europe"], 0.30
+    )
+    assert used_real is True
+    # Real route mix: transpacific_eb carries more electronics than asia_europe.
+    assert shares["transpacific_eb"] != shares["asia_europe"]
+    assert all(0.0 <= v <= 1.0 for v in shares.values())
+
+
+# ── Mean-reversion-aware vulnerability term ──────────────────────────────────
+
+
+def test_persistence_factors_are_documented_and_bounded() -> None:
+    """Per-driver persistence factors are an explicit table in (0, 1]."""
+    from processing.disruption_cascade import (
+        _DEFAULT_PERSISTENCE,
+        _DRIVER_PERSISTENCE,
+    )
+
+    assert _DRIVER_PERSISTENCE  # the table is non-empty
+    for driver, factor in _DRIVER_PERSISTENCE.items():
+        assert 0.0 < factor <= 1.0, driver
+    assert 0.0 < _DEFAULT_PERSISTENCE <= 1.0
+    # Fast-reverting weather earns less than a slow-reverting chokepoint.
+    assert _DRIVER_PERSISTENCE["weather"] < _DRIVER_PERSISTENCE["chokepoint"]
+    assert _DRIVER_PERSISTENCE["weather"] < _DRIVER_PERSISTENCE["congestion"]
+
+
+def test_cascade_link_contributions_decompose_exactly(
+    ideas: list[EquityIdea],
+) -> None:
+    """Every link's contribution == route_stress x cargo_share x exposure_weight."""
+    from processing.exposure_matrix import company_commodity_weights
+
+    for idea in ideas:
+        weights = company_commodity_weights(idea.ticker)
+        for link in idea.cascade_chain:
+            exposure_weight = weights.get(link.hs_category, 0.0)
+            expected = link.route_stress * link.cargo_share * exposure_weight
+            # Both factors and the product are rounded for display; a small
+            # tolerance absorbs that rounding without hiding a real error.
+            assert abs(expected - link.contribution) < 1e-3, (
+                f"{idea.ticker}:{link.route_id}:{link.hs_category}"
+            )

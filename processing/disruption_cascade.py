@@ -15,7 +15,11 @@ walks one hop per (commodity, route) pair:
 * that category implies a set of trade routes
   (``exposure_matrix.routes_for_commodity``);
 * each route carries a measured ``RouteStress.stress_score`` from the SSI;
-* the route's *cargo share* of that commodity scales the link.
+* the route's *cargo share* of that commodity scales the link — the **actual**
+  per-route commodity share from ``cargo_analyzer.get_route_cargo_mix``, so a
+  lane genuinely carrying more of the commodity contributes more. When real mix
+  data cannot be obtained the link falls back to a uniform ``1 / N`` split
+  across the commodity's routes.
 
 One :class:`CascadeLink` is recorded per hop with
 ``contribution = route_stress * cargo_share * exposure_weight`` — a single
@@ -38,10 +42,24 @@ Conviction — a transparent weighted sum
 ``conviction_score`` (always in ``[0, 1]``) is a plain weighted sum of four
 named terms — cascade magnitude, signal-agreement count, commodity-ETF
 confirmation, and route vulnerability — and **every term is surfaced verbatim**
-in the idea's ``supporting_signals`` list. The optional ``insights`` argument
-(``engine.scorer`` output) is cross-referenced purely for *corroboration*: a
-matching ``Insight.stocks_potentially_affected`` adds a supporting signal but is
-never required and never changes the direction.
+in the idea's ``supporting_signals`` list.
+
+The four term *weights* are **not** one fixed set. :data:`_CONVICTION_WEIGHT_SETS`
+holds a small table of hand-authored, per-driver weight sets: a chokepoint-driven
+idea up-weights cascade magnitude (the physical reroute is the signal), a
+rate-dislocation idea up-weights signal agreement (a rate move wants
+independent confirmation). Every set sums to 1.0, every set is published, and
+the *name* of the set actually used is stated in ``supporting_signals`` — the
+score stays fully reproducible.
+
+The route-vulnerability term is additionally weighted by **stress persistence**:
+fast-reverting stress (weather) is discounted, slow-reverting structural stress
+(a chokepoint closure) is not. The per-driver persistence factor lives in
+:data:`_DRIVER_PERSISTENCE` and is documented and explicit — not learned.
+
+The optional ``insights`` argument (``engine.scorer`` output) is cross-referenced
+purely for *corroboration*: a matching ``Insight.stocks_potentially_affected``
+adds a supporting signal but is never required and never changes the direction.
 
 Pure processing module — **no Streamlit imports, no ``st.`` calls.** Every
 public function tolerates an empty or degenerate ``stress_report`` /
@@ -55,6 +73,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
+from processing import cargo_analyzer
 from processing.commodity_shipping import analyze_commodity_signals
 from processing.company_profiler import COMPANY_PROFILES
 from processing.exposure_matrix import (
@@ -237,32 +256,161 @@ _FUEL_OVERLAY_THRESHOLD: float = 0.03
 
 
 # ---------------------------------------------------------------------------
-# Conviction model — transparent weighted sum
+# Conviction model — transparent weighted sum, per-driver weight sets
 # ---------------------------------------------------------------------------
 # conviction_score = sum of four named, normalised-to-[0,1] terms, each scaled
-# by the weight below. The weights sum to 1.0 so the score itself lands in
-# [0, 1] without further clamping (a defensive clamp is still applied). Every
-# term is also emitted as a human-readable string in supporting_signals so the
-# number is fully decomposable.
-_CONVICTION_WEIGHTS: dict[str, float] = {
-    "cascade":        0.42,   # how large the summed cascade contribution is
-    "agreement":      0.22,   # how many independent signals point the same way
-    "etf_confirm":    0.20,   # commodity-ETF move confirms the direction
-    "vulnerability":  0.16,   # structural fragility of the driving routes
+# by a published weight. The weights in any one set sum to 1.0 so the score
+# itself lands in [0, 1] without further clamping (a defensive clamp is still
+# applied). Every term — and the *name* of the weight set used — is emitted as
+# a human-readable string in supporting_signals so the number is fully
+# decomposable.
+#
+# Why per-driver weight sets, not one fixed set
+# ----------------------------------------------
+# The four terms do not deserve equal trust across every disruption type:
+#
+#   * A *chokepoint*-driven idea is a physical-capacity story. The summed
+#     cascade magnitude is the load-bearing evidence, so the "cascade" weight
+#     is lifted and the softer corroboration terms are trimmed.
+#   * A *rate*-dislocation idea is a price signal that can be noisy on its own
+#     — a rate move genuinely wants independent confirmation, so "agreement"
+#     and "etf_confirm" are lifted at the cascade term's expense.
+#   * A *congestion* idea is an operational story sitting between the two —
+#     the balanced "default" set is used.
+#   * A *weather* idea is short-lived; its cascade magnitude overstates a
+#     transient event, so cascade is trimmed and corroboration leaned on.
+#   * A *vulnerability*-driven idea has no acute trigger — structural fragility
+#     is the whole story, so the "vulnerability" weight is lifted.
+#
+# Each set is hand-authored and asserted to sum to 1.0 below. There is no
+# fitting and no hidden weighting — selection is a plain dictionary lookup on
+# the normalised driver key, and the chosen key is surfaced in the output.
+#
+# Term keys (stable):
+#   cascade       — how large the summed cascade contribution is
+#   agreement     — how many independent signals point the same way
+#   etf_confirm   — commodity-ETF move confirms the direction
+#   vulnerability — persistence-weighted structural fragility of the routes
+_CONVICTION_WEIGHT_SETS: dict[str, dict[str, float]] = {
+    # Balanced set — the historical weights; used for congestion and as the
+    # fallback whenever a driver has no dedicated set.
+    "default": {
+        "cascade":        0.42,
+        "agreement":      0.22,
+        "etf_confirm":    0.20,
+        "vulnerability":  0.16,
+    },
+    # Chokepoint reroute — a physical-capacity story; trust the cascade most.
+    "chokepoint": {
+        "cascade":        0.52,
+        "agreement":      0.18,
+        "etf_confirm":    0.16,
+        "vulnerability":  0.14,
+    },
+    # Freight-rate dislocation — a price signal; demand independent agreement.
+    "rate": {
+        "cascade":        0.30,
+        "agreement":      0.30,
+        "etf_confirm":    0.28,
+        "vulnerability":  0.12,
+    },
+    # Weather — short-lived; the cascade magnitude overstates a transient hit,
+    # so lean on corroboration instead.
+    "weather": {
+        "cascade":        0.34,
+        "agreement":      0.26,
+        "etf_confirm":    0.24,
+        "vulnerability":  0.16,
+    },
+    # Structural vulnerability — no acute trigger; fragility is the whole story.
+    "vulnerability": {
+        "cascade":        0.34,
+        "agreement":      0.20,
+        "etf_confirm":    0.16,
+        "vulnerability":  0.30,
+    },
 }
-assert abs(sum(_CONVICTION_WEIGHTS.values()) - 1.0) < 1e-9, (
-    "disruption_cascade _CONVICTION_WEIGHTS must sum to 1.0"
-)
+# Every published weight set must sum to 1.0 — the conviction-score [0, 1]
+# bound depends on it. Asserted at import so a mis-edit fails loudly.
+for _set_name, _set in _CONVICTION_WEIGHT_SETS.items():
+    assert abs(sum(_set.values()) - 1.0) < 1e-9, (
+        f"disruption_cascade _CONVICTION_WEIGHT_SETS['{_set_name}'] "
+        f"must sum to 1.0"
+    )
+
+# Driver key -> conviction weight-set name. Any driver without an explicit
+# mapping (including the "" empty-cascade case) uses the "default" set.
+_DRIVER_WEIGHT_SET: dict[str, str] = {
+    "chokepoint":    "chokepoint",
+    "congestion":    "default",
+    "weather":       "weather",
+    "rate":          "rate",
+    "vulnerability": "vulnerability",
+}
+
+# Backward-compatible alias. Earlier code (and external callers / tests) read
+# the single fixed weight set as ``_CONVICTION_WEIGHTS``; that name now refers
+# to the balanced "default" set so the historical import keeps working.
+_CONVICTION_WEIGHTS: dict[str, float] = _CONVICTION_WEIGHT_SETS["default"]
+
+
+def _conviction_weights_for(driver_key: str) -> tuple[str, dict[str, float]]:
+    """Return ``(set_name, weights)`` — the conviction weight set for *driver_key*.
+
+    A plain dictionary lookup: the driver key selects a named set from
+    :data:`_CONVICTION_WEIGHT_SETS`, defaulting to the balanced ``"default"``
+    set for any unmapped or empty driver. Transparent by construction — the
+    returned ``set_name`` is surfaced verbatim in ``supporting_signals``.
+    """
+    set_name = _DRIVER_WEIGHT_SET.get(driver_key, "default")
+    return set_name, _CONVICTION_WEIGHT_SETS[set_name]
+
+
+# ---------------------------------------------------------------------------
+# Stress-persistence factors — mean-reversion awareness for the vuln term
+# ---------------------------------------------------------------------------
+# The route-vulnerability conviction term measures structural lane fragility.
+# But fragility only *earns conviction* in proportion to how long the stress
+# is likely to last: a fragile lane hit by a thunderstorm reverts within days,
+# whereas the same lane behind a closed chokepoint stays stressed for months.
+#
+# _DRIVER_PERSISTENCE is a hand-authored multiplier in (0, 1] applied to the
+# vulnerability term, keyed by the dominant driver:
+#
+#   * chokepoint    — a closure / reroute is slow to resolve; near-full credit.
+#   * vulnerability — structural fragility is by definition persistent.
+#   * congestion    — port backlogs clear over weeks; moderate persistence.
+#   * rate          — a freight-rate dislocation mean-reverts as capacity
+#                     responds; modest persistence.
+#   * weather       — fast-reverting by nature; the smallest credit.
+#
+# This is documented and explicit — a published constant, not a fitted decay.
+# It only ever *discounts* the vulnerability term (all factors <= 1.0), so it
+# can never inflate conviction.
+_DRIVER_PERSISTENCE: dict[str, float] = {
+    "chokepoint":    0.95,
+    "vulnerability": 1.00,
+    "congestion":    0.70,
+    "rate":          0.55,
+    "weather":       0.30,
+}
+# Persistence factor for an unmapped or empty driver key — mid-range, neither
+# rewarding nor heavily penalising an unclassified driver.
+_DEFAULT_PERSISTENCE: float = 0.60
 
 # Cascade magnitude that maps to a full (1.0) cascade term. The raw cascade
 # magnitude is ``route_stress * cargo_share * exposure_weight`` summed over
-# every hop; because the exposure weight is spread across each commodity's
-# routes (so cargo_share is itself a fraction of the weight), magnitudes are
-# bounded well below 1.0 in practice. Empirically a fully-stressed, well-
-# exposed company sums to roughly 0.12-0.16, so this scale is set so a
-# genuinely high cascade reaches a near-full term without saturating on
-# ordinary stress. Documented and explicit — calibrated, not learned.
-_CASCADE_FULL_SCALE: float = 0.16
+# every hop, where ``cargo_share`` is now the *actual* per-route commodity
+# share (cargo_analyzer.get_route_cargo_mix), typically 0.07-0.50 — materially
+# larger than the old uniform exposure_weight/N fraction. Empirically (a
+# uniform-stress sweep across every route, mirrored in the module tests) the
+# magnitude scales near-linearly with system stress at roughly
+# ``2.1 * mean_route_stress``: a genuinely high, fleet-wide ~0.6 stress level
+# sums to ~1.2-1.5. This scale is therefore set to 1.2 so a genuinely severe
+# cascade reaches a near-full term while ordinary stress lands mid-range and
+# stays discriminating. Documented and explicit — calibrated to the cargo-mix
+# magnitude scale, not learned.
+_CASCADE_FULL_SCALE: float = 1.2
 
 # Number of agreeing supporting signals that maps to a full agreement term.
 _AGREEMENT_FULL_COUNT: int = 4
@@ -322,6 +470,8 @@ class EquityIdea:
     price: float = 0.0                   # latest close (0.0 if unavailable)
     change_30d: float = 0.0              # 30-day % move (0.0 if unavailable)
     generated_at: str = ""               # ISO 8601 UTC generation time
+    conviction_weight_set: str = "default"  # named _CONVICTION_WEIGHT_SETS key used
+    dominant_driver_key: str = ""        # normalised driver key (see _driver_key)
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +563,77 @@ def _fuel_cost_move(stock_data: dict) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Per-route cargo shares — real mix with a uniform fallback
+# ---------------------------------------------------------------------------
+
+def _route_cargo_shares(
+    hs_category: str,
+    route_ids: list[str],
+    exposure_weight: float,
+) -> tuple[dict[str, float], bool]:
+    """Return ``({route_id: cargo_share}, used_real_mix)`` for one commodity.
+
+    The cargo share scales how much a given lane's stress feeds the cascade.
+    The **real** share is ``cargo_analyzer.get_route_cargo_mix(route_id, {})``'s
+    weight for ``hs_category`` — the genuine commodity composition of that lane.
+    A route carrying more of the commodity therefore contributes proportionally
+    more to the company's cascade.
+
+    The uniform ``exposure_weight / len(route_ids)`` split is used **only** as a
+    fallback, and only when the real mix cannot be obtained at all (every route
+    returns an unusable mix, e.g. ``cargo_analyzer`` raised or yielded no data).
+    A route whose real mix simply does not list the commodity keeps a genuine
+    ``0.0`` share — it really is not carrying that cargo — and is not a reason
+    to discard the real-mix path for the other routes.
+
+    Parameters
+    ----------
+    hs_category:
+        The HS cargo category being walked.
+    route_ids:
+        Registry route_ids that carry the commodity (from
+        :func:`routes_for_commodity`); assumed non-empty by the caller.
+    exposure_weight:
+        The company's weight on the commodity — used only to size the uniform
+        fallback split so the fallback matches the prior behaviour exactly.
+
+    Returns
+    -------
+    tuple[dict[str, float], bool]
+        Per-route cargo share in ``[0, 1]`` and a flag that is ``True`` when
+        the real per-route mix was used, ``False`` when the uniform fallback
+        was taken. The flag is surfaced in the idea's signals/risk flags.
+    """
+    real_shares: dict[str, float] = {}
+    mix_available = False
+    for route_id in route_ids:
+        try:
+            mix = cargo_analyzer.get_route_cargo_mix(route_id, {})
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "disruption_cascade: get_route_cargo_mix failed for {}",
+                route_id,
+            )
+            continue
+        if not mix:
+            continue
+        # A usable mix was returned for at least one route — the real-mix
+        # path is viable. A commodity simply absent from the mix is a true
+        # 0.0 share, not a failure.
+        mix_available = True
+        share = float(mix.get(hs_category, 0.0))
+        real_shares[route_id] = _clamp(share)
+
+    if mix_available:
+        return real_shares, True
+
+    # No route yielded a usable mix — fall back to the uniform 1/N split,
+    # sized by the exposure weight exactly as the pre-real-mix code did.
+    uniform = exposure_weight / len(route_ids)
+    return {rid: uniform for rid in route_ids}, False
+
+
+# ---------------------------------------------------------------------------
 # Cascade walk — per company
 # ---------------------------------------------------------------------------
 
@@ -433,10 +654,14 @@ def _company_cascade(
         contribution = route_stress * cargo_share * exposure_weight
 
     where ``exposure_weight`` is the company's weight on the commodity and
-    ``cargo_share`` is that commodity's share of the route's cargo mix. The
-    summed contribution is the company's raw cascade *magnitude* (always
-    >= 0); the **sign** is resolved separately by :data:`_DIRECTION_RULES`
-    via :func:`_resolve_direction`.
+    ``cargo_share`` is that commodity's **actual** share of the route's cargo
+    mix, taken from :func:`cargo_analyzer.get_route_cargo_mix` — a route
+    genuinely carrying more of the commodity therefore contributes more. When
+    the real per-route mix cannot be obtained for a commodity the hop falls
+    back to a uniform ``1 / N`` split across that commodity's routes (the prior
+    behaviour). The summed contribution is the company's raw cascade
+    *magnitude* (always >= 0); the **sign** is resolved separately by
+    :data:`_DIRECTION_RULES` via :func:`_resolve_direction`.
 
     Parameters
     ----------
@@ -453,17 +678,23 @@ def _company_cascade(
 
     Returns
     -------
-    tuple[float, list[CascadeLink], str]
-        ``(cascade_magnitude, cascade_links, dominant_driver_key)`` — the
-        summed contribution, every traceable hop sorted by contribution
-        descending, and the normalised driver key of the single highest-
-        contribution link (``""`` when the cascade is empty).
+    tuple[float, list[CascadeLink], str, bool]
+        ``(cascade_magnitude, cascade_links, dominant_driver_key,
+        used_real_cargo_mix)`` — the summed contribution, every traceable hop
+        sorted by contribution descending, the normalised driver key of the
+        single highest-contribution link (``""`` when the cascade is empty),
+        and a flag that is ``True`` when at least one commodity used the real
+        per-route cargo mix and ``False`` when every commodity fell back to the
+        uniform split.
     """
     route_index = _route_stress_index(stress_report)
     exposure_index = _exposure_by_category(exposure_matrix)
     weights = company_commodity_weights(ticker)  # always non-empty
 
     links: list[CascadeLink] = []
+    # True once any commodity resolves to a real per-route cargo mix; False
+    # only if every commodity fell back to the uniform 1/N split.
+    used_real_cargo_mix = False
 
     # Walk every commodity the company is exposed to.
     for hs_category, exposure_weight in weights.items():
@@ -484,11 +715,16 @@ def _company_cascade(
         if not route_ids:
             continue
 
-        # The commodity's share *per route* is approximated by the company's
-        # own exposure weight (the matrix derives company weights from route
-        # cargo mixes). Spreading it across the routes keeps the per-link
-        # cargo_share interpretable as "this lane's slice of the exposure".
-        cargo_share = exposure_weight / len(route_ids)
+        # Per-route cargo share — the *actual* commodity share of each lane's
+        # cargo mix (from cargo_analyzer), so a route genuinely carrying more
+        # of this commodity contributes proportionally more. Falls back to the
+        # uniform exposure_weight / len(route_ids) split only when no real mix
+        # is available at all.
+        cargo_shares, used_real_mix = _route_cargo_shares(
+            hs_category, route_ids, exposure_weight
+        )
+        if used_real_mix:
+            used_real_cargo_mix = True
 
         for route_id in route_ids:
             route_stress_obj = route_index.get(route_id)
@@ -498,6 +734,11 @@ def _company_cascade(
                 float(getattr(route_stress_obj, "stress_score", 0.0))
             )
             if route_stress <= 0.0:
+                continue
+
+            cargo_share = _clamp(cargo_shares.get(route_id, 0.0))
+            if cargo_share <= 0.0:
+                # The lane carries none of this commodity — no traceable link.
                 continue
 
             contribution = route_stress * cargo_share * exposure_weight
@@ -530,7 +771,12 @@ def _company_cascade(
                 getattr(top_route, "dominant_driver", "")
             )
 
-    return cascade_magnitude, links, dominant_driver_key
+    # An empty cascade never exercised the real-mix path; report False so the
+    # flag is not misleading.
+    if not links:
+        used_real_cargo_mix = False
+
+    return cascade_magnitude, links, dominant_driver_key, used_real_cargo_mix
 
 
 # ---------------------------------------------------------------------------
@@ -722,10 +968,21 @@ def _score_one_idea(
     price, change_30d = _price_and_change(ticker, stock_data)
 
     # ---- 1. Walk the cascade --------------------------------------------
-    cascade_magnitude, links, driver_key = _company_cascade(
+    cascade_magnitude, links, driver_key, used_real_cargo_mix = _company_cascade(
         ticker, stress_report, exposure_matrix=list(exposure_index.values()),
         stock_data=stock_data,
     )
+
+    # Per-driver conviction weight set — a documented, published set chosen by
+    # a plain lookup on the dominant driver (chokepoint ideas up-weight cascade
+    # magnitude, rate ideas up-weight signal agreement, etc.). The set name is
+    # surfaced in supporting_signals so the weighting stays fully transparent.
+    weight_set_name, conviction_weights = _conviction_weights_for(driver_key)
+
+    # Stress-persistence factor for the dominant driver — discounts the
+    # vulnerability term for fast-reverting stress (weather) and leaves it
+    # near-intact for slow-reverting structural stress (a chokepoint closure).
+    persistence = _DRIVER_PERSISTENCE.get(driver_key, _DEFAULT_PERSISTENCE)
 
     # ---- 2. Resolve direction from the explicit rule table --------------
     # ``direction`` is the published verdict (after the fuel-cost overlay);
@@ -754,16 +1011,22 @@ def _score_one_idea(
     cascade_term = _clamp(cascade_magnitude / _CASCADE_FULL_SCALE)
 
     # Term D: route vulnerability — mean structural fragility of the driving
-    # routes (a fragile lane makes the disruption more likely to persist).
+    # routes, then weighted by stress persistence. A fragile lane only earns
+    # conviction in proportion to how long its stress is likely to last:
+    # weather reverts in days, a chokepoint closure persists for months. The
+    # raw mean fragility (``vulnerability_fragility``) and the persistence-
+    # weighted term that actually enters the sum (``vulnerability_term``) are
+    # both surfaced so the discount is auditable.
     route_index = _route_stress_index(stress_report)
     vuln_values = [
         _clamp(float(getattr(route_index.get(rid), "vulnerability", 0.0)))
         for rid in driving_routes
         if route_index.get(rid) is not None
     ]
-    vulnerability_term = (
+    vulnerability_fragility = (
         sum(vuln_values) / len(vuln_values) if vuln_values else 0.0
     )
+    vulnerability_term = _clamp(vulnerability_fragility * persistence)
 
     # Term C: commodity-ETF confirmation — does a driving commodity's ETF move
     # agree with the *cascade* direction? Corroboration, surfaced explicitly.
@@ -787,12 +1050,14 @@ def _score_one_idea(
     )
     agreement_term = _clamp(agreement_count / _AGREEMENT_FULL_COUNT)
 
-    # Weighted sum -> conviction in [0, 1].
+    # Weighted sum -> conviction in [0, 1]. ``conviction_weights`` is the
+    # per-driver set selected above; its four weights sum to 1.0 (asserted at
+    # import) so the score stays in [0, 1] before the defensive clamp.
     conviction_score = _clamp(
-        _CONVICTION_WEIGHTS["cascade"] * cascade_term
-        + _CONVICTION_WEIGHTS["agreement"] * agreement_term
-        + _CONVICTION_WEIGHTS["etf_confirm"] * etf_confirm_term
-        + _CONVICTION_WEIGHTS["vulnerability"] * vulnerability_term
+        conviction_weights["cascade"] * cascade_term
+        + conviction_weights["agreement"] * agreement_term
+        + conviction_weights["etf_confirm"] * etf_confirm_term
+        + conviction_weights["vulnerability"] * vulnerability_term
     )
     # A Neutral idea has no actionable conviction — cap it low so Neutral ideas
     # never outrank a genuine directional call.
@@ -802,33 +1067,53 @@ def _score_one_idea(
     conviction_label = _conviction_band(conviction_score)
 
     # ---- 4. supporting_signals — every conviction term, surfaced --------
+    # The conviction score is fully decomposable from this list: the weight
+    # set in use is named, each term's weight and value are printed, and the
+    # cargo-share source and persistence discount are stated explicitly.
     supporting_signals: list[str] = []
     supporting_signals.append(
+        f"Conviction weight set: '{weight_set_name}' "
+        f"(cascade {conviction_weights['cascade']:.0%}, "
+        f"agreement {conviction_weights['agreement']:.0%}, "
+        f"etf-confirm {conviction_weights['etf_confirm']:.0%}, "
+        f"vulnerability {conviction_weights['vulnerability']:.0%}; "
+        f"sums to 1.0) — selected for "
+        f"{driver_key or 'no'}-driven stress."
+    )
+    cargo_mix_src = (
+        "actual per-route cargo mix" if used_real_cargo_mix
+        else "uniform 1/N cargo-share fallback"
+    )
+    supporting_signals.append(
         f"Cascade magnitude {cascade_magnitude:.3f} across "
-        f"{len(links)} route-commodity hop(s) "
-        f"(weight {_CONVICTION_WEIGHTS['cascade']:.0%}, "
+        f"{len(links)} route-commodity hop(s), each = route stress x "
+        f"cargo share x exposure weight using the {cargo_mix_src} "
+        f"(weight {conviction_weights['cascade']:.0%}, "
         f"term {cascade_term:.2f})."
     )
     supporting_signals.extend(agreement_notes)
     supporting_signals.append(
         f"Signal-agreement count {agreement_count} "
-        f"(weight {_CONVICTION_WEIGHTS['agreement']:.0%}, "
+        f"(weight {conviction_weights['agreement']:.0%}, "
         f"term {agreement_term:.2f})."
     )
     if etf_confirm_term > 0.0:
         supporting_signals.append(
             f"Commodity-ETF confirmation present "
-            f"(weight {_CONVICTION_WEIGHTS['etf_confirm']:.0%}, "
+            f"(weight {conviction_weights['etf_confirm']:.0%}, "
             f"term {etf_confirm_term:.2f})."
         )
     else:
         supporting_signals.append(
             f"No commodity-ETF confirmation "
-            f"(weight {_CONVICTION_WEIGHTS['etf_confirm']:.0%}, term 0.00)."
+            f"(weight {conviction_weights['etf_confirm']:.0%}, term 0.00)."
         )
     supporting_signals.append(
         f"Driving-route vulnerability {vulnerability_term:.2f} "
-        f"(weight {_CONVICTION_WEIGHTS['vulnerability']:.0%})."
+        f"= mean fragility {vulnerability_fragility:.2f} x persistence "
+        f"{persistence:.2f} ({driver_key or 'unclassified'} stress "
+        f"{'reverts slowly' if persistence >= 0.7 else 'mean-reverts'}) "
+        f"(weight {conviction_weights['vulnerability']:.0%})."
     )
 
     # ---- 5. risk_flags --------------------------------------------------
@@ -852,6 +1137,12 @@ def _score_one_idea(
         risk_flags.append(
             "Commodity-demand ETFs do not yet confirm the cascade direction — "
             "signal rests on route stress alone."
+        )
+    if links and not used_real_cargo_mix:
+        risk_flags.append(
+            "Per-route cargo shares fell back to a uniform 1/N split — real "
+            "cargo-mix data was unavailable, so per-lane contributions are "
+            "approximate."
         )
 
     # ---- 6. thesis ------------------------------------------------------
@@ -897,6 +1188,8 @@ def _score_one_idea(
         price=round(price, 4),
         change_30d=round(change_30d, 4),
         generated_at=datetime.now(timezone.utc).isoformat(),
+        conviction_weight_set=weight_set_name,
+        dominant_driver_key=driver_key,
     )
 
 
