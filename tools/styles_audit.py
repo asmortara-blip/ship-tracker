@@ -10,7 +10,9 @@ Signals per file:
                       /``C_HIGH``/``C_MOD``/``C_LOW``/``C_ACCENT``/``C_CONV``
                       /``C_MACRO``/``C_TEXT``/``C_TEXT2``/``C_TEXT3``
                       assignments inside the file
-    inline_divs       count of inline ``st.markdown('<div style='`` blocks
+    inline_divs       count of inline ``style=`` attributes on any HTML tag
+                      (``<div>``, ``<p>``, ``<span>``, ``<section>``, ``<a>``,
+                      ``<td>``, ...) — name kept for CSV-schema stability
     unsafe_html       count of ``unsafe_allow_html=True`` calls
     random_calls      count of ``np.random.`` or ``random.`` usages
                       (proxy for mock data)
@@ -48,7 +50,14 @@ _PALETTE_ASSIGN_RE = re.compile(
     re.MULTILINE,
 )
 
-_INLINE_DIV_RE = re.compile(r"<div\s+style\s*=", re.IGNORECASE)
+# Inline styling on ANY HTML tag, not just <div>. Catches <p style=>,
+# <span style=>, <section style=>, <a href=".." style=>, <td style=>, etc.
+# `style` must be a standalone attribute: it follows the tag name or another
+# attribute, so it is preceded by whitespace (or the `<tagname`). This avoids
+# false positives like `data-style=` or `lifestyle=`. Kept under the legacy
+# name `inline_divs` for CSV-schema stability (see AuditRow / write_csv
+# fieldnames) — it just counts more now.
+_INLINE_DIV_RE = re.compile(r"<\w+(?:[^>]*\s)?style\s*=", re.IGNORECASE)
 
 _UNSAFE_HTML_RE = re.compile(r"unsafe_allow_html\s*=\s*True")
 
