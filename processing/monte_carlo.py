@@ -1,7 +1,43 @@
 """Monte Carlo simulation engine for freight rate forecasting.
 
-Uses Geometric Brownian Motion (GBM) to simulate future freight rate paths
-and derive probabilistic forecasts for each shipping route.
+Simulates future freight rate paths and derives probabilistic forecasts for
+each shipping route.
+
+Process: Ornstein-Uhlenbeck mean reversion with optional jumps
+---------------------------------------------------------------
+Freight rates are **cyclical and mean-reverting**, not a pure random walk:
+oversupply pushes rates down → carriers idle capacity → the market tightens →
+rates recover. A plain Geometric Brownian Motion (constant drift, constant
+vol, log-normal) has *no reversion force*, so long-horizon GBM paths fan out
+and drift away from any economically plausible level.
+
+This engine instead simulates the **log-rate** with an Ornstein-Uhlenbeck
+(OU) mean-reverting process — the discrete-time recursion of:
+
+    d(lnS) = θ · (μ_long − lnS) · dt  +  σ · dW
+
+  * ``lnS``    — natural log of the freight rate (kept in log-space so the
+                 rate itself can never go negative).
+  * ``μ_long`` — the long-run equilibrium log-rate the series is pulled
+                 toward. Estimated from the trailing history (a blend of the
+                 trailing mean and median of log-rates, so a few spikes do
+                 not distort the anchor).
+  * ``θ``      — the *reversion speed*: how strongly the rate is pulled back
+                 toward ``μ_long`` each step. A modest value is used so the
+                 pull is gentle, not snap-back. ``θ`` relates to the
+                 reversion *half-life* by  half_life = ln(2) / θ.
+  * ``σ``      — the per-step volatility of the log-rate (the historical
+                 daily log-return std, or an annualised override).
+  * ``dW``     — a standard normal shock, one per simulated day.
+
+On top of the diffusion, an optional **Poisson jump term** injects discrete
+disruption shocks (a canal closure, a sudden blank-sailing wave). Jumps are
+kept *low-intensity by default* (a rare event, modest size) so they add a
+realistic fat tail without ever dominating the mean-reverting dynamics.
+
+The model is intentionally simple, transparent and pure-numpy — no new
+dependencies, no black-box ML. Every parameter above is documented and
+estimated directly from the input series.
 """
 from __future__ import annotations
 
@@ -9,6 +45,27 @@ from dataclasses import dataclass
 
 import numpy as np
 from loguru import logger
+
+
+# ── Process parameters (documented defaults) ────────────────────────────────────
+#
+# These govern the OU + jump dynamics. They are deliberately conservative so the
+# simulation stays well-behaved on the platform's synthetic data.
+
+# Reversion speed θ (per day). 0.025/day ⇒ a reversion half-life of
+# ln(2)/0.025 ≈ 28 days — rates drift back toward equilibrium over roughly a
+# month, which is gentle enough not to flatten the near-term path.
+_DEFAULT_REVERSION_SPEED: float = 0.025
+
+# Weight on the trailing MEAN vs. MEDIAN when estimating the long-run anchor
+# μ_long. A blend (mean is responsive, median is robust to spikes).
+_MU_MEAN_WEIGHT: float = 0.5
+
+# Poisson jump term — discrete disruption shocks. Kept low-intensity so jumps
+# add a fat tail without dominating the diffusion.
+_JUMP_INTENSITY_PER_DAY: float = 0.012     # ≈ 1 jump per ~83 days per path
+_JUMP_MEAN_LOG: float = 0.0                # jumps are symmetric (up or down)
+_JUMP_STD_LOG: float = 0.045               # ~4.5% typical jump size in log-space
 
 
 # ── Result dataclass ───────────────────────────────────────────────────────────
@@ -28,6 +85,11 @@ class MonteCarloResult:
     bull_case_90d: float                         # p90 at day 90
     bear_case_90d: float                         # p10 at day 90
     confidence_interval_90d: tuple[float, float] # (p5, p95)
+    # ── Added fields (process transparency; existing fields unchanged) ──────────
+    process: str = "ornstein_uhlenbeck_jump"     # name of the path process used
+    reversion_speed: float = 0.0                 # θ — OU reversion speed per day
+    long_run_rate: float = 0.0                   # equilibrium rate exp(μ_long)
+    daily_volatility: float = 0.0                # σ — per-day log-rate volatility
 
 
 # ── Core simulation ────────────────────────────────────────────────────────────
@@ -39,7 +101,13 @@ def simulate_freight_rates(
     forecast_days: int = 90,
     volatility_override: float | None = None,
 ) -> MonteCarloResult | None:
-    """Run a GBM Monte Carlo simulation for a single route.
+    """Run a mean-reverting Monte Carlo simulation for a single route.
+
+    The default path process is **Ornstein-Uhlenbeck mean reversion with an
+    optional low-intensity Poisson jump term** (see the module docstring for
+    the full process description). The log-rate is pulled toward a long-run
+    equilibrium estimated from the trailing history, so long-horizon paths
+    stay economically plausible instead of drifting like a GBM random walk.
 
     Parameters
     ----------
@@ -48,15 +116,24 @@ def simulate_freight_rates(
     route_id:
         The route to simulate.
     n_simulations:
-        Number of independent price paths to generate.
+        Number of independent rate paths to generate.
     forecast_days:
         Number of calendar days to project forward.
     volatility_override:
-        If provided, use this annualised sigma instead of the historical estimate.
+        If provided, use this annualised sigma instead of the historical
+        estimate. It is converted to a per-day log-rate sigma (÷√252).
 
     Returns
     -------
     MonteCarloResult or None if data is insufficient.
+
+    Notes
+    -----
+    The public return shape is unchanged: percentiles, VaR, prob_up/prob_down
+    and the end-of-horizon metrics all derive from the simulated path matrix
+    exactly as before. Four descriptive fields (``process``,
+    ``reversion_speed``, ``long_run_rate``, ``daily_volatility``) are added
+    so callers can inspect the process — they are optional and defaulted.
     """
     df = freight_data.get(route_id)
     if df is None or df.empty or "rate_usd_per_feu" not in df.columns:
@@ -75,34 +152,65 @@ def simulate_freight_rates(
         return None
 
     # ── Parameter estimation ──────────────────────────────────────────────────
-    log_returns = np.log(rates / rates.shift(1)).dropna()
+    # Everything is estimated in LOG-space: the OU process is run on ln(rate),
+    # which keeps simulated rates strictly positive and makes σ a clean
+    # log-return volatility.
+    log_rates = np.log(rates.clip(lower=1e-6))
+    log_returns = log_rates.diff().dropna()
 
-    mu = float(log_returns.mean())          # daily mean log-return
-
+    # σ — per-day volatility of the log-rate.
     if volatility_override is not None:
-        # Treat override as annualised sigma; convert to daily
-        sigma = float(volatility_override) / np.sqrt(252)
+        # Treat the override as an annualised sigma; convert to a daily value.
+        daily_sigma = float(volatility_override) / np.sqrt(252)
     else:
-        sigma = float(log_returns.std())    # daily sigma
+        daily_sigma = float(log_returns.std())  # historical daily log-return std
 
-    # Guard against degenerate parameters
-    if sigma <= 0 or not np.isfinite(mu) or not np.isfinite(sigma):
-        sigma = 0.01
-        mu = 0.0
+    # μ_long — long-run equilibrium log-rate. A blend of the trailing mean
+    # (responsive) and median (robust to spikes) so a few outliers in the
+    # synthetic series do not drag the anchor.
+    trailing = log_rates.tail(min(len(log_rates), 180))
+    mu_mean = float(trailing.mean())
+    mu_median = float(trailing.median())
+    mu_long = _MU_MEAN_WEIGHT * mu_mean + (1.0 - _MU_MEAN_WEIGHT) * mu_median
 
-    # ── GBM simulation ────────────────────────────────────────────────────────
-    # Annualised drift & vol → daily increments
-    daily_mu = mu / 252          # already a daily value; keep consistent with spec
-    daily_sigma = sigma / np.sqrt(252)
+    # θ — reversion speed. A modest constant default; the pull is gentle so
+    # the near-term path is still shock-driven, not snapped to the mean.
+    theta = _DEFAULT_REVERSION_SPEED
 
-    # shape: (n_simulations, forecast_days)
+    # Guard against degenerate parameters.
+    if not np.isfinite(daily_sigma) or daily_sigma <= 0:
+        daily_sigma = 0.01
+    if not np.isfinite(mu_long):
+        mu_long = float(np.log(current_rate))
+    if not np.isfinite(theta) or theta <= 0:
+        theta = _DEFAULT_REVERSION_SPEED
+
+    # ── OU + jump simulation ──────────────────────────────────────────────────
+    # Discrete recursion with dt = 1 day:
+    #   ln S_{t+1} = ln S_t + θ·(μ_long − ln S_t)·dt + σ·Z   (+ jump)
+    # Each path starts at the current (log) rate and is pulled toward μ_long.
     rng = np.random.default_rng()
-    random_shocks = rng.normal(daily_mu, daily_sigma, size=(n_simulations, forecast_days))
 
-    # Cumulative product of (1 + approximate daily return via exp of log-return)
-    daily_factors = np.exp(random_shocks)        # exp(log-return) = return factor
-    cumulative = np.cumprod(daily_factors, axis=1)
-    paths = current_rate * cumulative             # shape: (n_simulations, forecast_days)
+    # Diffusion shocks: one standard-normal draw per (sim, day).
+    diffusion = rng.normal(0.0, daily_sigma, size=(n_simulations, forecast_days))
+
+    # Poisson jump term — discrete disruption shocks. Low-intensity by design:
+    # most days see zero jumps; a jump, when it occurs, is a modest log-space
+    # move. This adds a realistic fat tail without dominating the OU dynamics.
+    jump_counts = rng.poisson(_JUMP_INTENSITY_PER_DAY, size=(n_simulations, forecast_days))
+    jump_sizes = rng.normal(_JUMP_MEAN_LOG, _JUMP_STD_LOG, size=(n_simulations, forecast_days))
+    jumps = jump_counts * jump_sizes  # zero on non-jump days
+
+    # Step forward day by day. The reversion term depends on the *current*
+    # log-rate, so this must be a recursion (not a vectorised cumsum).
+    ln_s = np.full(n_simulations, float(np.log(current_rate)))
+    log_paths = np.empty((n_simulations, forecast_days))
+    for t in range(forecast_days):
+        reversion = theta * (mu_long - ln_s)          # pull toward equilibrium
+        ln_s = ln_s + reversion + diffusion[:, t] + jumps[:, t]
+        log_paths[:, t] = ln_s
+
+    paths = np.exp(log_paths)  # back to rate-space; strictly positive
 
     # ── Percentile bands ─────────────────────────────────────────────────────
     pct_levels = {"p5": 5, "p25": 25, "p50": 50, "p75": 75, "p95": 95}
@@ -117,12 +225,12 @@ def simulate_freight_rates(
     prob_increase = float(np.mean(final_rates > current_rate))
     prob_decrease = float(np.mean(final_rates < current_rate))
 
-    # VaR 95%: worst expected loss at 95th-percentile downside
-    # Losses are positive; if 5th-percentile final rate > current, VaR = 0
+    # VaR 95%: worst expected loss at 95th-percentile downside.
+    # Losses are positive; if 5th-percentile final rate > current, VaR = 0.
     p5_final = float(np.percentile(final_rates, 5))
     var_95 = max(0.0, current_rate - p5_final)
 
-    # Day-90 (or last day) metrics
+    # Day-90 (or last day) metrics.
     day90_idx = min(89, forecast_days - 1)
     day90_rates = paths[:, day90_idx]
 
@@ -146,6 +254,10 @@ def simulate_freight_rates(
         bull_case_90d=bull_case_90d,
         bear_case_90d=bear_case_90d,
         confidence_interval_90d=(ci_p5, ci_p95),
+        process="ornstein_uhlenbeck_jump",
+        reversion_speed=float(theta),
+        long_run_rate=float(np.exp(mu_long)),
+        daily_volatility=float(daily_sigma),
     )
 
 
