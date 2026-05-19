@@ -729,40 +729,86 @@ if "nav_section" not in st.session_state:
 
 # Inject WSJ section nav CSS
 st.markdown("""<style>
-.sec-nav-btn > div > button {
-    background: transparent !important;
+/* ── Sidebar masthead ──────────────────────────────────────────── */
+.nav-brand { padding: 4px 4px 12px; margin-bottom: 2px; }
+.nav-brand-title {
+    font-family: 'Libre Baskerville','Georgia',serif;
+    font-size: 1.18rem; font-weight: 700; color: #e8e6e1;
+    letter-spacing: -0.01em; line-height: 1.15;
+    display: flex; align-items: center; gap: 8px;
+}
+.nav-brand-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    background: #2e9e6e; box-shadow: 0 0 8px rgba(46,158,110,0.7);
+    animation: nav-pulse 2.6s ease-in-out infinite;
+}
+@keyframes nav-pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.35 } }
+.nav-brand-sub {
+    font-family: 'Libre Franklin',sans-serif; font-size: 0.6rem;
+    font-weight: 600; color: #6b6760; letter-spacing: 0.16em;
+    text-transform: uppercase; margin-top: 6px;
+}
+.nav-cluster-label {
+    font-family: 'Libre Franklin',sans-serif; font-size: 0.58rem;
+    font-weight: 700; color: #6b6760; letter-spacing: 0.14em;
+    text-transform: uppercase; padding: 15px 8px 5px;
+}
+/* ── Sidebar nav buttons ───────────────────────────────────────── */
+.sec-nav-btn > div > button, .sec-nav-active > div > button {
     border: none !important;
-    border-bottom: 1px dotted rgba(232,230,225,0.06) !important;
-    border-radius: 0 !important;
-    color: #9a968e !important;
-    font-size: 0.82rem !important;
-    font-weight: 500 !important;
+    border-left: 2px solid transparent !important;
+    border-radius: 6px !important;
+    font-size: 0.83rem !important;
     font-family: 'Libre Franklin', sans-serif !important;
     text-align: left !important;
-    transition: all 0.15s ease !important;
-    padding: 8px 10px !important;
-    margin-bottom: 0 !important;
+    padding: 9px 12px !important;
+    margin-bottom: 1px !important;
+    transition: all 0.18s cubic-bezier(0.4,0,0.2,1) !important;
+}
+.sec-nav-btn > div > button {
+    background: transparent !important;
+    color: #9a968e !important;
+    font-weight: 500 !important;
 }
 .sec-nav-btn > div > button:hover {
-    background: rgba(53,114,176,0.04) !important;
+    background: rgba(53,114,176,0.05) !important;
+    border-left-color: rgba(53,114,176,0.35) !important;
     color: #e8e6e1 !important;
 }
 .sec-nav-active > div > button {
-    background: rgba(53,114,176,0.06) !important;
-    border-left: 2px solid #3572b0 !important;
+    background: var(--sec-bg, rgba(53,114,176,0.13)) !important;
+    border-left: 3px solid var(--sec-accent, #3572b0) !important;
     color: #e8e6e1 !important;
     font-weight: 600 !important;
 }
 </style>""", unsafe_allow_html=True)
 
 # Render nav in sidebar
+_NAV_CLUSTER2 = "trade_macro"  # second visual group starts here
 with st.sidebar:
-    st.divider()
-    st.caption("**Navigation**")
+    st.markdown(
+        '<div class="nav-brand">'
+        '<div class="nav-brand-title"><span class="nav-brand-dot"></span>ShipTracker</div>'
+        '<div class="nav-brand-sub">Shipping Intelligence Platform</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="nav-cluster-label">Core</div>', unsafe_allow_html=True)
     for sec_key, sec_icon, sec_label, sec_desc in SECTIONS:
+        if sec_key == _NAV_CLUSTER2:
+            st.markdown('<div class="nav-cluster-label">Analysis &amp; Risk</div>',
+                        unsafe_allow_html=True)
         active = st.session_state["nav_section"] == sec_key
-        css_class = "sec-nav-active" if active else "sec-nav-btn"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if active:
+            _ac = SECTION_COLORS.get(sec_key, "#3572b0").lstrip("#")
+            _rgb = f"{int(_ac[0:2], 16)},{int(_ac[2:4], 16)},{int(_ac[4:6], 16)}"
+            st.markdown(
+                f'<div class="sec-nav-active" '
+                f'style="--sec-accent:#{_ac};--sec-bg:rgba({_rgb},0.13);">',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown('<div class="sec-nav-btn">', unsafe_allow_html=True)
         btn_label = f"{sec_icon}  {sec_label}"
         if alerts and sec_key == "risk":
             btn_label += f"  ({len(alerts)})"
