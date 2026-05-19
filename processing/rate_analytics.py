@@ -25,7 +25,10 @@ def _safe_series(data: dict, key: str) -> pd.Series | None:
     if isinstance(val, pd.DataFrame):
         if val.empty:
             return None
-        return val.iloc[:, 0].dropna()
+        # Freight frames are columnar (date, route_id, rate_usd_per_feu, ...);
+        # select the rate column by name so we never positionally grab `date`.
+        col = val["rate_usd_per_feu"] if "rate_usd_per_feu" in val.columns else val.iloc[:, 0]
+        return pd.to_numeric(col, errors="coerce").dropna()
     if isinstance(val, pd.Series):
         return val.dropna()
     return None
