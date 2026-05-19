@@ -57,6 +57,75 @@ _CATEGORY_SHARES = {
     "chemicals": 0.12,   "apparel": 0.08,  "metals": 0.07, "agriculture": 0.05,
 }
 
+# Country-specific export sector mix (ISO2 → category → share). Hand-tuned to
+# reflect each economy's real export profile; exporters differ markedly in
+# their electronics / machinery / automotive / apparel / agriculture mix.
+# Countries not listed here fall back to the global _CATEGORY_SHARES table.
+# Each row is normalised to sum to 1.0 before use, so the numbers below only
+# need to be roughly proportional.
+_COUNTRY_CATEGORY_SHARES: dict[str, dict[str, float]] = {
+    # China — electronics/machinery powerhouse, large apparel base
+    "CN": {"electronics": 0.34, "machinery": 0.24, "automotive": 0.10,
+           "chemicals": 0.10, "apparel": 0.12, "metals": 0.06, "agriculture": 0.04},
+    # United States — machinery/automotive/chemicals heavy, big agriculture
+    "US": {"electronics": 0.20, "machinery": 0.24, "automotive": 0.16,
+           "chemicals": 0.18, "apparel": 0.02, "metals": 0.06, "agriculture": 0.14},
+    # Germany — automotive and machinery dominated
+    "DE": {"electronics": 0.14, "machinery": 0.27, "automotive": 0.30,
+           "chemicals": 0.18, "apparel": 0.02, "metals": 0.06, "agriculture": 0.03},
+    # Japan — automotive and machinery
+    "JP": {"electronics": 0.18, "machinery": 0.24, "automotive": 0.34,
+           "chemicals": 0.13, "apparel": 0.01, "metals": 0.07, "agriculture": 0.03},
+    # South Korea — electronics-led (semiconductors), strong automotive
+    "KR": {"electronics": 0.38, "machinery": 0.16, "automotive": 0.21,
+           "chemicals": 0.13, "apparel": 0.02, "metals": 0.07, "agriculture": 0.03},
+    # Taiwan — semiconductor/electronics concentration
+    "TW": {"electronics": 0.52, "machinery": 0.18, "automotive": 0.05,
+           "chemicals": 0.13, "apparel": 0.02, "metals": 0.07, "agriculture": 0.03},
+    # Hong Kong — re-export entrepôt skewed to electronics
+    "HK": {"electronics": 0.45, "machinery": 0.16, "automotive": 0.05,
+           "chemicals": 0.09, "apparel": 0.16, "metals": 0.06, "agriculture": 0.03},
+    # Singapore — electronics and chemicals (refining/petrochemicals)
+    "SG": {"electronics": 0.36, "machinery": 0.19, "automotive": 0.04,
+           "chemicals": 0.28, "apparel": 0.02, "metals": 0.07, "agriculture": 0.04},
+    # Netherlands — diversified entrepôt, notable agriculture/agri-food
+    "NL": {"electronics": 0.22, "machinery": 0.20, "automotive": 0.11,
+           "chemicals": 0.20, "apparel": 0.04, "metals": 0.07, "agriculture": 0.16},
+    # Belgium — chemicals/pharma heavy
+    "BE": {"electronics": 0.12, "machinery": 0.16, "automotive": 0.16,
+           "chemicals": 0.34, "apparel": 0.03, "metals": 0.09, "agriculture": 0.10},
+    # Malaysia — electronics and palm-oil agriculture
+    "MY": {"electronics": 0.41, "machinery": 0.15, "automotive": 0.05,
+           "chemicals": 0.13, "apparel": 0.04, "metals": 0.07, "agriculture": 0.15},
+    # United Arab Emirates — fuels skew into chemicals/metals here
+    "AE": {"electronics": 0.16, "machinery": 0.14, "automotive": 0.12,
+           "chemicals": 0.30, "apparel": 0.04, "metals": 0.20, "agriculture": 0.04},
+    # Sri Lanka — apparel-dominated, agriculture (tea)
+    "LK": {"electronics": 0.06, "machinery": 0.06, "automotive": 0.03,
+           "chemicals": 0.07, "apparel": 0.55, "metals": 0.05, "agriculture": 0.18},
+    # Morocco — automotive assembly, apparel, phosphate-driven chemicals
+    "MA": {"electronics": 0.12, "machinery": 0.10, "automotive": 0.27,
+           "chemicals": 0.22, "apparel": 0.16, "metals": 0.05, "agriculture": 0.08},
+    # Greece — agriculture and refined-product chemicals
+    "GR": {"electronics": 0.07, "machinery": 0.12, "automotive": 0.05,
+           "chemicals": 0.30, "apparel": 0.06, "metals": 0.13, "agriculture": 0.27},
+    # United Kingdom — machinery/automotive/chemicals
+    "GB": {"electronics": 0.18, "machinery": 0.22, "automotive": 0.22,
+           "chemicals": 0.20, "apparel": 0.03, "metals": 0.06, "agriculture": 0.09},
+    # Brazil — agriculture and metals (ore) heavy
+    "BR": {"electronics": 0.07, "machinery": 0.13, "automotive": 0.12,
+           "chemicals": 0.10, "apparel": 0.02, "metals": 0.18, "agriculture": 0.38},
+}
+
+
+def _category_shares_for_country(iso2: str) -> dict[str, float]:
+    """Return the export sector-share table for a country, normalised to sum
+    to 1.0. Falls back to the global shares for countries not in the
+    hand-tuned per-country table."""
+    raw = _COUNTRY_CATEGORY_SHARES.get(iso2, _CATEGORY_SHARES)
+    total = sum(raw.values()) or 1.0
+    return {cat: val / total for cat, val in raw.items()}
+
 
 @st.cache_data(ttl=604800, hash_funcs={CacheManager: lambda _: None})
 def fetch_all_ports(
@@ -234,8 +303,11 @@ def _wb_merchandise_fallback(
         exp_total = country_total.get("exports", 5e10)
         imp_total = country_total.get("imports", 5e10)
 
+        # Country-specific export sector mix (falls back to global shares).
+        category_shares = _category_shares_for_country(iso2)
+
         rows = []
-        for category, share in _CATEGORY_SHARES.items():
+        for category, share in category_shares.items():
             # Map category to first HS code in that category
             hs_code = next(
                 (k for k, v in _HS_CATEGORY_MAP.items() if v == category), "9999"

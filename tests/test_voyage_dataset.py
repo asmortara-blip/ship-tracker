@@ -47,6 +47,62 @@ def test_build_voyage_fleet_different_seeds_differ() -> None:
     assert a != b
 
 
+# ── Realism: serial correlation + delay/congestion coupling ─────────────────
+
+
+def test_delays_are_serially_correlated_within_route(fleet: list[Voyage]) -> None:
+    """Every voyage on a route shares one route-level congestion state.
+
+    Delays are modeled as ``route_congestion_state + idiosyncratic noise``,
+    so each route must expose exactly one congestion state across all of its
+    voyages — that is the structural signature of serial correlation.
+    """
+    by_route: dict[str, list[Voyage]] = {}
+    for v in fleet:
+        by_route.setdefault(v.route_id, []).append(v)
+
+    for route_id, voyages in by_route.items():
+        states = {v.route_congestion_state for v in voyages}
+        assert len(states) == 1, (
+            f"route {route_id} has multiple congestion states {states}"
+        )
+        if len(voyages) >= 3:
+            state = voyages[0].route_congestion_state
+            # Each voyage's delay sits near the shared state (noise is small).
+            for v in voyages:
+                assert abs(v.delay_days - state) < 5.0
+
+
+def test_delay_and_congestion_are_positively_coupled(fleet: list[Voyage]) -> None:
+    """A more-delayed voyage arrives into a more congested port.
+
+    congestion_at_dest is a function of the voyage's own delay, so across the
+    fleet the two series must be positively correlated, not independent.
+    """
+    delays = [v.delay_days for v in fleet]
+    cong = [v.congestion_at_dest for v in fleet]
+    n = len(delays)
+    mean_d = sum(delays) / n
+    mean_c = sum(cong) / n
+    cov = sum((d - mean_d) * (c - mean_c) for d, c in zip(delays, cong)) / n
+    var_d = sum((d - mean_d) ** 2 for d in delays) / n
+    var_c = sum((c - mean_c) ** 2 for c in cong) / n
+    corr = cov / ((var_d ** 0.5) * (var_c ** 0.5)) if var_d and var_c else 0.0
+    assert corr > 0.2, f"delay/congestion correlation too weak: {corr:.3f}"
+
+
+def test_chokepoint_severity_is_a_known_tier(fleet: list[Voyage]) -> None:
+    """The reroute penalty is tiered, not flat: severity ∈ a known set."""
+    valid = {"", "minor", "moderate", "severe"}
+    assert all(v.chokepoint_severity in valid for v in fleet)
+    # A disrupted voyage carries a non-empty tier; a clean one carries "".
+    for v in fleet:
+        if v.chokepoints_on_route:
+            assert v.chokepoint_severity in {"minor", "moderate", "severe"}
+        else:
+            assert v.chokepoint_severity == ""
+
+
 def test_build_voyage_fleet_default_seed_runs() -> None:
     """A ``None`` seed falls back to the date-derived seed and still builds."""
     fleet = build_voyage_fleet()

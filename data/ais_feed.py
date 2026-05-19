@@ -59,6 +59,20 @@ _SEASONAL = {
     10: 1.15, 11: 1.05, 12: 0.90,  # Oct-Dec: wind-down
 }
 
+# Per-port seasonal sensitivity: how strongly a port's congestion tracks the
+# global container-shipping season. Trans-Pacific export hubs swing hard with
+# US peak-season demand; Middle East / transshipment hubs are far steadier.
+# Multiplier blends toward 1.0 (no seasonality) as sensitivity → 0.
+_PORT_SEASONAL_SENSITIVITY: dict[str, float] = {
+    "CNSHA": 1.15, "CNNBO": 1.15, "CNSZN": 1.15, "CNTAO": 1.10,  # China export hubs
+    "CNTXG": 1.05, "HKHKG": 1.00, "KRPUS": 0.95, "JPYOK": 0.85,
+    "USLAX": 1.20, "USLGB": 1.20, "USNYC": 1.00, "USSAV": 1.05,  # US import gateways
+    "NLRTM": 0.80, "BEANR": 0.80, "DEHAM": 0.80, "GBFXT": 0.80,  # N Europe range
+    "SGSIN": 0.55, "MYPKG": 0.60, "MYTPP": 0.60, "LKCMB": 0.55,  # transshipment hubs
+    "AEJEA": 0.50, "GRPIR": 0.65, "MATNM": 0.60, "TWKHH": 0.85,
+    "BRSAO": 0.70,
+}
+
 
 @st.cache_data(ttl=21600, hash_funcs={CacheManager: lambda _: None})
 def fetch_vessel_counts(
@@ -161,27 +175,56 @@ def _fetch_portwatch_all() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _interp_seasonal(month: float) -> float:
+    """Linearly interpolate the monthly seasonal multiplier across a fractional
+    month so congestion drifts smoothly day-to-day instead of stepping on the
+    1st of each month."""
+    lo = int(month)
+    frac = month - lo
+    m0 = ((lo - 1) % 12) + 1
+    m1 = (lo % 12) + 1
+    return _SEASONAL[m0] * (1.0 - frac) + _SEASONAL[m1] * frac
+
+
 def _synthetic_congestion(port_locode: str) -> pd.DataFrame:
     """Generate realistic synthetic vessel count using baselines + seasonal adjustment.
 
     Uses:
     - Known 2024 baseline vessel counts per port
-    - Monthly seasonal multipliers (peak season Jul-Sep)
-    - ±10% random noise for realism
+    - Smoothly interpolated monthly seasonal curve (peak season Jul-Sep)
+    - Port-specific seasonal sensitivity (export hubs swing harder than
+      transshipment hubs)
+    - Smooth deterministic daily variation (a slow drift + a small daily
+      wobble) instead of week-boundary steps
     """
-    import math, random
+    import math
 
     baseline = _PORT_VESSEL_BASELINES.get(port_locode, 40)
-    month = datetime.now().month
-    seasonal = _SEASONAL.get(month, 1.0)
+    now_local = datetime.now()
 
-    # Deterministic noise seeded by port name + week of year
-    week = datetime.now().isocalendar()[1]
-    seed = hash(port_locode + str(week)) % 1000
-    random.seed(seed)
-    noise = 1.0 + (random.random() - 0.5) * 0.20  # ±10%
+    # Fractional month so the seasonal curve is continuous across month ends.
+    days_in_month = 30.4
+    frac_month = now_local.month + (now_local.day - 1) / days_in_month
+    seasonal_raw = _interp_seasonal(frac_month)
 
-    vessel_count = max(1, int(baseline * seasonal * noise))
+    # Blend the global seasonal swing toward 1.0 by the port's sensitivity:
+    # sensitivity 1.0 → full swing, 0.0 → flat year-round.
+    sensitivity = _PORT_SEASONAL_SENSITIVITY.get(port_locode, 0.85)
+    seasonal = 1.0 + (seasonal_raw - 1.0) * sensitivity
+
+    # Smooth daily variation: a slow multi-day drift plus two gentler wobbles
+    # at shorter periods for texture. All three are continuous functions of
+    # day-of-year, so consecutive days differ by only a few percent — no jumps
+    # on week boundaries, and the smoothness bound holds for any port phase.
+    doy = now_local.timetuple().tm_yday
+    port_phase = (hash(port_locode) % 1000) / 1000.0 * 2.0 * math.pi
+    slow_drift = 0.050 * math.sin(2.0 * math.pi * doy / 23.0 + port_phase)
+    daily_wobble = 0.020 * math.sin(2.0 * math.pi * doy / 7.0 + port_phase * 1.7)
+    fast_wobble = 0.010 * math.sin(2.0 * math.pi * doy / 4.0 + port_phase * 2.3)
+
+    variation = 1.0 + slow_drift + daily_wobble + fast_wobble
+
+    vessel_count = max(1, int(round(baseline * seasonal * variation)))
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     df = pd.DataFrame([{

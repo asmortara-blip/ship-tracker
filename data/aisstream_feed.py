@@ -121,6 +121,125 @@ _PORT_NAMES_DEST = [
     "JPYOK", "HKHKG", "BEANR", "AEJEA", "USNYC", "LKCMB",
 ]
 
+
+# ── Route-biased destination model ───────────────────────────────────────────
+#
+# A vessel near a port is far more likely to be heading to a destination served
+# by an actual shipping lane out of that port than to a random global port.
+# We derive per-origin destination weights from routes/route_registry.py and
+# blend in a small uniform background so unlisted destinations remain possible.
+
+_AVG_TRANSIT_DAYS = 16  # fallback transit when an O→D pair has no registered lane
+
+
+def _build_route_dest_tables() -> tuple[dict[str, dict[str, float]], dict[tuple[str, str], int]]:
+    """Build, from the route registry:
+
+    - dest_weights: origin_locode → {dest_locode: weight} destination bias
+    - transit_lookup: (origin, dest) → typical transit days
+
+    Built once at import time. Degrades gracefully to empty tables if the
+    route registry cannot be imported.
+    """
+    dest_weights: dict[str, dict[str, float]] = {}
+    transit_lookup: dict[tuple[str, str], int] = {}
+    try:
+        from routes.route_registry import ROUTES
+    except Exception as exc:  # pragma: no cover - registry always present in repo
+        logger.debug(f"route registry unavailable for synthetic AIS bias: {exc}")
+        return dest_weights, transit_lookup
+
+    for route in ROUTES:
+        o, d = route.origin_locode, route.dest_locode
+        # A registered lane gets a heavy weight; busier (shorter intra-Asia and
+        # the headline Trans-Pacific) lanes are weighted up via inverse-ish
+        # transit so feeder lanes do not get drowned out.
+        weight = 3.0 if route.transit_days <= 15 else 2.0
+        dest_weights.setdefault(o, {})
+        dest_weights[o][d] = dest_weights[o].get(d, 0.0) + weight
+        # Keep the shortest transit if a pair appears on multiple lanes.
+        prev = transit_lookup.get((o, d))
+        if prev is None or route.transit_days < prev:
+            transit_lookup[(o, d)] = route.transit_days
+
+    return dest_weights, transit_lookup
+
+
+_ROUTE_DEST_WEIGHTS, _ROUTE_TRANSIT = _build_route_dest_tables()
+
+
+def _destination_for_port(origin: str, rng: random.Random) -> str:
+    """Pick a plausible destination for a vessel near *origin*.
+
+    Destinations on registered lanes out of the origin are heavily favoured; a
+    small uniform background over the global destination pool keeps every other
+    port reachable. Falls back to a uniform pick when the origin has no lanes.
+    """
+    lane_dests = _ROUTE_DEST_WEIGHTS.get(origin, {})
+    weighted: dict[str, float] = {}
+
+    # Registered lanes out of the origin take roughly four-fifths of the
+    # probability mass; a uniform background over the global pool keeps the
+    # remaining ~18% open to any other port, so off-lane destinations stay
+    # plausible without drowning out the real lanes. The background is scaled
+    # to the origin's total lane weight so the lane / off-lane split stays
+    # stable regardless of how many lanes a given port has.
+    lane_total = sum(lane_dests.values())
+    if lane_total > 0:
+        bg = (lane_total * 0.22) / max(1, len(_PORT_NAMES_DEST))
+    else:
+        bg = 1.0  # origin has no registered lanes — fall back to uniform pick
+    for dest in _PORT_NAMES_DEST:
+        weighted[dest] = weighted.get(dest, 0.0) + bg
+    # Lane destinations from the route registry (may include ports outside the
+    # default destination pool) get the dominant weight.
+    for dest, w in lane_dests.items():
+        weighted[dest] = weighted.get(dest, 0.0) + w
+
+    # A vessel never lists its own port as destination.
+    weighted.pop(origin, None)
+    if not weighted:
+        return rng.choice(_PORT_NAMES_DEST)
+
+    dests = list(weighted.keys())
+    wts = [weighted[d] for d in dests]
+    return rng.choices(dests, weights=wts, k=1)[0]
+
+
+def _transit_days(origin: str, dest: str) -> int:
+    """Typical transit days for an origin→destination pair.
+
+    Uses the route registry when the pair is a registered lane; otherwise
+    estimates from great-circle distance between the two ports, falling back to
+    a global average if either port location is unknown.
+    """
+    direct = _ROUTE_TRANSIT.get((origin, dest))
+    if direct is not None:
+        return direct
+    reverse = _ROUTE_TRANSIT.get((dest, origin))
+    if reverse is not None:
+        return reverse
+
+    # Estimate from distance: container ships average ~20 kts ≈ 480 nm/day.
+    o_cfg = _PORT_VESSEL_CONFIG.get(origin)
+    d_cfg = _PORT_VESSEL_CONFIG.get(dest)
+    if o_cfg and d_cfg and "lat" in o_cfg and "lat" in d_cfg:
+        dist_nm = _great_circle_nm(o_cfg["lat"], o_cfg["lon"], d_cfg["lat"], d_cfg["lon"])
+        # +1.5 days of port/pilotage/approach overhead.
+        return max(2, int(round(dist_nm / 480.0 + 1.5)))
+    return _AVG_TRANSIT_DAYS
+
+
+def _great_circle_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in nautical miles between two lat/lon points."""
+    r_nm = 3440.065  # Earth radius in nautical miles
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = (math.sin(dphi / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2)
+    return 2 * r_nm * math.asin(min(1.0, math.sqrt(a)))
+
 # Per-port realistic vessel pools (baselines scaled by port size)
 _PORT_VESSEL_CONFIG: dict[str, dict] = {
     "USLAX": {"count": (10, 16), "lat": 33.74, "lon": -118.27, "spread": 0.6},
@@ -154,9 +273,57 @@ _PORT_VESSEL_CONFIG: dict[str, dict] = {
 _SYNTH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _SYNTH_TTL_SECS = 1800  # 30-minute synthetic cache
 
+# Monthly container-shipping seasonal curve (mirrors data/ais_feed.py so the
+# synthetic vessel feed and the synthetic congestion feed tell the same story).
+_SEASONAL_MONTH = {
+    1: 0.85, 2: 0.75, 3: 0.95, 4: 1.00, 5: 1.05, 6: 1.10,
+    7: 1.15, 8: 1.20, 9: 1.25, 10: 1.15, 11: 1.05, 12: 0.90,
+}
 
-def _synth_vessel(mmsi_base: int, idx: int, lat_c: float, lon_c: float, spread: float) -> dict:
-    """Generate a single plausible synthetic vessel dict."""
+
+def _port_congestion(locode: str) -> float:
+    """Estimate a [0,1] congestion level for a port for the synthetic feed.
+
+    Combines the port's relative size (its configured vessel-count range vs.
+    the busiest port) with the current month's seasonal multiplier. Used only
+    to make the synthetic anchored-vessel fraction congestion-aware — busier,
+    in-season ports show more vessels waiting at anchor.
+    """
+    cfg = _PORT_VESSEL_CONFIG.get(locode)
+    if not cfg:
+        size = 0.4  # unknown port: assume mid-small
+    else:
+        lo, hi = cfg["count"]
+        mid = (lo + hi) / 2.0
+        # Normalise against the busiest configured port (Shanghai ≈ 23).
+        size = min(1.0, mid / 23.0)
+
+    seasonal = _SEASONAL_MONTH.get(datetime.now(timezone.utc).month, 1.0)
+    # Seasonal runs 0.75–1.25; recentre so an average month is neutral.
+    level = size * (0.7 + 0.5 * (seasonal - 0.75))
+    return max(0.0, min(1.0, level))
+
+
+def _synth_vessel(
+    mmsi_base: int,
+    idx: int,
+    lat_c: float,
+    lon_c: float,
+    spread: float,
+    origin: str = "",
+    congestion: float = 0.4,
+) -> dict:
+    """Generate a single plausible synthetic vessel dict.
+
+    Parameters
+    ----------
+    origin : str
+        LOCODE of the port this vessel is near. Used to bias the destination
+        toward ports actually served by lanes out of *origin*.
+    congestion : float
+        [0,1] congestion level of the origin port. Raises the probability the
+        vessel is anchored (waiting for a berth).
+    """
     rng = random.Random(mmsi_base + idx * 7919)
 
     v_type_code = rng.choice([70, 71, 74, 80, 89, 60, 30, 79])
@@ -183,8 +350,13 @@ def _synth_vessel(mmsi_base: int, idx: int, lat_c: float, lon_c: float, spread: 
         length = rng.randint(80, 200)
         speed = round(rng.uniform(6.0, 14.0), 1)
 
-    # Vessels near port may be anchored/slow
-    anchored = rng.random() < 0.25
+    # Route-biased destination: prefer ports on real lanes out of the origin.
+    dest = _destination_for_port(origin, rng) if origin else rng.choice(_PORT_NAMES_DEST)
+
+    # Congestion-aware anchored fraction: a base ~18% rises toward ~48% as the
+    # origin port gets more congested (more ships waiting for a berth).
+    anchored_prob = 0.18 + 0.30 * congestion
+    anchored = rng.random() < anchored_prob
     if anchored:
         speed = round(rng.uniform(0.0, 1.0), 1)
 
@@ -192,8 +364,16 @@ def _synth_vessel(mmsi_base: int, idx: int, lat_c: float, lon_c: float, spread: 
     lat = lat_c + rng.uniform(-spread, spread)
     lon = lon_c + rng.uniform(-spread, spread)
 
-    dest = rng.choice(_PORT_NAMES_DEST)
-    eta_hours = rng.randint(12, 240)
+    # ETA clustering: cluster around the realistic transit time for this
+    # origin→destination pair rather than a flat 12–240h spread. A vessel still
+    # at the origin has most of the voyage ahead; one already under way is
+    # somewhere along it — model that as a fraction of the full transit.
+    transit_h = _transit_days(origin, dest) * 24.0 if origin else _AVG_TRANSIT_DAYS * 24.0
+    progress = rng.random()  # 0 = just departed, 1 = nearly arrived
+    remaining = transit_h * (1.0 - progress)
+    # Small ±15% scheduling noise (weather, speed, port slot timing).
+    remaining *= rng.uniform(0.85, 1.15)
+    eta_hours = int(max(6, min(360, round(remaining))))
     eta_dt = datetime.now(timezone.utc) + timedelta(hours=eta_hours)
 
     return {
@@ -227,10 +407,18 @@ def _synthetic_vessels_for_port(locode: str, lat: float, lon: float) -> list[dic
     count = rng.randint(*cfg["count"])
     spread = cfg.get("spread", 0.4)
 
+    # Origin port congestion drives the anchored-vessel fraction. Only a real
+    # port LOCODE has a meaningful congestion level; route/coordinate keys fall
+    # back to the neutral default inside _port_congestion.
+    congestion = _port_congestion(locode) if locode in _PORT_VESSEL_CONFIG else 0.4
+
     # Generate a MMSI base that is deterministic but varied per port
     mmsi_base = (abs(hash(locode)) % 900_000_000) + 100_000_000
 
-    vessels = [_synth_vessel(mmsi_base, i, lat, lon, spread) for i in range(count)]
+    vessels = [
+        _synth_vessel(mmsi_base, i, lat, lon, spread, origin=locode, congestion=congestion)
+        for i in range(count)
+    ]
     _SYNTH_CACHE[locode] = (now, vessels)
     return vessels
 

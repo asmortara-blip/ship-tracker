@@ -10,11 +10,18 @@ so the fleet agrees with the rest of the platform.
 Realism without losing determinism:
 
 * The fleet is seeded from the *current date* — stable within a session,
-  refreshes day to day (today = 2026-05-18).
-* The delay distribution is **biased toward lanes that are genuinely
-  disrupted**: routes touched by an active maritime chokepoint disruption
-  (``processing.chokepoint_analyzer``) or a current-season weather alert
-  (``processing.weather_risk``) carry materially larger delays.
+  refreshes day to day.
+* Delays are **serially correlated within a route**: each lane draws one
+  ``route_congestion_state`` and every voyage's delay is that state plus a
+  small idiosyncratic noise term. Disruption therefore *clusters* on a lane
+  instead of scattering voyage by voyage.
+* Lanes touched by an active maritime chokepoint disruption
+  (``processing.chokepoint_analyzer``) carry a **severity-tiered** reroute
+  penalty (minor / moderate / severe), and current-season weather alerts
+  (``processing.weather_risk``) shift the whole lane's state.
+* Destination-port congestion is **coupled to delay**: a delayed voyage
+  arrives into a more congested port. Congestion = port-specific baseline
+  (busy hubs read busier) + a delay-driven term + small noise.
 * Vessel name pools are imported from ``data.aisstream_feed`` rather than
   duplicated.
 
@@ -58,6 +65,51 @@ _STATUS_ON_TIME_MAX = 1.0      # delay <= 1d  -> "On Schedule"
 _STATUS_MINOR_MAX = 3.0        # 1d < delay <= 3d -> "Minor Delay"
 # delay > 3d -> "Major Delay"
 
+# ── Chokepoint severity tiers ────────────────────────────────────────────────
+# A flat reroute penalty is unrealistic: a minor advisory and a full
+# Suez-class diversion are not the same event. Each tier carries its own
+# (mean, sigma) delay distribution in days; the tail widens with severity.
+_CHOKE_SEVERITY_TIERS: dict[str, tuple[float, float]] = {
+    "minor":    (2.5, 1.2),    # advisory / slow steaming — modest add
+    "moderate": (6.0, 2.2),    # partial diversion, queueing
+    "severe":   (11.0, 3.5),   # full Cape-of-Good-Hope-class reroute
+}
+# Probability weights for which tier a disrupted lane lands in (per route).
+_CHOKE_TIER_WEIGHTS: dict[str, float] = {
+    "minor":    0.30,
+    "moderate": 0.45,
+    "severe":   0.25,
+}
+
+# ── Serial-correlation knobs ─────────────────────────────────────────────────
+# Each route draws ONE congestion state; every voyage's delay is that state
+# plus a small idiosyncratic vessel-level noise term. This makes delays
+# *cluster* on genuinely disrupted lanes instead of scattering per voyage.
+_ROUTE_STATE_MEAN = 0.3        # baseline route congestion state (days)
+_ROUTE_STATE_SIGMA = 0.9       # spread of the route-level state
+_VOYAGE_NOISE_SIGMA = 0.6      # per-voyage idiosyncratic noise around the state
+
+# ── Port congestion baselines ────────────────────────────────────────────────
+# Busy hubs read structurally busier than quiet ports. We don't hand-curate
+# every LOCODE; instead a handful of mega-hubs get an explicit elevated
+# baseline and everything else gets a stable hash-derived baseline so the
+# distribution is varied but deterministic.
+_PORT_CONGESTION_BASELINE: dict[str, float] = {
+    "CNSHA": 0.52,   # Shanghai — busiest container port on earth
+    "SGSIN": 0.48,   # Singapore — transhipment mega-hub
+    "CNNGB": 0.47,   # Ningbo-Zhoushan
+    "CNSZX": 0.45,   # Shenzhen
+    "NLRTM": 0.44,   # Rotterdam — busiest in Europe
+    "USLAX": 0.46,   # Los Angeles — chronic West Coast backlog
+    "USLGB": 0.45,   # Long Beach
+    "USNYC": 0.40,   # New York / New Jersey
+    "DEHAM": 0.39,   # Hamburg
+    "BEANR": 0.38,   # Antwerp
+    "AEJEA": 0.36,   # Jebel Ali
+}
+# Baseline used when a port is not in the explicit hub table.
+_PORT_CONGESTION_DEFAULT = 0.28
+
 
 @dataclass
 class Voyage:
@@ -83,6 +135,14 @@ class Voyage:
     congestion_at_dest: float      # 0.0 - 1.0 modeled congestion at the destination port
     weather_delay_days: float
     chokepoints_on_route: list[str]
+    # ── Added fields (backward-compatible; default-valued) ──────────────────
+    # Severity tier of the chokepoint disruption affecting this lane, if any:
+    # "minor" | "moderate" | "severe" | "" (none). Shared by every voyage on a
+    # disrupted route because it is a property of the lane, not the vessel.
+    chokepoint_severity: str = ""
+    # The per-route congestion *state* (days) this voyage's delay was drawn
+    # around — exposes the serial-correlation structure to consumers/tests.
+    route_congestion_state: float = 0.0
 
 
 # ── Provenance ───────────────────────────────────────────────────────────────
@@ -193,6 +253,28 @@ def _vessel_name_pool(vessel_type: str) -> list[str]:
     return _CONTAINER_NAMES
 
 
+def _port_congestion_baseline(locode: str) -> float:
+    """Structural congestion baseline for a destination port in [0, 1].
+
+    Mega-hubs carry an explicit elevated baseline; every other port gets a
+    stable hash-derived value so the fleet shows port-to-port variation
+    without us hand-curating every LOCODE. Deterministic for a given LOCODE.
+    """
+    if locode in _PORT_CONGESTION_BASELINE:
+        return _PORT_CONGESTION_BASELINE[locode]
+    # Stable pseudo-random offset in roughly [-0.10, +0.14] around the default.
+    h = sum(ord(c) for c in locode)
+    offset = ((h * 2654435761) % 1000) / 1000.0 * 0.24 - 0.10
+    return round(max(0.10, min(0.55, _PORT_CONGESTION_DEFAULT + offset)), 3)
+
+
+def _choke_severity_tier(rng: random.Random) -> str:
+    """Pick a chokepoint severity tier for a disrupted route (one draw/route)."""
+    tiers = list(_CHOKE_TIER_WEIGHTS.keys())
+    weights = [_CHOKE_TIER_WEIGHTS[t] for t in tiers]
+    return rng.choices(tiers, weights=weights)[0]
+
+
 def build_voyage_fleet(
     seed: int | None = None,
     per_route: tuple[int, int] = (4, 9),
@@ -248,6 +330,25 @@ def build_voyage_fleet(
         except Exception:
             weather_buffer = 0.0
 
+        # ── Per-route congestion STATE — drawn ONCE per route ───────────────
+        # Every voyage on this lane shares this state; their individual delays
+        # are this state plus small idiosyncratic noise. That is what makes
+        # delays *cluster* on disrupted lanes rather than scatter per voyage.
+        route_state = rng.gauss(_ROUTE_STATE_MEAN, _ROUTE_STATE_SIGMA)
+
+        # Chokepoint severity is a property of the LANE — pick the tier (and
+        # its delay distribution) once, then add a route-level reroute penalty
+        # into the shared state so the whole lane shifts together.
+        choke_severity = ""
+        if is_choke:
+            choke_severity = _choke_severity_tier(rng)
+            tier_mean, tier_sigma = _CHOKE_SEVERITY_TIERS[choke_severity]
+            route_state += max(0.0, rng.gauss(tier_mean, tier_sigma))
+
+        # Weather buffer also shifts the whole lane (it is a lane-level event).
+        if is_weather and weather_buffer > 0.0:
+            route_state += max(0.0, rng.gauss(weather_buffer, weather_buffer * 0.3))
+
         n_voyages = rng.randint(lo, hi)
 
         for v_idx in range(n_voyages):
@@ -271,22 +372,22 @@ def build_voyage_fleet(
             days_since_departure = rng.randint(0, max_age)
             departed_at = today - _dt.timedelta(days=days_since_departure)
 
-            # ── Delay model — biased by live disruption state ───────────────
-            # Base delay: small noise around zero, occasionally negative (early).
-            delay = rng.gauss(0.2, 0.7)
+            # ── Delay model — serially correlated within the route ──────────
+            # delay = shared route congestion state + idiosyncratic vessel
+            # noise. Voyages on the SAME lane therefore move together; a
+            # disrupted lane shows a *cluster* of delayed voyages, an
+            # undisrupted lane a cluster of near-on-time ones. The small noise
+            # term still lets individual vessels run early or late.
+            delay = route_state + rng.gauss(0.0, _VOYAGE_NOISE_SIGMA)
 
-            # Weather contribution — present on weather-flagged lanes.
+            # Per-voyage weather attribution — the slice of this voyage's
+            # delay we label as weather-driven (for the weather_delay_days
+            # field). It is bounded by the delay so it never exceeds it.
             weather_delay = 0.0
-            if is_weather and weather_buffer > 0.0:
-                weather_delay = max(
-                    0.0, rng.gauss(weather_buffer, weather_buffer * 0.4)
+            if is_weather and weather_buffer > 0.0 and delay > 0.0:
+                weather_delay = min(
+                    delay, max(0.0, rng.gauss(weather_buffer, weather_buffer * 0.3))
                 )
-            delay += weather_delay
-
-            # Chokepoint contribution — the dominant driver on disrupted lanes.
-            if is_choke:
-                # Suez/Bab-el-Mandeb-class reroute: +7-12 days, heavy tail.
-                delay += max(0.0, rng.gauss(8.5, 3.0))
 
             delay = round(max(-2.0, delay), 1)
 
@@ -315,13 +416,19 @@ def build_voyage_fleet(
                 origin.lat, origin.lon, dest.lat, dest.lon, progress
             )
 
-            # Modeled destination-port congestion — higher on disrupted lanes.
-            base_congestion = rng.uniform(0.15, 0.55)
-            if is_choke:
-                base_congestion = min(1.0, base_congestion + rng.uniform(0.2, 0.4))
-            if is_weather:
-                base_congestion = min(1.0, base_congestion + rng.uniform(0.05, 0.2))
-            congestion_at_dest = round(base_congestion, 3)
+            # ── Destination-port congestion — coupled to this voyage's delay ─
+            # A delayed voyage arrives into a port that is itself backed up:
+            # congestion is NOT an independent draw. It is the structural
+            # port baseline (busy hubs read busier) plus a term that scales
+            # with the voyage's own delay, plus small noise. Delay and
+            # congestion therefore move together, as they do in reality.
+            port_baseline = _port_congestion_baseline(route.dest_locode)
+            # Each delayed day adds ~3.5 congestion points; saturating so a
+            # huge reroute delay cannot push congestion past a plausible ceil.
+            delay_pressure = 0.035 * max(0.0, delay)
+            delay_pressure = min(0.35, delay_pressure)
+            congestion = port_baseline + delay_pressure + rng.gauss(0.0, 0.05)
+            congestion_at_dest = round(max(0.0, min(1.0, congestion)), 3)
 
             # Chokepoints touched by this route (real registry IDs only).
             chokepoints_on_route = sorted(
@@ -354,6 +461,8 @@ def build_voyage_fleet(
                     congestion_at_dest=congestion_at_dest,
                     weather_delay_days=round(weather_delay, 1),
                     chokepoints_on_route=chokepoints_on_route,
+                    chokepoint_severity=choke_severity,
+                    route_congestion_state=round(route_state, 2),
                 )
             )
 
