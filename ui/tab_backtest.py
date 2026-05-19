@@ -1,4 +1,19 @@
-"""Backtesting tab — historical alpha signal performance dashboard."""
+"""Backtesting tab — historical alpha signal performance dashboard.
+
+Two complementary validation views live here:
+
+* **Real-Signal Validation** — the platform's *actual* signals (the disruption
+  cascade's ranked ``EquityIdea`` list and the commodity-shipping signals) are
+  measured directly against forward returns over the platform's synthetic price
+  history. This is the transparent hit-rate scorecard built in
+  ``processing.signal_validation`` and is shown first.
+* **Heuristic Signal Backtest** — the original ``backtest_engine`` simulation of
+  hard-coded momentum / mean-reversion / divergence heuristics, kept below for
+  comparison.
+
+Every figure here is computed on synthetic / modeled data and is labelled as
+such — it is a signal-quality scorecard, never investment advice.
+"""
 from __future__ import annotations
 
 import traceback
@@ -8,7 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-from data.quality import DataSource
+from data.quality import DataKind, DataQuality, DataSource
 from ui.styles import (
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
     C_CONV, C_MACRO, C_SURFACE,
@@ -39,6 +54,24 @@ _TYPE_COLORS: dict[str, str] = {
     "MACRO":          C_MACRO,
     "TECHNICAL":      C_MOD,
     "FUNDAMENTAL":    C_HIGH,
+}
+
+# Conviction-tier palette for the real-signal validation scorecard. The cascade
+# emits High/Moderate/Low/Watch; commodity signals carry no tier and bucket
+# under "Commodity".
+_TIER_COLORS: dict[str, str] = {
+    "High":      C_HIGH,
+    "Moderate":  C_MOD,
+    "Low":       C_LOW,
+    "Watch":     C_TEXT3,
+    "Commodity": C_MACRO,
+}
+
+# Direction-word palette — the real signals are framed Bullish/Bearish/Neutral.
+_DIRECTION_COLORS: dict[str, str] = {
+    "Bullish": C_HIGH,
+    "Bearish": C_LOW,
+    "Neutral": C_TEXT2,
 }
 
 
@@ -421,17 +454,359 @@ def _build_insights(results) -> list[tuple[str, str, str, float]]:
 
 
 # ---------------------------------------------------------------------------
+# Real-signal validation — the platform's actual signals, not hardcoded mocks
+# ---------------------------------------------------------------------------
+
+def _hit_rate_color(hr: float) -> str:
+    """Colour a hit rate: >=55% green, >=45% amber, else red."""
+    if hr >= 0.55:
+        return C_HIGH
+    if hr >= 0.45:
+        return C_MOD
+    return C_LOW
+
+
+def _edge_color(edge: float) -> str:
+    """Colour an edge-vs-baseline figure: positive green, ~flat amber, negative red."""
+    if edge > 0.02:
+        return C_HIGH
+    if edge < -0.02:
+        return C_LOW
+    return C_MOD
+
+
+def _hit_rate_bar(hr: float, color: str) -> str:
+    """Inline hit-rate bar — proportion filled, percentage label alongside."""
+    pct = max(0.0, min(100.0, hr * 100.0))
+    return (
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<div style="width:74px;background:rgba(232,230,225,0.06);'
+        f'border-radius:3px;height:7px;flex-shrink:0;">'
+        f'<div style="width:{pct:.0f}%;background:{color};height:100%;'
+        f'border-radius:3px;"></div></div>'
+        f'<span style="font-family:var(--mono);color:{color};font-size:0.78rem;'
+        f'font-weight:700;">{pct:.0f}%</span></div>'
+    )
+
+
+def _validation_tier_rows(tiers: list) -> list[list[str]]:
+    """Build wsj_market_table rows for the conviction-tier breakdown."""
+    rows: list[list[str]] = []
+    for t in tiers:
+        tier_color = _TIER_COLORS.get(t.tier, C_ACCENT)
+        hr_color = _hit_rate_color(t.hit_rate)
+        edge_color = _edge_color(t.edge_vs_baseline)
+        edge_str = f"{t.edge_vs_baseline * 100:+.0f} pts"
+        rows.append([
+            badge(t.tier, color=tier_color),
+            _mono(str(t.n_signals), color=C_TEXT2),
+            _mono(str(t.n_observations), color=C_TEXT3),
+            _hit_rate_bar(t.hit_rate, hr_color),
+            _mono(f"{t.baseline_hit_rate * 100:.0f}%", color=C_TEXT2),
+            _mono(edge_str, color=edge_color),
+            _mono(f"{t.directional_return * 100:+.2f}%",
+                  color=_return_color(t.directional_return)),
+        ])
+    return rows
+
+
+def _validation_signal_rows(signals: list) -> list[list[str]]:
+    """Build wsj_market_table rows for the per-signal validation detail."""
+    rows: list[list[str]] = []
+    for s in signals:
+        tier_color = _TIER_COLORS.get(s.conviction_label, C_ACCENT)
+        dir_color = _DIRECTION_COLORS.get(s.direction.title(), C_TEXT2)
+        hr_color = _hit_rate_color(s.hit_rate)
+        edge_color = _edge_color(s.edge_vs_baseline)
+        result_label = "Low sample" if s.low_sample else (
+            "Edge" if s.edge_vs_baseline > 0.02
+            else ("Lags" if s.edge_vs_baseline < -0.02 else "In line")
+        )
+        result_color = C_TEXT3 if s.low_sample else edge_color
+        rows.append([
+            _sans(s.signal_id, color=C_TEXT, weight=700),
+            _sans(s.signal_kind, color=C_TEXT3),
+            badge(s.direction.title(), color=dir_color),
+            badge(s.conviction_label, color=tier_color),
+            _hit_rate_bar(s.hit_rate, hr_color),
+            _mono(f"{s.directional_return * 100:+.2f}%",
+                  color=_return_color(s.directional_return)),
+            _mono(f"{s.edge_vs_baseline * 100:+.0f} pts", color=edge_color),
+            _mono(str(s.n_observations), color=C_TEXT3),
+            badge(result_label, color=result_color),
+        ])
+    return rows
+
+
+def _validation_tier_chart(tiers: list) -> go.Figure:
+    """Grouped bar: conviction-tier hit rate vs equal-weight baseline."""
+    fig = go.Figure()
+    if not tiers:
+        apply_dark_layout(fig, title="Hit Rate by Conviction Tier — No Data", height=320)
+        return fig
+
+    labels = [t.tier for t in tiers]
+    hit_rates = [t.hit_rate * 100 for t in tiers]
+    baselines = [t.baseline_hit_rate * 100 for t in tiers]
+    bar_colors = [_TIER_COLORS.get(t.tier, C_ACCENT) for t in tiers]
+
+    fig.add_trace(go.Bar(
+        name="Signal Hit Rate",
+        x=labels,
+        y=hit_rates,
+        marker_color=bar_colors,
+        marker_opacity=0.9,
+        text=[f"{v:.0f}%" for v in hit_rates],
+        textposition="outside",
+        textfont=dict(size=11, color=C_TEXT),
+        hovertemplate="<b>%{x}</b><br>Hit Rate: %{y:.0f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        name="Equal-Weight Baseline",
+        x=labels,
+        y=baselines,
+        marker_color=["rgba(154,150,142,0.45)"] * len(labels),
+        text=[f"{v:.0f}%" for v in baselines],
+        textposition="outside",
+        textfont=dict(size=10, color=C_TEXT3),
+        hovertemplate="<b>%{x}</b><br>Baseline: %{y:.0f}%<extra></extra>",
+    ))
+
+    apply_dark_layout(
+        fig,
+        title="Hit Rate by Conviction Tier vs Synthetic Baseline",
+        height=340,
+        barmode="group",
+        yaxis={"title": "Hit Rate (%)", "ticksuffix": "%", "range": [0, 110]},
+    )
+    return fig
+
+
+def _render_real_signal_validation(stock_data: dict, insights: object) -> None:
+    """Render the real-signal validation scorecard.
+
+    Builds the platform's *actual* signals — the disruption cascade's ranked
+    ``EquityIdea`` list and the commodity-shipping signals — then validates each
+    signal's directional claim against forward returns over the synthetic price
+    history via ``processing.signal_validation``. Surfaces the conviction-tier
+    hit rates, the vs-baseline comparison, and a per-signal detail table.
+
+    Wrapped defensively: any failure degrades to an inline notice rather than
+    breaking the tab.
+    """
+    section_header(
+        "Real-Signal Validation",
+        "The platform's own cascade & commodity signals, scored on synthetic history",
+    )
+
+    st.markdown(
+        f"<p style='color:{C_TEXT2};font-size:0.82rem;line-height:1.6;"
+        f"margin:0 0 14px;'>"
+        "Unlike the heuristic backtest below, this section validates the "
+        "<b>signals the platform actually surfaces</b> — the disruption "
+        "cascade's ranked equity ideas and the commodity-shipping signals. "
+        "Each signal's directional claim (Bullish / Bearish / Neutral) is "
+        "measured against forward returns over the platform's "
+        "<b>synthetic price history</b>, then broken down by the cascade's own "
+        "conviction tiers and compared with an equal-weight, always-long "
+        "baseline. Every number is a plain count of forward windows — no fitted "
+        "model. <b>Modeled demo data — a signal-quality scorecard, not "
+        "investment advice.</b></p>",
+        unsafe_allow_html=True,
+    )
+
+    try:
+        from processing.exposure_matrix import build_exposure_matrix
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.signal_validation import build_validation_report
+
+        # The Backtest tab has no pre-computed cascade in hand, so build the SSI
+        # and exposure matrix here, then run the real pipeline + validation. All
+        # of these tolerate empty inputs and return neutral defaults.
+        stress_report = compute_shipping_stress({}, {}, [], [], voyage_fleet=None)
+        exposure_matrix = build_exposure_matrix(stock_data)
+        report = build_validation_report(
+            stress_report, exposure_matrix, stock_data, insights=insights,
+        )
+    except Exception as e:
+        logger.exception("tab_backtest: real-signal validation failed")
+        st.warning(f"Real-signal validation unavailable: {e}")
+        return
+
+    val_source = report.source or DataSource(
+        name="Real-Signal Validator (synthetic history)",
+        kind=DataKind.MODELED,
+        quality=DataQuality.DEMO,
+    )
+
+    if report.n_signals_validated == 0:
+        st.info(
+            "No real signals could be validated — no synthetic price history "
+            "was available for any signalled ticker. Ensure stock data is "
+            "loaded."
+        )
+        st.markdown(source_footer([val_source]), unsafe_allow_html=True)
+        return
+
+    # ── Headline KPIs ────────────────────────────────────────────────────
+    metric_card_row(
+        [
+            {
+                "label":    "Signals Validated",
+                "value":    str(report.n_signals_validated),
+                "accent":   C_ACCENT,
+                "sublabel": f"{report.n_signals_skipped} skipped (no history)",
+            },
+            {
+                "label":    "Aggregate Hit Rate",
+                "value":    f"{report.overall_hit_rate * 100:.0f}%",
+                "accent":   _hit_rate_color(report.overall_hit_rate),
+                "sublabel": f"{report.forward_days}-day forward horizon",
+            },
+            {
+                "label":    "Synthetic Baseline",
+                "value":    f"{report.overall_baseline_hit_rate * 100:.0f}%",
+                "accent":   C_TEXT2,
+                "sublabel": "equal-weight, always-long",
+            },
+            {
+                "label":    "Edge vs Baseline",
+                "value":    f"{report.overall_edge * 100:+.0f} pts",
+                "accent":   _edge_color(report.overall_edge),
+                "sublabel": "hit rate over baseline",
+            },
+            {
+                "label":    "Avg In-Favour Return",
+                "value":    f"{report.overall_directional_return * 100:+.2f}%",
+                "accent":   _return_color(report.overall_directional_return),
+                "sublabel": "mean directional move",
+            },
+        ],
+        columns=5,
+    )
+    st.markdown(source_footer([val_source]), unsafe_allow_html=True)
+
+    # ── Plain-language headline ──────────────────────────────────────────
+    st.markdown(
+        insight_card_html(
+            title="Validation Summary",
+            score=max(0.0, min(1.0, report.overall_hit_rate)),
+            action=(
+                "Prioritize" if report.overall_edge > 0.02
+                else ("Caution" if report.overall_edge < -0.02 else "Monitor")
+            ),
+            rationale=report.summary,
+            category="SYNTHETIC",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # ── Conviction-tier breakdown ────────────────────────────────────────
+    section_header(
+        "Hit Rate by Conviction Tier",
+        "Do higher-conviction cascade signals actually hit more often?",
+    )
+    try:
+        fig_tier = _validation_tier_chart(report.tiers)
+        st.plotly_chart(fig_tier, use_container_width=True, key="bt_val_tier_chart")
+    except Exception as e:
+        logger.exception("tab_backtest: tier chart failed")
+        st.error(f"Tier chart error: {e}")
+
+    try:
+        if report.tiers:
+            wsj_market_table(
+                headers=[
+                    "Tier", "Signals", "Windows", "Hit Rate",
+                    "Baseline", "Edge", "Avg In-Favour Return",
+                ],
+                rows=_validation_tier_rows(report.tiers),
+            )
+            st.markdown(
+                f"<p style='color:{C_TEXT3};font-size:0.72rem;margin-top:6px;'>"
+                "&lsquo;Windows&rsquo; counts the forward-return observations "
+                "behind each tier. &lsquo;Edge&rsquo; is hit rate minus the "
+                "equal-weight synthetic baseline — positive means the tier beat "
+                "doing nothing. Neutral-direction signals score a hit when the "
+                "synthetic tape stayed flat.</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(source_footer([val_source]), unsafe_allow_html=True)
+    except Exception as e:
+        logger.exception("tab_backtest: tier table failed")
+        st.error(f"Tier table error: {e}")
+
+    # ── Per-signal detail ────────────────────────────────────────────────
+    section_header(
+        "Per-Signal Track Record",
+        "Every cascade idea and commodity signal, ranked by conviction",
+    )
+    try:
+        if report.signals:
+            wsj_market_table(
+                headers=[
+                    "Signal", "Kind", "Direction", "Conviction",
+                    "Hit Rate", "In-Favour Return", "Edge", "Windows", "Result",
+                ],
+                rows=_validation_signal_rows(report.signals),
+            )
+            n_low = sum(1 for s in report.signals if s.low_sample)
+            caveat = (
+                f" {n_low} signal(s) flagged low-sample — read those hit rates "
+                f"as indicative only."
+                if n_low else ""
+            )
+            st.markdown(
+                f"<p style='color:{C_TEXT3};font-size:0.72rem;margin-top:6px;'>"
+                f"Each signal's direction tested against {report.forward_days}-day "
+                f"forward returns over {report.price_history_days} rows of "
+                f"synthetic price history.{caveat}</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(source_footer([val_source]), unsafe_allow_html=True)
+        else:
+            st.info("No per-signal records to display.")
+    except Exception as e:
+        logger.exception("tab_backtest: per-signal table failed")
+        st.error(f"Per-signal table error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Main render
 # ---------------------------------------------------------------------------
 
-def render(stock_data: dict, macro_data: dict, insights: object) -> None:
-    """Render the full Backtesting tab."""
+def render(stock_data: dict, macro_data: dict = None, insights: object = None,
+           **kwargs) -> None:
+    """Render the full Backtesting tab.
+
+    Surfaces two views: the real-signal validation scorecard (the platform's
+    actual cascade & commodity signals, validated on synthetic history) followed
+    by the original heuristic-signal backtest simulation.
+
+    ``macro_data`` / ``insights`` are optional and ``**kwargs`` is accepted so
+    the tab is robust to caller arg drift.
+    """
+    macro_data = macro_data or {}
 
     page_header(
-        title="Alpha Signal Backtester",
-        subtitle="Simulate historical performance of shipping stock signals",
+        title="Signal Validation & Backtester",
+        subtitle="Validate the platform's real signals, then the heuristic backtest — all on synthetic data",
         badge_text="DEMO",
         badge_color=C_LOW,
+    )
+
+    # ── Real-signal validation (the platform's actual signals) ───────────────
+    try:
+        _render_real_signal_validation(stock_data, insights)
+    except Exception as e:
+        logger.exception("tab_backtest: real-signal validation section crashed")
+        st.error(f"Real-signal validation section error: {e}")
+
+    section_divider("Heuristic Signal Backtest")
+
+    section_header(
+        "Heuristic Signal Backtest",
+        "The original simulation of hard-coded momentum / mean-reversion / divergence rules",
     )
 
     # ── Controls ─────────────────────────────────────────────────────────────
