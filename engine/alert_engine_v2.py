@@ -95,7 +95,13 @@ def _bdi_series(macro_data: dict):
     """Return a sorted pandas Series of BDI values, or None."""
     try:
         import pandas as pd
-        bdi_df = macro_data.get("BDI") or macro_data.get("bdi")
+        # FRED canonical key is BDIY; older callers may still pass BDI/bdi.
+        # Avoid `a or b` on DataFrames (DataFrame.__bool__ raises).
+        bdi_df = macro_data.get("BDIY")
+        if bdi_df is None:
+            bdi_df = macro_data.get("BDI")
+        if bdi_df is None:
+            bdi_df = macro_data.get("bdi")
         if bdi_df is None or getattr(bdi_df, "empty", True):
             return None
         date_col = "date" if "date" in bdi_df.columns else bdi_df.columns[0]

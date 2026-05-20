@@ -189,7 +189,10 @@ def simulate_freight_rates(
     # Discrete recursion with dt = 1 day:
     #   ln S_{t+1} = ln S_t + θ·(μ_long − ln S_t)·dt + σ·Z   (+ jump)
     # Each path starts at the current (log) rate and is pulled toward μ_long.
-    rng = np.random.default_rng()
+    # Deterministic seed so the Monte Carlo tab is reproducible across reruns
+    # for the same input rate, matching the rest of the platform's synthetic
+    # paths (options_screener, freight_scraper, backtester all seed too).
+    rng = np.random.default_rng(seed=int(round(current_rate * 100)) & 0xFFFFFFFF)
 
     # Diffusion shocks: one standard-normal draw per (sim, day).
     diffusion = rng.normal(0.0, daily_sigma, size=(n_simulations, forecast_days))

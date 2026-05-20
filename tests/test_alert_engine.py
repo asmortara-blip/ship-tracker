@@ -224,19 +224,16 @@ def _bdi_frame(values: list[float]) -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "value": values})
 
 
-# NOTE: generate_alerts resolves the BDI frame with
-#   bdi_df = (macro_data or {}).get("BDI") or (macro_data or {}).get("bdi")
-# When macro_data["BDI"] holds a (non-empty) DataFrame, the `or` invokes
-# DataFrame.__bool__ and raises ValueError before the lowercase fallback is
-# even reached. The lowercase "bdi" key works (`.get("BDI")` returns None,
-# then `None or df` is fine), so the firing-behaviour tests below use it.
-# See test_macro_shift_uppercase_BDI_key_raises_value_error for the bug.
+# generate_alerts resolves the BDI frame via an explicit None-check chain
+# over the FRED canonical key ("BDIY") first, then "BDI" / "bdi" as legacy
+# aliases — never `a or b` on a DataFrame (which invokes DataFrame.__bool__
+# and raises ValueError).
 
 
 def test_macro_shift_fires_on_steep_bdi_decline() -> None:
     """A 40-point→far-lower BDI slide over 31+ obs fires a CRITICAL macro alert."""
     values = [2000.0] * 40 + [1100.0]  # iloc[-31] is 2000, iloc[-1] is 1100 → -45%
-    macro = {"bdi": _bdi_frame(values)}  # lowercase key avoids the __bool__ bug
+    macro = {"bdi": _bdi_frame(values)}
     alerts = generate_alerts([], [], {}, macro, [])
     macro_alerts = [a for a in alerts if a.alert_type == "MACRO_SHIFT"]
     assert len(macro_alerts) == 1
@@ -257,20 +254,24 @@ def test_macro_shift_skipped_when_history_too_short() -> None:
     assert not [a for a in alerts if a.alert_type == "MACRO_SHIFT"]
 
 
-@pytest.mark.xfail(
-    reason="BUG in engine.alert_engine.generate_alerts line ~291: "
-    "`(macro_data or {}).get('BDI') or (macro_data or {}).get('bdi')` "
-    "invokes DataFrame.__bool__ on the uppercase 'BDI' frame and raises "
-    "ValueError('truth value of a DataFrame is ambiguous'). The MACRO_SHIFT "
-    "branch is unreachable for any caller passing the canonical 'BDI' key. "
-    "Source not patched per task constraints.",
-    raises=ValueError,
-    strict=True,
-)
-def test_macro_shift_uppercase_BDI_key_raises_value_error() -> None:
-    """Documents the uppercase-'BDI'-key crash; xfail until the source is fixed."""
+def test_macro_shift_fires_with_uppercase_BDI_key() -> None:
+    """The uppercase 'BDI' key resolves cleanly (no DataFrame.__bool__ crash)
+    and the macro alert fires identically to the lowercase path."""
     macro = {"BDI": _bdi_frame([2000.0] * 40 + [1100.0])}
-    generate_alerts([], [], {}, macro, [])
+    alerts = generate_alerts([], [], {}, macro, [])
+    macro_alerts = [a for a in alerts if a.alert_type == "MACRO_SHIFT"]
+    assert len(macro_alerts) == 1
+    assert macro_alerts[0].severity == "CRITICAL"
+
+
+def test_macro_shift_fires_with_canonical_BDIY_key() -> None:
+    """The canonical FRED key 'BDIY' is the live-data path; the alert must
+    fire from it (previously it was silently ignored)."""
+    macro = {"BDIY": _bdi_frame([2000.0] * 40 + [1100.0])}
+    alerts = generate_alerts([], [], {}, macro, [])
+    macro_alerts = [a for a in alerts if a.alert_type == "MACRO_SHIFT"]
+    assert len(macro_alerts) == 1
+    assert macro_alerts[0].severity == "CRITICAL"
 
 
 # ── CONVERGENCE insights ────────────────────────────────────────────────────

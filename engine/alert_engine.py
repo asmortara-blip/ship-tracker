@@ -288,7 +288,15 @@ def generate_alerts(
             ))
 
     # ── 4. MACRO_SHIFT — BDI ──────────────────────────────────────────────────
-    bdi_df = (macro_data or {}).get("BDI") or (macro_data or {}).get("bdi")
+    # Resolve the BDI frame by canonical FRED key (BDIY), then legacy aliases.
+    # Use an explicit None chain — never `a or b` on DataFrames (which invokes
+    # DataFrame.__bool__ and raises ValueError).
+    _macro = macro_data or {}
+    bdi_df = _macro.get("BDIY")
+    if bdi_df is None:
+        bdi_df = _macro.get("BDI")
+    if bdi_df is None:
+        bdi_df = _macro.get("bdi")
     if bdi_df is not None and not getattr(bdi_df, "empty", True):
         try:
             import pandas as pd

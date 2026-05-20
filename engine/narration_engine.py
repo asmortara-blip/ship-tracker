@@ -44,7 +44,13 @@ def _now_date() -> str:
 
 def _bdi_current_and_change(macro_data: dict[str, pd.DataFrame]) -> tuple[float, float]:
     """Return (current_bdi_value, pct_change_30d) or (0.0, 0.0) if unavailable."""
-    bdi_df = macro_data.get("BDI") or macro_data.get("bdi")
+    # FRED canonical key is BDIY; older callers may still pass BDI/bdi.
+    # Avoid `a or b` on DataFrames (DataFrame.__bool__ raises).
+    bdi_df = macro_data.get("BDIY")
+    if bdi_df is None:
+        bdi_df = macro_data.get("BDI")
+    if bdi_df is None:
+        bdi_df = macro_data.get("bdi")
     if bdi_df is None or bdi_df.empty:
         return 0.0, 0.0
     try:
