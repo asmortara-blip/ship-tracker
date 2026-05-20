@@ -50,7 +50,7 @@ Plumbing that unlocks every downstream track.
 - [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
 - [ ] `engine/carrier_factor_model.py`
 - [x] `state/scenarios.py` + scenario overlay mixin — `Scenario`/`ScenarioShock` schema with `<namespace>:<id>.<field>` target keys (wildcard `<id>` supported), 6-scenario canonical catalog, `overlay_value/multiplier/addend/iterable` apply helpers; 26 tests
-- [ ] `engine/portfolio_optimizer.py`
+- [x] `engine/portfolio_optimizer.py` — max_sharpe / min_variance / mean_variance / risk_parity via scipy SLSQP, long-only + weight-cap constraints, walk-forward backtest; 23 tests
 - [ ] Alert-rule editor UI on top of `engine/alert_engine_v2.py`
 - [ ] `engine/narration_engine.py` wired to Claude API (cached daily)
 
