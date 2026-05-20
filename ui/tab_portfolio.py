@@ -390,13 +390,13 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
 def _render_performance_chart(df: pd.DataFrame) -> None:
     """90-day simulated portfolio NAV vs shipping index."""
     try:
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         days = 90
         dates = pd.date_range(end=datetime.date.today(), periods=days, freq="B")
 
-        # Simulate correlated returns
-        port_ret   = np.random.normal(0.0008, 0.018, days)
-        index_ret  = np.random.normal(0.0003, 0.020, days)
+        # Simulate correlated returns — instance-scoped RNG, not global
+        port_ret   = rng.normal(0.0008, 0.018, days)
+        index_ret  = rng.normal(0.0003, 0.020, days)
 
         # Add some correlation + trending
         port_ret   = port_ret + 0.0005
@@ -437,9 +437,9 @@ def _render_performance_chart(df: pd.DataFrame) -> None:
 def _render_risk_metrics(df: pd.DataFrame) -> None:
     """VaR, Sharpe, Max Drawdown, BDI correlation panel."""
     try:
-        np.random.seed(7)
+        rng = np.random.default_rng(7)
         n = 252
-        port_ret = np.random.normal(0.0008, 0.018, n)
+        port_ret = rng.normal(0.0008, 0.018, n)
 
         # VaR 95% 1-day
         var_95 = float(np.percentile(port_ret, 5))
@@ -456,8 +456,8 @@ def _render_risk_metrics(df: pd.DataFrame) -> None:
         drawdown = (nav - peak) / peak
         max_dd = float(drawdown.min()) * 100
 
-        # BDI correlation (simulated)
-        bdi_ret = 0.6 * port_ret + np.random.normal(0, 0.012, n)
+        # BDI correlation (simulated) — same instance RNG continues
+        bdi_ret = 0.6 * port_ret + rng.normal(0, 0.012, n)
         bdi_corr = float(np.corrcoef(port_ret, bdi_ret)[0, 1])
 
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
@@ -548,7 +548,8 @@ def _render_position_details(df: pd.DataFrame) -> None:
             return
         section_header("Position Detail", "Per-position price chart, key stats, and sector context")
 
-        np.random.seed(0)
+        # Note: the outer np.random.seed(0) here was dead — pd.date_range uses
+        # no randomness and the loop seeds a per-ticker RNG below.
         dates = pd.date_range(end=datetime.date.today(), periods=60, freq="B")
 
         for _, row in df.iterrows():
@@ -560,10 +561,10 @@ def _render_position_details(df: pd.DataFrame) -> None:
                 f"{ticker}  —  {_fmt_pct(row['P&L %'])}  |  {_fmt_dollar_abs(row['Market Value'])}",
                 expanded=False
             ):
-                # Mini price chart (simulated)
-                seed_offset = stable_hash(ticker) % 999
-                np.random.seed(seed_offset)
-                daily_ret  = np.random.normal(0.0005, 0.022, 60)
+                # Mini price chart (simulated) — instance-scoped RNG so we
+                # don't perturb numpy's global state mid-render.
+                rng = np.random.default_rng(stable_hash(ticker) % 999)
+                daily_ret  = rng.normal(0.0005, 0.022, 60)
                 price_path = row["Price"] / np.cumprod(1 + daily_ret)[-1] * np.cumprod(1 + daily_ret)
 
                 mini_fig = go.Figure()
