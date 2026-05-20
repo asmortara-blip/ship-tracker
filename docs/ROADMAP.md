@@ -51,7 +51,7 @@ Plumbing that unlocks every downstream track.
 - [ ] `engine/carrier_factor_model.py`
 - [x] `state/scenarios.py` + scenario overlay mixin — `Scenario`/`ScenarioShock` schema with `<namespace>:<id>.<field>` target keys (wildcard `<id>` supported), 6-scenario canonical catalog, `overlay_value/multiplier/addend/iterable` apply helpers; 26 tests
 - [x] `engine/portfolio_optimizer.py` — max_sharpe / min_variance / mean_variance / risk_parity via scipy SLSQP, long-only + weight-cap constraints, walk-forward backtest; 23 tests
-- [ ] Alert-rule editor UI on top of `engine/alert_engine_v2.py`
+- [x] Alert-rule editor UI on top of `engine/alert_engine_v2.py` — `save_rules`/`load_rules`/`reset_rules` persistence to `cache/alerts/rules.json` with project-root anchor; full per-rule editor (name, metric, threshold, condition, severity, email, enabled) + delete + Save All to Disk + Reset to Defaults; 11 persistence tests
 - [ ] `engine/narration_engine.py` wired to Claude API (cached daily)
 
 ## Phase 4 — New analytical tabs

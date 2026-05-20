@@ -385,6 +385,7 @@ def run_all_checks(
 # Anchor to the project root so alerts persist in the same place regardless
 # of the current working directory.
 ALERT_FILE = Path(__file__).resolve().parent.parent / "cache" / "alerts" / "alerts.json"
+RULES_FILE = Path(__file__).resolve().parent.parent / "cache" / "alerts" / "rules.json"
 _MAX_STORED = 500
 
 
@@ -483,3 +484,48 @@ def get_unread_count() -> int:
     """Count unacknowledged alerts."""
     records = _load_raw()
     return sum(1 for r in records if not r.get("acknowledged", False))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Rule persistence (separate from alert persistence — rules are user-authored
+#  configuration, alerts are the fired events those rules produce).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def save_rules(rules: list[dict]) -> None:
+    """Persist the user's alert-rule list to disk as JSON.
+
+    Rules are stored as plain dicts (matching the in-memory shape used by
+    ``ui/tab_alerts.py``'s session state). The typed ``AlertRule`` dataclass
+    is reserved for future use; the dict shape keeps the editor UI flexible
+    while still being durable across sessions.
+    """
+    RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with RULES_FILE.open("w", encoding="utf-8") as fh:
+            json.dump(list(rules), fh, indent=2, default=str)
+    except Exception as exc:
+        logger.warning(f"Could not write rules file: {exc}")
+
+
+def load_rules() -> list[dict]:
+    """Load the persisted user rule list. Returns [] if the file is missing
+    or unreadable — callers can fall back to defaults in that case."""
+    if not RULES_FILE.exists():
+        return []
+    try:
+        with RULES_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        logger.warning(f"Could not read rules file: {exc}")
+        return []
+
+
+def reset_rules() -> None:
+    """Remove the persisted rules file. The next ``load_rules()`` returns []
+    so the caller can re-seed with its default list."""
+    if RULES_FILE.exists():
+        try:
+            RULES_FILE.unlink()
+        except Exception as exc:
+            logger.warning(f"Could not delete rules file: {exc}")

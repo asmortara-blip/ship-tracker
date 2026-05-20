@@ -427,7 +427,13 @@ def _scan_triggered_alerts(freight_data, insights, stock_data, macro_data) -> li
 # ---------------------------------------------------------------------------
 def _init_state() -> None:
     if "user_alerts" not in st.session_state:
-        st.session_state["user_alerts"] = _default_rules()
+        # Prefer persisted rules; fall back to defaults on first use.
+        try:
+            from engine.alert_engine_v2 import load_rules
+            persisted = load_rules()
+        except Exception:
+            persisted = []
+        st.session_state["user_alerts"] = persisted if persisted else _default_rules()
     if "alert_dismissed" not in st.session_state:
         st.session_state["alert_dismissed"] = set()
     if "alert_history" not in st.session_state:
@@ -728,18 +734,69 @@ def _render_notifications() -> None:
 
 
 def _render_rules_manager() -> None:
+    """Full rule editor: per-rule expander with editable fields + save / delete
+    per rule, plus top-level "Save All to Disk" and "Reset to Defaults" actions.
+
+    Persistence wires through ``engine.alert_engine_v2.save_rules`` /
+    ``load_rules`` / ``reset_rules`` so user-authored rules survive Streamlit
+    cold starts.
+    """
     try:
-        rules = st.session_state.get("user_alerts") or _default_rules()
+        from engine.alert_engine_v2 import (
+            load_rules as engine_load_rules,
+            reset_rules as engine_reset_rules,
+            save_rules as engine_save_rules,
+        )
+
+        rules: list[dict] = st.session_state.get("user_alerts") or _default_rules()
         st.session_state["user_alerts"] = rules
 
         enabled_count = sum(1 for r in rules if r.get("enabled", True))
         section_header(
             "Rules Management",
-            f"{enabled_count} of {len(rules)} rules enabled",
+            f"{enabled_count} of {len(rules)} rules enabled — edit thresholds, "
+            "toggle, delete, or persist to disk.",
         )
         st.html(live_data_badge(_RULES_SRC))
 
-        # Table of rules (read-only summary)
+        # ── Top-level actions: Save All / Reset / Reload ───────────────────
+        action_cols = st.columns([1, 1, 1, 3], gap="small")
+        with action_cols[0]:
+            if st.button("💾 Save All to Disk", use_container_width=True,
+                         key="rules_save_all"):
+                try:
+                    engine_save_rules(st.session_state["user_alerts"])
+                    st.success(
+                        f"Saved {len(st.session_state['user_alerts'])} rules."
+                    )
+                except Exception as exc:
+                    st.error(f"Save failed: {exc}")
+        with action_cols[1]:
+            if st.button("↻ Reload from Disk", use_container_width=True,
+                         key="rules_reload"):
+                persisted = engine_load_rules()
+                if persisted:
+                    st.session_state["user_alerts"] = persisted
+                    st.success(f"Loaded {len(persisted)} rules from disk.")
+                    st.rerun()
+                else:
+                    st.info("No persisted rules on disk; keeping current session state.")
+        with action_cols[2]:
+            if st.button("🗘 Reset to Defaults", use_container_width=True,
+                         key="rules_reset"):
+                engine_reset_rules()
+                st.session_state["user_alerts"] = _default_rules()
+                st.success("Reset to default rules.")
+                st.rerun()
+        with action_cols[3]:
+            st.markdown(
+                f'<div style="font-size:0.72rem;color:{C_TEXT3};line-height:1.4;'
+                f'padding-top:8px">Edits below stay in session until you click '
+                f'<b>Save All to Disk</b>. Per-rule Save buttons persist immediately.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Summary read-only table ────────────────────────────────────────
         headers = ["Rule Name", "Metric", "Threshold", "Condition", "Severity", "Email"]
         rows = []
         for rule in rules:
@@ -747,9 +804,10 @@ def _render_rules_manager() -> None:
             m_icon  = _METRIC_ICONS.get(rule.get("metric", ""), "--")
             email_label = "On" if rule.get("email_notify") else "Off"
             email_color = C_HIGH if rule.get("email_notify") else C_TEXT3
+            name_color = C_TEXT if rule.get("enabled", True) else C_TEXT3
 
             rows.append([
-                _sans(rule.get("name", ""), color=C_TEXT, weight=700),
+                _sans(rule.get("name", ""), color=name_color, weight=700),
                 _sans(
                     f"{m_icon} {rule.get('metric','')}",
                     color=C_TEXT2, weight=500,
@@ -761,20 +819,97 @@ def _render_rules_manager() -> None:
             ])
         wsj_market_table(headers, rows)
 
-        # Enable / disable toggles
-        st.html('<div class="sub-section-header">Enable / Disable Rules</div>')
-        tcols = st.columns(min(3, max(1, len(rules))))
+        # ── Per-rule editors ───────────────────────────────────────────────
+        st.html('<div class="sub-section-header">Edit Rules</div>')
+
+        metric_options = list(_METRIC_ICONS.keys()) if _METRIC_ICONS else [
+            "Freight Rate", "Sentiment Score", "Stock Price",
+            "Port Congestion", "Macro Indicator",
+        ]
+        severity_options = ["Info", "Warning", "Critical"]
+        condition_options = ["Above", "Below"]
+
         for i, rule in enumerate(rules):
-            with tcols[i % len(tcols)]:
-                try:
-                    enabled_new = st.toggle(
-                        rule.get("name", f"Rule {i+1}"),
-                        value=rule.get("enabled", True),
-                        key=f"rule_toggle_{rule.get('id', i)}_{i}",
+            rule_id = rule.get("id", f"rule_{i}")
+            label = rule.get("name") or f"Rule {i+1}"
+            status_dot = "🟢" if rule.get("enabled", True) else "⚪"
+            with st.expander(f"{status_dot} {label}", expanded=False):
+                ec1, ec2 = st.columns(2, gap="medium")
+                with ec1:
+                    new_name = st.text_input(
+                        "Name", value=rule.get("name", ""),
+                        key=f"edit_name_{rule_id}",
                     )
-                    st.session_state["user_alerts"][i]["enabled"] = enabled_new
-                except Exception:
-                    pass
+                    metric_value = rule.get("metric", metric_options[0])
+                    if metric_value not in metric_options:
+                        # Preserve a legacy metric value by adding it to the choices.
+                        metric_options_local = [metric_value] + metric_options
+                    else:
+                        metric_options_local = metric_options
+                    new_metric = st.selectbox(
+                        "Metric", options=metric_options_local,
+                        index=metric_options_local.index(metric_value),
+                        key=f"edit_metric_{rule_id}",
+                    )
+                    new_threshold = st.number_input(
+                        "Threshold", value=float(rule.get("threshold", 0.0)),
+                        step=0.5, format="%.2f",
+                        key=f"edit_threshold_{rule_id}",
+                    )
+                with ec2:
+                    cond_value = rule.get("condition", condition_options[0])
+                    new_condition = st.selectbox(
+                        "Condition", options=condition_options,
+                        index=condition_options.index(cond_value)
+                          if cond_value in condition_options else 0,
+                        key=f"edit_condition_{rule_id}",
+                    )
+                    sev_value = rule.get("severity", "Warning")
+                    new_severity = st.selectbox(
+                        "Severity", options=severity_options,
+                        index=severity_options.index(sev_value)
+                          if sev_value in severity_options else 1,
+                        key=f"edit_severity_{rule_id}",
+                    )
+                    new_email = st.toggle(
+                        "Email Notification", value=bool(rule.get("email_notify", False)),
+                        key=f"edit_email_{rule_id}",
+                    )
+                    new_enabled = st.toggle(
+                        "Enabled", value=bool(rule.get("enabled", True)),
+                        key=f"edit_enabled_{rule_id}",
+                    )
+
+                btn_cols = st.columns([1, 1, 4], gap="small")
+                with btn_cols[0]:
+                    if st.button("💾 Save", key=f"save_btn_{rule_id}",
+                                 use_container_width=True, type="primary"):
+                        st.session_state["user_alerts"][i].update({
+                            "name": new_name.strip() or label,
+                            "metric": new_metric,
+                            "threshold": float(new_threshold),
+                            "condition": new_condition,
+                            "severity": new_severity,
+                            "email_notify": bool(new_email),
+                            "enabled": bool(new_enabled),
+                        })
+                        try:
+                            engine_save_rules(st.session_state["user_alerts"])
+                            st.success(f"Saved '{new_name.strip() or label}'.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Save failed: {exc}")
+                with btn_cols[1]:
+                    if st.button("🗑 Delete", key=f"del_btn_{rule_id}",
+                                 use_container_width=True):
+                        deleted = st.session_state["user_alerts"].pop(i)
+                        try:
+                            engine_save_rules(st.session_state["user_alerts"])
+                        except Exception as exc:
+                            logger.debug(f"rules_manager: post-delete save failed: {exc}")
+                        st.warning(f"Deleted '{deleted.get('name', label)}'.")
+                        st.rerun()
+
     except Exception:
         logger.exception("Rules manager render failed")
         st.error("Rules management unavailable.")
