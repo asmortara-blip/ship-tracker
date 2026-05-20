@@ -57,9 +57,9 @@ COMPONENT_WEIGHTS: dict[str, float] = {
     "rate":          0.18,
     "vulnerability": 0.10,
 }
-assert abs(sum(COMPONENT_WEIGHTS.values()) - 1.0) < 1e-9, (
-    "SSI COMPONENT_WEIGHTS must sum to 1.0"
-)
+if abs(sum(COMPONENT_WEIGHTS.values()) - 1.0) >= 1e-9:
+    # ValueError instead of assert so the invariant still fires under ``python -O``.
+    raise ValueError("SSI COMPONENT_WEIGHTS must sum to 1.0")
 
 # Routes given extra weight in the fleet-wide SSI roll-up — the two highest-
 # volume global container lanes. Their stress matters disproportionately.

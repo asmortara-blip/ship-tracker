@@ -331,12 +331,13 @@ _CONVICTION_WEIGHT_SETS: dict[str, dict[str, float]] = {
     },
 }
 # Every published weight set must sum to 1.0 — the conviction-score [0, 1]
-# bound depends on it. Asserted at import so a mis-edit fails loudly.
+# bound depends on it. ValueError (not assert) so the invariant survives ``-O``.
 for _set_name, _set in _CONVICTION_WEIGHT_SETS.items():
-    assert abs(sum(_set.values()) - 1.0) < 1e-9, (
-        f"disruption_cascade _CONVICTION_WEIGHT_SETS['{_set_name}'] "
-        f"must sum to 1.0"
-    )
+    if abs(sum(_set.values()) - 1.0) >= 1e-9:
+        raise ValueError(
+            f"disruption_cascade _CONVICTION_WEIGHT_SETS['{_set_name}'] "
+            f"must sum to 1.0"
+        )
 
 # Driver key -> conviction weight-set name. Any driver without an explicit
 # mapping (including the "" empty-cascade case) uses the "default" set.

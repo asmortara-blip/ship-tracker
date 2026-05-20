@@ -66,7 +66,9 @@ _NEUTRAL_STRESS: float = 0.40
 _W_CURRENT: float = 0.55      # persistence — stress is sticky
 _W_CONGESTION: float = 0.28   # how the physical bottleneck is trending
 _W_RATE: float = 0.17         # rate direction as a capacity-tightness proxy
-assert abs(_W_CURRENT + _W_CONGESTION + _W_RATE - 1.0) < 1e-9
+if abs(_W_CURRENT + _W_CONGESTION + _W_RATE - 1.0) >= 1e-9:
+    # ValueError (not assert) so the invariant fires under ``python -O``.
+    raise ValueError("_W_CURRENT + _W_CONGESTION + _W_RATE must sum to 1.0")
 
 # A rate move of this magnitude (fraction) is treated as a "full" stress signal.
 # Used as a fallback saturation when a route's own volatility is unavailable.
