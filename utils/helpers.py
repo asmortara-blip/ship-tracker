@@ -66,4 +66,7 @@ def safe_normalize(series, min_val: float | None = None, max_val: float | None =
 def sigmoid(x: float) -> float:
     """Sigmoid function for converting z-scores to [0,1]."""
     import math
+    # Clamp to avoid math.exp overflow on extreme inputs — z-scores are
+    # normally bounded but defensive clamping keeps the function total.
+    x = max(-700.0, min(700.0, x))
     return 1 / (1 + math.exp(-x))

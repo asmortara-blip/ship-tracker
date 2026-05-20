@@ -251,7 +251,7 @@ def _triggers_bdi_momentum(macro_data: dict, threshold: float = 0.05) -> list[in
         return indices
 
     if isinstance(bdi_series, pd.DataFrame):
-        bdi_series = bdi_series.iloc[:, 0]
+        bdi_series = bdi_series["value"] if "value" in bdi_series.columns else bdi_series.iloc[:, -1]
     bdi_returns = bdi_series.pct_change(7).dropna()
     indices = []
     last = -30
@@ -277,7 +277,7 @@ def _triggers_pmi_acceleration(macro_data: dict) -> list[int]:
         return indices
 
     if isinstance(pmi_series, pd.DataFrame):
-        pmi_series = pmi_series.iloc[:, 0]
+        pmi_series = pmi_series["value"] if "value" in pmi_series.columns else pmi_series.iloc[:, -1]
     rising = (pmi_series.diff() > 0).astype(int)
     consec = rising.rolling(3).sum()
     indices = []
@@ -304,7 +304,7 @@ def _triggers_fuel_spike(macro_data: dict, threshold: float = 0.15) -> list[int]
         return indices
 
     if isinstance(fuel_series, pd.DataFrame):
-        fuel_series = fuel_series.iloc[:, 0]
+        fuel_series = fuel_series["value"] if "value" in fuel_series.columns else fuel_series.iloc[:, -1]
     fuel_30d_ret = fuel_series.pct_change(30).dropna()
     indices = []
     last = -45
@@ -330,7 +330,7 @@ def _triggers_high_congestion(macro_data: dict, threshold: float = 0.75) -> list
         return indices
 
     if isinstance(cong, pd.DataFrame):
-        cong = cong.iloc[:, 0]
+        cong = cong["value"] if "value" in cong.columns else cong.iloc[:, -1]
     indices = []
     last = -21
     for i, v in enumerate(cong):

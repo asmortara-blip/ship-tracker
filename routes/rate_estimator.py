@@ -55,6 +55,8 @@ def compute_rate_pct_change(
 
     if len(recent) < 2:
         return 0.0
+    if "rate_usd_per_feu" not in recent.columns:
+        return 0.0
 
     start = recent["rate_usd_per_feu"].iloc[0]
     end = recent["rate_usd_per_feu"].iloc[-1]
