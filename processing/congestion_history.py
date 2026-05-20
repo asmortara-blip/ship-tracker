@@ -994,7 +994,10 @@ def forecast_congestion_advanced(
     logger.debug("Advanced forecast requested for port={}", port_locode)
 
     # ── 1. Determine current score ─────────────────────────────────────────
-    current = 0.45  # fallback
+    # ``None`` sentinel rather than a magic float — ``_clamp(vessel/hist_max)``
+    # can legitimately equal any specific value (incl. 0.45) and we must not
+    # confuse a real reading with "not set yet".
+    current: Optional[float] = None
     if current_ais_data:
         ais_score = current_ais_data.get("congestion_score")
         if ais_score is not None:
@@ -1008,11 +1011,15 @@ def forecast_congestion_advanced(
             current = _clamp(current_ais_data["vessel_count"] / max(1, hist_max))
 
     # Fallback to most recent historical record
-    if current == 0.45:
+    if current is None:
         records = CONGESTION_HISTORY.get(port_locode, [])
         if records:
             latest = max(records, key=lambda r: r.date)
             current = latest.congestion_score
+
+    # Ultimate fallback if neither AIS nor history is available
+    if current is None:
+        current = 0.45
 
     # ── 2. Component decomposition ─────────────────────────────────────────
     today = date.today()
