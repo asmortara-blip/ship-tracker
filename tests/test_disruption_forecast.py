@@ -187,14 +187,44 @@ def test_forecast_all_is_repeatable() -> None:
 # ── Refinements: volatility scaling, symmetric tails, cross-signal ──────────
 
 
-def _rate_history(rid: str, start: float, end: float, noise_sd: float):
-    """A synthetic ``rate_usd_per_feu`` series: linear trend + Gaussian noise."""
+def _rate_history(rid: str, start: float, end: float, noise_sd: float, *, seed: int = 7):
+    """A synthetic ``rate_usd_per_feu`` series: linear trend + Gaussian noise.
+
+    Seeded with a fixed integer (not ``hash(rid)`` — Python's hash is salted per
+    process, which made earlier versions of these tests flaky).
+    """
     import numpy as np
     import pandas as pd
 
     dates = pd.date_range("2025-01-01", periods=240, freq="D")
-    rng = np.random.default_rng(abs(hash(rid)) % (2**32))
+    rng = np.random.default_rng(seed)
     rates = np.linspace(start, end, 240) + rng.normal(0.0, noise_sd, 240)
+    return pd.DataFrame({"date": dates, "rate_usd_per_feu": rates.clip(min=1.0)})
+
+
+def _rate_history_split(historical_vol: float, *, seed: int = 7):
+    """Two-segment synthetic rate history with engineered volatility.
+
+    Days 0–149 hold the route's "characteristic" past with the supplied noise σ
+    (this is where the historical rate-volatility estimator lives — std of monthly
+    log-returns over the full series). Days 150–239 are an identical, noise-free
+    linear ramp from 1900 → 2150 on every lane, so the ML rate forecaster reads
+    the same momentum / z-score features regardless of how swingy the early
+    history was.
+
+    Net effect: same recent shock on every lane, but ``_route_rate_volatility``
+    sees a very different dispersion. This is what makes
+    ``test_rate_signal_is_volatility_scaled`` deterministic.
+    """
+    import numpy as np
+    import pandas as pd
+
+    dates = pd.date_range("2025-01-01", periods=240, freq="D")
+    rng = np.random.default_rng(seed)
+
+    historical = 1900.0 + rng.normal(0.0, historical_vol, size=150)
+    recent = np.linspace(1900.0, 2150.0, 90)  # +13.2% over 90 days, no noise
+    rates = np.concatenate([historical, recent])
     return pd.DataFrame({"date": dates, "rate_usd_per_feu": rates.clip(min=1.0)})
 
 
@@ -212,15 +242,20 @@ def test_added_fields_present_and_bounded() -> None:
 
 
 def test_rate_signal_is_volatility_scaled() -> None:
-    """An equal % move counts as a larger z-score on a calm lane than a swingy one."""
-    calm = {"transpacific_eb": _rate_history("transpacific_eb", 1900, 2150, 25.0)}
-    swingy = {"asia_europe": _rate_history("asia_europe", 1900, 2150, 350.0)}
+    """An equal % move counts as a larger z-score on a calm lane than a swingy one.
+
+    Constructed deterministically: both lanes share an identical, noise-free
+    recent 90-day ramp (so the rate forecaster reads the same momentum signal),
+    only the *early* history differs in volatility. The model should therefore
+    scale the same recent move into a larger |z| on the lane with the calmer
+    past, and the historical-vol estimate should rank them correctly.
+    """
+    calm = {"transpacific_eb": _rate_history_split(historical_vol=25.0)}
+    swingy = {"asia_europe": _rate_history_split(historical_vol=350.0)}
 
     fc_calm = forecast_route_stress("transpacific_eb", calm, {}, [], current_stress=0.5)
     fc_swingy = forecast_route_stress("asia_europe", swingy, {}, [], current_stress=0.5)
 
-    # The calm lane carries the higher |z| despite a comparable raw % move,
-    # and the swingy lane is measured as the more volatile of the two.
     assert fc_swingy.rate_volatility > fc_calm.rate_volatility
     assert abs(fc_calm.rate_signal_z) > abs(fc_swingy.rate_signal_z)
 
