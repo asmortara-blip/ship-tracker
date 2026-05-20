@@ -811,7 +811,9 @@ def _entry_to_update(entry, carrier: str) -> Optional[CarrierUpdate]:
         return None
 
 
-_CACHE_DIR = Path("cache/carrier_intel")
+# Anchor to the project root so the cache lives in the same place regardless
+# of the current working directory.
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "carrier_intel"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _MEM_CACHE: dict[str, tuple[float, list[CarrierUpdate]]] = {}
 _REQUEST_TIMEOUT = 8            # hard per-feed network timeout (seconds)

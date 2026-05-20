@@ -19,7 +19,9 @@ from loguru import logger
 # Constants
 # ---------------------------------------------------------------------------
 
-POSITIONS_FILE = Path("cache/portfolio/positions.json")
+# Anchor to the project root so positions persist in the same place regardless
+# of the current working directory.
+POSITIONS_FILE = Path(__file__).resolve().parent.parent / "cache" / "portfolio" / "positions.json"
 
 _DEFAULT_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE"]
 

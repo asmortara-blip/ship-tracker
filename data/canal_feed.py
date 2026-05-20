@@ -41,7 +41,9 @@ except ImportError:
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
-_CACHE_DIR = Path("cache/canal")
+# Anchor to the project root so the cache lives in the same place regardless
+# of the current working directory (CLI tools, non-standard deployments).
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "canal"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _REQUEST_TIMEOUT = 12   # seconds — HTML scrape timeout

@@ -382,7 +382,9 @@ def run_all_checks(
 #  Persistence
 # ─────────────────────────────────────────────────────────────────────────────
 
-ALERT_FILE = Path("cache/alerts/alerts.json")
+# Anchor to the project root so alerts persist in the same place regardless
+# of the current working directory.
+ALERT_FILE = Path(__file__).resolve().parent.parent / "cache" / "alerts" / "alerts.json"
 _MAX_STORED = 500
 
 
