@@ -132,6 +132,201 @@ def _load_fleet() -> list:
     return build_voyage_fleet()
 
 
+# ── Section B': fleet utilization ───────────────────────────────────────────
+def _classification_color(label: str) -> str:
+    """Map a utilization classification to the palette."""
+    return {"Tight": C_HIGH, "Slack": C_LOW}.get(label, C_MOD)
+
+
+def _synth_util_history(current_score: float, *, n: int = 180, seed: int = 20260520):
+    """Build a 180-day synthetic utilization history anchored on the *current*
+    fleet score. Used because the platform only ingests a current voyage
+    snapshot — there's no persisted per-day utilization series yet. Endpoint
+    matches the live score so the snapshot/history are visually consistent.
+    """
+    import numpy as np
+    import pandas as pd
+    from datetime import date, timedelta
+
+    rng = np.random.default_rng(seed)
+    dates = [date.today() - timedelta(days=(n - 1 - i)) for i in range(n)]
+    walk = rng.normal(0.0, 0.012, size=n).cumsum()
+    walk -= walk[-1]  # land exactly on current_score at t = n-1
+    path = np.clip(current_score + walk, 0.05, 0.95)
+    return pd.Series(path, index=pd.to_datetime(dates))
+
+
+def _synth_rate_history_for_util(seed_key: str = "fleet_util", *, n: int = 180):
+    """Companion synthetic rate series for the walk-forward backtest panel."""
+    import numpy as np
+    import pandas as pd
+    from datetime import date, timedelta
+
+    # Use stable_hash so the seed is process-stable (Python's hash() is salted).
+    try:
+        from utils.helpers import stable_hash
+        seed = stable_hash(seed_key)
+    except Exception:
+        seed = 4242
+    rng = np.random.default_rng(seed % (2**31))
+    dates = [date.today() - timedelta(days=(n - 1 - i)) for i in range(n)]
+    rates = 2000.0 * np.exp(rng.normal(0.0, 0.012, size=n).cumsum())
+    return pd.Series(rates, index=pd.to_datetime(dates))
+
+
+def _render_fleet_utilization(fleet: list, freight_data=None) -> None:
+    """Snapshot of fleet utilization + per-route ranking + backtest panel.
+
+    Pulls compute_fleet_utilization on the current fleet, surfaces the four
+    component metrics per route in a wsj_market_table, and runs the
+    walk-forward backtest on synthetic history so the model's predictive
+    power is visible in the UI (per docs/ROADMAP.md principle 5).
+    """
+    try:
+        from engine.fleet_utilization import (
+            compute_fleet_utilization,
+            walk_forward_backtest,
+        )
+
+        section_header(
+            "Fleet Utilization",
+            "Composite score of active share, capacity lock-in, delay intensity, "
+            "and forward destination congestion. Higher = tighter capacity = bullish for rates.",
+        )
+
+        report = compute_fleet_utilization(fleet)
+
+        # ── Headline metric strip ──────────────────────────────────────────
+        cls_color = _classification_color(report.fleet_classification)
+        metric_card_row(
+            [
+                {"label": "Fleet Utilization",
+                 "value": f"{report.fleet_utilization * 100:.1f}%",
+                 "accent": cls_color,
+                 "sublabel": report.fleet_classification},
+                {"label": "Active Voyages",
+                 "value": f"{report.voyages_active}",
+                 "accent": C_ACCENT,
+                 "sublabel": f"of {report.voyages_total} total"},
+                {"label": "Routes Tracked",
+                 "value": f"{len(report.routes)}",
+                 "accent": C_TEXT2,
+                 "sublabel": "with at least one voyage"},
+                {"label": "Tight / Balanced / Slack",
+                 "value": (
+                     f"{sum(1 for r in report.routes if r.classification == 'Tight')} / "
+                     f"{sum(1 for r in report.routes if r.classification == 'Balanced')} / "
+                     f"{sum(1 for r in report.routes if r.classification == 'Slack')}"
+                 ),
+                 "accent": cls_color,
+                 "sublabel": "Route distribution"},
+            ],
+            columns=4,
+        )
+
+        if not report.routes:
+            st.info("No routes carry active voyages — nothing to score.")
+            return
+
+        # ── Per-route ranking table, sorted by score descending ────────────
+        sorted_routes = sorted(
+            report.routes,
+            key=lambda rm: rm.utilization_score,
+            reverse=True,
+        )
+        headers = [
+            "Route", "Score", "Class", "Active",
+            "Total", "Progress", "Delay (d)", "Fwd Cong.",
+        ]
+        rows: list[list[str]] = []
+        for rm in sorted_routes:
+            rows.append([
+                _mono(rm.route_id, color=C_TEXT),
+                _mono(f"{rm.utilization_score * 100:5.1f}%",
+                      color=_classification_color(rm.classification)),
+                _sans(
+                    badge(rm.classification, color=_classification_color(rm.classification)),
+                    color=C_TEXT2,
+                ),
+                _mono(f"{rm.voyages_active}", color=C_TEXT),
+                _mono(f"{rm.voyages_total}", color=C_TEXT3),
+                _mono(f"{rm.mean_progress_pct * 100:4.0f}%", color=C_TEXT2),
+                _mono(
+                    f"{rm.mean_delay_days:+5.1f}",
+                    color=(C_LOW if rm.mean_delay_days > 5 else (
+                        C_MOD if rm.mean_delay_days > 1 else C_TEXT2
+                    )),
+                ),
+                _mono(
+                    f"{rm.mean_dest_congestion * 100:4.0f}%",
+                    color=(C_LOW if rm.mean_dest_congestion > 0.6 else (
+                        C_MOD if rm.mean_dest_congestion > 0.35 else C_TEXT2
+                    )),
+                ),
+            ])
+        wsj_market_table(headers, rows)
+
+        # ── Walk-forward backtest on synthetic utilization vs rate ─────────
+        try:
+            util_series = _synth_util_history(report.fleet_utilization)
+            rate_series = _synth_rate_history_for_util("fleet_util")
+            bt = walk_forward_backtest(
+                util_series, rate_series,
+                train_window=60, test_window=10, step=10,
+            )
+            hit_color = (
+                C_HIGH if bt.hit_rate >= 0.55
+                else (C_MOD if bt.hit_rate >= 0.45 else C_LOW)
+            )
+            out_color = C_HIGH if bt.avg_r_out_of_sample > 0.1 else C_TEXT2
+            metric_card_row(
+                [
+                    {"label": "Backtest Windows",
+                     "value": f"{bt.n_windows}",
+                     "accent": C_TEXT2,
+                     "sublabel": "Train 60d / test 10d / step 10d"},
+                    {"label": "Modal Lag",
+                     "value": f"{bt.best_lag_days}d",
+                     "accent": C_ACCENT,
+                     "sublabel": "Most-picked across windows"},
+                    {"label": "Direction Hit Rate",
+                     "value": f"{bt.hit_rate * 100:.0f}%",
+                     "accent": hit_color,
+                     "sublabel": "Sign of next-window Δrate"},
+                    {"label": "Out-of-Sample r̄",
+                     "value": f"{bt.avg_r_out_of_sample:+.2f}",
+                     "accent": out_color,
+                     "sublabel": f"In-sample r̄={bt.avg_r_in_sample:+.2f}"},
+                ],
+                columns=4,
+            )
+        except Exception as exc:
+            logger.debug(f"tab_voyage_tracker: utilization backtest skipped: {exc}")
+
+        # ── Provenance footer ──────────────────────────────────────────────
+        try:
+            from data.quality import DataSource
+            st.markdown(
+                source_footer([
+                    DataSource.modeled(
+                        "Fleet Utilization Composite",
+                        notes=(
+                            "Snapshot from current voyage fleet. Backtest panel "
+                            "uses a synthetic 180-day utilization history "
+                            "anchored on the current score — the platform does "
+                            "not yet persist a per-day utilization series."
+                        ),
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            pass
+
+    except Exception:
+        logger.exception("Voyage Tracker — fleet utilization render failed")
+
+
 # ── Section B: fleet KPI strip ──────────────────────────────────────────────
 
 def _render_kpi_strip(fleet: list) -> None:
@@ -587,6 +782,10 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
     except Exception:
         logger.exception("Voyage Tracker — KPI strip failed")
         st.error("Fleet KPI strip unavailable.")
+
+    # ── B'. Fleet utilization composite + backtest panel ───────────────────
+    section_divider("Utilization")
+    _render_fleet_utilization(fleet, freight_data=freight_data)
 
     section_divider("Vessel Search")
 
