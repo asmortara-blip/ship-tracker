@@ -49,7 +49,7 @@ Plumbing that unlocks every downstream track.
 - [x] `engine/fleet_utilization.py` — 4-component composite utilization score (active share + capacity lock-in + delay intensity + forward congestion) with walk-forward backtest; 16 tests
 - [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
 - [ ] `engine/carrier_factor_model.py`
-- [ ] `state/scenarios.py` + scenario overlay mixin
+- [x] `state/scenarios.py` + scenario overlay mixin — `Scenario`/`ScenarioShock` schema with `<namespace>:<id>.<field>` target keys (wildcard `<id>` supported), 6-scenario canonical catalog, `overlay_value/multiplier/addend/iterable` apply helpers; 26 tests
 - [ ] `engine/portfolio_optimizer.py`
 - [ ] Alert-rule editor UI on top of `engine/alert_engine_v2.py`
 - [ ] `engine/narration_engine.py` wired to Claude API (cached daily)
