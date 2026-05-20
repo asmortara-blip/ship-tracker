@@ -12,6 +12,7 @@ from loguru import logger
 
 from data.quality import DataSource
 from engine.alpha_engine import generate_all_signals
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_CONV,
@@ -137,7 +138,7 @@ _ALPHA_SOURCES = [
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_signals(stock_data_key: str, now_bucket: str) -> list[dict]:
     """Return live-monitor signals list (cached 60 s)."""
-    rng = random.Random(hash(now_bucket))
+    rng = random.Random(stable_hash(now_bucket))
     results = []
     for row in _MOCK_SIGNALS:
         ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, age_min = row
@@ -431,7 +432,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                         y_vals = df["close"].tolist()
                     else:
                         # Generate synthetic price series (legitimate fallback)
-                        rng = np.random.default_rng(42 + hash(ticker) % 100)
+                        rng = np.random.default_rng(42 + stable_hash(ticker) % 100)
                         n = 120
                         base = 19.4 if ticker == "ZIM" else 24.1
                         price_returns = rng.normal(0.0005, 0.025, n)
@@ -446,7 +447,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                     sig_list = [s for s in signals
                                 if isinstance(s, dict) and s.get("ticker") == ticker]
                     long_x, long_y, short_x, short_y = [], [], [], []
-                    rng2 = random.Random(hash(ticker))
+                    rng2 = random.Random(stable_hash(ticker))
                     for s in sig_list[:3]:
                         idx = rng2.randint(max(0, len(x_vals) - 30), len(x_vals) - 1)
                         px  = float(y_vals[idx])

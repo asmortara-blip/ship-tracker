@@ -22,6 +22,8 @@ import requests
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
+
 # ── API key helper ────────────────────────────────────────────────────────────
 
 def _get_aisstream_key() -> str:
@@ -403,7 +405,7 @@ def _synthetic_vessels_for_port(locode: str, lat: float, lon: float) -> list[dic
         return cached[1]
 
     cfg = _PORT_VESSEL_CONFIG.get(locode, {"count": (5, 10), "spread": 0.4})
-    rng = random.Random(int(now // _SYNTH_TTL_SECS) ^ hash(locode))
+    rng = random.Random(int(now // _SYNTH_TTL_SECS) ^ stable_hash(locode))
     count = rng.randint(*cfg["count"])
     spread = cfg.get("spread", 0.4)
 
@@ -412,8 +414,9 @@ def _synthetic_vessels_for_port(locode: str, lat: float, lon: float) -> list[dic
     # back to the neutral default inside _port_congestion.
     congestion = _port_congestion(locode) if locode in _PORT_VESSEL_CONFIG else 0.4
 
-    # Generate a MMSI base that is deterministic but varied per port
-    mmsi_base = (abs(hash(locode)) % 900_000_000) + 100_000_000
+    # Generate a MMSI base that is deterministic and varied per port — stable
+    # across processes so the "same vessel at this port" stays the same MMSI.
+    mmsi_base = (stable_hash(locode) % 900_000_000) + 100_000_000
 
     vessels = [
         _synth_vessel(mmsi_base, i, lat, lon, spread, origin=locode, congestion=congestion)

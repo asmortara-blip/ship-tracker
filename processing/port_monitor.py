@@ -16,6 +16,8 @@ from typing import Optional
 
 from loguru import logger
 
+from utils.helpers import stable_hash
+
 
 # ── Status colour palette ─────────────────────────────────────────────────────
 
@@ -983,9 +985,11 @@ def simulate_live_throughput(port_locode: str) -> dict:
         logger.warning("simulate_live_throughput: unknown locode {}", port_locode)
         return {}
 
-    # Seed from locode + current minute for stable-ish values within each minute
+    # Seed from locode + current minute for stable-ish values within each minute.
+    # stable_hash so the same (locode, minute) maps to the same value across
+    # processes — important under multi-worker / restart-prone deployments.
     seed_minute = datetime.now(timezone.utc).minute
-    rng = random.Random(hash(port_locode + str(seed_minute)))
+    rng = random.Random(stable_hash(port_locode + str(seed_minute)))
 
     tod_factor = _hour_of_day_factor(port)
 

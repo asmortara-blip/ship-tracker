@@ -8,6 +8,8 @@ from typing import Optional
 import numpy as np
 from datetime import datetime, timedelta
 
+from utils.helpers import stable_hash
+
 
 @dataclass
 class OptionsData:
@@ -221,7 +223,7 @@ def get_iv_surface(ticker: str) -> dict:
       - expiries : list[str]   (e.g. "2W", "1M", …)
       - iv_grid  : list[list[float]]  shape [n_expiries][n_strikes]
     """
-    rng = np.random.default_rng(seed=abs(hash(ticker)) % (2 ** 31))
+    rng = np.random.default_rng(seed=stable_hash(ticker) % (2 ** 31))
     info = _TICKER_PRICES.get(ticker, {"price": 20.0, "vol_base": 0.60})
     S = info["price"]
     vol_base = info["vol_base"]

@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
 from ui.styles import (
     _hex_to_rgba,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
@@ -560,7 +561,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
                 expanded=False
             ):
                 # Mini price chart (simulated)
-                seed_offset = hash(ticker) % 999
+                seed_offset = stable_hash(ticker) % 999
                 np.random.seed(seed_offset)
                 daily_ret  = np.random.normal(0.0005, 0.022, 60)
                 price_path = row["Price"] / np.cumprod(1 + daily_ret)[-1] * np.cumprod(1 + daily_ret)

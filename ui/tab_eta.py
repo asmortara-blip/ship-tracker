@@ -19,6 +19,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
+
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -231,8 +233,8 @@ def _render_voyage_tracker() -> None:
         headers = ["Vessel", "IMO", "Origin", "Destination", "Departed", "Orig ETA", "Curr ETA", "Delay", "Status", "Speed", "Position"]
         rows: list[list[str]] = []
         for name, imo, orig, dest, delay_hrs, spd, pos in _VESSELS:
-            departed = today - timedelta(days=abs(hash(name)) % 22 + 3)
-            orig_eta = today + timedelta(days=abs(hash(name + "e")) % 18 + 1)
+            departed = today - timedelta(days=stable_hash(name) % 22 + 3)
+            orig_eta = today + timedelta(days=stable_hash(name + "e") % 18 + 1)
             curr_eta = orig_eta + timedelta(hours=delay_hrs)
             dc = _delay_color(delay_hrs)
             sign = "+" if delay_hrs > 0 else ""
@@ -279,7 +281,7 @@ def _render_eta_calculator() -> None:
             try:
                 dist_nm = _ROUTES_DIST.get((origin, destination)) or _ROUTES_DIST.get((destination, origin))
                 if dist_nm is None:
-                    dist_nm = int(abs(hash(origin + destination)) % 6000 + 3000)
+                    dist_nm = int(stable_hash(origin + destination) % 6000 + 3000)
 
                 transit_days   = round(dist_nm / (speed_kn * 24), 1)
                 fuel_rate_mt   = {"Container (TEU)": 120, "Bulk (MT)": 90, "Liquid Bulk (MT)": 95,

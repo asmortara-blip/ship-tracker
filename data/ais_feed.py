@@ -17,6 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from data.cache_manager import CacheManager
 from data.normalizer import normalize_ais_df
 from ports.port_registry import PORTS, PORTS_BY_LOCODE
+from utils.helpers import stable_hash
 
 # IMF PortWatch public API — no key required
 _PORTWATCH_BASE = "https://portwatch.imf.org/api/v1"
@@ -217,7 +218,7 @@ def _synthetic_congestion(port_locode: str) -> pd.DataFrame:
     # day-of-year, so consecutive days differ by only a few percent — no jumps
     # on week boundaries, and the smoothness bound holds for any port phase.
     doy = now_local.timetuple().tm_yday
-    port_phase = (hash(port_locode) % 1000) / 1000.0 * 2.0 * math.pi
+    port_phase = (stable_hash(port_locode) % 1000) / 1000.0 * 2.0 * math.pi
     slow_drift = 0.050 * math.sin(2.0 * math.pi * doy / 23.0 + port_phase)
     daily_wobble = 0.020 * math.sin(2.0 * math.pi * doy / 7.0 + port_phase * 1.7)
     fast_wobble = 0.010 * math.sin(2.0 * math.pi * doy / 4.0 + port_phase * 2.3)

@@ -14,6 +14,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
+
 from ui.styles import (
     C_ACCENT,
     C_CONV,
@@ -72,7 +74,7 @@ _ROUTES = [
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _seed_for(key: str) -> int:
-    return abs(hash(key)) % 10000
+    return stable_hash(key) % 10000
 
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:

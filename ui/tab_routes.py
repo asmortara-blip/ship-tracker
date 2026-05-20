@@ -13,6 +13,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+from utils.helpers import stable_hash
 from ui.styles import (
     _hex_to_rgba,
     C_ACCENT,
@@ -514,7 +515,7 @@ def _section_route_profiles(routes: list[dict]) -> None:
 
                     with col_chart:
                         try:
-                            random.seed(hash(name) % 10000)
+                            random.seed(stable_hash(name) % 10000)
                             months_back = 12
                             dates = [datetime.date.today() - datetime.timedelta(days=30 * i) for i in range(months_back, 0, -1)]
                             vals  = [r["rate"]]
@@ -585,7 +586,7 @@ def _section_route_profiles(routes: list[dict]) -> None:
                         )
 
                         try:
-                            random.seed(hash(name + "season") % 9999)
+                            random.seed(stable_hash(name + "season") % 9999)
                             seasonal_idx = [1.0 + random.uniform(-0.18, 0.18) for _ in range(12)]
                             months_short = ["J","F","M","A","M","J","J","A","S","O","N","D"]
                             fig2 = go.Figure(go.Bar(

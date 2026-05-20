@@ -26,6 +26,7 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
@@ -488,7 +489,7 @@ def _share_bar_svg(pct: float, *, width: int = 110, height: int = 6,
 
 
 def _pressure_level(route_name: str, commodity: str) -> dict[str, str]:
-    seed_val = hash(route_name + commodity) % 1000
+    seed_val = stable_hash(route_name + commodity) % 1000
     rng2 = random.Random(seed_val)
     levels = ["LOW", "MOD", "HIGH"]
     weights = [0.35, 0.40, 0.25]
@@ -502,7 +503,7 @@ def _pressure_level(route_name: str, commodity: str) -> dict[str, str]:
 
 
 def _seeded_rate_history(base_rate: float, route_name: str) -> pd.DataFrame:
-    rng = random.Random(hash(route_name) % 99999)
+    rng = random.Random(stable_hash(route_name) % 99999)
     today = datetime.date.today()
     dates = pd.date_range(end=today, periods=52, freq="W")
     rates = [base_rate]
@@ -513,7 +514,7 @@ def _seeded_rate_history(base_rate: float, route_name: str) -> pd.DataFrame:
 
 
 def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
-    rng = random.Random(hash(route_name + commodity) % 77777)
+    rng = random.Random(stable_hash(route_name + commodity) % 77777)
     pool = BCO_NAMES[:]
     rng.shuffle(pool)
     out = []

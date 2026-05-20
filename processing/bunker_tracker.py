@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from utils.helpers import stable_hash
+
 from loguru import logger
 
 from processing.carbon_calculator import ROUTE_DISTANCES
@@ -518,7 +520,7 @@ def price_history_synthetic(
     if base_price == 0.0:
         base_price = 620.0  # safe fallback
 
-    rng = random.Random(hash(fuel_type) % 9999)
+    rng = random.Random(stable_hash(fuel_type) % 9999)
     prices: list[float] = [base_price]
     for _ in range(weeks - 1):
         prev = prices[-1]

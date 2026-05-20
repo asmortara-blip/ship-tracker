@@ -24,6 +24,7 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
@@ -137,7 +138,7 @@ def _sans_with_sub(value: str, sub: str, color: str = C_TEXT) -> str:
 def _seed(stock_data) -> int:
     try:
         s = stock_data.get("ticker", "SHIP") if isinstance(stock_data, dict) else "SHIP"
-        return hash(s) % 10000
+        return stable_hash(s) % 10000
     except Exception:
         return 42
 

@@ -15,6 +15,7 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -96,7 +97,7 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
 
 
 def _seed_price(port: str, fuel: str) -> float:
-    rng = random.Random(abs(hash(port + fuel)) % 9999)
+    rng = random.Random(stable_hash(port + fuel) % 9999)
     base = _GLOBAL_AVG[fuel]
     return round(base * rng.uniform(0.91, 1.12), 1)
 
@@ -193,7 +194,7 @@ def _bunker_price_by_port() -> None:
         headers = ["Port", "Region", "VLSFO", "HFO", "MGO", "Availability", "vs Global Avg"]
         rows = []
         for p in _PORTS:
-            rng = random.Random(abs(hash(p["name"])) % 9999)
+            rng = random.Random(stable_hash(p["name"]) % 9999)
             vlsfo = _seed_price(p["name"], "VLSFO")
             hfo   = _seed_price(p["name"], "HFO")
             mgo   = _seed_price(p["name"], "MGO")

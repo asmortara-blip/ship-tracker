@@ -15,6 +15,7 @@ from data.cache_manager import CacheManager
 from data.normalizer import normalize_freight_df
 from data.quality import DataSeries, DataSource
 from routes.route_registry import ROUTES, get_all_fbx_indices
+from utils.helpers import stable_hash
 
 
 # FBX index metadata (used for scraping and labeling)
@@ -343,16 +344,16 @@ def _synthetic_series(route_id: str, fbx_index: str) -> pd.DataFrame:
     """Build a ~120-day mean-reverting synthetic rate series for one route.
 
     The walk is seeded deterministically from ``route_id`` so the same route
-    yields the same history within a session (the platform relies on
-    within-session stability). Schema matches the real scrape path.
+    yields the same history across processes (the platform relies on this
+    stability for caching and UI consistency). Schema matches the real scrape
+    path.
     """
     import numpy as np
 
     baseline = _DEFAULT_RATES.get(fbx_index, _DEFAULT_RATE_FALLBACK)
 
-    # Deterministic per-route RNG — stable history for a given route_id.
-    seed = abs(hash(route_id)) % (2**32)
-    rng = np.random.default_rng(seed)
+    # Deterministic per-route RNG — stable across processes.
+    rng = np.random.default_rng(stable_hash(route_id))
 
     n = _SYNTH_HISTORY_DAYS
     end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)

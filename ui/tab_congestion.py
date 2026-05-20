@@ -19,6 +19,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
+
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
@@ -269,7 +271,7 @@ def _render_timeline(ports: list[dict]) -> None:
         palette = [C_LOW, C_MOD, C_ACCENT, C_HIGH, "#7c6eaf"]
         fig = go.Figure()
         for idx, p in enumerate(top5):
-            rng = random.Random(hash(p["port"]) & 0xFFFF)
+            rng = random.Random(stable_hash(p["port"]) & 0xFFFF)
             series = []
             val = max(20, p["score"] - 15)
             for _ in range(90):
