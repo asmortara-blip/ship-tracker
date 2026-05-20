@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from utils.helpers import stable_hash
 from ui.styles import (
     _hex_to_rgba,
@@ -714,6 +715,240 @@ def _t_color(tval: float) -> str:
     return C_TEXT3
 
 
+def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
+    """Synthetic daily-returns panel keyed on the supplied tickers.
+
+    The portfolio tab doesn't yet ingest a persisted per-ticker daily-return
+    history (``stock_data`` is a per-ticker snapshot). This synth gives the
+    optimizer a 504-day (~2y) panel with per-ticker mean/vol drawn from
+    stable seeds + a uniform pairwise correlation of 0.30.
+
+    Determinism: every per-ticker mean / vol seed flows through
+    ``utils.helpers.stable_hash`` so the same ticker → same return profile
+    across processes (Python's built-in hash is salted; see the existing
+    audit in commit 789518f).
+    """
+    from utils.helpers import stable_hash
+
+    if not tickers:
+        return pd.DataFrame()
+    k = len(tickers)
+    means = np.array([
+        # Per-ticker daily mean drawn deterministically from a small range.
+        0.0002 + (stable_hash(t + "mu") % 10) / 10_000.0
+        for t in tickers
+    ])
+    vols = np.array([
+        # Per-ticker daily vol — shipping stocks are 1.5–3% daily σ.
+        0.014 + (stable_hash(t + "vol") % 100) / 5_000.0
+        for t in tickers
+    ])
+    corr = np.full((k, k), 0.30)
+    np.fill_diagonal(corr, 1.0)
+    cov = np.outer(vols, vols) * corr
+    rng = np.random.default_rng(stable_hash("_panel" + "".join(tickers)) % (2**31))
+    samples = rng.multivariate_normal(mean=means, cov=cov, size=n)
+    dates = pd.date_range(end=datetime.date.today(), periods=n, freq="B")
+    return pd.DataFrame(samples, index=dates, columns=tickers)
+
+
+def _render_optimization_lab(df: pd.DataFrame) -> None:
+    """Run portfolio_optimizer's four methods on the current holdings and
+    surface the comparison.
+
+    Sections:
+      1. Per-method comparison table: expected return / vol / Sharpe and the
+         top-2 weighted positions.
+      2. Side-by-side weight table: each ticker × each method.
+      3. Walk-forward backtest equity curve for max_sharpe vs min_variance.
+
+    The pure-function engine lives in ``engine.portfolio_optimizer``; this
+    function only handles UI rendering + synthetic data plumbing.
+    """
+    try:
+        from engine.portfolio_optimizer import (
+            VALID_METHODS,
+            optimize_portfolio,
+            walk_forward_backtest,
+        )
+
+        if df is None or df.empty:
+            st.info("Add positions above to run the optimization lab.")
+            return
+
+        tickers = [str(t) for t in df["Ticker"].tolist() if t]
+        if len(tickers) < 2:
+            st.info("Need at least 2 tickers in the portfolio to optimize.")
+            return
+
+        returns_df = _synth_returns_panel(tickers)
+        if returns_df.empty or returns_df.shape[1] < 2:
+            st.info("Could not assemble a returns panel.")
+            return
+
+        section_header(
+            "Portfolio Optimization Lab",
+            "Compare four canonical methods against the current weighting — "
+            "max-Sharpe, min-variance, mean-variance, and risk-parity. "
+            "Walk-forward backtest sits below.",
+        )
+
+        # ── 1. Run all four methods ────────────────────────────────────────
+        results = {}
+        for method in VALID_METHODS:
+            try:
+                results[method] = optimize_portfolio(
+                    returns_df, method=method, weight_cap=0.40, rf=0.045,
+                )
+            except Exception as exc:
+                logger.debug(f"optimization_lab: {method} failed: {exc}")
+
+        if not results:
+            st.warning("All optimization methods failed on this panel.")
+            return
+
+        # ── 2. Per-method comparison table ────────────────────────────────
+        method_labels = {
+            "max_sharpe":    "Max Sharpe",
+            "min_variance":  "Min Variance",
+            "mean_variance": "Mean-Variance (λ=2)",
+            "risk_parity":   "Risk Parity",
+        }
+        headers = ["Method", "Exp. Return", "Exp. Vol", "Sharpe", "Top Holdings"]
+        rows: list[list[str]] = []
+        for method in VALID_METHODS:
+            if method not in results:
+                continue
+            opt = results[method]
+            top2 = sorted(opt.weights.items(), key=lambda kv: kv[1], reverse=True)[:2]
+            top_str = ", ".join(f"{t} {w*100:.0f}%" for t, w in top2)
+            ret_color = C_HIGH if opt.expected_return > 0.15 else (
+                C_MOD if opt.expected_return > 0.05 else C_TEXT2
+            )
+            sharpe_color = (
+                C_HIGH if opt.sharpe > 1.0 else
+                (C_MOD if opt.sharpe > 0.4 else C_LOW)
+            )
+            rows.append([
+                _sans(method_labels[method], color=C_TEXT),
+                _mono(f"{opt.expected_return*100:+6.1f}%", color=ret_color),
+                _mono(f"{opt.expected_vol*100:6.1f}%", color=C_TEXT2),
+                _mono(f"{opt.sharpe:5.2f}", color=sharpe_color),
+                _sans(top_str, color=C_TEXT2),
+            ])
+        wsj_market_table(headers, rows)
+
+        # ── 3. Side-by-side weight table ──────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        weight_headers = ["Ticker"] + [method_labels[m] for m in VALID_METHODS if m in results]
+        weight_rows: list[list[str]] = []
+        for ticker in tickers:
+            row = [_mono(ticker, color=C_TEXT)]
+            for method in VALID_METHODS:
+                if method not in results:
+                    continue
+                w = results[method].weights.get(ticker, 0.0)
+                if w >= 0.40 - 0.005:
+                    color = C_LOW  # at cap
+                elif w >= 0.20:
+                    color = C_HIGH
+                elif w >= 0.05:
+                    color = C_TEXT
+                else:
+                    color = C_TEXT3
+                row.append(_mono(f"{w*100:5.1f}%", color=color))
+            weight_rows.append(row)
+        wsj_market_table(weight_headers, weight_rows)
+        st.markdown(
+            f'<div style="font-size:0.72rem;color:{C_TEXT3};margin-top:4px">'
+            f'Cells highlighted in red are at the per-position cap (40%).</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 4. Walk-forward backtest equity curves ─────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header(
+            "Walk-Forward Backtest",
+            "Train 252 days, rebalance every 21 days. Comparison of "
+            "max-Sharpe vs min-variance equity curves on the synthetic panel.",
+        )
+
+        bt_results: dict[str, "BacktestResult"] = {}  # type: ignore[name-defined]
+        for method in ("max_sharpe", "min_variance"):
+            try:
+                bt_results[method] = walk_forward_backtest(
+                    returns_df, method=method,
+                    train_window=252, rebal_freq=21,
+                    weight_cap=0.40, rf=0.045,
+                )
+            except Exception as exc:
+                logger.debug(f"optimization_lab: backtest {method} failed: {exc}")
+
+        if any(bt.n_rebalances > 0 for bt in bt_results.values()):
+            fig = go.Figure()
+            method_color = {"max_sharpe": C_ACCENT, "min_variance": C_HIGH}
+            for method, bt in bt_results.items():
+                if bt.n_rebalances == 0 or bt.equity_curve.empty:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=bt.equity_curve.index, y=bt.equity_curve.values,
+                    mode="lines", name=method_labels[method],
+                    line=dict(color=method_color[method], width=2),
+                    hovertemplate=(
+                        f"<b>{method_labels[method]}</b><br>%{{x|%b %Y}}<br>"
+                        f"Equity: %{{y:.3f}}<extra></extra>"
+                    ),
+                ))
+            apply_dark_layout(
+                fig,
+                title="Backtest Equity Curve — $1 invested",
+                height=320,
+                margin=dict(l=12, r=12, t=46, b=30),
+                yaxis=dict(title=dict(text="Cumulative growth of $1", font=dict(color=C_TEXT2, size=11))),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+            # Backtest metrics summary
+            metric_cards = []
+            for method in ("max_sharpe", "min_variance"):
+                if method not in bt_results or bt_results[method].n_rebalances == 0:
+                    continue
+                bt = bt_results[method]
+                metric_cards.append({
+                    "label": f"{method_labels[method]} — Ann. Return",
+                    "value": f"{bt.annualized_return*100:+5.1f}%",
+                    "accent": C_HIGH if bt.annualized_return > 0 else C_LOW,
+                    "sublabel": f"Final equity: {bt.final_equity:.2f}×",
+                })
+                metric_cards.append({
+                    "label": f"{method_labels[method]} — Sharpe / MaxDD",
+                    "value": f"{bt.sharpe:.2f} / {bt.max_drawdown*100:.1f}%",
+                    "accent": (
+                        C_HIGH if bt.sharpe > 1.0 else (
+                            C_MOD if bt.sharpe > 0.3 else C_LOW
+                        )
+                    ),
+                    "sublabel": f"{bt.n_rebalances} rebalances",
+                })
+            if metric_cards:
+                metric_card_row(metric_cards, columns=2)
+
+        # ── 5. Provenance footer ──────────────────────────────────────────
+        st.markdown(
+            source_footer([
+                DataSource.demo(
+                    "Synthetic 2-year returns panel — per-ticker mean/vol "
+                    "drawn deterministically via utils.helpers.stable_hash. "
+                    "Wire to a real return history when the platform persists it."
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+
+    except Exception:
+        logger.exception("Portfolio — optimization lab render failed")
+
+
 def _render_carrier_factor_lens(stock_data, macro_data) -> None:
     """Quant artifact: OLS betas + residual mean-reversion backtest."""
     try:
@@ -898,6 +1133,10 @@ def render(stock_data, macro_data, insights) -> None:
         section_divider("Risk")
 
         _render_risk_metrics(df)
+
+        section_divider("Optimization Lab")
+
+        _render_optimization_lab(df)
 
         section_divider("Factor Attribution")
 
