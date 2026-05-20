@@ -274,12 +274,37 @@ conviction score.
   A separate bearish fuel-cost overlay (`_FUEL_COST_RULE`) handles the USO
   channel: a rising USO can drag a bullish cascade to Neutral or push a neutral
   cascade Bearish, but never strengthens a bullish call.
+- **Per-route cargo shares are real, not uniform.** A hop's `cargo_share` is
+  the *actual* per-route commodity share from
+  `cargo_analyzer.get_route_cargo_mix(route_id, {})`, so a lane that genuinely
+  carries more of a commodity contributes proportionally more to the cascade.
+  The uniform `1 / N` split survives only as a graceful fallback when no route
+  yields a usable mix; when it triggers, the idea raises a risk flag stating
+  that per-lane contributions are approximate.
 - **Conviction is a transparent weighted sum** of four named, normalised terms
-  — cascade magnitude (0.42), signal agreement (0.22), commodity-ETF
-  confirmation (0.20), route vulnerability (0.16) — and **every term is
-  surfaced verbatim** in the idea's `supporting_signals`. Optional `insights`
-  are cross-referenced for *corroboration only* — never required, never
-  changes a direction.
+  — cascade magnitude, signal agreement, commodity-ETF confirmation and
+  persistence-weighted route vulnerability. **The weights are not one fixed
+  set.** `_CONVICTION_WEIGHT_SETS` holds five per-driver sets (`default`,
+  `chokepoint`, `rate`, `weather`, `vulnerability`), each summing to 1.0 and
+  asserted at import. A chokepoint-driven idea up-weights cascade magnitude
+  (the physical reroute *is* the signal); a rate-dislocation idea up-weights
+  signal agreement and ETF confirmation (a price move wants independent
+  confirmation); a weather idea trims cascade and leans on corroboration; a
+  vulnerability-driven idea up-weights the vulnerability term. Selection is a
+  plain dictionary lookup on the dominant driver key, and the *name* of the
+  set actually used is stated verbatim in `supporting_signals` — the score
+  stays fully reproducible.
+- **The vulnerability term is mean-reversion aware.** Raw mean route fragility
+  is multiplied by a per-driver persistence factor (`_DRIVER_PERSISTENCE`):
+  fast-reverting stress (weather, 0.30) is heavily discounted, slow-reverting
+  structural stress (a chokepoint closure, 0.95; pure vulnerability, 1.00) is
+  not. The factor only ever discounts — it can never inflate conviction — and
+  both the raw fragility and the persistence-discounted term are surfaced in
+  `supporting_signals` so the discount is auditable.
+- **Every term is surfaced verbatim** in the idea's `supporting_signals`,
+  alongside the named weight set used and the cargo-mix source
+  (real-vs-fallback). Optional `insights` are cross-referenced for
+  *corroboration only* — never required, never changes a direction.
 
 **Key dataclasses.**
 
@@ -440,12 +465,17 @@ Signals is a transparent, rule-based, fully-traceable system:
 
 - **Transparent.** Direction comes from the explicit, documented
   `_DIRECTION_RULES` table — there is no model to train and no hidden
-  weighting. Conviction is a plain weighted sum of four named terms whose
-  weights are asserted to sum to 1.0.
+  weighting. Conviction is a plain weighted sum of four named terms drawn
+  from a per-driver weight set in `_CONVICTION_WEIGHT_SETS`; every set is
+  published, every set is asserted to sum to 1.0, and the *name* of the set
+  in use for each idea is stated in `supporting_signals`. The vulnerability
+  term is multiplied by an explicit per-driver persistence factor
+  (`_DRIVER_PERSISTENCE`) — also published and only ever a discount.
 - **Traceable.** Every `EquityIdea` reproduces its full reasoning path: the
   cascade chain hop-by-hop (each `CascadeLink.contribution` decomposes into
-  `route_stress × cargo_share × exposure_weight`), every conviction term in
-  `supporting_signals`, and every caveat in `risk_flags`.
+  `route_stress × cargo_share × exposure_weight`, where `cargo_share` is the
+  real per-route share with a documented uniform fallback), every conviction
+  term in `supporting_signals`, and every caveat in `risk_flags`.
 - **Framed as a view, not a trade.** Ideas are strictly **Bullish / Bearish /
   Neutral with a rationale** — never a Buy/Sell call and never a price target.
   The Equity Signals tab carries an unconditional "modeled — not investment
@@ -454,3 +484,31 @@ Signals is a transparent, rule-based, fully-traceable system:
 
 Disruption Alpha is a research and decision-support tool. Nothing it produces
 should be read as a recommendation to buy or sell any security.
+
+## Validation
+
+The platform's older `processing/backtester.py` only ever exercised a handful
+of hard-coded heuristic signals (BDI momentum, z-score reversion, calendar
+triggers). The signals Disruption Alpha *actually* surfaces — the cascade's
+ranked `EquityIdea` list and the `CommodityShippingSignal` list — were never
+themselves validated. `processing/signal_validation.py` closes that gap.
+
+`build_validation_report(...)` runs the real pipeline end-to-end
+(`score_equity_ideas` + `analyze_commodity_signals`) and then, for every live
+signal, replays its directional claim — Bullish / Bearish / Neutral — against
+forward returns over the platform's synthetic price history. A signal "hits"
+when the forward move clears the `_FLAT_BAND = 0.005` directional dead-band
+in its favour (a Neutral call is correct when the move *stays inside* that
+band — a flat tape genuinely is the Neutral prediction). The output is a
+plain `ValidationReport` of per-signal hit /
+miss counts and an **observation-weighted hit rate broken down by the
+cascade's own conviction tiers** (High / Moderate / Low / Watch / Commodity),
+each tier compared against an **equal-weight, always-long synthetic baseline**
+pooled from every ticker's forward windows. A tier only earns its keep if its
+hit rate beats that baseline.
+
+The Backtest tab renders this scorecard *first* (above the older heuristic
+backtest), with a per-tier hit-rate chart and a per-signal detail table. The
+provenance pill is stamped `MODELED` / `DEMO`: the result is arithmetic on
+synthetic forward returns, never investment advice. See `docs/MODELS.md` for
+the full validator methodology.
