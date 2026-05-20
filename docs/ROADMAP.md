@@ -46,7 +46,7 @@ Plumbing that unlocks every downstream track.
 ## Phase 3 — Analytical depth
 
 - [x] `processing/congestion_rate_lag.py` — port-congestion → freight-rate lag model with walk-forward backtest; 19 tests
-- [ ] `engine/fleet_utilization.py`
+- [x] `engine/fleet_utilization.py` — 4-component composite utilization score (active share + capacity lock-in + delay intensity + forward congestion) with walk-forward backtest; 16 tests
 - [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
 - [ ] `engine/carrier_factor_model.py`
 - [ ] `state/scenarios.py` + scenario overlay mixin
