@@ -556,7 +556,13 @@ def fetch_vessels_on_route(
 
 # ── All-ports convenience loader ──────────────────────────────────────────────
 
-@st.cache_data(ttl=1800, show_spinner=False)
+# Intentionally NOT wrapped in @st.cache_data: ``ports_cfg`` is a ``list[dict]``,
+# which Streamlit cannot hash (dicts are mutable and unhashable). Behavior in
+# that case is version-dependent — raises UnhashableParamError on recent
+# Streamlit, falls back to id() on older ones — and the per-port loop below
+# already calls into ``fetch_vessels_near_port`` whose own _SYNTH_CACHE handles
+# repeated requests. Callers wanting an outer cache should wrap this in their
+# own zero-arg cached helper (see ``ui.tab_vessel_map._load_all_vessels``).
 def fetch_all_port_vessels(ports_cfg: list[dict]) -> dict[str, list[dict]]:
     """
     Fetch vessel lists for all configured ports in one call.
