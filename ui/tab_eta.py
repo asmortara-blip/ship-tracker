@@ -144,13 +144,19 @@ _MONTHS_18 = [
     (date(2026,  2, 1), "Feb '26"),
 ]
 
-random.seed(42)
-
-
-def _reliability_series(base: float, volatility: float, n: int = 18) -> list[float]:
+def _reliability_series(
+    base: float,
+    volatility: float,
+    rng: random.Random,
+    n: int = 18,
+) -> list[float]:
+    """Synthesize a noisy reliability path. Caller supplies an instance RNG so
+    the global ``random`` module state is never mutated mid-render (two tabs
+    rendering concurrently would otherwise step on each other's seeds).
+    """
     vals, v = [], base
     for _ in range(n):
-        v = max(30.0, min(95.0, v + random.gauss(0, volatility)))
+        v = max(30.0, min(95.0, v + rng.gauss(0, volatility)))
         vals.append(round(v, 1))
     return vals
 
@@ -467,9 +473,9 @@ def _render_reliability_trends() -> None:
         top_bases = {"Maersk": 74, "Hapag-Lloyd": 71, "CMA CGM": 69, "ONE": 68, "Evergreen": 66}
         bot_bases = {"HMM": 55, "Yang Ming": 57, "ZIM": 54, "PIL": 51, "IRISL": 48}
 
-        random.seed(7)
+        rng = random.Random(7)
         for carrier, base in top_bases.items():
-            series = _reliability_series(base, 3.5)
+            series = _reliability_series(base, 3.5, rng)
             fig.add_trace(go.Scatter(
                 x=months_labels, y=series, mode="lines+markers",
                 name=carrier, line=dict(width=2),
@@ -477,7 +483,7 @@ def _render_reliability_trends() -> None:
             ))
 
         for carrier, base in bot_bases.items():
-            series = _reliability_series(base, 4.2)
+            series = _reliability_series(base, 4.2, rng)
             fig.add_trace(go.Scatter(
                 x=months_labels, y=series, mode="lines",
                 name=carrier, line=dict(width=1.5, dash="dot"),

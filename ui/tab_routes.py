@@ -360,11 +360,13 @@ def _section_volatility(routes: list[dict]) -> None:
         "Rolling 30-day annualized volatility — high values flag disruption risk",
     )
     try:
-        random.seed(42)
+        # Instance RNG so render is deterministic without mutating the
+        # process-wide random module state.
+        rng = random.Random(42)
         vols = []
         for r in routes:
             base_vol = abs(r.get("m", 0)) * 0.8 + abs(r.get("w", 0)) * 1.2
-            ann_vol  = base_vol * math.sqrt(252 / 30) + random.uniform(2, 8)
+            ann_vol  = base_vol * math.sqrt(252 / 30) + rng.uniform(2, 8)
             vols.append({"route": r["route"], "vol": ann_vol})
 
         vols.sort(key=lambda x: x["vol"], reverse=True)
@@ -515,13 +517,13 @@ def _section_route_profiles(routes: list[dict]) -> None:
 
                     with col_chart:
                         try:
-                            random.seed(stable_hash(name) % 10000)
+                            rng_chart = random.Random(stable_hash(name) % 10000)
                             months_back = 12
                             dates = [datetime.date.today() - datetime.timedelta(days=30 * i) for i in range(months_back, 0, -1)]
                             vals  = [r["rate"]]
                             for _ in range(months_back - 1):
                                 prev = vals[-1]
-                                vals.append(max(500, prev * (1 + random.uniform(-0.06, 0.07))))
+                                vals.append(max(500, prev * (1 + rng_chart.uniform(-0.06, 0.07))))
                             vals = list(reversed(vals))
 
                             fig = go.Figure()
@@ -586,8 +588,8 @@ def _section_route_profiles(routes: list[dict]) -> None:
                         )
 
                         try:
-                            random.seed(stable_hash(name + "season") % 9999)
-                            seasonal_idx = [1.0 + random.uniform(-0.18, 0.18) for _ in range(12)]
+                            rng_season = random.Random(stable_hash(name + "season") % 9999)
+                            seasonal_idx = [1.0 + rng_season.uniform(-0.18, 0.18) for _ in range(12)]
                             months_short = ["J","F","M","A","M","J","J","A","S","O","N","D"]
                             fig2 = go.Figure(go.Bar(
                                 x=months_short, y=seasonal_idx,
