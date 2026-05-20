@@ -191,6 +191,53 @@ with st.sidebar:
 
     st.divider()
 
+    # ── What-if scenario selector ──────────────────────────────────────────
+    # Wired to state/scenarios.py via active_scenario / set_active_scenario.
+    # Any tab can read the active scenario through `overlay_value(...)` etc.
+    try:
+        from state.scenarios import (
+            SCENARIO_CATALOG,
+            active_scenario,
+            list_scenarios,
+            set_active_scenario,
+        )
+
+        st.caption("**What-If Scenario**")
+        _scenario_options = ["— No scenario —"] + [
+            f"{s.name}" for s in list_scenarios()
+        ]
+        _scenario_ids = [None] + [s.id for s in list_scenarios()]
+        _current = active_scenario()
+        _default_idx = (
+            _scenario_ids.index(_current.id) if _current and _current.id in _scenario_ids else 0
+        )
+        _picked = st.selectbox(
+            "Active scenario",
+            options=_scenario_options,
+            index=_default_idx,
+            label_visibility="collapsed",
+            key="scenario_selector",
+        )
+        _picked_id = _scenario_ids[_scenario_options.index(_picked)]
+        if _picked_id != (_current.id if _current else None):
+            set_active_scenario(_picked_id)
+            st.rerun()
+
+        if _current is not None:
+            st.markdown(
+                f'<div style="font-size:0.7rem;line-height:1.35;color:#a8a39a;'
+                f'background:rgba(53,114,176,0.08);border-left:2px solid #3572b0;'
+                f'padding:6px 8px;margin-top:4px;border-radius:2px">'
+                f'<b style="color:#e8e6e1">{_current.category}</b> · '
+                f'{len(_current.shocks)} shock{"s" if len(_current.shocks)!=1 else ""}<br>'
+                f'<span style="color:#7a756c">{_current.summary[:140]}…</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+    except Exception as _exc:
+        logger.debug(f"Scenario selector unavailable: {_exc}")
+
     # API health
     st.caption("**Data Sources**")
     _health = _get_api_health()

@@ -526,6 +526,178 @@ def _render_monte_carlo(macro_data):
         st.error(f"Monte Carlo error: {exc}")
 
 
+# ── Canonical Catalog (state.scenarios) ───────────────────────────────────────
+def _render_canonical_catalog():
+    """Browser for the canonical what-if catalog from state.scenarios.
+
+    Surfaces the schema (Scenario / ScenarioShock) live: each catalog entry
+    is a row in a wsj_market_table, with an Activate button per row that
+    flips the active scenario in session state. A small "Effect Preview"
+    grid below shows the active scenario's impact on representative numbers
+    (Asia-Europe rate, BDI, ZIM return, transit days) so the overlay isn't
+    an abstraction — users see the actual multipliers / addends in action.
+    """
+    try:
+        from state.scenarios import (
+            SCENARIO_CATALOG,
+            active_scenario,
+            list_scenarios,
+            overlay_addend,
+            overlay_multiplier,
+            overlay_value,
+            set_active_scenario,
+        )
+
+        section_header(
+            "Canonical What-If Catalog",
+            subtitle="Six pre-built scenarios. Activate one to overlay it across every tab that reads the scenario via state.scenarios.",
+        )
+
+        current = active_scenario()
+
+        # ── Active-scenario banner ─────────────────────────────────────────
+        if current is not None:
+            cols = st.columns([5, 1], gap="small")
+            with cols[0]:
+                st.markdown(
+                    f'<div style="background:rgba(53,114,176,0.10);'
+                    f'border-left:3px solid {C_ACCENT};padding:10px 14px;border-radius:3px;'
+                    f'margin-bottom:8px">'
+                    f'<div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;'
+                    f'color:{C_TEXT3};font-weight:600">Active Scenario · {current.category}</div>'
+                    f'<div style="font-size:1.05rem;color:{C_TEXT};font-weight:600;margin-top:2px">'
+                    f'{current.name}</div>'
+                    f'<div style="font-size:0.78rem;color:{C_TEXT2};margin-top:4px;line-height:1.4">'
+                    f'{current.summary}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                if st.button("Clear", key="scn_clear", use_container_width=True):
+                    set_active_scenario(None)
+                    st.rerun()
+        else:
+            st.markdown(
+                f'<div style="font-size:0.78rem;color:{C_TEXT3};padding:6px 0 10px 0">'
+                f'No active scenario. Pick one below or from the sidebar selector.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Catalog table with per-row activate buttons ────────────────────
+        scenarios = list_scenarios()
+        for scen in scenarios:
+            is_active = current is not None and current.id == scen.id
+            cols = st.columns([1.8, 1.0, 0.7, 4.2, 0.8], gap="small")
+            with cols[0]:
+                st.markdown(
+                    f'<div style="font-size:0.85rem;color:{C_TEXT};font-weight:600;'
+                    f'font-family:Libre Franklin,sans-serif">{scen.name}</div>',
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                _category_color = {
+                    "Geopolitical": C_LOW, "Weather": C_MOD, "Macro": C_ACCENT,
+                    "Demand": "#7c6eaf", "Operational": C_TEXT2,
+                }.get(scen.category, C_TEXT2)
+                st.markdown(badge(scen.category, color=_category_color), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{C_TEXT2};'
+                    f'font-family:JetBrains Mono,monospace">{len(scen.shocks)} shock'
+                    f'{"" if len(scen.shocks)==1 else "s"}</div>',
+                    unsafe_allow_html=True,
+                )
+            with cols[3]:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.4">'
+                    f'{scen.summary}</div>',
+                    unsafe_allow_html=True,
+                )
+            with cols[4]:
+                btn_label = "Active" if is_active else "Activate"
+                if st.button(btn_label, key=f"scn_btn_{scen.id}",
+                             use_container_width=True, disabled=is_active):
+                    set_active_scenario(scen.id)
+                    st.rerun()
+            st.markdown(
+                f'<div style="border-bottom:1px dotted rgba(232,230,225,0.06);'
+                f'margin:6px 0 8px 0"></div>', unsafe_allow_html=True,
+            )
+
+        # ── Effect Preview — show before/after on representative numbers ────
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header(
+            "Effect Preview",
+            subtitle="Representative numbers under the active scenario. Cells show the multiplier × base + addend output from state.scenarios.overlay_value.",
+        )
+
+        previews: list[tuple[str, str, str, float, str]] = [
+            # (target_key,                          row label,                  unit,    base,    note)
+            ("route:transpacific_eb.rate",          "Trans-Pacific EB rate",     "$/FEU", 2500.0, "Container spot"),
+            ("route:asia_europe.rate",              "Asia-Europe rate",          "$/FEU", 2000.0, "Container spot"),
+            ("route:middle_east_to_europe.rate",    "Middle East → Europe rate", "$/FEU", 1800.0, "Container spot"),
+            ("route:asia_europe.transit_days",      "Asia-Europe transit",       "days",  25.0,   "Nominal time"),
+            ("macro:bdi.level",                     "Baltic Dry Index",          "pts",   1450.0, "Composite"),
+            ("commodity:wti.spot",                  "WTI crude spot",            "$/bbl", 78.0,   "Front-month"),
+            ("ticker:ZIM.return",                   "ZIM expected return",       "x",     1.00,   "Per-period multiplier"),
+            ("ticker:MATX.return",                  "MATX expected return",      "x",     1.00,   "Per-period multiplier"),
+        ]
+
+        headers = ["Target", "Base", "Mult", "Addend", "Result", "Δ vs Base", "Note"]
+        rows: list[list[str]] = []
+        for target, label, unit, base, note in previews:
+            mult = overlay_multiplier(target)
+            addend = overlay_addend(target)
+            result = overlay_value(target, base)
+            if base != 0:
+                pct_delta = (result - base) / abs(base) * 100.0
+            else:
+                pct_delta = 0.0
+            delta_color = (
+                C_HIGH if pct_delta > 0.5 else
+                (C_LOW if pct_delta < -0.5 else C_TEXT2)
+            )
+            mult_color = (
+                C_HIGH if mult > 1.001 else
+                (C_LOW if mult < 0.999 else C_TEXT3)
+            )
+            base_fmt = (
+                f"{base:,.2f}" if unit == "x" else
+                f"{int(base):,}" if unit in ("pts", "$/FEU") else
+                f"{base:,.1f}"
+            )
+            result_fmt = (
+                f"{result:,.2f}" if unit == "x" else
+                f"{int(round(result)):,}" if unit in ("pts", "$/FEU") else
+                f"{result:,.1f}"
+            )
+            rows.append([
+                _mono(f"{label}", color=C_TEXT) + _sans(
+                    f" · {unit}", color=C_TEXT3
+                ),
+                _mono(base_fmt, color=C_TEXT2),
+                _mono(f"{mult:5.2f}×", color=mult_color),
+                _mono(f"{addend:+5.1f}" if addend else "—", color=C_TEXT2),
+                _mono(result_fmt, color=C_TEXT),
+                _mono(f"{pct_delta:+5.1f}%" if base else "—", color=delta_color),
+                _sans(note, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
+
+        st.markdown(
+            source_footer([
+                DataSource.modeled(
+                    "What-If Overlay",
+                    notes="Base numbers are illustrative anchors; the multiplier and addend columns are the actual shock values from the active scenario's matching ScenarioShock records.",
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+
+    except Exception as exc:
+        logger.exception("Canonical scenario catalog render failed")
+        st.error(f"Canonical catalog unavailable: {exc}")
+
+
 # ── Main Entry Point ───────────────────────────────────────────────────────────
 def render(macro_data=None, freight_data=None, insights=None):
     """Render the Scenario Analysis & Stress Testing tab."""
@@ -538,9 +710,11 @@ def render(macro_data=None, freight_data=None, insights=None):
             badge_color=C_ACCENT,
         )
 
-        _render_dashboard(macro_data, freight_data)
+        _render_canonical_catalog()
 
         section_divider("Reference Cases")
+
+        _render_dashboard(macro_data, freight_data)
 
         section_header(
             "Base / Bull / Bear Comparison",
