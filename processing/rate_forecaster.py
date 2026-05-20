@@ -55,7 +55,29 @@ class RateForecast:
 
 
 # ── Simple in-process cache (avoids re-training within one session) ──────────
-_FORECAST_CACHE: dict[str, tuple[RateForecast, datetime.datetime]] = {}
+# Key is ``(route_id, data_fingerprint)`` so that when the route's rate history
+# changes, the cache misses and we retrain — instead of serving a stale forecast
+# computed against earlier data. Without the fingerprint, two callers feeding
+# different histories under the same route_id would silently share a forecast.
+_FORECAST_CACHE: dict[tuple[str, str], tuple[RateForecast, datetime.datetime]] = {}
+
+
+def _data_fingerprint(rate_df: pd.DataFrame) -> str:
+    """Stable short hash of the route's rate column.
+
+    Uses blake2b on the raw float64 bytes — deterministic, content-addressed,
+    fast (single-digit µs on a 240-row series). Returns ``"empty"`` for any
+    input that lacks the expected column so the cache key is still well-formed.
+    """
+    if rate_df is None or "rate_usd_per_feu" not in getattr(rate_df, "columns", []):
+        return "empty"
+    values = rate_df["rate_usd_per_feu"].to_numpy(dtype=np.float64, copy=False)
+    return hashlib.blake2b(values.tobytes(), digest_size=8).hexdigest()
+
+
+def clear_forecast_cache() -> None:
+    """Reset the in-process forecast cache. Public so test fixtures can call it."""
+    _FORECAST_CACHE.clear()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,7 +389,9 @@ def forecast_route(
     global _FORECAST_CACHE
 
     # ── Cache check ───────────────────────────────────────────────────────────
-    cache_key = route_id
+    # Fingerprinting the input means callers feeding new data for an existing
+    # route_id correctly miss the cache and get a freshly-trained forecast.
+    cache_key = (route_id, _data_fingerprint(rate_df))
     if cache_key in _FORECAST_CACHE:
         cached_fc, cached_at = _FORECAST_CACHE[cache_key]
         age_h = (datetime.datetime.utcnow() - cached_at).total_seconds() / 3600
