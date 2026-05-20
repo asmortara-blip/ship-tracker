@@ -48,7 +48,6 @@ Plumbing that unlocks every downstream track.
 - [ ] `processing/congestion_rate_lag.py`
 - [ ] `engine/fleet_utilization.py`
 - [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
-- [ ] `processing/performance_attribution.py` (extend to Brinson-style)
 - [ ] `engine/carrier_factor_model.py`
 - [ ] `state/scenarios.py` + scenario overlay mixin
 - [ ] `engine/portfolio_optimizer.py`

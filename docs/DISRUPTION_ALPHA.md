@@ -487,11 +487,12 @@ should be read as a recommendation to buy or sell any security.
 
 ## Validation
 
-The platform's older `processing/backtester.py` only ever exercised a handful
-of hard-coded heuristic signals (BDI momentum, z-score reversion, calendar
-triggers). The signals Disruption Alpha *actually* surfaces — the cascade's
-ranked `EquityIdea` list and the `CommodityShippingSignal` list — were never
-themselves validated. `processing/signal_validation.py` closes that gap.
+Earlier iterations of the platform shipped a heuristic backtester that only
+ever exercised a handful of hard-coded signals (BDI momentum, z-score
+reversion, calendar triggers). The signals Disruption Alpha *actually*
+surfaces — the cascade's ranked `EquityIdea` list and the
+`CommodityShippingSignal` list — were never themselves validated.
+`processing/signal_validation.py` closes that gap.
 
 `build_validation_report(...)` runs the real pipeline end-to-end
 (`score_equity_ideas` + `analyze_commodity_signals`) and then, for every live
