@@ -8,7 +8,7 @@ spot rate alerts, and space availability by carrier.
 from __future__ import annotations
 
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -534,7 +534,7 @@ def _space_availability_by_carrier() -> None:
 
         st.caption(
             f"Space remaining as % of vessel TEU capacity. "
-            f"Updated: {datetime.now().strftime('%H:%M UTC')}"
+            f"Updated: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
         )
     except Exception as exc:
         logger.warning(f"Space availability error: {exc}")

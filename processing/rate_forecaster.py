@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 from dataclasses import dataclass, field
+from datetime import timezone
 from typing import Optional
 
 import numpy as np
@@ -394,7 +395,7 @@ def forecast_route(
     cache_key = (route_id, _data_fingerprint(rate_df))
     if cache_key in _FORECAST_CACHE:
         cached_fc, cached_at = _FORECAST_CACHE[cache_key]
-        age_h = (datetime.datetime.utcnow() - cached_at).total_seconds() / 3600
+        age_h = (datetime.datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
         if age_h < cache_ttl_hours:
             return cached_fc
 
@@ -501,10 +502,10 @@ def forecast_route(
             direction_confidence=direction_confidence,
             key_drivers=key_drivers,
             model_r2=float(np.clip(model_r2, 0.0, 1.0)),
-            last_updated=datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            last_updated=datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         )
 
-        _FORECAST_CACHE[cache_key] = (fc, datetime.datetime.utcnow())
+        _FORECAST_CACHE[cache_key] = (fc, datetime.datetime.now(timezone.utc))
         return fc
 
     except Exception as exc:
