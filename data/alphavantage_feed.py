@@ -14,6 +14,7 @@ API key:
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +38,12 @@ _DEFAULT_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE"]
 # ---------------------------------------------------------------------------
 
 _last_request_time: float = 0.0
+# Serialize the read-check-sleep-write on _last_request_time. Without the
+# lock, two concurrent Streamlit worker threads can both read the same
+# `elapsed`, both decide they need no sleep, and both fire in the same
+# millisecond — silently busting Alpha Vantage's 5-req/min limit and
+# eventually getting the API key throttled.
+_rate_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -131,17 +138,20 @@ def _rate_limited_get(url: str, params: dict) -> dict:
     failures.
     """
     global _last_request_time
-    elapsed = time.time() - _last_request_time
-    if elapsed < 12.5:
-        time.sleep(12.5 - elapsed)
+    # Reserve the next allowed slot under the lock so concurrent callers
+    # serialize on rate-limit decisions without holding the lock across
+    # the actual network request.
+    with _rate_lock:
+        elapsed = time.time() - _last_request_time
+        if elapsed < 12.5:
+            time.sleep(12.5 - elapsed)
+        _last_request_time = time.time()
 
     try:
         resp = requests.get(url, params=params, timeout=20)
-        _last_request_time = time.time()
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        _last_request_time = time.time()
         logger.error("Alpha Vantage request failed: %s", exc)
         return {}
 
