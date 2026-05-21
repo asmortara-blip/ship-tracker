@@ -89,6 +89,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+import requests
 
 import data.comtrade_feed as cf
 from data.cache_manager import CacheManager
@@ -118,8 +119,10 @@ def _wits_payload(records: list[dict]) -> dict:
 
 # Strip the @st.cache_data wrapper for direct invocation in tests.
 _fetch_all_ports_raw = cf.fetch_all_ports.__wrapped__
-# Strip the tenacity @retry wrapper so failure paths run once, not 2x.
-_fetch_wits_country_raw = cf._fetch_wits_country.__wrapped__
+# The @retry decorator now lives on the inner _wits_http_get helper, not on
+# _fetch_wits_country itself, so we can call it directly. Tests that need to
+# exercise the retry-then-swallow path patch _wits_http_get.retry.wait to 0.
+_fetch_wits_country_raw = cf._fetch_wits_country
 
 
 @pytest.fixture(autouse=True)
@@ -389,18 +392,39 @@ def test_fetch_wits_country_skips_non_200(monkeypatch):
     assert df.empty
 
 
-def test_fetch_wits_country_swallows_request_exceptions(monkeypatch):
-    """A thrown exception in ``requests.get`` is caught — both flows skipped
-    → empty DataFrame returned (NOT propagated to the retry decorator).
-
-    Finding: this is consistent with the worldbank_feed contract, but it
-    means the tenacity decorator on this function can only retry timeouts
-    raised *after* this try/except (i.e. effectively never via this path)."""
+def test_fetch_wits_country_swallows_non_network_exceptions(monkeypatch):
+    """A non-network exception (e.g. malformed JSON RuntimeError) inside the
+    per-flow try block skips that flow without triggering tenacity retry.
+    Both flows raising → empty DataFrame returned."""
     def boom(*a, **k):
-        raise RuntimeError("DNS dead")
+        raise RuntimeError("garbage JSON")
 
     monkeypatch.setattr(cf.requests, "get", boom)
     df = _fetch_wits_country_raw("CN", "2024")
+    assert df.empty
+
+
+def test_fetch_wits_country_retries_network_then_returns_empty(monkeypatch):
+    """A ``RequestException`` (Timeout / ConnectionError / HTTPError) now
+    propagates to the @retry decorator on ``_wits_http_get`` so transient
+    failures are retried before falling back to an empty frame."""
+    # Bypass exponential backoff between retries.
+    monkeypatch.setattr(
+        "data.comtrade_feed._wits_http_get.retry.wait",
+        lambda *a, **kw: 0,
+    )
+
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise requests.exceptions.ConnectionError("DNS dead")
+
+    monkeypatch.setattr(cf.requests, "get", boom)
+    df = _fetch_wits_country_raw("CN", "2024")
+
+    # stop_after_attempt(2) × 2 flows = 4 calls before degrading to empty.
+    assert calls["n"] == 4
     assert df.empty
 
 

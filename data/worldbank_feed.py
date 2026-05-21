@@ -4,7 +4,12 @@ import pandas as pd
 import requests
 import streamlit as st
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from data.cache_manager import CacheManager
 from data.normalizer import normalize_throughput_df
@@ -78,14 +83,37 @@ def fetch_port_throughput(
     return results
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
+)
+def _wb_http_get(url: str, params: dict) -> dict:
+    """Issue a WB v2 API call. Retries on ``RequestException`` only.
+
+    Raises after attempts are exhausted so the caller can decide how to
+    degrade.
+    """
+    resp = requests.get(url, params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _fetch_indicator(
     indicator_id: str,
     indicator_name: str,
     iso2_codes: list[str],
     years_back: int,
 ) -> pd.DataFrame:
-    """Fetch a single World Bank indicator for a set of countries."""
+    """Fetch a single World Bank indicator for a set of countries.
+
+    Network failures (``RequestException`` family) are retried via
+    ``_wb_http_get``; if every attempt fails, this function still returns
+    an empty DataFrame so the orchestrator can skip the indicator. Parse
+    / schema failures on a successful 200 (bad JSON, unexpected envelope)
+    also degrade to empty.
+    """
     country_str = ";".join(iso2_codes)
     url = f"{_WB_BASE}/country/{country_str}/indicator/{indicator_id}"
     params = {
@@ -97,10 +125,13 @@ def _fetch_indicator(
     logger.debug(f"World Bank fetch: {indicator_id} for {country_str}")
 
     try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _wb_http_get(url, params)
+    except requests.exceptions.RequestException as exc:
+        # All retries exhausted — degrade to empty.
+        logger.error(f"World Bank {indicator_id} network failure: {exc}")
+        return pd.DataFrame()
     except Exception as exc:
+        # Parse / schema failures (e.g. .json() ValueError).
         logger.error(f"World Bank {indicator_id} failed: {exc}")
         return pd.DataFrame()
 

@@ -226,25 +226,51 @@ def test_fetch_indicator_returns_empty_on_all_null_values(monkeypatch):
     assert df.empty
 
 
-def test_fetch_indicator_swallows_http_error(monkeypatch):
-    """A 5xx status (``raise_for_status`` raises) returns empty — does not propagate."""
-    monkeypatch.setattr(wb.requests, "get", lambda *a, **k: _make_response({}, status=503))
+def test_fetch_indicator_retries_http_error_then_empty(monkeypatch):
+    """A 5xx status (``raise_for_status`` raises ``HTTPError`` — a subclass
+    of ``RequestException``) is now retried by tenacity, then degrades to
+    empty after attempts exhaust."""
+    # Bypass exponential backoff between retries.
+    monkeypatch.setattr(
+        "data.worldbank_feed._wb_http_get.retry.wait",
+        lambda *a, **kw: 0,
+    )
+    calls = {"n": 0}
+
+    def fake_get(*a, **k):
+        calls["n"] += 1
+        return _make_response({}, status=503)
+
+    monkeypatch.setattr(wb.requests, "get", fake_get)
     df = _fetch_indicator("IS.SHP.GOOD.TU", "TEU", ["US"], 7)
+    # 3 attempts before degrading to empty.
+    assert calls["n"] == 3
     assert df.empty
 
 
-def test_fetch_indicator_swallows_network_error(monkeypatch):
-    """A ``ConnectionError`` from ``requests.get`` itself returns empty."""
+def test_fetch_indicator_retries_network_error_then_empty(monkeypatch):
+    """A ``ConnectionError`` (``RequestException``) propagates to tenacity,
+    is retried up to ``stop_after_attempt(3)`` times, then yields empty."""
+    monkeypatch.setattr(
+        "data.worldbank_feed._wb_http_get.retry.wait",
+        lambda *a, **kw: 0,
+    )
+    calls = {"n": 0}
+
     def boom(*a, **k):
+        calls["n"] += 1
         raise requests.ConnectionError("DNS failure")
 
     monkeypatch.setattr(wb.requests, "get", boom)
     df = _fetch_indicator("IS.SHP.GOOD.TU", "TEU", ["US"], 7)
+    assert calls["n"] == 3
     assert df.empty
 
 
 def test_fetch_indicator_swallows_invalid_json(monkeypatch):
-    """A response whose ``.json()`` raises ⇒ empty DataFrame."""
+    """A response whose ``.json()`` raises a non-network exception (e.g.
+    ``ValueError``) is NOT retried — it's a 200 with a broken body. The
+    function still returns an empty DataFrame."""
     resp = MagicMock()
     resp.raise_for_status.return_value = None
     resp.json.side_effect = ValueError("not JSON")

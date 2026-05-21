@@ -148,14 +148,17 @@ def test_fred_series_dict_shape():
 
 
 def test_fred_series_dict_includes_bdi_key():
-    """BDI must be reachable under "BDIY" — get_bdi() depends on this exact key.
+    """BDI must be reachable under "BSXRLM" — get_bdi() depends on this exact key.
 
-    Reference memory notes BDIY may need to be BSXRLM at FRED. This test
-    pins *current* behavior — if the key changes, get_bdi() also needs
-    updating in lock-step.
+    BSXRLM is the canonical FRED series ID for the Baltic Dry Index;
+    "BDIY" (the Bloomberg ticker) returns 404 at FRED. get_bdi() has a
+    BSXRLM-then-BDIY fallback chain so legacy callers don't break.
     """
-    assert "BDIY" in FRED_SERIES
-    assert FRED_SERIES["BDIY"] == "Baltic Dry Index"
+    assert "BSXRLM" in FRED_SERIES
+    assert FRED_SERIES["BSXRLM"] == "Baltic Dry Index"
+    # BDIY should no longer be in the dict (it was misleading — never a
+    # valid FRED ID and the fetcher would 404 on every call).
+    assert "BDIY" not in FRED_SERIES
 
 
 # ─── _is_not_found_error ───────────────────────────────────────────────────
@@ -239,23 +242,49 @@ def test_fetch_series_404_raises_series_not_found(monkeypatch):
         fred_feed._fetch_series("BDIY", "Baltic Dry Index", 30, "DUMMY")
 
 
-def test_fetch_series_generic_error_returns_empty(monkeypatch):
-    """Non-404 errors swallow inside _fetch_series after retries exhaust.
+def test_fetch_series_non_network_error_returns_empty(monkeypatch):
+    """A non-network exception (e.g. KeyError, ValueError on a 200 body) is
+    swallowed inside the inner try — no retry, returns empty.
 
-    To keep this fast, we patch the tenacity wait to zero before the call.
-    """
-    # Bypass the exponential backoff between retries.
+    Network-class errors (URLError / ConnectionError) now propagate (see
+    ``test_fetch_series_network_error_propagates_after_retries`` below),
+    so this test uses a parse-style exception instead."""
     monkeypatch.setattr(
         "data.fred_feed._fetch_series.retry.wait",
         lambda *a, **kw: 0,
     )
 
-    _patch_fred(monkeypatch, {"BDIY": ConnectionError("connection refused")})
+    _patch_fred(monkeypatch, {"BSXRLM": ValueError("unexpected schema")})
 
-    out = fred_feed._fetch_series("BDIY", "Baltic Dry Index", 30, "DUMMY")
-    # Generic exceptions get a return-empty path inside the try block; the
-    # decorator does not re-raise because the inner function caught it.
+    out = fred_feed._fetch_series("BSXRLM", "Baltic Dry Index", 30, "DUMMY")
     assert out.empty
+
+
+def test_fetch_series_network_error_propagates_after_retries(monkeypatch):
+    """A ``ConnectionError`` (network family) propagates to tenacity. After
+    ``stop_after_attempt(3)`` retries it re-raises (the orchestrator catches
+    the outer ``Exception``)."""
+    monkeypatch.setattr(
+        "data.fred_feed._fetch_series.retry.wait",
+        lambda *a, **kw: 0,
+    )
+
+    calls = {"n": 0}
+
+    class _Boomy:
+        def __init__(self, **kw):
+            pass
+
+        def get_series(self, series_id, observation_start=""):
+            calls["n"] += 1
+            raise ConnectionError("DNS dead")
+
+    monkeypatch.setattr(fred_feed, "Fred", lambda **kw: _Boomy(**kw))
+
+    with pytest.raises(ConnectionError):
+        fred_feed._fetch_series("BSXRLM", "Baltic Dry Index", 30, "DUMMY")
+    # 3 attempts before reraise.
+    assert calls["n"] == 3
 
 
 def test_fetch_series_retry_then_success(monkeypatch):
@@ -322,14 +351,14 @@ def test_fetch_macro_series_isolates_failures(monkeypatch):
     monkeypatch.setattr(fred_feed, "_FREDAPI_AVAILABLE", True)
 
     # Three responses to exercise the three branches:
-    #   BDIY      -> happy path
+    #   BSXRLM    -> happy path (canonical FRED BDI ID)
     #   DGS10     -> 404 (mapped to _FredSeriesNotFound, swallowed)
     #   VIXCLS    -> generic crash inside Fred() instantiation (caught by
     #                the broad except)
     #   IPMAN     -> empty series (returns empty DataFrame, excluded)
     idx = pd.date_range("2026-01-01", periods=3, freq="D")
     responses = {
-        "BDIY":   pd.Series([100.0, 110.0, 120.0], index=idx),
+        "BSXRLM": pd.Series([100.0, 110.0, 120.0], index=idx),
         "DGS10":  RuntimeError("HTTP 404 not found"),
         "IPMAN":  pd.Series(dtype=float),
     }
@@ -364,7 +393,7 @@ def test_fetch_macro_series_isolates_failures(monkeypatch):
     out = _fetch_raw(lookback_days=30)
 
     # Happy path series present
-    assert "BDIY" in out and not out["BDIY"].empty
+    assert "BSXRLM" in out and not out["BSXRLM"].empty
     # 404 series absent
     assert "DGS10" not in out
     # Empty-series-id absent (IPMAN returned empty)
@@ -460,9 +489,19 @@ def test_get_bdi_missing_returns_empty_df():
 
 
 def test_get_bdi_returns_series():
+    """Legacy "BDIY" key still resolves via the get_bdi fallback chain."""
     df = _macro_df([100.0, 110.0])
     out = get_bdi({"BDIY": df})
     assert len(out) == 2
+
+
+def test_get_bdi_prefers_canonical_bsxrlm_key():
+    """get_bdi() looks up "BSXRLM" first (matching the live fetcher),
+    then falls back to "BDIY" only when BSXRLM is absent."""
+    bsxrlm_df = _macro_df([200.0, 220.0], series_id="BSXRLM")
+    bdiy_df = _macro_df([100.0, 110.0], series_id="BDIY")
+    out = get_bdi({"BSXRLM": bsxrlm_df, "BDIY": bdiy_df})
+    assert (out["value"] == [200.0, 220.0]).all()
 
 
 def test_get_wti_missing_returns_empty_df():

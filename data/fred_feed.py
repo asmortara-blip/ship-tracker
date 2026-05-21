@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
+from urllib.error import URLError
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +23,11 @@ except ImportError:
 # Series to fetch and their human-readable names
 FRED_SERIES: dict[str, str] = {
     # ── Core shipping / freight ──────────────────────────────────────────────
-    "BDIY":             "Baltic Dry Index",
+    # Note: BSXRLM is the FRED series ID for the Baltic Dry Index. "BDIY" is
+    # the Bloomberg ticker (FRED returns 404 for it). Downstream callers that
+    # still look up macro_data["BDIY"] silently miss the BDI; alert_engine_v2
+    # / narration_engine already chain through BSXRLM first.
+    "BSXRLM":           "Baltic Dry Index",
     "WPU101":           "PPI Crude Petroleum",
     "XTIMVA01USM667S":  "US Imports Value (Monthly)",
     "XTEXVA01USM667S":  "US Exports Value (Monthly)",
@@ -173,9 +178,16 @@ def _fetch_series(series_id: str, series_name: str, lookback_days: int, api_key:
     try:
         series = fred.get_series(series_id, observation_start=start_date)
     except Exception as exc:
+        # 400/404-style → permanent skip, no retry value (raised so the
+        # orchestrator's _FredSeriesNotFound branch can short-circuit).
         if _is_not_found_error(exc):
             logger.warning(f"FRED series {series_id} not available (skipping): {exc}")
             raise _FredSeriesNotFound(series_id) from exc
+        # Transient network failures (urllib URLError family, incl. socket
+        # ConnectionError) propagate so tenacity can retry them. Everything
+        # else (parse errors, schema surprises) still degrades to empty.
+        if isinstance(exc, (URLError, ConnectionError, TimeoutError)):
+            raise
         logger.error(f"FRED series {series_id} failed: {exc}")
         return pd.DataFrame()
 
@@ -244,8 +256,15 @@ def get_latest_value(series_id: str, macro_data: dict[str, pd.DataFrame]) -> flo
 
 
 def get_bdi(macro_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Convenience: return the Baltic Dry Index series."""
-    return macro_data.get("BDIY", pd.DataFrame())
+    """Convenience: return the Baltic Dry Index series.
+
+    Tries BSXRLM (canonical FRED ID) first, then BDIY (legacy Bloomberg
+    ticker alias). Callers populated by ``fetch_macro_series`` see BSXRLM.
+    """
+    df = macro_data.get("BSXRLM")
+    if df is None:
+        df = macro_data.get("BDIY", pd.DataFrame())
+    return df
 
 
 # ── DataSeries variant (Phase 1 rollout) ─────────────────────────────────────

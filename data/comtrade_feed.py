@@ -13,7 +13,12 @@ import pandas as pd
 import requests
 import streamlit as st
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from data.cache_manager import CacheManager
 from data.normalizer import normalize_trade_df
@@ -194,20 +199,41 @@ def fetch_all_ports(
     return results
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=3, max=15))
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=3, max=15),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
+)
+def _wits_http_get(url: str, params: dict) -> requests.Response:
+    """Issue a WITS GET. Retries only on ``RequestException`` and re-raises
+    after attempts are exhausted so the caller can decide what to do."""
+    return requests.get(url, params=params, timeout=30)
+
+
 def _fetch_wits_country(iso2: str, year: str) -> pd.DataFrame:
-    """Fetch country trade flows from WITS for a given year."""
+    """Fetch country trade flows from WITS for a given year.
+
+    Network failures (``RequestException`` family) trigger tenacity retries;
+    once exhausted the flow is skipped (empty rows from that side). Non-200
+    statuses and parse errors are still skipped without retry.
+    """
     rows = []
 
     for flow in ["exports", "imports"]:
         url = f"{_WITS_BASE}/{iso2}/{year}/all/{flow}"
         params = {"format": "JSON"}
         try:
-            resp = requests.get(url, params=params, timeout=30)
+            resp = _wits_http_get(url, params)
             if resp.status_code != 200:
                 continue
             data = resp.json()
+        except requests.exceptions.RequestException as exc:
+            # Retries exhausted on a real network failure — skip flow.
+            logger.debug(f"WITS {iso2} {year} {flow} network failure: {exc}")
+            continue
         except Exception as exc:
+            # Parse / schema problems on a 200 — skip flow.
             logger.debug(f"WITS {iso2} {year} {flow}: {exc}")
             continue
 
