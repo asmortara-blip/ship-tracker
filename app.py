@@ -631,9 +631,8 @@ st.markdown(f"""
 @keyframes pulse-live {{ 0%,100%{{opacity:1}} 50%{{opacity:.35}} }}
 .wsj-live {{ animation: pulse-live 2.5s ease-in-out infinite; }}
 </style>
-
 <div style="padding:12px 0 0 0; margin-bottom:0">
-    <!-- WSJ Masthead -->
+<!-- WSJ Masthead -->
     <div style="text-align:center;padding-bottom:14px;border-bottom:3px double rgba(232,230,225,0.12)">
         <div style="font-family:'Libre Franklin',system-ui,sans-serif;font-size:0.62rem;
                     font-weight:700;color:#6b6760;text-transform:uppercase;letter-spacing:0.2em;
@@ -659,7 +658,6 @@ st.markdown(f"""
             </span>
         </div>
     </div>
-
     <!-- Summary line -->
     <div style="display:flex;justify-content:space-between;align-items:center;
                 padding:10px 0;border-bottom:1px solid rgba(232,230,225,0.08);

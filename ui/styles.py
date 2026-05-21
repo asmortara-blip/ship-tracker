@@ -1418,7 +1418,17 @@ def page_header(
 
 
 def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
-    """Render a responsive row of metric cards."""
+    """Render a responsive row of metric cards.
+
+    Note: the HTML below is intentionally NOT indented and contains no
+    blank-line gaps between elements. Streamlit's markdown parser treats
+    a blank line followed by 4+ space-indented content as a code block,
+    so an empty {delta_html} or {sub_html} interpolation inside an
+    indented template would silently turn the rest of the card into a
+    <code> block (seen in the wild — KPI sublabels rendered as raw HTML
+    text). De-indenting the template prevents this regardless of which
+    optional pieces are empty.
+    """
     n    = min(columns, len(metrics))
     cols = st.columns(n)
     for i, (col, m) in enumerate(zip(cols, metrics)):
@@ -1437,14 +1447,15 @@ def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
                 f'<div style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
                 if sub else ""
             )
-            st.markdown(f"""
-            <div class="kpi-card slide-in" style="border-top:2px solid {accent};">
-                <div class="kpi-label">{m.get("label","")}</div>
-                <div class="kpi-value">{m.get("value","")}</div>
-                {delta_html}
-                {sub_html}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="kpi-card slide-in" style="border-top:2px solid {accent};">'
+                f'<div class="kpi-label">{m.get("label","")}</div>'
+                f'<div class="kpi-value">{m.get("value","")}</div>'
+                f'{delta_html}'
+                f'{sub_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def insight_card_html(
