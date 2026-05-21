@@ -27,14 +27,18 @@ from engine.alert_delivery import (
     DeliveryChannel,
     DeliveryResult,
     _deliver_email,
+    _deliver_sms,
     _get_smtp_config,
+    _get_twilio_config,
     _meets_threshold,
     _SmtpConfig,
+    _TwilioConfig,
     delete_channel,
     deliver_alert,
     deliver_pending,
     format_email_payload,
     format_slack_payload,
+    format_sms_payload,
     load_channels,
     save_channel,
 )
@@ -338,13 +342,13 @@ def test_deliver_alert_unsupported_kind_fails(monkeypatch) -> None:
         alert_delivery.requests, "post",
         lambda *a, **kw: _FakeResponse(200),
     )
-    # "sms" is reserved for a future backend; using it today must fail
+    # "webhook" is reserved for a future backend; using it today must fail
     # so alerts aren't silently dropped on a half-configured channel.
-    channel = _make_channel("LOW", kind="sms")
+    channel = _make_channel("LOW", kind="webhook")
     result = deliver_alert(_make_alert("HIGH"), channel)
     assert result.success is False
     assert "unsupported channel kind" in result.error_msg
-    assert "sms" in result.error_msg
+    assert "webhook" in result.error_msg
 
 
 # ─── Channel persistence ──────────────────────────────────────────────────
@@ -880,3 +884,281 @@ def test_deliver_alert_email_disabled_skips_smtp(monkeypatch) -> None:
     assert result.success is True
     assert "disabled" in result.error_msg
     assert instances == []
+
+
+# ─── SMS backend: helpers ──────────────────────────────────────────────────
+
+
+def _clear_twilio_env(monkeypatch) -> None:
+    """Strip all TWILIO_* env vars so _get_twilio_config sees a clean slate."""
+    for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def _set_twilio_env(monkeypatch) -> None:
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACtest1234567890abcdef1234567890ab")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "secret_token_value")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+15559876543")
+
+
+def _twilio_cfg() -> _TwilioConfig:
+    return _TwilioConfig(
+        account_sid="ACtest1234567890abcdef1234567890ab",
+        auth_token="secret_token_value",
+        from_number="+15559876543",
+    )
+
+
+class _FakeTwilioResponse:
+    """Stand-in for ``requests.Response`` for Twilio calls — carries
+    ``status_code``, ``text``, and a ``json()`` method that returns a
+    pre-baked dict (or raises if ``json_payload`` is None)."""
+
+    def __init__(
+        self,
+        status_code: int = 201,
+        text: str = "",
+        json_payload: dict | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.text = text
+        self._json_payload = json_payload
+
+    def json(self) -> dict:
+        if self._json_payload is None:
+            raise ValueError("no json body")
+        return self._json_payload
+
+
+# ─── format_sms_payload ────────────────────────────────────────────────────
+
+
+def test_format_sms_payload_includes_severity_prefix_and_title() -> None:
+    a = _make_alert(severity="HIGH", title="BDI Surged 7.2% in 1 Day", body="Body text.")
+    payload = format_sms_payload(a)
+    body = payload["body"]
+    assert body.startswith("[HIGH] BDI Surged 7.2% in 1 Day")
+    # Body text follows the header on its own line
+    assert "Body text." in body
+    assert "\n" in body
+
+
+def test_format_sms_payload_respects_280_char_body_cap() -> None:
+    long_body = "x" * 1000
+    a = _make_alert(severity="MEDIUM", title="t", body=long_body, value=0, threshold=0)
+    payload = format_sms_payload(a)
+    body = payload["body"]
+    # The truncated body portion should not exceed 280 chars and ends with "..."
+    # Pull the line that holds the original body.
+    body_line = body.split("\n", 1)[1]  # everything after "[MEDIUM] t\n"
+    assert len(body_line) <= 280
+    assert body_line.endswith("...")
+
+
+def test_format_sms_payload_includes_value_threshold_footer_when_nonzero() -> None:
+    a = _make_alert(severity="HIGH", value=2345.67, threshold=1000.0)
+    payload = format_sms_payload(a)
+    body = payload["body"]
+    assert "2,345.67" in body
+    assert "1,000.00" in body
+    assert "Value" in body
+    assert "Threshold" in body
+
+
+def test_format_sms_payload_omits_footer_when_value_and_threshold_zero() -> None:
+    a = _make_alert(severity="LOW", value=0.0, threshold=0.0)
+    payload = format_sms_payload(a)
+    body = payload["body"]
+    # No noisy "Value 0.00 / Threshold 0.00" tail
+    assert "Value" not in body
+    assert "Threshold" not in body
+
+
+def test_format_sms_payload_returns_dict_with_body_key() -> None:
+    payload = format_sms_payload(_make_alert(severity="HIGH"))
+    assert isinstance(payload, dict)
+    assert "body" in payload
+    assert isinstance(payload["body"], str)
+
+
+# ─── _get_twilio_config ────────────────────────────────────────────────────
+
+
+def test_get_twilio_config_returns_none_when_env_missing(monkeypatch) -> None:
+    _clear_twilio_env(monkeypatch)
+    # st.secrets path returns "" or raises in the test harness, so missing
+    # env vars => None.
+    assert _get_twilio_config() is None
+
+
+def test_get_twilio_config_returns_none_when_only_partial_env(monkeypatch) -> None:
+    _clear_twilio_env(monkeypatch)
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACxxx")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "secret")
+    # missing TWILIO_FROM_NUMBER
+    assert _get_twilio_config() is None
+
+
+def test_get_twilio_config_builds_from_env(monkeypatch) -> None:
+    _clear_twilio_env(monkeypatch)
+    _set_twilio_env(monkeypatch)
+    cfg = _get_twilio_config()
+    assert cfg is not None
+    assert isinstance(cfg, _TwilioConfig)
+    assert cfg.account_sid == "ACtest1234567890abcdef1234567890ab"
+    assert cfg.auth_token == "secret_token_value"
+    assert cfg.from_number == "+15559876543"
+
+
+# ─── _deliver_sms (Twilio mocked end-to-end) ───────────────────────────────
+
+
+def test_deliver_sms_success_201(monkeypatch) -> None:
+    calls = {}
+
+    def fake_post(url, auth=None, data=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["auth"] = auth
+        calls["data"] = data
+        calls["timeout"] = timeout
+        return _FakeTwilioResponse(
+            status_code=201,
+            json_payload={"sid": "SM_test_sid_123"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    alert = _make_alert(severity="HIGH", title="ZIM dropped 8%")
+
+    result = _deliver_sms(channel, alert, _twilio_cfg())
+    assert result.success is True
+    assert result.status_code == 201
+    assert result.error_msg == ""
+
+    # Twilio URL embeds the AccountSid
+    assert calls["url"].endswith(
+        "/Accounts/ACtest1234567890abcdef1234567890ab/Messages.json"
+    )
+    assert calls["url"].startswith("https://api.twilio.com/2010-04-01/")
+    # HTTP Basic auth tuple (sid, token)
+    assert calls["auth"] == ("ACtest1234567890abcdef1234567890ab", "secret_token_value")
+    # Form-encoded payload uses To/From/Body
+    assert calls["data"]["To"] == "+15551234567"
+    assert calls["data"]["From"] == "+15559876543"
+    assert "[HIGH] ZIM dropped 8%" in calls["data"]["Body"]
+    # 10s timeout matching the Slack/email pattern
+    assert calls["timeout"] == 10.0
+
+
+def test_deliver_sms_400_returns_failure_with_twilio_message(monkeypatch) -> None:
+    def fake_post(url, auth=None, data=None, timeout=None, **kw):
+        return _FakeTwilioResponse(
+            status_code=400,
+            text='{"code": 21211, "message": "Invalid number"}',
+            json_payload={"code": 21211, "message": "Invalid number"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    result = _deliver_sms(channel, _make_alert("HIGH"), _twilio_cfg())
+    assert result.success is False
+    assert result.status_code == 400
+    assert "Invalid number" in result.error_msg
+
+
+def test_deliver_sms_connection_error_returns_failure(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError("no route to twilio")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    result = _deliver_sms(channel, _make_alert("HIGH"), _twilio_cfg())
+    assert result.success is False
+    assert result.status_code == 0
+    assert "connection error" in result.error_msg
+    assert "no route to twilio" in result.error_msg
+
+
+def test_deliver_sms_timeout_returns_failure(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.Timeout("twilio read timed out")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    result = _deliver_sms(channel, _make_alert("HIGH"), _twilio_cfg())
+    assert result.success is False
+    assert result.status_code == 0
+    assert "timeout" in result.error_msg.lower()
+
+
+# ─── deliver_alert dispatch on kind="sms" ──────────────────────────────────
+
+
+def test_deliver_alert_sms_no_config_returns_failure(monkeypatch) -> None:
+    """kind=sms with no Twilio credentials → failure with explicit msg."""
+    _clear_twilio_env(monkeypatch)
+    # Belt-and-suspenders: also patch _get_twilio_config to return None so
+    # any stray st.secrets in the test env can't satisfy it.
+    monkeypatch.setattr(alert_delivery, "_get_twilio_config", lambda: None)
+
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is False
+    assert result.error_msg == "Twilio not configured"
+
+
+def test_deliver_alert_sms_with_config_succeeds(monkeypatch) -> None:
+    """kind=sms with configured Twilio → routes through _deliver_sms and
+    returns success when the (mocked) HTTP call returns 201."""
+    _clear_twilio_env(monkeypatch)
+    monkeypatch.setattr(alert_delivery, "_get_twilio_config", _twilio_cfg)
+
+    calls = {"n": 0}
+
+    def fake_post(url, auth=None, data=None, timeout=None, **kw):
+        calls["n"] += 1
+        return _FakeTwilioResponse(
+            status_code=201,
+            json_payload={"sid": "SM_test_sid_123"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567")
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert result.status_code == 201
+    assert calls["n"] == 1
+
+
+def test_deliver_alert_sms_below_threshold_skips_twilio(monkeypatch) -> None:
+    """Severity gating runs before transport selection — a below-threshold
+    SMS channel must not touch Twilio at all."""
+    monkeypatch.setattr(alert_delivery, "_get_twilio_config", _twilio_cfg)
+    calls = {"n": 0}
+
+    def fake_post(*a, **kw):
+        calls["n"] += 1
+        return _FakeTwilioResponse(201, json_payload={"sid": "x"})
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("CRITICAL", kind="sms", target="+15551234567")
+    result = deliver_alert(_make_alert("LOW"), channel)
+    assert result.success is True
+    assert "below threshold" in result.error_msg
+    assert calls["n"] == 0
+
+
+def test_deliver_alert_sms_disabled_skips_twilio(monkeypatch) -> None:
+    monkeypatch.setattr(alert_delivery, "_get_twilio_config", _twilio_cfg)
+    calls = {"n": 0}
+
+    def fake_post(*a, **kw):
+        calls["n"] += 1
+        return _FakeTwilioResponse(201, json_payload={"sid": "x"})
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="sms", target="+15551234567", enabled=False)
+    result = deliver_alert(_make_alert("CRITICAL"), channel)
+    assert result.success is True
+    assert "disabled" in result.error_msg
+    assert calls["n"] == 0

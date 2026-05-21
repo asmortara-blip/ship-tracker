@@ -2,28 +2,29 @@
 
 The alert engine in ``engine.alert_engine_v2`` persists alerts to SQLite
 and surfaces them in the UI. This module adds an outbound channel so
-alerts can also be pushed to Slack or Email (today), with SMS reserved
-for the future.
+alerts can also be pushed to Slack, Email, or SMS (via Twilio).
 
 Design notes
 ------------
 * ``DeliveryChannel`` is a typed config row. ``kind`` is a free-form
-  string — "slack" and "email" are supported today, "sms" is reserved.
-  ``target`` is the Slack incoming-webhook URL for slack channels and
-  the recipient email address for email channels.
+  string — "slack", "email", and "sms" are supported. ``target`` is
+  the Slack incoming-webhook URL for slack channels, the recipient
+  email address for email channels, and the E.164 phone number (e.g.
+  ``+15551234567``) for sms channels.
 * ``severity_threshold`` uses ``alert_engine_v2._SEVERITY_ORDER`` —
   CRITICAL (0) < HIGH (1) < MEDIUM (2) < LOW (3). A channel with
   threshold "MEDIUM" delivers MEDIUM/HIGH/CRITICAL alerts and skips
   LOW.
-* ``format_slack_payload`` / ``format_email_payload`` are pure
-  functions so they can be tested without touching the network.
-  ``deliver_alert`` opens the transport (HTTPS for slack, SMTP for
-  email) with a 10s timeout and always returns a ``DeliveryResult`` —
-  it never raises so callers can iterate over many alerts without one
-  outage breaking the whole batch.
-* SMTP credentials are read from environment variables (or Streamlit
-  secrets) at delivery time via ``_get_smtp_config``. They never live
-  in the ``delivery_channels`` row.
+* ``format_slack_payload`` / ``format_email_payload`` /
+  ``format_sms_payload`` are pure functions so they can be tested
+  without touching the network. ``deliver_alert`` opens the transport
+  (HTTPS for slack + Twilio, SMTP for email) with a 10s timeout and
+  always returns a ``DeliveryResult`` — it never raises so callers can
+  iterate over many alerts without one outage breaking the whole batch.
+* SMTP + Twilio credentials are read from environment variables (or
+  Streamlit secrets) at delivery time via ``_get_smtp_config`` /
+  ``_get_twilio_config``. They never live in the ``delivery_channels``
+  row.
 * Channel persistence lives in the SQLite ``delivery_channels`` table
   (schema v2). Channel configs are user-authored config, parallel to
   ``alert_rules``.
@@ -52,8 +53,8 @@ from engine.alert_engine_v2 import ShippingAlert, _SEVERITY_ORDER, _row_to_alert
 class DeliveryChannel:
     channel_id: str          # UUID-ish identifier
     name: str                # human-readable label, e.g. "Trading desk Slack"
-    kind: str                # "slack" today; "email"/"sms" reserved
-    target: str              # webhook URL for slack
+    kind: str                # "slack" | "email" | "sms"
+    target: str              # webhook URL for slack, email address, or E.164 phone for sms
     severity_threshold: str  # "CRITICAL"|"HIGH"|"MEDIUM"|"LOW"
     enabled: bool = True
     created_at: str = ""     # ISO timestamp, populated by save_channel
@@ -248,6 +249,51 @@ def format_email_payload(alert: ShippingAlert) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  SMS payload formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Twilio concatenates up to 1600 chars, but each 160-char segment costs a
+# message. Cap the body at ~280 chars (2 segments) to keep costs predictable
+# while still leaving room for the severity-prefixed title.
+_SMS_BODY_MAX_CHARS = 280
+
+
+def format_sms_payload(alert: ShippingAlert) -> dict:
+    """Build the Twilio SMS body for a ``ShippingAlert``.
+
+    SMS has a 160-char per-segment limit but Twilio concatenates up to
+    1600 chars. We format as:
+
+        [SEVERITY] {title}
+        {body truncated to ~280 chars}
+        {optional footer with value/threshold}
+
+    and return ``{"body": str}`` for symmetry with ``format_slack_payload``
+    and ``format_email_payload``.
+    """
+    header = f"[{alert.severity}] {alert.title}"
+
+    # Truncate the body to keep total length close to 2 segments.
+    body_text = alert.body or ""
+    if len(body_text) > _SMS_BODY_MAX_CHARS:
+        # Reserve 3 chars for the ellipsis so the truncated text + "..."
+        # fits inside the cap.
+        body_text = body_text[: _SMS_BODY_MAX_CHARS - 3] + "..."
+
+    parts: list[str] = [header]
+    if body_text:
+        parts.append(body_text)
+
+    # Footer carries value/threshold only when at least one is non-zero so
+    # alerts that don't trade in numeric thresholds don't get a noisy
+    # "Value 0.00 / Threshold 0.00" tail.
+    if alert.value != 0 or alert.threshold != 0:
+        parts.append(f"Value {alert.value:,.2f} / Threshold {alert.threshold:,.2f}")
+
+    return {"body": "\n".join(parts)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  SMTP configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -322,11 +368,73 @@ def _get_smtp_config() -> Optional[_SmtpConfig]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Twilio configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class _TwilioConfig:
+    account_sid: str
+    auth_token: str
+    from_number: str
+
+
+def _get_twilio_config() -> Optional[_TwilioConfig]:
+    """Read Twilio credentials from Streamlit secrets (preferred) or env
+    vars. Returns ``None`` if any required field is missing.
+
+    Required keys / env vars (all three must be present):
+      - ``TWILIO_ACCOUNT_SID``
+      - ``TWILIO_AUTH_TOKEN``
+      - ``TWILIO_FROM_NUMBER`` (E.164, e.g. ``+15559876543``)
+
+    Never raises. Same pattern as ``_get_smtp_config``.
+    """
+    try:
+        getters: list = []
+
+        # st.secrets takes precedence so a deployed Streamlit app can
+        # carry credentials without touching the OS environment.
+        try:
+            import streamlit as st
+            getters.append(lambda k: str(st.secrets.get(k, "")) if st.secrets else "")
+        except Exception:
+            pass
+
+        getters.append(lambda k: os.environ.get(k, ""))
+
+        def lookup(key: str) -> str:
+            for getter in getters:
+                try:
+                    val = getter(key)
+                except Exception:
+                    val = ""
+                if val:
+                    return str(val)
+            return ""
+
+        account_sid = lookup("TWILIO_ACCOUNT_SID")
+        auth_token = lookup("TWILIO_AUTH_TOKEN")
+        from_number = lookup("TWILIO_FROM_NUMBER")
+
+        if not (account_sid and auth_token and from_number):
+            return None
+        return _TwilioConfig(
+            account_sid=account_sid,
+            auth_token=auth_token,
+            from_number=from_number,
+        )
+    except Exception:
+        # _get_twilio_config must never raise.
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Delivery
 # ─────────────────────────────────────────────────────────────────────────────
 
 _REQUEST_TIMEOUT_S = 10.0
 _SMTP_TIMEOUT_S = 10.0
+_TWILIO_API_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 
 
 def _deliver_email(
@@ -384,6 +492,71 @@ def _deliver_email(
     return DeliveryResult(success=True, status_code=0)
 
 
+def _deliver_sms(
+    channel: DeliveryChannel,
+    alert: ShippingAlert,
+    config: _TwilioConfig,
+) -> DeliveryResult:
+    """Send ``alert`` to ``channel.target`` (E.164 phone number) via the
+    Twilio REST API.
+
+    POSTs form-encoded ``To/From/Body`` to
+    ``https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json``
+    with HTTP Basic auth (sid as user, auth token as password). Returns
+    ``DeliveryResult(success=True, status_code=201)`` on Twilio's
+    standard 201 response. Twilio errors typically come back as 400 with
+    a JSON body ``{"code", "message"}`` — we surface the ``message``
+    field in ``error_msg`` when present, falling back to the raw text.
+    """
+    payload = format_sms_payload(alert)
+    url = _TWILIO_API_URL.format(sid=config.account_sid)
+
+    try:
+        resp = requests.post(
+            url,
+            auth=(config.account_sid, config.auth_token),
+            data={
+                "To": channel.target,
+                "From": config.from_number,
+                "Body": payload["body"],
+            },
+            timeout=_REQUEST_TIMEOUT_S,
+        )
+    except requests.exceptions.Timeout as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"timeout: {exc}")
+    except requests.exceptions.ConnectionError as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+    except requests.exceptions.RequestException as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"request error: {exc}")
+    except Exception as exc:
+        # Defence-in-depth — never let an unexpected exception propagate.
+        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+
+    status = getattr(resp, "status_code", 0)
+    if status == 201:
+        return DeliveryResult(success=True, status_code=201)
+
+    # Try to surface Twilio's structured error message when the response
+    # body parses as JSON; fall back to the raw text otherwise.
+    error_text = ""
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("message"):
+            error_text = str(data["message"])
+    except Exception:
+        pass
+    if not error_text:
+        try:
+            error_text = (resp.text or "")[:500]
+        except Exception:
+            error_text = ""
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {error_text}" if error_text else f"HTTP {status}",
+    )
+
+
 def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryResult:
     """Push a single alert to ``channel``. Never raises — network errors
     are caught and returned in the ``DeliveryResult``.
@@ -398,6 +571,8 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
       - ``"slack"`` → POST to the incoming-webhook URL in ``target``
       - ``"email"`` → send via SMTP using ``_get_smtp_config`` (env /
         st.secrets) to the recipient address in ``target``
+      - ``"sms"`` → POST to Twilio's REST API using ``_get_twilio_config``
+        (env / st.secrets) to the E.164 phone number in ``target``
       - anything else → explicit "unsupported kind" failure
     """
     if not channel.enabled:
@@ -419,10 +594,20 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             )
         return _deliver_email(channel, alert, config)
 
+    if channel.kind == "sms":
+        twilio_cfg = _get_twilio_config()
+        if twilio_cfg is None:
+            return DeliveryResult(
+                success=False,
+                status_code=0,
+                error_msg="Twilio not configured",
+            )
+        return _deliver_sms(channel, alert, twilio_cfg)
+
     if channel.kind != "slack":
-        # Reserved for future backends (sms / pagerduty / ...); surface
-        # as an explicit failure so callers don't silently drop alerts
-        # when someone adds a channel before its backend exists.
+        # Reserved for future backends (pagerduty / opsgenie / ...);
+        # surface as an explicit failure so callers don't silently drop
+        # alerts when someone adds a channel before its backend exists.
         return DeliveryResult(
             success=False,
             status_code=0,
