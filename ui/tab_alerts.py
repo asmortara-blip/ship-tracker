@@ -915,6 +915,143 @@ def _render_rules_manager() -> None:
         st.error("Rules management unavailable.")
 
 
+def _render_delivery_channels() -> None:
+    """Manage outbound Slack delivery channels and trigger pending deliveries.
+
+    Wires through ``engine.alert_delivery`` for persistence + transport.
+    Wrapped in a single try/except so a delivery outage cannot break the
+    rest of the Alert Center tab.
+    """
+    try:
+        from uuid import uuid4
+        from engine.alert_delivery import (
+            DeliveryChannel,
+            delete_channel,
+            deliver_pending,
+            load_channels,
+            save_channel,
+        )
+
+        section_divider("Delivery Channels")
+        section_header(
+            "Outbound Notifications",
+            "Push triggered alerts to Slack via incoming webhooks.",
+        )
+
+        # ── Existing channels list ─────────────────────────────────────────
+        try:
+            channels = load_channels()
+        except Exception as exc:
+            logger.exception("load_channels failed")
+            st.error(f"Could not load delivery channels: {exc}")
+            channels = []
+
+        if channels:
+            headers = ["Name", "Kind", "Threshold", "Enabled", "Created"]
+            rows = []
+            for ch in channels:
+                rows.append([
+                    _sans(ch.name, color=C_TEXT, weight=700),
+                    _sans(ch.kind, color=C_TEXT2, weight=500),
+                    _sev_badge(ch.severity_threshold.title()
+                               if ch.severity_threshold in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+                               else ch.severity_threshold),
+                    _sans("On" if ch.enabled else "Off",
+                          color=C_HIGH if ch.enabled else C_TEXT3, weight=600),
+                    _mono(_fmt_dt(ch.created_at), color=C_TEXT3, weight=400),
+                ])
+            wsj_market_table(headers, rows)
+
+            # Delete buttons — one column per channel, capped at 4 wide.
+            del_cols = st.columns(min(4, len(channels)))
+            for idx, ch in enumerate(channels):
+                with del_cols[idx % len(del_cols)]:
+                    if st.button(
+                        f"🗑 Delete {ch.name}",
+                        key=f"del_channel_{ch.channel_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            delete_channel(ch.channel_id)
+                            st.success(f"Deleted channel '{ch.name}'.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Delete failed: {exc}")
+        else:
+            st.info("No delivery channels configured yet. Add one below.")
+
+        # ── Add Channel form ───────────────────────────────────────────────
+        with st.expander("Add Channel", expanded=not channels):
+            with st.form("add_channel_form", clear_on_submit=True):
+                ch_name = st.text_input(
+                    "Channel name",
+                    placeholder="e.g. Trading desk Slack",
+                )
+                ch_kind = st.selectbox("Kind", options=["slack"])
+                ch_target = st.text_input(
+                    "Webhook URL",
+                    placeholder="https://hooks.slack.com/services/...",
+                )
+                ch_threshold = st.selectbox(
+                    "Severity threshold",
+                    options=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                    index=2,
+                    help="Channel delivers alerts at this severity or higher.",
+                )
+                ch_enabled = st.checkbox("Enabled", value=True)
+                submitted = st.form_submit_button(
+                    "Save channel", use_container_width=True, type="primary",
+                )
+
+            if submitted:
+                if not ch_name.strip():
+                    st.warning("Please enter a channel name.")
+                elif not ch_target.strip():
+                    st.warning("Please enter a webhook URL.")
+                else:
+                    try:
+                        save_channel(DeliveryChannel(
+                            channel_id=str(uuid4()),
+                            name=ch_name.strip(),
+                            kind=ch_kind,
+                            target=ch_target.strip(),
+                            severity_threshold=ch_threshold,
+                            enabled=bool(ch_enabled),
+                        ))
+                        st.success(f"Saved channel '{ch_name.strip()}'.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Save failed: {exc}")
+
+        # ── Deliver pending alerts ─────────────────────────────────────────
+        enabled_channels = [c for c in channels if c.enabled]
+        if st.button(
+            f"📤 Deliver pending alerts ({len(enabled_channels)} enabled)",
+            key="deliver_pending_btn",
+            use_container_width=False,
+            disabled=not enabled_channels,
+        ):
+            since = datetime.now(timezone.utc) - timedelta(hours=24)
+            for ch in enabled_channels:
+                try:
+                    results = deliver_pending(ch, since=since)
+                    sent = sum(1 for r in results if r.success and r.status_code != 0)
+                    failed = sum(1 for r in results if not r.success)
+                    if sent or failed:
+                        st.info(
+                            f"{ch.name}: sent {sent}, failed {failed} "
+                            f"(of {len(results)} considered)."
+                        )
+                    else:
+                        st.caption(f"{ch.name}: no alerts in the last 24h.")
+                except Exception as exc:
+                    logger.exception("deliver_pending failed for channel %s", ch.name)
+                    st.error(f"{ch.name}: delivery error — {exc}")
+    except Exception:
+        logger.exception("Delivery channels render failed")
+        st.error("Delivery channels section unavailable.")
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -963,6 +1100,8 @@ def render(
         section_divider("Configuration")
         _render_notifications()
         _render_rules_manager()
+
+        _render_delivery_channels()
     except Exception:
         logger.exception("tab_alerts top-level render failed")
         st.error("Alert Center tab encountered an error.")
