@@ -67,6 +67,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Authentication gate ──────────────────────────────────────────────────
+# Single-password gate (NOT multi-user). When APP_PASSWORD_HASH and
+# APP_PASSWORD_SALT are unset, the app runs in open mode (intentional
+# for local dev). See docs/AUTH.md for setup. Wrapped in try/except so
+# a broken auth module never takes down the whole app.
+try:
+    from auth.gate import require_auth
+    require_auth()  # calls st.stop() if not authenticated
+except Exception as _auth_exc:
+    logger.warning(f"Auth gate unavailable, allowing through: {_auth_exc}")
+
 # ── Logging — rotated file sink + stderr ─────────────────────────────────
 # Idempotent across Streamlit hot-reloads. Writes to <project_root>/logs/
 # which the Dockerfile mounts via the cache/logs volume.
