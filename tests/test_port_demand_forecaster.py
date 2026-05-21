@@ -267,3 +267,32 @@ def test_forecast_is_repeatable_for_same_inputs() -> None:
         (fc.port_locode, fc.forecast_30d, fc.forecast_60d, fc.forecast_90d, fc.confidence)
         for fc in b
     ]
+
+
+# ── BDI macro-key resolution (BSXRLM canonical, BDIY fallback) ──────────────
+
+
+def _fred_bdi_frame(n: int = 60) -> "object":  # pandas DataFrame
+    """Build a FRED-shaped BDI frame the confidence path will accept."""
+    import pandas as pd
+
+    dates = pd.date_range("2025-01-01", periods=n, freq="D")
+    return pd.DataFrame({
+        "date": dates,
+        "value": [1_500.0 + 2.0 * i for i in range(n)],
+    })
+
+
+def test_bsxrlm_macro_frame_lifts_confidence() -> None:
+    """A BDI series under the canonical FRED key must add the +0.2 credit."""
+    macro = {"BSXRLM": _fred_bdi_frame()}
+    fc = forecast_port_demand([_PortStub("X", "X", 0.55)], macro, {})[0]
+    # Baseline 0.4 + 0.2 BDI credit = 0.6 (no WB data, neutral congestion).
+    assert fc.confidence == pytest.approx(0.6, abs=1e-6)
+
+
+def test_bdiy_macro_frame_still_lifts_confidence_as_fallback() -> None:
+    """Legacy callers keyed by ``BDIY`` must still get the +0.2 credit."""
+    macro = {"BDIY": _fred_bdi_frame()}
+    fc = forecast_port_demand([_PortStub("X", "X", 0.55)], macro, {})[0]
+    assert fc.confidence == pytest.approx(0.6, abs=1e-6)

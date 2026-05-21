@@ -94,9 +94,12 @@ def compute_index_dashboard(freight_data: dict, macro_data: dict = None) -> list
                 key_mapping[idx_key] = fk
                 break
 
-    # Also check for BDI in macro data (FRED: BDIY)
+    # Also check for BDI in macro data.
+    # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
     if "BDI" not in key_mapping and macro_data:
-        if "BDIY" in macro_data:
+        if "BSXRLM" in macro_data:
+            key_mapping["BDI"] = "BSXRLM"
+        elif "BDIY" in macro_data:
             key_mapping["BDI"] = "BDIY"
 
     for idx_key, defn in INDEX_DEFINITIONS.items():

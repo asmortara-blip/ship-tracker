@@ -158,9 +158,11 @@ def _build_features(rate_series: pd.Series, macro_data: dict) -> pd.DataFrame:
     is_cny       = 1 if month in (1, 2) else 0
 
     # ── BDI ───────────────────────────────────────────────────────────────────
-    bdi_level  = _latest_macro_value(macro_data, "BDIY")
-    bdi_chg30  = _macro_pct_change(macro_data, "BDIY", 30)
-    bdi_chg90  = _macro_pct_change(macro_data, "BDIY", 90)
+    # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
+    bdi_key = "BSXRLM" if "BSXRLM" in macro_data else "BDIY"
+    bdi_level  = _latest_macro_value(macro_data, bdi_key)
+    bdi_chg30  = _macro_pct_change(macro_data, bdi_key, 30)
+    bdi_chg90  = _macro_pct_change(macro_data, bdi_key, 90)
 
     # ── WTI (bunker fuel proxy) ───────────────────────────────────────────────
     wti = _latest_macro_value(macro_data, "DCOILWTICO")

@@ -269,6 +269,31 @@ def test_build_features_macro_defaults_when_missing() -> None:
     assert feat["pmi_level"].iloc[0] == 100.0
 
 
+def test_build_features_bdi_resolves_via_bsxrlm_macro_key() -> None:
+    """The BDI level must be sourced from the canonical FRED ``BSXRLM`` key."""
+    s = pd.Series(_noisy_rates(100))
+    bsx = _macro_df([1_200.0] * 100)
+    feat = _build_features(s, {"BSXRLM": bsx})
+    assert feat["bdi_level"].iloc[0] == 1_200.0
+
+
+def test_build_features_bdi_resolves_via_bdiy_fallback_macro_key() -> None:
+    """Legacy callers keyed by ``BDIY`` continue to resolve as the fallback."""
+    s = pd.Series(_noisy_rates(100))
+    bdi = _macro_df([1_300.0] * 100)
+    feat = _build_features(s, {"BDIY": bdi})
+    assert feat["bdi_level"].iloc[0] == 1_300.0
+
+
+def test_build_features_bsxrlm_preferred_over_bdiy_when_both_present() -> None:
+    """When both keys are present, the canonical BSXRLM wins."""
+    s = pd.Series(_noisy_rates(100))
+    bsx = _macro_df([1_111.0] * 100)
+    bdi = _macro_df([2_222.0] * 100)
+    feat = _build_features(s, {"BSXRLM": bsx, "BDIY": bdi})
+    assert feat["bdi_level"].iloc[0] == 1_111.0
+
+
 def test_build_features_uses_napmpi_when_ipman_missing() -> None:
     """If IPMAN missing, falls back to NAPMPI; PMI default not used."""
     s = pd.Series(_noisy_rates(100))

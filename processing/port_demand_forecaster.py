@@ -108,7 +108,10 @@ def _compute_macro_adjustment(macro_data: dict) -> tuple[float, list[str]]:
     drivers: list[str] = []
 
     # ── BDI trend ──────────────────────────────────────────────────────────
-    bdi_df = macro_data.get("BDIY")
+    # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
+    bdi_df = macro_data.get("BSXRLM")
+    if bdi_df is None:
+        bdi_df = macro_data.get("BDIY")
     if bdi_df is not None and not bdi_df.empty and len(bdi_df) >= 10:
         bdi_score = compute_bdi_score(macro_data)
         if bdi_score > 0.55:
@@ -186,8 +189,10 @@ def _compute_confidence(
     """Compute confidence score [0, 1] based on data richness."""
     conf = 0.4  # baseline — no true port time series
 
-    # +0.2 if BDI data present
-    bdi_df = macro_data.get("BDIY")
+    # +0.2 if BDI data present (canonical BSXRLM, BDIY fallback)
+    bdi_df = macro_data.get("BSXRLM")
+    if bdi_df is None:
+        bdi_df = macro_data.get("BDIY")
     if bdi_df is not None and not bdi_df.empty and len(bdi_df) >= 5:
         conf += 0.2
 

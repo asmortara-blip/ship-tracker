@@ -320,3 +320,33 @@ def test_structural_oversupply_flag_is_bool_in_batch() -> None:
     """Every forecast in a batch exposes a boolean structural_oversupply flag."""
     batch = forecast_all_stress({}, {}, [])
     assert all(isinstance(f.structural_oversupply, bool) for f in batch)
+
+
+# ── BDI macro-key resolution (BSXRLM canonical, BDIY fallback) ──────────────
+
+
+def _rising_bdi_frame() -> "pd.DataFrame":  # type: ignore[name-defined]
+    """Build a strictly rising 60-row FRED frame so BDI_rising → True."""
+    import pandas as pd  # local import keeps the module top tidy
+
+    dates = pd.date_range("2025-01-01", periods=60, freq="D")
+    return pd.DataFrame({
+        "date": dates,
+        "value": [1_500.0 + 5.0 * i for i in range(60)],
+    })
+
+
+def test_macro_for_congestion_resolves_bdi_via_bsxrlm() -> None:
+    """The canonical FRED key ``BSXRLM`` must populate BDI_rising."""
+    from processing.disruption_forecast import _macro_for_congestion
+
+    adapted = _macro_for_congestion({"BSXRLM": _rising_bdi_frame()})
+    assert adapted.get("BDI_rising") is True
+
+
+def test_macro_for_congestion_resolves_bdi_via_bdiy_fallback() -> None:
+    """Legacy callers keyed by ``BDIY`` must continue to resolve as the fallback."""
+    from processing.disruption_forecast import _macro_for_congestion
+
+    adapted = _macro_for_congestion({"BDIY": _rising_bdi_frame()})
+    assert adapted.get("BDI_rising") is True

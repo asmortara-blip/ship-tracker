@@ -218,7 +218,10 @@ def _macro_for_congestion(macro_data: dict | None) -> dict:
 
     # Otherwise try to derive from FRED-style DataFrames.
     try:
-        bdi_df = macro_data.get("BDIY")
+        # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
+        bdi_df = macro_data.get("BSXRLM")
+        if bdi_df is None:
+            bdi_df = macro_data.get("BDIY")
         if bdi_df is not None and hasattr(bdi_df, "empty") and not bdi_df.empty:
             col = "value" if "value" in bdi_df.columns else None
             if col is None:

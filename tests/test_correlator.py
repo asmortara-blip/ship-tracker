@@ -284,3 +284,41 @@ def test_heatmap_data_ignores_unknown_stocks_or_signals() -> None:
     # No row/col added; the unknown stock just doesn't contribute.
     assert df.shape == (1, 1)
     assert df.loc["BDI", "ZIM"] == 0.0
+
+
+# ─── BDI key resolution ────────────────────────────────────────────────────
+
+def test_analyze_resolves_bdi_via_bsxrlm_macro_key() -> None:
+    """The signal builder must source BDI from the canonical FRED ``BSXRLM`` key.
+
+    A tightly correlated stock+BDI pair should produce at least one BDI
+    correlation result when the macro frame is keyed by BSXRLM.
+    """
+    n = 200
+    rng = np.random.default_rng(7)
+    base = np.cumsum(rng.normal(0.0, 1.0, n))
+    dates = pd.date_range("2025-01-01", periods=n, freq="D")
+    stock_df = pd.DataFrame({"date": dates, "close": base + rng.normal(0, 0.05, n)})
+    macro = {
+        "BSXRLM": pd.DataFrame({"date": dates, "value": base + rng.normal(0, 0.05, n)}),
+    }
+    c = ShippingStockCorrelator(min_window=60, min_abs_r=0.30, lags_to_test=[0])
+    results = c.analyze({"ZIM": stock_df}, macro)
+    bdi_results = [r for r in results if r.signal == "BDI"]
+    assert bdi_results, "BDI signal should resolve via BSXRLM macro key"
+
+
+def test_analyze_resolves_bdi_via_bdiy_fallback_macro_key() -> None:
+    """Legacy callers keyed by ``BDIY`` must continue to resolve as the fallback."""
+    n = 200
+    rng = np.random.default_rng(7)
+    base = np.cumsum(rng.normal(0.0, 1.0, n))
+    dates = pd.date_range("2025-01-01", periods=n, freq="D")
+    stock_df = pd.DataFrame({"date": dates, "close": base + rng.normal(0, 0.05, n)})
+    macro = {
+        "BDIY": pd.DataFrame({"date": dates, "value": base + rng.normal(0, 0.05, n)}),
+    }
+    c = ShippingStockCorrelator(min_window=60, min_abs_r=0.30, lags_to_test=[0])
+    results = c.analyze({"ZIM": stock_df}, macro)
+    bdi_results = [r for r in results if r.signal == "BDI"]
+    assert bdi_results, "BDI signal should resolve via BDIY legacy fallback"

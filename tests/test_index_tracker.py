@@ -180,6 +180,16 @@ def test_dashboard_resolves_bdi_via_bdiy_macro_key() -> None:
     }
 
 
+def test_dashboard_resolves_bdi_via_bsxrlm_macro_key() -> None:
+    """BDI also resolves via the canonical FRED ``BSXRLM`` key (BDIY remains as fallback)."""
+    macro = {"BSXRLM": _fred_frame(n=60, start=1_500.0, slope=5.0)}
+    results = compute_index_dashboard({}, macro)
+    bdi_row = next(r for r in results if r["key"] == "BDI")
+    assert bdi_row["has_data"] is True
+    assert isinstance(bdi_row["current"], float)
+    assert bdi_row["current"] == pytest.approx(1_500.0 + 5.0 * 59)
+
+
 def test_dashboard_picks_rate_column_from_freight_frame() -> None:
     """SCFI sourced from a freight frame uses rate_usd_per_feu, not date."""
     freight = {"SCFI": _freight_frame(n=60, start=2_000.0, slope=1.0)}
