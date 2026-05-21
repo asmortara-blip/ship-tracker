@@ -1156,3 +1156,465 @@ def generate_port_narrative(port_result) -> str:
 def generate_scenario_commentary(scenario_name: str, scenario_result: dict) -> str:
     """Module-level convenience wrapper around NarrationEngine.generate_scenario_commentary."""
     return NarrationEngine().generate_scenario_commentary(scenario_name, scenario_result)
+
+
+# =============================================================================
+# Daily LLM-narrated briefing — wired to the Claude API, cached by date.
+#
+# Lives alongside the rule-based NarrationEngine above. The rule-based path
+# stays the workhorse for per-route / per-port commentary; this path produces
+# *one* structured English briefing for the whole platform per UTC day, calls
+# Claude once, and caches the result to disk.
+#
+# Graceful degradation:
+#   • If ANTHROPIC_API_KEY is absent → returns a template-based narration
+#     deterministically synthesized from the same structured context.
+#   • If the API call fails (network, bad JSON, schema mismatch) → same
+#     template fallback. The error is logged, never raised.
+#   • Template-path output is NOT cached (the cache slot stays open for the
+#     LLM to fill on a later call once the key is configured).
+# =============================================================================
+
+import json as _json
+import os as _os
+from dataclasses import asdict as _asdict, dataclass as _dataclass, field as _field
+from datetime import date as _date
+from pathlib import Path as _Path
+from typing import Any as _Any, Optional as _Optional
+
+
+DEFAULT_LLM_MODEL: str = "claude-haiku-4-5-20251001"
+"""Haiku 4.5 — fast + cheap + good enough for a structured daily briefing.
+Tunable via the ``model=`` argument to ``generate_daily_narration``."""
+
+# Anchor to the project root so cache lives in the same place regardless of CWD.
+NARRATION_CACHE_DIR: _Path = _Path(__file__).resolve().parent.parent / "cache" / "narrations"
+
+
+_DAILY_SYSTEM_PROMPT: str = """You are a shipping-markets analyst writing the morning briefing for an
+institutional research team. Voice: tight, factual, WSJ-style. No hedge-fund
+hype, no "should consider"-style recommendations, no price targets.
+
+Output ONLY a single JSON object (no markdown fences, no commentary) matching
+this exact schema:
+
+{
+  "headline": "<one sentence, ≤140 chars>",
+  "body": "<2-4 short paragraphs separated by blank lines; plain text>",
+  "sections": [
+    {
+      "title": "<3-5 word section heading>",
+      "bullets": ["<key point>", "<key point>", "<key point>"]
+    }
+  ]
+}
+
+Aim for 3-4 sections. Each section should have 2-4 bullets. Every bullet
+must be a single line of plain text under 200 chars. Use route names and
+ticker symbols as they appear in the input data. Never invent numbers —
+use exactly what the input provides, or omit the figure."""
+
+
+@_dataclass(frozen=True)
+class NarrationSection:
+    """One topical sub-section of the daily briefing."""
+    title: str
+    bullets: list[str] = _field(default_factory=list)
+
+
+@_dataclass(frozen=True)
+class DailyNarration:
+    """One day's structured briefing."""
+    date: str                       # ISO date string YYYY-MM-DD
+    headline: str
+    body: str
+    sections: list[NarrationSection] = _field(default_factory=list)
+    source: str = "template"        # "claude" | "template"
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    generated_at: str = ""          # ISO 8601 UTC
+
+
+@_dataclass
+class NarrationContext:
+    """Structured input to the daily narrator.
+
+    Every field is optional — a caller with only an SSI and a few ideas can
+    still produce a useful narration. Inputs are duck-typed against the
+    existing ShippingStressReport / EquityIdea / StressForecast dataclasses
+    so this module doesn't pin those imports at the top.
+    """
+    target_date: _date = _field(default_factory=lambda: datetime.now(timezone.utc).date())
+    stress_report: _Optional[_Any] = None       # ShippingStressReport
+    top_ideas: list[_Any] = _field(default_factory=list)         # list[EquityIdea]
+    top_forecasts: list[_Any] = _field(default_factory=list)     # list[StressForecast]
+    notable_indicators: dict[str, float] = _field(default_factory=dict)
+
+
+# ── Cache helpers ────────────────────────────────────────────────────────────
+
+def _narration_cache_path(target_date: _date, cache_dir: _Path) -> _Path:
+    return cache_dir / f"{target_date.isoformat()}.json"
+
+
+def _read_narration_cache(path: _Path) -> _Optional[DailyNarration]:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = _json.load(fh)
+        sections = [
+            NarrationSection(
+                title=str(s.get("title", "")),
+                bullets=[str(b) for b in s.get("bullets", [])],
+            )
+            for s in data.get("sections", [])
+        ]
+        return DailyNarration(
+            date=str(data.get("date", "")),
+            headline=str(data.get("headline", "")),
+            body=str(data.get("body", "")),
+            sections=sections,
+            source=str(data.get("source", "template")),
+            model=str(data.get("model", "")),
+            tokens_in=int(data.get("tokens_in", 0)),
+            tokens_out=int(data.get("tokens_out", 0)),
+            generated_at=str(data.get("generated_at", "")),
+        )
+    except Exception as exc:
+        logger.debug(f"narration_engine: cache read failed for {path}: {exc}")
+        return None
+
+
+def _write_narration_cache(path: _Path, narration: DailyNarration) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("w", encoding="utf-8") as fh:
+            _json.dump(_asdict(narration), fh, indent=2, default=str)
+    except Exception as exc:
+        logger.warning(f"narration_engine: cache write failed for {path}: {exc}")
+
+
+# ── API key lookup — match the codebase pattern (st.secrets ▶ os.getenv) ────
+
+def _get_anthropic_key(explicit: _Optional[str]) -> str:
+    if explicit:
+        return explicit
+    try:
+        import streamlit as st
+        key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if key:
+            return str(key)
+    except Exception:
+        pass
+    return _os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+# ── Context → structured-prompt payload ─────────────────────────────────────
+
+def _summarize_stress(stress_report: _Any) -> dict:
+    if stress_report is None:
+        return {}
+    return {
+        "overall_ssi": round(float(getattr(stress_report, "overall_ssi", 0.0)), 3),
+        "ssi_label": getattr(stress_report, "ssi_label", ""),
+        "top_disruptions": list(getattr(stress_report, "top_disruptions", []))[:6],
+        "wow_change": round(float(getattr(stress_report, "wow_change", 0.0)), 3),
+        "component_scores": {
+            k: round(float(v), 3)
+            for k, v in dict(getattr(stress_report, "component_scores", {})).items()
+        },
+    }
+
+
+def _summarize_idea(idea: _Any) -> dict:
+    return {
+        "ticker": getattr(idea, "ticker", ""),
+        "direction": getattr(idea, "direction", ""),
+        "conviction_label": getattr(idea, "conviction_label", ""),
+        "conviction_score": round(float(getattr(idea, "conviction_score", 0.0)), 3),
+        "thesis": (getattr(idea, "thesis", "") or "")[:280],
+        "supporting_signals": list(getattr(idea, "supporting_signals", []))[:3],
+    }
+
+
+def _summarize_forecast(fc: _Any) -> dict:
+    return {
+        "route_id": getattr(fc, "route_id", ""),
+        "route_name": getattr(fc, "route_name", ""),
+        "current_stress": round(float(getattr(fc, "current_stress", 0.0)), 3),
+        "stress_30d": round(float(getattr(fc, "stress_30d", 0.0)), 3),
+        "trend": getattr(fc, "trend", ""),
+        "rate_forecast_pct": round(float(getattr(fc, "rate_forecast_pct", 0.0)), 3),
+    }
+
+
+def _build_daily_user_prompt(context: NarrationContext) -> str:
+    """Render the context as a compact JSON block for Claude to ingest."""
+    payload: dict = {
+        "date": context.target_date.isoformat(),
+        "ssi": _summarize_stress(context.stress_report),
+        "top_disruption_ideas": [_summarize_idea(i) for i in context.top_ideas[:5]],
+        "top_route_forecasts": [_summarize_forecast(f) for f in context.top_forecasts[:5]],
+        "indicators": {k: round(float(v), 3) for k, v in context.notable_indicators.items()},
+    }
+    return (
+        "Today's structured shipping signals (JSON):\n\n"
+        + _json.dumps(payload, indent=2, default=str)
+        + "\n\nWrite the daily briefing as JSON per the system instructions."
+    )
+
+
+# ── Template fallback ────────────────────────────────────────────────────────
+
+def _template_daily_narration(context: NarrationContext) -> DailyNarration:
+    """Deterministic narration synthesized from the same structured inputs.
+
+    Used when no ANTHROPIC_API_KEY is configured, when the API call fails,
+    and in tests (keeps the suite hermetic — no real API traffic).
+    """
+    ssi = _summarize_stress(context.stress_report) if context.stress_report else {}
+    ssi_val = ssi.get("overall_ssi", 0.0)
+    ssi_lbl = ssi.get("ssi_label", "Unknown")
+
+    headline = (
+        f"Shipping Stress Index at {ssi_val:.2f} ({ssi_lbl})"
+        if ssi
+        else "Shipping daily briefing (template — no live narration)"
+    )
+
+    body_paragraphs: list[str] = []
+    if ssi:
+        wow = ssi.get("wow_change", 0.0)
+        wow_phrase = (
+            f"up {wow*100:+.1f}pp week-over-week" if abs(wow) >= 0.005
+            else "roughly flat week-over-week"
+        )
+        body_paragraphs.append(
+            f"Fleet-wide stress is at {ssi_val:.2f} ({ssi_lbl}), {wow_phrase}. "
+            + (
+                "Drivers: " + "; ".join(ssi.get("top_disruptions", [])[:3]) + "."
+                if ssi.get("top_disruptions") else ""
+            )
+        )
+    if context.top_ideas:
+        idea_lines = [
+            f"{i.ticker} ({i.direction}, {i.conviction_label})"
+            for i in context.top_ideas[:3]
+            if getattr(i, "ticker", "")
+        ]
+        if idea_lines:
+            body_paragraphs.append(
+                "Top cascade-derived equity ideas: " + ", ".join(idea_lines) + "."
+            )
+    if context.top_forecasts:
+        forecast_lines = [
+            f"{f.route_name or f.route_id} (current {f.current_stress:.2f} → "
+            f"30d {f.stress_30d:.2f}, {f.trend})"
+            for f in context.top_forecasts[:3]
+            if getattr(f, "route_id", "")
+        ]
+        if forecast_lines:
+            body_paragraphs.append(
+                "Route forecasts: " + "; ".join(forecast_lines) + "."
+            )
+    if not body_paragraphs:
+        body_paragraphs.append(
+            "No structured shipping signals supplied for today's briefing. "
+            "Configure inputs upstream or set ANTHROPIC_API_KEY for the "
+            "LLM-narrated path."
+        )
+
+    sections: list[NarrationSection] = []
+    if ssi:
+        comp = ssi.get("component_scores", {})
+        if comp:
+            sections.append(NarrationSection(
+                title="SSI Component Breakdown",
+                bullets=[
+                    f"{name}: {score:.2f}"
+                    for name, score in sorted(
+                        comp.items(), key=lambda kv: kv[1], reverse=True
+                    )[:5]
+                ],
+            ))
+    if context.top_ideas:
+        sections.append(NarrationSection(
+            title="Top Equity Ideas",
+            bullets=[
+                f"{i.ticker} — {i.direction} ({i.conviction_label}, "
+                f"score {i.conviction_score:.2f}): "
+                f"{(getattr(i, 'thesis', '') or '')[:140]}"
+                for i in context.top_ideas[:4]
+                if getattr(i, "ticker", "")
+            ],
+        ))
+    if context.top_forecasts:
+        sections.append(NarrationSection(
+            title="Route Forecasts",
+            bullets=[
+                f"{f.route_name or f.route_id}: "
+                f"{f.current_stress:.2f} now → {f.stress_30d:.2f} in 30d ({f.trend})"
+                for f in context.top_forecasts[:4]
+                if getattr(f, "route_id", "")
+            ],
+        ))
+    if context.notable_indicators:
+        sections.append(NarrationSection(
+            title="Notable Indicators",
+            bullets=[
+                f"{k}: {v:.2f}" for k, v in list(context.notable_indicators.items())[:5]
+            ],
+        ))
+
+    return DailyNarration(
+        date=context.target_date.isoformat(),
+        headline=headline,
+        body="\n\n".join(body_paragraphs),
+        sections=sections,
+        source="template",
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+# ── Claude path ──────────────────────────────────────────────────────────────
+
+def _call_claude(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    model: str,
+    api_key: str,
+) -> tuple[str, int, int]:
+    """Single-shot Claude call. Returns (text, tokens_in, tokens_out).
+
+    Uses ``cache_control: ephemeral`` on the system prompt so repeated
+    calls within the 5-minute cache window cost less. For typical
+    once-a-day usage this is mostly defensive; for retry paths it pays."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=model,
+        max_tokens=1500,
+        system=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    text_parts = [
+        block.text for block in response.content
+        if getattr(block, "type", "") == "text"
+    ]
+    text = "".join(text_parts).strip()
+    usage = getattr(response, "usage", None)
+    tokens_in = int(getattr(usage, "input_tokens", 0)) if usage else 0
+    tokens_out = int(getattr(usage, "output_tokens", 0)) if usage else 0
+    return text, tokens_in, tokens_out
+
+
+def _parse_claude_json(
+    raw: str, context: NarrationContext,
+    tokens_in: int, tokens_out: int, model: str,
+) -> _Optional[DailyNarration]:
+    """Parse Claude's JSON output into a DailyNarration. Returns None on any
+    parsing / shape failure so the caller can fall back to the template."""
+    try:
+        text = raw.strip()
+        # Tolerate the occasional markdown fence even though we asked not to.
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+            text = text.strip("`").strip()
+        data = _json.loads(text)
+        if not isinstance(data, dict):
+            return None
+        sections_raw = data.get("sections", [])
+        if not isinstance(sections_raw, list):
+            return None
+        sections = [
+            NarrationSection(
+                title=str(s.get("title", "")),
+                bullets=[str(b) for b in s.get("bullets", []) if str(b).strip()],
+            )
+            for s in sections_raw
+            if isinstance(s, dict)
+        ]
+        headline = str(data.get("headline", "")).strip()
+        body = str(data.get("body", "")).strip()
+        if not headline or not body:
+            return None
+        return DailyNarration(
+            date=context.target_date.isoformat(),
+            headline=headline,
+            body=body,
+            sections=sections,
+            source="claude",
+            model=model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except (_json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
+        logger.debug(f"narration_engine: Claude JSON parse failed: {exc}")
+        return None
+
+
+# ── Public entry point ──────────────────────────────────────────────────────
+
+def generate_daily_narration(
+    context: NarrationContext,
+    *,
+    model: str = DEFAULT_LLM_MODEL,
+    cache_dir: _Optional[_Path] = None,
+    api_key: _Optional[str] = None,
+    use_cache: bool = True,
+) -> DailyNarration:
+    """Return today's narration. Cache-first; LLM if needed; template fallback.
+
+    Decision flow
+    -------------
+    1. If ``use_cache`` and a cached file for ``context.target_date`` exists,
+       return it. Each UTC day has at most one cached narration.
+    2. Otherwise, resolve the Anthropic API key (explicit arg → st.secrets →
+       env var). If absent, return the template narration (NOT cached — we
+       want the cache slot to stay open for the LLM on a later call once a
+       key is configured).
+    3. Build the prompt from ``context``, call Claude (Haiku 4.5 by default),
+       parse the JSON output, write to cache, return.
+    4. On any failure in step 3 (network, JSON parse, schema mismatch),
+       log and fall back to the template. Template fallback is NOT cached.
+    """
+    cache_dir = cache_dir or NARRATION_CACHE_DIR
+    cache_file = _narration_cache_path(context.target_date, cache_dir)
+
+    if use_cache:
+        cached = _read_narration_cache(cache_file)
+        if cached is not None:
+            return cached
+
+    api_key = _get_anthropic_key(api_key)
+    if not api_key:
+        logger.debug("narration_engine: no ANTHROPIC_API_KEY, using template")
+        return _template_daily_narration(context)
+
+    user_prompt = _build_daily_user_prompt(context)
+    try:
+        raw, tokens_in, tokens_out = _call_claude(
+            _DAILY_SYSTEM_PROMPT, user_prompt, model=model, api_key=api_key,
+        )
+        narration = _parse_claude_json(raw, context, tokens_in, tokens_out, model)
+    except Exception as exc:
+        logger.warning(f"narration_engine: Claude call failed: {exc}")
+        narration = None
+
+    if narration is not None:
+        _write_narration_cache(cache_file, narration)
+        return narration
+    return _template_daily_narration(context)
