@@ -315,3 +315,204 @@ def _forecast_single_port(
 # port_forecasts = forecast_all_ports(port_results, macro_data, wb_data)
 # Then call _render_port_forecasts(port_forecasts) at bottom of tab
 # ---------------------------------------------------------------------------
+
+
+# =============================================================================
+# Time-series baseline + walk-forward backtest
+#
+# Per docs/ROADMAP principle 5, every model in the codebase ships with a
+# walk-forward backtest. The signal-based forecaster above is a snapshot — it
+# produces forward scores from current adjustments rather than from a per-port
+# time series. To satisfy principle 5 we add (a) a *baseline* time-series
+# forecaster the signal-based path can be benchmarked against, and (b) a
+# walk-forward backtest harness that scores the baseline's MAE + direction
+# hit rate against held-out data. The signal-based forecaster can be wired
+# into the same harness once a historical macro-context series exists.
+# =============================================================================
+
+import math as _math
+from typing import Optional as _Optional, Sequence as _Sequence
+
+
+@dataclass(frozen=True)
+class PortDemandBacktestResult:
+    """Summary of a walk-forward backtest on one port-demand history."""
+    port_locode: str
+    n_predictions: int
+    mae: float                   # mean absolute error on the forecast horizon
+    rmse: float                  # root-mean-squared error
+    direction_hit_rate: float    # fraction where forecast direction matched realized
+    avg_horizon_days: int        # the test horizon used (informational)
+    bias: float                  # mean(forecast − realized); +ve = forecasts too high
+
+
+def naive_history_forecast(
+    series,
+    horizon: int = 30,
+    *,
+    drift_weight: float = 0.6,
+    mean_weight: float = 0.4,
+) -> float:
+    """One-shot forecast: blend the trailing drift with the trailing mean.
+
+    Inputs
+    ------
+    series   : pandas.Series of historical demand scores, ascending date index.
+    horizon  : forecast horizon in days. Drift is scaled to this horizon.
+    drift_weight + mean_weight should sum to ~1.0; we don't enforce the
+    invariant because callers may want to weight by hand.
+
+    Construction
+    ------------
+    drift_per_day  = (last − first) / (n − 1)
+    mean_value     = trailing mean
+    forecast       = drift_weight × (last + drift_per_day × horizon)
+                   + mean_weight  × mean_value
+    Clamped into [0.05, 0.95] to match the signal-based forecaster's bounds.
+
+    A pragmatic baseline — simpler than ARIMA but captures both momentum
+    (drift) and mean-reversion (trailing average) in one knob-tunable line.
+    """
+    import pandas as pd  # local — keeps the module importable in tests without pandas at module load
+
+    if series is None:
+        return 0.5
+    s = pd.Series(series).dropna()
+    if s.empty:
+        return 0.5
+    if len(s) == 1:
+        return float(_clamp(s.iloc[0]))
+
+    last = float(s.iloc[-1])
+    first = float(s.iloc[0])
+    n = len(s)
+    drift_per_step = (last - first) / max(1, n - 1)
+    trailing_mean = float(s.mean())
+
+    forecast = (
+        drift_weight * (last + drift_per_step * horizon)
+        + mean_weight * trailing_mean
+    )
+    return float(_clamp(forecast))
+
+
+def walk_forward_backtest(
+    history,
+    *,
+    port_locode: str = "",
+    train_window: int = 60,
+    horizon: int = 30,
+    step: int = 15,
+    drift_weight: float = 0.6,
+    mean_weight: float = 0.4,
+) -> PortDemandBacktestResult:
+    """Walk-forward backtest of :func:`naive_history_forecast` on one series.
+
+    At each rolling step:
+      - Fit on the last ``train_window`` days.
+      - Predict ``horizon`` days ahead.
+      - Compare to the realized value at that horizon.
+      - Score MAE, RMSE, direction hit-rate (was the predicted change in the
+        same direction as the realized change), and bias (mean signed error).
+
+    Returns an empty result (n_predictions=0, MAE=0) when ``history`` is too
+    short to fit (< train_window + horizon).
+    """
+    import pandas as pd
+
+    if history is None:
+        return _empty_pd_backtest(port_locode, horizon)
+    s = pd.Series(history).dropna().sort_index()
+    if s.empty or len(s) < train_window + horizon:
+        return _empty_pd_backtest(port_locode, horizon)
+
+    abs_errors: list[float] = []
+    sq_errors: list[float] = []
+    direction_hits: int = 0
+    direction_total: int = 0
+    signed_errors: list[float] = []
+
+    # Start at the first index where we have a full training window AND a
+    # realized value at t+horizon to compare against.
+    n = len(s)
+    t = train_window
+    while t + horizon <= n:
+        train = s.iloc[t - train_window: t]
+        predicted = naive_history_forecast(
+            train, horizon=horizon,
+            drift_weight=drift_weight, mean_weight=mean_weight,
+        )
+        realized = float(s.iloc[t + horizon - 1])
+        err = predicted - realized
+        abs_errors.append(abs(err))
+        sq_errors.append(err * err)
+        signed_errors.append(err)
+
+        # Direction: did the predicted change from "current" point the same
+        # way as the realized change?
+        anchor = float(s.iloc[t - 1])
+        pred_dir = 1.0 if predicted > anchor else (-1.0 if predicted < anchor else 0.0)
+        realized_dir = 1.0 if realized > anchor else (-1.0 if realized < anchor else 0.0)
+        if pred_dir != 0.0 and realized_dir != 0.0:
+            direction_total += 1
+            if pred_dir == realized_dir:
+                direction_hits += 1
+
+        t += step
+
+    if not abs_errors:
+        return _empty_pd_backtest(port_locode, horizon)
+
+    mae = float(sum(abs_errors) / len(abs_errors))
+    rmse = float(_math.sqrt(sum(sq_errors) / len(sq_errors)))
+    hit_rate = (direction_hits / direction_total) if direction_total else 0.0
+    bias = float(sum(signed_errors) / len(signed_errors))
+
+    return PortDemandBacktestResult(
+        port_locode=port_locode,
+        n_predictions=len(abs_errors),
+        mae=round(mae, 4),
+        rmse=round(rmse, 4),
+        direction_hit_rate=round(hit_rate, 4),
+        avg_horizon_days=int(horizon),
+        bias=round(bias, 4),
+    )
+
+
+def _empty_pd_backtest(port_locode: str, horizon: int) -> PortDemandBacktestResult:
+    return PortDemandBacktestResult(
+        port_locode=port_locode,
+        n_predictions=0,
+        mae=0.0,
+        rmse=0.0,
+        direction_hit_rate=0.0,
+        avg_horizon_days=int(horizon),
+        bias=0.0,
+    )
+
+
+def backtest_all_ports(
+    history_by_port: dict,
+    *,
+    train_window: int = 60,
+    horizon: int = 30,
+    step: int = 15,
+) -> list[PortDemandBacktestResult]:
+    """Run :func:`walk_forward_backtest` on every port in the supplied dict.
+
+    ``history_by_port`` is ``{locode: pandas.Series}``. Results are returned
+    sorted by MAE ascending (most-accurate first).
+    """
+    results: list[PortDemandBacktestResult] = []
+    if not history_by_port:
+        return results
+    for locode, series in history_by_port.items():
+        try:
+            results.append(walk_forward_backtest(
+                series, port_locode=str(locode),
+                train_window=train_window, horizon=horizon, step=step,
+            ))
+        except Exception as exc:
+            logger.debug(f"backtest_all_ports: {locode} failed: {exc}")
+    results.sort(key=lambda r: r.mae)
+    return results

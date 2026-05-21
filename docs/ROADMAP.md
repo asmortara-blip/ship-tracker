@@ -47,7 +47,7 @@ Plumbing that unlocks every downstream track.
 
 - [x] `processing/congestion_rate_lag.py` — port-congestion → freight-rate lag model with walk-forward backtest; 19 tests
 - [x] `engine/fleet_utilization.py` — 4-component composite utilization score (active share + capacity lock-in + delay intensity + forward congestion) with walk-forward backtest; 16 tests
-- [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
+- [x] `processing/port_demand_forecaster.py` (upgrade with backtest) — added `naive_history_forecast` (drift + trailing-mean baseline), `walk_forward_backtest` (MAE / RMSE / direction hit rate / bias), `backtest_all_ports` (multi-port batch sorted by MAE asc), `PortDemandBacktestResult` dataclass; 16 tests including flat-series MAE=0 / trend direction-hit ≥ 0.95 / drift_weight beats mean_weight on linear trend / sorted by MAE checks
 - [ ] `engine/carrier_factor_model.py`
 - [x] `state/scenarios.py` + scenario overlay mixin — `Scenario`/`ScenarioShock` schema with `<namespace>:<id>.<field>` target keys (wildcard `<id>` supported), 6-scenario canonical catalog, `overlay_value/multiplier/addend/iterable` apply helpers; 26 tests
 - [x] `engine/portfolio_optimizer.py` — max_sharpe / min_variance / mean_variance / risk_parity via scipy SLSQP, long-only + weight-cap constraints, walk-forward backtest; 23 tests
