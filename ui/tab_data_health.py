@@ -516,6 +516,122 @@ def _render_sla_dashboard(source_rows: list[dict]) -> None:
         )
 
 
+def _render_log_viewer() -> None:
+    """In-app log viewer — tail the active log file with level/text filters.
+
+    Reads from ``utils.logging_setup.get_active_log_file()``. Renders the
+    last N lines (user-controllable), color-coded by level. Shows a
+    helpful placeholder if logging hasn't been configured yet.
+    """
+    try:
+        from utils.log_reader import (
+            filter_log_lines, parse_log_line, read_recent_log_lines,
+        )
+        from utils.logging_setup import get_active_log_file
+    except Exception as exc:
+        st.error(f"Log viewer modules unavailable: {exc}")
+        return
+
+    section_header(
+        "Log Viewer",
+        "Tail the rotated log file with level and substring filters. "
+        "Updates on rerun — use the refresh button or change a filter to "
+        "pick up new lines.",
+    )
+
+    log_path = get_active_log_file()
+
+    # Controls: tail size · min level · text filter · refresh.
+    c1, c2, c3, c4 = st.columns([1, 1, 2, 0.7], gap="small")
+    with c1:
+        tail_n = st.select_slider(
+            "Tail lines", options=[50, 100, 200, 500, 1000],
+            value=200, key="log_viewer_tail_n",
+        )
+    with c2:
+        min_level = st.selectbox(
+            "Min level",
+            options=["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+            index=2,  # INFO
+            key="log_viewer_min_level",
+        )
+    with c3:
+        contains = st.text_input(
+            "Contains (substring)", value="",
+            placeholder="optional — case-insensitive",
+            key="log_viewer_contains",
+        )
+    with c4:
+        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        refresh = st.button("↻", key="log_viewer_refresh", use_container_width=True)
+
+    # Read + filter.
+    raw_lines = read_recent_log_lines(int(tail_n), log_path=log_path)
+    if not raw_lines:
+        # Path-relative-to-CWD for the message so the user sees roughly where to look.
+        try:
+            display_path = log_path.relative_to(Path.cwd())
+        except Exception:
+            display_path = log_path
+        st.info(
+            f"No log lines yet at `{display_path}`. Configure logging at "
+            f"app startup with `utils.logging_setup.configure_logging()` "
+            f"to begin writing to disk."
+        )
+        return
+
+    filtered = filter_log_lines(
+        raw_lines, min_level=min_level, contains=contains.strip() or None,
+    )
+
+    # Header stats
+    st.markdown(
+        f'<div style="font-size:0.72rem;color:{C_TEXT3};margin-bottom:8px">'
+        f'Showing <b style="color:{C_TEXT}">{len(filtered)}</b> of '
+        f'<b style="color:{C_TEXT}">{len(raw_lines)}</b> lines · '
+        f'log path: <code style="font-size:0.66rem">{log_path}</code>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not filtered:
+        st.info("No lines match the current filters. Loosen them to see more.")
+        return
+
+    # Color-coded log block.
+    level_color = {
+        "TRACE":    C_TEXT3,
+        "DEBUG":    C_TEXT3,
+        "INFO":     C_TEXT,
+        "WARNING":  C_MOD,
+        "ERROR":    C_LOW,
+        "CRITICAL": C_LOW,
+    }
+
+    rendered_lines: list[str] = []
+    for line in filtered:
+        parsed = parse_log_line(line)
+        color = level_color.get(parsed.level, C_TEXT2)
+        # Escape HTML — we don't trust message content. Minimal escape pass.
+        safe = (
+            line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        weight = "700" if parsed.level in ("ERROR", "CRITICAL") else "400"
+        rendered_lines.append(
+            f'<div style="color:{color};font-weight:{weight};'
+            f'white-space:pre-wrap">{safe}</div>'
+        )
+    st.markdown(
+        f'<div style="font-family:JetBrains Mono,monospace;font-size:0.72rem;'
+        f'line-height:1.45;max-height:480px;overflow-y:auto;'
+        f'background:rgba(0,0,0,0.20);border:1px solid rgba(232,230,225,0.06);'
+        f'border-radius:3px;padding:10px 12px">'
+        + "".join(rendered_lines)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_cache_performance(source_rows: list[dict]) -> None:
     section_header("Cache Size & Performance", "Per-source footprint, fetch volume, and hit rate (illustrative where no live telemetry).")
     headers = ["Data Source", "Cache Size", "Fetches (7d)", "Avg Fetch (ms)", "Hit Rate"]
@@ -850,6 +966,14 @@ def render(
         except Exception as exc:
             logger.error(f"SLA dashboard render error: {exc}")
             st.error("SLA dashboard unavailable.")
+
+        # ── Movement 1.7: log viewer ───────────────────────────────────────
+        section_divider("Logs")
+        try:
+            _render_log_viewer()
+        except Exception as exc:
+            logger.error(f"Log viewer render error: {exc}")
+            st.error("Log viewer unavailable.")
 
         # ── Movement 2: performance & credentials ───────────────────────────
         section_divider("Cache & Credentials")

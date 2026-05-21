@@ -67,6 +67,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Logging — rotated file sink + stderr ─────────────────────────────────
+# Idempotent across Streamlit hot-reloads. Writes to <project_root>/logs/
+# which the Dockerfile mounts via the cache/logs volume.
+try:
+    from utils.logging_setup import configure_logging
+    configure_logging(level="INFO", max_size_mb=10, retention=5)
+except Exception as _exc:
+    # Don't let a logging setup failure take down the whole app.
+    logger.warning(f"Could not configure rotated logging: {_exc}")
+
 # ── Config ────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_config() -> dict:

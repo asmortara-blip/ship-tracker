@@ -70,7 +70,7 @@ Plumbing that unlocks every downstream track.
 - [x] Data-SLA dashboard in `tab_data_health` — added `_render_sla_dashboard` between Source Catalog and Cache & Credentials. 4-card compliance summary (rate, warnings, breaches, avg age/TTL ratio), per-source horizontal bar chart with SLA threshold lines at 0.80× (warning) and 1.00× (breach), and a breach table sorted by severity. Uses the existing `ttl_h` and `age_h` fields from `_build_source_rows()` — no new data sources, pure synthesis.
 - [ ] State layer — SQLite via `database/schema.sql`
 - [x] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile` — single-stage Python 3.11-slim image, non-root user (UID 10001), Streamlit healthcheck against `/_stcore/health`, layered for cache-stable rebuilds. `.dockerignore` keeps cache/logs/tests/secrets out of the image. `docs/DEPLOYMENT.md` covers 3 paths (Streamlit Cloud / Docker / Fly.io) with required-env-vars table and volume-mount notes.
-- [ ] Observability — log rotation + in-app log viewer + basic metrics
+- [x] Observability — log rotation + in-app log viewer — `utils/logging_setup.py` (idempotent loguru config: 10MB rotation, 5-file retention, stderr + rotated file sinks, optional JSON mode), `utils/log_reader.py` (efficient backwards-tail read + level/substring filters + structured `ParsedLogLine`), live log viewer panel in `tab_data_health` (tail-N slider, min-level dropdown, contains substring, refresh button, color-coded by severity), and `configure_logging()` wired into `app.py` at startup. 23 hermetic tests with per-test isolated log dirs. Basic metrics counters deferred.
 
 ## Guiding principles
 
