@@ -55,7 +55,7 @@ from loguru import logger
 DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker.db"
 
 # Current schema version. Bump when adding a migration in state/migrations.py.
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -166,6 +166,25 @@ CREATE TABLE IF NOT EXISTS delivery_channels (
 );
 """
 
+# Schema v3 adds the llm_calls table for LLM cost telemetry. Every Anthropic
+# call (commentary, narration, future) records one row here so the platform
+# can answer "how much have I spent on Claude this week?".
+_SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS llm_calls (
+    call_id       TEXT PRIMARY KEY,
+    created_at    TEXT NOT NULL,
+    source        TEXT NOT NULL,           -- 'commentary' / 'narration' / future
+    tab_name      TEXT NOT NULL DEFAULT '',
+    model         TEXT NOT NULL,
+    tokens_in     INTEGER NOT NULL DEFAULT 0,
+    tokens_out    INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    est_cost_usd  REAL NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_source ON llm_calls(source);
+"""
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -173,6 +192,10 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # v2 add-only schema (CREATE TABLE IF NOT EXISTS) — safe to run on
     # every open so fresh databases skip the explicit migration step.
     conn.executescript(_SCHEMA_V2)
+    # v3 add-only schema (CREATE TABLE IF NOT EXISTS) — same pattern; the
+    # explicit _migrate_to_v3 path in state.migrations re-runs this
+    # script on upgrade, so a fresh DB never needs the helper.
+    conn.executescript(_SCHEMA_V3)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -203,6 +226,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v2(conn)
         except Exception as exc:
             logger.warning(f"state.db: v2 migration skipped: {exc}")
+
+    # Migration 2 → 3: add the llm_calls telemetry table.
+    if current < 3:
+        try:
+            from state.migrations import _migrate_to_v3
+            _migrate_to_v3(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v3 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

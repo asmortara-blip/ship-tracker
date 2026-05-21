@@ -492,6 +492,20 @@ def build_commentary(
         commentary = None
 
     if commentary is not None:
+        # Telemetry: record the successful LLM call for cost tracking.
+        # Wrapped defensively so a state-DB hiccup never breaks the user's
+        # commentary; ``record_call`` itself also swallows exceptions.
+        try:
+            from engine.llm_telemetry import record_call
+            record_call(
+                source="commentary",
+                model=commentary.model,
+                tokens_in=commentary.tokens_in,
+                tokens_out=commentary.tokens_out,
+                tab_name=tab_name,
+            )
+        except Exception as exc:
+            logger.debug(f"tab_commentary: telemetry write failed for {tab_name}: {exc}")
         if use_cache:
             _write_cache(cache_key, commentary)
         return commentary

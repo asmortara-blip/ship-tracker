@@ -186,3 +186,19 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
     from state.db import _SCHEMA_V2
 
     conn.executescript(_SCHEMA_V2)
+
+
+# ─── Schema v2 → v3 ───────────────────────────────────────────────────────
+
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    """Add the llm_calls table for LLM cost telemetry.
+
+    Each successful Anthropic API call writes one row here (commentary
+    and narration paths today; new sources may join later). Idempotent —
+    CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS — so this
+    statement is also safe to re-run on every open via the schema
+    bootstrap in state.db.
+    """
+    from state.db import _SCHEMA_V3
+
+    conn.executescript(_SCHEMA_V3)

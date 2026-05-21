@@ -1615,6 +1615,19 @@ def generate_daily_narration(
         narration = None
 
     if narration is not None:
+        # Telemetry: record the successful LLM call for cost tracking.
+        # Defensive try/except so a state-DB hiccup never breaks the
+        # daily briefing; ``record_call`` also swallows exceptions.
+        try:
+            from engine.llm_telemetry import record_call
+            record_call(
+                source="narration",
+                model=narration.model,
+                tokens_in=narration.tokens_in,
+                tokens_out=narration.tokens_out,
+            )
+        except Exception as exc:
+            logger.debug(f"narration_engine: telemetry write failed: {exc}")
         _write_narration_cache(cache_file, narration)
         return narration
     return _template_daily_narration(context)
