@@ -171,3 +171,18 @@ def _migrate_report_history_index(conn: sqlite3.Connection) -> None:
         logger.info(
             f"state.migrations: imported {len(rows)} reports from {_REPORT_INDEX_JSON}"
         )
+
+
+# ─── Schema v1 → v2 ───────────────────────────────────────────────────────
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Add the delivery_channels table for external alert delivery.
+
+    Idempotent — uses CREATE TABLE IF NOT EXISTS so this can be re-run
+    safely (the schema bootstrap in state.db also runs the same statement
+    via ``_SCHEMA_V2`` so a fresh DB never needs this helper, but we still
+    register it as the explicit upgrade path from v1).
+    """
+    from state.db import _SCHEMA_V2
+
+    conn.executescript(_SCHEMA_V2)

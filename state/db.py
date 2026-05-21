@@ -29,7 +29,8 @@ Schema versioning
 The ``kv_state`` table carries a ``schema_version`` row holding the
 current integer schema version. ``_init_schema()`` checks it on startup
 and runs pending migrations from ``state/migrations.py``. Current
-version: 1 (initial schema).
+version: 2 (adds ``delivery_channels`` table for external alert
+delivery — Slack webhooks today, Email/SMS later).
 
 Concurrency
 -----------
@@ -54,7 +55,7 @@ from loguru import logger
 DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker.db"
 
 # Current schema version. Bump when adding a migration in state/migrations.py.
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -150,10 +151,28 @@ CREATE TABLE IF NOT EXISTS report_history (
 CREATE INDEX IF NOT EXISTS idx_report_history_generated_at ON report_history(generated_at);
 """
 
+# Schema v2 adds the delivery_channels table. Kept as a separate script so
+# the v2 migration helper can re-use the exact same CREATE TABLE statement
+# (idempotent via IF NOT EXISTS).
+_SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS delivery_channels (
+    channel_id          TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    kind                TEXT NOT NULL,            -- 'slack' today; 'email'/'sms' later
+    target              TEXT NOT NULL,            -- webhook URL for slack
+    severity_threshold  TEXT NOT NULL DEFAULT 'LOW',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL
+);
+"""
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
+    # v2 add-only schema (CREATE TABLE IF NOT EXISTS) — safe to run on
+    # every open so fresh databases skip the explicit migration step.
+    conn.executescript(_SCHEMA_V2)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -163,8 +182,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     if current >= SCHEMA_VERSION:
         return  # Up to date
 
-    # Run migrations. State today has only the v1 schema. Future versions
-    # add migration steps here (or in state/migrations.py).
+    # Run migrations. Each step is idempotent (CREATE IF NOT EXISTS,
+    # INSERT OR IGNORE) so it's safe to re-run if a previous bump only
+    # partially completed.
     from datetime import datetime, timezone
 
     # Migration 0 → 1: import legacy JSON files if present (best-effort,
@@ -175,6 +195,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             migrate_legacy_json_files(conn)
         except Exception as exc:
             logger.warning(f"state.db: legacy migration skipped: {exc}")
+
+    # Migration 1 → 2: add the delivery_channels table.
+    if current < 2:
+        try:
+            from state.migrations import _migrate_to_v2
+            _migrate_to_v2(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v2 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
