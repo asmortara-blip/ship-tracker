@@ -64,7 +64,52 @@ Healthcheck is configured against Streamlit's built-in
 - `.dockerignore` keeps `cache/`, `logs/`, `tests/`, `docs/`,
   `.venv/`, and any `.streamlit/secrets.toml` out of the image.
 
-## 3. Fly.io / Render / other PaaS
+## 3. Docker Compose: app + worker
+
+For self-hosting where you want both the Streamlit UI **and** the daily
+investor-briefing worker running side-by-side, the repo ships a
+`docker-compose.yml` that wires up two containers sharing the same
+`cache/` (SQLite DB + saved reports) and `logs/` bind mounts:
+
+| Service  | Role                                       | Port |
+|----------|--------------------------------------------|------|
+| `app`    | Streamlit UI                               | 8501 |
+| `worker` | Daily `python -m worker.scheduler --push`, looped every 24h | —    |
+
+Both services build from the existing `Dockerfile`; the worker just
+overrides the `CMD` with a small shell loop.
+
+```bash
+cp .env.example .env
+# edit .env — at minimum set FRED_API_KEY and ANTHROPIC_API_KEY
+docker compose up -d
+```
+
+Tail logs from either container:
+
+```bash
+docker compose logs -f app
+docker compose logs -f worker
+```
+
+Notes:
+
+- The worker uses an **internal 24h sleep loop** (`while true; do … ; sleep 86400; done`)
+  rather than host `cron` or a dedicated scheduler container. That means
+  `docker compose up -d` is the whole deployment — no crontab edits, no
+  systemd unit. The worker runs once immediately on `up`, then every 24h
+  thereafter.
+- On first start the SQLite DB at `cache/ship_tracker.db` is **auto-created**
+  via the v1+v2+v3 schema migrations the first time either container
+  opens a connection — no manual `init-db` step.
+- Both containers bind-mount the same `./cache` directory, so reports the
+  worker writes (`cache/reports/*.html`) are immediately listable in the
+  app's report-history tab, and alert rules added in the UI are
+  immediately visible to the worker's `--push` delivery step.
+- Stop everything with `docker compose down`; the bind mounts ensure
+  the DB + reports survive container removal.
+
+## 4. Fly.io / Render / other PaaS
 
 Any platform that runs a Docker container works. Minimum config:
 
