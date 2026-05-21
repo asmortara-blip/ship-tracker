@@ -248,6 +248,111 @@ def _render_market_verdict(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SECTION B2 — Editorial Commentary (per-tab LLM, cached + template fallback)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_editorial_commentary(
+    port_results: list, route_results: list, insights: list,
+    freight_data: dict, macro_data: dict,
+) -> None:
+    """Render a 1-2 paragraph editorial commentary from ``engine.tab_commentary``.
+
+    Wraps the engine call in try/except — the entire section is defensive
+    so a network blip or a missing API key never breaks the front page.
+    The commentary itself is template-fallback safe; the only failure mode
+    we have to guard against here is import errors / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+
+        has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
+        avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
+        top_insight = max(
+            (i for i in insights if getattr(i, "score", None) is not None),
+            key=lambda i: getattr(i, "score", 0.0),
+            default=None,
+        )
+        top_route = max(
+            (r for r in route_results
+             if getattr(r, "opportunity_score", None) is not None),
+            key=lambda r: getattr(r, "opportunity_score", 0.0),
+            default=None,
+        )
+        bdi_val = _fv(freight_data or {}, "bdi", "BDI", fmt="{:.0f}", default="")
+
+        context: dict[str, object] = {
+            "tone": _market_tone(port_results)[0],
+            "avg_port_demand": round(avg_demand, 3),
+            "tracked_ports": len(has_data),
+            "high_conviction_signals": sum(
+                1 for i in insights if getattr(i, "score", 0) >= 0.70
+            ),
+            "strong_routes": sum(
+                1 for r in route_results
+                if getattr(r, "opportunity_label", "") == "Strong"
+            ),
+        }
+        if top_insight is not None:
+            context["top_signal"] = (
+                f"{getattr(top_insight, 'title', '') or ''}"
+                f" (score {getattr(top_insight, 'score', 0.0):.2f})"
+            ).strip()
+        if top_route is not None:
+            context["top_route"] = (
+                f"{getattr(top_route, 'route_name', '') or getattr(top_route, 'route_id', '')}"
+                f" (opportunity {getattr(top_route, 'opportunity_score', 0.0):.2f})"
+            ).strip()
+        if bdi_val:
+            context["bdi"] = bdi_val
+
+        commentary = build_commentary("overview", context)
+
+        section_header(
+            "Editorial",
+            subtitle="LLM-narrated read on the current overview snapshot. "
+            "Falls back to a deterministic template when no API key is configured.",
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Overview — editorial commentary render failed")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SECTION C — Headline KPI Strip
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -915,6 +1020,11 @@ def render(
         # ── B. Market verdict — tone banner + feed health ───────────────────
         _render_market_verdict(port_results, route_results, insights,
                                freight_data, macro_data, stock_data)
+
+        # ── B2. Editorial commentary (per-tab LLM + template fallback) ──────
+        _render_editorial_commentary(
+            port_results, route_results, insights, freight_data, macro_data,
+        )
 
         # ── C. Headline KPI strip ───────────────────────────────────────────
         section_divider("Headline KPIs")
