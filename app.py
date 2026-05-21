@@ -884,6 +884,16 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
+# ── Cross-tab filter bar ─────────────────────────────────────────────────
+# Rendered once above the section tabs. State persists via state/session.py.
+try:
+    from ui.filter_bar import render_filter_bar
+    _active_filters = render_filter_bar()
+except Exception as _exc:
+    logger.debug(f"Filter bar unavailable: {_exc}")
+    _active_filters = None
+
+
 # ── Section routing ───────────────────────────────────────────────────────
 
 # ── 1. Dashboard ──────────────────────────────────────────────────────────

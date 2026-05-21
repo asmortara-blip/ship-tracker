@@ -124,9 +124,20 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
         st.error(f"Rate analytics module unavailable: {e}")
         return
 
-    freight_data = freight_data or {}
+    # Apply the cross-tab filter bar's narrowing (route + date range).
+    try:
+        from state.session import apply_filters_to_freight
+        from ui.filter_bar import active_filters
+        filters = active_filters()
+        freight_data = apply_filters_to_freight(freight_data or {}, filters)
+    except Exception:
+        freight_data = freight_data or {}
+
     if not freight_data:
-        st.info("No freight data available for rate analytics.")
+        st.info(
+            "No freight data after applying the cross-tab filter bar. "
+            "Clear route / date selections to see all data."
+        )
         return
 
     # ── 1. Page header ──────────────────────────────────────────────────────
