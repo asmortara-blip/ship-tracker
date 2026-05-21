@@ -24,11 +24,13 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 # ── fpdf2 ────────────────────────────────────────────────────────────────────
 try:
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
     _FPDF_OK = True
 except ImportError:
     # Provide a no-op base class so the module can be imported without fpdf2
     class FPDF:  # type: ignore
         pass
+    XPos = YPos = None  # type: ignore
     _FPDF_OK = False
 
 if TYPE_CHECKING:
@@ -314,16 +316,28 @@ class InstitutionalReportPDF(FPDF):
     def set_section_name(self, name: str) -> None:
         self._section_name = name
 
-    # Auto-sanitize all text going into fpdf (Helvetica is Latin-1 only)
-    def cell(self, w=0, h=0, txt="", border=0, ln=0, align="", fill=False, link=""):
-        return super().cell(w, h, _t(txt), border, ln, align, fill, link)
+    # Auto-sanitize all text going into fpdf (Helvetica is Latin-1 only).
+    # new_x/new_y replace the deprecated ln= parameter in fpdf2 >= 2.5.2; the
+    # defaults below match the legacy ln=0 (cell) and ln=3 (multi_cell) behavior
+    # this renderer was originally written against.
+    def cell(self, w=0, h=0, txt="", border=0, align="", fill=False, link="",
+             new_x=XPos.RIGHT if XPos else None,
+             new_y=YPos.TOP if YPos else None):
+        return super().cell(w, h, _t(txt), border=border, align=align,
+                            fill=fill, link=link, new_x=new_x, new_y=new_y)
 
     def multi_cell(self, w, h, txt="", border=0, align="J", fill=False,
-                   split_only=False, link="", ln=3, max_line_height=None,
-                   markdown=False, output=None):
-        return super().multi_cell(w, h, _t(txt), border, align, fill,
-                                  split_only, link, ln, max_line_height,
-                                  markdown, output)
+                   split_only=False, link="", max_line_height=None,
+                   markdown=False, output=None,
+                   new_x=XPos.RIGHT if XPos else None,
+                   new_y=YPos.TOP if YPos else None):
+        kwargs = dict(border=border, align=align, fill=fill,
+                      split_only=split_only, link=link,
+                      max_line_height=max_line_height, markdown=markdown,
+                      new_x=new_x, new_y=new_y)
+        if output is not None:
+            kwargs["output"] = output
+        return super().multi_cell(w, h, _t(txt), **kwargs)
 
     # ─────────────────────────────────────────────────────────────────────────
     # HEADER

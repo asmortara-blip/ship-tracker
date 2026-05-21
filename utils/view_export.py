@@ -29,6 +29,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+# fpdf2 enums for cell()/multi_cell() cursor positioning (replaces deprecated ln=).
+# Imported lazily-tolerantly so the module itself stays importable without fpdf2;
+# the actual PDF build still needs the package and will raise on import there.
+try:
+    from fpdf.enums import XPos, YPos
+except ImportError:
+    XPos = YPos = None  # type: ignore
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Snapshot schema
@@ -150,7 +158,7 @@ def build_view_pdf(snapshot: ViewSnapshot) -> bytes:
     # ── Title block ──────────────────────────────────────────────────────────
     pdf.set_text_color(*_INK_HEX)
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 9, _utf8_safe(snapshot.title), ln=1)
+    pdf.cell(0, 9, _utf8_safe(snapshot.title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     if snapshot.subtitle:
         pdf.set_text_color(*_MUTED_HEX)
         pdf.set_font("Helvetica", "", 10)
@@ -200,7 +208,7 @@ def build_view_pdf(snapshot: ViewSnapshot) -> bytes:
     pdf.set_text_color(*_MUTED_HEX)
     pdf.set_font("Helvetica", "I", 8)
     footer_left = f"Ship Tracker | Generated {generated}"
-    pdf.cell(0, 4, _utf8_safe(footer_left), ln=0)
+    pdf.cell(0, 4, _utf8_safe(footer_left), new_x=XPos.RIGHT, new_y=YPos.TOP)
     if snapshot.footer_note:
         pdf.set_x(_MARGIN_MM)
         pdf.set_y(-8)
@@ -227,7 +235,7 @@ def _render_section(pdf, section: ViewSection) -> None:
 
     pdf.set_text_color(*_INK_HEX)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, _utf8_safe(section.title), ln=1)
+    pdf.cell(0, 6, _utf8_safe(section.title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Body
     if section.body:
@@ -271,7 +279,7 @@ def _render_table(pdf, table: ViewTable) -> None:
     if table.title:
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*_MUTED_HEX)
-        pdf.cell(0, 5, _utf8_safe(table.title), ln=1)
+        pdf.cell(0, 5, _utf8_safe(table.title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(1)
 
     n_cols = max(len(table.headers), max((len(r) for r in table.rows), default=0))
@@ -285,7 +293,7 @@ def _render_table(pdf, table: ViewTable) -> None:
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*_INK_HEX)
         for h in table.headers:
-            pdf.cell(col_w, 5, _utf8_safe(str(h))[:60], border=0, ln=0)
+            pdf.cell(col_w, 5, _utf8_safe(str(h))[:60], border=0, new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.ln(5)
         pdf.set_draw_color(*_ACCENT_HEX)
         pdf.set_line_width(0.3)
@@ -301,7 +309,7 @@ def _render_table(pdf, table: ViewTable) -> None:
     for row in table.rows:
         for i in range(n_cols):
             cell = str(row[i]) if i < len(row) else ""
-            pdf.cell(col_w, 5, _utf8_safe(cell)[:60], border=0, ln=0)
+            pdf.cell(col_w, 5, _utf8_safe(cell)[:60], border=0, new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.ln(5)
         y = pdf.get_y()
         pdf.line(_MARGIN_MM, y, _MARGIN_MM + width, y)
