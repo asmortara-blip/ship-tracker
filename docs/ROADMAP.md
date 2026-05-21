@@ -58,7 +58,7 @@ Plumbing that unlocks every downstream track.
 
 - [ ] `tab_convergence.py` — Convergence & Divergence Lab
 - [ ] `tab_nowcast.py` — Trade Nowcast
-- [ ] `tab_idea_engine.py` — Signal-to-Trade Ideas
+- [x] `tab_idea_engine.py` — Signal-to-Trade Ideas (wired as 6th tab in Disruption Alpha section). Synthesizes disruption_cascade ideas + scenario overlay (sidebar-controlled) + portfolio_optimizer mini. Hero / ranked table with Δ vs scenario / per-idea cascade rationale expanders / max-Sharpe weights on top bullish names.
 - [ ] `tab_risk_lab.py` — Risk Lab
 - [ ] `tab_briefing.py` — Daily Briefing (LLM-narrated)
 - [ ] Cross-tab filter bar (reads from `state/session.py`)

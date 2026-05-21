@@ -999,9 +999,9 @@ elif active_section == "markets":
 
 # ── 3. Disruption Alpha ───────────────────────────────────────────────────
 elif active_section == "disruption_alpha":
-    t0, t1, t2, t3, t4 = st.tabs([
+    t0, t1, t2, t3, t4, t5 = st.tabs([
         "Voyage Tracker", "Disruption Radar", "Macro Projection",
-        "Supply Linkage", "Equity Signals",
+        "Supply Linkage", "Equity Signals", "Idea Engine",
     ])
     with t0:
         try:
@@ -1033,6 +1033,19 @@ elif active_section == "disruption_alpha":
             _r(stock_data, freight_data, macro_data, port_results, route_results, insights)
         except Exception as e:
             st.error(f"Equity Signals error: {e}")
+    with t5:
+        try:
+            from ui.tab_idea_engine import render as _r
+            _r(
+                port_results=port_results,
+                route_results=route_results,
+                insights=insights,
+                freight_data=freight_data,
+                macro_data=macro_data,
+                stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Idea Engine error: {e}")
 
 # ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
