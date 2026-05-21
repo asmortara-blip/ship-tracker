@@ -51,14 +51,22 @@ def normalize_trade_df(df: pd.DataFrame) -> pd.DataFrame:
 
         out["port_locode"] = df.get("port_locode", "UNKNOWN")
         out["country_iso3"] = df.get("reporterISO", df.get("reporterCode", "UNK"))
-        out["hs_code"] = df.get("cmdCode", df.get("cmdDesc", "")).astype(str).str[:4]
+        # df.get default returns a bare str when both columns are missing —
+        # a bare str has no .astype, so wrap in a same-length pd.Series.
+        hs_raw = df.get("cmdCode", df.get("cmdDesc", pd.Series([""] * len(df))))
+        out["hs_code"] = hs_raw.astype(str).str[:4]
         _flow_raw = df.get("flowCode", df.get("flowDesc", ""))
         if isinstance(_flow_raw, pd.Series):
             out["flow"] = _flow_raw.astype(str).str.upper().str[:1]
         else:
             out["flow"] = str(_flow_raw).upper()[:1]
-        out["value_usd"] = pd.to_numeric(df.get("primaryValue", 0), errors="coerce").fillna(0)
-        out["net_weight_kg"] = pd.to_numeric(df.get("netWgt", 0), errors="coerce").fillna(0)
+        # Same scalar-fallback gotcha as hs_code above: df.get default returns
+        # a bare int when the column is missing, which pd.to_numeric turns
+        # into a numpy scalar with no .fillna() method.
+        value_raw = df.get("primaryValue", pd.Series([0] * len(df)))
+        out["value_usd"] = pd.to_numeric(value_raw, errors="coerce").fillna(0)
+        weight_raw = df.get("netWgt", pd.Series([0] * len(df)))
+        out["net_weight_kg"] = pd.to_numeric(weight_raw, errors="coerce").fillna(0)
         out["source"] = "comtrade"
 
         out = out.dropna(subset=["date"])
@@ -160,22 +168,28 @@ def normalize_stock_df(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
         return _empty(STOCK_COLS)
 
     try:
-        out = pd.DataFrame()
-
-        # yfinance returns DatetimeIndex
+        # yfinance returns a DatetimeIndex; if we build `out` column-by-column,
+        # the first assignment of df.index promotes `out` to a RangeIndex while
+        # subsequent OHLC Series remain DatetimeIndex-aligned. pandas then
+        # reindexes the Series to the RangeIndex and produces all-NaN, which
+        # dropna(subset=["close"]) strips entirely. Build the frame in one
+        # shot so every column lands on the same index.
         if isinstance(df.index, pd.DatetimeIndex):
-            out["date"] = df.index.tz_localize(None) if df.index.tz else df.index
+            date_values = df.index.tz_localize(None) if df.index.tz else df.index
         else:
-            out["date"] = pd.to_datetime(df.get("Date", df.index), errors="coerce")
+            date_values = pd.to_datetime(df.get("Date", df.index), errors="coerce")
 
         # yfinance column names may vary (capitalized or multi-level)
         cols = {c.lower(): c for c in df.columns}
-        out["symbol"] = symbol
-        out["open"] = pd.to_numeric(df[cols.get("open", "Open")], errors="coerce")
-        out["high"] = pd.to_numeric(df[cols.get("high", "High")], errors="coerce")
-        out["low"] = pd.to_numeric(df[cols.get("low", "Low")], errors="coerce")
-        out["close"] = pd.to_numeric(df[cols.get("close", "Close")], errors="coerce")
-        out["volume"] = pd.to_numeric(df[cols.get("volume", "Volume")], errors="coerce").fillna(0)
+        out = pd.DataFrame({
+            "date": pd.Series(date_values).reset_index(drop=True),
+            "symbol": symbol,
+            "open": pd.to_numeric(df[cols.get("open", "Open")], errors="coerce").reset_index(drop=True),
+            "high": pd.to_numeric(df[cols.get("high", "High")], errors="coerce").reset_index(drop=True),
+            "low": pd.to_numeric(df[cols.get("low", "Low")], errors="coerce").reset_index(drop=True),
+            "close": pd.to_numeric(df[cols.get("close", "Close")], errors="coerce").reset_index(drop=True),
+            "volume": pd.to_numeric(df[cols.get("volume", "Volume")], errors="coerce").fillna(0).reset_index(drop=True),
+        })
 
         out = out.dropna(subset=["date", "close"])
         out = out.sort_values("date").reset_index(drop=True)
@@ -198,7 +212,11 @@ def normalize_throughput_df(df: pd.DataFrame) -> pd.DataFrame:
         out["port_locode"] = df.get("port_locode", "UNKNOWN")
         out["country_iso3"] = df.get("country_iso3", df.get("countryiso3code", "UNK"))
         out["teu_millions"] = pd.to_numeric(df.get("teu_millions", df.get("value", 0)), errors="coerce").fillna(0)
-        out["connectivity_index"] = pd.to_numeric(df.get("connectivity_index", 0), errors="coerce").fillna(0)
+        # df.get default returns a bare scalar, not a Series — wrap in a
+        # pd.Series of matching length so pd.to_numeric returns a Series and
+        # .fillna() works (a numpy scalar has no .fillna method).
+        connectivity_raw = df.get("connectivity_index", pd.Series([0] * len(df)))
+        out["connectivity_index"] = pd.to_numeric(connectivity_raw, errors="coerce").fillna(0)
         out["source"] = "worldbank"
 
         out = out[out["year"] > 0]

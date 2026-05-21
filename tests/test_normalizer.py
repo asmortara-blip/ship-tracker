@@ -46,19 +46,19 @@ normalize_macro_df
 normalize_stock_df
     * empty / None input → empty schema-only frame
     * tz-aware DatetimeIndex is stripped of timezone
-    * BUG (pinned): yfinance-shaped frames with DatetimeIndex and
-      capitalized OHLC columns produce zero rows because of index
-      misalignment between out (RangeIndex) and df (DatetimeIndex)
-    * lowercase-column path also exhibits the same misalignment
+    * yfinance-shaped frames (DatetimeIndex + capitalized OHLC) round-trip
+      with the expected row count — the index-misalignment bug was fixed
+      by building `out` in one shot via pd.DataFrame({...}) with
+      reset_index() on the underlying Series
+    * lowercase-column path produces the same correct output
     * symbol argument flows through as a scalar column
 
 normalize_throughput_df
     * empty / None input → empty schema-only frame
     * happy path with all six expected columns present
     * rows with year <= 0 are filtered out
-    * BUG (pinned): when "connectivity_index" is absent the fallback
-      ``df.get("connectivity_index", 0)`` returns a bare int that has no
-      .fillna(), so the function returns an empty frame
+    * when "connectivity_index" is absent the fallback uses a same-length
+      Series of zeros so the resulting column is all-0 (not an exception)
     * source is always overwritten to "worldbank"
 
 _empty
@@ -293,15 +293,18 @@ def test_normalize_trade_df_marks_source_as_comtrade() -> None:
     assert out["source"].iloc[0] == "comtrade"
 
 
-def test_normalize_trade_df_exception_path_returns_empty() -> None:
-    """When the cmdCode/cmdDesc fallback collapses to a bare string, the
-    `.astype(str)` call raises AttributeError; the broad except returns
-    an empty schema-only frame instead of crashing the pipeline.
+def test_normalize_trade_df_handles_missing_cmd_columns() -> None:
+    """When BOTH cmdCode and cmdDesc are absent, the fallback uses a
+    same-length Series of empty strings — the function now produces a
+    properly-shaped row with hs_code='' instead of returning empty via
+    the broad except path (previously raised AttributeError on .astype).
     """
     df = pd.DataFrame({"period": ["202401"]})  # no cmdCode, no cmdDesc
     out = normalize_trade_df(df)
     assert list(out.columns) == TRADE_COLS
-    assert len(out) == 0
+    assert len(out) == 1
+    assert out["hs_code"].iloc[0] == ""
+    assert out["date"].iloc[0] == pd.Timestamp("2024-01-01")
 
 
 # ─── normalize_freight_df ──────────────────────────────────────────────────
@@ -637,15 +640,10 @@ def test_normalize_stock_df_strips_timezone() -> None:
         },
         index=idx,
     )
-    # The output may be empty due to the index-alignment bug below, but the
-    # tz-strip path on the date column itself is still exercised: the
-    # assignment `out["date"] = df.index.tz_localize(None)` runs before
-    # the bug strikes. We pin that the column exists and is tz-naive when
-    # the function returns successfully.
     out = normalize_stock_df(df, symbol="AAPL")
     assert "date" in out.columns
-    if len(out) > 0:
-        assert out["date"].dt.tz is None
+    assert len(out) == 3
+    assert out["date"].dt.tz is None
 
 
 def test_normalize_stock_df_emits_canonical_columns() -> None:
@@ -665,18 +663,15 @@ def test_normalize_stock_df_emits_canonical_columns() -> None:
     assert list(out.columns) == STOCK_COLS
 
 
-def test_normalize_stock_df_yfinance_shape_index_misalignment_bug() -> None:
-    """BUG: yfinance returns a DataFrame with a DatetimeIndex, but
-    normalize_stock_df builds ``out`` whose index is the *raw* DatetimeIndex
-    only on the first assignment (``out["date"] = df.index``) — pandas then
-    converts ``out`` to a RangeIndex when subsequent scalar assignments
-    happen. When the OHLC Series (still DatetimeIndex-aligned) is assigned
-    back to ``out``, pandas reindexes to the RangeIndex and produces NaN
-    everywhere, which the final dropna(subset=['close']) strips entirely.
+def test_normalize_stock_df_yfinance_shape_roundtrips_with_correct_row_count() -> None:
+    """yfinance returns a DataFrame with a DatetimeIndex and capitalized
+    OHLC columns. The previous implementation built `out` column-by-column
+    starting from the DatetimeIndex, then pandas reindexed every subsequent
+    OHLC Series to the resulting RangeIndex, producing all-NaN that
+    dropna(subset=['close']) stripped entirely (zero rows out).
 
-    Result: zero rows out from a valid yfinance-shaped frame.
-
-    Pin this behavior so a future fix breaks this test loudly.
+    The fix builds the frame in one shot via pd.DataFrame({...}) with
+    reset_index() on each Series so every column lands on the same index.
     """
     idx = pd.date_range("2024-01-01", periods=5)
     df = pd.DataFrame(
@@ -690,12 +685,20 @@ def test_normalize_stock_df_yfinance_shape_index_misalignment_bug() -> None:
         index=idx,
     )
     out = normalize_stock_df(df, symbol="AAPL")
-    # All rows are dropped because close ends up all-NaN after reindex.
-    assert len(out) == 0
+    assert len(out) == 5
+    assert list(out.columns) == STOCK_COLS
+    assert out["close"].tolist() == [101.0, 102.0, 103.0, 104.0, 105.0]
+    assert out["open"].tolist() == [100.0, 101.0, 102.0, 103.0, 104.0]
+    assert out["volume"].tolist() == [1000.0, 2000.0, 3000.0, 4000.0, 5000.0]
+    assert (out["symbol"] == "AAPL").all()
+    assert out["date"].iloc[0] == pd.Timestamp("2024-01-01")
+    assert out["date"].iloc[-1] == pd.Timestamp("2024-01-05")
 
 
-def test_normalize_stock_df_lowercase_columns_also_misaligned() -> None:
-    """The lowercase-column path exhibits the same misalignment bug."""
+def test_normalize_stock_df_lowercase_columns_also_work() -> None:
+    """Lowercase OHLC columns travel through the same one-shot construction
+    and produce the expected row count.
+    """
     idx = pd.date_range("2024-01-01", periods=3)
     df = pd.DataFrame(
         {
@@ -708,7 +711,28 @@ def test_normalize_stock_df_lowercase_columns_also_misaligned() -> None:
         index=idx,
     )
     out = normalize_stock_df(df, symbol="AAPL")
-    assert len(out) == 0
+    assert len(out) == 3
+    assert out["close"].tolist() == [101.0, 102.0, 103.0]
+
+
+def test_normalize_stock_df_drops_rows_with_nan_close() -> None:
+    """A NaN close still gets dropped — the dropna(subset=['close']) guard
+    survives the fix. Only the *all-NaN* misalignment bug was repaired.
+    """
+    idx = pd.date_range("2024-01-01", periods=4)
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 102.0, 103.0],
+            "High": [102.0, 103.0, 104.0, 105.0],
+            "Low": [99.0, 100.0, 101.0, 102.0],
+            "Close": [101.0, float("nan"), 103.0, 104.0],
+            "Volume": [1000, 2000, 3000, 4000],
+        },
+        index=idx,
+    )
+    out = normalize_stock_df(df, symbol="AAPL")
+    assert len(out) == 3
+    assert not out["close"].isna().any()
 
 
 # ─── normalize_throughput_df ───────────────────────────────────────────────
@@ -806,25 +830,24 @@ def test_normalize_throughput_df_emits_canonical_columns() -> None:
     assert list(out.columns) == THROUGHPUT_COLS
 
 
-def test_normalize_throughput_df_missing_connectivity_index_returns_empty() -> None:
-    """BUG: when `connectivity_index` is absent, the fallback
-    ``df.get("connectivity_index", 0)`` returns a bare ``int``, then
-    ``pd.to_numeric(0, ...)`` returns a numpy scalar, then ``.fillna(0)``
-    raises AttributeError. The broad except yields an empty frame.
-
-    A caller who omits the column today gets *nothing* back, not a frame
-    with connectivity_index=0. Pin this until the fix lands.
+def test_normalize_throughput_df_missing_connectivity_index_defaults_to_zero() -> None:
+    """When `connectivity_index` is absent, the fallback uses a same-length
+    Series of zeros (not the bare int 0), so pd.to_numeric returns a Series
+    and .fillna(0) works. The caller now gets a properly-shaped row with
+    connectivity_index=0 instead of an empty frame.
     """
     df = pd.DataFrame({
-        "year": [2020],
-        "port_locode": ["A"],
-        "country_iso3": ["USA"],
-        "teu_millions": [1.5],
+        "year": [2020, 2021],
+        "port_locode": ["A", "B"],
+        "country_iso3": ["USA", "CHN"],
+        "teu_millions": [1.5, 2.5],
         # connectivity_index intentionally missing
     })
     out = normalize_throughput_df(df)
-    assert len(out) == 0
+    assert len(out) == 2
     assert list(out.columns) == THROUGHPUT_COLS
+    assert out["connectivity_index"].tolist() == [0.0, 0.0]
+    assert out["teu_millions"].tolist() == [1.5, 2.5]
 
 
 def test_normalize_throughput_df_marks_source_as_worldbank() -> None:
