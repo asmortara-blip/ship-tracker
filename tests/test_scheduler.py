@@ -37,6 +37,7 @@ from worker.scheduler import (
     load_data_bundle,
     main,
     run_daily_briefing_job,
+    run_telemetry_prune_job,
 )
 
 
@@ -463,3 +464,90 @@ def test_load_data_bundle_does_not_import_streamlit() -> None:
     # pull it in), but we can confirm worker.scheduler itself does not
     # have a streamlit attribute baked in.
     assert not hasattr(ws, "st")
+
+
+# ─── run_telemetry_prune_job ────────────────────────────────────────────────
+
+def test_run_telemetry_prune_job_returns_int(monkeypatch) -> None:
+    """Returns the int count from prune_old_calls; never raises."""
+    prune_mock = MagicMock(return_value=7)
+    monkeypatch.setattr("engine.llm_telemetry.prune_old_calls", prune_mock)
+
+    result = run_telemetry_prune_job(retention_days=42)
+
+    assert result == 7
+    prune_mock.assert_called_once_with(retention_days=42)
+
+
+def test_run_telemetry_prune_job_swallows_errors(monkeypatch) -> None:
+    """A prune_old_calls exception must NOT propagate; returns 0."""
+    prune_mock = MagicMock(side_effect=RuntimeError("db wedged"))
+    monkeypatch.setattr("engine.llm_telemetry.prune_old_calls", prune_mock)
+
+    # Must not raise.
+    result = run_telemetry_prune_job()
+    assert result == 0
+
+
+# ─── main() runs both jobs (briefing + prune) ──────────────────────────────
+
+def test_main_calls_both_briefing_and_prune_in_order(monkeypatch) -> None:
+    """main() invokes run_daily_briefing_job FIRST, then run_telemetry_prune_job."""
+    monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+
+    call_order: list[str] = []
+
+    def fake_briefing(bundle, *, push_to_channels=False):
+        call_order.append("briefing")
+        return ReportJobResult(
+            report_id="rid",
+            file_path="/tmp/x.html",
+            success=True,
+            duration_s=0.1,
+            error_msg="",
+        )
+
+    def fake_prune(retention_days: int = 90):
+        call_order.append("prune")
+        return 0
+
+    monkeypatch.setattr(scheduler, "run_daily_briefing_job", fake_briefing)
+    monkeypatch.setattr(scheduler, "run_telemetry_prune_job", fake_prune)
+    monkeypatch.setattr(sys, "argv", ["worker.scheduler", "--push"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 0
+    # Briefing runs first, then prune.
+    assert call_order == ["briefing", "prune"]
+
+
+def test_main_prune_failure_does_not_block_successful_briefing(monkeypatch) -> None:
+    """A raise inside run_telemetry_prune_job must NOT flip the briefing's
+    exit code — the report ran successfully and that's what matters."""
+    monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+
+    monkeypatch.setattr(
+        scheduler,
+        "run_daily_briefing_job",
+        lambda bundle, *, push_to_channels=False: ReportJobResult(
+            report_id="rid",
+            file_path="/tmp/x.html",
+            success=True,
+            duration_s=0.1,
+            error_msg="",
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_telemetry_prune_job",
+        MagicMock(side_effect=RuntimeError("prune blew up")),
+    )
+    monkeypatch.setattr(sys, "argv", ["worker.scheduler", "--push"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    # Exit code is still 0 — briefing succeeded; prune is best-effort.
+    assert excinfo.value.code == 0

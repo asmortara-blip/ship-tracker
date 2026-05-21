@@ -344,6 +344,36 @@ def run_daily_briefing_job(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Telemetry retention
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_telemetry_prune_job(retention_days: int = 90) -> int:
+    """Prune ``llm_calls`` rows older than ``retention_days`` days.
+
+    Thin wrapper around ``engine.llm_telemetry.prune_old_calls`` that
+    adds logging and shields the caller from any exception. Designed to
+    be invoked once per day from ``main`` AFTER ``run_daily_briefing_job``
+    so the daily cron does both: build the report AND prune old
+    telemetry.
+
+    Returns the number of rows deleted (``0`` on no-op or any error).
+    Never raises — a prune failure must never block the briefing job.
+    """
+    try:
+        from engine.llm_telemetry import prune_old_calls
+
+        deleted = prune_old_calls(retention_days=retention_days)
+        logger.info(
+            f"run_telemetry_prune_job: deleted={deleted} rows "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_telemetry_prune_job: failed: {exc}")
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  CLI entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -366,6 +396,15 @@ def main(argv: Optional[list] = None) -> int:
     bundle = load_data_bundle()
     result = run_daily_briefing_job(bundle, push_to_channels=args.push)
     print(json.dumps(asdict(result), indent=2, default=str))
+
+    # Telemetry retention runs AFTER the briefing job so a prune failure
+    # cannot block the report. Wrapped in try/except for the same reason
+    # the helper itself already swallows errors — belt-and-braces.
+    try:
+        run_telemetry_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: telemetry prune step failed: {exc}")
+
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)
 

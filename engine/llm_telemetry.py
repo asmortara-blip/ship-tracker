@@ -387,3 +387,161 @@ def get_recent_calls(limit: int = 50) -> list[dict[str, Any]]:
     except Exception as exc:
         logger.debug(f"llm_telemetry: get_recent_calls failed: {exc}")
         return []
+
+
+# ─── Retention ─────────────────────────────────────────────────────────────
+
+def prune_old_calls(retention_days: int = 90) -> int:
+    """Delete ``llm_calls`` rows older than ``retention_days`` days.
+
+    A hard cutoff retention pass: any row whose ``created_at`` is older
+    than ``now - retention_days`` is removed. Returns the number of rows
+    deleted. Wrapped in a single transaction (``with conn:``) so a
+    failure mid-way rolls back rather than leaving a partial prune.
+
+    Best-effort — any exception (DB disconnect, schema drift, bad input)
+    is caught and logged at debug level so a retention failure never
+    breaks the calling worker. Returns ``0`` on any error.
+
+    Parameters
+    ----------
+    retention_days:
+        Keep rows newer than this many days. Default 90. A value of
+        ``0`` means "delete everything" (cutoff is now). A negative
+        value is treated as a no-op and returns ``0`` — protects against
+        an accidental nuke from a CLI typo like ``--retention-days -1``.
+
+    Returns
+    -------
+    int
+        Number of rows deleted. ``0`` when nothing matched, when the
+        input was a negative no-op, or when an exception was caught.
+    """
+    try:
+        # Coerce to int; bad input → no-op.
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError):
+            logger.debug(
+                f"llm_telemetry: prune_old_calls got non-int "
+                f"retention_days={retention_days!r}, treating as no-op"
+            )
+            return 0
+
+        # Negative window is explicitly a no-op — guards against a CLI
+        # typo deleting the whole table.
+        if retention_days < 0:
+            logger.debug(
+                f"llm_telemetry: prune_old_calls retention_days="
+                f"{retention_days} < 0, treating as no-op"
+            )
+            return 0
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=retention_days)
+        ).isoformat()
+
+        from state.db import get_connection
+        conn = get_connection()
+
+        # Single transaction — `with conn` commits on clean exit, rolls
+        # back on exception. The outer try/except below still catches
+        # anything that escapes.
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM llm_calls WHERE created_at < ?",
+                (cutoff,),
+            )
+            deleted = int(cur.rowcount or 0)
+        logger.debug(
+            f"llm_telemetry: prune_old_calls deleted={deleted} rows "
+            f"(retention_days={retention_days}, cutoff={cutoff})"
+        )
+        return deleted
+    except Exception as exc:
+        logger.debug(f"llm_telemetry: prune_old_calls failed: {exc}")
+        return 0
+
+
+# ─── CLI entry point ───────────────────────────────────────────────────────
+
+def _count_old_calls(retention_days: int) -> int:
+    """Count rows that ``prune_old_calls`` WOULD delete. Used by --dry-run.
+
+    Never raises; returns 0 on any error or on a negative
+    ``retention_days`` (matching prune_old_calls' no-op semantics).
+    """
+    try:
+        retention_days = int(retention_days)
+        if retention_days < 0:
+            return 0
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=retention_days)
+        ).isoformat()
+        from state.db import get_connection
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM llm_calls WHERE created_at < ?",
+            (cutoff,),
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+    except Exception as exc:
+        logger.debug(f"llm_telemetry: _count_old_calls failed: {exc}")
+        return 0
+
+
+def _main(argv: Optional[list] = None) -> int:
+    """CLI entry point — prune old llm_calls rows.
+
+    Returns the intended exit code (0 success / 1 error) so callers in
+    tests can assert without triggering ``sys.exit``. The ``__main__``
+    block below this function is what actually calls ``sys.exit``.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="engine.llm_telemetry",
+        description=(
+            "Prune llm_calls rows older than the retention window. "
+            "Intended to be invoked from cron or the worker."
+        ),
+    )
+    parser.add_argument(
+        "--retention-days",
+        type=int,
+        default=90,
+        help="Keep rows newer than this many days (default 90).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what WOULD be deleted without actually deleting.",
+    )
+
+    try:
+        args = parser.parse_args(argv)
+        if args.dry_run:
+            would_delete = _count_old_calls(args.retention_days)
+            print(
+                f"[dry-run] would delete {would_delete} llm_calls rows "
+                f"(retention_days={args.retention_days})"
+            )
+        else:
+            deleted = prune_old_calls(args.retention_days)
+            print(
+                f"pruned {deleted} llm_calls rows "
+                f"(retention_days={args.retention_days})"
+            )
+        return 0
+    except SystemExit:
+        # argparse calls sys.exit on --help / bad args. Surface as 1
+        # only if it wasn't a clean help-style exit (code 0).
+        raise
+    except Exception as exc:
+        print(f"prune_old_calls CLI failed: {exc}")
+        return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    sys.exit(_main())

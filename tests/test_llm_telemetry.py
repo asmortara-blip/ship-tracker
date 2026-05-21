@@ -528,3 +528,204 @@ def test_schema_version_is_three() -> None:
         "SELECT value FROM kv_state WHERE key = 'schema_version'"
     ).fetchone()
     assert int(row["value"]) == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# prune_old_calls — retention policy
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_prune_old_calls_empty_db_returns_zero() -> None:
+    """No rows at all → no-op, returns 0, does not raise."""
+    from engine.llm_telemetry import prune_old_calls
+
+    assert prune_old_calls(retention_days=90) == 0
+    # Table still exists and is still empty.
+    assert _all_rows() == []
+
+
+def test_prune_old_calls_all_rows_within_window_returns_zero() -> None:
+    """Every row is newer than the cutoff → nothing pruned, survivors intact."""
+    from engine.llm_telemetry import prune_old_calls, record_call
+
+    for i in range(3):
+        record_call(
+            source="commentary",
+            model="claude-haiku-4-5-20251001",
+            tokens_in=10 + i, tokens_out=5 + i,
+        )
+
+    deleted = prune_old_calls(retention_days=90)
+    assert deleted == 0
+    assert len(_all_rows()) == 3
+
+
+def test_prune_old_calls_mixed_age_returns_pruned_count() -> None:
+    """Three calls — two backdated past the cutoff, one fresh. Only the
+    two old rows are removed; the fresh one survives."""
+    from engine.llm_telemetry import prune_old_calls, record_call
+
+    # Two "old" rows — each backdated past the 90-day cutoff.
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=111, tokens_out=11, tab_name="old_one")
+    _backdate_latest(days=120)
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=222, tokens_out=22, tab_name="old_two")
+    _backdate_latest(days=100)
+    # One "fresh" row — within the window, must survive.
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=333, tokens_out=33, tab_name="fresh")
+
+    deleted = prune_old_calls(retention_days=90)
+    assert deleted == 2
+
+    survivors = _all_rows()
+    assert len(survivors) == 1
+    # The survivor is the fresh row.
+    assert survivors[0]["tab_name"] == "fresh"
+    assert survivors[0]["tokens_in"] == 333
+
+
+def test_prune_old_calls_retention_zero_deletes_everything() -> None:
+    """retention_days=0 means "cutoff is now" → every row is older than
+    "now" by some small epsilon and gets removed."""
+    from engine.llm_telemetry import prune_old_calls, record_call
+
+    for i in range(4):
+        record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                    tokens_in=1, tokens_out=1)
+    # Backdate one slightly to guarantee its timestamp is < "now" when
+    # the DELETE fires; the others were just inserted but their
+    # ISO timestamp is microseconds in the past, which also satisfies
+    # "< now".
+    _backdate_latest(days=1)
+
+    deleted = prune_old_calls(retention_days=0)
+    assert deleted == 4
+    assert _all_rows() == []
+
+
+def test_prune_old_calls_negative_retention_is_noop() -> None:
+    """retention_days=-1 is treated as a no-op — guards against an
+    accidental "nuke everything" from a CLI typo."""
+    from engine.llm_telemetry import prune_old_calls, record_call
+
+    for _ in range(3):
+        record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                    tokens_in=1, tokens_out=1)
+
+    deleted = prune_old_calls(retention_days=-1)
+    assert deleted == 0
+    assert len(_all_rows()) == 3
+
+
+def test_prune_old_calls_swallows_db_errors(monkeypatch) -> None:
+    """A broken DB connection must NOT raise — prune is best-effort."""
+    from engine import llm_telemetry as telem
+
+    def _broken_get_connection():
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr("state.db.get_connection", _broken_get_connection)
+
+    # MUST NOT raise; must return 0.
+    assert telem.prune_old_calls(retention_days=90) == 0
+
+
+def test_prune_old_calls_default_retention_is_90_days() -> None:
+    """The contract — default retention window is 90 days. A row backdated
+    91 days is pruned; a row backdated 89 days survives."""
+    from engine.llm_telemetry import prune_old_calls, record_call
+
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1, tab_name="just_outside")
+    _backdate_latest(days=91)
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1, tab_name="just_inside")
+    _backdate_latest(days=89)
+
+    # Call without the argument — exercises the default.
+    deleted = prune_old_calls()
+    assert deleted == 1
+
+    survivors = _all_rows()
+    assert len(survivors) == 1
+    assert survivors[0]["tab_name"] == "just_inside"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CLI — `python -m engine.llm_telemetry`
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_cli_dry_run_does_not_delete(capsys) -> None:
+    """--dry-run prints the count but leaves the table untouched."""
+    from engine.llm_telemetry import _main, record_call
+
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1)
+    _backdate_latest(days=120)
+
+    exit_code = _main(["--retention-days", "90", "--dry-run"])
+    assert exit_code == 0
+
+    out = capsys.readouterr().out
+    assert "dry-run" in out.lower()
+    assert "1" in out  # the count
+
+    # Nothing was deleted.
+    assert len(_all_rows()) == 1
+
+
+def test_cli_without_dry_run_deletes_and_prints_count(capsys) -> None:
+    """Without --dry-run, the CLI actually prunes and prints the count."""
+    from engine.llm_telemetry import _main, record_call
+
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1)
+    _backdate_latest(days=120)
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1)  # fresh — must survive
+
+    exit_code = _main(["--retention-days", "90"])
+    assert exit_code == 0
+
+    out = capsys.readouterr().out
+    # "pruned 1 ..." somewhere in the output
+    assert "1" in out
+    assert "pruned" in out.lower()
+
+    # The fresh row survived.
+    assert len(_all_rows()) == 1
+
+
+def test_cli_default_retention_is_90_days(capsys) -> None:
+    """Invoking the CLI without --retention-days uses 90."""
+    from engine.llm_telemetry import _main, record_call
+
+    record_call(source="commentary", model="claude-haiku-4-5-20251001",
+                tokens_in=1, tokens_out=1)
+    _backdate_latest(days=91)
+
+    exit_code = _main([])
+    assert exit_code == 0
+
+    out = capsys.readouterr().out
+    assert "retention_days=90" in out
+    assert _all_rows() == []
+
+
+def test_cli_returns_zero_even_on_internal_failure(monkeypatch, capsys) -> None:
+    """If prune_old_calls itself swallows an error and returns 0, the
+    CLI still exits 0 — there was nothing to surface as a hard error."""
+    from engine import llm_telemetry as telem
+
+    # Simulate a DB failure inside the helper. prune_old_calls returns 0.
+    monkeypatch.setattr(
+        "state.db.get_connection",
+        lambda: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    exit_code = telem._main(["--retention-days", "90"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    # Reports zero rows pruned; doesn't crash.
+    assert "pruned 0" in out.lower()
