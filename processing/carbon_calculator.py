@@ -36,7 +36,12 @@ _FUEL_CONSUMPTION_MT_PER_DAY: float = 85.0   # large container vessel at sea spe
 _CO2_FACTOR_KG_PER_KG_FUEL: float = 3.114    # IMO HFO standard (kg CO2 / kg fuel)
 _TEU_CAPACITY: int = 8_000                    # assumed large vessel
 _LOAD_FACTOR: float = 0.85                    # typical utilization
-_EEDI_BENCHMARK: float = 0.05                 # MT CO2/TEU — excellent benchmark
+# Long-haul reference intensity: a ~29-day voyage at the catalog's fuel rate
+# and 85% load factor emits ~1.15 MT CO2 / TEU. Used to rescale eedi_score
+# so the four grade bands (A/B/C/D) distribute across realistic transit
+# durations (3-35 days). Aligns with IMO MEPC.353(78) CII A-E rating bands
+# for container ships, expressed per-voyage-TEU rather than per-nm.
+_EEDI_REFERENCE_MT_PER_TEU: float = 1.15
 _EU_ETS_PRICE_USD: float = 80.0              # $/tonne CO2
 _VESSEL_TYPE: str = "large_container"
 
@@ -97,9 +102,14 @@ def calculate_route_emissions(
     # Sea freight vs air freight: sea shipping emits ~98% less CO2 per tonne-km
     co2_vs_air_freight_pct = 0.98
 
-    # EEDI proxy: score relative to the excellent benchmark of 0.05 MT CO2/TEU
-    # A route at the benchmark scores 100; routes above it score progressively lower.
-    eedi_score = max(0.0, 100.0 - (co2_per_teu_mt / _EEDI_BENCHMARK) * 100.0)
+    # EEDI proxy: linear score from 100 (zero CO2 / TEU) down to 0
+    # (at the long-haul reference intensity of 1.15 MT CO2/TEU).
+    # Yields a distribution across catalog routes of roughly:
+    #   eedi > 80  (A): voyages emitting < 0.23 MT CO2/TEU  (~3-5 days)
+    #   eedi > 60  (B): 0.23-0.46 MT/TEU                    (~6-12 days)
+    #   eedi > 40  (C): 0.46-0.69 MT/TEU                    (~12-18 days)
+    #   eedi <= 40 (D): >= 0.69 MT/TEU                      (~18+ days)
+    eedi_score = max(0.0, 100.0 * (1.0 - co2_per_teu_mt / _EEDI_REFERENCE_MT_PER_TEU))
 
     # Poseidon Principles 2050 trajectory alignment
     poseidon_compliant = co2_per_teu_mt < 0.12

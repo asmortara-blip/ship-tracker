@@ -8,11 +8,13 @@ Covers:
                        co2_emissions_mt = total_fuel_mt * 3.114
                        co2_per_teu_mt = co2 / (8000 * 0.85)
                        carbon_cost_usd = co2 * 80
-      * eedi_score formula = max(0, 100 - co2_per_teu/0.05 * 100)
-      * eedi_score clamped to >= 0 (real routes saturate to 0)
+      * eedi_score formula = max(0, 100 * (1 - co2_per_teu / 1.15))
+        rescaled against a 29-day long-haul reference so all four
+        grade bands distribute across catalog transit times (3-35 days)
+      * eedi_score clamped to >= 0 for voyages worse than the reference
       * sustainability_grade tiers ('A' / 'B' / 'C' / 'D') exercised via the
-        eedi_score thresholds (>80 / >60 / >40 / else); B+C are not reachable
-        from integer transit_days with the catalog constants — flagged below
+        eedi_score thresholds (>80 / >60 / >40 / else); all four reachable
+        from the 17 catalog routes (short intra-Asia → A, long-haul → D)
       * poseidon_compliant boundary: True iff co2_per_teu_mt < 0.12
         (d=3 days → compliant; d=4 → not)
       * unknown route_id → distance_nm = 0.0 (other fields still computed)
@@ -22,18 +24,13 @@ Covers:
       * returns one RouteEmissions per registered ShippingRoute
       * sorted ascending by co2_per_teu_mt
       * each entry's distance_nm matches ROUTE_DISTANCES[id]
+      * all four sustainability grades A/B/C/D appear in the catalog
   - compare_to_alternatives:
       * vs_air_freight_co2_ratio = 50.0; vs_road_estimate = 3.0
       * trees_to_offset = ceil(co2_emissions_mt / 0.42); always an int
       * carbon_offset_cost_usd = co2_emissions_mt * 15
       * ceil rounding: co2 just above 0.42 → 2 trees
       * zero-emission voyage → 0 trees, $0 offset
-
-Findings:
-  - The sustainability grades B and C are unreachable for any real route
-    given the integer transit_days input and the catalog constants
-    (transit_days >= 1 always gives eedi_score <= ~22 → grade D).
-    Only d=0 hits grade A. Test pins current behavior; flagging for review.
 """
 from __future__ import annotations
 
@@ -57,7 +54,7 @@ _CO2_FACTOR = 3.114
 _TEU = 8_000
 _LOAD = 0.85
 _LOADED_TEU = _TEU * _LOAD  # 6800
-_BENCHMARK = 0.05
+_EEDI_REFERENCE = 1.15  # MT CO2 / TEU at the long-haul reference voyage
 _ETS_PRICE = 80.0
 _TREE_MT = 0.42
 _OFFSET_PRICE = 15.0
@@ -163,13 +160,13 @@ def test_eedi_score_zero_days_is_one_hundred() -> None:
 def test_eedi_score_formula_matches_hand_calc() -> None:
     em = calculate_route_emissions("transpacific_eb", "TP-EB", transit_days=1)
     expected_co2_per_teu = (_FUEL_PER_DAY * 1 * _CO2_FACTOR) / _LOADED_TEU
-    expected_eedi = max(0.0, 100.0 - (expected_co2_per_teu / _BENCHMARK) * 100.0)
+    expected_eedi = max(0.0, 100.0 * (1.0 - expected_co2_per_teu / _EEDI_REFERENCE))
     assert em.eedi_score == pytest.approx(expected_eedi, abs=1e-9)
 
 
 def test_eedi_score_clamps_at_zero_for_long_voyages() -> None:
-    """A 14-day voyage produces co2/teu ~0.545 → raw eedi < 0 → clamps to 0."""
-    em = calculate_route_emissions("transpacific_eb", "TP-EB", transit_days=14)
+    """A 35-day voyage produces co2/teu ~1.36 > 1.15 reference → clamps to 0."""
+    em = calculate_route_emissions("china_south_america", "CN-SA", transit_days=35)
     assert em.eedi_score == 0.0
 
 
@@ -203,20 +200,60 @@ def test_grade_a_when_eedi_above_eighty() -> None:
     assert em.sustainability_grade == "A"
 
 
+def test_grade_b_when_eedi_between_sixty_and_eighty() -> None:
+    """transit_days=8 → eedi≈72.9 → grade 'B' (short-to-mid haul)."""
+    em = calculate_route_emissions("north_africa_to_europe", "NA-EU", transit_days=8)
+    assert 60 < em.eedi_score <= 80
+    assert em.sustainability_grade == "B"
+
+
+def test_grade_c_when_eedi_between_forty_and_sixty() -> None:
+    """transit_days=14 → eedi≈52.6 → grade 'C' (mid-haul transpac)."""
+    em = calculate_route_emissions("transpacific_eb", "TP-EB", transit_days=14)
+    assert 40 < em.eedi_score <= 60
+    assert em.sustainability_grade == "C"
+
+
 def test_grade_d_when_eedi_at_or_below_forty() -> None:
-    """transit_days=1 gives eedi≈22 → grade 'D'."""
-    em = calculate_route_emissions("transpacific_eb", "TP-EB", transit_days=1)
+    """transit_days=22 → eedi≈25.5 → grade 'D' (long-haul)."""
+    em = calculate_route_emissions("europe_south_america", "EU-SA", transit_days=22)
     assert em.eedi_score <= 40
     assert em.sustainability_grade == "D"
 
 
-def test_grade_d_for_all_registered_routes() -> None:
-    """Documented finding: with current constants, no integer transit_days
-    catalog route reaches A/B/C — they all clamp to grade D."""
-    for em in calculate_all_routes():
-        assert em.sustainability_grade == "D", (
-            f"{em.route_id} unexpectedly graded {em.sustainability_grade}"
+def test_short_intra_asia_routes_grade_a() -> None:
+    """Real catalog: the two shortest routes (3 & 5 days) are grade A."""
+    em3 = calculate_route_emissions("intra_asia_china_japan", "Intra-CN-JP", transit_days=3)
+    em5 = calculate_route_emissions("intra_asia_china_sea", "Intra-CN-SE", transit_days=5)
+    assert em3.sustainability_grade == "A"
+    assert em5.sustainability_grade == "A"
+
+
+def test_mid_haul_routes_grade_c() -> None:
+    """Real catalog: 12-16 day routes (transpac, transatlantic) are grade C."""
+    for route_id, days in (("transatlantic", 12), ("transpacific_eb", 14), ("transpacific_wb", 16)):
+        em = calculate_route_emissions(route_id, route_id, transit_days=days)
+        assert em.sustainability_grade == "C", (
+            f"{route_id} (d={days}) graded {em.sustainability_grade}, expected C"
         )
+
+
+def test_long_haul_routes_grade_d() -> None:
+    """Real catalog: 20+ day routes (asia-europe, china-south-america) are grade D."""
+    for route_id, days in (("south_asia_to_europe", 20),
+                           ("asia_europe", 25),
+                           ("ningbo_europe", 28),
+                           ("china_south_america", 35)):
+        em = calculate_route_emissions(route_id, route_id, transit_days=days)
+        assert em.sustainability_grade == "D", (
+            f"{route_id} (d={days}) graded {em.sustainability_grade}, expected D"
+        )
+
+
+def test_all_four_grades_present_in_registered_routes() -> None:
+    """With the rescaled EEDI, every grade A/B/C/D is reachable from the catalog."""
+    grades = {em.sustainability_grade for em in calculate_all_routes()}
+    assert grades == {"A", "B", "C", "D"}
 
 
 # ─── calculate_all_routes ───────────────────────────────────────────────────
