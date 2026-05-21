@@ -1,14 +1,11 @@
 """Tests for engine.alert_engine_v2 rule persistence (save / load / reset).
 
-Each test runs against an isolated, monkeypatched RULES_FILE path so the
-suite doesn't touch the real cache/alerts/rules.json. Round-trips are
-verified by value-equality, and edge cases (missing file, malformed JSON,
-empty list) are pinned to "returns []" for graceful degradation.
+Rules now live in the SQLite ``alert_rules`` table (see ``state.db``).
+The legacy RULES_FILE constant is kept on the module for the one-time
+JSON-to-SQLite migration helper. Each test runs against an isolated
+SQLite DB at tmp_path so no test touches the real cache/ship_tracker.db.
 """
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 import pytest
 
@@ -19,12 +16,15 @@ from engine.alert_engine_v2 import load_rules, reset_rules, save_rules
 # ─── Fixture: isolate persistence to a tmp file per test ────────────────────
 
 @pytest.fixture(autouse=True)
-def isolated_rules_file(monkeypatch, tmp_path):
-    """Redirect the module-level RULES_FILE at every test so persistence
-    writes go to a per-test tmp dir, never the real cache."""
-    tmp_file = tmp_path / "rules.json"
-    monkeypatch.setattr(engv2, "RULES_FILE", tmp_file)
-    yield tmp_file
+def isolated_state_db(monkeypatch, tmp_path):
+    """Redirect the SQLite state DB to a per-test tmp_path so no test
+    touches the real cache/ship_tracker.db. Rules now live in SQLite
+    instead of the legacy RULES_FILE."""
+    from state import db as state_db
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "ship_tracker.db")
+    state_db.reset_for_tests()
+    yield
+    state_db.reset_for_tests()
 
 
 # ─── Sample rule fixtures ───────────────────────────────────────────────────
@@ -56,21 +56,48 @@ def _sample_rules() -> list[dict]:
 
 # ─── load_rules: edge cases ─────────────────────────────────────────────────
 
-def test_load_rules_returns_empty_when_file_missing(isolated_rules_file: Path) -> None:
-    assert not isolated_rules_file.exists()
+def test_load_rules_returns_empty_when_table_empty() -> None:
+    """Fresh per-test DB: alert_rules table exists but has zero rows."""
     assert load_rules() == []
 
 
-def test_load_rules_returns_empty_on_corrupt_json(isolated_rules_file: Path) -> None:
-    isolated_rules_file.parent.mkdir(parents=True, exist_ok=True)
-    isolated_rules_file.write_text("{ this is not json", encoding="utf-8")
-    assert load_rules() == []
+def test_load_rules_skips_corrupt_json_blob() -> None:
+    """If the data column holds malformed JSON, that row is silently
+    dropped from the loaded list (rather than raising)."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+            ("good", '{"id": "good", "name": "OK"}'),
+        )
+        conn.execute(
+            "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+            ("bad", "{not valid json"),
+        )
+    loaded = load_rules()
+    assert len(loaded) == 1
+    assert loaded[0]["id"] == "good"
 
 
-def test_load_rules_returns_empty_on_non_list_payload(isolated_rules_file: Path) -> None:
-    isolated_rules_file.parent.mkdir(parents=True, exist_ok=True)
-    isolated_rules_file.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
-    assert load_rules() == []
+def test_load_rules_skips_non_dict_blob() -> None:
+    """If the data column holds a JSON list or scalar (not a dict), the
+    row is silently dropped."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+            ("good", '{"id": "good"}'),
+        )
+        conn.execute(
+            "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+            ("non_dict", '["a list", "not a dict"]'),
+        )
+    loaded = load_rules()
+    assert {r.get("id") for r in loaded} == {"good"}
 
 
 # ─── save / load round-trip ─────────────────────────────────────────────────
@@ -82,12 +109,16 @@ def test_save_then_load_round_trips_rules_exactly() -> None:
     assert loaded == rules
 
 
-def test_save_creates_parent_directories(isolated_rules_file: Path) -> None:
-    # Parent doesn't exist yet under tmp_path/rules.json — save should mkdir.
-    assert not isolated_rules_file.parent.exists() or isolated_rules_file.parent.iterdir
+def test_save_creates_database_file(tmp_path, monkeypatch) -> None:
+    """The SQLite DB file is lazily created on first save."""
+    from state import db as state_db
+
+    new_path = tmp_path / "lazy_init.db"
+    monkeypatch.setattr(state_db, "DB_PATH", new_path)
+    state_db.reset_for_tests()
+    assert not new_path.exists()
     save_rules(_sample_rules())
-    assert isolated_rules_file.exists()
-    assert isolated_rules_file.parent.exists()
+    assert new_path.exists()
 
 
 def test_save_empty_list_writes_empty_list() -> None:
@@ -124,27 +155,22 @@ def test_reset_rules_deletes_file() -> None:
     assert load_rules() == []
 
 
-def test_reset_rules_when_file_missing_is_safe(isolated_rules_file: Path) -> None:
-    assert not isolated_rules_file.exists()
-    # Must not raise.
+def test_reset_rules_when_table_empty_is_safe() -> None:
+    """Reset against an already-empty table must not raise."""
+    # Must not raise even before any save_rules call.
     reset_rules()
     assert load_rules() == []
 
 
-# ─── File location: project-root anchor ─────────────────────────────────────
+# ─── Legacy path anchors ────────────────────────────────────────────────────
 
-def test_default_rules_file_lives_in_project_cache(monkeypatch) -> None:
-    """The non-test default lives inside <project_root>/cache/alerts/.
-
-    This is the same anchoring used for ALERT_FILE (commit c409bb0 fixed
-    cache paths to be CWD-independent). Re-import the module fresh to pick
-    up the un-monkeypatched constant.
-    """
+def test_legacy_rules_file_path_still_anchored_to_project_cache(monkeypatch) -> None:
+    """The legacy RULES_FILE constant is kept on the module for the
+    one-time JSON-to-SQLite migration helper. It must still point
+    inside <project_root>/cache/alerts/ (siblings to ALERT_FILE)."""
     monkeypatch.undo()
     import importlib
     import engine.alert_engine_v2 as fresh
     importlib.reload(fresh)
-    # Should be under <project_root>/cache/alerts/rules.json — siblings to
-    # ALERT_FILE.
     assert fresh.RULES_FILE.parent == fresh.ALERT_FILE.parent
     assert fresh.RULES_FILE.name == "rules.json"

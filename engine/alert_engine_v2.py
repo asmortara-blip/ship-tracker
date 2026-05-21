@@ -387,111 +387,137 @@ def run_all_checks(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Persistence
+#  Persistence (SQLite-backed via state.db)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Anchor to the project root so alerts persist in the same place regardless
-# of the current working directory.
+# Legacy JSON paths — kept as module attributes for the one-time migration
+# helper in state.migrations. Production reads/writes go through SQLite.
 ALERT_FILE = Path(__file__).resolve().parent.parent / "cache" / "alerts" / "alerts.json"
 RULES_FILE = Path(__file__).resolve().parent.parent / "cache" / "alerts" / "rules.json"
 _MAX_STORED = 500
 
 
-def _load_raw() -> list[dict]:
-    if not ALERT_FILE.exists():
-        return []
-    try:
-        with ALERT_FILE.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, list) else []
-    except Exception as exc:
-        logger.warning(f"Could not read alerts file: {exc}")
-        return []
-
-
-def _save_raw(records: list[dict]) -> None:
-    ALERT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with ALERT_FILE.open("w", encoding="utf-8") as fh:
-            json.dump(records, fh, indent=2, default=str)
-    except Exception as exc:
-        logger.warning(f"Could not write alerts file: {exc}")
-
-
-def _dict_to_alert(d: dict) -> Optional[ShippingAlert]:
-    try:
-        return ShippingAlert(
-            alert_id=d.get("alert_id", _new_id()),
-            created_at=d.get("created_at", _now_iso()),
-            alert_type=d.get("alert_type", "MACRO"),
-            severity=d.get("severity", "LOW"),
-            title=d.get("title", ""),
-            body=d.get("body", ""),
-            ticker=d.get("ticker", ""),
-            route_id=d.get("route_id", ""),
-            port_locode=d.get("port_locode", ""),
-            value=float(d.get("value", 0.0)),
-            threshold=float(d.get("threshold", 0.0)),
-            change_pct=float(d.get("change_pct", 0.0)),
-            acknowledged=bool(d.get("acknowledged", False)),
-        )
-    except Exception:
-        return None
+def _row_to_alert(row) -> ShippingAlert:
+    """Map a sqlite3.Row from the alerts table to a ShippingAlert."""
+    return ShippingAlert(
+        alert_id=row["alert_id"],
+        created_at=row["created_at"],
+        alert_type=row["alert_type"],
+        severity=row["severity"],
+        title=row["title"],
+        body=row["body"],
+        ticker=row["ticker"] or "",
+        route_id=row["route_id"] or "",
+        port_locode=row["port_locode"] or "",
+        value=float(row["value"]),
+        threshold=float(row["threshold"]),
+        change_pct=float(row["change_pct"]),
+        acknowledged=bool(row["acknowledged"]),
+    )
 
 
 def save_alerts(alerts: list[ShippingAlert]) -> None:
-    """Append new alerts to JSON file, max 500 stored."""
-    existing = _load_raw()
-    existing_ids = {r["alert_id"] for r in existing if "alert_id" in r}
+    """Persist alerts to the SQLite store; dedupe by alert_id; trim to
+    _MAX_STORED keeping the newest (by created_at)."""
+    if not alerts:
+        return
+    from state.db import get_connection
 
-    new_records = [
-        asdict(a) for a in alerts
-        if a.alert_id not in existing_ids
+    conn = get_connection()
+    rows = [
+        (a.alert_id, a.created_at, a.alert_type, a.severity, a.title, a.body,
+         a.ticker, a.route_id, a.port_locode, a.value, a.threshold,
+         a.change_pct, 1 if a.acknowledged else 0)
+        for a in alerts
     ]
-    combined = existing + new_records
-    # Trim to max; keep newest (last in list after sort by created_at)
-    combined.sort(key=lambda r: r.get("created_at", ""))
-    if len(combined) > _MAX_STORED:
-        combined = combined[-_MAX_STORED:]
-    _save_raw(combined)
+    try:
+        with conn:
+            # INSERT OR IGNORE — dedupe by alert_id primary key.
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO alerts
+                  (alert_id, created_at, alert_type, severity, title, body,
+                   ticker, route_id, port_locode, value, threshold, change_pct,
+                   acknowledged)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            # Trim to _MAX_STORED keeping the newest created_at. SQLite's
+            # ROWID order matches insertion order, but we sort by created_at
+            # to be robust against backfilled or out-of-order writes.
+            conn.execute(
+                """
+                DELETE FROM alerts
+                WHERE alert_id IN (
+                    SELECT alert_id FROM alerts
+                    ORDER BY created_at DESC
+                    LIMIT -1 OFFSET ?
+                )
+                """,
+                (_MAX_STORED,),
+            )
+    except Exception as exc:
+        logger.warning(f"save_alerts: SQLite write failed: {exc}")
 
 
 def load_alerts(max_age_days: int = 30) -> list[ShippingAlert]:
-    """Load recent alerts from JSON file."""
+    """Load alerts created within the last ``max_age_days``."""
+    from state.db import get_connection
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
-    records = _load_raw()
-    alerts: list[ShippingAlert] = []
-    for rec in records:
-        if rec.get("created_at", "") < cutoff:
-            continue
-        alert = _dict_to_alert(rec)
-        if alert is not None:
-            alerts.append(alert)
-    return alerts
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE created_at >= ? ORDER BY created_at DESC",
+            (cutoff,),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(f"load_alerts: SQLite read failed: {exc}")
+        return []
+    return [_row_to_alert(r) for r in rows]
 
 
 def acknowledge_alert(alert_id: str) -> None:
-    """Mark alert as acknowledged."""
-    records = _load_raw()
-    for rec in records:
-        if rec.get("alert_id") == alert_id:
-            rec["acknowledged"] = True
-            break
-    _save_raw(records)
+    """Mark a single alert as acknowledged."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE alerts SET acknowledged = 1 WHERE alert_id = ?",
+                (alert_id,),
+            )
+    except Exception as exc:
+        logger.warning(f"acknowledge_alert: SQLite update failed: {exc}")
 
 
 def acknowledge_all() -> None:
-    """Mark all alerts as acknowledged."""
-    records = _load_raw()
-    for rec in records:
-        rec["acknowledged"] = True
-    _save_raw(records)
+    """Mark every alert in the store as acknowledged."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute("UPDATE alerts SET acknowledged = 1")
+    except Exception as exc:
+        logger.warning(f"acknowledge_all: SQLite update failed: {exc}")
 
 
 def get_unread_count() -> int:
     """Count unacknowledged alerts."""
-    records = _load_raw()
-    return sum(1 for r in records if not r.get("acknowledged", False))
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM alerts WHERE acknowledged = 0"
+        ).fetchone()
+        return int(row["n"]) if row else 0
+    except Exception as exc:
+        logger.warning(f"get_unread_count: SQLite read failed: {exc}")
+        return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,40 +526,71 @@ def get_unread_count() -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def save_rules(rules: list[dict]) -> None:
-    """Persist the user's alert-rule list to disk as JSON.
+    """Persist the user's alert-rule list to the SQLite store.
 
-    Rules are stored as plain dicts (matching the in-memory shape used by
-    ``ui/tab_alerts.py``'s session state). The typed ``AlertRule`` dataclass
-    is reserved for future use; the dict shape keeps the editor UI flexible
-    while still being durable across sessions.
-    """
-    RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Rules are stored as JSON blobs keyed by rule_id (or id) — matching the
+    in-memory shape used by ``ui/tab_alerts.py``'s session state. The typed
+    ``AlertRule`` dataclass is reserved for future use; the dict shape
+    keeps the editor UI flexible while still being durable across sessions.
+
+    Replaces the entire rule set (matches the JSON-file write-everything
+    semantics callers already rely on)."""
+    from state.db import get_connection
+
+    conn = get_connection()
     try:
-        with RULES_FILE.open("w", encoding="utf-8") as fh:
-            json.dump(list(rules), fh, indent=2, default=str)
+        with conn:
+            conn.execute("DELETE FROM alert_rules")
+            rows = []
+            for r in rules:
+                if not isinstance(r, dict):
+                    continue
+                rule_id = r.get("rule_id") or r.get("id")
+                if not rule_id:
+                    continue
+                rows.append((str(rule_id), json.dumps(r, default=str)))
+            if rows:
+                conn.executemany(
+                    "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+                    rows,
+                )
     except Exception as exc:
-        logger.warning(f"Could not write rules file: {exc}")
+        logger.warning(f"save_rules: SQLite write failed: {exc}")
 
 
 def load_rules() -> list[dict]:
-    """Load the persisted user rule list. Returns [] if the file is missing
-    or unreadable — callers can fall back to defaults in that case."""
-    if not RULES_FILE.exists():
-        return []
+    """Load the persisted user rule list. Returns [] if no rules exist
+    or the read fails — callers can fall back to defaults in that case."""
+    from state.db import get_connection
+
+    conn = get_connection()
     try:
-        with RULES_FILE.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, list) else []
+        rows = conn.execute(
+            "SELECT data FROM alert_rules ORDER BY rule_id"
+        ).fetchall()
     except Exception as exc:
-        logger.warning(f"Could not read rules file: {exc}")
+        logger.warning(f"load_rules: SQLite read failed: {exc}")
         return []
+
+    out: list[dict] = []
+    for r in rows:
+        try:
+            parsed = json.loads(r["data"])
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        except Exception:
+            continue
+    return out
 
 
 def reset_rules() -> None:
-    """Remove the persisted rules file. The next ``load_rules()`` returns []
+    """Drop every rule. The next ``load_rules()`` returns []
     so the caller can re-seed with its default list."""
-    if RULES_FILE.exists():
-        try:
-            RULES_FILE.unlink()
-        except Exception as exc:
-            logger.warning(f"Could not delete rules file: {exc}")
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute("DELETE FROM alert_rules")
+    except Exception as exc:
+        logger.warning(f"reset_rules: SQLite delete failed: {exc}")

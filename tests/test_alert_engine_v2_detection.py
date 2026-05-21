@@ -53,8 +53,14 @@ from engine.alert_engine_v2 import (
 # ─── Fixture: isolate ALERT_FILE per test ──────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def isolated_alert_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(engv2, "ALERT_FILE", tmp_path / "alerts.json")
+def isolated_state_db(monkeypatch, tmp_path):
+    """Redirect the SQLite state DB to a per-test tmp_path so no test
+    touches the real cache/ship_tracker.db."""
+    from state import db as state_db
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "ship_tracker.db")
+    state_db.reset_for_tests()
+    yield
+    state_db.reset_for_tests()
 
 
 # ─── Stand-ins for duck-typed inputs ────────────────────────────────────────

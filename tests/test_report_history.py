@@ -1,36 +1,32 @@
-"""Tests for utils.report_history — report persistence layer.
+"""Tests for utils.report_history — report persistence layer (SQLite-backed).
 
-The module stores investor reports as HTML files under cache/reports/ with a
-JSON sidecar index (report_index.json). Every public function is wrapped in a
-try/except returning a sensible default — these tests verify both the happy
-paths and the defensive defaults.
+Reports are stored as HTML files under cache/reports/ with metadata in the
+SQLite ``report_history`` table (see ``state.db``). Each test redirects
+DB_PATH to a tmp_path so the real database is never touched.
 
 Covers:
   - ReportMeta dataclass shape
-  - Module constants (REPORT_DIR, MAX_REPORTS, _INDEX_FILE)
+  - Module constants (REPORT_DIR, MAX_REPORTS)
   - _attr: attribute access, dict access, None → default, missing → default
-  - _safe_float: numeric strings, ints, None/garbage → default
-  - _safe_int: numeric strings, floats, None/garbage → default
-  - _load_index: missing file → []; corrupt JSON → []; malformed entries skipped
-  - _save_index: writes parseable JSON; creates REPORT_DIR if absent
-  - _prune_old_reports: ≤ MAX_REPORTS no-op; trims to newest N; deletes
-    pruned files on disk; missing files don't raise
-  - save_report: writes HTML, returns populated ReportMeta, appends to index;
+  - _safe_float / _safe_int: numeric strings, garbage → default
+  - _row_to_meta: SQLite Row → ReportMeta round-trip
+  - _prune_old_reports: ≤ MAX_REPORTS no-op; trims to newest N from the
+    SQLite table; deletes pruned files on disk; missing files don't raise
+  - save_report: writes HTML, inserts row, returns populated ReportMeta;
     extracts metadata from object attrs OR dict; safe defaults when fields
-    are missing; pruning triggers when len > MAX_REPORTS; returns None on
-    write failure (REPORT_DIR unwritable)
-  - list_reports: newest-first sort; filters out entries whose file is gone;
-    cleans index when files missing; returns [] on error
-  - load_report_html: returns HTML for a known id; None for unknown id; None
-    when file deleted underneath; round-trips unicode
-  - delete_report: removes index entry and file; returns True on success,
-    False for unknown id; tolerates already-deleted files
+    are missing; pruning triggers when count > MAX_REPORTS; returns None
+    on write failure (REPORT_DIR unwritable)
+  - list_reports: newest-first sort; filters out entries whose file is
+    gone; cleans index when files missing; returns [] on error
+  - load_report_html: returns HTML for a known id; None for unknown id;
+    None when file deleted underneath; round-trips unicode
+  - delete_report: removes row and file; returns True on success; False
+    for unknown id; tolerates already-deleted files
   - get_report_stats: empty → zeroed dict; populated → totals, oldest/newest,
     average sentiment, label distribution
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,11 +38,9 @@ from utils.report_history import (
     MAX_REPORTS,
     ReportMeta,
     _attr,
-    _load_index,
     _prune_old_reports,
     _safe_float,
     _safe_int,
-    _save_index,
     delete_report,
     get_report_stats,
     list_reports,
@@ -55,14 +49,21 @@ from utils.report_history import (
 )
 
 
-# ─── Fixture: isolate REPORT_DIR + _INDEX_FILE per test ────────────────────
+# ─── Fixture: isolate REPORT_DIR + SQLite DB per test ──────────────────────
 
 @pytest.fixture(autouse=True)
-def isolated_report_dir(monkeypatch, tmp_path):
-    """Redirect the module-level paths so no test touches real cache/reports."""
-    tmp_dir = tmp_path / "reports"
-    monkeypatch.setattr(rh, "REPORT_DIR", tmp_dir)
-    monkeypatch.setattr(rh, "_INDEX_FILE", tmp_dir / "report_index.json")
+def isolated_storage(monkeypatch, tmp_path):
+    """Redirect both the HTML file dir AND the SQLite DB so no test
+    touches real cache/."""
+    from state import db as state_db
+
+    tmp_reports = tmp_path / "reports"
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_reports)
+    monkeypatch.setattr(rh, "_INDEX_FILE", tmp_reports / "report_index.json")
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "ship_tracker.db")
+    state_db.reset_for_tests()
+    yield
+    state_db.reset_for_tests()
 
 
 # ─── Stand-in report object ────────────────────────────────────────────────
@@ -77,36 +78,68 @@ class _FakeReport:
     data_quality: str = "FULL"
 
 
-def _meta(
-    report_id: str = "rid-1",
+def _insert_meta(
+    report_id: str,
+    file_path: str,
     generated_at: str | None = None,
-    file_path: str = "/tmp/fake.html",
     sentiment_label: str = "BULLISH",
     sentiment_score: float = 0.5,
     file_size_kb: float = 12.5,
+    report_date: str = "Test Date",
+    risk_level: str = "MODERATE",
+    signal_count: int = 3,
+    data_quality: str = "FULL",
 ) -> ReportMeta:
-    """Helper to fabricate a ReportMeta for index-level tests."""
+    """Insert a row directly into the SQLite report_history table.
+    Replaces the old `_save_index([_meta(...)])` pattern."""
+    from state.db import get_connection
+
     if generated_at is None:
         generated_at = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO report_history
+              (report_id, generated_at, report_date, sentiment_label,
+               sentiment_score, risk_level, signal_count, data_quality,
+               file_path, file_size_kb)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (report_id, generated_at, report_date, sentiment_label,
+             sentiment_score, risk_level, signal_count, data_quality,
+             file_path, file_size_kb),
+        )
     return ReportMeta(
         report_id=report_id,
         generated_at=generated_at,
-        report_date="Test Date",
+        report_date=report_date,
         sentiment_label=sentiment_label,
         sentiment_score=sentiment_score,
-        risk_level="MODERATE",
-        signal_count=3,
-        data_quality="FULL",
+        risk_level=risk_level,
+        signal_count=signal_count,
+        data_quality=data_quality,
         file_path=file_path,
         file_size_kb=file_size_kb,
     )
 
 
+def _row_count() -> int:
+    from state.db import get_connection
+    return get_connection().execute(
+        "SELECT COUNT(*) AS n FROM report_history"
+    ).fetchone()["n"]
+
+
 # ─── Dataclass + constants ──────────────────────────────────────────────────
 
 def test_report_meta_shape() -> None:
-    m = _meta()
-    assert m.report_id == "rid-1"
+    m = ReportMeta(
+        report_id="x", generated_at="t", report_date="d",
+        sentiment_label="BULLISH", sentiment_score=0.5, risk_level="LOW",
+        signal_count=3, data_quality="FULL", file_path="/tmp/x",
+        file_size_kb=1.0,
+    )
     assert m.sentiment_label == "BULLISH"
     assert m.signal_count == 3
 
@@ -167,116 +200,65 @@ def test_safe_int_returns_default_for_garbage() -> None:
     assert _safe_int(object(), default=99) == 99
 
 
-# ─── _load_index / _save_index ─────────────────────────────────────────────
-
-def test_load_index_missing_file_returns_empty() -> None:
-    """Fresh fixture: _INDEX_FILE does not exist yet."""
-    assert _load_index() == []
-
-
-def test_save_index_creates_dir_and_writes_json() -> None:
-    m = _meta()
-    _save_index([m])
-    assert rh._INDEX_FILE.exists()
-    parsed = json.loads(rh._INDEX_FILE.read_text(encoding="utf-8"))
-    assert isinstance(parsed, list)
-    assert parsed[0]["report_id"] == "rid-1"
-
-
-def test_save_and_load_index_round_trip() -> None:
-    a = _meta(report_id="a", sentiment_label="BULLISH")
-    b = _meta(report_id="b", sentiment_label="BEARISH")
-    _save_index([a, b])
-    loaded = _load_index()
-    assert len(loaded) == 2
-    assert {m.report_id for m in loaded} == {"a", "b"}
-
-
-def test_load_index_corrupt_json_returns_empty() -> None:
-    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    rh._INDEX_FILE.write_text("not valid json {{", encoding="utf-8")
-    assert _load_index() == []
-
-
-def test_load_index_skips_malformed_entries() -> None:
-    """Index containing both a good and a malformed record yields only the good one."""
-    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = [
-        {  # good
-            "report_id": "ok",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "report_date": "x",
-            "sentiment_label": "BULLISH",
-            "sentiment_score": 0.5,
-            "risk_level": "LOW",
-            "signal_count": 1,
-            "data_quality": "FULL",
-            "file_path": "/tmp/x.html",
-            "file_size_kb": 1.0,
-        },
-        {"missing": "everything"},  # malformed → skipped
-    ]
-    rh._INDEX_FILE.write_text(json.dumps(payload), encoding="utf-8")
-    loaded = _load_index()
-    assert len(loaded) == 1
-    assert loaded[0].report_id == "ok"
-
-
-# ─── _prune_old_reports ─────────────────────────────────────────────────────
+# ─── _prune_old_reports (SQLite-backed) ────────────────────────────────────
 
 def test_prune_noop_when_at_or_below_cap(monkeypatch) -> None:
+    """Fewer rows than MAX_REPORTS → no deletion."""
     monkeypatch.setattr(rh, "MAX_REPORTS", 5)
-    metas = [_meta(report_id=f"r{i}") for i in range(3)]
-    out = _prune_old_reports(metas)
-    assert len(out) == 3
+    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        f = rh.REPORT_DIR / f"r{i}.html"
+        f.write_text("<html>", encoding="utf-8")
+        _insert_meta(f"r{i}", str(f))
+    _prune_old_reports()
+    assert _row_count() == 3
 
 
 def test_prune_keeps_only_newest_n(monkeypatch) -> None:
+    """More rows than MAX_REPORTS → newest two survive."""
     monkeypatch.setattr(rh, "MAX_REPORTS", 2)
+    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     base = datetime.now(timezone.utc)
-    metas = [
-        _meta(report_id=f"r{i}",
-              generated_at=(base + timedelta(seconds=i)).isoformat())
-        for i in range(5)
-    ]
-    out = _prune_old_reports(metas)
-    assert len(out) == 2
-    # Newest two are r3 and r4 (largest timestamps)
-    kept = {m.report_id for m in out}
-    assert kept == {"r3", "r4"}
+    for i in range(5):
+        f = rh.REPORT_DIR / f"r{i}.html"
+        f.write_text("<html>", encoding="utf-8")
+        _insert_meta(
+            f"r{i}", str(f),
+            generated_at=(base + timedelta(seconds=i)).isoformat(),
+        )
+    _prune_old_reports()
+    # r3 and r4 have the largest timestamps
+    survivors = {m.report_id for m in list_reports()}
+    assert survivors == {"r3", "r4"}
 
 
-def test_prune_deletes_files_for_pruned_entries(monkeypatch, tmp_path) -> None:
+def test_prune_deletes_files_for_pruned_entries(monkeypatch) -> None:
     monkeypatch.setattr(rh, "MAX_REPORTS", 1)
+    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     base = datetime.now(timezone.utc)
-    f_old = tmp_path / "old.html"
-    f_new = tmp_path / "new.html"
+    f_old = rh.REPORT_DIR / "old.html"
+    f_new = rh.REPORT_DIR / "new.html"
     f_old.write_text("old", encoding="utf-8")
     f_new.write_text("new", encoding="utf-8")
+    _insert_meta("old", str(f_old), generated_at=base.isoformat())
+    _insert_meta("new", str(f_new),
+                 generated_at=(base + timedelta(seconds=10)).isoformat())
 
-    metas = [
-        _meta(report_id="old", file_path=str(f_old),
-              generated_at=base.isoformat()),
-        _meta(report_id="new", file_path=str(f_new),
-              generated_at=(base + timedelta(seconds=10)).isoformat()),
-    ]
-    _prune_old_reports(metas)
+    _prune_old_reports()
     assert not f_old.exists(), "pruned file should be deleted"
     assert f_new.exists(), "kept file should remain"
 
 
 def test_prune_tolerates_missing_files(monkeypatch) -> None:
-    """A pruned entry pointing at a nonexistent file must not raise."""
+    """A pruned row pointing at a nonexistent file must not raise."""
     monkeypatch.setattr(rh, "MAX_REPORTS", 1)
     base = datetime.now(timezone.utc)
-    metas = [
-        _meta(report_id="ghost", file_path="/nonexistent/path/x.html",
-              generated_at=base.isoformat()),
-        _meta(report_id="kept", file_path="/nonexistent/path/y.html",
-              generated_at=(base + timedelta(seconds=5)).isoformat()),
-    ]
-    out = _prune_old_reports(metas)  # should not raise
-    assert len(out) == 1
+    _insert_meta("ghost", "/nonexistent/path/x.html",
+                 generated_at=base.isoformat())
+    _insert_meta("kept", "/nonexistent/path/y.html",
+                 generated_at=(base + timedelta(seconds=5)).isoformat())
+    _prune_old_reports()  # must not raise
+    assert _row_count() == 1
 
 
 # ─── save_report ────────────────────────────────────────────────────────────
@@ -292,11 +274,10 @@ def test_save_report_writes_file_and_returns_meta() -> None:
     assert Path(meta.file_path).read_text(encoding="utf-8") == "<html>hi</html>"
 
 
-def test_save_report_appends_to_index() -> None:
+def test_save_report_inserts_row() -> None:
     save_report("<a>", _FakeReport())
     save_report("<b>", _FakeReport())
-    loaded = _load_index()
-    assert len(loaded) == 2
+    assert _row_count() == 2
 
 
 def test_save_report_uses_safe_defaults_for_bare_object() -> None:
@@ -339,7 +320,6 @@ def test_save_report_returns_none_when_dir_unwritable(monkeypatch) -> None:
     """If REPORT_DIR cannot be created, save_report swallows and returns None."""
     bad = Path("/proc/should_not_exist/cannot_make")
     monkeypatch.setattr(rh, "REPORT_DIR", bad)
-    monkeypatch.setattr(rh, "_INDEX_FILE", bad / "report_index.json")
     assert save_report("<html>", _FakeReport()) is None
 
 
@@ -349,53 +329,45 @@ def test_save_report_triggers_pruning(monkeypatch) -> None:
     save_report("<a>", _FakeReport())
     save_report("<b>", _FakeReport())
     save_report("<c>", _FakeReport())
-    loaded = _load_index()
-    assert len(loaded) == 2
+    assert _row_count() == 2
 
 
 # ─── list_reports ──────────────────────────────────────────────────────────
 
-def test_list_reports_empty_when_no_index() -> None:
+def test_list_reports_empty_when_no_rows() -> None:
     assert list_reports() == []
 
 
 def test_list_reports_sorts_newest_first() -> None:
+    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     base = datetime.now(timezone.utc)
-    # Save three reports, then rewrite their generated_at to fixed values
-    m1 = save_report("<1>", _FakeReport())
-    m2 = save_report("<2>", _FakeReport())
-    m3 = save_report("<3>", _FakeReport())
-    assert m1 and m2 and m3
-    forged = [
-        _meta(report_id=m1.report_id, file_path=m1.file_path,
-              generated_at=base.isoformat()),
-        _meta(report_id=m2.report_id, file_path=m2.file_path,
-              generated_at=(base + timedelta(seconds=5)).isoformat()),
-        _meta(report_id=m3.report_id, file_path=m3.file_path,
-              generated_at=(base + timedelta(seconds=10)).isoformat()),
-    ]
-    _save_index(forged)
+    files = []
+    for i in range(3):
+        f = rh.REPORT_DIR / f"r{i}.html"
+        f.write_text("<html>", encoding="utf-8")
+        files.append(f)
+        _insert_meta(
+            f"r{i}", str(f),
+            generated_at=(base + timedelta(seconds=i * 5)).isoformat(),
+        )
     out = list_reports()
-    assert [m.report_id for m in out] == [m3.report_id, m2.report_id, m1.report_id]
+    # Newest first: r2, r1, r0
+    assert [m.report_id for m in out] == ["r2", "r1", "r0"]
 
 
 def test_list_reports_filters_out_missing_files(tmp_path) -> None:
-    """If an HTML file is deleted out from under the index, the entry is
-    removed and the cleaned index is persisted."""
+    """If an HTML file is deleted, the row is removed from the SQLite
+    index and the cleaned list is returned."""
     rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     real = rh.REPORT_DIR / "real.html"
     real.write_text("<html>", encoding="utf-8")
-    metas = [
-        _meta(report_id="real", file_path=str(real)),
-        _meta(report_id="ghost", file_path=str(tmp_path / "gone.html")),
-    ]
-    _save_index(metas)
+    _insert_meta("real", str(real))
+    _insert_meta("ghost", str(tmp_path / "gone.html"))
 
     out = list_reports()
     assert {m.report_id for m in out} == {"real"}
     # Persisted cleanup
-    on_disk = _load_index()
-    assert {m.report_id for m in on_disk} == {"real"}
+    assert _row_count() == 1
 
 
 # ─── load_report_html ──────────────────────────────────────────────────────
@@ -426,7 +398,7 @@ def test_load_report_html_round_trips_unicode() -> None:
     assert load_report_html(meta.report_id) == body
 
 
-def test_load_report_html_empty_index_returns_none() -> None:
+def test_load_report_html_empty_db_returns_none() -> None:
     assert load_report_html("anything") is None
 
 
@@ -441,27 +413,25 @@ def test_delete_report_removes_entry_and_file() -> None:
     ok = delete_report(meta.report_id)
     assert ok is True
     assert not path.exists()
-    loaded = _load_index()
-    assert all(m.report_id != meta.report_id for m in loaded)
+    assert _row_count() == 0
 
 
 def test_delete_report_unknown_id_returns_false() -> None:
     save_report("<html>", _FakeReport())
     assert delete_report("never-existed") is False
-    # Index intact
-    assert len(_load_index()) == 1
+    assert _row_count() == 1
 
 
 def test_delete_report_tolerates_already_missing_file() -> None:
     meta = save_report("<html>", _FakeReport())
     assert meta is not None
     Path(meta.file_path).unlink()
-    # The file is gone, but the entry must still be removed cleanly.
+    # The file is gone, but the row must still be removed cleanly.
     assert delete_report(meta.report_id) is True
-    assert _load_index() == []
+    assert _row_count() == 0
 
 
-def test_delete_report_empty_index_returns_false() -> None:
+def test_delete_report_empty_db_returns_false() -> None:
     assert delete_report("any-id") is False
 
 
@@ -480,7 +450,6 @@ def test_get_report_stats_empty_returns_zeroed_dict() -> None:
 def test_get_report_stats_aggregates_totals() -> None:
     rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     base = datetime.now(timezone.utc)
-    metas = []
     for i, (label, score) in enumerate([
         ("BULLISH", 0.6),
         ("BULLISH", 0.4),
@@ -488,15 +457,13 @@ def test_get_report_stats_aggregates_totals() -> None:
     ]):
         f = rh.REPORT_DIR / f"r{i}.html"
         f.write_text("<html>", encoding="utf-8")
-        metas.append(_meta(
-            report_id=f"r{i}",
-            file_path=str(f),
+        _insert_meta(
+            f"r{i}", str(f),
             generated_at=(base + timedelta(seconds=i)).isoformat(),
             sentiment_label=label,
             sentiment_score=score,
             file_size_kb=1024.0,  # 1 MB each
-        ))
-    _save_index(metas)
+        )
 
     stats = get_report_stats()
     assert stats["total_reports"] == 3
@@ -512,13 +479,8 @@ def test_get_report_stats_excludes_entries_with_missing_files() -> None:
     rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
     real = rh.REPORT_DIR / "real.html"
     real.write_text("<html>", encoding="utf-8")
-    metas = [
-        _meta(report_id="real", file_path=str(real), file_size_kb=512.0),
-        _meta(report_id="ghost", file_path="/no/such/file.html",
-              file_size_kb=999.0),
-    ]
-    _save_index(metas)
+    _insert_meta("real", str(real), file_size_kb=512.0)
+    _insert_meta("ghost", "/no/such/file.html", file_size_kb=999.0)
     stats = get_report_stats()
     assert stats["total_reports"] == 1
-    # 512 KB → 0.5 MB
     assert stats["total_size_mb"] == 0.5

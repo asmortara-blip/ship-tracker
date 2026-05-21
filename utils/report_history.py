@@ -1,17 +1,18 @@
 """Report history — save, load, list, and delete generated investor reports.
 
-Reports are stored as HTML files under cache/reports/.  A JSON sidecar index
-(report_index.json) tracks metadata for every saved report so the UI can
-display history without re-reading every HTML file.
+Reports are stored as HTML files under cache/reports/. Metadata for every
+saved report lives in the SQLite ``report_history`` table (see ``state.db``).
+The legacy ``report_index.json`` is no longer written; on first migration
+its contents are imported into SQLite and the JSON file is left in place
+as a safety net.
 
 The module is intentionally crash-proof: every public function catches all
 exceptions and returns a sensible default (empty list, None, False, {}).
 """
 from __future__ import annotations
 
-import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,6 +29,9 @@ if TYPE_CHECKING:
 
 REPORT_DIR: Path = Path(__file__).parent.parent / "cache" / "reports"
 MAX_REPORTS: int = 30  # keep the last N reports on disk
+
+# Legacy path — kept so state.migrations can find it on first run. Production
+# reads/writes go through SQLite.
 _INDEX_FILE: Path = REPORT_DIR / "report_index.json"
 
 
@@ -53,8 +57,24 @@ class ReportMeta:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _row_to_meta(row) -> ReportMeta:
+    """Map a sqlite3.Row from the report_history table to a ReportMeta."""
+    return ReportMeta(
+        report_id=row["report_id"],
+        generated_at=row["generated_at"],
+        report_date=row["report_date"],
+        sentiment_label=row["sentiment_label"],
+        sentiment_score=float(row["sentiment_score"]),
+        risk_level=row["risk_level"],
+        signal_count=int(row["signal_count"]),
+        data_quality=row["data_quality"],
+        file_path=row["file_path"],
+        file_size_kb=float(row["file_size_kb"]),
+    )
+
+
 def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
-    """Persist *html_content* to disk and update the report index.
+    """Persist *html_content* to disk and insert a row in report_history.
 
     Args:
         html_content: Fully rendered HTML string.
@@ -65,6 +85,8 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
         A populated ReportMeta on success, or None if saving fails.
     """
     try:
+        from state.db import get_connection
+
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
         report_id = str(uuid.uuid4())
@@ -77,7 +99,6 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
         file_path.write_text(html_content, encoding="utf-8")
         file_size_kb = round(file_path.stat().st_size / 1024, 2)
 
-        # Extract metadata from report_obj with safe fallbacks
         meta = ReportMeta(
             report_id=report_id,
             generated_at=now.isoformat(),
@@ -91,11 +112,25 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
             file_size_kb=file_size_kb,
         )
 
-        # Update persistent index
-        existing = _load_index()
-        existing.append(meta)
-        existing = _prune_old_reports(existing)
-        _save_index(existing)
+        conn = get_connection()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO report_history
+                  (report_id, generated_at, report_date, sentiment_label,
+                   sentiment_score, risk_level, signal_count, data_quality,
+                   file_path, file_size_kb)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (meta.report_id, meta.generated_at, meta.report_date,
+                 meta.sentiment_label, meta.sentiment_score, meta.risk_level,
+                 meta.signal_count, meta.data_quality, meta.file_path,
+                 meta.file_size_kb),
+            )
+
+        # Prune any rows over MAX_REPORTS, oldest first. Also delete the
+        # pruned files from disk.
+        _prune_old_reports()
 
         logger.info(
             f"Report saved: {filename} "
@@ -111,17 +146,32 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
 def list_reports() -> list[ReportMeta]:
     """Return all saved reports sorted newest-first, skipping missing files.
 
-    Returns:
-        List of ReportMeta; empty list on any error.
+    If any rows reference files that have been deleted outside this module,
+    those rows are removed from the SQLite index before returning.
     """
     try:
-        entries = _load_index()
-        # Filter entries whose HTML file has been deleted outside this module
-        valid = [e for e in entries if Path(e.file_path).exists()]
-        if len(valid) != len(entries):
-            # Persist the cleaned index
-            _save_index(valid)
-        return sorted(valid, key=lambda m: m.generated_at, reverse=True)
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT * FROM report_history ORDER BY generated_at DESC"
+        ).fetchall()
+        valid: list[ReportMeta] = []
+        stale_ids: list[str] = []
+        for r in rows:
+            meta = _row_to_meta(r)
+            if Path(meta.file_path).exists():
+                valid.append(meta)
+            else:
+                stale_ids.append(meta.report_id)
+
+        if stale_ids:
+            with conn:
+                conn.executemany(
+                    "DELETE FROM report_history WHERE report_id = ?",
+                    [(rid,) for rid in stale_ids],
+                )
+        return valid
     except Exception as exc:
         logger.error(f"list_reports failed: {exc}")
         return []
@@ -134,16 +184,21 @@ def load_report_html(report_id: str) -> str | None:
         HTML string, or None if the report is not found or unreadable.
     """
     try:
-        entries = _load_index()
-        for meta in entries:
-            if meta.report_id == report_id:
-                path = Path(meta.file_path)
-                if not path.exists():
-                    logger.warning(f"load_report_html: file missing for {report_id}")
-                    return None
-                return path.read_text(encoding="utf-8")
-        logger.debug(f"load_report_html: report_id not found: {report_id}")
-        return None
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT file_path FROM report_history WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        if row is None:
+            logger.debug(f"load_report_html: report_id not found: {report_id}")
+            return None
+        path = Path(row["file_path"])
+        if not path.exists():
+            logger.warning(f"load_report_html: file missing for {report_id}")
+            return None
+        return path.read_text(encoding="utf-8")
     except Exception as exc:
         logger.error(f"load_report_html failed for {report_id}: {exc}")
         return None
@@ -156,21 +211,30 @@ def delete_report(report_id: str) -> bool:
         True if the report was found and removed; False otherwise.
     """
     try:
-        entries = _load_index()
-        to_delete = [e for e in entries if e.report_id == report_id]
-        if not to_delete:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT file_path FROM report_history WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        if row is None:
             logger.debug(f"delete_report: report_id not found: {report_id}")
             return False
 
-        remaining = [e for e in entries if e.report_id != report_id]
+        with conn:
+            conn.execute(
+                "DELETE FROM report_history WHERE report_id = ?",
+                (report_id,),
+            )
 
-        for meta in to_delete:
-            path = Path(meta.file_path)
-            if path.exists():
+        path = Path(row["file_path"])
+        if path.exists():
+            try:
                 path.unlink()
                 logger.info(f"Deleted report file: {path.name}")
-
-        _save_index(remaining)
+            except Exception as exc:
+                logger.warning(f"Could not unlink {path}: {exc}")
         return True
     except Exception as exc:
         logger.error(f"delete_report failed for {report_id}: {exc}")
@@ -185,7 +249,7 @@ def get_report_stats() -> dict:
         avg_sentiment_score, sentiment_distribution
     """
     try:
-        entries = list_reports()  # already filtered and sorted newest-first
+        entries = list_reports()  # already filtered + sorted newest-first
         if not entries:
             return {
                 "total_reports": 0,
@@ -231,61 +295,42 @@ def get_report_stats() -> dict:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _prune_old_reports(meta_list: list[ReportMeta]) -> list[ReportMeta]:
-    """Keep only the MAX_REPORTS most recent entries; delete pruned files."""
-    if len(meta_list) <= MAX_REPORTS:
-        return meta_list
-
-    # Sort newest-first so we can slice off the tail
-    sorted_list = sorted(meta_list, key=lambda m: m.generated_at, reverse=True)
-    keep = sorted_list[:MAX_REPORTS]
-    prune = sorted_list[MAX_REPORTS:]
-
-    for meta in prune:
-        try:
-            path = Path(meta.file_path)
-            if path.exists():
-                path.unlink()
-                logger.debug(f"Pruned old report: {path.name}")
-        except Exception as exc:
-            logger.warning(f"Could not delete pruned report {meta.file_path}: {exc}")
-
-    return keep
-
-
-def _save_index(meta_list: list[ReportMeta]) -> None:
-    """Serialize the metadata list to report_index.json."""
+def _prune_old_reports() -> None:
+    """Keep only the MAX_REPORTS most recent rows; delete pruned files."""
     try:
-        REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        payload = [asdict(m) for m in meta_list]
-        _INDEX_FILE.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.error(f"_save_index failed: {exc}")
+        from state.db import get_connection
 
+        conn = get_connection()
+        # Find rows beyond the MAX_REPORTS newest
+        rows = conn.execute(
+            """
+            SELECT report_id, file_path FROM report_history
+            ORDER BY generated_at DESC
+            LIMIT -1 OFFSET ?
+            """,
+            (MAX_REPORTS,),
+        ).fetchall()
 
-def _load_index() -> list[ReportMeta]:
-    """Deserialize report_index.json into a list of ReportMeta.
+        if not rows:
+            return
 
-    Returns an empty list if the file is absent or corrupted.
-    """
-    try:
-        if not _INDEX_FILE.exists():
-            return []
-        raw = _INDEX_FILE.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-        result: list[ReportMeta] = []
-        for item in payload:
+        with conn:
+            conn.executemany(
+                "DELETE FROM report_history WHERE report_id = ?",
+                [(r["report_id"],) for r in rows],
+            )
+
+        # Delete pruned files from disk (best-effort).
+        for r in rows:
             try:
-                result.append(ReportMeta(**item))
-            except Exception as item_exc:
-                logger.warning(f"Skipping malformed index entry: {item_exc}")
-        return result
+                path = Path(r["file_path"])
+                if path.exists():
+                    path.unlink()
+                    logger.debug(f"Pruned old report: {path.name}")
+            except Exception as exc:
+                logger.warning(f"Could not delete pruned report {r['file_path']}: {exc}")
     except Exception as exc:
-        logger.error(f"_load_index failed: {exc}")
-        return []
+        logger.error(f"_prune_old_reports failed: {exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,325 @@
+"""Tests for state.db + state.migrations — the shared SQLite layer.
+
+Covers:
+  - state.db.get_connection: lazy open, idempotent on repeat calls,
+    creates the parent dir, WAL mode enabled, schema initialized
+  - state.db.reset_for_tests: drops the cached connection so the next
+    call re-opens against a (possibly newly-patched) DB_PATH
+  - Schema: all four tables present (kv_state, alerts, alert_rules,
+    report_history); schema_version stamped after init
+  - state.migrations: JSON → SQLite import is idempotent, handles
+    missing files, malformed records, and partial schemas
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(monkeypatch, tmp_path):
+    """Every test gets a fresh DB pointed at a per-test tmp_path."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "ship_tracker.db")
+    state_db.reset_for_tests()
+    yield
+    state_db.reset_for_tests()
+
+
+# ─── get_connection ────────────────────────────────────────────────────────
+
+def test_get_connection_creates_parent_dir(tmp_path, monkeypatch) -> None:
+    from state import db as state_db
+
+    nested = tmp_path / "nested" / "deeper" / "ship_tracker.db"
+    monkeypatch.setattr(state_db, "DB_PATH", nested)
+    state_db.reset_for_tests()
+
+    conn = state_db.get_connection()
+    assert nested.parent.exists()
+    assert nested.exists()
+    assert conn is not None
+
+
+def test_get_connection_is_idempotent() -> None:
+    from state.db import get_connection
+
+    a = get_connection()
+    b = get_connection()
+    assert a is b
+
+
+def test_reset_for_tests_drops_cached_connection(tmp_path, monkeypatch) -> None:
+    from state import db as state_db
+
+    a = state_db.get_connection()
+    state_db.reset_for_tests()
+    # Point at a different file so we know a NEW connection opened
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "second.db")
+    b = state_db.get_connection()
+    assert a is not b
+
+
+def test_connection_uses_wal_mode() -> None:
+    from state.db import get_connection
+
+    conn = get_connection()
+    row = conn.execute("PRAGMA journal_mode").fetchone()
+    # SQLite returns the active journal_mode as the first column
+    assert row[0].lower() == "wal"
+
+
+# ─── Schema ────────────────────────────────────────────────────────────────
+
+def test_all_tables_exist_after_init() -> None:
+    from state.db import get_connection
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    table_names = {r["name"] for r in rows}
+    assert {"kv_state", "alerts", "alert_rules", "report_history"} <= table_names
+
+
+def test_schema_version_stamped_after_init() -> None:
+    from state.db import SCHEMA_VERSION, get_connection
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert row is not None
+    assert int(row["value"]) == SCHEMA_VERSION
+
+
+def test_alerts_table_has_indexes() -> None:
+    from state.db import get_connection
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='alerts'"
+    ).fetchall()
+    idx_names = {r["name"] for r in rows}
+    assert "idx_alerts_created_at" in idx_names
+    assert "idx_alerts_unacknowledged" in idx_names
+
+
+def test_foreign_keys_enabled() -> None:
+    from state.db import get_connection
+
+    conn = get_connection()
+    row = conn.execute("PRAGMA foreign_keys").fetchone()
+    assert row[0] == 1
+
+
+# ─── Migrations: alerts.json import ───────────────────────────────────────
+
+def test_migration_imports_alerts_json(tmp_path, monkeypatch) -> None:
+    """Synthesize a legacy alerts.json under the project root, run the
+    migration via the schema init path, verify the rows landed in SQLite."""
+    from state import db as state_db
+    from state import migrations as migr
+
+    # Build a synthetic legacy file at the path the migration helper reads
+    legacy = tmp_path / "alerts.json"
+    legacy.write_text(json.dumps([
+        {
+            "alert_id": "a1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "alert_type": "BDI_MOVE",
+            "severity": "HIGH",
+            "title": "T1",
+            "body": "B1",
+            "ticker": "ZIM",
+            "value": 1.5,
+            "threshold": 1.0,
+            "change_pct": 50.0,
+            "acknowledged": False,
+        },
+        {
+            "alert_id": "a2",
+            "created_at": "2026-01-02T00:00:00+00:00",
+            "alert_type": "RATE_SURGE",
+            "severity": "CRITICAL",
+            "title": "T2",
+            "body": "B2",
+            "acknowledged": True,
+        },
+    ]), encoding="utf-8")
+    monkeypatch.setattr(migr, "_ALERTS_JSON", legacy)
+
+    # Force a fresh DB so the migration runs on next get_connection
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    rows = conn.execute(
+        "SELECT alert_id, severity, acknowledged FROM alerts ORDER BY alert_id"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["alert_id"] == "a1"
+    assert rows[0]["acknowledged"] == 0
+    assert rows[1]["alert_id"] == "a2"
+    assert rows[1]["acknowledged"] == 1
+
+
+def test_migration_is_idempotent_via_schema_version(tmp_path, monkeypatch) -> None:
+    """Once schema_version is stamped at SCHEMA_VERSION, subsequent
+    get_connection() calls must NOT re-run migrations."""
+    from state import db as state_db
+    from state import migrations as migr
+
+    # First run with a legacy file present
+    legacy = tmp_path / "alerts.json"
+    legacy.write_text(json.dumps([{
+        "alert_id": "a1",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "alert_type": "BDI_MOVE",
+        "severity": "HIGH",
+        "title": "t", "body": "b",
+    }]), encoding="utf-8")
+    monkeypatch.setattr(migr, "_ALERTS_JSON", legacy)
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    # Reset cached connection but DO NOT delete the DB file. Now mutate
+    # the legacy file to add a NEW alert and confirm it does NOT come in.
+    state_db.reset_for_tests()
+    legacy.write_text(json.dumps([
+        {"alert_id": "a1", "created_at": "x", "alert_type": "X",
+         "severity": "LOW", "title": "t", "body": "b"},
+        {"alert_id": "a_new", "created_at": "y", "alert_type": "X",
+         "severity": "LOW", "title": "t", "body": "b"},
+    ]), encoding="utf-8")
+    conn = state_db.get_connection()
+    rows = conn.execute("SELECT alert_id FROM alerts").fetchall()
+    ids = {r["alert_id"] for r in rows}
+    # Only a1 imported on the first run; a_new must NOT appear because
+    # schema_version >= 1 short-circuits the migration.
+    assert "a1" in ids
+    assert "a_new" not in ids
+
+
+def test_migration_imports_rules_json(tmp_path, monkeypatch) -> None:
+    from state import db as state_db
+    from state import migrations as migr
+
+    legacy = tmp_path / "rules.json"
+    legacy.write_text(json.dumps([
+        {"rule_id": "r1", "name": "Rule 1", "enabled": True},
+        {"id": "r2", "name": "Rule 2", "enabled": False},  # 'id' key fallback
+        {"name": "Rule 3 with no id"},  # skipped
+    ]), encoding="utf-8")
+    monkeypatch.setattr(migr, "_RULES_JSON", legacy)
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    rows = conn.execute(
+        "SELECT rule_id FROM alert_rules ORDER BY rule_id"
+    ).fetchall()
+    ids = {r["rule_id"] for r in rows}
+    assert ids == {"r1", "r2"}
+
+
+def test_migration_imports_report_history(tmp_path, monkeypatch) -> None:
+    from state import db as state_db
+    from state import migrations as migr
+
+    legacy = tmp_path / "report_index.json"
+    legacy.write_text(json.dumps([
+        {
+            "report_id": "rpt-1",
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "report_date": "January 1, 2026",
+            "sentiment_label": "BULLISH",
+            "sentiment_score": 0.7,
+            "risk_level": "LOW",
+            "signal_count": 5,
+            "data_quality": "FULL",
+            "file_path": "/tmp/r.html",
+            "file_size_kb": 12.5,
+        },
+    ]), encoding="utf-8")
+    monkeypatch.setattr(migr, "_REPORT_INDEX_JSON", legacy)
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    row = conn.execute(
+        "SELECT * FROM report_history WHERE report_id = 'rpt-1'"
+    ).fetchone()
+    assert row is not None
+    assert row["sentiment_label"] == "BULLISH"
+    assert row["signal_count"] == 5
+    assert row["file_size_kb"] == 12.5
+
+
+def test_migration_handles_missing_legacy_files(tmp_path, monkeypatch) -> None:
+    """No legacy files → migration runs without error, tables are empty."""
+    from state import db as state_db
+    from state import migrations as migr
+
+    monkeypatch.setattr(migr, "_ALERTS_JSON", tmp_path / "does_not_exist_alerts.json")
+    monkeypatch.setattr(migr, "_RULES_JSON", tmp_path / "does_not_exist_rules.json")
+    monkeypatch.setattr(migr, "_REPORT_INDEX_JSON", tmp_path / "does_not_exist_index.json")
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    assert conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM alert_rules").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM report_history").fetchone()["n"] == 0
+
+
+def test_migration_skips_malformed_records(tmp_path, monkeypatch) -> None:
+    """A legacy file with mixed good/bad records imports only the good ones."""
+    from state import db as state_db
+    from state import migrations as migr
+
+    legacy = tmp_path / "alerts.json"
+    legacy.write_text(json.dumps([
+        {"alert_id": "good", "created_at": "x", "alert_type": "T",
+         "severity": "LOW", "title": "t", "body": "b"},
+        "not a dict",  # skipped
+        {"missing_alert_id": True},  # skipped
+    ]), encoding="utf-8")
+    monkeypatch.setattr(migr, "_ALERTS_JSON", legacy)
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    ids = {r["alert_id"] for r in conn.execute(
+        "SELECT alert_id FROM alerts"
+    ).fetchall()}
+    assert ids == {"good"}
+
+
+def test_migration_handles_non_list_payload(tmp_path, monkeypatch) -> None:
+    """If a legacy file contains a dict instead of a list, migration
+    skips it silently rather than crashing."""
+    from state import db as state_db
+    from state import migrations as migr
+
+    bad = tmp_path / "alerts.json"
+    bad.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
+    monkeypatch.setattr(migr, "_ALERTS_JSON", bad)
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # must not raise
+    assert conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()["n"] == 0
+
+
+def test_migration_handles_corrupt_json(tmp_path, monkeypatch) -> None:
+    from state import db as state_db
+    from state import migrations as migr
+
+    bad = tmp_path / "alerts.json"
+    bad.write_text("not valid json {{{ at all", encoding="utf-8")
+    monkeypatch.setattr(migr, "_ALERTS_JSON", bad)
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "fresh.db")
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # must not raise
+    assert conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()["n"] == 0
