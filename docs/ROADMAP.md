@@ -60,7 +60,7 @@ Plumbing that unlocks every downstream track.
 - [ ] `tab_nowcast.py` — Trade Nowcast
 - [x] `tab_idea_engine.py` — Signal-to-Trade Ideas (wired as 6th tab in Disruption Alpha section). Synthesizes disruption_cascade ideas + scenario overlay (sidebar-controlled) + portfolio_optimizer mini. Hero / ranked table with Δ vs scenario / per-idea cascade rationale expanders / max-Sharpe weights on top bullish names.
 - [ ] `tab_risk_lab.py` — Risk Lab
-- [ ] `tab_briefing.py` — Daily Briefing (LLM-narrated)
+- [x] `tab_briefing.py` — Daily Briefing (LLM-narrated) (added as 2nd tab in Dashboard section). Editorial-typography surface for engine.narration_engine: serif headline, multi-paragraph body, 3-col sections grid, transparency panel showing the SSI + top forecasts + indicators the LLM saw, force-refresh button that bypasses the day cache, source meta (model / tokens / generated_at).
 - [ ] Cross-tab filter bar (reads from `state/session.py`)
 - [ ] "Export this view" PDF on every tab
 

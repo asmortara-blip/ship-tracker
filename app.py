@@ -888,7 +888,10 @@ st.markdown(f"""
 
 # ── 1. Dashboard ──────────────────────────────────────────────────────────
 if active_section == "dashboard":
-    t0, t1, t2, t3, t4 = st.tabs(["Overview", "Market Commentary", "Scorecard", "Live Feed", "Data Health"])
+    t0, t_brief, t1, t2, t3, t4 = st.tabs([
+        "Overview", "Daily Briefing", "Market Commentary",
+        "Scorecard", "Live Feed", "Data Health",
+    ])
     with t0:
         try:
             from ui.tab_overview import render as _r
@@ -897,6 +900,16 @@ if active_section == "dashboard":
                stock_data=stock_data, alerts=alerts)
         except Exception as e:
             st.error(f"Overview error: {e}")
+    with t_brief:
+        try:
+            from ui.tab_briefing import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Daily Briefing error: {e}")
     with t1:
         try:
             from ui.tab_commentary import render as _r
