@@ -721,6 +721,138 @@ def _render_cold_start() -> None:
         st.info("Dashboard loading -- configure API credentials to enable live data.")
 
 
+# ── Daily Briefing (LLM-narrated; template fallback) ────────────────────────
+def _render_daily_briefing(port_results, route_results, freight_data, macro_data) -> None:
+    """Pulls SSI + route forecasts, hands them to engine.narration_engine's
+    LLM-narrated daily-briefing path, and renders the output as a clean
+    panel. Falls back to a template-based briefing when no API key is
+    configured — the UI always shows something.
+    """
+    try:
+        from engine.narration_engine import (
+            NarrationContext,
+            generate_daily_narration,
+        )
+
+        # ── Assemble the NarrationContext from existing platform signals ──
+        stress_report = None
+        forecasts: list = []
+        try:
+            from processing.shipping_stress_index import compute_shipping_stress
+            stress_report = compute_shipping_stress(
+                freight_data, macro_data, port_results, route_results,
+            )
+        except Exception as exc:
+            logger.debug(f"daily_briefing: SSI compute failed: {exc}")
+
+        try:
+            from processing.disruption_forecast import forecast_all_stress
+            all_forecasts = forecast_all_stress(
+                freight_data, macro_data, route_results, stress_report=stress_report,
+            )
+            # Sort by absolute 30d stress descending; take the top 5.
+            forecasts = sorted(
+                all_forecasts, key=lambda f: getattr(f, "stress_30d", 0.0),
+                reverse=True,
+            )[:5]
+        except Exception as exc:
+            logger.debug(f"daily_briefing: forecast compute failed: {exc}")
+
+        # Notable headline indicators from macro / freight feeds, if present.
+        notable: dict[str, float] = {}
+        try:
+            if isinstance(macro_data, dict):
+                for k in ("BDIY", "BDI", "WCI", "FBX", "SCFI"):
+                    df = macro_data.get(k)
+                    if df is not None and not getattr(df, "empty", True):
+                        if "value" in getattr(df, "columns", []):
+                            notable[k] = float(df["value"].dropna().iloc[-1])
+        except Exception:
+            pass
+
+        ctx = NarrationContext(
+            stress_report=stress_report,
+            top_forecasts=forecasts,
+            notable_indicators=notable,
+        )
+        narration = generate_daily_narration(ctx)
+
+        # ── Render ────────────────────────────────────────────────────────
+        section_header(
+            "Daily Briefing",
+            subtitle="LLM-narrated synthesis of today's shipping signals. "
+            "Falls back to a deterministic template when no API key is configured.",
+        )
+
+        # Source badge: claude (green) or template (amber)
+        source_label = {
+            "claude":   ("LLM", C_HIGH),
+            "template": ("Template", C_MOD),
+        }.get(narration.source, ("Unknown", C_TEXT3))
+        meta_bits = [f"{source_label[0]}"]
+        if narration.source == "claude" and narration.model:
+            meta_bits.append(f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{narration.model}</code>")
+        if narration.tokens_in or narration.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{narration.tokens_in}→{narration.tokens_out} tok</span>"
+            )
+
+        # Headline card
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.08);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: <span style="color:{source_label[1]}">{source_label[0]}</span>'
+            f' · {narration.date}'
+            f'{" · " + meta_bits[1] if len(meta_bits) > 1 else ""}'
+            f'{" · " + meta_bits[2] if len(meta_bits) > 2 else ""}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.1rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600">{narration.headline}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Body — render the multi-paragraph text with proper paragraph breaks
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in narration.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="margin:0 0 14px 0">{body_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Sections — 2-column grid for compactness
+        if narration.sections:
+            n_sec = len(narration.sections)
+            cols = st.columns(min(n_sec, 2), gap="medium")
+            for i, sec in enumerate(narration.sections):
+                with cols[i % len(cols)]:
+                    bullets_html = "".join(
+                        f'<li style="font-size:0.78rem;line-height:1.45;color:{C_TEXT2};'
+                        f'margin-bottom:4px">{b}</li>'
+                        for b in sec.bullets
+                    )
+                    st.markdown(
+                        f'<div style="background:rgba(255,255,255,0.02);'
+                        f'border:1px solid rgba(232,230,225,0.06);'
+                        f'border-radius:3px;padding:10px 14px;margin-bottom:10px">'
+                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
+                        f'letter-spacing:0.10em;color:{C_TEXT};font-weight:700;'
+                        f'margin-bottom:6px">{sec.title}</div>'
+                        f'<ul style="margin:0;padding-left:18px">{bullets_html}</ul>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+    except Exception:
+        logger.exception("Overview — daily briefing render failed")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN RENDER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -774,6 +906,11 @@ def render(
             _render_data_status(port_results, route_results, insights,
                                 freight_data, macro_data, stock_data)
             return
+
+        # ── A2. Daily Briefing (LLM-narrated; template fallback) ───────────
+        _render_daily_briefing(
+            port_results, route_results, freight_data, macro_data,
+        )
 
         # ── B. Market verdict — tone banner + feed health ───────────────────
         _render_market_verdict(port_results, route_results, insights,
