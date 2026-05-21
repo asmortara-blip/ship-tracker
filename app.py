@@ -1264,8 +1264,8 @@ elif active_section == "supply_chain":
 
 # ── 8. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
-    t0, t1, t2, t3, t4 = st.tabs([
-        "Risk Matrix", "Weather", "Compliance",
+    t0, t1, t2, t3, t4, t5 = st.tabs([
+        "Risk Matrix", "Risk Lab", "Weather", "Compliance",
         "Market Cycle", "Fundamentals",
     ])
     with t0:
@@ -1276,23 +1276,33 @@ elif active_section == "risk":
             st.error(f"Risk Matrix error: {e}")
     with t1:
         try:
+            from ui.tab_risk_lab import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Risk Lab error: {e}")
+    with t2:
+        try:
             from ui.tab_weather import render as _r
             _r(port_results, route_results, freight_data)
         except Exception as e:
             st.error(f"Weather error: {e}")
-    with t2:
+    with t3:
         try:
             from ui.tab_compliance import render as _r
             _r(route_results, port_results, macro_data)
         except Exception as e:
             st.error(f"Compliance error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_cycle import render as _r
             _r(freight_data, macro_data, stock_data, route_results)
         except Exception as e:
             st.error(f"Market Cycle error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_fundamentals import render as _r
             _r(stock_data, freight_data, macro_data)
