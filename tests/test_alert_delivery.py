@@ -26,19 +26,26 @@ from engine import alert_delivery
 from engine.alert_delivery import (
     DeliveryChannel,
     DeliveryResult,
+    _deliver_discord,
     _deliver_email,
+    _deliver_pagerduty,
     _deliver_sms,
+    _deliver_webhook,
     _get_smtp_config,
     _get_twilio_config,
     _meets_threshold,
+    _PAGERDUTY_EVENTS_URL,
     _SmtpConfig,
     _TwilioConfig,
     delete_channel,
     deliver_alert,
     deliver_pending,
+    format_discord_payload,
     format_email_payload,
+    format_pagerduty_payload,
     format_slack_payload,
     format_sms_payload,
+    format_webhook_payload,
     load_channels,
     save_channel,
 )
@@ -342,13 +349,13 @@ def test_deliver_alert_unsupported_kind_fails(monkeypatch) -> None:
         alert_delivery.requests, "post",
         lambda *a, **kw: _FakeResponse(200),
     )
-    # "webhook" is reserved for a future backend; using it today must fail
-    # so alerts aren't silently dropped on a half-configured channel.
-    channel = _make_channel("LOW", kind="webhook")
+    # "made_up" is not a real backend; using it must fail so alerts
+    # aren't silently dropped on a half-configured channel.
+    channel = _make_channel("LOW", kind="made_up")
     result = deliver_alert(_make_alert("HIGH"), channel)
     assert result.success is False
     assert "unsupported channel kind" in result.error_msg
-    assert "webhook" in result.error_msg
+    assert "made_up" in result.error_msg
 
 
 # ─── Channel persistence ──────────────────────────────────────────────────
@@ -383,6 +390,50 @@ def test_save_channel_upsert_overwrites_existing() -> None:
     assert len(loaded) == 1
     assert loaded[0].name == "Renamed"
     assert loaded[0].severity_threshold == "CRITICAL"
+
+
+def test_save_channel_persists_digest_mode_daily() -> None:
+    """v6 schema added digest_mode — saving a channel with mode='daily'
+    must round-trip back as 'daily' (was silently dropped before the
+    save_channel / load_channels CRUD wiring was completed)."""
+    ch = _make_channel(channel_id="c1", name="Digest desk")
+    ch.digest_mode = "daily"
+    save_channel(ch)
+    loaded = load_channels()
+    assert len(loaded) == 1
+    assert loaded[0].digest_mode == "daily"
+
+
+def test_save_channel_invalid_digest_mode_falls_back_to_immediate() -> None:
+    """A stale or invalid digest_mode string in the dataclass must not
+    poison the DB — save_channel coerces back to 'immediate'."""
+    ch = _make_channel(channel_id="c1")
+    ch.digest_mode = "weekly"  # not a supported value
+    save_channel(ch)
+    assert load_channels()[0].digest_mode == "immediate"
+
+
+def test_load_channels_defaults_digest_mode_to_immediate_for_pre_v6_rows() -> None:
+    """Channels saved before the v6 column existed return digest_mode=
+    'immediate' (the column default), preserving prior behaviour."""
+    # Insert a row WITHOUT digest_mode — relying on the DEFAULT
+    from state.db import get_connection
+
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO delivery_channels
+              (channel_id, name, kind, target, severity_threshold,
+               enabled, created_at)
+            VALUES ('c-pre-v6', 'Legacy', 'slack',
+                    'https://hooks.slack.com/services/x',
+                    'HIGH', 1, '2026-05-21T00:00:00+00:00')
+            """
+        )
+    loaded = load_channels()
+    assert len(loaded) == 1
+    assert loaded[0].digest_mode == "immediate"
 
 
 def test_load_channels_returns_empty_when_table_empty() -> None:
@@ -1162,3 +1213,495 @@ def test_deliver_alert_sms_disabled_skips_twilio(monkeypatch) -> None:
     assert result.success is True
     assert "disabled" in result.error_msg
     assert calls["n"] == 0
+
+
+# ─── format_webhook_payload ───────────────────────────────────────────────
+
+
+def test_format_webhook_payload_includes_all_alert_fields() -> None:
+    """The generic webhook envelope must carry every alert field plus the
+    ``event_type`` discriminator so receivers can identify the schema."""
+    alert = _make_alert(
+        severity="HIGH",
+        alert_id="abc-123",
+        title="ZIM dropped 8%",
+        body="ZIM intraday move triggered the stock rule.",
+        ticker="ZIM",
+        route_id="SHANGHAI-LA",
+        port_locode="USLAX",
+        value=2345.67,
+        threshold=1000.0,
+        change_pct=23.4,
+        alert_type="STOCK_MOVE",
+    )
+    payload = format_webhook_payload(alert)
+    expected_keys = {
+        "event_type", "alert_id", "created_at", "alert_type", "severity",
+        "title", "body", "ticker", "route_id", "port_locode", "value",
+        "threshold", "change_pct", "acknowledged",
+    }
+    assert set(payload.keys()) >= expected_keys
+    assert payload["event_type"] == "alert"
+    assert payload["alert_id"] == "abc-123"
+    assert payload["severity"] == "HIGH"
+    assert payload["title"] == "ZIM dropped 8%"
+    assert payload["body"] == "ZIM intraday move triggered the stock rule."
+    assert payload["ticker"] == "ZIM"
+    assert payload["route_id"] == "SHANGHAI-LA"
+    assert payload["port_locode"] == "USLAX"
+    assert payload["value"] == 2345.67
+    assert payload["threshold"] == 1000.0
+    assert payload["change_pct"] == 23.4
+    assert payload["alert_type"] == "STOCK_MOVE"
+    assert payload["acknowledged"] is False
+
+
+def test_format_webhook_payload_is_json_serializable() -> None:
+    """A receiver POSTed this envelope must be able to round-trip it
+    through ``json.dumps`` / ``json.loads`` without losing data."""
+    import json
+    alert = _make_alert(severity="MEDIUM", value=1.23, threshold=4.56, change_pct=-7.89)
+    payload = format_webhook_payload(alert)
+    encoded = json.dumps(payload)
+    decoded = json.loads(encoded)
+    assert decoded["event_type"] == "alert"
+    assert decoded["severity"] == "MEDIUM"
+    assert decoded["value"] == 1.23
+
+
+# ─── format_discord_payload ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "severity,expected_color",
+    [
+        ("CRITICAL", 14104137),
+        ("HIGH",     16148490),
+        ("MEDIUM",   15844367),
+        ("LOW",      6976125),
+    ],
+)
+def test_format_discord_payload_severity_color(severity, expected_color) -> None:
+    payload = format_discord_payload(_make_alert(severity=severity))
+    embed = payload["embeds"][0]
+    assert embed["color"] == expected_color
+
+
+def test_format_discord_payload_includes_value_threshold_change_fields() -> None:
+    alert = _make_alert(value=2345.67, threshold=1000.0, change_pct=23.4)
+    payload = format_discord_payload(alert)
+    embed = payload["embeds"][0]
+    fields = {f["name"]: f["value"] for f in embed["fields"]}
+    assert "Value" in fields
+    assert "2,345.67" in fields["Value"]
+    assert "Threshold" in fields
+    assert "1,000.00" in fields["Threshold"]
+    assert "Change %" in fields
+    assert "23.40" in fields["Change %"]
+
+
+def test_format_discord_payload_content_and_embed_title_carry_severity() -> None:
+    payload = format_discord_payload(_make_alert(severity="CRITICAL", title="BDI crashed"))
+    assert "[CRITICAL]" in payload["content"]
+    assert "BDI crashed" in payload["content"]
+    embed = payload["embeds"][0]
+    assert "[CRITICAL]" in embed["title"]
+    assert "BDI crashed" in embed["title"]
+
+
+def test_format_discord_payload_description_is_alert_body() -> None:
+    alert = _make_alert(body="Drewry SCFI jumped sharply overnight.")
+    payload = format_discord_payload(alert)
+    assert payload["embeds"][0]["description"] == "Drewry SCFI jumped sharply overnight."
+
+
+# ─── format_pagerduty_payload ─────────────────────────────────────────────
+
+
+def test_format_pagerduty_payload_dedup_key_matches_alert_id() -> None:
+    alert = _make_alert(alert_id="alert-uuid-42")
+    payload = format_pagerduty_payload(alert, integration_key="key123")
+    assert payload["dedup_key"] == "alert-uuid-42"
+
+
+def test_format_pagerduty_payload_event_action_is_trigger() -> None:
+    payload = format_pagerduty_payload(_make_alert(), integration_key="k")
+    assert payload["event_action"] == "trigger"
+
+
+def test_format_pagerduty_payload_routing_key_set_from_arg() -> None:
+    payload = format_pagerduty_payload(_make_alert(), integration_key="my-integration-key-xyz")
+    assert payload["routing_key"] == "my-integration-key-xyz"
+
+
+@pytest.mark.parametrize(
+    "severity,expected_pd",
+    [
+        ("CRITICAL", "critical"),
+        ("HIGH",     "error"),
+        ("MEDIUM",   "warning"),
+        ("LOW",      "info"),
+    ],
+)
+def test_format_pagerduty_payload_severity_mapping(severity, expected_pd) -> None:
+    payload = format_pagerduty_payload(_make_alert(severity=severity), integration_key="k")
+    assert payload["payload"]["severity"] == expected_pd
+
+
+def test_format_pagerduty_payload_custom_details_include_value_threshold_change() -> None:
+    alert = _make_alert(value=2345.67, threshold=1000.0, change_pct=23.4)
+    payload = format_pagerduty_payload(alert, integration_key="k")
+    custom = payload["payload"]["custom_details"]
+    assert custom["value"] == 2345.67
+    assert custom["threshold"] == 1000.0
+    assert custom["change_pct"] == 23.4
+
+
+def test_format_pagerduty_payload_source_and_summary() -> None:
+    alert = _make_alert(severity="HIGH", title="ZIM dropped 8%")
+    payload = format_pagerduty_payload(alert, integration_key="k")
+    assert payload["payload"]["source"] == "ship-tracker"
+    assert "[HIGH]" in payload["payload"]["summary"]
+    assert "ZIM dropped 8%" in payload["payload"]["summary"]
+
+
+# ─── _deliver_webhook ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("status", [200, 201, 202, 204])
+def test_deliver_webhook_2xx_success(monkeypatch, status) -> None:
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        calls["timeout"] = timeout
+        return _FakeResponse(status_code=status)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW", kind="webhook", target="https://example.com/hooks/alerts"
+    )
+    result = _deliver_webhook(channel, _make_alert("HIGH"))
+    assert result.success is True
+    assert result.status_code == status
+    assert calls["url"] == "https://example.com/hooks/alerts"
+    assert calls["timeout"] == 10.0
+    # The body is the generic webhook envelope
+    assert calls["json"]["event_type"] == "alert"
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 500, 502, 503])
+def test_deliver_webhook_non_2xx_failure(monkeypatch, status) -> None:
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=status, text="boom"),
+    )
+    channel = _make_channel(
+        "LOW", kind="webhook", target="https://example.com/hooks/alerts"
+    )
+    result = _deliver_webhook(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == status
+    assert str(status) in result.error_msg
+
+
+def test_deliver_webhook_connection_error(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError("no route to host")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="webhook", target="https://example.com/h")
+    result = _deliver_webhook(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == 0
+    assert "connection error" in result.error_msg
+    assert "no route to host" in result.error_msg
+
+
+def test_deliver_webhook_timeout(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.Timeout("read timed out")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="webhook", target="https://example.com/h")
+    result = _deliver_webhook(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert "timeout" in result.error_msg.lower()
+
+
+# ─── _deliver_discord ─────────────────────────────────────────────────────
+
+
+def test_deliver_discord_204_success(monkeypatch) -> None:
+    """Discord returns 204 No Content on a successful webhook POST."""
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        calls["timeout"] = timeout
+        return _FakeResponse(status_code=204, text="")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    target = "https://discord.com/api/webhooks/123456789/abc-token-xyz"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    result = _deliver_discord(channel, _make_alert("HIGH"))
+    assert result.success is True
+    assert result.status_code == 204
+    assert calls["url"] == target
+    assert calls["timeout"] == 10.0
+    # Body is the Discord-shaped payload
+    assert "embeds" in calls["json"]
+    assert "content" in calls["json"]
+
+
+def test_deliver_discord_accepts_discordapp_com_url(monkeypatch) -> None:
+    """The legacy ``discordapp.com`` host is also a valid Discord webhook URL."""
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=204, text=""),
+    )
+    target = "https://discordapp.com/api/webhooks/123456789/abc-token-xyz"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    result = _deliver_discord(channel, _make_alert("HIGH"))
+    assert result.success is True
+
+
+def test_deliver_discord_rejects_non_discord_target(monkeypatch) -> None:
+    """A URL that isn't a Discord webhook must be rejected before the POST."""
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(status_code=204)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW", kind="discord", target="https://example.com/not-discord"
+    )
+    result = _deliver_discord(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert "must be a Discord webhook URL" in result.error_msg
+    assert posted["n"] == 0  # never POSTed
+
+
+def test_deliver_discord_connection_error(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError("no route to discord")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    target = "https://discord.com/api/webhooks/1/t"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    result = _deliver_discord(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == 0
+    assert "connection error" in result.error_msg
+    assert "no route to discord" in result.error_msg
+
+
+def test_deliver_discord_400_returns_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=400, text="bad embed"),
+    )
+    target = "https://discord.com/api/webhooks/1/t"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    result = _deliver_discord(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == 400
+    assert "400" in result.error_msg
+
+
+# ─── _deliver_pagerduty ───────────────────────────────────────────────────
+
+
+class _FakePagerDutyResponse:
+    """``requests.Response`` stand-in for PagerDuty: status + text +
+    ``json()`` returning a pre-baked dict."""
+
+    def __init__(
+        self,
+        status_code: int = 202,
+        text: str = "",
+        json_payload: dict | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.text = text
+        self._json_payload = json_payload
+
+    def json(self) -> dict:
+        if self._json_payload is None:
+            raise ValueError("no json body")
+        return self._json_payload
+
+
+def test_deliver_pagerduty_202_success(monkeypatch) -> None:
+    """PagerDuty returns 202 Accepted on a successful Events API enqueue."""
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        calls["timeout"] = timeout
+        return _FakePagerDutyResponse(
+            status_code=202,
+            json_payload={"status": "success", "dedup_key": "x", "message": "Event processed"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="pagerduty", target="my-integration-key")
+    alert = _make_alert(severity="HIGH", title="ZIM dropped 8%")
+
+    result = _deliver_pagerduty(channel, alert)
+    assert result.success is True
+    assert result.status_code == 202
+    # Fixed events endpoint
+    assert calls["url"] == _PAGERDUTY_EVENTS_URL
+    assert calls["url"] == "https://events.pagerduty.com/v2/enqueue"
+    # Routing key lives in the body
+    assert calls["json"]["routing_key"] == "my-integration-key"
+    assert calls["json"]["event_action"] == "trigger"
+    assert "[HIGH] ZIM dropped 8%" in calls["json"]["payload"]["summary"]
+    assert calls["timeout"] == 10.0
+
+
+def test_deliver_pagerduty_400_surfaces_message(monkeypatch) -> None:
+    """A 400 with a PagerDuty error body must surface the ``message`` field."""
+    def fake_post(url, json=None, timeout=None, **kw):
+        return _FakePagerDutyResponse(
+            status_code=400,
+            text='{"status":"invalid event","message":"Invalid routing key"}',
+            json_payload={"status": "invalid event", "message": "Invalid routing key"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="pagerduty", target="bad-key")
+    result = _deliver_pagerduty(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == 400
+    assert "Invalid routing key" in result.error_msg
+
+
+def test_deliver_pagerduty_connection_error(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError("no route to pagerduty")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="pagerduty", target="key")
+    result = _deliver_pagerduty(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert result.status_code == 0
+    assert "connection error" in result.error_msg
+    assert "no route to pagerduty" in result.error_msg
+
+
+def test_deliver_pagerduty_timeout(monkeypatch) -> None:
+    def boom(*a, **kw):
+        raise requests.exceptions.Timeout("pd read timed out")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel("LOW", kind="pagerduty", target="key")
+    result = _deliver_pagerduty(channel, _make_alert("HIGH"))
+    assert result.success is False
+    assert "timeout" in result.error_msg.lower()
+
+
+# ─── deliver_alert dispatch on kind="webhook"/"discord"/"pagerduty" ───────
+
+
+def test_deliver_alert_kind_webhook_dispatches(monkeypatch) -> None:
+    """kind="webhook" must POST to ``target`` with the generic envelope."""
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        return _FakeResponse(status_code=200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW", kind="webhook", target="https://hooks.example.com/alerts"
+    )
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert calls["url"] == "https://hooks.example.com/alerts"
+    assert calls["json"]["event_type"] == "alert"
+
+
+def test_deliver_alert_kind_discord_dispatches(monkeypatch) -> None:
+    """kind="discord" must POST to the Discord webhook URL with the
+    Discord-shaped body."""
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        return _FakeResponse(status_code=204, text="")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    target = "https://discord.com/api/webhooks/123/token"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert calls["url"] == target
+    assert "embeds" in calls["json"]
+
+
+def test_deliver_alert_kind_pagerduty_dispatches(monkeypatch) -> None:
+    """kind="pagerduty" must POST to the PagerDuty Events endpoint with
+    the routing key in the body."""
+    calls = {}
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls["url"] = url
+        calls["json"] = json
+        return _FakePagerDutyResponse(
+            status_code=202,
+            json_payload={"status": "success", "dedup_key": "x", "message": "ok"},
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="pagerduty", target="my-key-abc")
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert calls["url"] == _PAGERDUTY_EVENTS_URL
+    assert calls["json"]["routing_key"] == "my-key-abc"
+
+
+def test_deliver_alert_kind_webhook_below_threshold_skips(monkeypatch) -> None:
+    """Severity gating runs before transport selection for webhook too."""
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "CRITICAL", kind="webhook", target="https://example.com/h"
+    )
+    result = deliver_alert(_make_alert("LOW"), channel)
+    assert result.success is True
+    assert "below threshold" in result.error_msg
+    assert posted["n"] == 0
+
+
+def test_deliver_alert_kind_discord_disabled_skips(monkeypatch) -> None:
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(204)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW",
+        kind="discord",
+        target="https://discord.com/api/webhooks/1/t",
+        enabled=False,
+    )
+    result = deliver_alert(_make_alert("CRITICAL"), channel)
+    assert result.success is True
+    assert "disabled" in result.error_msg
+    assert posted["n"] == 0

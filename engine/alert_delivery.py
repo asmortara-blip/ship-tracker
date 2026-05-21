@@ -2,15 +2,19 @@
 
 The alert engine in ``engine.alert_engine_v2`` persists alerts to SQLite
 and surfaces them in the UI. This module adds an outbound channel so
-alerts can also be pushed to Slack, Email, or SMS (via Twilio).
+alerts can also be pushed to Slack, Email, SMS (via Twilio), a generic
+HTTP webhook, Discord, or PagerDuty.
 
 Design notes
 ------------
 * ``DeliveryChannel`` is a typed config row. ``kind`` is a free-form
-  string — "slack", "email", and "sms" are supported. ``target`` is
-  the Slack incoming-webhook URL for slack channels, the recipient
-  email address for email channels, and the E.164 phone number (e.g.
-  ``+15551234567``) for sms channels.
+  string — "slack", "email", "sms", "webhook", "discord", and
+  "pagerduty" are supported. ``target`` is the Slack incoming-webhook
+  URL for slack channels, the recipient email address for email
+  channels, the E.164 phone number (e.g. ``+15551234567``) for sms
+  channels, the destination URL for webhook channels, the Discord
+  webhook URL for discord channels, and the PagerDuty integration
+  key for pagerduty channels.
 * ``severity_threshold`` uses ``alert_engine_v2._SEVERITY_ORDER`` —
   CRITICAL (0) < HIGH (1) < MEDIUM (2) < LOW (3). A channel with
   threshold "MEDIUM" delivers MEDIUM/HIGH/CRITICAL alerts and skips
@@ -28,6 +32,13 @@ Design notes
 * Channel persistence lives in the SQLite ``delivery_channels`` table
   (schema v2). Channel configs are user-authored config, parallel to
   ``alert_rules``.
+* ``digest_mode`` (schema v6) lets a channel batch the eligible alerts
+  from a single ``deliver_pending`` window into ONE digest delivery
+  instead of POSTing one message per alert. Default is ``"immediate"``
+  (legacy behaviour, one-per-alert). ``"daily"`` collapses everything
+  into a single ``deliver_digest`` call. The cron/worker that calls
+  ``deliver_pending`` decides the cadence — this module only chooses
+  between per-alert and batched dispatch.
 """
 from __future__ import annotations
 
@@ -53,11 +64,17 @@ from engine.alert_engine_v2 import ShippingAlert, _SEVERITY_ORDER, _row_to_alert
 class DeliveryChannel:
     channel_id: str          # UUID-ish identifier
     name: str                # human-readable label, e.g. "Trading desk Slack"
-    kind: str                # "slack" | "email" | "sms"
-    target: str              # webhook URL for slack, email address, or E.164 phone for sms
+    kind: str                # "slack" | "email" | "sms" | "webhook" | "discord" | "pagerduty"
+    target: str              # webhook URL / email addr / E.164 phone / generic URL / Discord webhook URL / PagerDuty integration key
     severity_threshold: str  # "CRITICAL"|"HIGH"|"MEDIUM"|"LOW"
     enabled: bool = True
     created_at: str = ""     # ISO timestamp, populated by save_channel
+    # Delivery cadence. "immediate" (default) sends one delivery per alert
+    # — preserves the original behaviour exactly. "daily" batches every
+    # eligible alert since ``since`` into ONE digest delivery; the
+    # caller's cron / worker decides when ``deliver_pending`` runs, this
+    # field only changes how it dispatches the alerts it finds.
+    digest_mode: str = "immediate"  # "immediate" | "daily"
 
 
 @dataclass
@@ -291,6 +308,167 @@ def format_sms_payload(alert: ShippingAlert) -> dict:
         parts.append(f"Value {alert.value:,.2f} / Threshold {alert.threshold:,.2f}")
 
     return {"body": "\n".join(parts)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Generic webhook payload formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+def format_webhook_payload(alert: ShippingAlert) -> dict:
+    """Build a generic HTTP-webhook payload for a ``ShippingAlert``.
+
+    Returns a JSON-serializable dict carrying every field on the alert plus
+    a top-level ``event_type: "alert"`` discriminator so receivers can
+    distinguish this schema from other event shapes they might receive.
+
+    Unlike the Slack / Discord payloads, this format is intentionally flat
+    and uncosmetic — it's meant to be consumed by automation, not displayed
+    to a human.
+    """
+    return {
+        "event_type": "alert",
+        "alert_id": alert.alert_id,
+        "created_at": alert.created_at,
+        "alert_type": alert.alert_type,
+        "severity": alert.severity,
+        "title": alert.title,
+        "body": alert.body,
+        "ticker": alert.ticker,
+        "route_id": alert.route_id,
+        "port_locode": alert.port_locode,
+        "value": alert.value,
+        "threshold": alert.threshold,
+        "change_pct": alert.change_pct,
+        "acknowledged": alert.acknowledged,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Discord payload formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Discord uses integer-RGB for embed colors. These integers map to the
+# same severity palette as ``_SEVERITY_COLOR`` (with minor rounding so
+# the values stay easy to recognise across our own dashboards and the
+# embed renderer).
+_DISCORD_SEVERITY_COLOR = {
+    "CRITICAL": 14104137,  # red
+    "HIGH":     16148490,  # orange
+    "MEDIUM":   15844367,  # yellow
+    "LOW":      6976125,   # gray
+}
+
+_DISCORD_WEBHOOK_PREFIXES = (
+    "https://discord.com/api/webhooks/",
+    "https://discordapp.com/api/webhooks/",
+)
+
+
+def format_discord_payload(alert: ShippingAlert) -> dict:
+    """Build the Discord-webhook payload for a ``ShippingAlert``.
+
+    Returns a dict matching Discord's webhook message JSON shape:
+      - ``content``: short fallback string (severity-prefixed title) for
+        clients that don't render embeds
+      - ``embeds``: a single embed with title, description (alert body),
+        an integer color matching the severity, and a ``fields`` array
+        carrying Value / Threshold / Change %
+    """
+    color = _DISCORD_SEVERITY_COLOR.get(alert.severity, _DISCORD_SEVERITY_COLOR["LOW"])
+    title = f"[{alert.severity}] {alert.title}"
+
+    fields: list[dict] = [
+        {"name": "Value", "value": f"{alert.value:,.2f}", "inline": True},
+        {"name": "Threshold", "value": f"{alert.threshold:,.2f}", "inline": True},
+        {"name": "Change %", "value": f"{alert.change_pct:+.2f}%", "inline": True},
+        {"name": "Type", "value": alert.alert_type, "inline": True},
+    ]
+
+    # Optional context fields — only included when set.
+    if alert.ticker:
+        fields.append({"name": "Ticker", "value": alert.ticker, "inline": True})
+    if alert.route_id:
+        fields.append({"name": "Route", "value": alert.route_id, "inline": True})
+    if alert.port_locode:
+        fields.append({"name": "Port", "value": alert.port_locode, "inline": True})
+
+    embed: dict = {
+        "title": title,
+        "description": alert.body,
+        "color": color,
+        "fields": fields,
+    }
+    if alert.created_at:
+        embed["timestamp"] = alert.created_at
+
+    return {
+        "content": title,
+        "embeds": [embed],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PagerDuty payload formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Mapping from our severity names to PagerDuty Events API v2 severities.
+# PagerDuty only accepts: critical | error | warning | info.
+_PAGERDUTY_SEVERITY = {
+    "CRITICAL": "critical",
+    "HIGH":     "error",
+    "MEDIUM":   "warning",
+    "LOW":      "info",
+}
+
+_PAGERDUTY_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
+
+
+def format_pagerduty_payload(alert: ShippingAlert, integration_key: str) -> dict:
+    """Build the PagerDuty Events API v2 payload for a ``ShippingAlert``.
+
+    The Events API expects:
+      - ``routing_key``: the integration key (lives in the body, not the URL)
+      - ``event_action``: ``"trigger"`` for new incidents
+      - ``dedup_key``: stable id used to deduplicate retries (we use the
+        alert UUID)
+      - ``payload.summary`` / ``severity`` / ``source`` / ``component``
+      - ``payload.custom_details``: free-form dict for extra context
+
+    Severity is mapped via ``_PAGERDUTY_SEVERITY`` because PagerDuty only
+    accepts ``critical | error | warning | info``.
+    """
+    pd_severity = _PAGERDUTY_SEVERITY.get(alert.severity, "info")
+    component = alert.alert_type or "ship-tracker"
+
+    custom_details: dict = {
+        "alert_type": alert.alert_type,
+        "severity": alert.severity,
+        "body": alert.body,
+        "value": alert.value,
+        "threshold": alert.threshold,
+        "change_pct": alert.change_pct,
+    }
+    if alert.ticker:
+        custom_details["ticker"] = alert.ticker
+    if alert.route_id:
+        custom_details["route_id"] = alert.route_id
+    if alert.port_locode:
+        custom_details["port_locode"] = alert.port_locode
+    if alert.created_at:
+        custom_details["created_at"] = alert.created_at
+
+    return {
+        "routing_key": integration_key,
+        "event_action": "trigger",
+        "dedup_key": alert.alert_id,
+        "payload": {
+            "summary": f"[{alert.severity}] {alert.title}",
+            "severity": pd_severity,
+            "source": "ship-tracker",
+            "component": component,
+            "custom_details": custom_details,
+        },
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -557,6 +735,147 @@ def _deliver_sms(
     )
 
 
+def _http_post_json(url: str, payload: dict) -> tuple[int, str, Optional[Exception]]:
+    """Shared HTTP POST helper used by the webhook / discord / pagerduty
+    delivery paths. Returns ``(status_code, body_text, exception)``. On
+    success ``exception`` is ``None``. On failure ``status_code`` is 0 and
+    ``exception`` carries the underlying error.
+    """
+    try:
+        resp = requests.post(url, json=payload, timeout=_REQUEST_TIMEOUT_S)
+    except requests.exceptions.Timeout as exc:
+        return 0, "", exc
+    except requests.exceptions.ConnectionError as exc:
+        return 0, "", exc
+    except requests.exceptions.RequestException as exc:
+        return 0, "", exc
+    except Exception as exc:
+        return 0, "", exc
+
+    status = getattr(resp, "status_code", 0)
+    body = ""
+    try:
+        body = (resp.text or "")[:500]
+    except Exception:
+        pass
+    return status, body, None
+
+
+def _classify_request_exc(exc: Exception) -> str:
+    """Map a request-side exception onto the ``error_msg`` prefix the rest
+    of the module uses ("timeout" / "connection error" / "request error" /
+    "unexpected"). Keeps the wording identical to the existing Slack /
+    Twilio paths."""
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"timeout: {exc}"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return f"connection error: {exc}"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return f"request error: {exc}"
+    return f"unexpected: {exc}"
+
+
+def _deliver_webhook(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:
+    """POST the alert as a generic JSON envelope to ``channel.target``.
+
+    Success on any 2xx. Anything else (or a transport-level exception) is
+    a failure; the response body (when available) is surfaced in
+    ``error_msg`` so debugging doesn't require a re-run.
+    """
+    payload = format_webhook_payload(alert)
+    status, body, exc = _http_post_json(channel.target, payload)
+    if exc is not None:
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+    if 200 <= status < 300:
+        return DeliveryResult(success=True, status_code=status)
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {body}" if body else f"HTTP {status}",
+    )
+
+
+def _deliver_discord(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:
+    """POST the alert as a Discord-shaped JSON to ``channel.target``.
+
+    Validates that ``channel.target`` is actually a Discord webhook URL —
+    a generic URL configured under ``kind="discord"`` would silently
+    succeed against many endpoints, which would be a footgun.
+
+    Discord returns 204 (No Content) on success; we accept any 2xx to be
+    consistent with the rest of the module.
+    """
+    target = channel.target or ""
+    if not any(target.startswith(prefix) for prefix in _DISCORD_WEBHOOK_PREFIXES):
+        return DeliveryResult(
+            success=False,
+            status_code=0,
+            error_msg="target must be a Discord webhook URL",
+        )
+
+    payload = format_discord_payload(alert)
+    status, body, exc = _http_post_json(target, payload)
+    if exc is not None:
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+    if 200 <= status < 300:
+        return DeliveryResult(success=True, status_code=status)
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {body}" if body else f"HTTP {status}",
+    )
+
+
+def _deliver_pagerduty(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:
+    """POST the alert as a PagerDuty Events API v2 trigger event.
+
+    ``channel.target`` carries the integration key (the routing key lives
+    in the request body, not the URL). The POST goes to a fixed events
+    endpoint; PagerDuty returns 202 (Accepted) on success.
+
+    On non-2xx, we try to surface PagerDuty's ``message`` field from the
+    JSON error body so the caller sees ``"Invalid routing key"`` rather
+    than just ``HTTP 400``.
+    """
+    integration_key = channel.target or ""
+    payload = format_pagerduty_payload(alert, integration_key=integration_key)
+
+    try:
+        resp = requests.post(_PAGERDUTY_EVENTS_URL, json=payload, timeout=_REQUEST_TIMEOUT_S)
+    except requests.exceptions.Timeout as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"timeout: {exc}")
+    except requests.exceptions.ConnectionError as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+    except requests.exceptions.RequestException as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"request error: {exc}")
+    except Exception as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+
+    status = getattr(resp, "status_code", 0)
+    if 200 <= status < 300:
+        return DeliveryResult(success=True, status_code=status)
+
+    # Surface PagerDuty's structured error message when the response body
+    # parses as JSON; fall back to the raw text otherwise.
+    error_text = ""
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("message"):
+            error_text = str(data["message"])
+    except Exception:
+        pass
+    if not error_text:
+        try:
+            error_text = (resp.text or "")[:500]
+        except Exception:
+            error_text = ""
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {error_text}" if error_text else f"HTTP {status}",
+    )
+
+
 def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryResult:
     """Push a single alert to ``channel``. Never raises — network errors
     are caught and returned in the ``DeliveryResult``.
@@ -573,6 +892,13 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
         st.secrets) to the recipient address in ``target``
       - ``"sms"`` → POST to Twilio's REST API using ``_get_twilio_config``
         (env / st.secrets) to the E.164 phone number in ``target``
+      - ``"webhook"`` → POST a generic JSON envelope to ``target`` (any
+        HTTP endpoint)
+      - ``"discord"`` → POST a Discord-shaped JSON to the Discord webhook
+        URL in ``target``
+      - ``"pagerduty"`` → POST a PagerDuty Events API v2 trigger to
+        ``https://events.pagerduty.com/v2/enqueue``; ``target`` is the
+        integration key
       - anything else → explicit "unsupported kind" failure
     """
     if not channel.enabled:
@@ -604,10 +930,19 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             )
         return _deliver_sms(channel, alert, twilio_cfg)
 
+    if channel.kind == "webhook":
+        return _deliver_webhook(channel, alert)
+
+    if channel.kind == "discord":
+        return _deliver_discord(channel, alert)
+
+    if channel.kind == "pagerduty":
+        return _deliver_pagerduty(channel, alert)
+
     if channel.kind != "slack":
-        # Reserved for future backends (pagerduty / opsgenie / ...);
-        # surface as an explicit failure so callers don't silently drop
-        # alerts when someone adds a channel before its backend exists.
+        # Reserved for future backends (opsgenie / teams / ...); surface
+        # as an explicit failure so callers don't silently drop alerts
+        # when someone adds a channel before its backend exists.
         return DeliveryResult(
             success=False,
             status_code=0,
@@ -688,6 +1023,10 @@ def save_channel(channel: DeliveryChannel) -> None:
     from state.db import get_connection
 
     created_at = channel.created_at or datetime.now(timezone.utc).isoformat()
+    # Normalize digest_mode to one of the two supported values; any
+    # other string falls back to "immediate" so a stale/invalid value
+    # in the dataclass can't poison the DB.
+    digest_mode = channel.digest_mode if channel.digest_mode in ("immediate", "daily") else "immediate"
     conn = get_connection()
     try:
         with conn:
@@ -695,14 +1034,15 @@ def save_channel(channel: DeliveryChannel) -> None:
                 """
                 INSERT INTO delivery_channels
                   (channel_id, name, kind, target, severity_threshold,
-                   enabled, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                   enabled, created_at, digest_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                   name = excluded.name,
                   kind = excluded.kind,
                   target = excluded.target,
                   severity_threshold = excluded.severity_threshold,
-                  enabled = excluded.enabled
+                  enabled = excluded.enabled,
+                  digest_mode = excluded.digest_mode
                 """,
                 (
                     channel.channel_id,
@@ -712,6 +1052,7 @@ def save_channel(channel: DeliveryChannel) -> None:
                     channel.severity_threshold,
                     1 if channel.enabled else 0,
                     created_at,
+                    digest_mode,
                 ),
             )
         # Mirror created_at back onto the dataclass so the caller can
@@ -734,6 +1075,16 @@ def load_channels() -> list[DeliveryChannel]:
     except Exception as exc:
         logger.warning(f"load_channels: SQLite read failed: {exc}")
         return []
+    # Tolerate older SQLite Row objects that may not expose the v6
+    # ``digest_mode`` column yet (e.g. when this code runs against a
+    # cache file that hasn't been re-opened since the schema bump).
+    def _digest_mode_of(row) -> str:
+        try:
+            val = row["digest_mode"]
+        except (KeyError, IndexError):
+            return "immediate"
+        return val if val in ("immediate", "daily") else "immediate"
+
     return [
         DeliveryChannel(
             channel_id=r["channel_id"],
@@ -743,6 +1094,7 @@ def load_channels() -> list[DeliveryChannel]:
             severity_threshold=r["severity_threshold"],
             enabled=bool(r["enabled"]),
             created_at=r["created_at"],
+            digest_mode=_digest_mode_of(r),
         )
         for r in rows
     ]
