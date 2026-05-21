@@ -313,14 +313,14 @@ class TestComputeRateMomentum:
         score_desc = compute_rate_momentum("transpacific_eb", {"transpacific_eb": df_desc})
         assert score_asc == pytest.approx(score_desc)
 
-    def test_missing_rate_column_raises_keyerror(self) -> None:
-        # Documents an asymmetry in the module: compute_rate_pct_change
-        # guards the missing-column case, compute_rate_momentum does not.
-        # If the source is fixed to short-circuit, replace with an
-        # assertion that the function returns 0.5.
+    def test_missing_rate_column_returns_neutral(self) -> None:
+        # compute_rate_momentum now guards the missing-column case the same
+        # way compute_rate_pct_change does; returns 0.5 (neutral) rather
+        # than raising KeyError.
         df = _make_rate_df([1000.0, 1100.0, 1200.0], include_rate_col=False)
-        with pytest.raises(KeyError):
-            compute_rate_momentum("transpacific_eb", {"transpacific_eb": df})
+        assert compute_rate_momentum(
+            "transpacific_eb", {"transpacific_eb": df}
+        ) == 0.5
 
     def test_lookback_days_respected(self) -> None:
         # 100 days at 1000, last 5 days at 2000. With lookback=5, rolling avg = 2000
@@ -425,14 +425,16 @@ class TestGetAllRouteRates:
         # score = (1.0476 - 0.5) / 1.0 ~ 0.5476 (between 0 and 1)
         assert 0.5 < eb["momentum_score"] < 1.0
 
-    def test_route_missing_rate_column_propagates_crash(self) -> None:
-        # current_rate is guarded (line 77 column check), pct_30d is guarded
-        # inside compute_rate_pct_change — but compute_rate_momentum is NOT,
-        # so a populated-but-column-less DataFrame propagates the KeyError.
-        # Locks in the same bug surfaced by TestComputeRateMomentum.
+    def test_route_missing_rate_column_yields_neutral_summary(self) -> None:
+        # With compute_rate_momentum now column-guarded, a populated-but-
+        # column-less DataFrame falls through to neutral (0.5 momentum,
+        # 0.0 current_rate, 0.0 pct_30d) instead of crashing.
         df = _make_rate_df([1000.0, 1100.0], include_rate_col=False)
-        with pytest.raises(KeyError):
-            get_all_route_rates({"transpacific_eb": df})
+        summary = get_all_route_rates({"transpacific_eb": df})
+        eb = summary["transpacific_eb"]
+        assert eb["current_rate"] == 0.0
+        assert eb["pct_30d"] == 0.0
+        assert eb["momentum_score"] == 0.5
 
     def test_empty_dataframe_falls_through_to_zero(self) -> None:
         summary = get_all_route_rates({"transpacific_eb": pd.DataFrame()})

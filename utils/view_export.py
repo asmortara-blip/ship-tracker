@@ -214,8 +214,9 @@ def build_view_pdf(snapshot: ViewSnapshot) -> bytes:
         pdf.set_y(-8)
         pdf.multi_cell(0, 4, _utf8_safe(snapshot.footer_note))
 
-    out = pdf.output(dest="S")
-    # Older fpdf returns a str (latin-1), newer returns bytearray.
+    # fpdf2 v2.2.0+ dropped the `dest="S"` parameter; bare output() returns
+    # a bytearray. Keep the legacy str path for older installs.
+    out = pdf.output()
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
     return out.encode("latin-1", errors="replace")
