@@ -69,7 +69,7 @@ Plumbing that unlocks every downstream track.
 - [ ] Coverage: engine 80%, processing 70%, data 60%
 - [ ] Data-SLA dashboard in `tab_data_health`
 - [ ] State layer — SQLite via `database/schema.sql`
-- [ ] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile`
+- [x] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile` — single-stage Python 3.11-slim image, non-root user (UID 10001), Streamlit healthcheck against `/_stcore/health`, layered for cache-stable rebuilds. `.dockerignore` keeps cache/logs/tests/secrets out of the image. `docs/DEPLOYMENT.md` covers 3 paths (Streamlit Cloud / Docker / Fly.io) with required-env-vars table and volume-mount notes.
 - [ ] Observability — log rotation + in-app log viewer + basic metrics
 
 ## Guiding principles
