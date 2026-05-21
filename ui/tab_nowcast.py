@@ -341,6 +341,72 @@ def render(
         section_divider("Lead-Lag Matrix")
         _render_lead_lag_heatmap(macro_data or {}, freight_data or {})
 
+        # ── Export this view (PDF) ────────────────────────────────────────
+        try:
+            from utils.view_export import (
+                ViewSection, ViewSnapshot, ViewTable, render_export_button,
+            )
+            composite = float(score_data.get("composite_score", 0.5))
+            forecast = score_data.get("four_week_forecast", "STABLE")
+            top_bull = score_data.get("top_bullish_indicators", []) or []
+            top_bear = score_data.get("top_bearish_indicators", []) or []
+
+            # Sort indicators by their contribution magnitude for the table.
+            sig_to_w = {"BULLISH": +1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+            indicator_rows = []
+            sorted_inds = sorted(
+                indicators,
+                key=lambda i: abs(getattr(i, "change_pct", 0.0)) * getattr(i, "weight", 0.0),
+                reverse=True,
+            )[:12]
+            for ind in sorted_inds:
+                contrib = sig_to_w.get(getattr(ind, "signal", "NEUTRAL"), 0.0) * float(getattr(ind, "weight", 0.0))
+                indicator_rows.append([
+                    getattr(ind, "name", ""),
+                    f"{float(getattr(ind, 'current_value', 0.0)):,.2f}",
+                    f"{float(getattr(ind, 'change_pct', 0.0)):+5.2f}%",
+                    getattr(ind, "signal", ""),
+                    f"{contrib:+.3f}",
+                ])
+
+            sections = [
+                ViewSection(
+                    title="Top Indicators by Impact",
+                    tables=[ViewTable(
+                        title=f"{len(indicators)} leading indicators tracked",
+                        headers=["Indicator", "Current", "Δ %", "Signal", "Contrib"],
+                        rows=indicator_rows,
+                    )],
+                ),
+            ]
+            if top_bull or top_bear:
+                sections.append(ViewSection(
+                    title="Direction Leaders",
+                    bullets=(
+                        [f"Bullish: {n}" for n in top_bull[:5]]
+                        + [f"Bearish: {n}" for n in top_bear[:5]]
+                    ),
+                ))
+
+            snapshot = ViewSnapshot(
+                title="Trade Nowcast",
+                subtitle=f"Composite {composite:.2f} · 4-week forecast {forecast}",
+                headline=(
+                    f"Recession probability {recession_prob*100:.0f}% · "
+                    f"Composite {composite:.2f} ({forecast})"
+                ),
+                sections=sections,
+                footer_note=(
+                    "Composite from processing.leading_indicators (15+ FRED "
+                    "series, weighted by importance + lead time)."
+                ),
+            )
+            cols = st.columns([1, 5], gap="small")
+            with cols[0]:
+                render_export_button(snapshot, "nowcast", key="nowcast_export")
+        except Exception as exc:
+            logger.debug(f"tab_nowcast: PDF export skipped: {exc}")
+
         st.markdown(
             source_footer([
                 DataSource.modeled(

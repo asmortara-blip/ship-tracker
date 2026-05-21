@@ -308,4 +308,49 @@ def _render_table(pdf, table: ViewTable) -> None:
         pdf.ln(0.3)
 
 
-__all__ = ["ViewTable", "ViewSection", "ViewSnapshot", "build_view_pdf"]
+def render_export_button(
+    snapshot: ViewSnapshot,
+    filename_prefix: str,
+    *,
+    key: str,
+    label: str = "⇩ Export PDF",
+    container_width: bool = True,
+) -> None:
+    """Streamlit helper — renders a download button bound to ``build_view_pdf``.
+
+    Tab code calls this with a ready-built snapshot; the helper handles the
+    try/except wrapping, filename generation, and falls back to a disabled
+    button (with the exception in its tooltip) when PDF generation fails.
+
+    ``filename_prefix`` produces ``<prefix>_<YYYY-MM-DD>.pdf``. ``key`` must
+    be unique across the Streamlit page — typically ``"<tab>_export_pdf"``.
+
+    Imported only when called (Streamlit isn't a hard dep of this module),
+    so the build_view_pdf path remains usable in headless / test contexts.
+    """
+    import streamlit as st
+    from datetime import datetime, timezone
+
+    try:
+        pdf_bytes = build_view_pdf(snapshot)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        st.download_button(
+            label,
+            data=pdf_bytes,
+            file_name=f"{filename_prefix}_{today}.pdf",
+            mime="application/pdf",
+            use_container_width=container_width,
+            key=key,
+        )
+    except Exception as exc:
+        st.button(
+            label, disabled=True, use_container_width=container_width,
+            key=f"{key}_disabled",
+            help=f"PDF export unavailable: {exc}",
+        )
+
+
+__all__ = [
+    "ViewTable", "ViewSection", "ViewSnapshot",
+    "build_view_pdf", "render_export_button",
+]

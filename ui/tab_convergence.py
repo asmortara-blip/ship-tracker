@@ -324,6 +324,72 @@ def render(
         section_divider("Heatmap")
         _render_heatmap(series_dict, window=long_window)
 
+        # ── Export this view (PDF) ────────────────────────────────────────
+        try:
+            from utils.view_export import (
+                ViewSection, ViewSnapshot, ViewTable, render_export_button,
+            )
+            from processing.convergence_analyzer import (
+                find_converging, find_decoupling, find_diverging,
+            )
+            top_conv = next(iter(find_converging(pairs)), None)
+            top_div = next(iter(find_diverging(pairs)), None)
+            top_dec = next(iter(find_decoupling(pairs)), None)
+            headline_parts = []
+            if top_conv:
+                headline_parts.append(
+                    f"Converging: {top_conv.name_a} ↔ {top_conv.name_b} "
+                    f"(Δr {top_conv.delta_r:+.2f})"
+                )
+            if top_dec:
+                headline_parts.append(
+                    f"Decoupling: {top_dec.name_a} ↔ {top_dec.name_b}"
+                )
+            headline = " · ".join(headline_parts) if headline_parts else "No significant convergence shifts"
+
+            table_rows = [
+                [
+                    str(i + 1),
+                    f"{p.name_a} ↔ {p.name_b}",
+                    p.direction,
+                    f"{p.short_r:+.2f}",
+                    f"{p.long_r:+.2f}",
+                    f"{p.delta_r:+.2f}",
+                ]
+                for i, p in enumerate(pairs[:15])
+            ]
+            snapshot = ViewSnapshot(
+                title="Convergence & Divergence Lab",
+                subtitle=(
+                    f"{len(series_dict)} series, {len(pairs)} classifiable pairs · "
+                    f"windows {short_window}d / {long_window}d · "
+                    f"min |Δr| {min_delta:.2f}"
+                ),
+                headline=headline,
+                sections=[
+                    ViewSection(
+                        title="Top 15 Pairs by |Δr|",
+                        tables=[ViewTable(
+                            title="Sorted by absolute change",
+                            headers=["#", "Pair", "Direction",
+                                     "Short r", "Long r", "Δr"],
+                            rows=table_rows,
+                        )],
+                    ),
+                ],
+                footer_note=(
+                    "Rolling-window Pearson correlation from "
+                    "processing.convergence_analyzer."
+                ),
+            )
+            cols = st.columns([1, 5], gap="small")
+            with cols[0]:
+                render_export_button(
+                    snapshot, "convergence", key="convergence_export",
+                )
+        except Exception as exc:
+            logger.debug(f"tab_convergence: PDF export skipped: {exc}")
+
         # ── Source footer ─────────────────────────────────────────────────
         st.markdown(
             source_footer([

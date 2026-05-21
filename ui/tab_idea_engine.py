@@ -471,6 +471,59 @@ def render(
         section_divider("Portfolio Construction")
         _render_optimization_mini(ideas)
 
+        # ── Export this view (PDF) ────────────────────────────────────────
+        try:
+            from utils.view_export import (
+                ViewSection, ViewSnapshot, ViewTable, render_export_button,
+            )
+            top = ideas[0]
+            top_label = (
+                f"{getattr(top, 'ticker', '?')} — "
+                f"{getattr(top, 'direction', '')} "
+                f"({getattr(top, 'conviction_label', '')})"
+            )
+            ranked_rows = []
+            for rank, idea in enumerate(ideas[:10], start=1):
+                ranked_rows.append([
+                    str(rank),
+                    getattr(idea, "ticker", "?"),
+                    getattr(idea, "direction", ""),
+                    getattr(idea, "conviction_label", ""),
+                    f"{getattr(idea, 'conviction_score', 0.0):.2f}",
+                    (getattr(idea, "thesis", "") or "")[:80],
+                ])
+            scenario_note = (
+                f"Active scenario: {scenario.name}" if scenario else "No active scenario"
+            )
+            snapshot = ViewSnapshot(
+                title="Idea Engine — Trade Ideas",
+                subtitle=scenario_note,
+                headline=f"Top conviction: {top_label}",
+                body=(getattr(top, "thesis", "") or "")[:600],
+                sections=[
+                    ViewSection(
+                        title="Top 10 Ideas",
+                        tables=[ViewTable(
+                            title=f"Sorted by conviction ({len(ideas)} total)",
+                            headers=["#", "Ticker", "Direction", "Conviction",
+                                     "Score", "Thesis (truncated)"],
+                            rows=ranked_rows,
+                        )],
+                    ),
+                ],
+                footer_note=(
+                    "Cascade output from processing.disruption_cascade. "
+                    "Scenario overlay from state.scenarios."
+                ),
+            )
+            cols = st.columns([1, 5], gap="small")
+            with cols[0]:
+                render_export_button(
+                    snapshot, "idea_engine", key="idea_engine_export",
+                )
+        except Exception as exc:
+            logger.debug(f"tab_idea_engine: PDF export skipped: {exc}")
+
         # ── Source footer ─────────────────────────────────────────────────
         st.markdown(
             source_footer([
