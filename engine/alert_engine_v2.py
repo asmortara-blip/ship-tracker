@@ -92,12 +92,20 @@ def _make(
 
 
 def _bdi_series(macro_data: dict):
-    """Return a sorted pandas Series of BDI values, or None."""
+    """Return a sorted pandas Series of BDI values, or None.
+
+    Tries multiple key conventions: the real FRED series ID `BSXRLM` first
+    (which is what `data/macro_data.py` actually fetches), then the legacy
+    aliases BDIY / BDI / bdi that older callers may still pass. Without the
+    BSXRLM check the alert engine silently misses every BDI alert when fed
+    macro_data straight from the FRED loader.
+    """
     try:
         import pandas as pd
-        # FRED canonical key is BDIY; older callers may still pass BDI/bdi.
         # Avoid `a or b` on DataFrames (DataFrame.__bool__ raises).
-        bdi_df = macro_data.get("BDIY")
+        bdi_df = macro_data.get("BSXRLM")
+        if bdi_df is None:
+            bdi_df = macro_data.get("BDIY")
         if bdi_df is None:
             bdi_df = macro_data.get("BDI")
         if bdi_df is None:

@@ -148,10 +148,16 @@ def test_make_generates_unique_ids() -> None:
 
 # ─── _bdi_series ────────────────────────────────────────────────────────────
 
-def test_bdi_series_finds_bdiy_key() -> None:
-    s = _bdi_series(_bdi_df([1000.0, 1100.0], key="BDIY"))
+def test_bdi_series_finds_bsxrlm_key() -> None:
+    """BSXRLM is the real FRED BDI series ID — must be supported."""
+    s = _bdi_series(_bdi_df([1000.0, 1100.0], key="BSXRLM"))
     assert s is not None
     assert list(s) == [1000.0, 1100.0]
+
+
+def test_bdi_series_falls_back_to_bdiy_key() -> None:
+    s = _bdi_series(_bdi_df([1000.0, 1100.0], key="BDIY"))
+    assert s is not None
 
 
 def test_bdi_series_falls_back_to_bdi_key() -> None:
@@ -165,13 +171,13 @@ def test_bdi_series_falls_back_to_lowercase_key() -> None:
 
 
 def test_bdi_series_returns_none_when_no_recognized_key() -> None:
-    # 'BSXRLM' is the real FRED key but the alert engine doesn't look for it.
-    s = _bdi_series(_bdi_df([1000.0, 1100.0], key="BSXRLM"))
+    """A bogus key still returns None — the fallback chain is bounded."""
+    s = _bdi_series(_bdi_df([1000.0, 1100.0], key="NOT_A_BDI_KEY"))
     assert s is None
 
 
 def test_bdi_series_returns_none_for_empty_df() -> None:
-    assert _bdi_series({"BDIY": pd.DataFrame()}) is None
+    assert _bdi_series({"BSXRLM": pd.DataFrame()}) is None
 
 
 # ─── check_bdi_alerts ───────────────────────────────────────────────────────
