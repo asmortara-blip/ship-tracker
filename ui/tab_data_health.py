@@ -516,6 +516,122 @@ def _render_sla_dashboard(source_rows: list[dict]) -> None:
         )
 
 
+def _render_llm_usage() -> None:
+    """LLM cost-telemetry panel — last 7 days of Anthropic API spend.
+
+    Consumes ``engine.llm_telemetry`` aggregations directly (no
+    re-aggregation). Wrapped in a single try/except so a telemetry
+    DB outage cannot break the rest of the Data Health tab. Imports
+    are lazy/defensive — same pattern as ``_render_delivery_channels``
+    in ``ui/tab_alerts.py``.
+    """
+    try:
+        from engine.llm_telemetry import get_recent_calls, get_usage_summary
+        from utils.helpers import format_usd
+
+        section_header(
+            "LLM Usage",
+            "Rolling 7-day Anthropic API spend across all platform LLM "
+            "callers (commentary, narration). Source: llm_calls table.",
+        )
+
+        summary = get_usage_summary(window_days=7)
+        total_calls = int(summary.get("total_calls", 0))
+
+        if total_calls == 0:
+            st.info("No LLM usage data yet.")
+            return
+
+        total_tokens_out = int(summary.get("total_tokens_out", 0))
+        total_cost = float(summary.get("total_cost_usd", 0.0))
+        avg_cost = total_cost / total_calls if total_calls else 0.0
+
+        metric_card_row(
+            [
+                {"label": "TOTAL CALLS (7D)",
+                 "value": f"{total_calls:,}",
+                 "accent": C_ACCENT,
+                 "sublabel": "Rolling 7-day window"},
+                {"label": "TOKENS OUT (7D)",
+                 "value": f"{total_tokens_out:,}",
+                 "accent": C_TEXT,
+                 "sublabel": "Anthropic completion tokens"},
+                {"label": "COST (7D)",
+                 "value": format_usd(total_cost, compact=False),
+                 "accent": C_HIGH if total_cost < 5.0 else (
+                     C_MOD if total_cost < 25.0 else C_LOW
+                 ),
+                 "sublabel": "Est. via public list pricing"},
+                {"label": "COST PER CALL",
+                 "value": format_usd(avg_cost, compact=False),
+                 "accent": C_TEXT,
+                 "sublabel": "Average over 7-day window"},
+            ],
+            columns=4,
+        )
+
+        by_source = summary.get("by_source", {}) or {}
+        by_model = summary.get("by_model", {}) or {}
+
+        col_l, col_r = st.columns(2, gap="small")
+        with col_l:
+            st.markdown(
+                f'<div style="font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+                f'margin:6px 0 6px 0">By Source</div>',
+                unsafe_allow_html=True,
+            )
+            if by_source:
+                headers = ["Source", "Calls", "Cost"]
+                rows: list[list[str]] = []
+                for src in sorted(by_source.keys()):
+                    info = by_source[src]
+                    rows.append([
+                        _sans(src, weight=600),
+                        _mono(f"{int(info.get('calls', 0)):,}", color=C_TEXT2),
+                        _mono(format_usd(float(info.get("cost", 0.0)), compact=False), color=C_TEXT),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.info("No source breakdown available.")
+
+        with col_r:
+            st.markdown(
+                f'<div style="font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+                f'margin:6px 0 6px 0">By Model</div>',
+                unsafe_allow_html=True,
+            )
+            if by_model:
+                headers = ["Model", "Calls", "Cost"]
+                rows = []
+                for mdl in sorted(by_model.keys()):
+                    info = by_model[mdl]
+                    rows.append([
+                        _sans(mdl, weight=600),
+                        _mono(f"{int(info.get('calls', 0)):,}", color=C_TEXT2),
+                        _mono(format_usd(float(info.get("cost", 0.0)), compact=False), color=C_TEXT),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.info("No model breakdown available.")
+
+        with st.expander("Recent calls (latest 20)", expanded=False):
+            recent = get_recent_calls(limit=20)
+            if recent:
+                st.dataframe(pd.DataFrame(recent), use_container_width=True)
+            else:
+                st.info("No recent calls recorded.")
+
+        st.markdown(
+            live_data_badge(DataSource.live("llm_calls table", notes="engine.llm_telemetry")),
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.exception(f"LLM usage panel render error: {exc}")
+        st.error("LLM usage panel unavailable.")
+
+
 def _render_log_viewer() -> None:
     """In-app log viewer — tail the active log file with level/text filters.
 
@@ -966,6 +1082,14 @@ def render(
         except Exception as exc:
             logger.error(f"SLA dashboard render error: {exc}")
             st.error("SLA dashboard unavailable.")
+
+        # ── Movement 1.6: LLM usage telemetry ──────────────────────────────
+        section_divider("LLM Usage")
+        try:
+            _render_llm_usage()
+        except Exception as exc:
+            logger.error(f"LLM usage render error: {exc}")
+            st.error("LLM usage panel unavailable.")
 
         # ── Movement 1.7: log viewer ───────────────────────────────────────
         section_divider("Logs")
