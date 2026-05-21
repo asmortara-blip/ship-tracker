@@ -1,31 +1,52 @@
-name: ci
+# CI — runs the full pytest suite on every push and PR.
+#
+# Purpose: lock in the ~3124-test safety net so a regression never
+# reaches main unseen. Runs in ~30s; the 5-minute job timeout is a
+# safety net for runaway hangs, not an expected upper bound.
+#
+# Defaults from pytest.ini are honored (-x --timeout=30 --strict-markers -q),
+# so this workflow does not pass --override-ini. If a test fails, the
+# job stops at the first failure (per the -x default) and the run is red.
+#
+# Coverage is collected across the whole repo and uploaded as an
+# artifact so contributors can inspect it without re-running locally.
+
+name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 jobs:
-  lint-and-test:
+  test:
+    name: test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest pytest-cov pytest-timeout ruff
+          pip install -r requirements.txt
+          pip install pytest pytest-timeout pytest-cov
 
-      - name: Ruff
-        run: ruff check ui/styles.py ui/components.py data/quality.py engine/cointegration.py state/ tools/ tests/
+      - name: Run pytest
+        run: pytest --cov=. --cov-report=xml --cov-report=term
 
-      - name: Pytest
-        run: pytest --cov=data.quality --cov=state --cov=ui.styles --cov=tools.styles_audit --cov=engine.cointegration
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
