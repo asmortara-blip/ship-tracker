@@ -67,7 +67,7 @@ Plumbing that unlocks every downstream track.
 ## Phase 5 — Harden and ship
 
 - [ ] Coverage: engine 80%, processing 70%, data 60%
-- [ ] Data-SLA dashboard in `tab_data_health`
+- [x] Data-SLA dashboard in `tab_data_health` — added `_render_sla_dashboard` between Source Catalog and Cache & Credentials. 4-card compliance summary (rate, warnings, breaches, avg age/TTL ratio), per-source horizontal bar chart with SLA threshold lines at 0.80× (warning) and 1.00× (breach), and a breach table sorted by severity. Uses the existing `ttl_h` and `age_h` fields from `_build_source_rows()` — no new data sources, pure synthesis.
 - [ ] State layer — SQLite via `database/schema.sql`
 - [x] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile` — single-stage Python 3.11-slim image, non-root user (UID 10001), Streamlit healthcheck against `/_stcore/health`, layered for cache-stable rebuilds. `.dockerignore` keeps cache/logs/tests/secrets out of the image. `docs/DEPLOYMENT.md` covers 3 paths (Streamlit Cloud / Docker / Fly.io) with required-env-vars table and volume-mount notes.
 - [ ] Observability — log rotation + in-app log viewer + basic metrics

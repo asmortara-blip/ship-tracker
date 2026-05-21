@@ -362,6 +362,160 @@ def _render_source_table(source_rows: list[dict]) -> None:
     )
 
 
+def _render_sla_dashboard(source_rows: list[dict]) -> None:
+    """SLA compliance view — actual cache age vs each source's TTL target.
+
+    For each source we compute:
+      margin_h         = ttl_h - age_h         (positive = within SLA)
+      ratio            = age_h / ttl_h         (>1.0 = breach)
+      breach_severity  = "OK" / "WARNING" / "BREACH"
+
+    Tier thresholds match the existing status classifier:
+      ratio <= 0.80           → OK
+      0.80 < ratio <= 1.00    → WARNING (approaching breach)
+      ratio > 1.00            → BREACH (past SLA target)
+    """
+    section_header(
+        "SLA Compliance",
+        "Each feed's age relative to its declared TTL (Time To Live). "
+        "A ratio > 1.0 means the source is past its freshness SLA; > 1.5 is critical.",
+    )
+
+    # Per-source ratio + classification.
+    sla_rows: list[dict] = []
+    for row in source_rows:
+        ttl = float(row.get("ttl_h", 0.0) or 0.0)
+        age = float(row.get("age_h", 0.0) or 0.0)
+        if ttl <= 0:
+            ratio = 0.0
+            tier = "n/a"
+        else:
+            ratio = age / ttl
+            if ratio <= 0.80:
+                tier = "OK"
+            elif ratio <= 1.00:
+                tier = "WARNING"
+            elif ratio <= 1.50:
+                tier = "BREACH"
+            else:
+                tier = "CRITICAL"
+        sla_rows.append({
+            **row,
+            "margin_h": ttl - age,
+            "ratio": ratio,
+            "tier": tier,
+        })
+
+    # ── Compliance summary cards ──────────────────────────────────────────
+    valid_rows = [r for r in sla_rows if r["tier"] != "n/a"]
+    total = len(valid_rows)
+    within = sum(1 for r in valid_rows if r["tier"] == "OK")
+    warning = sum(1 for r in valid_rows if r["tier"] == "WARNING")
+    breach = sum(1 for r in valid_rows if r["tier"] in ("BREACH", "CRITICAL"))
+    compliance_pct = (within / total * 100) if total else 0.0
+    avg_ratio = (sum(r["ratio"] for r in valid_rows) / total) if total else 0.0
+
+    metric_card_row(
+        [
+            {"label": "Compliance Rate",
+             "value": f"{compliance_pct:.0f}%",
+             "accent": (
+                 C_HIGH if compliance_pct >= 80 else
+                 (C_MOD if compliance_pct >= 60 else C_LOW)
+             ),
+             "sublabel": f"{within} of {total} feeds within SLA"},
+            {"label": "Warnings",
+             "value": f"{warning}",
+             "accent": C_MOD if warning > 0 else C_TEXT3,
+             "sublabel": "Within 80-100% of TTL"},
+            {"label": "Breaches",
+             "value": f"{breach}",
+             "accent": C_LOW if breach > 0 else C_HIGH,
+             "sublabel": "Past SLA target"},
+            {"label": "Avg Age/TTL Ratio",
+             "value": f"{avg_ratio:.2f}",
+             "accent": (
+                 C_HIGH if avg_ratio < 0.7 else
+                 (C_MOD if avg_ratio < 1.0 else C_LOW)
+             ),
+             "sublabel": "Across all feeds"},
+        ],
+        columns=4,
+    )
+
+    # ── Per-source ratio bar chart ────────────────────────────────────────
+    if valid_rows:
+        ranked = sorted(valid_rows, key=lambda r: r["ratio"], reverse=True)[:20]
+        names = [r["name"] for r in ranked]
+        ratios = [r["ratio"] for r in ranked]
+        colors = [
+            C_LOW if r["tier"] in ("BREACH", "CRITICAL") else
+            (C_MOD if r["tier"] == "WARNING" else C_HIGH)
+            for r in ranked
+        ]
+        fig = go.Figure(go.Bar(
+            x=ratios, y=names, orientation="h",
+            marker_color=colors,
+            text=[f"{r:.2f}" for r in ratios],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>Age/TTL = %{x:.2f}<extra></extra>"
+            ),
+        ))
+        # SLA threshold reference lines (0.8 = warn floor; 1.0 = breach floor).
+        fig.add_shape(
+            type="line", line=dict(color=C_MOD, dash="dot", width=1),
+            x0=0.80, x1=0.80, y0=-0.5, y1=len(names) - 0.5,
+        )
+        fig.add_shape(
+            type="line", line=dict(color=C_LOW, dash="dash", width=1.2),
+            x0=1.00, x1=1.00, y0=-0.5, y1=len(names) - 0.5,
+        )
+        apply_dark_layout(
+            fig, title="Age / TTL Ratio per Source (red dashed = SLA breach line)",
+            height=max(280, 22 * len(names) + 80),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(
+                title=dict(text="age / TTL (ratio)", font=dict(color=C_TEXT2, size=11)),
+                range=[0, max(1.6, max(ratios) * 1.1)],
+            ),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    # ── Breach list ───────────────────────────────────────────────────────
+    breaches = [r for r in sla_rows if r["tier"] in ("BREACH", "CRITICAL")]
+    if breaches:
+        breaches.sort(key=lambda r: r["ratio"], reverse=True)
+        st.markdown(
+            f'<div style="font-size:0.72rem;text-transform:uppercase;'
+            f'letter-spacing:0.10em;color:{C_LOW};font-weight:700;'
+            f'margin:14px 0 6px 0">Active SLA Breaches</div>',
+            unsafe_allow_html=True,
+        )
+        bheaders = ["Source", "Type", "TTL (h)", "Age (h)", "Ratio", "Margin (h)", "Severity"]
+        brows = []
+        for r in breaches:
+            sev_color = C_LOW if r["tier"] == "CRITICAL" else C_MOD
+            brows.append([
+                _sans(r["name"], color=C_TEXT, weight=600),
+                _sans(r["type"], color=C_TEXT2),
+                _mono(f"{r['ttl_h']:.1f}", color=C_TEXT2),
+                _mono(f"{r['age_h']:.1f}", color=C_LOW),
+                _mono(f"{r['ratio']:.2f}×", color=C_LOW),
+                _mono(f"{r['margin_h']:+.1f}", color=C_LOW),
+                _sans(r["tier"], color=sev_color, weight=700),
+            ])
+        wsj_market_table(bheaders, brows)
+    else:
+        st.markdown(
+            f'<div style="font-size:0.78rem;color:{C_HIGH};margin-top:14px">'
+            f'✓ No active SLA breaches. All {total} feeds within their TTL.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _render_cache_performance(source_rows: list[dict]) -> None:
     section_header("Cache Size & Performance", "Per-source footprint, fetch volume, and hit rate (illustrative where no live telemetry).")
     headers = ["Data Source", "Cache Size", "Fetches (7d)", "Avg Fetch (ms)", "Hit Rate"]
@@ -688,6 +842,14 @@ def render(
         except Exception as exc:
             logger.error(f"Source table render error: {exc}")
             st.error("Source table unavailable.")
+
+        # ── Movement 1.5: SLA dashboard ────────────────────────────────────
+        section_divider("SLA")
+        try:
+            _render_sla_dashboard(source_rows)
+        except Exception as exc:
+            logger.error(f"SLA dashboard render error: {exc}")
+            st.error("SLA dashboard unavailable.")
 
         # ── Movement 2: performance & credentials ───────────────────────────
         section_divider("Cache & Credentials")
