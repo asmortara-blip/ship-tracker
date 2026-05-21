@@ -1171,9 +1171,9 @@ elif active_section == "carriers":
 
 # ── 6. Trade & Macro ─────────────────────────────────────────────────────
 elif active_section == "trade_macro":
-    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         "Macro", "Bellwethers", "Trade Flows", "Trade War", "Geopolitical",
-        "Chokepoints", "Trade Finance", "E-Commerce",
+        "Chokepoints", "Trade Finance", "E-Commerce", "Nowcast",
     ])
     with t0:
         try:
@@ -1224,6 +1224,16 @@ elif active_section == "trade_macro":
             _r(trade_data, freight_data, macro_data, route_results)
         except Exception as e:
             st.error(f"E-Commerce error: {e}")
+    with t8:
+        try:
+            from ui.tab_nowcast import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Nowcast error: {e}")
 
 # ── 7. Supply Chain ───────────────────────────────────────────────────────
 elif active_section == "supply_chain":
