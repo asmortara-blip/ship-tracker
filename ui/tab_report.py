@@ -16,7 +16,7 @@ Sections
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import streamlit as st
@@ -602,6 +602,105 @@ def _render_history() -> None:
                             key=f"dl_hist_{rep_id}_{i}",
                             use_container_width=True,
                         )
+
+    # Per-row public-share controls — uses attribute access on ReportMeta.
+    _render_share_links(reports[:10])
+
+
+def _render_share_links(reports: list) -> None:
+    """Render per-report 'Generate share link' / 'Revoke' / 'Regenerate' controls."""
+    from utils.report_history import make_public, revoke_public
+
+    if not reports:
+        return
+
+    base_url = os.environ.get("SHARE_BASE_URL", "https://your-app-domain").rstrip("/")
+    now_utc = datetime.now(timezone.utc)
+
+    st.markdown(
+        '<div class="sub-section-header">Public Share Links</div>',
+        unsafe_allow_html=True,
+    )
+    if not os.environ.get("SHARE_BASE_URL"):
+        st.caption("Configure SHARE_BASE_URL to display the full URL.")
+
+    for rep in reports:
+        try:
+            rep_id = getattr(rep, "report_id", None)
+            if not rep_id:
+                continue
+            rep_label = getattr(rep, "report_date", None) or rep_id
+            slug = getattr(rep, "public_slug", "") or ""
+            expires_raw = getattr(rep, "public_expires_at", "") or ""
+            expires_dt = None
+            if expires_raw:
+                try:
+                    expires_dt = datetime.fromisoformat(expires_raw)
+                    if expires_dt.tzinfo is None:
+                        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    expires_dt = None
+
+            with st.expander(f"Share - {rep_label} ({rep_id[:8]})", expanded=False):
+                # State 1: no slug -> Generate
+                if not slug:
+                    if st.button("Generate share link", key=f"share_{rep_id}"):
+                        try:
+                            new_slug = make_public(rep_id, expires_in_days=30)
+                            if new_slug:
+                                expires_at = now_utc + timedelta(days=30)
+                                st.success(f"Share link created. Expires {expires_at.strftime('%Y-%m-%d %H:%M UTC')}.")
+                                st.code(new_slug)
+                                st.code(f"{base_url}/r/{new_slug}")
+                                st.rerun()
+                            else:
+                                st.error("Could not generate share link.")
+                        except Exception as exc:
+                            logger.error(f"make_public failed for {rep_id}: {exc}")
+                            st.error(f"Share link error: {exc}")
+                # State 3: slug exists but expired -> Regenerate
+                elif expires_dt is not None and expires_dt < now_utc:
+                    st.warning(f"Link expired on {expires_dt.strftime('%Y-%m-%d %H:%M UTC')}.")
+                    st.code(slug)
+                    if st.button("Regenerate share link", key=f"regen_{rep_id}"):
+                        try:
+                            new_slug = make_public(rep_id, expires_in_days=30)
+                            if new_slug:
+                                st.success("Share link regenerated.")
+                                st.code(new_slug)
+                                st.code(f"{base_url}/r/{new_slug}")
+                                st.rerun()
+                            else:
+                                st.error("Could not regenerate share link.")
+                        except Exception as exc:
+                            logger.error(f"make_public regenerate failed for {rep_id}: {exc}")
+                            st.error(f"Share link error: {exc}")
+                # State 2: slug exists and valid -> show + Revoke
+                else:
+                    expiry_str = (
+                        expires_dt.strftime("%Y-%m-%d %H:%M UTC")
+                        if expires_dt is not None else "unknown"
+                    )
+                    st.caption(f"Active - expires {expiry_str}")
+                    st.code(slug)
+                    st.code(f"{base_url}/r/{slug}")
+                    if st.button("Revoke", key=f"revoke_{rep_id}"):
+                        try:
+                            ok = revoke_public(rep_id)
+                            if ok:
+                                try:
+                                    st.toast("Share link revoked.")
+                                except Exception:
+                                    pass
+                                st.success("Share link revoked.")
+                                st.rerun()
+                            else:
+                                st.error("Could not revoke share link.")
+                        except Exception as exc:
+                            logger.error(f"revoke_public failed for {rep_id}: {exc}")
+                            st.error(f"Share link error: {exc}")
+        except Exception as exc:
+            logger.warning(f"Could not render share row: {exc}")
 
 
 # ── Section 7: Data source status ─────────────────────────────────────────────

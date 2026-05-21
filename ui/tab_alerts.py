@@ -915,9 +915,143 @@ def _render_rules_manager() -> None:
         st.error("Rules management unavailable.")
 
 
+def _render_acknowledgment_analytics() -> None:
+    """Render acknowledgment analytics for the persisted alerts table.
+
+    Reads aggregates from ``engine.alert_analytics.compute_alert_metrics`` and
+    surfaces a 4-KPI strip + severity-breakdown table + by-day line chart.
+    Wrapped in try/except so an analytics failure cannot break the rest of
+    the Alert Center tab. All engine imports are lazy to mirror the
+    ``_render_delivery_channels`` pattern.
+    """
+    try:
+        from engine.alert_analytics import (
+            compute_alert_metrics,
+            get_unacknowledged_critical,
+        )
+
+        section_divider("Acknowledgment Analytics")
+
+        window = st.selectbox(
+            "Window",
+            options=[7, 14, 30, 60, 90],
+            index=2,
+            format_func=lambda d: f"{d} days",
+            key="ack_analytics_window",
+            help="Look-back window for ack metrics over the alerts table.",
+        )
+
+        metrics = compute_alert_metrics(window_days=int(window))
+        unack_critical = get_unacknowledged_critical(window_days=int(window))
+
+        if metrics.total_alerts == 0:
+            st.info("No alerts yet in this window.")
+            return
+
+        # ── KPI strip ──────────────────────────────────────────────────────
+        ack_pct = metrics.ack_rate * 100.0
+        unack_crit_count = len(unack_critical)
+        if metrics.median_time_to_ack_hours is None:
+            ttack_value = "—"
+        else:
+            total_min = int(round(metrics.median_time_to_ack_hours * 60))
+            h, m = divmod(max(total_min, 0), 60)
+            ttack_value = f"{h}h {m}m"
+
+        metric_card_row([
+            {
+                "label":    "Total Alerts",
+                "value":    str(metrics.total_alerts),
+                "accent":   C_ACCENT,
+                "sublabel": f"last {int(window)} days",
+            },
+            {
+                "label":    "Acknowledged Rate",
+                "value":    f"{ack_pct:.1f}%",
+                "accent":   C_HIGH if ack_pct >= 80 else (C_MOD if ack_pct >= 50 else C_LOW),
+                "sublabel": f"{metrics.acknowledged_count} of {metrics.total_alerts}",
+            },
+            {
+                "label":    "Unacknowledged Critical",
+                "value":    str(unack_crit_count),
+                "accent":   C_LOW if unack_crit_count > 0 else C_HIGH,
+                "sublabel": "needs attention" if unack_crit_count else "all clear",
+            },
+            {
+                "label":    "Median Time to Ack",
+                "value":    ttack_value,
+                "accent":   C_MOD,
+                "sublabel": "from acked rows",
+            },
+        ], columns=4)
+
+        # ── Severity breakdown + by-day chart ──────────────────────────────
+        bc1, bc2 = st.columns(2, gap="medium")
+        with bc1:
+            st.html('<div class="sub-section-header">By Severity</div>')
+            if metrics.by_severity:
+                headers = ["Severity", "Total", "Acked", "Rate"]
+                rows = []
+                for sev_key in sorted(
+                    metrics.by_severity.keys(),
+                    key=lambda s: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(s, 99),
+                ):
+                    stats = metrics.by_severity[sev_key]
+                    rate_pct = stats.get("ack_rate", 0.0) * 100.0
+                    rate_color = (
+                        C_HIGH if rate_pct >= 80
+                        else (C_MOD if rate_pct >= 50 else C_LOW)
+                    )
+                    rows.append([
+                        _sev_badge(sev_key.title()),
+                        _mono(str(stats.get("total", 0)), color=C_TEXT, weight=700),
+                        _mono(str(stats.get("ack_count", 0)), color=C_TEXT2, weight=600),
+                        _mono(f"{rate_pct:.0f}%", color=rate_color, weight=700),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.caption("No severity data in this window.")
+
+        with bc2:
+            st.html('<div class="sub-section-header">Daily Volume</div>')
+            if metrics.by_day:
+                import pandas as pd
+                df = pd.DataFrame(metrics.by_day)
+                df = df.rename(columns={"total": "Total", "ack_count": "Acked"})
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")[["Total", "Acked"]]
+                st.line_chart(df, height=220)
+            else:
+                st.caption("No daily data in this window.")
+
+        # ── Unacknowledged Critical detail expander ────────────────────────
+        if unack_critical:
+            with st.expander(
+                f"Unacknowledged Critical Alerts ({len(unack_critical)})",
+                expanded=False,
+            ):
+                rows = []
+                for a in unack_critical:
+                    rows.append({
+                        "Created":   _fmt_dt(getattr(a, "created_at", "")),
+                        "Type":      getattr(a, "alert_type", ""),
+                        "Title":     getattr(a, "title", ""),
+                        "Value":     getattr(a, "value", 0.0),
+                        "Threshold": getattr(a, "threshold", 0.0),
+                        "Change %":  getattr(a, "change_pct", 0.0),
+                    })
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+    except Exception:
+        logger.exception("Acknowledgment analytics render failed")
+        st.error("Acknowledgment analytics unavailable.")
+
+
 def _render_delivery_channels() -> None:
-    """Manage outbound Slack + Email delivery channels and trigger pending
-    deliveries.
+    """Manage outbound delivery channels and trigger pending deliveries.
+
+    Supports all six channel kinds exposed by ``engine.alert_delivery``:
+    slack, email, sms, webhook, discord, and pagerduty. Each channel can
+    operate in ``immediate`` or ``daily`` digest mode.
 
     Wires through ``engine.alert_delivery`` for persistence + transport.
     Wrapped in a single try/except so a delivery outage cannot break the
@@ -936,16 +1070,30 @@ def _render_delivery_channels() -> None:
         )
         from engine.alert_engine_v2 import _make as _make_alert
 
-        # Forgiving validation patterns: case-insensitive Slack host check;
-        # basic "something@something.something" email shape.
+        # Forgiving validation patterns: case-insensitive checks where it
+        # matters; pragmatic shape checks elsewhere. PagerDuty keys vary
+        # slightly in format so a short key triggers a warning, not a block.
         _SLACK_URL_RE = re.compile(r"^https?://hooks\.slack\.com/", re.IGNORECASE)
+        _DISCORD_URL_RE = re.compile(
+            r"^https?://(discord\.com|discordapp\.com)/api/webhooks/",
+            re.IGNORECASE,
+        )
         _EMAIL_RE = re.compile(r"^\S+@\S+\.\S+$")
-        _KIND_LABEL = {"slack": "slack", "email": "email"}
+        _SMS_RE = re.compile(r"^\+[1-9]\d{1,14}$")
+        _KIND_LABEL = {
+            "slack": "slack",
+            "email": "email",
+            "sms": "sms",
+            "webhook": "webhook",
+            "discord": "discord",
+            "pagerduty": "pagerduty",
+        }
 
         section_divider("Delivery Channels")
         section_header(
             "Outbound Notifications",
-            "Push triggered alerts to Slack webhooks or Email recipients.",
+            "Push triggered alerts to Slack, Email, SMS, generic webhooks, "
+            "Discord, or PagerDuty.",
         )
 
         # ── Existing channels list ─────────────────────────────────────────
@@ -957,16 +1105,20 @@ def _render_delivery_channels() -> None:
             channels = []
 
         if channels:
-            headers = ["Name", "Kind", "Threshold", "Enabled", "Created"]
+            headers = ["Name", "Kind", "Threshold", "Digest", "Enabled", "Created"]
             rows = []
             for ch in channels:
                 kind_label = _KIND_LABEL.get(ch.kind, ch.kind)
+                digest_label = getattr(ch, "digest_mode", "immediate") or "immediate"
                 rows.append([
                     _sans(ch.name, color=C_TEXT, weight=700),
                     _sans(kind_label, color=C_TEXT2, weight=600),
                     _sev_badge(ch.severity_threshold.title()
                                if ch.severity_threshold in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
                                else ch.severity_threshold),
+                    _sans(digest_label,
+                          color=C_ACCENT if digest_label == "daily" else C_TEXT2,
+                          weight=600),
                     _sans("On" if ch.enabled else "Off",
                           color=C_HIGH if ch.enabled else C_TEXT3, weight=600),
                     _mono(_fmt_dt(ch.created_at), color=C_TEXT3, weight=400),
@@ -1016,6 +1168,49 @@ def _render_delivery_channels() -> None:
             st.info("No delivery channels configured yet. Add one below.")
 
         # ── Add Channel form ───────────────────────────────────────────────
+        # Per-kind copy for the target field + an informational block listing
+        # any env-var prerequisites (auth via env vars vs auth in target).
+        _KIND_COPY: dict[str, dict] = {
+            "slack": {
+                "label": "Webhook URL",
+                "placeholder": "https://hooks.slack.com/services/...",
+                "info": None,  # auth lives in the URL itself
+            },
+            "email": {
+                "label": "Recipient Email",
+                "placeholder": "alerts@example.com",
+                "info": (
+                    "Email delivery requires SMTP env vars: `SMTP_HOST`, "
+                    "`SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, "
+                    "`SMTP_FROM_ADDRESS`. See docs/AUTH.md for setup."
+                ),
+            },
+            "sms": {
+                "label": "Phone Number (E.164)",
+                "placeholder": "+15551234567",
+                "info": (
+                    "SMS delivery requires Twilio env vars: "
+                    "`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, "
+                    "`TWILIO_FROM_NUMBER`."
+                ),
+            },
+            "webhook": {
+                "label": "Webhook URL",
+                "placeholder": "https://your-endpoint.example.com/alerts",
+                "info": None,  # auth handled by the receiver
+            },
+            "discord": {
+                "label": "Discord Webhook URL",
+                "placeholder": "https://discord.com/api/webhooks/...",
+                "info": None,  # auth lives in the URL itself
+            },
+            "pagerduty": {
+                "label": "Integration Key",
+                "placeholder": "R0123ABCDEF...",
+                "info": None,  # routing key in target, no env vars needed
+            },
+        }
+
         with st.expander("Add Channel", expanded=not channels):
             with st.form("add_channel_form", clear_on_submit=True):
                 ch_name = st.text_input(
@@ -1024,29 +1219,35 @@ def _render_delivery_channels() -> None:
                 )
                 ch_kind = st.selectbox(
                     "Kind",
-                    options=["slack", "email"],
-                    help="slack → POST to webhook URL · email → SMTP to recipient.",
+                    options=["slack", "email", "sms", "webhook", "discord", "pagerduty"],
+                    help=(
+                        "slack/discord → POST to webhook URL · email → SMTP "
+                        "to recipient · sms → Twilio to E.164 number · "
+                        "webhook → POST JSON to any URL · "
+                        "pagerduty → trigger PagerDuty incident."
+                    ),
                 )
-                if ch_kind == "email":
-                    ch_target = st.text_input(
-                        "Recipient Email",
-                        placeholder="alerts@example.com",
-                    )
-                    st.info(
-                        "Email delivery requires SMTP env vars: "
-                        "`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, "
-                        "`SMTP_FROM_ADDRESS`. See docs/AUTH.md for setup."
-                    )
-                else:
-                    ch_target = st.text_input(
-                        "Webhook URL",
-                        placeholder="https://hooks.slack.com/services/...",
-                    )
+                _copy = _KIND_COPY.get(ch_kind, _KIND_COPY["slack"])
+                ch_target = st.text_input(
+                    _copy["label"],
+                    placeholder=_copy["placeholder"],
+                )
+                if _copy["info"]:
+                    st.info(_copy["info"])
                 ch_threshold = st.selectbox(
                     "Severity threshold",
                     options=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
                     index=2,
                     help="Channel delivers alerts at this severity or higher.",
+                )
+                ch_digest = st.selectbox(
+                    "Digest mode",
+                    options=["immediate", "daily"],
+                    index=0,
+                    help=(
+                        "Immediate: send every alert as it fires. "
+                        "Daily: batch alerts into a single daily message."
+                    ),
                 )
                 ch_enabled = st.checkbox("Enabled", value=True)
                 submitted = st.form_submit_button(
@@ -1055,23 +1256,46 @@ def _render_delivery_channels() -> None:
 
             if submitted:
                 target_clean = ch_target.strip()
+                pd_shape_warning = False
                 if not ch_name.strip():
                     st.warning("Please enter a channel name.")
                 elif not target_clean:
-                    st.warning(
-                        "Please enter a recipient email."
-                        if ch_kind == "email"
-                        else "Please enter a webhook URL."
-                    )
+                    st.warning(f"Please enter a {_copy['label'].lower()}.")
                 elif ch_kind == "slack" and not _SLACK_URL_RE.match(target_clean):
                     st.error(
                         "Slack webhook URLs must start with https://hooks.slack.com/"
+                    )
+                elif ch_kind == "discord" and not _DISCORD_URL_RE.match(target_clean):
+                    st.error(
+                        "Discord webhook URLs must start with "
+                        "https://discord.com/api/webhooks/ or "
+                        "https://discordapp.com/api/webhooks/"
                     )
                 elif ch_kind == "email" and not _EMAIL_RE.match(target_clean):
                     st.error(
                         "Recipient must be a valid email address (e.g. you@example.com)."
                     )
+                elif ch_kind == "sms" and not _SMS_RE.match(target_clean):
+                    st.error(
+                        "SMS recipient must be E.164 format "
+                        "(e.g. +15551234567 — leading +, no spaces or dashes)."
+                    )
+                elif ch_kind == "webhook" and not (
+                    target_clean.startswith("http://")
+                    or target_clean.startswith("https://")
+                ):
+                    st.error("Webhook URL must start with http:// or https://")
                 else:
+                    # PagerDuty integration keys are usually 32 chars but the
+                    # format varies slightly — surface a warning and still
+                    # allow the save.
+                    if ch_kind == "pagerduty" and len(target_clean) < 32:
+                        st.warning(
+                            "PagerDuty integration keys are typically 32 "
+                            "characters. Saving anyway — verify the key if "
+                            "deliveries fail."
+                        )
+                        pd_shape_warning = True
                     try:
                         save_channel(DeliveryChannel(
                             channel_id=str(uuid4()),
@@ -1080,9 +1304,11 @@ def _render_delivery_channels() -> None:
                             target=target_clean,
                             severity_threshold=ch_threshold,
                             enabled=bool(ch_enabled),
+                            digest_mode=ch_digest,
                         ))
                         st.success(f"Saved channel '{ch_name.strip()}'.")
-                        st.rerun()
+                        if not pd_shape_warning:
+                            st.rerun()
                     except Exception as exc:
                         st.error(f"Save failed: {exc}")
 
@@ -1159,6 +1385,8 @@ def render(
 
         st.divider()
         _render_history()
+
+        _render_acknowledgment_analytics()
 
         section_divider("Configuration")
         _render_notifications()
