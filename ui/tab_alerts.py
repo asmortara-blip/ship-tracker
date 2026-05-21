@@ -916,26 +916,36 @@ def _render_rules_manager() -> None:
 
 
 def _render_delivery_channels() -> None:
-    """Manage outbound Slack delivery channels and trigger pending deliveries.
+    """Manage outbound Slack + Email delivery channels and trigger pending
+    deliveries.
 
     Wires through ``engine.alert_delivery`` for persistence + transport.
     Wrapped in a single try/except so a delivery outage cannot break the
     rest of the Alert Center tab.
     """
     try:
+        import re
         from uuid import uuid4
         from engine.alert_delivery import (
             DeliveryChannel,
             delete_channel,
+            deliver_alert,
             deliver_pending,
             load_channels,
             save_channel,
         )
+        from engine.alert_engine_v2 import _make as _make_alert
+
+        # Forgiving validation patterns: case-insensitive Slack host check;
+        # basic "something@something.something" email shape.
+        _SLACK_URL_RE = re.compile(r"^https?://hooks\.slack\.com/", re.IGNORECASE)
+        _EMAIL_RE = re.compile(r"^\S+@\S+\.\S+$")
+        _KIND_LABEL = {"slack": "slack", "email": "email"}
 
         section_divider("Delivery Channels")
         section_header(
             "Outbound Notifications",
-            "Push triggered alerts to Slack via incoming webhooks.",
+            "Push triggered alerts to Slack webhooks or Email recipients.",
         )
 
         # ── Existing channels list ─────────────────────────────────────────
@@ -950,9 +960,10 @@ def _render_delivery_channels() -> None:
             headers = ["Name", "Kind", "Threshold", "Enabled", "Created"]
             rows = []
             for ch in channels:
+                kind_label = _KIND_LABEL.get(ch.kind, ch.kind)
                 rows.append([
                     _sans(ch.name, color=C_TEXT, weight=700),
-                    _sans(ch.kind, color=C_TEXT2, weight=500),
+                    _sans(kind_label, color=C_TEXT2, weight=600),
                     _sev_badge(ch.severity_threshold.title()
                                if ch.severity_threshold in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
                                else ch.severity_threshold),
@@ -962,10 +973,34 @@ def _render_delivery_channels() -> None:
                 ])
             wsj_market_table(headers, rows)
 
-            # Delete buttons — one column per channel, capped at 4 wide.
-            del_cols = st.columns(min(4, len(channels)))
-            for idx, ch in enumerate(channels):
-                with del_cols[idx % len(del_cols)]:
+            # Per-channel action buttons — Test + Delete laid out side by side.
+            for ch in channels:
+                act_cols = st.columns([1, 1, 4], gap="small")
+                with act_cols[0]:
+                    if st.button(
+                        f"📨 Test {ch.name}",
+                        key=f"test_channel_{ch.channel_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            test_alert = _make_alert(
+                                alert_type="TEST",
+                                severity=ch.severity_threshold,
+                                title=f"Test alert from {ch.name}",
+                                body="If you can see this, delivery is working.",
+                            )
+                            result = deliver_alert(test_alert, ch)
+                            if result.success:
+                                st.success(
+                                    f"Test sent — channel delivered successfully "
+                                    f"(status {result.status_code})."
+                                )
+                            else:
+                                st.error(f"Test failed: {result.error_msg}")
+                        except Exception as exc:
+                            logger.exception("test channel delivery failed")
+                            st.error(f"Test failed: {exc}")
+                with act_cols[1]:
                     if st.button(
                         f"🗑 Delete {ch.name}",
                         key=f"del_channel_{ch.channel_id}",
@@ -987,11 +1022,26 @@ def _render_delivery_channels() -> None:
                     "Channel name",
                     placeholder="e.g. Trading desk Slack",
                 )
-                ch_kind = st.selectbox("Kind", options=["slack"])
-                ch_target = st.text_input(
-                    "Webhook URL",
-                    placeholder="https://hooks.slack.com/services/...",
+                ch_kind = st.selectbox(
+                    "Kind",
+                    options=["slack", "email"],
+                    help="slack → POST to webhook URL · email → SMTP to recipient.",
                 )
+                if ch_kind == "email":
+                    ch_target = st.text_input(
+                        "Recipient Email",
+                        placeholder="alerts@example.com",
+                    )
+                    st.info(
+                        "Email delivery requires SMTP env vars: "
+                        "`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, "
+                        "`SMTP_FROM_ADDRESS`. See docs/AUTH.md for setup."
+                    )
+                else:
+                    ch_target = st.text_input(
+                        "Webhook URL",
+                        placeholder="https://hooks.slack.com/services/...",
+                    )
                 ch_threshold = st.selectbox(
                     "Severity threshold",
                     options=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
@@ -1004,17 +1054,30 @@ def _render_delivery_channels() -> None:
                 )
 
             if submitted:
+                target_clean = ch_target.strip()
                 if not ch_name.strip():
                     st.warning("Please enter a channel name.")
-                elif not ch_target.strip():
-                    st.warning("Please enter a webhook URL.")
+                elif not target_clean:
+                    st.warning(
+                        "Please enter a recipient email."
+                        if ch_kind == "email"
+                        else "Please enter a webhook URL."
+                    )
+                elif ch_kind == "slack" and not _SLACK_URL_RE.match(target_clean):
+                    st.error(
+                        "Slack webhook URLs must start with https://hooks.slack.com/"
+                    )
+                elif ch_kind == "email" and not _EMAIL_RE.match(target_clean):
+                    st.error(
+                        "Recipient must be a valid email address (e.g. you@example.com)."
+                    )
                 else:
                     try:
                         save_channel(DeliveryChannel(
                             channel_id=str(uuid4()),
                             name=ch_name.strip(),
                             kind=ch_kind,
-                            target=ch_target.strip(),
+                            target=target_clean,
                             severity_threshold=ch_threshold,
                             enabled=bool(ch_enabled),
                         ))
