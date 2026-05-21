@@ -938,10 +938,10 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
         "Markets", "Sector Dashboard", "Alpha Signals", "Results",
         "Indices", "Derivatives", "Scenarios", "Monte Carlo",
-        "Backtesting", "Portfolio", "Options & Flow",
+        "Backtesting", "Portfolio", "Options & Flow", "Convergence",
     ])
     with t0:
         try:
@@ -1009,6 +1009,16 @@ elif active_section == "markets":
             tab_options.render(stock_data, insights, signals=insights)
         except Exception as e:
             st.error(f"Options & Flow error: {e}")
+    with t11:
+        try:
+            from ui.tab_convergence import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Convergence error: {e}")
 
 # ── 3. Disruption Alpha ───────────────────────────────────────────────────
 elif active_section == "disruption_alpha":

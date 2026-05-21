@@ -56,7 +56,7 @@ Plumbing that unlocks every downstream track.
 
 ## Phase 4 — New analytical tabs
 
-- [ ] `tab_convergence.py` — Convergence & Divergence Lab
+- [x] `tab_convergence.py` — Convergence & Divergence Lab (added as 12th tab in Markets section). Built on new `processing/convergence_analyzer.py` (23 tests) — pairwise rolling-correlation analysis with Converging/Diverging/Decoupling/Stable classification. Tab: interactive window sliders, 3-card hero (top per direction), ranked table sorted by |Δr|, long-window correlation heatmap.
 - [ ] `tab_nowcast.py` — Trade Nowcast
 - [x] `tab_idea_engine.py` — Signal-to-Trade Ideas (wired as 6th tab in Disruption Alpha section). Synthesizes disruption_cascade ideas + scenario overlay (sidebar-controlled) + portfolio_optimizer mini. Hero / ranked table with Δ vs scenario / per-idea cascade rationale expanders / max-Sharpe weights on top bullish names.
 - [ ] `tab_risk_lab.py` — Risk Lab
