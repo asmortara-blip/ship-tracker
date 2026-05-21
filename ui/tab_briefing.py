@@ -310,9 +310,83 @@ def _render_inputs_panel(signals: dict) -> None:
         st.markdown(chips, unsafe_allow_html=True)
 
 
-def _render_actions_bar(ctx) -> None:
-    """Refresh button + brief usage notes."""
-    cols = st.columns([1, 4], gap="small")
+def _build_export_snapshot(narration, signals: dict):
+    """Translate the current briefing into a ViewSnapshot for PDF export.
+
+    Mirrors the on-screen content: headline, multi-paragraph body, one
+    section per narration section, plus an Inputs section showing the
+    SSI snapshot, top route forecasts table, and indicator chips. The
+    snapshot is built lazily — caller wraps in try/except so failure
+    here can't take down the tab.
+    """
+    from utils.view_export import ViewSection, ViewSnapshot, ViewTable
+
+    sections = [
+        ViewSection(title=s.title, bullets=list(s.bullets))
+        for s in narration.sections
+    ]
+
+    # Inputs section: SSI snapshot + top forecasts table + indicators chip line.
+    stress_report = signals.get("stress_report")
+    forecasts = signals.get("forecasts", [])
+    indicators = signals.get("indicators", {})
+    input_bullets: list[str] = []
+    input_tables: list[ViewTable] = []
+
+    if stress_report is not None:
+        input_bullets.extend([
+            f"SSI: {getattr(stress_report, 'overall_ssi', 0.0):.2f} "
+            f"({getattr(stress_report, 'ssi_label', '')})",
+            f"Active disruptions: {len(getattr(stress_report, 'top_disruptions', []) or [])}",
+            f"Routes tracked: {len(getattr(stress_report, 'route_stress', []) or [])}",
+            f"WoW SSI change: {getattr(stress_report, 'wow_change', 0.0)*100:+.1f}pp",
+        ])
+    if forecasts:
+        rows = []
+        for f in forecasts:
+            rows.append([
+                str(getattr(f, "route_name", "") or getattr(f, "route_id", "")),
+                f"{float(getattr(f, 'current_stress', 0.0)):.2f}",
+                f"{float(getattr(f, 'stress_30d', 0.0)):.2f}",
+                str(getattr(f, "trend", "")),
+                f"{float(getattr(f, 'rate_forecast_pct', 0.0))*100:+5.1f}%",
+            ])
+        input_tables.append(ViewTable(
+            title="Top Route Forecasts",
+            headers=["Route", "Current", "30d", "Trend", "Rate 30d %"],
+            rows=rows,
+        ))
+    if indicators:
+        input_bullets.append(
+            "Indicators: " + " · ".join(f"{k}={v:.2f}" for k, v in indicators.items())
+        )
+
+    if input_bullets or input_tables:
+        sections.append(ViewSection(
+            title="Today's Inputs",
+            bullets=input_bullets,
+            tables=input_tables,
+        ))
+
+    source_label = "LLM (Claude)" if narration.source == "claude" else "Template"
+    return ViewSnapshot(
+        title=f"Daily Briefing — {narration.date}",
+        subtitle=f"Source: {source_label}"
+        + (f" · {narration.model}" if narration.source == "claude" and narration.model else ""),
+        headline=narration.headline,
+        body=narration.body,
+        sections=sections,
+        footer_note=(
+            "Ship Tracker daily briefing. Narration via engine.narration_engine; "
+            "structured inputs from shipping_stress_index + disruption_forecast."
+        ),
+        generated_at=narration.generated_at,
+    )
+
+
+def _render_actions_bar(ctx, narration, signals: dict) -> None:
+    """Refresh button + PDF export + usage notes."""
+    cols = st.columns([1, 1, 4], gap="small")
     with cols[0]:
         if st.button("↻ Force refresh", use_container_width=True,
                      key="briefing_refresh"):
@@ -328,12 +402,32 @@ def _render_actions_bar(ctx) -> None:
             except Exception as exc:
                 st.error(f"Refresh failed: {exc}")
     with cols[1]:
+        try:
+            from utils.view_export import build_view_pdf
+            snapshot = _build_export_snapshot(narration, signals)
+            pdf_bytes = build_view_pdf(snapshot)
+            filename = f"briefing_{narration.date}.pdf"
+            st.download_button(
+                "⇩ Export PDF",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                use_container_width=True,
+                key="briefing_export_pdf",
+            )
+        except Exception as exc:
+            logger.debug(f"tab_briefing: PDF export unavailable: {exc}")
+            st.button("⇩ Export PDF", disabled=True, use_container_width=True,
+                       key="briefing_export_pdf_disabled",
+                       help=f"PDF export unavailable: {exc}")
+    with cols[2]:
         st.markdown(
             f'<div style="font-size:0.72rem;color:{C_TEXT3};line-height:1.45;'
             f'padding-top:8px">'
             f'The briefing is cached per UTC day — first viewer of each day '
-            f'triggers a fresh call. Use ↻ to force regeneration. The LLM '
-            f'path requires <code>ANTHROPIC_API_KEY</code> in <code>st.secrets</code> '
+            f'triggers a fresh call. Use ↻ to force regeneration, ⇩ to '
+            f'download the current view as a PDF. The LLM path requires '
+            f'<code>ANTHROPIC_API_KEY</code> in <code>st.secrets</code> '
             f'or env; without it the template path runs.'
             f'</div>',
             unsafe_allow_html=True,
@@ -388,8 +482,8 @@ def render(
 
         section_divider("Actions")
 
-        # ── 5. Refresh button + notes ──────────────────────────────────────
-        _render_actions_bar(ctx)
+        # ── 5. Refresh button + PDF export + notes ─────────────────────────
+        _render_actions_bar(ctx, narration, signals)
 
         # ── 6. Source footer ───────────────────────────────────────────────
         st.markdown(
