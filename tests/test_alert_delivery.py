@@ -39,7 +39,9 @@ from engine.alert_delivery import (
     _TwilioConfig,
     delete_channel,
     deliver_alert,
+    deliver_digest,
     deliver_pending,
+    format_digest_payload,
     format_discord_payload,
     format_email_payload,
     format_pagerduty_payload,
@@ -1704,4 +1706,514 @@ def test_deliver_alert_kind_discord_disabled_skips(monkeypatch) -> None:
     result = deliver_alert(_make_alert("CRITICAL"), channel)
     assert result.success is True
     assert "disabled" in result.error_msg
+    assert posted["n"] == 0
+
+
+# ─── Digest formatting + delivery ─────────────────────────────────────────
+
+def _digest_alerts(spec: list[tuple[str, str]]) -> list[ShippingAlert]:
+    """Build a list of alerts from ``[(severity, alert_id), ...]`` tuples.
+    Created_at is staggered so created_at-desc sort is deterministic — the
+    later the position in the input list, the newer the alert."""
+    base = datetime.now(timezone.utc) - timedelta(hours=24)
+    out: list[ShippingAlert] = []
+    for i, (sev, aid) in enumerate(spec):
+        ts = (base + timedelta(minutes=i)).isoformat()
+        out.append(_make_alert(
+            severity=sev,
+            alert_id=aid,
+            created_at=ts,
+            title=f"{sev}-{aid}",
+            body=f"Body for {aid}",
+        ))
+    return out
+
+
+def test_format_digest_payload_slack_shape() -> None:
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("LOW", "a3")])
+    payload = format_digest_payload(alerts, "slack")
+    # Top-level fallback text labels the delivery as a digest
+    assert "Daily Alert Digest" in payload["text"]
+    # Refined Steel color so digests visually differ from immediate alerts
+    assert payload["attachments"][0]["color"] == "#e8e6e1"
+    blocks = payload["attachments"][0]["blocks"]
+    # Header block carries the title
+    header_blocks = [b for b in blocks if b.get("type") == "header"]
+    assert header_blocks
+    assert "Daily Alert Digest" in header_blocks[0]["text"]["text"]
+    # Summary line is in a section block and includes the per-severity counts
+    all_text = " ".join(
+        b.get("text", {}).get("text", "") for b in blocks if isinstance(b.get("text"), dict)
+    )
+    assert "3 alerts" in all_text
+    assert "1 CRITICAL" in all_text
+
+
+def test_format_digest_payload_email_shape() -> None:
+    alerts = _digest_alerts([
+        ("CRITICAL", "a1"), ("HIGH", "a2"), ("MEDIUM", "a3"), ("LOW", "a4"),
+    ])
+    payload = format_digest_payload(alerts, "email")
+    assert payload["subject"] == "Daily Alert Digest — 4 alerts"
+    # HTML body has header, summary, top-5 list
+    html = payload["html_body"]
+    assert "Daily Alert Digest" in html
+    assert "4 alerts" in html
+    assert "Top alerts" in html
+    # Plain-text fallback carries the same data, no HTML
+    text = payload["text_body"]
+    assert "<html" not in text.lower()
+    assert "Daily Alert Digest" in text
+    assert "4 alerts" in text
+
+
+def test_format_digest_payload_sms_shape_and_cap() -> None:
+    alerts = _digest_alerts([
+        ("CRITICAL", "a1"), ("CRITICAL", "a2"), ("CRITICAL", "a3"),
+        ("HIGH", "a4"), ("HIGH", "a5"),
+    ])
+    payload = format_digest_payload(alerts, "sms")
+    body = payload["body"]
+    assert body.startswith("Daily Digest:")
+    assert "5 alerts" in body
+    assert "3 CRITICAL" in body
+    # SMS cap holds at 280 chars even for digests
+    assert len(body) <= 280
+
+
+def test_format_digest_payload_sms_cap_truncates_long_title() -> None:
+    """A very long top-alert title must not bust the 280-char SMS cap."""
+    long_title = "X" * 500
+    alert = _make_alert(severity="CRITICAL", title=long_title, alert_id="a1")
+    payload = format_digest_payload([alert], "sms")
+    assert len(payload["body"]) <= 280
+    assert payload["body"].endswith("...")
+
+
+def test_format_digest_payload_webhook_shape() -> None:
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("MEDIUM", "a3")])
+    payload = format_digest_payload(alerts, "webhook")
+    assert payload["event_type"] == "digest"
+    assert payload["alert_count"] == 3
+    assert payload["by_severity"] == {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 0}
+    assert isinstance(payload["top_alerts"], list)
+    assert len(payload["top_alerts"]) == 3
+    # Top alerts carry full ShippingAlert webhook dicts
+    for entry in payload["top_alerts"]:
+        assert entry["event_type"] == "alert"
+        assert "alert_id" in entry
+        assert "severity" in entry
+    # generated_at is an ISO timestamp string
+    assert isinstance(payload["generated_at"], str)
+    assert "T" in payload["generated_at"]
+
+
+def test_format_digest_payload_discord_shape_no_top_level_content() -> None:
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2")])
+    payload = format_digest_payload(alerts, "discord")
+    # Discord digest intentionally has no "content" — embeds render fine
+    assert "content" not in payload
+    assert "embeds" in payload
+    embed = payload["embeds"][0]
+    assert embed["title"] == "Daily Alert Digest"
+    assert "2 alerts" in embed["description"]
+    # Color matches the highest-severity present (CRITICAL)
+    assert embed["color"] == 14104137  # CRITICAL
+    # Fields carry the by-severity counts
+    field_names = [f["name"] for f in embed["fields"]]
+    for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        assert sev in field_names
+
+
+def test_format_digest_payload_discord_color_from_highest_severity() -> None:
+    """If no CRITICAL is present, the embed color falls back to the next
+    severity down."""
+    alerts = _digest_alerts([("MEDIUM", "a1"), ("LOW", "a2")])
+    payload = format_digest_payload(alerts, "discord")
+    assert payload["embeds"][0]["color"] == 15844367  # MEDIUM
+
+
+def test_format_digest_payload_pagerduty_shape() -> None:
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("HIGH", "a3")])
+    payload = format_digest_payload(alerts, "pagerduty")
+    assert payload["event_action"] == "trigger"
+    # Severity maps from the highest-severity in the input
+    assert payload["payload"]["severity"] == "critical"
+    assert "3 alerts" in payload["payload"]["summary"]
+    assert "1 CRITICAL" in payload["payload"]["summary"]
+    assert "2 HIGH" in payload["payload"]["summary"]
+    custom = payload["payload"]["custom_details"]
+    assert custom["alert_count"] == 3
+    assert custom["by_severity"] == {"CRITICAL": 1, "HIGH": 2, "MEDIUM": 0, "LOW": 0}
+    assert isinstance(custom["top_alert_titles"], list)
+    assert len(custom["top_alert_titles"]) == 3
+
+
+def test_format_digest_payload_pagerduty_severity_fallback_when_no_critical() -> None:
+    """No CRITICAL → severity maps to ``error`` for the next-highest (HIGH)."""
+    alerts = _digest_alerts([("HIGH", "a1"), ("LOW", "a2")])
+    payload = format_digest_payload(alerts, "pagerduty")
+    assert payload["payload"]["severity"] == "error"
+
+
+def test_format_digest_payload_pagerduty_dedup_key_stable_for_same_ids() -> None:
+    """Two digests covering the same alert_ids must produce the SAME
+    dedup_key so PagerDuty collapses the duplicate."""
+    alerts_a = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("LOW", "a3")])
+    alerts_b = _digest_alerts([("LOW", "a3"), ("CRITICAL", "a1"), ("HIGH", "a2")])
+    pa = format_digest_payload(alerts_a, "pagerduty")
+    pb = format_digest_payload(alerts_b, "pagerduty")
+    assert pa["dedup_key"] == pb["dedup_key"]
+
+
+def test_format_digest_payload_pagerduty_dedup_key_changes_with_ids() -> None:
+    """Different alert_ids → different dedup_key."""
+    alerts_a = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2")])
+    alerts_b = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a99")])
+    pa = format_digest_payload(alerts_a, "pagerduty")
+    pb = format_digest_payload(alerts_b, "pagerduty")
+    assert pa["dedup_key"] != pb["dedup_key"]
+
+
+# ─── Digest formatting: empty inputs ───────────────────────────────────────
+
+def test_format_digest_payload_empty_slack_returns_all_clear_message() -> None:
+    payload = format_digest_payload([], "slack")
+    assert "Daily Alert Digest" in payload["text"]
+    # Body mentions the "no alerts" placeholder copy
+    all_text = " ".join(
+        b.get("text", {}).get("text", "")
+        for b in payload["attachments"][0]["blocks"]
+        if isinstance(b.get("text"), dict)
+    )
+    assert "No alerts" in all_text
+
+
+def test_format_digest_payload_empty_email_returns_all_clear_subject() -> None:
+    payload = format_digest_payload([], "email")
+    assert "0 alerts" in payload["subject"]
+    assert "No alerts" in payload["html_body"]
+    assert "No alerts" in payload["text_body"]
+
+
+def test_format_digest_payload_empty_sms_short_message() -> None:
+    payload = format_digest_payload([], "sms")
+    assert "no alerts" in payload["body"].lower()
+    assert len(payload["body"]) <= 280
+
+
+def test_format_digest_payload_empty_webhook_zero_count() -> None:
+    payload = format_digest_payload([], "webhook")
+    assert payload["event_type"] == "digest"
+    assert payload["alert_count"] == 0
+    assert payload["top_alerts"] == []
+    assert payload["by_severity"] == {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+
+
+def test_format_digest_payload_empty_discord_no_alerts_embed() -> None:
+    payload = format_digest_payload([], "discord")
+    assert "content" not in payload
+    embed = payload["embeds"][0]
+    assert "No alerts" in embed["description"]
+
+
+def test_format_digest_payload_empty_pagerduty_info_severity() -> None:
+    """Empty digest still emits a heartbeat event at severity=info."""
+    payload = format_digest_payload([], "pagerduty")
+    assert payload["event_action"] == "trigger"
+    assert payload["payload"]["severity"] == "info"
+    assert "0 alerts" in payload["payload"]["summary"]
+    assert payload["payload"]["custom_details"]["alert_count"] == 0
+
+
+# ─── Digest formatting: top-5 cap + sort order ─────────────────────────────
+
+def test_format_digest_payload_caps_top_alerts_at_5() -> None:
+    """When N>5, the top_alerts list still has exactly 5 entries."""
+    alerts = _digest_alerts([
+        ("CRITICAL", "a1"), ("CRITICAL", "a2"), ("HIGH", "a3"),
+        ("HIGH", "a4"), ("MEDIUM", "a5"), ("MEDIUM", "a6"),
+        ("LOW", "a7"), ("LOW", "a8"),
+    ])
+    payload = format_digest_payload(alerts, "webhook")
+    assert payload["alert_count"] == 8
+    assert len(payload["top_alerts"]) == 5
+
+
+def test_format_digest_payload_sort_order_severity_then_recency() -> None:
+    """Top alerts ordered CRITICAL > HIGH > MEDIUM > LOW, then created_at desc
+    within the same severity."""
+    # Two CRITICALs: a-old created earlier, a-new created later.
+    # Mix them with one HIGH so the cross-severity ordering is exercised too.
+    base = datetime.now(timezone.utc) - timedelta(hours=10)
+    alerts = [
+        _make_alert(severity="CRITICAL", alert_id="c-old",
+                    created_at=(base).isoformat(), title="C-OLD"),
+        _make_alert(severity="HIGH", alert_id="h1",
+                    created_at=(base + timedelta(hours=2)).isoformat(), title="H1"),
+        _make_alert(severity="CRITICAL", alert_id="c-new",
+                    created_at=(base + timedelta(hours=1)).isoformat(), title="C-NEW"),
+    ]
+    payload = format_digest_payload(alerts, "webhook")
+    top_titles = [a["title"] for a in payload["top_alerts"]]
+    # CRITICAL first (newest within CRITICAL leading), then HIGH
+    assert top_titles == ["C-NEW", "C-OLD", "H1"]
+
+
+def test_format_digest_payload_severity_counts_match_input() -> None:
+    alerts = _digest_alerts([
+        ("CRITICAL", "a1"), ("CRITICAL", "a2"), ("CRITICAL", "a3"),
+        ("HIGH", "a4"), ("HIGH", "a5"),
+        ("MEDIUM", "a6"),
+        # No LOW alerts — the count must still be reported as 0
+    ])
+    payload = format_digest_payload(alerts, "webhook")
+    assert payload["by_severity"] == {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}
+
+
+# ─── deliver_digest ────────────────────────────────────────────────────────
+
+def test_deliver_digest_slack_posts_once(monkeypatch) -> None:
+    """deliver_digest on a slack channel POSTs exactly one payload."""
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _FakeResponse(status_code=200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="slack")
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("MEDIUM", "a3")])
+    result = deliver_digest(channel, alerts)
+
+    assert result.success is True
+    assert result.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["url"] == channel.target
+    assert calls[0]["timeout"] == 10.0
+    # The single body is the slack-shaped digest payload
+    assert calls[0]["json"]["text"] == "Daily Alert Digest"
+    assert "attachments" in calls[0]["json"]
+
+
+def test_deliver_digest_discord_rejects_non_discord_target(monkeypatch) -> None:
+    """deliver_digest must validate Discord URL prefix exactly like
+    immediate-mode _deliver_discord does."""
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(204)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW", kind="discord", target="https://example.com/not-discord"
+    )
+    alerts = _digest_alerts([("CRITICAL", "a1")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is False
+    assert "must be a Discord webhook URL" in result.error_msg
+    assert posted["n"] == 0
+
+
+def test_deliver_digest_discord_posts_embed_only(monkeypatch) -> None:
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append({"url": url, "json": json})
+        return _FakeResponse(status_code=204, text="")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    target = "https://discord.com/api/webhooks/123/token"
+    channel = _make_channel("LOW", kind="discord", target=target)
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is True
+    assert len(calls) == 1
+    assert calls[0]["url"] == target
+    # No top-level content on a Discord digest
+    assert "content" not in calls[0]["json"]
+    assert "embeds" in calls[0]["json"]
+
+
+def test_deliver_digest_pagerduty_posts_with_routing_key_injected(monkeypatch) -> None:
+    """deliver_digest on a PagerDuty channel must inject channel.target as
+    the routing_key in the wire payload, even though format_digest_payload
+    omits it."""
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append({"url": url, "json": json})
+        return _FakeResponse(status_code=202, text="")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="pagerduty", target="my-integration-key")
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is True
+    assert calls[0]["url"] == _PAGERDUTY_EVENTS_URL
+    assert calls[0]["json"]["routing_key"] == "my-integration-key"
+    assert calls[0]["json"]["event_action"] == "trigger"
+
+
+def test_deliver_digest_pagerduty_dedup_key_stable_across_runs(monkeypatch) -> None:
+    """Two consecutive deliver_digest calls with the same alert set must
+    POST the same dedup_key so PagerDuty collapses the duplicate."""
+    bodies: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        bodies.append(json)
+        return _FakeResponse(status_code=202, text="")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="pagerduty", target="key")
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2")])
+    deliver_digest(channel, alerts)
+    deliver_digest(channel, alerts)
+    assert bodies[0]["dedup_key"] == bodies[1]["dedup_key"]
+
+
+def test_deliver_digest_webhook_posts_envelope(monkeypatch) -> None:
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append({"url": url, "json": json})
+        return _FakeResponse(status_code=200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel(
+        "LOW", kind="webhook", target="https://example.com/hooks/digest"
+    )
+    alerts = _digest_alerts([("CRITICAL", "a1"), ("HIGH", "a2"), ("LOW", "a3")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is True
+    assert calls[0]["url"] == "https://example.com/hooks/digest"
+    assert calls[0]["json"]["event_type"] == "digest"
+    assert calls[0]["json"]["alert_count"] == 3
+
+
+def test_deliver_digest_disabled_channel_skips(monkeypatch) -> None:
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="slack", enabled=False)
+    alerts = _digest_alerts([("CRITICAL", "a1")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is True
+    assert "disabled" in result.error_msg
+    assert posted["n"] == 0
+
+
+def test_deliver_digest_unsupported_kind_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        alert_delivery.requests, "post", lambda *a, **kw: _FakeResponse(200)
+    )
+    channel = _make_channel("LOW", kind="made_up")
+    alerts = _digest_alerts([("CRITICAL", "a1")])
+    result = deliver_digest(channel, alerts)
+    assert result.success is False
+    assert "unsupported channel kind" in result.error_msg
+
+
+# ─── deliver_pending: digest mode dispatch ────────────────────────────────
+
+def test_deliver_pending_immediate_loops_one_per_alert(monkeypatch) -> None:
+    """digest_mode='immediate' (default) preserves the legacy
+    one-delivery-per-alert behaviour."""
+    cutoff, _ = _seed_alerts()
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append(json)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW")  # immediate by default
+    assert channel.digest_mode == "immediate"
+    results = deliver_pending(channel, cutoff)
+    assert len(results) == 4
+    assert len(calls) == 4
+
+
+def test_deliver_pending_daily_collapses_to_single_digest_call(monkeypatch) -> None:
+    """digest_mode='daily' makes ONE deliver_digest call regardless of
+    how many alerts match."""
+    cutoff, _ = _seed_alerts()
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append(json)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="slack")
+    channel.digest_mode = "daily"
+    results = deliver_pending(channel, cutoff)
+    # Exactly one DeliveryResult, exactly one HTTP POST
+    assert len(results) == 1
+    assert len(calls) == 1
+    # The single POSTed body is the digest envelope
+    assert calls[0]["text"] == "Daily Alert Digest"
+
+
+def test_deliver_pending_daily_with_zero_matches_returns_empty(monkeypatch) -> None:
+    """digest_mode='daily' with no eligible alerts in the window returns
+    [] and never attempts delivery (no heartbeat / no empty digest)."""
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="slack")
+    channel.digest_mode = "daily"
+    # Cutoff in the future → nothing matches
+    cutoff = datetime.now(timezone.utc) + timedelta(days=1)
+    results = deliver_pending(channel, cutoff)
+    assert results == []
+    assert posted["n"] == 0
+
+
+def test_deliver_pending_daily_respects_severity_threshold(monkeypatch) -> None:
+    """In daily mode, the severity threshold still filters which alerts
+    make it into the digest body."""
+    cutoff, _ = _seed_alerts()
+    calls: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        calls.append(json)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    # CRITICAL threshold → only the CRITICAL alert is eligible
+    channel = _make_channel("CRITICAL", kind="webhook", target="https://x/y")
+    channel.digest_mode = "daily"
+    results = deliver_pending(channel, cutoff)
+    assert len(results) == 1
+    assert len(calls) == 1
+    body = calls[0]
+    assert body["event_type"] == "digest"
+    assert body["alert_count"] == 1
+    assert body["by_severity"]["CRITICAL"] == 1
+    assert body["by_severity"]["HIGH"] == 0
+
+
+def test_deliver_pending_daily_disabled_channel_returns_empty(monkeypatch) -> None:
+    cutoff, _ = _seed_alerts()
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", enabled=False)
+    channel.digest_mode = "daily"
+    results = deliver_pending(channel, cutoff)
+    assert results == []
     assert posted["n"] == 0

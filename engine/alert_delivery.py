@@ -42,10 +42,11 @@ Design notes
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
@@ -975,12 +976,564 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
     return DeliveryResult(success=False, status_code=status, error_msg=f"HTTP {status}: {body}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Digest formatting + delivery
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maximum number of alerts to embed in the "top alerts" section of a digest
+# payload. Larger windows can still be captured in the by_severity counts.
+_DIGEST_TOP_N = 5
+_DIGEST_SMS_MAX_CHARS = 280
+
+
+def _sorted_top_alerts(alerts: list[ShippingAlert], n: int = _DIGEST_TOP_N) -> list[ShippingAlert]:
+    """Sort ``alerts`` by severity (CRITICAL → HIGH → MEDIUM → LOW) then by
+    ``created_at`` descending within the same severity, and return the top
+    ``n``. Alerts with an unknown severity sort to the end."""
+    return sorted(
+        alerts,
+        key=lambda a: (_SEVERITY_ORDER.get(a.severity, 99), _NegStr(a.created_at or "")),
+    )[:n]
+
+
+class _NegStr:
+    """Wrapper that inverts string comparison so ``sorted`` produces
+    descending order for that field. Used inside the tuple key in
+    ``_sorted_top_alerts`` so we can mix ascending and descending sort
+    directions without a lambda for each field."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, s: str) -> None:
+        self._s = s
+
+    def __lt__(self, other: "_NegStr") -> bool:
+        return self._s > other._s
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - trivial
+        return isinstance(other, _NegStr) and self._s == other._s
+
+
+def _severity_counts(alerts: list[ShippingAlert]) -> dict:
+    """Return a ``{"CRITICAL": n, "HIGH": n, "MEDIUM": n, "LOW": n}`` dict.
+    Every key is present even when the count is zero so receivers can rely
+    on the shape."""
+    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for a in alerts:
+        if a.severity in counts:
+            counts[a.severity] += 1
+    return counts
+
+
+def _highest_severity(alerts: list[ShippingAlert]) -> Optional[str]:
+    """Return the highest severity present in ``alerts`` (CRITICAL is the
+    highest) or ``None`` if the list is empty."""
+    if not alerts:
+        return None
+    return min(
+        (a.severity for a in alerts if a.severity in _SEVERITY_ORDER),
+        key=lambda s: _SEVERITY_ORDER[s],
+        default=None,
+    )
+
+
+def _summary_line(counts: dict, total: int) -> str:
+    """Build the human-readable summary line shared by the slack / email /
+    discord / pagerduty payloads. Always lists severities in CRITICAL →
+    HIGH → MEDIUM → LOW order."""
+    parts = [f"{counts[s]} {s}" for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW")]
+    return f"{total} alerts in the last 24h: " + ", ".join(parts)
+
+
+def format_digest_payload(alerts: list[ShippingAlert], kind: str) -> dict:
+    """Build the digest payload for ``kind`` covering ``alerts``.
+
+    Returns a per-platform dict ready to be POSTed (slack/discord/webhook/
+    pagerduty), handed to SMTP (email), or sent through Twilio (sms).
+    When ``alerts`` is empty, a per-kind "all-clear" placeholder is
+    returned (NOT an empty dict) so the delivery still has a meaningful
+    body. When ``len(alerts) > _DIGEST_TOP_N`` (5), the "top alerts" list
+    is capped at the highest-severity / most-recent first.
+
+    Per-kind shapes:
+      - **slack**: ``{"text": "Daily Alert Digest", "attachments": [{...}]}``
+      - **email**: ``{"subject", "html_body", "text_body"}``
+      - **sms**: ``{"body": str}`` — capped at 280 chars
+      - **webhook**: flat envelope with ``event_type="digest"``,
+        ``alert_count``, ``by_severity``, ``top_alerts`` (full alert
+        dicts), ``generated_at``
+      - **discord**: ``{"embeds": [...]}`` (no top-level content)
+      - **pagerduty**: a single Events API v2 trigger with a stable
+        ``dedup_key`` hashed from the sorted alert_id list
+    """
+    total = len(alerts)
+    counts = _severity_counts(alerts)
+    top = _sorted_top_alerts(alerts)
+    generated_at = datetime.now(timezone.utc).isoformat()
+
+    if kind == "slack":
+        return _format_digest_slack(alerts, total, counts, top)
+    if kind == "email":
+        return _format_digest_email(alerts, total, counts, top)
+    if kind == "sms":
+        return _format_digest_sms(alerts, total, counts, top)
+    if kind == "webhook":
+        return _format_digest_webhook(alerts, total, counts, top, generated_at)
+    if kind == "discord":
+        return _format_digest_discord(alerts, total, counts, top)
+    if kind == "pagerduty":
+        return _format_digest_pagerduty(alerts, total, counts, top)
+    # Fallback for any unsupported kind — return a generic-ish webhook
+    # envelope so callers can still see what would have been sent.
+    return _format_digest_webhook(alerts, total, counts, top, generated_at)
+
+
+# ── Per-kind digest formatters ────────────────────────────────────────────
+
+def _format_digest_slack(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+) -> dict:
+    """Slack-shaped digest payload. Uses a single attachment with the
+    Refined Steel colour ``#e8e6e1`` so digests visually separate from
+    immediate alerts (which use the severity palette)."""
+    if total == 0:
+        blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": "Daily Alert Digest", "emoji": True}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "No alerts to digest in the last 24h."}},
+        ]
+        return {
+            "text": "Daily Alert Digest — no alerts",
+            "attachments": [{"color": "#e8e6e1", "blocks": blocks}],
+        }
+
+    summary = _summary_line(counts, total)
+    bullets = "\n".join(
+        f"• *[{a.severity}]* {a.title}" for a in top
+    )
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": "Daily Alert Digest", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": summary}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": bullets}},
+    ]
+    return {
+        "text": "Daily Alert Digest",
+        "attachments": [{"color": "#e8e6e1", "blocks": blocks}],
+    }
+
+
+def _format_digest_email(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+) -> dict:
+    """Email digest — HTML body with a summary table + styled top-5 list,
+    plus a plain-text fallback for non-HTML clients."""
+    if total == 0:
+        subject = "Daily Alert Digest — 0 alerts"
+        html_body = (
+            "<html><body style='font-family:Helvetica,Arial,sans-serif;color:#24292e;"
+            "background:#ffffff;margin:0;padding:0;'>"
+            "<div style='max-width:640px;margin:0 auto;padding:24px;'>"
+            "<h2 style='margin:0 0 16px 0;font-size:20px;color:#24292e;'>Daily Alert Digest</h2>"
+            "<p style='font-size:14px;color:#586069;'>No alerts to digest in the last 24h.</p>"
+            "</div></body></html>"
+        )
+        text_body = "Daily Alert Digest\n==================\n\nNo alerts to digest in the last 24h."
+        return {"subject": subject, "html_body": html_body, "text_body": text_body}
+
+    subject = f"Daily Alert Digest — {total} alerts"
+    summary = _summary_line(counts, total)
+
+    # ── Summary table ───────────────────────────────────────────────
+    summary_rows = "".join(
+        f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>{sev}</td>"
+        f"<td style='padding:4px 0;'><b>{counts[sev]}</b></td></tr>"
+        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+    )
+
+    # ── Top-5 list ──────────────────────────────────────────────────
+    top_items = "".join(
+        f"<li style='margin:4px 0;'>"
+        f"<span style='display:inline-block;min-width:64px;font-weight:bold;"
+        f"color:{_SEVERITY_COLOR.get(a.severity, _SEVERITY_COLOR['LOW'])};'>"
+        f"[{a.severity}]</span> {a.title}</li>"
+        for a in top
+    )
+
+    html_body = (
+        "<html><body style='font-family:Helvetica,Arial,sans-serif;color:#24292e;"
+        "background:#ffffff;margin:0;padding:0;'>"
+        "<div style='max-width:640px;margin:0 auto;padding:24px;'>"
+        "<h2 style='margin:0 0 8px 0;font-size:20px;color:#24292e;'>Daily Alert Digest</h2>"
+        f"<p style='font-size:14px;color:#586069;margin:0 0 16px 0;'>{summary}</p>"
+        "<table style='border-collapse:collapse;font-size:13px;color:#24292e;margin-bottom:16px;'>"
+        f"{summary_rows}</table>"
+        "<h3 style='margin:8px 0;font-size:15px;color:#24292e;'>Top alerts</h3>"
+        f"<ul style='padding-left:18px;margin:0;font-size:13px;'>{top_items}</ul>"
+        "</div></body></html>"
+    )
+
+    text_lines = [
+        f"Daily Alert Digest — {total} alerts",
+        "=" * 40,
+        "",
+        summary,
+        "",
+        "Top alerts:",
+    ]
+    for a in top:
+        text_lines.append(f"- [{a.severity}] {a.title}")
+    text_body = "\n".join(text_lines)
+
+    return {"subject": subject, "html_body": html_body, "text_body": text_body}
+
+
+def _format_digest_sms(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+) -> dict:
+    """SMS digest — single line, capped at 280 chars total to match the
+    immediate-mode SMS cost ceiling."""
+    if total == 0:
+        body = "Daily Digest: no alerts in the last 24h."
+        return {"body": body[:_DIGEST_SMS_MAX_CHARS]}
+
+    crit = counts["CRITICAL"]
+    # The "top" alert in SMS context is the most-severe / newest one, i.e.
+    # the first element of ``top``.
+    top_title = top[0].title if top else ""
+    head = f"Daily Digest: {total} alerts, {crit} CRITICAL."
+    suffix = f" Top: {top_title}" if top_title else ""
+    body = head + suffix
+    if len(body) > _DIGEST_SMS_MAX_CHARS:
+        # Reserve 3 chars for the ellipsis so the truncated text + "..."
+        # fits inside the cap.
+        body = body[: _DIGEST_SMS_MAX_CHARS - 3] + "..."
+    return {"body": body}
+
+
+def _format_digest_webhook(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+    generated_at: str,
+) -> dict:
+    """Generic webhook digest — flat JSON envelope carrying the by-severity
+    counts and the top-5 alerts as full dicts (same shape the immediate
+    webhook uses, minus the discriminator)."""
+    return {
+        "event_type": "digest",
+        "alert_count": total,
+        "by_severity": counts,
+        "top_alerts": [format_webhook_payload(a) for a in top],
+        "generated_at": generated_at,
+    }
+
+
+def _format_digest_discord(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+) -> dict:
+    """Discord digest — a single embed with title, summary description,
+    severity counts as fields, and the top-3 alerts as fields. No
+    top-level ``content`` so Discord renders the embed cleanly."""
+    if total == 0:
+        embed = {
+            "title": "Daily Alert Digest",
+            "description": "No alerts to digest in the last 24h.",
+            "color": _DISCORD_SEVERITY_COLOR["LOW"],
+            "fields": [],
+        }
+        return {"embeds": [embed]}
+
+    summary = _summary_line(counts, total)
+    highest = _highest_severity(alerts) or "LOW"
+    color = _DISCORD_SEVERITY_COLOR.get(highest, _DISCORD_SEVERITY_COLOR["LOW"])
+
+    fields: list[dict] = []
+    for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        fields.append({"name": sev, "value": str(counts[sev]), "inline": True})
+
+    # Top 3 alerts as their own fields (Discord embeds get visually
+    # cluttered past ~6 fields, so we stop at 3 here even though the
+    # cross-platform "top" cap is 5).
+    for a in top[:3]:
+        fields.append({
+            "name": f"[{a.severity}] {a.title}",
+            "value": (a.body or " ")[:200],
+            "inline": False,
+        })
+
+    embed = {
+        "title": "Daily Alert Digest",
+        "description": summary,
+        "color": color,
+        "fields": fields,
+    }
+    return {"embeds": [embed]}
+
+
+def _format_digest_pagerduty(
+    alerts: list[ShippingAlert],
+    total: int,
+    counts: dict,
+    top: list[ShippingAlert],
+) -> dict:
+    """PagerDuty digest — collapses all eligible alerts into a single
+    Events API v2 trigger. ``dedup_key`` is a 16-char blake2b digest of
+    the sorted ``alert_id`` list so re-sending the same digest collapses
+    on PagerDuty's side instead of creating a duplicate incident.
+
+    Severity maps from the highest-severity alert in the input (falling
+    back to ``"info"`` when ``alerts`` is empty)."""
+    if total == 0:
+        # An empty digest still emits a PagerDuty event so an operator
+        # who relies on the heartbeat doesn't see a missing run as an
+        # outage. severity="info" keeps it from paging.
+        dedup_key = "ship-tracker-digest-empty"
+        return {
+            "event_action": "trigger",
+            "dedup_key": dedup_key,
+            "payload": {
+                "summary": "Daily alert digest: 0 alerts",
+                "severity": "info",
+                "source": "ship-tracker",
+                "component": "digest",
+                "custom_details": {
+                    "alert_count": 0,
+                    "by_severity": counts,
+                    "top_alert_titles": [],
+                },
+            },
+        }
+
+    highest = _highest_severity(alerts) or "LOW"
+    pd_severity = _PAGERDUTY_SEVERITY.get(highest, "info")
+
+    sorted_ids = sorted(a.alert_id for a in alerts)
+    digest = hashlib.blake2b(",".join(sorted_ids).encode("utf-8")).hexdigest()[:16]
+    dedup_key = f"ship-tracker-digest-{digest}"
+
+    crit = counts["CRITICAL"]
+    high = counts["HIGH"]
+    summary = f"Daily alert digest: {total} alerts ({crit} CRITICAL, {high} HIGH)"
+
+    return {
+        "event_action": "trigger",
+        "dedup_key": dedup_key,
+        "payload": {
+            "summary": summary,
+            "severity": pd_severity,
+            "source": "ship-tracker",
+            "component": "digest",
+            "custom_details": {
+                "alert_count": total,
+                "by_severity": counts,
+                "top_alert_titles": [a.title for a in top],
+            },
+        },
+    }
+
+
+# ── Digest delivery ───────────────────────────────────────────────────────
+
+def _post_json(url: str, payload: dict, timeout: float = _REQUEST_TIMEOUT_S) -> DeliveryResult:
+    """Shared HTTP POST → ``DeliveryResult`` helper used by the digest
+    delivery paths for slack/webhook/discord/pagerduty. Returns success
+    on any 2xx, surfaces the response body in ``error_msg`` otherwise."""
+    status, body, exc = _http_post_json(url, payload)
+    if exc is not None:
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+    if 200 <= status < 300:
+        return DeliveryResult(success=True, status_code=status)
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {body}" if body else f"HTTP {status}",
+    )
+
+
+def _deliver_digest_email(channel: DeliveryChannel, payload: dict) -> DeliveryResult:
+    """Send a pre-formatted digest email via SMTP. Mirrors the structure
+    of ``_deliver_email`` but takes the formatted payload directly so it
+    can be tested in isolation."""
+    config = _get_smtp_config()
+    if config is None:
+        return DeliveryResult(
+            success=False, status_code=0, error_msg="SMTP not configured"
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = payload["subject"]
+    msg["From"] = config.from_addr
+    msg["To"] = channel.target
+    msg.attach(MIMEText(payload["text_body"], "plain", "utf-8"))
+    msg.attach(MIMEText(payload["html_body"], "html", "utf-8"))
+
+    try:
+        smtp = smtplib.SMTP(config.host, config.port, timeout=_SMTP_TIMEOUT_S)
+    except smtplib.SMTPException as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"smtp connect: {exc}")
+    except OSError as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+    except Exception as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+
+    try:
+        try:
+            smtp.starttls()
+            smtp.login(config.user, config.password)
+            smtp.sendmail(config.from_addr, [channel.target], msg.as_string())
+        except smtplib.SMTPAuthenticationError as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"smtp auth: {exc}")
+        except smtplib.SMTPRecipientsRefused as exc:
+            return DeliveryResult(
+                success=False, status_code=0, error_msg=f"recipient refused: {exc}"
+            )
+        except smtplib.SMTPException as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"smtp error: {exc}")
+        except OSError as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+        except Exception as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+
+    return DeliveryResult(success=True, status_code=0)
+
+
+def _deliver_digest_sms(channel: DeliveryChannel, payload: dict) -> DeliveryResult:
+    """Send a pre-formatted digest SMS via Twilio. Mirrors ``_deliver_sms``
+    but takes the formatted body directly."""
+    config = _get_twilio_config()
+    if config is None:
+        return DeliveryResult(
+            success=False, status_code=0, error_msg="Twilio not configured"
+        )
+
+    url = _TWILIO_API_URL.format(sid=config.account_sid)
+    try:
+        resp = requests.post(
+            url,
+            auth=(config.account_sid, config.auth_token),
+            data={
+                "To": channel.target,
+                "From": config.from_number,
+                "Body": payload["body"],
+            },
+            timeout=_REQUEST_TIMEOUT_S,
+        )
+    except requests.exceptions.Timeout as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"timeout: {exc}")
+    except requests.exceptions.ConnectionError as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+    except requests.exceptions.RequestException as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"request error: {exc}")
+    except Exception as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+
+    status = getattr(resp, "status_code", 0)
+    if status == 201:
+        return DeliveryResult(success=True, status_code=201)
+
+    error_text = ""
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("message"):
+            error_text = str(data["message"])
+    except Exception:
+        pass
+    if not error_text:
+        try:
+            error_text = (resp.text or "")[:500]
+        except Exception:
+            error_text = ""
+    return DeliveryResult(
+        success=False,
+        status_code=status,
+        error_msg=f"HTTP {status}: {error_text}" if error_text else f"HTTP {status}",
+    )
+
+
+def deliver_digest(channel: DeliveryChannel, alerts: list[ShippingAlert]) -> DeliveryResult:
+    """Format and deliver a single digest message covering ``alerts`` to
+    ``channel``. Returns one ``DeliveryResult`` for the digest as a whole.
+
+    Dispatch on ``channel.kind``:
+      - ``"slack"`` / ``"webhook"`` → ``_post_json(channel.target, payload)``
+      - ``"discord"`` → same, but validates ``channel.target`` is a
+        Discord webhook URL first (mirrors ``_deliver_discord``)
+      - ``"pagerduty"`` → ``_post_json(_PAGERDUTY_EVENTS_URL, payload)``,
+        injecting ``channel.target`` as the ``routing_key``
+      - ``"email"`` → SMTP via ``_deliver_digest_email``
+      - ``"sms"`` → Twilio via ``_deliver_digest_sms``
+      - anything else → explicit "unsupported kind" failure
+    """
+    if not channel.enabled:
+        return DeliveryResult(success=True, status_code=0, error_msg="channel disabled")
+
+    payload = format_digest_payload(alerts, channel.kind)
+
+    if channel.kind == "slack":
+        return _post_json(channel.target, payload)
+
+    if channel.kind == "webhook":
+        return _post_json(channel.target, payload)
+
+    if channel.kind == "discord":
+        target = channel.target or ""
+        if not any(target.startswith(prefix) for prefix in _DISCORD_WEBHOOK_PREFIXES):
+            return DeliveryResult(
+                success=False,
+                status_code=0,
+                error_msg="target must be a Discord webhook URL",
+            )
+        return _post_json(target, payload)
+
+    if channel.kind == "pagerduty":
+        # The PagerDuty digest payload doesn't include routing_key (so the
+        # formatter is testable without a key); inject channel.target here.
+        wire_payload = dict(payload)
+        wire_payload["routing_key"] = channel.target or ""
+        return _post_json(_PAGERDUTY_EVENTS_URL, wire_payload)
+
+    if channel.kind == "email":
+        return _deliver_digest_email(channel, payload)
+
+    if channel.kind == "sms":
+        return _deliver_digest_sms(channel, payload)
+
+    return DeliveryResult(
+        success=False,
+        status_code=0,
+        error_msg=f"unsupported channel kind: {channel.kind}",
+    )
+
+
 def deliver_pending(channel: DeliveryChannel, since: datetime) -> list[DeliveryResult]:
     """Pull every alert created after ``since`` whose severity meets
-    ``channel.severity_threshold``, and deliver each one.
+    ``channel.severity_threshold`` and deliver them.
 
-    Returns one ``DeliveryResult`` per attempted delivery. An empty list
-    means no alerts matched the filters (not a failure).
+    Dispatch on ``channel.digest_mode``:
+      - ``"immediate"`` (default) → call ``deliver_alert`` per matching
+        alert; returns one ``DeliveryResult`` per attempted delivery.
+      - ``"daily"`` → call ``deliver_digest`` once for the whole eligible
+        batch; returns a one-element list. If zero alerts match, returns
+        an empty list (no delivery attempt).
+
+    A disabled channel always returns ``[]`` regardless of mode.
     """
     if not channel.enabled:
         return []
@@ -1002,13 +1555,19 @@ def deliver_pending(channel: DeliveryChannel, since: datetime) -> list[DeliveryR
         logger.warning(f"deliver_pending: SQLite read failed: {exc}")
         return []
 
-    results: list[DeliveryResult] = []
+    eligible: list[ShippingAlert] = []
     for row in rows:
         alert = _row_to_alert(row)
-        if not _meets_threshold(alert.severity, channel.severity_threshold):
-            continue
-        results.append(deliver_alert(alert, channel))
-    return results
+        if _meets_threshold(alert.severity, channel.severity_threshold):
+            eligible.append(alert)
+
+    if channel.digest_mode == "daily":
+        if not eligible:
+            return []
+        return [deliver_digest(channel, eligible)]
+
+    # Default / "immediate" behaviour — one delivery per matching alert.
+    return [deliver_alert(alert, channel) for alert in eligible]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
