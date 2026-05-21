@@ -2,30 +2,40 @@
 
 The alert engine in ``engine.alert_engine_v2`` persists alerts to SQLite
 and surfaces them in the UI. This module adds an outbound channel so
-alerts can also be pushed to Slack (today) or Email / SMS (future).
+alerts can also be pushed to Slack or Email (today), with SMS reserved
+for the future.
 
 Design notes
 ------------
 * ``DeliveryChannel`` is a typed config row. ``kind`` is a free-form
-  string today ("slack") with "email" / "sms" reserved for future
-  PRs. ``target`` is the Slack incoming-webhook URL.
+  string — "slack" and "email" are supported today, "sms" is reserved.
+  ``target`` is the Slack incoming-webhook URL for slack channels and
+  the recipient email address for email channels.
 * ``severity_threshold`` uses ``alert_engine_v2._SEVERITY_ORDER`` —
   CRITICAL (0) < HIGH (1) < MEDIUM (2) < LOW (3). A channel with
   threshold "MEDIUM" delivers MEDIUM/HIGH/CRITICAL alerts and skips
   LOW.
-* ``format_slack_payload`` is a pure function so it can be tested
-  without touching the network. ``deliver_alert`` POSTs the payload
-  with a 10s timeout and always returns a ``DeliveryResult`` — it
-  never raises so callers can iterate over many alerts without one
-  Slack outage breaking the whole batch.
+* ``format_slack_payload`` / ``format_email_payload`` are pure
+  functions so they can be tested without touching the network.
+  ``deliver_alert`` opens the transport (HTTPS for slack, SMTP for
+  email) with a 10s timeout and always returns a ``DeliveryResult`` —
+  it never raises so callers can iterate over many alerts without one
+  outage breaking the whole batch.
+* SMTP credentials are read from environment variables (or Streamlit
+  secrets) at delivery time via ``_get_smtp_config``. They never live
+  in the ``delivery_channels`` row.
 * Channel persistence lives in the SQLite ``delivery_channels`` table
   (schema v2). Channel configs are user-authored config, parallel to
   ``alert_rules``.
 """
 from __future__ import annotations
 
+import os
+import smtplib
 from dataclasses import dataclass
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Optional
 
 import requests
@@ -144,14 +154,238 @@ def format_slack_payload(alert: ShippingAlert) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Email payload formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+def format_email_payload(alert: ShippingAlert) -> dict:
+    """Build the email payload (subject + html_body + text_body) for a
+    ``ShippingAlert``.
+
+    Returns a dict with three string keys:
+      - ``subject``: ``"[SEVERITY] title"``
+      - ``html_body``: inline-styled HTML using the same severity colour
+        palette as the Slack payload (``_SEVERITY_COLOR``)
+      - ``text_body``: plain-text fallback for clients that don't render
+        HTML (or for sanity in mail logs)
+    """
+    color = _SEVERITY_COLOR.get(alert.severity, _SEVERITY_COLOR["LOW"])
+    subject = f"[{alert.severity}] {alert.title}"
+
+    # ── Optional context bits ────────────────────────────────────────
+    context_lines: list[tuple[str, str]] = []
+    if alert.ticker:
+        context_lines.append(("Ticker", alert.ticker))
+    if alert.route_id:
+        context_lines.append(("Route", alert.route_id))
+    if alert.port_locode:
+        context_lines.append(("Port", alert.port_locode))
+    if alert.created_at:
+        context_lines.append(("At", alert.created_at))
+
+    # ── HTML body ────────────────────────────────────────────────────
+    fields_html = (
+        f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Value</td>"
+        f"<td style='padding:4px 0;'><b>{alert.value:,.2f}</b></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Threshold</td>"
+        f"<td style='padding:4px 0;'><b>{alert.threshold:,.2f}</b></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Change %</td>"
+        f"<td style='padding:4px 0;'><b>{alert.change_pct:+.2f}%</b></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Type</td>"
+        f"<td style='padding:4px 0;'><b>{alert.alert_type}</b></td></tr>"
+    )
+
+    context_html = ""
+    if context_lines:
+        rows = "".join(
+            f"<tr><td style='padding:2px 12px 2px 0;color:#586069;'>{label}</td>"
+            f"<td style='padding:2px 0;'>{value}</td></tr>"
+            for label, value in context_lines
+        )
+        context_html = (
+            "<table style='border-collapse:collapse;margin-top:12px;font-size:13px;color:#24292e;'>"
+            f"{rows}</table>"
+        )
+
+    html_body = (
+        "<html><body style='font-family:Helvetica,Arial,sans-serif;color:#24292e;"
+        "background:#ffffff;margin:0;padding:0;'>"
+        "<div style='max-width:640px;margin:0 auto;padding:24px;'>"
+        f"<div style='border-left:6px solid {color};padding:12px 16px;background:#fafbfc;'>"
+        f"<div style='font-size:12px;font-weight:bold;letter-spacing:1px;color:{color};'>"
+        f"{alert.severity}</div>"
+        f"<h2 style='margin:4px 0 0 0;font-size:20px;color:#24292e;'>{alert.title}</h2>"
+        "</div>"
+        f"<p style='font-size:14px;line-height:1.5;margin:16px 0;'>{alert.body}</p>"
+        "<table style='border-collapse:collapse;font-size:13px;color:#24292e;'>"
+        f"{fields_html}</table>"
+        f"{context_html}"
+        "</div></body></html>"
+    )
+
+    # ── Plain-text body ──────────────────────────────────────────────
+    text_lines = [
+        subject,
+        "=" * len(subject),
+        "",
+        alert.body,
+        "",
+        f"Value:     {alert.value:,.2f}",
+        f"Threshold: {alert.threshold:,.2f}",
+        f"Change %:  {alert.change_pct:+.2f}%",
+        f"Type:      {alert.alert_type}",
+    ]
+    if context_lines:
+        text_lines.append("")
+        for label, value in context_lines:
+            text_lines.append(f"{label}: {value}")
+    text_body = "\n".join(text_lines)
+
+    return {
+        "subject": subject,
+        "html_body": html_body,
+        "text_body": text_body,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SMTP configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class _SmtpConfig:
+    host: str
+    port: int
+    user: str
+    password: str
+    from_addr: str
+
+
+def _get_smtp_config() -> Optional[_SmtpConfig]:
+    """Read SMTP credentials from Streamlit secrets (preferred) or env
+    vars. Returns ``None`` if any required field is missing or unparsable.
+
+    Required keys / env vars (all five must be present):
+      - ``SMTP_HOST``
+      - ``SMTP_PORT`` (defaults to 587 if unset; must parse as int when set)
+      - ``SMTP_USER``
+      - ``SMTP_PASSWORD``
+      - ``SMTP_FROM_ADDRESS``
+
+    Never raises. Same pattern as ``narration_engine._get_anthropic_key``
+    (st.secrets first, then os.environ).
+    """
+    try:
+        getters: list = []
+
+        # st.secrets takes precedence so a deployed Streamlit app can
+        # carry credentials without touching the OS environment.
+        try:
+            import streamlit as st
+            getters.append(lambda k: str(st.secrets.get(k, "")) if st.secrets else "")
+        except Exception:
+            pass
+
+        getters.append(lambda k: os.environ.get(k, ""))
+
+        def lookup(key: str) -> str:
+            for getter in getters:
+                try:
+                    val = getter(key)
+                except Exception:
+                    val = ""
+                if val:
+                    return str(val)
+            return ""
+
+        host = lookup("SMTP_HOST")
+        user = lookup("SMTP_USER")
+        password = lookup("SMTP_PASSWORD")
+        from_addr = lookup("SMTP_FROM_ADDRESS")
+
+        port_raw = lookup("SMTP_PORT")
+        if port_raw:
+            try:
+                port = int(port_raw)
+            except (TypeError, ValueError):
+                return None
+        else:
+            port = 587  # STARTTLS default
+
+        if not (host and user and password and from_addr):
+            return None
+        return _SmtpConfig(
+            host=host, port=port, user=user, password=password, from_addr=from_addr
+        )
+    except Exception:
+        # _get_smtp_config must never raise.
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Delivery
 # ─────────────────────────────────────────────────────────────────────────────
 
 _REQUEST_TIMEOUT_S = 10.0
+_SMTP_TIMEOUT_S = 10.0
+
+
+def _deliver_email(
+    channel: DeliveryChannel,
+    alert: ShippingAlert,
+    config: _SmtpConfig,
+) -> DeliveryResult:
+    """Send ``alert`` to ``channel.target`` (recipient email) via SMTP.
+
+    Opens an ``smtplib.SMTP`` connection, runs ``starttls()`` + ``login()``,
+    sends a ``MIMEMultipart('alternative')`` carrying text + html parts.
+    Returns ``DeliveryResult(success=...)`` — never raises.
+    """
+    payload = format_email_payload(alert)
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = payload["subject"]
+    msg["From"] = config.from_addr
+    msg["To"] = channel.target
+    msg.attach(MIMEText(payload["text_body"], "plain", "utf-8"))
+    msg.attach(MIMEText(payload["html_body"], "html", "utf-8"))
+
+    try:
+        smtp = smtplib.SMTP(config.host, config.port, timeout=_SMTP_TIMEOUT_S)
+    except smtplib.SMTPException as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"smtp connect: {exc}")
+    except OSError as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+    except Exception as exc:
+        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+
+    try:
+        try:
+            smtp.starttls()
+            smtp.login(config.user, config.password)
+            smtp.sendmail(config.from_addr, [channel.target], msg.as_string())
+        except smtplib.SMTPAuthenticationError as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"smtp auth: {exc}")
+        except smtplib.SMTPRecipientsRefused as exc:
+            return DeliveryResult(
+                success=False, status_code=0, error_msg=f"recipient refused: {exc}"
+            )
+        except smtplib.SMTPException as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"smtp error: {exc}")
+        except OSError as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
+        except Exception as exc:
+            return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+
+    return DeliveryResult(success=True, status_code=0)
 
 
 def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryResult:
-    """POST a single alert to ``channel``. Never raises — network errors
+    """Push a single alert to ``channel``. Never raises — network errors
     are caught and returned in the ``DeliveryResult``.
 
     Severity gating + ``enabled`` are enforced here so callers can fire
@@ -159,6 +393,12 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
     threshold or disabled → ``success=True`` with status_code=0 and
     error_msg explaining the skip; this matches "delivery succeeded by
     being a no-op" rather than "delivery failed".
+
+    Dispatch on ``channel.kind``:
+      - ``"slack"`` → POST to the incoming-webhook URL in ``target``
+      - ``"email"`` → send via SMTP using ``_get_smtp_config`` (env /
+        st.secrets) to the recipient address in ``target``
+      - anything else → explicit "unsupported kind" failure
     """
     if not channel.enabled:
         return DeliveryResult(success=True, status_code=0, error_msg="channel disabled")
@@ -169,10 +409,20 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             error_msg=f"below threshold ({alert.severity} < {channel.severity_threshold})",
         )
 
+    if channel.kind == "email":
+        config = _get_smtp_config()
+        if config is None:
+            return DeliveryResult(
+                success=False,
+                status_code=0,
+                error_msg="SMTP not configured",
+            )
+        return _deliver_email(channel, alert, config)
+
     if channel.kind != "slack":
-        # Reserved for future backends; surface as an explicit failure so
-        # callers don't silently drop alerts when someone adds an
-        # email/sms channel before the backend exists.
+        # Reserved for future backends (sms / pagerduty / ...); surface
+        # as an explicit failure so callers don't silently drop alerts
+        # when someone adds a channel before its backend exists.
         return DeliveryResult(
             success=False,
             status_code=0,

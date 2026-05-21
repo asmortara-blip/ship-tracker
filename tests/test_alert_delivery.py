@@ -15,6 +15,7 @@ Covers:
 """
 from __future__ import annotations
 
+import smtplib
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
@@ -25,10 +26,14 @@ from engine import alert_delivery
 from engine.alert_delivery import (
     DeliveryChannel,
     DeliveryResult,
+    _deliver_email,
+    _get_smtp_config,
     _meets_threshold,
+    _SmtpConfig,
     delete_channel,
     deliver_alert,
     deliver_pending,
+    format_email_payload,
     format_slack_payload,
     load_channels,
     save_channel,
@@ -333,11 +338,13 @@ def test_deliver_alert_unsupported_kind_fails(monkeypatch) -> None:
         alert_delivery.requests, "post",
         lambda *a, **kw: _FakeResponse(200),
     )
-    channel = _make_channel("LOW", kind="email")
+    # "sms" is reserved for a future backend; using it today must fail
+    # so alerts aren't silently dropped on a half-configured channel.
+    channel = _make_channel("LOW", kind="sms")
     result = deliver_alert(_make_alert("HIGH"), channel)
     assert result.success is False
     assert "unsupported channel kind" in result.error_msg
-    assert "email" in result.error_msg
+    assert "sms" in result.error_msg
 
 
 # ─── Channel persistence ──────────────────────────────────────────────────
@@ -530,3 +537,346 @@ def test_deliver_pending_propagates_http_failure(monkeypatch) -> None:
     assert len(results) == 4
     assert all(not r.success for r in results)
     assert all(r.status_code == 500 for r in results)
+
+
+# ─── Email backend: helpers ───────────────────────────────────────────────
+
+
+def _clear_smtp_env(monkeypatch) -> None:
+    """Strip all SMTP_* env vars so _get_smtp_config sees a clean slate."""
+    for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM_ADDRESS"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def _set_smtp_env(monkeypatch) -> None:
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USER", "alerts@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "hunter2")
+    monkeypatch.setenv("SMTP_FROM_ADDRESS", "alerts@example.com")
+
+
+class _FakeSMTP:
+    """Stand-in for ``smtplib.SMTP`` that records the call sequence and
+    can be configured to raise on individual methods."""
+
+    instances: list["_FakeSMTP"] = []  # populated when the constructor is called
+
+    def __init__(
+        self,
+        host: str = "",
+        port: int = 0,
+        timeout: float | None = None,
+        *,
+        starttls_raises: BaseException | None = None,
+        login_raises: BaseException | None = None,
+        sendmail_raises: BaseException | None = None,
+        ctor_raises: BaseException | None = None,
+    ) -> None:
+        if ctor_raises is not None:
+            raise ctor_raises
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.starttls_raises = starttls_raises
+        self.login_raises = login_raises
+        self.sendmail_raises = sendmail_raises
+        self.calls: list[tuple] = [("__init__", host, port, timeout)]
+        _FakeSMTP.instances.append(self)
+
+    def starttls(self) -> None:
+        self.calls.append(("starttls",))
+        if self.starttls_raises is not None:
+            raise self.starttls_raises
+
+    def login(self, user: str, password: str) -> None:
+        self.calls.append(("login", user, password))
+        if self.login_raises is not None:
+            raise self.login_raises
+
+    def sendmail(self, from_addr: str, to_addrs, msg: str) -> None:
+        self.calls.append(("sendmail", from_addr, tuple(to_addrs), msg))
+        if self.sendmail_raises is not None:
+            raise self.sendmail_raises
+
+    def quit(self) -> None:
+        self.calls.append(("quit",))
+
+
+def _install_fake_smtp(monkeypatch, **kw):
+    """Patch ``alert_delivery.smtplib.SMTP`` to construct a ``_FakeSMTP``
+    pre-configured with the given kwargs. Returns the ``instances`` list
+    so callers can inspect after delivery."""
+    _FakeSMTP.instances = []
+
+    def factory(host, port, timeout=None):
+        return _FakeSMTP(host, port, timeout, **kw)
+
+    monkeypatch.setattr(alert_delivery.smtplib, "SMTP", factory)
+    return _FakeSMTP.instances
+
+
+# ─── format_email_payload ──────────────────────────────────────────────────
+
+
+def test_format_email_payload_subject_prefix_and_severity_color() -> None:
+    cases = {
+        "CRITICAL": "#d73a49",
+        "HIGH":     "#f66a0a",
+        "MEDIUM":   "#f1c40f",
+        "LOW":      "#6a737d",
+    }
+    for sev, expected_color in cases.items():
+        alert = _make_alert(severity=sev, title="BDI Surged 7.2% in 1 Day")
+        payload = format_email_payload(alert)
+        # Subject is "[SEVERITY] title"
+        assert payload["subject"] == f"[{sev}] BDI Surged 7.2% in 1 Day"
+        # HTML body carries the matching severity colour
+        assert expected_color in payload["html_body"], (sev, expected_color)
+
+
+def test_format_email_payload_html_includes_value_threshold_change() -> None:
+    alert = _make_alert(
+        severity="HIGH",
+        value=2345.67,
+        threshold=1000.0,
+        change_pct=23.4,
+        body="Drewry SCFI jumped sharply overnight.",
+    )
+    payload = format_email_payload(alert)
+    html = payload["html_body"]
+    # Subject + body content surface in the HTML
+    assert "Drewry SCFI jumped sharply overnight." in html
+    # Severity colour swatch
+    assert "#f66a0a" in html
+    # Formatted numeric fields (the same shape used in slack)
+    assert "Value" in html
+    assert "2,345.67" in html
+    assert "Threshold" in html
+    assert "1,000.00" in html
+    assert "Change %" in html
+    assert "23.40" in html or "+23.40" in html
+
+
+def test_format_email_payload_text_body_is_plain_text() -> None:
+    alert = _make_alert(severity="MEDIUM", title="Suez throughput dipped", body="See chart.")
+    payload = format_email_payload(alert)
+    text = payload["text_body"]
+    # No HTML tags in the plain-text fallback
+    assert "<html" not in text.lower()
+    assert "<table" not in text.lower()
+    assert "<div" not in text.lower()
+    # But it still carries the key fields
+    assert "Suez throughput dipped" in text
+    assert "MEDIUM" in text
+    assert "Value:" in text
+    assert "Threshold:" in text
+    assert "Change %" in text
+
+
+def test_format_email_payload_omits_context_rows_when_empty() -> None:
+    alert = _make_alert(ticker="", route_id="", port_locode="", created_at="")
+    payload = format_email_payload(alert)
+    # Without any context bits, none of the "Ticker"/"Route"/"Port"/"At"
+    # labels should leak into the HTML.
+    html = payload["html_body"]
+    assert "Ticker" not in html
+    assert "Route" not in html
+    assert ">Port<" not in html  # avoid false positive on "Threshold"
+    assert ">At<" not in html
+
+
+# ─── _get_smtp_config ──────────────────────────────────────────────────────
+
+
+def test_get_smtp_config_returns_none_when_env_missing(monkeypatch) -> None:
+    _clear_smtp_env(monkeypatch)
+    # _get_smtp_config tries st.secrets first (wrapped in try/except).
+    # In this test env no secrets.toml is present, so the secrets read
+    # raises and we fall through to env vars, which we just cleared.
+    assert _get_smtp_config() is None
+
+
+def test_get_smtp_config_returns_none_when_only_partial_env(monkeypatch) -> None:
+    _clear_smtp_env(monkeypatch)
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_USER", "alerts@example.com")
+    # missing SMTP_PASSWORD + SMTP_FROM_ADDRESS
+    assert _get_smtp_config() is None
+
+
+def test_get_smtp_config_builds_from_env(monkeypatch) -> None:
+    _clear_smtp_env(monkeypatch)
+    _set_smtp_env(monkeypatch)
+    cfg = _get_smtp_config()
+    assert cfg is not None
+    assert isinstance(cfg, _SmtpConfig)
+    assert cfg.host == "smtp.example.com"
+    assert cfg.port == 587
+    assert cfg.user == "alerts@example.com"
+    assert cfg.password == "hunter2"
+    assert cfg.from_addr == "alerts@example.com"
+
+
+def test_get_smtp_config_defaults_port_587_when_unset(monkeypatch) -> None:
+    _clear_smtp_env(monkeypatch)
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_USER", "alerts@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "hunter2")
+    monkeypatch.setenv("SMTP_FROM_ADDRESS", "alerts@example.com")
+    # No SMTP_PORT set
+    cfg = _get_smtp_config()
+    assert cfg is not None
+    assert cfg.port == 587
+
+
+def test_get_smtp_config_returns_none_on_unparsable_port(monkeypatch) -> None:
+    _clear_smtp_env(monkeypatch)
+    _set_smtp_env(monkeypatch)
+    monkeypatch.setenv("SMTP_PORT", "not-a-number")
+    assert _get_smtp_config() is None
+
+
+# ─── _deliver_email (SMTP mocked end-to-end) ───────────────────────────────
+
+
+def _smtp_cfg() -> _SmtpConfig:
+    return _SmtpConfig(
+        host="smtp.example.com",
+        port=587,
+        user="alerts@example.com",
+        password="hunter2",
+        from_addr="alerts@example.com",
+    )
+
+
+def test_deliver_email_success_runs_starttls_login_sendmail(monkeypatch) -> None:
+    instances = _install_fake_smtp(monkeypatch)
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    alert = _make_alert(severity="HIGH", title="ZIM dropped 8%")
+
+    result = _deliver_email(channel, alert, _smtp_cfg())
+    assert result.success is True
+    assert result.error_msg == ""
+
+    # The connection sequence happened in order: ctor → starttls → login →
+    # sendmail → quit.
+    assert len(instances) == 1
+    seq = [c[0] for c in instances[0].calls]
+    assert seq == ["__init__", "starttls", "login", "sendmail", "quit"]
+
+    # Login credentials forwarded from config
+    login_call = next(c for c in instances[0].calls if c[0] == "login")
+    assert login_call[1] == "alerts@example.com"
+    assert login_call[2] == "hunter2"
+
+    # sendmail addressed to the channel target
+    send_call = next(c for c in instances[0].calls if c[0] == "sendmail")
+    assert send_call[1] == "alerts@example.com"      # from
+    assert send_call[2] == ("ops@example.com",)      # to
+    raw_msg = send_call[3]
+    assert "Subject: [HIGH] ZIM dropped 8%" in raw_msg
+
+
+def test_deliver_email_uses_10s_timeout(monkeypatch) -> None:
+    instances = _install_fake_smtp(monkeypatch)
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    _deliver_email(channel, _make_alert("HIGH"), _smtp_cfg())
+    init_call = instances[0].calls[0]
+    assert init_call[0] == "__init__"
+    assert init_call[3] == 10.0
+
+
+def test_deliver_email_auth_error_returns_failure(monkeypatch) -> None:
+    _install_fake_smtp(
+        monkeypatch,
+        login_raises=smtplib.SMTPAuthenticationError(535, b"auth failed"),
+    )
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = _deliver_email(channel, _make_alert("HIGH"), _smtp_cfg())
+    assert result.success is False
+    assert "smtp auth" in result.error_msg.lower()
+
+
+def test_deliver_email_recipient_refused_returns_failure(monkeypatch) -> None:
+    _install_fake_smtp(
+        monkeypatch,
+        sendmail_raises=smtplib.SMTPRecipientsRefused({"ops@example.com": (550, b"no such user")}),
+    )
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = _deliver_email(channel, _make_alert("HIGH"), _smtp_cfg())
+    assert result.success is False
+    assert "recipient refused" in result.error_msg.lower()
+
+
+def test_deliver_email_connection_error_returns_failure(monkeypatch) -> None:
+    _install_fake_smtp(monkeypatch, ctor_raises=ConnectionError("no route to host"))
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = _deliver_email(channel, _make_alert("HIGH"), _smtp_cfg())
+    assert result.success is False
+    assert "connection error" in result.error_msg.lower()
+    assert "no route to host" in result.error_msg
+
+
+def test_deliver_email_generic_smtp_exception_returns_failure(monkeypatch) -> None:
+    _install_fake_smtp(monkeypatch, sendmail_raises=smtplib.SMTPException("queue full"))
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = _deliver_email(channel, _make_alert("HIGH"), _smtp_cfg())
+    assert result.success is False
+    assert "smtp error" in result.error_msg.lower()
+
+
+# ─── deliver_alert dispatch on kind="email" ────────────────────────────────
+
+
+def test_deliver_alert_email_no_config_returns_failure(monkeypatch) -> None:
+    """kind=email with no SMTP credentials → failure with explicit msg."""
+    _clear_smtp_env(monkeypatch)
+    # Belt-and-suspenders: also patch _get_smtp_config to return None so
+    # any stray st.secrets in the test env can't satisfy it.
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", lambda: None)
+
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is False
+    assert result.error_msg == "SMTP not configured"
+
+
+def test_deliver_alert_email_with_config_succeeds(monkeypatch) -> None:
+    """kind=email with configured SMTP → routes through _deliver_email
+    and returns success when the (mocked) connection round-trips."""
+    _clear_smtp_env(monkeypatch)
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", _smtp_cfg)
+    instances = _install_fake_smtp(monkeypatch)
+
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    # And the SMTP connection was actually exercised
+    assert len(instances) == 1
+    assert any(c[0] == "sendmail" for c in instances[0].calls)
+
+
+def test_deliver_alert_email_below_threshold_skips_smtp(monkeypatch) -> None:
+    """Severity gating runs before transport selection — a below-threshold
+    email channel must not touch SMTP at all."""
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", _smtp_cfg)
+    instances = _install_fake_smtp(monkeypatch)
+
+    channel = _make_channel("CRITICAL", kind="email", target="ops@example.com")
+    result = deliver_alert(_make_alert("LOW"), channel)
+    assert result.success is True
+    assert "below threshold" in result.error_msg
+    # No SMTP instance was constructed
+    assert instances == []
+
+
+def test_deliver_alert_email_disabled_skips_smtp(monkeypatch) -> None:
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", _smtp_cfg)
+    instances = _install_fake_smtp(monkeypatch)
+
+    channel = _make_channel("LOW", kind="email", target="ops@example.com", enabled=False)
+    result = deliver_alert(_make_alert("CRITICAL"), channel)
+    assert result.success is True
+    assert "disabled" in result.error_msg
+    assert instances == []
