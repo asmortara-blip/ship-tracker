@@ -11,9 +11,10 @@ exceptions and returns a sensible default (empty list, None, False, {}).
 """
 from __future__ import annotations
 
+import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,16 +42,18 @@ _INDEX_FILE: Path = REPORT_DIR / "report_index.json"
 
 @dataclass
 class ReportMeta:
-    report_id: str          # UUID
-    generated_at: str       # ISO timestamp (UTC)
-    report_date: str        # human-readable date shown in the report
-    sentiment_label: str    # BULLISH / BEARISH / NEUTRAL / MIXED
-    sentiment_score: float  # -1.0 to +1.0
-    risk_level: str         # LOW / MODERATE / HIGH / CRITICAL
-    signal_count: int       # number of alpha signals included
-    data_quality: str       # FULL / PARTIAL / DEGRADED
-    file_path: str          # absolute path to the stored HTML file
-    file_size_kb: float     # file size in kilobytes
+    report_id: str               # UUID
+    generated_at: str            # ISO timestamp (UTC)
+    report_date: str             # human-readable date shown in the report
+    sentiment_label: str         # BULLISH / BEARISH / NEUTRAL / MIXED
+    sentiment_score: float       # -1.0 to +1.0
+    risk_level: str              # LOW / MODERATE / HIGH / CRITICAL
+    signal_count: int            # number of alpha signals included
+    data_quality: str            # FULL / PARTIAL / DEGRADED
+    file_path: str               # absolute path to the stored HTML file
+    file_size_kb: float          # file size in kilobytes
+    public_slug: str = ""        # URL-safe base64url token; "" = not shared
+    public_expires_at: str = ""  # ISO-8601 UTC; "" or past time = invalid
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +61,21 @@ class ReportMeta:
 # ---------------------------------------------------------------------------
 
 def _row_to_meta(row) -> ReportMeta:
-    """Map a sqlite3.Row from the report_history table to a ReportMeta."""
+    """Map a sqlite3.Row from the report_history table to a ReportMeta.
+
+    Tolerates rows missing the v5 public-share columns — older databases
+    that haven't run the v5 migration yet, or row factories that strip
+    columns — by defaulting both fields to the empty string."""
+    # sqlite3.Row does not implement .get(); reach for the column by key
+    # and fall back if it does not exist on the row.
+    try:
+        public_slug = row["public_slug"] or ""
+    except (IndexError, KeyError):
+        public_slug = ""
+    try:
+        public_expires_at = row["public_expires_at"] or ""
+    except (IndexError, KeyError):
+        public_expires_at = ""
     return ReportMeta(
         report_id=row["report_id"],
         generated_at=row["generated_at"],
@@ -70,6 +87,8 @@ def _row_to_meta(row) -> ReportMeta:
         data_quality=row["data_quality"],
         file_path=row["file_path"],
         file_size_kb=float(row["file_size_kb"]),
+        public_slug=public_slug,
+        public_expires_at=public_expires_at,
     )
 
 
@@ -239,6 +258,163 @@ def delete_report(report_id: str) -> bool:
     except Exception as exc:
         logger.error(f"delete_report failed for {report_id}: {exc}")
         return False
+
+
+def make_public(report_id: str, expires_in_days: int = 30) -> str | None:
+    """Generate a public-share slug for *report_id* and persist it.
+
+    The slug is a URL-safe base64url token from
+    ``secrets.token_urlsafe(12)`` (16-char string) — short enough to be
+    pasted into a chat or email, long enough to be unguessable, and
+    carrying no information about the internal ``report_id`` or
+    ``file_path``. The expiry is stored as an ISO-8601 UTC timestamp
+    and enforced on read by :func:`load_public_report`.
+
+    Args:
+        report_id:        The internal UUID of the report to share.
+        expires_in_days:  Lifetime of the link in days. Must be > 0.
+
+    Returns:
+        The newly-generated slug on success, or ``None`` if the report
+        cannot be found, ``expires_in_days`` is non-positive, or
+        anything else goes wrong (this function never raises).
+    """
+    try:
+        if expires_in_days <= 0:
+            return None
+
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT report_id FROM report_history WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        if row is None:
+            logger.debug(f"make_public: report_id not found: {report_id}")
+            return None
+
+        slug = secrets.token_urlsafe(12)
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+        ).isoformat()
+
+        with conn:
+            conn.execute(
+                """
+                UPDATE report_history
+                   SET public_slug = ?, public_expires_at = ?
+                 WHERE report_id = ?
+                """,
+                (slug, expires_at, report_id),
+            )
+        return slug
+    except Exception as exc:
+        logger.error(f"make_public failed for {report_id}: {exc}")
+        return None
+
+
+def revoke_public(report_id: str) -> bool:
+    """Clear the public-share slug + expiry for *report_id*.
+
+    After revoke, any prior call to :func:`load_public_report` with the
+    old slug returns ``None`` (slug not found).
+
+    Returns:
+        True if a row was updated, False if the report_id is unknown or
+        anything else goes wrong (this function never raises).
+    """
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT report_id FROM report_history WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        if row is None:
+            logger.debug(f"revoke_public: report_id not found: {report_id}")
+            return False
+
+        with conn:
+            conn.execute(
+                """
+                UPDATE report_history
+                   SET public_slug = '', public_expires_at = ''
+                 WHERE report_id = ?
+                """,
+                (report_id,),
+            )
+        return True
+    except Exception as exc:
+        logger.error(f"revoke_public failed for {report_id}: {exc}")
+        return False
+
+
+def load_public_report(slug: str) -> str | None:
+    """Return the HTML for the report identified by *slug*, if the link is valid.
+
+    Validity requires all of:
+      * ``slug`` is non-empty.
+      * A ``report_history`` row exists with that ``public_slug``.
+      * ``public_expires_at`` parses as a future ISO-8601 UTC timestamp.
+      * The on-disk HTML file referenced by ``file_path`` still exists.
+
+    Returns:
+        The HTML string on success, or ``None`` for any failure
+        condition (slug unknown / empty / expired / file deleted /
+        unreadable). Never raises.
+    """
+    try:
+        if not slug:
+            return None
+
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            """
+            SELECT file_path, public_slug, public_expires_at
+              FROM report_history
+             WHERE public_slug = ?
+            """,
+            (slug,),
+        ).fetchone()
+        if row is None:
+            logger.debug(f"load_public_report: slug not found: {slug}")
+            return None
+
+        # Defensive — a row where the slug column happened to be empty
+        # would have been matched by ``WHERE public_slug = ''``. Treat
+        # that as "not shared" and refuse.
+        if not row["public_slug"]:
+            return None
+
+        expires_at_raw = row["public_expires_at"] or ""
+        try:
+            expires_at = datetime.fromisoformat(expires_at_raw)
+        except ValueError:
+            logger.debug(
+                f"load_public_report: bad expires_at for slug {slug}: "
+                f"{expires_at_raw!r}"
+            )
+            return None
+        # Normalise to UTC-aware so we can compare against a
+        # timezone-aware "now" without raising.
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            logger.debug(f"load_public_report: slug expired: {slug}")
+            return None
+
+        path = Path(row["file_path"])
+        if not path.exists():
+            logger.debug(f"load_public_report: file missing for slug {slug}")
+            return None
+        return path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.error(f"load_public_report failed for slug {slug!r}: {exc}")
+        return None
 
 
 def get_report_stats() -> dict:

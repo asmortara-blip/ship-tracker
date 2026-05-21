@@ -484,3 +484,30 @@ def test_get_report_stats_excludes_entries_with_missing_files() -> None:
     stats = get_report_stats()
     assert stats["total_reports"] == 1
     assert stats["total_size_mb"] == 0.5
+
+
+# ─── Public-share columns flow through _row_to_meta ────────────────────────
+
+def test_list_reports_defaults_public_fields_for_unshared_rows() -> None:
+    """A freshly-saved report has empty public_slug + public_expires_at,
+    and list_reports() must surface those defaults on the ReportMeta."""
+    save_report("<html>", _FakeReport())
+    out = list_reports()
+    assert len(out) == 1
+    assert out[0].public_slug == ""
+    assert out[0].public_expires_at == ""
+
+
+def test_list_reports_carries_public_fields_after_make_public() -> None:
+    """After make_public(), list_reports() must surface the slug + expiry
+    on the corresponding ReportMeta."""
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7)
+    assert slug is not None
+
+    rows = list_reports()
+    matching = [r for r in rows if r.report_id == meta.report_id]
+    assert len(matching) == 1
+    assert matching[0].public_slug == slug
+    assert matching[0].public_expires_at != ""
