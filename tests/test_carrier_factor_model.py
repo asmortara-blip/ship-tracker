@@ -15,6 +15,9 @@ import pytest
 from engine.carrier_factor_model import (
     DEFAULT_CARRIERS,
     DEFAULT_FACTORS,
+    FactorAttribution,
+    attribute_all_carriers,
+    attribute_window_return,
     build_factor_frame,
     fit_carrier_factors,
     residual_signal_backtest,
@@ -192,3 +195,124 @@ def test_default_carriers_and_factors_are_tuples() -> None:
     assert isinstance(DEFAULT_FACTORS, tuple)
     assert len(DEFAULT_CARRIERS) >= 5
     assert len(DEFAULT_FACTORS) >= 5
+
+
+# ── attribute_window_return ─────────────────────────────────────────────────
+
+
+def test_attribution_decomposition_is_exact() -> None:
+    """observed_return ≡ alpha_contribution + Σ factor_contributions + residual."""
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["ZIM"]
+    attr = attribute_window_return(fit, returns_df["ZIM"], factors_df, window=12)
+    reconstructed = (
+        attr.alpha_contribution
+        + sum(attr.factor_contributions.values())
+        + attr.residual_return
+    )
+    # Floating-point reconstructor should hit the observed return up to roundoff.
+    assert reconstructed == pytest.approx(attr.observed_return, abs=1e-4)
+
+
+def test_attribution_explained_plus_residual_matches_observed() -> None:
+    """explained_return + residual_return == observed_return (also up to roundoff)."""
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["MATX"]
+    attr = attribute_window_return(fit, returns_df["MATX"], factors_df, window=8)
+    assert (attr.explained_return + attr.residual_return) == pytest.approx(
+        attr.observed_return, abs=1e-4
+    )
+
+
+def test_attribution_factor_contribution_signs_match_known_betas() -> None:
+    """ZIM's synthetic β on dBDI is +0.6. When the window's Σ dBDI is positive,
+    the dBDI contribution must be positive. When Σ dBDI is negative, negative."""
+    # Use a longer window so the random Σ dBDI is unlikely to be exactly 0.
+    returns_df, factors_df, truth = _synthetic_panel(n=260, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["ZIM"]
+    attr = attribute_window_return(fit, returns_df["ZIM"], factors_df, window=20)
+    # Sign of factor contribution should match sign(β) × sign(Σ factor).
+    for factor_name, beta_truth in truth["ZIM"].items():
+        if factor_name not in attr.factor_contributions:
+            continue
+        contrib = attr.factor_contributions[factor_name]
+        # Use the FITTED β (close to truth but not identical with noise).
+        beta_fit = fit.betas[factor_name]
+        factor_sum = float(factors_df.iloc[-20:][factor_name].sum())
+        if abs(beta_fit) < 1e-3 or abs(factor_sum) < 1e-6:
+            continue  # too small to assert a sign meaningfully
+        expected_sign = 1.0 if beta_fit * factor_sum > 0 else -1.0
+        actual_sign = 1.0 if contrib > 0 else (-1.0 if contrib < 0 else 0.0)
+        assert actual_sign == expected_sign, (
+            f"{factor_name}: β={beta_fit:.3f}, ΣF={factor_sum:.4f}, "
+            f"expected sign={expected_sign}, got contrib={contrib:.6f}"
+        )
+
+
+def test_attribution_window_smaller_than_window_arg_when_history_short() -> None:
+    """If `window` exceeds the aligned history length, the attribution honors
+    the actually-available window."""
+    returns_df, factors_df, _ = _synthetic_panel(n=80, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["ZIM"]
+    attr = attribute_window_return(fit, returns_df["ZIM"], factors_df, window=1000)
+    assert attr.window_size == 80   # full series used
+    assert math.isfinite(attr.observed_return)
+
+
+def test_attribution_empty_returns_zero_decomposition() -> None:
+    """No usable data → identity-shaped attribution (no exception)."""
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["ZIM"]
+    # Empty returns series → empty after _align
+    empty = pd.Series([], dtype=float, name="ZIM")
+    attr = attribute_window_return(fit, empty, factors_df, window=4)
+    assert attr.window_size == 0
+    assert attr.observed_return == 0.0
+    assert attr.alpha_contribution == 0.0
+    # Every factor key present, all contributions zero.
+    assert set(attr.factor_contributions.keys()) == set(fit.betas.keys())
+    assert all(v == 0.0 for v in attr.factor_contributions.values())
+
+
+def test_attribution_window_size_one_aggregates_single_period() -> None:
+    """window=1 should attribute exactly the last period's return."""
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fit = fit_carrier_factors(returns_df, factors_df)["ZIM"]
+    attr = attribute_window_return(fit, returns_df["ZIM"], factors_df, window=1)
+    # Align trims to overlapping dates; the last observed return goes in.
+    aligned_y_last = float(returns_df["ZIM"].iloc[-1])
+    # The dataclass rounds to 6 decimal places — match that tolerance.
+    assert attr.observed_return == pytest.approx(aligned_y_last, abs=1e-6)
+    assert attr.window_size == 1
+
+
+# ── attribute_all_carriers ──────────────────────────────────────────────────
+
+
+def test_attribute_all_returns_one_per_fit() -> None:
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fits = fit_carrier_factors(returns_df, factors_df)
+    attrs = attribute_all_carriers(fits, returns_df, factors_df, window=12)
+    assert len(attrs) == len(fits)
+    assert {a.name for a in attrs} == set(fits.keys())
+
+
+def test_attribute_all_sorted_by_observed_return_descending() -> None:
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fits = fit_carrier_factors(returns_df, factors_df)
+    attrs = attribute_all_carriers(fits, returns_df, factors_df, window=12)
+    observed_vals = [a.observed_return for a in attrs]
+    assert observed_vals == sorted(observed_vals, reverse=True)
+
+
+def test_attribute_all_skips_carriers_missing_from_returns() -> None:
+    """If a fit exists for a ticker that's not in returns_df, it's silently
+    skipped — the function must not raise KeyError."""
+    returns_df, factors_df, _ = _synthetic_panel(n=260, noise=0.005)
+    fits = fit_carrier_factors(returns_df, factors_df)
+    # Drop ZIM from returns_df but keep its fit.
+    returns_missing = returns_df[["MATX"]]
+    attrs = attribute_all_carriers(fits, returns_missing, factors_df, window=12)
+    tickers_in_output = {a.name for a in attrs}
+    assert "ZIM" not in tickers_in_output
+    assert "MATX" in tickers_in_output
