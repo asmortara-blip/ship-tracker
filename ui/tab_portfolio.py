@@ -298,6 +298,116 @@ def _render_add_position_form() -> None:
                 st.rerun()
 
 
+def _render_editorial_commentary(df: pd.DataFrame) -> None:
+    """1-2 paragraph editorial read on the current portfolio snapshot.
+
+    Sits between the summary KPI strip and the holdings table. Wraps the
+    engine call in try/except — template fallback is safe; the only failure
+    mode we guard against here is import / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+
+        if df is None or df.empty:
+            return  # No holdings → no editorial commentary to render.
+
+        total_val = float(df["Market Value"].sum())
+        total_pnl = float(df["P&L $"].sum())
+        day_pnl = float(df["Day P&L $"].sum())
+        cost_basis = float((df["Shares"] * df["Avg Cost"]).sum())
+        total_ret_pct = (
+            (total_pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+        )
+        port_beta = float(
+            (df["Beta"] * df["Weight %"] / 100.0).sum()
+        ) if "Weight %" in df.columns else 1.0
+
+        # Top holding by market value + best/worst single-day mover.
+        top_idx = df["Market Value"].idxmax()
+        top = df.loc[top_idx]
+        sorted_day = df.sort_values("Day Chg %", ascending=False)
+        best = sorted_day.iloc[0]
+        worst = sorted_day.iloc[-1]
+
+        # Sector exposure as a simple dict, rounded to whole pct points.
+        sector_exposure: dict[str, float] = {}
+        try:
+            sector_grp = (
+                df.groupby("Sector")["Market Value"].sum() / total_val * 100.0
+            )
+            sector_exposure = {
+                str(k): round(float(v), 1)
+                for k, v in sector_grp.sort_values(ascending=False).items()
+            }
+        except Exception:
+            pass
+
+        context: dict[str, object] = {
+            "n_positions": int(len(df)),
+            "total_value_usd": round(total_val, 2),
+            "total_pnl_usd": round(total_pnl, 2),
+            "total_return_pct": round(total_ret_pct, 2),
+            "day_pnl_usd": round(day_pnl, 2),
+            "portfolio_beta": round(port_beta, 2),
+            "top_holding": (
+                f"{top['Ticker']} ({top['Sector']}, "
+                f"{float(top['Weight %']):.1f}% of book)"
+            ),
+            "best_today": f"{best['Ticker']} ({float(best['Day Chg %']):+.2f}%)",
+            "worst_today": f"{worst['Ticker']} ({float(worst['Day Chg %']):+.2f}%)",
+            "sector_exposure_pct": sector_exposure,
+        }
+
+        commentary = build_commentary("Portfolio", context)
+
+        section_header(
+            "Editorial",
+            subtitle=(
+                "LLM-narrated read on the current portfolio snapshot. "
+                "Falls back to a deterministic template when no API key is "
+                "configured."
+            ),
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Portfolio — editorial commentary render failed")
+
+
 def _render_holdings_table(df: pd.DataFrame) -> None:
     """Sector-coded holdings table."""
     section_header("Holdings", "Sector-coded position table with P&L and weight allocation")
@@ -1115,6 +1225,9 @@ def render(stock_data, macro_data, insights) -> None:
         _render_summary_metrics(df)
 
         _render_add_position_form()
+
+        # Editorial commentary (per-tab LLM + template fallback)
+        _render_editorial_commentary(df)
 
         section_divider("Holdings")
 

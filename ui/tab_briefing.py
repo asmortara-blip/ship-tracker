@@ -210,6 +210,98 @@ def _render_sections_grid(narration) -> None:
             )
 
 
+def _render_editorial_commentary(narration, signals: dict) -> None:
+    """Per-tab editorial commentary from ``engine.tab_commentary``.
+
+    Sits between the briefing prose and the structured-inputs panel — gives
+    a tight, cached editorial read on the same signals using a different
+    voice from the main daily-narration block above. Wraps the engine call
+    in try/except — template fallback is safe; the only failure mode we
+    guard against here is import / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+
+        stress_report = signals.get("stress_report")
+        forecasts = signals.get("forecasts") or []
+        indicators = signals.get("indicators") or {}
+
+        context: dict[str, object] = {
+            "narration_source": getattr(narration, "source", ""),
+            "narration_date": getattr(narration, "date", ""),
+            "n_forecasts": len(forecasts),
+            "n_indicators": len(indicators),
+        }
+        if stress_report is not None:
+            context["ssi"] = round(float(getattr(stress_report, "overall_ssi", 0.0)), 3)
+            context["ssi_label"] = str(getattr(stress_report, "ssi_label", ""))
+            context["wow_change_pp"] = round(
+                float(getattr(stress_report, "wow_change", 0.0)) * 100.0, 2
+            )
+            context["active_disruptions"] = len(
+                getattr(stress_report, "top_disruptions", []) or []
+            )
+        if forecasts:
+            top = forecasts[0]
+            context["top_route"] = (
+                f"{getattr(top, 'route_name', '') or getattr(top, 'route_id', '')}"
+                f" (stress 30d {float(getattr(top, 'stress_30d', 0.0)):.2f})"
+            ).strip()
+        if indicators:
+            # Keep the indicator dict JSON-serializable (round to 2 dp).
+            context["indicators"] = {
+                str(k): round(float(v), 2) for k, v in list(indicators.items())[:6]
+            }
+
+        commentary = build_commentary("Briefing", context)
+
+        section_header(
+            "Editorial",
+            subtitle=(
+                "LLM-narrated read on today's inputs. Falls back to a "
+                "deterministic template when no API key is configured."
+            ),
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Briefing — editorial commentary render failed")
+
+
 def _render_inputs_panel(signals: dict) -> None:
     """Transparency panel — show the structured signals the LLM saw."""
     stress_report = signals.get("stress_report")
@@ -474,6 +566,9 @@ def render(
 
         # ── 3. Sections grid ───────────────────────────────────────────────
         _render_sections_grid(narration)
+
+        # ── 3b. Editorial commentary (per-tab LLM + template fallback) ─────
+        _render_editorial_commentary(narration, signals)
 
         section_divider("Inputs")
 

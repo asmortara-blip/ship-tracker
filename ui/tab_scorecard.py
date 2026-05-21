@@ -417,6 +417,101 @@ def _render_executive_summary(overall: int, rows: list[dict]) -> None:
         st.error("Executive summary unavailable.")
 
 
+# ── Section 1b: Editorial Commentary (per-tab LLM + template fallback) ───────
+
+def _render_editorial_commentary(rows: list[dict], overall: int) -> None:
+    """1-2 paragraph editorial read on the current scorecard snapshot.
+
+    Sits between the executive summary and the per-pillar deep dive. Wraps
+    the engine call in try/except — template fallback is safe; the only
+    failure mode we guard against here is import / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+
+        rag_label, _ = _rag(overall)
+        category_avgs = {
+            cat: _category_avg(rows, [cat]) for cat in _CATEGORY_ORDER
+        }
+        # Identify the strongest and weakest pillar so the commentary can
+        # name them without re-doing the work in the LLM prompt.
+        if category_avgs:
+            strongest = max(category_avgs, key=category_avgs.get)
+            weakest = min(category_avgs, key=category_avgs.get)
+        else:
+            strongest = weakest = ""
+
+        best = max(rows, key=lambda r: r["score"]) if rows else None
+        worst = min(rows, key=lambda r: r["score"]) if rows else None
+
+        context: dict[str, object] = {
+            "composite_score": int(overall),
+            "rag_band": rag_label,
+            "n_metrics": len(rows),
+            "pillar_averages": {k: int(v) for k, v in category_avgs.items()},
+            "strongest_pillar": strongest,
+            "weakest_pillar": weakest,
+            "week_of": _week_label(),
+        }
+        if best is not None:
+            context["best_metric"] = (
+                f"{best['metric']} ({best['category']}, score {best['score']})"
+            )
+        if worst is not None:
+            context["worst_metric"] = (
+                f"{worst['metric']} ({worst['category']}, score {worst['score']})"
+            )
+
+        commentary = build_commentary("Scorecard", context)
+
+        section_header(
+            "Editorial",
+            subtitle=(
+                "LLM-narrated read on the current scorecard snapshot. "
+                "Falls back to a deterministic template when no API key is "
+                "configured."
+            ),
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Scorecard — editorial commentary render failed")
+
+
 # ── Section 2: Category Averages ──────────────────────────────────────────────
 
 def _render_category_bar(rows: list[dict]) -> None:
@@ -1009,6 +1104,9 @@ def render(
 
         # ── Chapter 1: the headline read ──
         _render_executive_summary(overall, rows)
+
+        # ── Editorial commentary (per-tab LLM + template fallback) ──
+        _render_editorial_commentary(rows, overall)
 
         section_divider("Pillar Detail")
         _render_category_bar(rows)

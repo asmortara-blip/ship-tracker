@@ -142,6 +142,105 @@ def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
     metric_card_row(cards, columns=4)
 
 
+# ─── Section 1b: Editorial commentary (per-tab LLM + template fallback) ───
+
+def _render_editorial_commentary(
+    returns_df: pd.DataFrame, weights: dict,
+    portfolio_value: float, confidence: float,
+) -> None:
+    """1-2 paragraph editorial read on the current risk snapshot.
+
+    Sits between the VaR strip and the scenario stress table. Wraps the
+    engine call in try/except — template fallback is safe; the only failure
+    mode we guard against here is import / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+        from processing.risk_lab import portfolio_var
+
+        # Recompute the VaR numbers locally (cheap) so the commentary has
+        # the same figures the user just saw above.
+        hist = portfolio_var(
+            returns_df, weights, confidence=confidence,
+            method="historical", portfolio_value=portfolio_value,
+        )
+        para = portfolio_var(
+            returns_df, weights, confidence=confidence,
+            method="parametric", portfolio_value=portfolio_value,
+        )
+
+        # Largest single-name weight, for a contextual color on concentration.
+        top_ticker = max(weights, key=weights.get) if weights else ""
+        top_weight_pct = (
+            round(float(weights[top_ticker]) * 100.0, 1)
+            if top_ticker else 0.0
+        )
+
+        context: dict[str, object] = {
+            "portfolio_value_usd": float(portfolio_value),
+            "confidence_pct": int(confidence * 100),
+            "n_positions": len(weights),
+            "var_historical_pct": round(float(hist.var_pct) * 100.0, 2),
+            "var_historical_usd": round(float(hist.var_dollar), 0),
+            "cvar_historical_pct": round(float(hist.cvar_pct) * 100.0, 2),
+            "cvar_historical_usd": round(float(hist.cvar_dollar), 0),
+            "var_parametric_pct": round(float(para.var_pct) * 100.0, 2),
+            "var_parametric_usd": round(float(para.var_dollar), 0),
+            "top_position": (
+                f"{top_ticker} ({top_weight_pct:.1f}% of book)"
+                if top_ticker else ""
+            ),
+        }
+
+        commentary = build_commentary("Risk Lab", context)
+
+        section_header(
+            "Editorial",
+            subtitle=(
+                "LLM-narrated read on the current risk snapshot. Falls back "
+                "to a deterministic template when no API key is configured."
+            ),
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Risk Lab — editorial commentary render failed")
+
+
 # ─── Section 2: Scenario stress test table ──────────────────────────────────
 
 def _render_stress_table(weights: dict, portfolio_value: float) -> None:
@@ -333,6 +432,11 @@ def render(
 
         section_divider("Value-at-Risk")
         _render_var_strip(returns_df, weights, portfolio_value, confidence)
+
+        # ── Editorial commentary (per-tab LLM + template fallback) ──
+        _render_editorial_commentary(
+            returns_df, weights, portfolio_value, confidence,
+        )
 
         section_divider("Scenario Stress")
         _render_stress_table(weights, portfolio_value)
