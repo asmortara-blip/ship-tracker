@@ -414,6 +414,30 @@ def test_acknowledge_alert_persists() -> None:
     assert loaded[0].acknowledged is True
 
 
+def test_acknowledge_alert_stamps_acknowledged_at() -> None:
+    """After acknowledge_alert, the row's ``acknowledged_at`` must hold a
+    parseable ISO timestamp within a few seconds of "now"."""
+    from state.db import get_connection
+
+    a = _mk_alert()
+    save_alerts([a])
+    before = datetime.now(timezone.utc)
+    acknowledge_alert(a.alert_id)
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT acknowledged_at FROM alerts WHERE alert_id = ?",
+        (a.alert_id,),
+    ).fetchone()
+    assert row is not None
+    ack_ts_raw = row["acknowledged_at"]
+    assert ack_ts_raw  # non-empty
+    parsed = datetime.fromisoformat(ack_ts_raw.replace("Z", "+00:00"))
+    # The timestamp must land between "just before" and "a generous after"
+    # (5 seconds is plenty for a synchronous test in CI).
+    assert before - timedelta(seconds=1) <= parsed <= before + timedelta(seconds=5)
+
+
 def test_acknowledge_all_marks_every_record() -> None:
     save_alerts([_mk_alert(), _mk_alert(), _mk_alert()])
     acknowledge_all()

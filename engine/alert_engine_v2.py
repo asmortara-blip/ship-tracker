@@ -479,28 +479,47 @@ def load_alerts(max_age_days: int = 30) -> list[ShippingAlert]:
 
 
 def acknowledge_alert(alert_id: str) -> None:
-    """Mark a single alert as acknowledged."""
+    """Mark a single alert as acknowledged.
+
+    Also stamps ``acknowledged_at`` with the current ISO UTC timestamp
+    so the alert-analytics module can compute median time-to-ack.
+    Pre-v4 rows that were acked before this column existed keep an
+    empty string here and are excluded from the time-to-ack metric.
+    """
     from state.db import get_connection
 
     conn = get_connection()
+    ack_ts = _now_iso()
     try:
         with conn:
             conn.execute(
-                "UPDATE alerts SET acknowledged = 1 WHERE alert_id = ?",
-                (alert_id,),
+                "UPDATE alerts SET acknowledged = 1, acknowledged_at = ? WHERE alert_id = ?",
+                (ack_ts, alert_id),
             )
     except Exception as exc:
         logger.warning(f"acknowledge_alert: SQLite update failed: {exc}")
 
 
 def acknowledge_all() -> None:
-    """Mark every alert in the store as acknowledged."""
+    """Mark every alert in the store as acknowledged.
+
+    Sets ``acknowledged_at`` for every row whose flag flips from 0 → 1
+    in this call. Rows that were already acked keep their original
+    acknowledged_at (we only fill in the timestamp for rows we are
+    transitioning here — overwriting would lie about WHEN the user
+    acked the alert).
+    """
     from state.db import get_connection
 
     conn = get_connection()
+    ack_ts = _now_iso()
     try:
         with conn:
-            conn.execute("UPDATE alerts SET acknowledged = 1")
+            conn.execute(
+                "UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
+                "WHERE acknowledged = 0",
+                (ack_ts,),
+            )
     except Exception as exc:
         logger.warning(f"acknowledge_all: SQLite update failed: {exc}")
 

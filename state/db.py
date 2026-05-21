@@ -29,8 +29,10 @@ Schema versioning
 The ``kv_state`` table carries a ``schema_version`` row holding the
 current integer schema version. ``_init_schema()`` checks it on startup
 and runs pending migrations from ``state/migrations.py``. Current
-version: 2 (adds ``delivery_channels`` table for external alert
-delivery — Slack webhooks today, Email/SMS later).
+version: 6 (adds ``delivery_channels.digest_mode`` column —
+``immediate`` per-alert delivery (default, preserves legacy behavior)
+or ``daily`` digest mode that batches the eligible alerts into a
+single delivery).
 
 Concurrency
 -----------
@@ -55,7 +57,20 @@ from loguru import logger
 DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker.db"
 
 # Current schema version. Bump when adding a migration in state/migrations.py.
-SCHEMA_VERSION: int = 3
+#
+# Version history (skip-v5 is intentional — see note below):
+#   1 — initial schema (alerts / alert_rules / report_history / kv_state)
+#   2 — adds delivery_channels table for outbound delivery
+#   3 — adds llm_calls table for LLM cost telemetry
+#   4 — adds alerts.acknowledged_at for median time-to-ack analytics
+#   5 — RESERVED for a sibling-agent migration that may land separately
+#   6 — adds delivery_channels.digest_mode column (immediate | daily)
+#
+# v5 is held aside because this branch was authored in parallel with
+# another agent's schema bump. Per the digest-mode task spec, this
+# change takes the next available slot (v6) so both can ship without
+# colliding on the same version number.
+SCHEMA_VERSION: int = 6
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -154,6 +169,12 @@ CREATE INDEX IF NOT EXISTS idx_report_history_generated_at ON report_history(gen
 # Schema v2 adds the delivery_channels table. Kept as a separate script so
 # the v2 migration helper can re-use the exact same CREATE TABLE statement
 # (idempotent via IF NOT EXISTS).
+#
+# NOTE: the v6 migration adds a ``digest_mode`` column to this table via
+# ALTER TABLE (see ``_SCHEMA_V6_NOTE`` and ``_migrate_to_v6``). The column
+# is added separately because SQLite cannot do IF NOT EXISTS on ALTER
+# TABLE; keeping the CREATE statement unchanged avoids forking the v2
+# bootstrap path.
 _SCHEMA_V2 = """
 CREATE TABLE IF NOT EXISTS delivery_channels (
     channel_id          TEXT PRIMARY KEY,
@@ -185,6 +206,49 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_source ON llm_calls(source);
 """
 
+# Schema v4 adds the ``acknowledged_at`` column to the alerts table so
+# the alert analytics module can compute median time-to-ack. SQLite's
+# ALTER TABLE ADD COLUMN does NOT support IF NOT EXISTS, so the column
+# add is wrapped in try/except inside ``_migrate_to_v4`` and is therefore
+# idempotent across re-runs and across fresh-DB initialization (where
+# the column has already been created — but a fresh DB started from the
+# v1 schema script does NOT have it; we run the migration unconditionally
+# in _init_schema below and let the OperationalError no-op handle the
+# already-exists case).
+_SCHEMA_V4_NOTE: str = (
+    "v4: alerts.acknowledged_at TEXT NOT NULL DEFAULT '' "
+    "(added via ALTER TABLE in _migrate_to_v4)"
+)
+
+# Schema v5 adds two columns to report_history for read-only public-share
+# links: ``public_slug`` (URL-safe base64url token, empty when the report
+# has not been shared) and ``public_expires_at`` (ISO-8601 UTC timestamp;
+# the link is valid only while this is in the future). Same idempotent
+# ALTER-TABLE-in-try/except pattern as v4 — SQLite does not support
+# IF NOT EXISTS on ALTER TABLE.
+_SCHEMA_V5_NOTE: str = (
+    "v5: report_history.public_slug TEXT NOT NULL DEFAULT '' + "
+    "report_history.public_expires_at TEXT NOT NULL DEFAULT '' "
+    "(added via ALTER TABLE in _migrate_to_v5)"
+)
+
+# Schema v6 adds the ``digest_mode`` column to ``delivery_channels`` so a
+# channel can batch the eligible alerts since ``since`` into a single
+# delivery instead of POSTing one message per alert. Values:
+#
+#   "immediate" — legacy behaviour: one delivery per alert (the default,
+#                 so pre-v6 rows keep behaving exactly as they did).
+#   "daily"     — batch every eligible alert into one digest delivery
+#                 each time ``deliver_pending`` runs.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 — SQLite
+# does not support IF NOT EXISTS on ALTER TABLE. Added via
+# ``_migrate_to_v6`` in ``state/migrations.py``.
+_SCHEMA_V6_NOTE: str = (
+    "v6: delivery_channels.digest_mode TEXT NOT NULL DEFAULT 'immediate' "
+    "(added via ALTER TABLE in _migrate_to_v6)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -196,6 +260,30 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # explicit _migrate_to_v3 path in state.migrations re-runs this
     # script on upgrade, so a fresh DB never needs the helper.
     conn.executescript(_SCHEMA_V3)
+    # v4 column add — ALTER TABLE ADD COLUMN cannot be IF-NOT-EXISTS in
+    # SQLite, so the helper swallows OperationalError when the column
+    # already exists. Safe to run on every open (fresh DB: adds the
+    # column; existing DB: no-op).
+    try:
+        from state.migrations import _migrate_to_v4
+        _migrate_to_v4(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v4 column add skipped: {exc}")
+    # v5 column add — same idempotent pattern as v4. Adds the public-
+    # share-link columns to report_history.
+    try:
+        from state.migrations import _migrate_to_v5
+        _migrate_to_v5(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v5 column add skipped: {exc}")
+    # v6 column add — same idempotent pattern as v4 / v5. Adds the
+    # digest_mode column to delivery_channels so a channel can batch
+    # its alerts into one delivery instead of one-per-alert.
+    try:
+        from state.migrations import _migrate_to_v6
+        _migrate_to_v6(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v6 column add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -234,6 +322,40 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v3(conn)
         except Exception as exc:
             logger.warning(f"state.db: v3 migration skipped: {exc}")
+
+    # Migration 3 → 4: add the alerts.acknowledged_at column so the
+    # alert-analytics module can compute median time-to-ack. The helper
+    # is idempotent (it's already invoked once unconditionally above);
+    # this branch exists to formally register the upgrade in the
+    # version-step ladder.
+    if current < 4:
+        try:
+            from state.migrations import _migrate_to_v4
+            _migrate_to_v4(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v4 migration skipped: {exc}")
+
+    # Migration 4 → 5: add report_history.public_slug + .public_expires_at
+    # for read-only public-share links. As with v4, the helper is already
+    # invoked unconditionally above and is idempotent; this branch keeps
+    # the version-step ladder explicit.
+    if current < 5:
+        try:
+            from state.migrations import _migrate_to_v5
+            _migrate_to_v5(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v5 migration skipped: {exc}")
+
+    # Migration 5 → 6: add delivery_channels.digest_mode column so a
+    # channel can batch the alerts created since ``since`` into a single
+    # delivery instead of POSTing one-per-alert. Existing rows default
+    # to 'immediate', which preserves the original per-alert behaviour.
+    if current < 6:
+        try:
+            from state.migrations import _migrate_to_v6
+            _migrate_to_v6(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v6 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

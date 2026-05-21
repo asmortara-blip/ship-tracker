@@ -202,3 +202,111 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
     from state.db import _SCHEMA_V3
 
     conn.executescript(_SCHEMA_V3)
+
+
+# ─── Schema v3 → v4 ───────────────────────────────────────────────────────
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Add the ``acknowledged_at`` column to the alerts table.
+
+    The column is a TEXT default-empty-string field that the engine
+    sets to the current ISO timestamp whenever an alert is acked. Pre-
+    v4 rows keep an empty string here — the analytics module treats
+    those as "no ack timestamp available" and excludes them from the
+    median time-to-ack metric (rather than imputing a fake timestamp).
+
+    SQLite's ``ALTER TABLE ADD COLUMN`` does NOT accept ``IF NOT EXISTS``,
+    so this helper wraps the statement in try/except and treats
+    ``OperationalError: duplicate column name`` as a no-op. That makes
+    the helper safe to re-run on every database open — both fresh DBs
+    (where the column needs to be added because v1 schema did not have
+    it) and already-upgraded DBs (where the column is already present).
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError as exc:
+        # Idempotent path — SQLite raises "duplicate column name:
+        # acknowledged_at" when the column already exists. Any other
+        # OperationalError is unexpected; log it and continue rather
+        # than blocking schema initialization.
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(f"state.migrations: _migrate_to_v4 ALTER TABLE failed: {exc}")
+
+
+# ─── Schema v4 → v5 ───────────────────────────────────────────────────────
+
+def _migrate_to_v5(conn: sqlite3.Connection) -> None:
+    """Add the public-share-link columns to ``report_history``.
+
+    Two TEXT columns, both default-empty-string:
+
+      * ``public_slug``       — URL-safe base64url token from
+        ``secrets.token_urlsafe(12)``. Empty when the report has not
+        been shared. Looked up by ``load_public_report(slug)``.
+      * ``public_expires_at`` — ISO-8601 UTC timestamp (also empty when
+        not shared). The link is treated as valid only while this is
+        strictly in the future.
+
+    Pre-v5 rows keep empty strings for both columns. Same idempotent
+    ALTER TABLE pattern as ``_migrate_to_v4``: we swallow
+    ``OperationalError: duplicate column name`` so the helper is safe to
+    re-run on every database open. Each column is added in its own
+    try/except so partial completion of a prior run is also tolerated.
+    """
+    for col_name, col_def in (
+        ("public_slug", "TEXT NOT NULL DEFAULT ''"),
+        ("public_expires_at", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE report_history ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v5 ALTER TABLE "
+                f"({col_name}) failed: {exc}"
+            )
+
+
+# ─── Schema v5 → v6 ───────────────────────────────────────────────────────
+
+def _migrate_to_v6(conn: sqlite3.Connection) -> None:
+    """Add the ``digest_mode`` column to ``delivery_channels``.
+
+    The column is a TEXT field defaulting to ``'immediate'`` (the only
+    value pre-v6 rows could implicitly have had). Valid values:
+
+      * ``'immediate'`` — one delivery per alert. Matches the original
+        behaviour of ``deliver_pending`` so existing channels keep
+        behaving the same way after the upgrade.
+      * ``'daily'``     — batch every eligible alert into a single
+        digest delivery each time ``deliver_pending`` runs. The
+        actual scheduling cadence is the caller's responsibility
+        (cron / worker); this column only flips ``deliver_pending``
+        between per-alert loops and one-shot digest mode.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5``: SQLite does NOT support ``IF NOT EXISTS`` on
+    ALTER TABLE, so we wrap the statement in try/except and treat
+    ``OperationalError: duplicate column name`` as a no-op. This makes
+    the helper safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE delivery_channels ADD COLUMN "
+            "digest_mode TEXT NOT NULL DEFAULT 'immediate'"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v6 ALTER TABLE failed: {exc}"
+        )

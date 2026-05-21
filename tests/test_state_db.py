@@ -108,6 +108,34 @@ def test_alerts_table_has_indexes() -> None:
     assert "idx_alerts_unacknowledged" in idx_names
 
 
+def test_v4_migration_adds_acknowledged_at_column() -> None:
+    """v4 ALTER TABLE adds ``acknowledged_at`` to the alerts table —
+    the column must exist and default to empty-string on fresh inserts."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        row["name"]: row
+        for row in conn.execute("PRAGMA table_info(alerts)").fetchall()
+    }
+    assert "acknowledged_at" in cols
+    # Column must be TEXT and have an empty-string default.
+    assert cols["acknowledged_at"]["type"].upper() == "TEXT"
+    # Default value text varies between SQLite versions ("''", "\"\"") —
+    # the simplest check is that a fresh INSERT comes back with ''.
+    conn.execute(
+        """
+        INSERT INTO alerts
+          (alert_id, created_at, alert_type, severity, title, body)
+        VALUES ('vc4', '2026-05-21T00:00:00+00:00', 'MACRO', 'LOW', 't', 'b')
+        """
+    )
+    row = conn.execute(
+        "SELECT acknowledged_at FROM alerts WHERE alert_id = 'vc4'"
+    ).fetchone()
+    assert row["acknowledged_at"] == ""
+
+
 def test_foreign_keys_enabled() -> None:
     from state.db import get_connection
 
@@ -323,3 +351,64 @@ def test_migration_handles_corrupt_json(tmp_path, monkeypatch) -> None:
     state_db.reset_for_tests()
     conn = state_db.get_connection()  # must not raise
     assert conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()["n"] == 0
+
+
+# ─── Schema v5: report_history public-share columns ────────────────────────
+
+def test_v5_migration_adds_public_share_columns() -> None:
+    """v5 ALTER TABLE adds both ``public_slug`` and ``public_expires_at``
+    to report_history, each a TEXT NOT NULL column defaulting to ''."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(report_history)"
+        ).fetchall()
+    }
+    assert "public_slug" in cols
+    assert "public_expires_at" in cols
+    assert cols["public_slug"]["type"].upper() == "TEXT"
+    assert cols["public_expires_at"]["type"].upper() == "TEXT"
+    # NOT NULL is enforced (notnull == 1 in PRAGMA output).
+    assert cols["public_slug"]["notnull"] == 1
+    assert cols["public_expires_at"]["notnull"] == 1
+
+    # New rows must default both columns to the empty string.
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO report_history
+              (report_id, generated_at, file_path)
+            VALUES ('v5c', '2026-05-21T00:00:00+00:00', '/tmp/x.html')
+            """
+        )
+    row = conn.execute(
+        "SELECT public_slug, public_expires_at FROM report_history "
+        "WHERE report_id = 'v5c'"
+    ).fetchone()
+    assert row["public_slug"] == ""
+    assert row["public_expires_at"] == ""
+
+
+def test_v5_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v5+ database must not raise even though the ALTER
+    TABLE in _migrate_to_v5 would otherwise complain about duplicate
+    columns on the second invocation."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v5.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(report_history)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("public_slug") == 1
+    assert col_names.count("public_expires_at") == 1

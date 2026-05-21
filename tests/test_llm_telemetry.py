@@ -518,16 +518,21 @@ def test_schema_v3_indexes_exist() -> None:
 
 
 def test_schema_version_is_three() -> None:
-    """Schema version constant matches the new value AND lands in
-    kv_state.schema_version after init."""
+    """Schema version constant is at least 3 (when the llm_calls table
+    was introduced) AND lands in kv_state.schema_version after init.
+
+    The strict ``== 3`` was relaxed when the v4 ack-timestamp column
+    was added — the invariant this test cares about is that the
+    llm_calls schema (v3 and later) is present, not the exact integer."""
     from state.db import SCHEMA_VERSION, get_connection
 
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION >= 3
     conn = get_connection()
     row = conn.execute(
         "SELECT value FROM kv_state WHERE key = 'schema_version'"
     ).fetchone()
-    assert int(row["value"]) == 3
+    assert int(row["value"]) >= 3
+    assert int(row["value"]) == SCHEMA_VERSION
 
 
 # ═══════════════════════════════════════════════════════════════════════════
