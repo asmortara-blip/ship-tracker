@@ -657,3 +657,160 @@ def test_v10_schema_version_stamped() -> None:
         "SELECT value FROM kv_state WHERE key = 'schema_version'"
     ).fetchone()
     assert int(row["value"]) >= 10
+
+
+# ─── Schema v11: api_tokens table ─────────────────────────────────────────
+
+def test_v11_migration_adds_api_tokens_table() -> None:
+    """v11 adds the ``api_tokens`` table so each user can mint long-
+    lived per-user secrets ("PATs") for external scripts to
+    authenticate against future API endpoints. Confirms the table
+    exists with the documented columns and supporting indexes, and
+    that a fresh INSERT round-trips with the expected defaults."""
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. Table exists with the documented columns.
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(api_tokens)"
+        ).fetchall()
+    }
+    assert set(cols.keys()) >= {
+        "token_id", "user_id", "label", "token_hash", "token_salt",
+        "token_prefix", "created_at", "last_used_at", "revoked",
+    }
+    # token_id is the primary key.
+    assert cols["token_id"]["pk"] == 1
+    # The defaulted columns default appropriately.
+    assert cols["last_used_at"]["dflt_value"] in ("''", '""')
+    # ``revoked`` defaults to integer 0 (not "0" — SQLite reports
+    # numeric defaults without quotes).
+    assert str(cols["revoked"]["dflt_value"]).strip("'\"") == "0"
+
+    # 2. Both supporting indexes are present (user_id for per-user
+    # list/revoke queries, prefix for O(log n) verify lookups).
+    idx_rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='api_tokens'"
+    ).fetchall()
+    idx_names = {r["name"] for r in idx_rows}
+    assert "idx_api_tokens_user_id" in idx_names
+    assert "idx_api_tokens_prefix" in idx_names
+
+    # 3. A fresh INSERT round-trips and the defaults land.
+    conn.execute(
+        """
+        INSERT INTO api_tokens
+          (token_id, user_id, label, token_hash, token_salt,
+           token_prefix, created_at)
+        VALUES ('v11c', 'u-1', 'test', 'deadbeef', 'cafebabe',
+                'abcd1234', '2026-05-22T00:00:00+00:00')
+        """
+    )
+    row = conn.execute(
+        "SELECT * FROM api_tokens WHERE token_id = 'v11c'"
+    ).fetchone()
+    assert row is not None
+    assert row["last_used_at"] == ""
+    assert row["revoked"] == 0
+
+
+# ─── Schema v12: data_source_health table ─────────────────────────────────
+
+def test_v12_migration_adds_data_source_health_table() -> None:
+    """v12 adds the ``data_source_health`` table so periodic liveness
+    probes of external feeds (FRED, yfinance, World Bank, …) leave a
+    queryable record. Confirms the table exists with the documented
+    columns and supporting indexes, and that a fresh INSERT round-trips
+    with the expected defaults."""
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. Table exists with the documented columns.
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(data_source_health)"
+        ).fetchall()
+    }
+    assert set(cols.keys()) >= {
+        "ping_id", "source", "started_at", "duration_ms", "status", "error_msg",
+    }
+    # ping_id is the primary key.
+    assert cols["ping_id"]["pk"] == 1
+    # error_msg defaults to empty string.
+    assert cols["error_msg"]["dflt_value"] in ("''", '""')
+    # NOT NULL on the load-bearing columns.
+    assert cols["source"]["notnull"] == 1
+    assert cols["started_at"]["notnull"] == 1
+    assert cols["duration_ms"]["notnull"] == 1
+    assert cols["status"]["notnull"] == 1
+
+    # 2. Both supporting indexes are present (started_at for window
+    # queries, source for per-feed dashboards).
+    idx_rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='data_source_health'"
+    ).fetchall()
+    idx_names = {r["name"] for r in idx_rows}
+    assert "idx_data_source_health_started_at" in idx_names
+    assert "idx_data_source_health_source" in idx_names
+
+    # 3. A fresh INSERT round-trips and the default lands.
+    conn.execute(
+        """
+        INSERT INTO data_source_health
+          (ping_id, source, started_at, duration_ms, status)
+        VALUES ('v12c', 'fred', '2026-05-22T00:00:00+00:00', 250, 'up')
+        """
+    )
+    row = conn.execute(
+        "SELECT * FROM data_source_health WHERE ping_id = 'v12c'"
+    ).fetchone()
+    assert row is not None
+    assert row["source"] == "fred"
+    assert row["duration_ms"] == 250
+    assert row["status"] == "up"
+    # Default error_msg is empty string.
+    assert row["error_msg"] == ""
+
+
+def test_v12_schema_version_stamped() -> None:
+    """After init, the stored schema_version must be at least 12.
+
+    Guards against an accidental SCHEMA_VERSION rollback — the health-
+    ping layer must continue to ship at v12+ so the data_source_health
+    table is always present.
+    """
+    from state.db import SCHEMA_VERSION, get_connection
+
+    assert SCHEMA_VERSION >= 12
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) >= 12
+
+
+def test_v12_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v12+ DB must not raise — CREATE TABLE IF NOT EXISTS
+    is inherently idempotent, but exercise the path anyway."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v12.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    # Exactly one table named data_source_health.
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='data_source_health'"
+    ).fetchall()
+    assert len(rows) == 1

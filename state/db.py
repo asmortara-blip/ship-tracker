@@ -88,12 +88,29 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       break the hot path it sits inside. v10 was claimed for this
 #       commit while another sibling agent took v9 for InvestorReport
 #       snapshots in the same batch.
+#  11 — adds api_tokens table for per-user API access tokens (PATs).
+#       Each row carries a hashed-and-salted token (same scrypt-with-
+#       PBKDF2-fallback KDF as auth.gate so we do not introduce a new
+#       one), an 8-char plaintext prefix for O(log n) lookup via an
+#       index, a user-supplied label, created_at / last_used_at
+#       timestamps, and a revoked flag. The raw secret is returned
+#       exactly once at creation time and never written to disk in
+#       plaintext. Lets external scripts authenticate to future API
+#       endpoints without needing the user's password.
+#  12 — adds data_source_health table so the platform can answer
+#       "is FRED degrading right now?" without scrolling through logs.
+#       Each periodic liveness probe (fred, yfinance, worldbank,
+#       currency, alphavantage, newsapi, oecd, imf, comtrade, ais,
+#       canal_panama, canal_suez) writes one row carrying ping_id,
+#       source, started_at, duration_ms, status (up | degraded | down)
+#       and an error_msg. Populated by ``engine.source_health`` from
+#       the worker scheduler; pruned by ``prune_old_pings``.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 10
+SCHEMA_VERSION: int = 12
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -402,6 +419,77 @@ _SCHEMA_V10_NOTE: str = (
     "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v10)"
 )
 
+# Schema v11 adds the ``api_tokens`` table for per-user API access
+# tokens (PATs). Each row stores ONLY the hash + salt + 8-char prefix
+# of the raw secret — the secret itself is returned exactly once at
+# creation time and is never persisted in plaintext. The prefix is in
+# plaintext on purpose: ``verify_token`` looks up by prefix in O(log n)
+# via the index instead of scanning every row, then constant-time
+# compares the hash with ``auth.gate._verify_password``.
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10: a fresh DB picks up the table via the executescript path in
+# _init_schema; the explicit ``_migrate_to_v11`` helper re-runs the
+# same script on upgrade. Two indexes — user_id (per-user list/revoke
+# queries), token_prefix (O(log n) verify lookup).
+_SCHEMA_V11 = """
+CREATE TABLE IF NOT EXISTS api_tokens (
+    token_id      TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    token_hash    TEXT NOT NULL,
+    token_salt    TEXT NOT NULL,
+    token_prefix  TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    last_used_at  TEXT NOT NULL DEFAULT '',
+    revoked       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id
+    ON api_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix
+    ON api_tokens(token_prefix);
+"""
+
+_SCHEMA_V11_NOTE: str = (
+    "v11: api_tokens table (token_id PK, user_id, label, token_hash, "
+    "token_salt, token_prefix, created_at, last_used_at, revoked) + "
+    "two indexes (added via CREATE TABLE IF NOT EXISTS in _migrate_to_v11)"
+)
+
+# Schema v12 adds the ``data_source_health`` table so periodic liveness
+# probes of external feeds (FRED, yfinance, World Bank, etc.) leave a
+# queryable record. Each row carries ``ping_id`` (uuid), ``source``
+# (e.g. 'fred' / 'yfinance' / 'worldbank'), ``started_at`` (ISO UTC),
+# ``duration_ms`` (wall-clock measured via ``time.perf_counter``),
+# ``status`` (one of 'up' | 'degraded' | 'down'), and a free-form
+# ``error_msg`` (empty on success). Two indexes — started_at (window
+# queries for "in the last 24h") and source (per-feed dashboards).
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10 / v11: a fresh DB picks up the table via the executescript path
+# in ``_init_schema``; the explicit ``_migrate_to_v12`` helper re-runs
+# the same script on upgrade.
+_SCHEMA_V12 = """
+CREATE TABLE IF NOT EXISTS data_source_health (
+    ping_id      TEXT PRIMARY KEY,
+    source       TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    duration_ms  INTEGER NOT NULL,
+    status       TEXT NOT NULL,
+    error_msg    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_data_source_health_started_at
+    ON data_source_health(started_at);
+CREATE INDEX IF NOT EXISTS idx_data_source_health_source
+    ON data_source_health(source);
+"""
+
+_SCHEMA_V12_NOTE: str = (
+    "v12: data_source_health table (ping_id PK, source, started_at, "
+    "duration_ms, status, error_msg) + two indexes "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v12)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -460,6 +548,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # same pattern. Adds the audit_events table for "who did what when"
     # security-review record-keeping.
     conn.executescript(_SCHEMA_V10)
+    # v11 add-only schema (CREATE TABLE IF NOT EXISTS + two indexes) —
+    # same pattern. Adds the api_tokens table for per-user API access
+    # tokens (PATs) so external scripts can authenticate to future API
+    # endpoints without needing the user's password.
+    conn.executescript(_SCHEMA_V11)
+    # v12 add-only schema (CREATE TABLE IF NOT EXISTS + two indexes) —
+    # same pattern. Adds the data_source_health table so periodic feed
+    # probes (FRED, yfinance, World Bank, etc.) leave a queryable
+    # liveness/freshness record.
+    conn.executescript(_SCHEMA_V12)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -582,6 +680,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v10(conn)
         except Exception as exc:
             logger.warning(f"state.db: v10 migration skipped: {exc}")
+
+    # Migration 10 → 11: add the ``api_tokens`` table for per-user API
+    # access tokens (PATs). Same CREATE-IF-NOT-EXISTS idempotency — the
+    # helper is already invoked unconditionally above; this branch keeps
+    # the version-step ladder explicit.
+    if current < 11:
+        try:
+            from state.migrations import _migrate_to_v11
+            _migrate_to_v11(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v11 migration skipped: {exc}")
+
+    # Migration 11 → 12: add the ``data_source_health`` table so the
+    # platform can answer "is FRED degrading right now?" without
+    # scrolling through logs. Same CREATE-IF-NOT-EXISTS idempotency —
+    # the helper is already invoked unconditionally above; this branch
+    # keeps the version-step ladder explicit.
+    if current < 12:
+        try:
+            from state.migrations import _migrate_to_v12
+            _migrate_to_v12(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v12 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

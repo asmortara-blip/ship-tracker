@@ -432,3 +432,58 @@ def _migrate_to_v10(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v10 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v10 → v11 ─────────────────────────────────────────────────────
+
+def _migrate_to_v11(conn: sqlite3.Connection) -> None:
+    """Add the ``api_tokens`` table for per-user API access tokens (PATs).
+
+    Each row stores a hashed-and-salted token (reusing ``auth.gate``'s
+    KDF — same scrypt-with-PBKDF2-fallback as the password layer), an
+    8-char plaintext prefix for O(log n) verify lookups via an index,
+    a user-supplied label, created_at / last_used_at timestamps, and a
+    revoked flag. The raw secret is returned exactly once at creation
+    time and is NEVER written to disk in plaintext.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS —
+    so this statement is also safe to re-run on every open via the schema
+    bootstrap in state.db. Matches the v2 / v3 / v8 / v9 / v10 pattern
+    (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V11
+
+        conn.executescript(_SCHEMA_V11)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v11 CREATE TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v11 → v12 ─────────────────────────────────────────────────────
+
+def _migrate_to_v12(conn: sqlite3.Connection) -> None:
+    """Add the ``data_source_health`` table for periodic feed liveness probes.
+
+    Each ping_source / ping_all_sources invocation writes one row here
+    carrying ``ping_id`` (uuid), ``source`` (e.g. 'fred', 'yfinance',
+    'worldbank'), ``started_at`` (ISO UTC), ``duration_ms`` (wall-clock
+    via time.perf_counter), ``status`` (one of 'up' | 'degraded' |
+    'down'), and a free-form ``error_msg`` (empty on success). The
+    platform reads the table to answer "is FRED degrading right now?"
+    without scrolling through logs.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS —
+    so this statement is also safe to re-run on every open via the schema
+    bootstrap in state.db. Matches the v2 / v3 / v8 / v9 / v10 / v11
+    pattern (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V12
+
+        conn.executescript(_SCHEMA_V12)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v12 CREATE TABLE failed: {exc}"
+        )
