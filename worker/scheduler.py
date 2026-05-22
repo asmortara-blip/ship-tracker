@@ -405,6 +405,66 @@ def run_perf_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+def run_health_ping_job() -> list:
+    """Run every data-source health probe and record the outcomes.
+
+    Thin wrapper around ``engine.source_health.ping_all_sources`` that
+    adds logging and shields the caller from any exception. Designed to
+    be invoked once per daily worker pass — each probe writes one row
+    to ``data_source_health`` so the platform can answer "is FRED
+    degrading right now?" without scrolling through logs.
+
+    Returns the list of ``HealthPing`` results (empty list on any
+    error). Never raises — a probe failure must never block the
+    briefing job or its sibling prune jobs.
+    """
+    try:
+        from engine.source_health import ping_all_sources
+
+        pings = ping_all_sources()
+        # Roll-up log: one line per source so the worker log stays
+        # readable even when several feeds are degrading at once.
+        for p in pings:
+            logger.info(
+                f"run_health_ping_job: source={p.source} "
+                f"status={p.status} duration_ms={p.duration_ms}"
+                + (f" error={p.error_msg!r}" if p.status != "up" else "")
+            )
+        return list(pings)
+    except Exception as exc:
+        logger.warning(f"run_health_ping_job: failed: {exc}")
+        return []
+
+
+def run_health_prune_job(retention_days: int = 30) -> int:
+    """Prune ``data_source_health`` rows older than ``retention_days``.
+
+    Thin wrapper around ``engine.source_health.prune_old_pings`` —
+    mirrors ``run_telemetry_prune_job`` / ``run_perf_prune_job`` for the
+    health-ping table. Designed to be invoked once per day from
+    ``main`` AFTER ``run_health_ping_job`` so the new ping row lives
+    inside the retention window even at the boundary.
+
+    Default retention is 30 days — health pings accumulate at ~one
+    row per source per worker tick, well under the LLM-call default.
+
+    Returns the number of rows deleted (``0`` on no-op or any error).
+    Never raises — a prune failure must never block the briefing job.
+    """
+    try:
+        from engine.source_health import prune_old_pings
+
+        deleted = prune_old_pings(retention_days=retention_days)
+        logger.info(
+            f"run_health_prune_job: deleted={deleted} rows "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_health_prune_job: failed: {exc}")
+        return 0
+
+
 def run_snapshot_prune_job(keep_n: int = 30) -> int:
     """Prune ``investor_report_snapshots`` down to the newest ``keep_n``.
 
@@ -483,6 +543,23 @@ def main(argv: Optional[list] = None) -> int:
         run_snapshot_prune_job()
     except Exception as exc:
         logger.warning(f"main: snapshot prune step failed: {exc}")
+
+    # Data-source health pings. Runs AFTER every prune so the briefing
+    # is not slowed down by a slow probe — at the cost of the ping row
+    # potentially landing just before the prune cutoff on the NEXT
+    # tick. The order is "ping → prune ping rows": the freshly-written
+    # row is well inside the retention window because the prune uses
+    # ``now - retention_days`` as its cutoff. Same belt-and-braces
+    # guard — both helpers already swallow errors.
+    try:
+        run_health_ping_job()
+    except Exception as exc:
+        logger.warning(f"main: health ping step failed: {exc}")
+
+    try:
+        run_health_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: health prune step failed: {exc}")
 
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)
