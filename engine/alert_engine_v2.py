@@ -552,6 +552,21 @@ def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
             )
     except Exception as exc:
         logger.warning(f"acknowledge_alert: SQLite update failed: {exc}")
+    # Audit-log the ACK. record_audit never raises but we still wrap in
+    # try/except here as belt-and-braces — this hook sits inside the
+    # critical user-action path and an audit-write bug must never block
+    # the ACK from completing.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "ack_alert",
+            entity_type="alert",
+            entity_id=alert_id,
+            detail={"acknowledged_at": ack_ts},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def acknowledge_all(*, user_id: Optional[str] = None) -> None:
@@ -574,15 +589,30 @@ def acknowledge_all(*, user_id: Optional[str] = None) -> None:
     scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     ack_ts = _now_iso()
+    affected = 0
     try:
         with conn:
-            conn.execute(
+            cur = conn.execute(
                 f"UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
                 f"WHERE acknowledged = 0 {scope_sql}",
                 (ack_ts, *scope_params),
             )
+            affected = int(cur.rowcount or 0)
     except Exception as exc:
         logger.warning(f"acknowledge_all: SQLite update failed: {exc}")
+    # Audit-log the bulk ACK. count records HOW MANY alerts flipped, so
+    # security review can spot one-click "ack everything" sweeps in the
+    # event log. Wrapped in try/except as belt-and-braces (record_audit
+    # itself never raises).
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "ack_all_alerts",
+            detail={"count": affected, "acknowledged_at": ack_ts},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def get_unread_count(*, user_id: Optional[str] = None) -> int:
@@ -665,6 +695,19 @@ def save_rules(rules: list[dict], *, user_id: Optional[str] = None) -> None:
                 )
     except Exception as exc:
         logger.warning(f"save_rules: SQLite write failed: {exc}")
+    # Audit-log the rule replacement. Count is computed from the
+    # caller-supplied rules list rather than the row count we ended up
+    # inserting — security review wants to see "user saved N rules",
+    # not "the executemany wrote N filtered rows".
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "save_rules",
+            detail={"count": len(rules) if isinstance(rules, list) else 0},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def load_rules(*, user_id: Optional[str] = None) -> list[dict]:
@@ -742,3 +785,10 @@ def reset_rules() -> None:
             conn.execute("DELETE FROM alert_rules")
     except Exception as exc:
         logger.warning(f"reset_rules: SQLite delete failed: {exc}")
+    # Audit-log the rule wipe. No detail payload — this is a single
+    # boolean event ("user reset rules") with no useful per-call body.
+    try:
+        from auth.audit import record_audit
+        record_audit("reset_rules")
+    except Exception:  # noqa: BLE001
+        pass

@@ -1697,6 +1697,22 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
         channel.created_at = created_at
     except Exception as exc:
         logger.warning(f"save_channel: SQLite write failed: {exc}")
+    # Audit-log the channel save (INSERT or UPDATE — we can't easily
+    # tell which from the upsert without a pre-query, and a single
+    # 'save_channel' verb is fine for security review). target /
+    # webhook URL deliberately NOT logged — that's the secret we are
+    # protecting.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "save_channel",
+            entity_type="channel",
+            entity_id=channel.channel_id,
+            detail={"name": channel.name, "kind": channel.kind},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
@@ -1774,3 +1790,17 @@ def delete_channel(channel_id: str, *, user_id: Optional[str] = None) -> None:
             )
     except Exception as exc:
         logger.warning(f"delete_channel: SQLite delete failed: {exc}")
+    # Audit-log the deletion. We don't pre-check whether the row
+    # actually existed — the audit row reflects the user's INTENT to
+    # delete (which is what a security review wants to see), not
+    # whether the DB ultimately removed anything.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "delete_channel",
+            entity_type="channel",
+            entity_id=channel_id,
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass

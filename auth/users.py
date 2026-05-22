@@ -172,13 +172,30 @@ def signup(username: str, password: str) -> Optional[User]:
             # duplicate branch above.
             return None
 
-        return User(
+        new_user = User(
             user_id=user_id,
             username=username,
             role="user",
             created_at=created_at,
             last_login_at="",
         )
+        # Audit-log the signup. We stamp the audit row with the NEW
+        # user's id (not whatever was active in session_state at the
+        # moment of signup, which is usually empty pre-login). Username
+        # goes in the detail payload so security review can spot
+        # account creations without joining against the users table.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "signup",
+                entity_type="user",
+                entity_id=user_id,
+                detail={"username": username},
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return new_user
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
         logger.warning(f"auth.users.signup: failed for username={username!r}: {exc}")
         return None
@@ -243,13 +260,30 @@ def login(username: str, password: str) -> Optional[User]:
                 f"for {username!r}: {exc}"
             )
 
-        return User(
+        authenticated = User(
             user_id=row["user_id"],
             username=row["username"],
             role=row["role"],
             created_at=row["created_at"],
             last_login_at=now,
         )
+        # Audit-log ONLY successful logins. Failed logins would also be
+        # valuable in principle, but recording them here would let an
+        # attacker run a username-enumeration probe against the audit
+        # log (which is queryable by user_id). Keeping success-only
+        # matches the bad_user / bad_password symmetry above — there
+        # is no observable difference between the two failure paths.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "login",
+                entity_type="user",
+                entity_id=authenticated.user_id,
+                user_id=authenticated.user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return authenticated
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
         logger.warning(f"auth.users.login: failed for username={username!r}: {exc}")
         return None

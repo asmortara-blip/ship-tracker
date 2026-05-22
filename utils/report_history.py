@@ -294,6 +294,20 @@ def delete_report(report_id: str, *, user_id: str | None = None) -> bool:
                 logger.info(f"Deleted report file: {path.name}")
             except Exception as exc:
                 logger.warning(f"Could not unlink {path}: {exc}")
+        # Audit-log the deletion. Placed AFTER the row was successfully
+        # removed so we only emit an event when the delete actually
+        # happened — the early-return path on "report not found" does
+        # not fire this hook.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "delete_report",
+                entity_type="report",
+                entity_id=report_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return True
     except Exception as exc:
         logger.error(f"delete_report failed for {report_id}: {exc}")
@@ -356,6 +370,22 @@ def make_public(report_id: str, expires_in_days: int = 30, *, user_id: str | Non
                 """,
                 (slug, expires_at, report_id),
             )
+        # Audit-log the share-link generation. The slug itself is NOT
+        # logged — a stolen audit row should not give an attacker the
+        # working URL. expires_in_days is the only payload field; it's
+        # what a security review actually wants to see ("user shared
+        # report X with a 30-day link").
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "make_public",
+                entity_type="report",
+                entity_id=report_id,
+                detail={"expires_in_days": expires_in_days},
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return slug
     except Exception as exc:
         logger.error(f"make_public failed for {report_id}: {exc}")
@@ -402,6 +432,19 @@ def revoke_public(report_id: str, *, user_id: str | None = None) -> bool:
                 """,
                 (report_id,),
             )
+        # Audit-log the revoke. Same pattern as make_public —
+        # entity_type 'report' so a user can see "I shared X then
+        # revoked X" in chronological order during a review.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "revoke_public",
+                entity_type="report",
+                entity_id=report_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return True
     except Exception as exc:
         logger.error(f"revoke_public failed for {report_id}: {exc}")
