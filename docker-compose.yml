@@ -1,12 +1,15 @@
 # Ship Tracker — docker compose stack.
 #
-# Two containers built from the same Dockerfile that share the cache/
+# Three containers built from the same Dockerfile that share the cache/
 # directory (SQLite DB, narration cache, persisted reports) and the
 # logs/ directory via bind mounts:
 #
-#   app    — Streamlit UI on host port 8501
-#   worker — sleeps 24h, then runs `python -m worker.scheduler --push`,
-#            then loops. No host cron needed.
+#   app     — Streamlit UI on host port 8501
+#   worker  — sleeps 24h, then runs `python -m worker.scheduler --push`,
+#             then loops. No host cron needed.
+#   webhook — stdlib HTTP listener on host port 8502 that turns
+#             PagerDuty (or generic) ack POSTs into
+#             `engine.alert_engine_v2.acknowledge_alert` calls.
 #
 # Quickstart:
 #   cp .env.example .env       # then fill in your keys
@@ -69,3 +72,25 @@ services:
           echo "[worker] $(date -u +%FT%TZ) sleeping 24h"
           sleep 86400
         done
+
+  webhook:
+    # Stdlib HTTP listener that closes the loop with external paging
+    # systems. POST /ack/{alert_id} or /webhooks/pagerduty here and the
+    # listener calls engine.alert_engine_v2.acknowledge_alert against
+    # the shared SQLite DB (same bind mount as app + worker).
+    #
+    # HMAC SHA256 verified against WEBHOOK_SECRET from .env on every
+    # request — set it before exposing this port publicly. See
+    # docs/DEPLOYMENT.md for the full curl example.
+    build: .
+    image: ship-tracker:latest
+    container_name: ship-tracker-webhook
+    restart: unless-stopped
+    ports:
+      - "8502:8502"
+    env_file:
+      - .env
+    volumes:
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+    command: ["python3", "-m", "worker.webhook_listener", "--host", "0.0.0.0", "--port", "8502"]

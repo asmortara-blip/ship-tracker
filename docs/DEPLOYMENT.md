@@ -64,20 +64,22 @@ Healthcheck is configured against Streamlit's built-in
 - `.dockerignore` keeps `cache/`, `logs/`, `tests/`, `docs/`,
   `.venv/`, and any `.streamlit/secrets.toml` out of the image.
 
-## 3. Docker Compose: app + worker
+## 3. Docker Compose: app + worker + webhook
 
-For self-hosting where you want both the Streamlit UI **and** the daily
-investor-briefing worker running side-by-side, the repo ships a
-`docker-compose.yml` that wires up two containers sharing the same
-`cache/` (SQLite DB + saved reports) and `logs/` bind mounts:
+For self-hosting where you want the Streamlit UI, the daily
+investor-briefing worker, **and** the inbound ack webhook listener
+running side-by-side, the repo ships a `docker-compose.yml` that wires
+up three containers sharing the same `cache/` (SQLite DB + saved
+reports) and `logs/` bind mounts:
 
-| Service  | Role                                       | Port |
-|----------|--------------------------------------------|------|
-| `app`    | Streamlit UI                               | 8501 |
-| `worker` | Daily `python -m worker.scheduler --push`, looped every 24h | —    |
+| Service   | Role                                       | Port |
+|-----------|--------------------------------------------|------|
+| `app`     | Streamlit UI                               | 8501 |
+| `worker`  | Daily `python -m worker.scheduler --push`, looped every 24h | —    |
+| `webhook` | Stdlib HTTP listener for inbound acks (PagerDuty / curl) | 8502 |
 
-Both services build from the existing `Dockerfile`; the worker just
-overrides the `CMD` with a small shell loop.
+All three services build from the existing `Dockerfile`; the worker
+and webhook services just override the `CMD`.
 
 ```bash
 cp .env.example .env
@@ -108,6 +110,67 @@ Notes:
   immediately visible to the worker's `--push` delivery step.
 - Stop everything with `docker compose down`; the bind mounts ensure
   the DB + reports survive container removal.
+
+### Webhook listener (`webhook` service)
+
+The `webhook` container exposes a small stdlib `http.server` listener
+on port `8502` that turns inbound HTTP POSTs into
+`engine.alert_engine_v2.acknowledge_alert` calls against the shared
+SQLite DB. This closes the loop between Ship Tracker alerts and the
+external paging stack: when PagerDuty marks an incident resolved (or
+an on-call engineer hits the endpoint via curl), the matching alert
+flips to acknowledged inside Ship Tracker too — no manual UI click
+required.
+
+Endpoints:
+
+| Method · Path                  | Body                                                  | Auth header                  | Effect                                                                    |
+|--------------------------------|--------------------------------------------------------|------------------------------|---------------------------------------------------------------------------|
+| `POST /ack/{alert_id}`         | empty (or anything — only the path matters)            | `X-Signature-SHA256`         | `acknowledge_alert(alert_id)`. Idempotent — unknown IDs return 200.       |
+| `POST /ack-all`                | empty                                                  | `X-Signature-SHA256`         | `acknowledge_all()` — marks every unacked alert as acknowledged.          |
+| `POST /webhooks/pagerduty`     | PagerDuty Webhooks v3 envelope (JSON)                  | `X-PagerDuty-Signature`      | When `event_type == "incident.resolved"` and `dedup_key` is non-empty, calls `acknowledge_alert(dedup_key)`. Other event types are 200 no-ops. |
+
+Every endpoint verifies an HMAC SHA256 signature against the raw
+request body using the `WEBHOOK_SECRET` env variable (see
+`.env.example`). Mismatches return `401`. Unknown paths return `404`,
+non-`POST` methods return `405`, malformed JSON on the PagerDuty
+endpoint returns `400`. The constant-time comparison
+(`hmac.compare_digest`) guards against partial-match timing attacks.
+
+Generate a secret (≥ 32 random bytes recommended):
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Ack a single alert from the CLI:
+
+```bash
+SECRET="$WEBHOOK_SECRET"
+ALERT_ID="alert-uuid-here"
+# HMAC over an empty body (the path carries the alert_id).
+SIG=$(printf '' | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -X POST "http://localhost:8502/ack/$ALERT_ID" \
+     -H "X-Signature-SHA256: $SIG" \
+     -d ''
+# → {"acknowledged": true, "alert_id": "alert-uuid-here"}
+```
+
+Ack everything at once:
+
+```bash
+SIG=$(printf '' | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -X POST "http://localhost:8502/ack-all" \
+     -H "X-Signature-SHA256: $SIG" \
+     -d ''
+```
+
+For PagerDuty integration, point the v3 webhook at
+`https://<your-host>:8502/webhooks/pagerduty` and configure the
+shared secret in the PagerDuty webhook config. Because each Ship
+Tracker alert is sent to PagerDuty with `alert_id` as the
+`dedup_key`, the resolution event PagerDuty fires back already
+carries the ID needed to ack the original alert.
 
 ## 4. Fly.io / Render / other PaaS
 
