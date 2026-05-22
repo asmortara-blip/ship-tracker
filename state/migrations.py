@@ -310,3 +310,68 @@ def _migrate_to_v6(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v6 ALTER TABLE failed: {exc}"
         )
+
+
+# ─── Schema v6 → v7 ───────────────────────────────────────────────────────
+
+def _migrate_to_v7(conn: sqlite3.Connection) -> None:
+    """Add a nullable ``user_id`` column to each of the five existing
+    domain tables (alerts, alert_rules, report_history, delivery_channels,
+    llm_calls).
+
+    The ``users`` table itself is created via the ``_SCHEMA_V7`` script
+    in ``state.db._init_schema`` (CREATE TABLE IF NOT EXISTS, so it is
+    safe to re-run on every open). This helper handles only the column
+    adds, which SQLite cannot wrap in IF NOT EXISTS — each ALTER lives
+    in its own try/except so partial completion of a prior run is
+    tolerated, and re-running on a fully-migrated DB is a no-op.
+
+    The new column is defined as ``TEXT NOT NULL DEFAULT ''`` so legacy
+    rows belong to "no user" and remain visible under the existing
+    single-password gate. Per-user query scoping is left for a follow-up
+    — this migration is intentionally non-invasive.
+    """
+    targets = (
+        "alerts",
+        "alert_rules",
+        "report_history",
+        "delivery_channels",
+        "llm_calls",
+    )
+    for table in targets:
+        try:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN "
+                "user_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v7 ALTER TABLE "
+                f"({table}.user_id) failed: {exc}"
+            )
+
+
+# ─── Schema v7 → v8 ───────────────────────────────────────────────────────
+
+def _migrate_to_v8(conn: sqlite3.Connection) -> None:
+    """Add the ``tab_render_events`` table for per-tab render telemetry.
+
+    Every tab render() that opts into ``engine.perf_telemetry.track_render``
+    writes one row here. The platform reads the table to answer "which
+    tabs are slow?" without firing up a profiler.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS —
+    so this statement is also safe to re-run on every open via the schema
+    bootstrap in state.db. Matches the v2 / v3 pattern (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V8
+
+        conn.executescript(_SCHEMA_V8)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v8 CREATE TABLE failed: {exc}"
+        )

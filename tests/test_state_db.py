@@ -412,3 +412,100 @@ def test_v5_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> Non
     # No duplicates from re-running the ALTER TABLE.
     assert col_names.count("public_slug") == 1
     assert col_names.count("public_expires_at") == 1
+
+
+# ─── Schema v7: users table + per-table user_id columns ───────────────────
+
+def test_v7_migration_creates_users_table_and_adds_user_id_columns() -> None:
+    """v7 lays the foundation for multi-user auth:
+
+      * Adds a new ``users`` table.
+      * Adds a nullable ``user_id`` column to each of the five existing
+        domain tables (alerts, alert_rules, report_history,
+        delivery_channels, llm_calls).
+    """
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. users table exists with the documented columns.
+    user_cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(users)"
+        ).fetchall()
+    }
+    assert set(user_cols.keys()) >= {
+        "user_id", "username", "password_hash", "password_salt",
+        "role", "created_at", "last_login_at",
+    }
+    # username is UNIQUE (notnull and indexed).
+    assert user_cols["username"]["notnull"] == 1
+
+    # 2. Each of the five domain tables has a user_id column.
+    for table in (
+        "alerts",
+        "alert_rules",
+        "report_history",
+        "delivery_channels",
+        "llm_calls",
+    ):
+        cols = {
+            r["name"]: r for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()
+        }
+        assert "user_id" in cols, (
+            f"v7 migration missed {table}.user_id"
+        )
+        assert cols["user_id"]["type"].upper() == "TEXT"
+        # NOT NULL with empty-string default — legacy rows belong to "no user".
+        assert cols["user_id"]["notnull"] == 1
+
+
+def test_v7_user_id_default_is_empty_string_on_insert() -> None:
+    """A row inserted without specifying user_id must default to ''."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO alerts
+          (alert_id, created_at, alert_type, severity, title, body)
+        VALUES ('v7c', '2026-05-22T00:00:00+00:00', 'MACRO', 'LOW', 't', 'b')
+        """
+    )
+    row = conn.execute(
+        "SELECT user_id FROM alerts WHERE alert_id = 'v7c'"
+    ).fetchone()
+    assert row["user_id"] == ""
+
+
+def test_v7_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v7+ DB must not raise. The ALTER TABLE swallows
+    "duplicate column name" errors, and the CREATE TABLE IF NOT EXISTS
+    on the users table is a no-op on re-run."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v7.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    # No duplicate user_id columns from re-running the ALTER TABLE.
+    for table in (
+        "alerts",
+        "alert_rules",
+        "report_history",
+        "delivery_channels",
+        "llm_calls",
+    ):
+        col_names = [r["name"] for r in conn.execute(
+            f"PRAGMA table_info({table})"
+        ).fetchall()]
+        assert col_names.count("user_id") == 1, (
+            f"{table} has more than one user_id column after re-open"
+        )

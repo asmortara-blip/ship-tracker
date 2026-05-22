@@ -984,69 +984,84 @@ def render(
 
     The signature is positional — ``app.py`` calls ``render(...)`` by position,
     so the parameter order must not change.
+
+    Render telemetry
+    ----------------
+    The render body is wrapped in ``engine.perf_telemetry.track_render``
+    so the platform can answer "which tabs are slow?" without a profiler.
+    Overview is the reference tab — the same one-line wrapper can be
+    dropped into any other ``ui/tab_*.py`` to opt that tab in. The
+    context manager re-raises on failure, so the outer try/except below
+    still catches every exception exactly as it did before — the only
+    side effect of the wrapper is one row in ``tab_render_events``.
     """
+    # Lazy import keeps perf_telemetry off the tab-load critical path
+    # and avoids a circular when tests stub state.db.
+    from engine.perf_telemetry import track_render
+
     try:
-        port_results  = port_results  or []
-        route_results = route_results or []
-        insights      = insights      or []
-        freight_data  = freight_data  or {}
-        macro_data    = macro_data    or {}
-        stock_data    = stock_data    or {}
-        alerts        = alerts        or []
+        with track_render("overview"):
+            port_results  = port_results  or []
+            route_results = route_results or []
+            insights      = insights      or []
+            freight_data  = freight_data  or {}
+            macro_data    = macro_data    or {}
+            stock_data    = stock_data    or {}
+            alerts        = alerts        or []
 
-        # ── A. Page header ──────────────────────────────────────────────────
-        page_header(
-            title="Overview",
-            subtitle="Market tone, live KPIs, signals, alerts and data-feed "
-            "health at a glance.",
-            badge_text="DASHBOARD",
-            badge_color=C_ACCENT,
-        )
+            # ── A. Page header ──────────────────────────────────────────────
+            page_header(
+                title="Overview",
+                subtitle="Market tone, live KPIs, signals, alerts and data-feed "
+                "health at a glance.",
+                badge_text="DASHBOARD",
+                badge_color=C_ACCENT,
+            )
 
-        # ── Cold start — nothing modeled yet ────────────────────────────────
-        all_empty = not port_results and not route_results and not insights
-        if all_empty:
-            _render_cold_start()
-            section_divider("Data Feeds")
-            _render_data_status(port_results, route_results, insights,
-                                freight_data, macro_data, stock_data)
-            return
+            # ── Cold start — nothing modeled yet ────────────────────────────
+            all_empty = not port_results and not route_results and not insights
+            if all_empty:
+                _render_cold_start()
+                section_divider("Data Feeds")
+                _render_data_status(port_results, route_results, insights,
+                                    freight_data, macro_data, stock_data)
+                return
 
-        # ── A2. Daily Briefing (LLM-narrated; template fallback) ───────────
-        _render_daily_briefing(
-            port_results, route_results, freight_data, macro_data,
-        )
+            # ── A2. Daily Briefing (LLM-narrated; template fallback) ───────
+            _render_daily_briefing(
+                port_results, route_results, freight_data, macro_data,
+            )
 
-        # ── B. Market verdict — tone banner + feed health ───────────────────
-        _render_market_verdict(port_results, route_results, insights,
-                               freight_data, macro_data, stock_data)
+            # ── B. Market verdict — tone banner + feed health ───────────────
+            _render_market_verdict(port_results, route_results, insights,
+                                   freight_data, macro_data, stock_data)
 
-        # ── B2. Editorial commentary (per-tab LLM + template fallback) ──────
-        _render_editorial_commentary(
-            port_results, route_results, insights, freight_data, macro_data,
-        )
+            # ── B2. Editorial commentary (per-tab LLM + template fallback) ──
+            _render_editorial_commentary(
+                port_results, route_results, insights, freight_data, macro_data,
+            )
 
-        # ── C. Headline KPI strip ───────────────────────────────────────────
-        section_divider("Headline KPIs")
-        _render_kpi_strip(port_results, route_results, insights,
-                         freight_data, macro_data, stock_data, alerts)
+            # ── C. Headline KPI strip ───────────────────────────────────────
+            section_divider("Headline KPIs")
+            _render_kpi_strip(port_results, route_results, insights,
+                             freight_data, macro_data, stock_data, alerts)
 
-        # ── D. Markets & Signals ────────────────────────────────────────────
-        section_divider("Markets & Signals")
-        left, right = st.columns([3, 2], gap="large")
-        with left:
-            _render_market_pulse(freight_data, macro_data, stock_data)
-            _render_signal_matrix(route_results, insights)
-            _render_top_signals(insights)
-        with right:
-            _render_risk_alerts(insights, alerts)
-            _render_route_opps(route_results)
-            _render_data_status(port_results, route_results, insights,
-                               freight_data, macro_data, stock_data)
+            # ── D. Markets & Signals ────────────────────────────────────────
+            section_divider("Markets & Signals")
+            left, right = st.columns([3, 2], gap="large")
+            with left:
+                _render_market_pulse(freight_data, macro_data, stock_data)
+                _render_signal_matrix(route_results, insights)
+                _render_top_signals(insights)
+            with right:
+                _render_risk_alerts(insights, alerts)
+                _render_route_opps(route_results)
+                _render_data_status(port_results, route_results, insights,
+                                   freight_data, macro_data, stock_data)
 
-        # ── F. Quick Views ──────────────────────────────────────────────────
-        section_divider("Quick Views")
-        _render_sparklines(port_results, insights, freight_data)
+            # ── F. Quick Views ──────────────────────────────────────────────
+            section_divider("Quick Views")
+            _render_sparklines(port_results, insights, freight_data)
     except Exception as exc:
         logger.exception("tab_overview.render fatal")
         st.error(f"Overview dashboard error: {exc}")

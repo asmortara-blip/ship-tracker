@@ -65,12 +65,20 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #   4 — adds alerts.acknowledged_at for median time-to-ack analytics
 #   5 — RESERVED for a sibling-agent migration that may land separately
 #   6 — adds delivery_channels.digest_mode column (immediate | daily)
+#   7 — adds users table + nullable user_id columns on five existing
+#       tables (alerts, alert_rules, report_history, delivery_channels,
+#       llm_calls). Per-user data scoping is left as a follow-up; the
+#       empty default keeps legacy rows behaving as before.
+#   8 — adds tab_render_events table for per-tab render-duration
+#       telemetry so the platform can answer "which tabs are slow?"
+#       without firing up a profiler. Populated by ``engine.perf_telemetry``
+#       via a context manager any tab can opt into.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 6
+SCHEMA_VERSION: int = 8
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -249,6 +257,72 @@ _SCHEMA_V6_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v6)"
 )
 
+# Schema v7 lays the foundation for multi-user auth WITHOUT a big-bang
+# migration. Two halves:
+#
+#   1. A new ``users`` table holds the per-user identity row (username,
+#      password hash + salt — reusing ``auth.gate._hash_password`` so we
+#      do not introduce a new KDF), role, created_at, last_login_at.
+#   2. Each of the five existing domain tables (alerts, alert_rules,
+#      report_history, delivery_channels, llm_calls) grows a nullable
+#      ``user_id TEXT NOT NULL DEFAULT ''`` column. The empty default
+#      means legacy rows stay legacy — they belong to "no user" and
+#      remain visible under the existing single-password gate. Per-user
+#      query scoping is left for a follow-up.
+#
+# The new table is created via CREATE TABLE IF NOT EXISTS in
+# ``_SCHEMA_V7``; the five ALTER TABLE column adds live in
+# ``_migrate_to_v7`` with the same idempotent try/except wrapper used
+# for v4 / v5 / v6.
+_SCHEMA_V7 = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id         TEXT PRIMARY KEY,
+    username        TEXT UNIQUE NOT NULL,
+    password_hash   TEXT NOT NULL,
+    password_salt   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'user',
+    created_at      TEXT NOT NULL,
+    last_login_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+"""
+
+_SCHEMA_V7_NOTE: str = (
+    "v7: users table + user_id TEXT NOT NULL DEFAULT '' on alerts, "
+    "alert_rules, report_history, delivery_channels, llm_calls "
+    "(added via ALTER TABLE in _migrate_to_v7)"
+)
+
+# Schema v8 adds the ``tab_render_events`` table for per-tab render-duration
+# telemetry. Every successful (or failed) tab render() that opts in via
+# ``engine.perf_telemetry.track_render`` writes one row here. The table is
+# narrow on purpose — answering "which tabs are slow?" only needs the tab
+# name, the duration, and a success/error column.
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3: a fresh DB picks
+# up the table via the executescript path in _init_schema; the explicit
+# ``_migrate_to_v8`` helper re-runs the same script on upgrade.
+_SCHEMA_V8 = """
+CREATE TABLE IF NOT EXISTS tab_render_events (
+    event_id     TEXT PRIMARY KEY,
+    tab_name     TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    duration_ms  INTEGER NOT NULL DEFAULT 0,
+    success      INTEGER NOT NULL DEFAULT 1,
+    error_msg    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tab_render_events_started_at
+    ON tab_render_events(started_at);
+CREATE INDEX IF NOT EXISTS idx_tab_render_events_tab
+    ON tab_render_events(tab_name);
+"""
+
+_SCHEMA_V8_NOTE: str = (
+    "v8: tab_render_events table (event_id PK, tab_name, started_at, "
+    "duration_ms, success, error_msg) + two indexes "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v8)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -284,6 +358,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v6(conn)
     except Exception as exc:
         logger.warning(f"state.db: v6 column add skipped: {exc}")
+    # v7 add-only schema + per-table user_id column adds. Splits into:
+    #   - the ``users`` CREATE TABLE IF NOT EXISTS (safe on every open)
+    #   - the five ALTER TABLE column adds (each in its own try/except
+    #     inside ``_migrate_to_v7`` for idempotency).
+    conn.executescript(_SCHEMA_V7)
+    try:
+        from state.migrations import _migrate_to_v7
+        _migrate_to_v7(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v7 column adds skipped: {exc}")
+    # v8 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    # EXISTS) — safe to run on every open so fresh databases skip the
+    # explicit migration step. The explicit ``_migrate_to_v8`` path in
+    # state.migrations re-runs this script on upgrade.
+    conn.executescript(_SCHEMA_V8)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -356,6 +445,32 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v6(conn)
         except Exception as exc:
             logger.warning(f"state.db: v6 migration skipped: {exc}")
+
+    # Migration 6 → 7: lay the foundation for multi-user auth. The
+    # ``users`` table is created via ``_SCHEMA_V7`` (already executed
+    # unconditionally above), and each domain table gains a nullable
+    # ``user_id`` column via the ALTER-TABLE-in-try/except helper. As
+    # with v4 / v5 / v6, the helper is also called unconditionally above
+    # so a fresh DB picks up the columns at first open; this branch
+    # keeps the version-step ladder explicit.
+    if current < 7:
+        try:
+            from state.migrations import _migrate_to_v7
+            _migrate_to_v7(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v7 migration skipped: {exc}")
+
+    # Migration 7 → 8: add the ``tab_render_events`` table so the
+    # platform can answer "which tabs are slow?" without a profiler.
+    # Same CREATE-IF-NOT-EXISTS idempotency as v2 / v3 — the helper is
+    # already invoked unconditionally above; this branch keeps the
+    # version-step ladder explicit.
+    if current < 8:
+        try:
+            from state.migrations import _migrate_to_v8
+            _migrate_to_v8(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v8 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

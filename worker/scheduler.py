@@ -373,6 +373,38 @@ def run_telemetry_prune_job(retention_days: int = 90) -> int:
         return 0
 
 
+def run_perf_prune_job(retention_days: int = 30) -> int:
+    """Prune ``tab_render_events`` rows older than ``retention_days`` days.
+
+    Thin wrapper around ``engine.perf_telemetry.prune_old_events`` —
+    mirrors ``run_telemetry_prune_job`` for the LLM-call table, but
+    against the per-tab render-duration telemetry instead. Designed to
+    be invoked once per day from ``main`` AFTER both the briefing job
+    and the LLM-call prune so the daily cron handles all retention in
+    a single pass.
+
+    Default retention is 30 days — render events accumulate faster than
+    LLM calls and the operational question they answer ("which tabs are
+    slow right now?") only needs the recent picture; a 90-day window
+    would be wasteful.
+
+    Returns the number of rows deleted (``0`` on no-op or any error).
+    Never raises — a prune failure must never block the briefing job.
+    """
+    try:
+        from engine.perf_telemetry import prune_old_events
+
+        deleted = prune_old_events(retention_days=retention_days)
+        logger.info(
+            f"run_perf_prune_job: deleted={deleted} rows "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_perf_prune_job: failed: {exc}")
+        return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  CLI entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,6 +436,14 @@ def main(argv: Optional[list] = None) -> int:
         run_telemetry_prune_job()
     except Exception as exc:
         logger.warning(f"main: telemetry prune step failed: {exc}")
+
+    # Render-event retention runs immediately after the LLM-call prune
+    # so both telemetry tables are kept in trim by the same daily cron.
+    # Same belt-and-braces guard — the helper already swallows errors.
+    try:
+        run_perf_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: perf prune step failed: {exc}")
 
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)
