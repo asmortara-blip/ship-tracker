@@ -551,3 +551,93 @@ def test_main_prune_failure_does_not_block_successful_briefing(monkeypatch) -> N
 
     # Exit code is still 0 — briefing succeeded; prune is best-effort.
     assert excinfo.value.code == 0
+
+
+# ─── run_bulk_export_prune_job ──────────────────────────────────────────────
+
+def test_run_bulk_export_prune_job_returns_int(monkeypatch) -> None:
+    """Returns the int count from prune_old_exports; never raises."""
+    prune_mock = MagicMock(return_value=3)
+    monkeypatch.setattr("utils.bulk_export.prune_old_exports", prune_mock)
+
+    from worker.scheduler import run_bulk_export_prune_job
+    result = run_bulk_export_prune_job(keep_n=7)
+
+    assert result == 3
+    prune_mock.assert_called_once_with(keep_n=7)
+
+
+def test_run_bulk_export_prune_job_swallows_errors(monkeypatch) -> None:
+    """A prune_old_exports exception must NOT propagate; returns 0."""
+    prune_mock = MagicMock(side_effect=RuntimeError("disk wedged"))
+    monkeypatch.setattr("utils.bulk_export.prune_old_exports", prune_mock)
+
+    from worker.scheduler import run_bulk_export_prune_job
+    # Must not raise.
+    result = run_bulk_export_prune_job()
+    assert result == 0
+
+
+def test_main_invokes_bulk_export_prune_after_health_prune(monkeypatch) -> None:
+    """main() invokes run_bulk_export_prune_job AFTER run_health_prune_job."""
+    monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+
+    call_order: list[str] = []
+
+    def fake_briefing(bundle, *, push_to_channels=False):
+        call_order.append("briefing")
+        return ReportJobResult(
+            report_id="rid",
+            file_path="/tmp/x.html",
+            success=True,
+            duration_s=0.1,
+            error_msg="",
+        )
+
+    monkeypatch.setattr(scheduler, "run_daily_briefing_job", fake_briefing)
+    monkeypatch.setattr(scheduler, "run_telemetry_prune_job",
+                        lambda *a, **k: (call_order.append("telemetry"), 0)[1])
+    monkeypatch.setattr(scheduler, "run_perf_prune_job",
+                        lambda *a, **k: (call_order.append("perf"), 0)[1])
+    monkeypatch.setattr(scheduler, "run_snapshot_prune_job",
+                        lambda *a, **k: (call_order.append("snapshot"), 0)[1])
+    monkeypatch.setattr(scheduler, "run_health_ping_job",
+                        lambda *a, **k: (call_order.append("health_ping"), [])[1])
+    monkeypatch.setattr(scheduler, "run_health_prune_job",
+                        lambda *a, **k: (call_order.append("health_prune"), 0)[1])
+    monkeypatch.setattr(scheduler, "run_bulk_export_prune_job",
+                        lambda *a, **k: (call_order.append("bulk_export_prune"), 0)[1])
+    monkeypatch.setattr(sys, "argv", ["worker.scheduler"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 0
+    # Bulk export prune runs strictly after health prune.
+    assert "bulk_export_prune" in call_order
+    assert call_order.index("bulk_export_prune") > call_order.index("health_prune")
+
+
+def test_main_bulk_export_prune_failure_does_not_block_briefing(monkeypatch) -> None:
+    """A raise inside run_bulk_export_prune_job must NOT flip the briefing's
+    exit code — the report ran successfully and that's what matters."""
+    monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+    monkeypatch.setattr(
+        scheduler,
+        "run_daily_briefing_job",
+        lambda bundle, *, push_to_channels=False: ReportJobResult(
+            report_id="rid", file_path="/tmp/x.html",
+            success=True, duration_s=0.1, error_msg="",
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_bulk_export_prune_job",
+        MagicMock(side_effect=RuntimeError("export prune blew up")),
+    )
+    monkeypatch.setattr(sys, "argv", ["worker.scheduler"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 0

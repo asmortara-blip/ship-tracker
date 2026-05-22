@@ -465,6 +465,93 @@ def run_health_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+def run_bulk_export_prune_job(keep_n: int = 5) -> int:
+    """Prune ``cache/exports/*.tar.gz`` down to the newest ``keep_n``.
+
+    Thin wrapper around ``utils.bulk_export.prune_old_exports`` that
+    adds logging and shields the caller from any exception. Bulk exports
+    are larger than telemetry rows (megabytes per archive vs. bytes per
+    row) so even a small backlog adds up on disk — keeping the newest 5
+    is enough for "I broke something yesterday, roll me back" without
+    growing without bound.
+
+    Designed to be invoked once per day from ``main`` AFTER the
+    health prune so a freshly-created export from the same daily run is
+    still inside the retention window.
+
+    Returns the number of archives deleted (``0`` on no-op or any error).
+    Never raises — a prune failure must never block the briefing job.
+    """
+    try:
+        from utils.bulk_export import prune_old_exports
+
+        deleted = prune_old_exports(keep_n=keep_n)
+        logger.info(
+            f"run_bulk_export_prune_job: deleted={deleted} archives "
+            f"(keep_n={keep_n})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_bulk_export_prune_job: failed: {exc}")
+        return 0
+
+
+def run_operator_digest_job() -> list:
+    """Dispatch the daily Operator Dashboard digest to every ``ops-*`` channel.
+
+    Loads every persisted ``DeliveryChannel`` whose ``name`` starts with
+    ``"ops-"`` (the convention defined in
+    ``engine.operator_digest.OPERATOR_CHANNEL_PREFIX``) and calls
+    ``send_operator_digest`` for each one. Returns the list of
+    ``DeliveryResult`` outcomes — one per channel attempted.
+
+    Best-effort: a failure to load channels OR a per-channel dispatch
+    failure is logged but never raised. The daily cron runs this AFTER
+    the alert-delivery jobs so the digest reflects the state immediately
+    after any new alerts have been pushed.
+
+    The ``ops-`` prefix convention is the channel-naming contract that
+    distinguishes digest subscribers from immediate-alert channels —
+    operators tag a channel as ``ops-trading-desk`` to subscribe it to
+    the daily digest, leaving non-prefixed channels for per-alert
+    delivery only.
+    """
+    try:
+        from engine.alert_delivery import load_channels
+        from engine.operator_digest import (
+            OPERATOR_CHANNEL_PREFIX,
+            send_operator_digest,
+        )
+
+        channels = load_channels()
+    except Exception as exc:
+        logger.warning(f"run_operator_digest_job: channel load failed: {exc}")
+        return []
+
+    results: list = []
+    for channel in channels:
+        # The ``ops-`` prefix is the subscriber convention. A channel
+        # that doesn't carry the prefix is for immediate-alert delivery
+        # only and must NOT receive the daily digest.
+        if not channel.name or not channel.name.startswith(OPERATOR_CHANNEL_PREFIX):
+            continue
+        if not channel.enabled:
+            continue
+        try:
+            result = send_operator_digest(channel)
+            results.append(result)
+            logger.info(
+                f"run_operator_digest_job: channel={channel.name!r} "
+                f"kind={channel.kind} success={result.success}"
+                + (f" error={result.error_msg!r}" if not result.success else "")
+            )
+        except Exception as exc:
+            logger.warning(
+                f"run_operator_digest_job: send to {channel.name!r} failed: {exc}"
+            )
+    return results
+
+
 def run_snapshot_prune_job(keep_n: int = 30) -> int:
     """Prune ``investor_report_snapshots`` down to the newest ``keep_n``.
 
@@ -560,6 +647,25 @@ def main(argv: Optional[list] = None) -> int:
         run_health_prune_job()
     except Exception as exc:
         logger.warning(f"main: health prune step failed: {exc}")
+
+    # Bulk-export archive retention. Runs AFTER the health prune so a
+    # bulk-export taken on the same tick (if a future cron triggers one)
+    # would still be inside the retention window. Same belt-and-braces
+    # guard — the helper already swallows errors.
+    try:
+        run_bulk_export_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: bulk export prune step failed: {exc}")
+
+    # Operator Dashboard daily digest. Runs LAST so the digest reflects
+    # the state after every prune / health ping has settled. Subscribers
+    # are the ``DeliveryChannel`` rows whose ``name`` starts with
+    # ``ops-``. Same belt-and-braces guard — the helper already swallows
+    # per-channel errors and never raises.
+    try:
+        run_operator_digest_job()
+    except Exception as exc:
+        logger.warning(f"main: operator digest step failed: {exc}")
 
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)
