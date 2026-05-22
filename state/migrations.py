@@ -375,3 +375,60 @@ def _migrate_to_v8(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v8 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v8 → v9 ───────────────────────────────────────────────────────
+
+def _migrate_to_v9(conn: sqlite3.Connection) -> None:
+    """Add the ``investor_report_snapshots`` table.
+
+    Persists the slim ReportSnapshot dataclass (defined in
+    ``processing.report_snapshot``) so the briefing tab "what changed"
+    diff has prior snapshots to diff against after a Streamlit restart.
+
+    Each row is a JSON-encoded payload of the slim snapshot — never the
+    full InvestorReport, which carries pandas DataFrames and would not
+    round-trip cleanly. The diff helper only reads a handful of
+    attribute paths anyway (sentiment.overall_score, alpha.signals,
+    market.risk_level, freight.routes), so the slim shape is sufficient.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS —
+    so this statement is also safe to re-run on every open via the schema
+    bootstrap in state.db. Matches the v2 / v3 / v8 pattern (add-only
+    schema).
+    """
+    try:
+        from state.db import _SCHEMA_V9
+
+        conn.executescript(_SCHEMA_V9)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v9 CREATE TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v9 → v10 ──────────────────────────────────────────────────────
+
+def _migrate_to_v10(conn: sqlite3.Connection) -> None:
+    """Add the ``audit_events`` table for security-review audit logging.
+
+    Each privileged user action (alert ack, rule edit, channel CRUD,
+    report deletion, share-link generation, signup/login) writes one
+    row here via ``auth.audit.record_audit``. The table is intentionally
+    wide-and-flat: ``action`` + ``entity_type`` + ``entity_id`` + a
+    free-form ``detail_json`` payload absorbs new touchpoints without
+    requiring another migration each time.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS —
+    so this statement is also safe to re-run on every open via the schema
+    bootstrap in state.db. Matches the v2 / v3 / v8 / v9 pattern
+    (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V10
+
+        conn.executescript(_SCHEMA_V10)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v10 CREATE TABLE failed: {exc}"
+        )

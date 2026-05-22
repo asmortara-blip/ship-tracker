@@ -509,3 +509,151 @@ def test_v7_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> Non
         assert col_names.count("user_id") == 1, (
             f"{table} has more than one user_id column after re-open"
         )
+
+
+# ─── Schema v9: investor_report_snapshots table ───────────────────────────
+
+def test_v9_migration_adds_investor_report_snapshots_table() -> None:
+    """v9 adds the ``investor_report_snapshots`` table so the briefing-tab
+    diff survives Streamlit restarts. Confirms the table exists with the
+    documented columns and that the supporting index is in place."""
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. Table exists with the documented columns.
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(investor_report_snapshots)"
+        ).fetchall()
+    }
+    assert set(cols.keys()) >= {
+        "snapshot_id", "generated_at", "report_date", "payload_json", "user_id",
+    }
+    # snapshot_id is the primary key.
+    assert cols["snapshot_id"]["pk"] == 1
+    # report_date + user_id default to empty string.
+    assert cols["report_date"]["dflt_value"] in ("''", '""')
+    assert cols["user_id"]["dflt_value"] in ("''", '""')
+
+    # 2. The supporting index on generated_at is present.
+    idx_rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='investor_report_snapshots'"
+    ).fetchall()
+    idx_names = {r["name"] for r in idx_rows}
+    assert "idx_investor_report_snapshots_generated_at" in idx_names
+
+    # 3. A fresh INSERT round-trips.
+    conn.execute(
+        """
+        INSERT INTO investor_report_snapshots
+          (snapshot_id, generated_at, payload_json)
+        VALUES ('v9c', '2026-05-22T00:00:00+00:00', '{}')
+        """
+    )
+    row = conn.execute(
+        "SELECT * FROM investor_report_snapshots WHERE snapshot_id = 'v9c'"
+    ).fetchone()
+    assert row is not None
+    # Defaults landed.
+    assert row["report_date"] == ""
+    assert row["user_id"] == ""
+
+
+def test_v9_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v9+ DB does not raise — CREATE TABLE IF NOT EXISTS is
+    inherently idempotent, but we exercise the path anyway."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v9.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    state_db.get_connection()
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()
+    # Table still has exactly one row in sqlite_master (no duplicates).
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='investor_report_snapshots'"
+    ).fetchall()
+    assert len(rows) == 1
+
+
+# ─── Schema v10: audit_events table ───────────────────────────────────────
+
+def test_v10_migration_adds_audit_events_table() -> None:
+    """v10 adds the ``audit_events`` table so privileged user actions
+    (alert acks, rule edits, channel CRUD, report deletion, share-link
+    generation, signup/login) leave a queryable record for security
+    review. Confirms the table exists with the documented columns and
+    that the three supporting indexes are in place."""
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. Table exists with the documented columns.
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(audit_events)"
+        ).fetchall()
+    }
+    assert set(cols.keys()) >= {
+        "event_id", "created_at", "user_id", "action",
+        "entity_type", "entity_id", "detail_json",
+    }
+    # event_id is the primary key.
+    assert cols["event_id"]["pk"] == 1
+    # The defaulted columns default to empty string / '{}' on the
+    # detail_json column.
+    assert cols["user_id"]["dflt_value"] in ("''", '""')
+    assert cols["entity_type"]["dflt_value"] in ("''", '""')
+    assert cols["entity_id"]["dflt_value"] in ("''", '""')
+    assert cols["detail_json"]["dflt_value"] in ("'{}'", '"{}"')
+
+    # 2. All three supporting indexes are present.
+    idx_rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='audit_events'"
+    ).fetchall()
+    idx_names = {r["name"] for r in idx_rows}
+    assert "idx_audit_events_created_at" in idx_names
+    assert "idx_audit_events_user_id" in idx_names
+    assert "idx_audit_events_action" in idx_names
+
+    # 3. A fresh INSERT round-trips and the defaults land.
+    conn.execute(
+        """
+        INSERT INTO audit_events
+          (event_id, created_at, action)
+        VALUES ('v10c', '2026-05-22T00:00:00+00:00', 'test_action')
+        """
+    )
+    row = conn.execute(
+        "SELECT * FROM audit_events WHERE event_id = 'v10c'"
+    ).fetchone()
+    assert row is not None
+    assert row["user_id"] == ""
+    assert row["entity_type"] == ""
+    assert row["entity_id"] == ""
+    assert row["detail_json"] == "{}"
+
+
+def test_v10_schema_version_stamped() -> None:
+    """After init, the stored schema_version must be exactly 10.
+
+    Guards against an accidental SCHEMA_VERSION rollback in a future
+    edit — the audit log must continue to ship at v10 (or higher) so
+    the audit_events table is always present.
+    """
+    from state.db import SCHEMA_VERSION, get_connection
+
+    assert SCHEMA_VERSION >= 10
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) >= 10

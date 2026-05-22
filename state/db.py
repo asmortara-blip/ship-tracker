@@ -73,12 +73,27 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       telemetry so the platform can answer "which tabs are slow?"
 #       without firing up a profiler. Populated by ``engine.perf_telemetry``
 #       via a context manager any tab can opt into.
+#   9 — adds investor_report_snapshots table so the "what changed" diff
+#       on the daily briefing tab survives Streamlit restarts. Stores a
+#       slimmed-down ReportSnapshot dataclass JSON-encoded — only the
+#       fields ``processing.report_diff.compute_report_diff`` actually
+#       reads (sentiment.overall_score, alpha.signals, freight.routes,
+#       market.risk_level) so we never have to round-trip the full
+#       InvestorReport (which carries pandas objects).
+#  10 — adds audit_events table for security-review "who did what when"
+#       record-keeping. Hooked at the privileged user-action touchpoints
+#       (alert acknowledgement, rule changes, channel CRUD, report
+#       deletion, share-link generation, signup/login). Every write is
+#       best-effort + never raises — an audit-log failure must never
+#       break the hot path it sits inside. v10 was claimed for this
+#       commit while another sibling agent took v9 for InvestorReport
+#       snapshots in the same batch.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 8
+SCHEMA_VERSION: int = 10
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -323,6 +338,70 @@ _SCHEMA_V8_NOTE: str = (
     "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v8)"
 )
 
+# Schema v9 adds the ``investor_report_snapshots`` table so the "what
+# changed" diff in ``ui.tab_briefing`` survives Streamlit restarts. Each
+# row stores a slim ReportSnapshot JSON-encoded (sentiment overall score,
+# signals, freight routes, risk level) — only the fields
+# ``processing.report_diff.compute_report_diff`` actually reads. Never
+# tries to round-trip the full InvestorReport (which carries pandas
+# objects). Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8:
+# a fresh DB picks up the table via the executescript path in
+# _init_schema; the explicit ``_migrate_to_v9`` helper re-runs the same
+# script on upgrade.
+_SCHEMA_V9 = """
+CREATE TABLE IF NOT EXISTS investor_report_snapshots (
+    snapshot_id   TEXT PRIMARY KEY,
+    generated_at  TEXT NOT NULL,
+    report_date   TEXT NOT NULL DEFAULT '',
+    payload_json  TEXT NOT NULL,
+    user_id       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_investor_report_snapshots_generated_at
+    ON investor_report_snapshots(generated_at);
+"""
+
+_SCHEMA_V9_NOTE: str = (
+    "v9: investor_report_snapshots table (snapshot_id PK, generated_at, "
+    "report_date, payload_json, user_id) + index on generated_at "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v9)"
+)
+
+# Schema v10 adds the ``audit_events`` table so privileged user actions
+# (alert acks, rule edits, channel CRUD, report deletion, share-link
+# generation, signup/login) leave a queryable record for security
+# review. Wide on purpose — ``action`` + ``entity_type`` + ``entity_id``
+# + a free-form ``detail_json`` payload keeps the table general enough
+# to absorb new touchpoints without another migration each time.
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9: a
+# fresh DB picks up the table via the executescript path in
+# _init_schema; the explicit ``_migrate_to_v10`` helper re-runs the
+# same script on upgrade. Three indexes — created_at (range queries),
+# user_id (per-user audit views), action (filter by action type).
+_SCHEMA_V10 = """
+CREATE TABLE IF NOT EXISTS audit_events (
+    event_id     TEXT PRIMARY KEY,
+    created_at   TEXT NOT NULL,
+    user_id      TEXT NOT NULL DEFAULT '',
+    action       TEXT NOT NULL,
+    entity_type  TEXT NOT NULL DEFAULT '',
+    entity_id    TEXT NOT NULL DEFAULT '',
+    detail_json  TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created_at
+    ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_events_user_id
+    ON audit_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_events_action
+    ON audit_events(action);
+"""
+
+_SCHEMA_V10_NOTE: str = (
+    "v10: audit_events table (event_id PK, created_at, user_id, action, "
+    "entity_type, entity_id, detail_json) + three indexes "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v10)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -373,6 +452,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # explicit migration step. The explicit ``_migrate_to_v8`` path in
     # state.migrations re-runs this script on upgrade.
     conn.executescript(_SCHEMA_V8)
+    # v9 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    # EXISTS) — same pattern as v2 / v3 / v8. Persists slim ReportSnapshot
+    # rows so the briefing-tab diff survives Streamlit restarts.
+    conn.executescript(_SCHEMA_V9)
+    # v10 add-only schema (CREATE TABLE IF NOT EXISTS + three indexes) —
+    # same pattern. Adds the audit_events table for "who did what when"
+    # security-review record-keeping.
+    conn.executescript(_SCHEMA_V10)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -471,6 +558,30 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v8(conn)
         except Exception as exc:
             logger.warning(f"state.db: v8 migration skipped: {exc}")
+
+    # Migration 8 → 9: add the ``investor_report_snapshots`` table so the
+    # briefing tab "what changed" diff survives Streamlit restarts. Same
+    # CREATE-IF-NOT-EXISTS idempotency — the helper is already invoked
+    # unconditionally above; this branch keeps the version-step ladder
+    # explicit.
+    if current < 9:
+        try:
+            from state.migrations import _migrate_to_v9
+            _migrate_to_v9(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v9 migration skipped: {exc}")
+
+    # Migration 9 → 10: add the ``audit_events`` table so privileged
+    # user actions leave a queryable security-review record. Same
+    # CREATE-IF-NOT-EXISTS idempotency — the helper is already invoked
+    # unconditionally above; this branch keeps the version-step ladder
+    # explicit.
+    if current < 10:
+        try:
+            from state.migrations import _migrate_to_v10
+            _migrate_to_v10(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v10 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

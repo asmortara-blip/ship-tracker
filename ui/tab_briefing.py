@@ -479,14 +479,19 @@ def _build_export_snapshot(narration, signals: dict):
 def _rotate_investor_report_in_session(
     port_results, route_results, insights, freight_data, macro_data, stock_data,
 ) -> None:
-    """Build a fresh InvestorReport and rotate it through session state.
+    """Build a fresh InvestorReport, rotate it through session state, AND
+    persist a slim ReportSnapshot to SQLite.
 
     Pattern: each briefing-tab visit rotates ``current`` → ``previous`` and
-    sets ``current`` to a freshly-built InvestorReport. First visit leaves
-    ``previous`` as None; second visit yields a real diff for the
-    ``_render_report_diff`` helper to consume.
+    sets ``current`` to a freshly-built InvestorReport in session state.
+    In parallel we extract a slim ReportSnapshot from the report and
+    INSERT it into ``investor_report_snapshots`` so the "what changed"
+    diff survives Streamlit restarts (the session-state rotation only
+    persists for the lifetime of one Streamlit session).
 
-    Wrapped in try/except so failures here cannot break the rest of the tab.
+    Wrapped in try/except so failures here cannot break the rest of the
+    tab. The snapshot save itself never raises (``save_snapshot`` returns
+    False on error), so even a broken SQLite layer degrades gracefully.
     """
     try:
         from processing.investor_report_engine import build_investor_report
@@ -503,6 +508,21 @@ def _rotate_investor_report_in_session(
         if prev is not None:
             st.session_state["previous_investor_report"] = prev
         st.session_state["current_investor_report"] = current_report
+
+        # Persist the slim snapshot so the diff survives a restart.
+        # Best-effort — save_snapshot never raises; the in-session
+        # rotation above is a working fallback for the first-visit case.
+        try:
+            from processing.report_snapshot import (
+                extract_snapshot,
+                save_snapshot,
+            )
+            from state.user_scope import current_user_id
+
+            snapshot = extract_snapshot(current_report)
+            save_snapshot(snapshot, user_id=current_user_id())
+        except Exception:
+            logger.exception("tab_briefing: snapshot persistence failed")
     except Exception:
         logger.exception("tab_briefing: investor-report session rotation failed")
 
@@ -510,14 +530,32 @@ def _rotate_investor_report_in_session(
 def _render_report_diff() -> None:
     """Render a "What Changed" widget comparing today vs. previous report.
 
-    Pulls two InvestorReport snapshots from session state (rotated on each
-    briefing-tab visit by ``_rotate_investor_report_in_session``). When
-    either is missing, surfaces an empty-state notice and returns.
+    Primary path: pull the two newest ReportSnapshot rows from the
+    ``investor_report_snapshots`` SQLite table — this survives Streamlit
+    restarts so the diff is durable across deploys.
+
+    Secondary fallback: if the SQLite layer has fewer than two snapshots
+    (e.g. the very first briefing-tab visit before the snapshot has
+    been saved), fall back to the legacy session-state pair so the
+    in-session diff still works.
     """
     section_divider("What Changed")
     try:
         from processing.report_diff import compute_report_diff, format_diff_html
+        from processing.report_snapshot import load_latest_snapshots
+        from state.user_scope import current_user_id
 
+        # Primary: SQLite-backed snapshots (survive restart).
+        snapshots = load_latest_snapshots(n=2, user_id=current_user_id())
+        if len(snapshots) >= 2:
+            # newest is index 0; second-newest is the prior snapshot.
+            diff = compute_report_diff(snapshots[1], snapshots[0])
+            html = format_diff_html(diff)
+            st.markdown(html, unsafe_allow_html=True)
+            return
+
+        # Secondary fallback: in-session rotation pair (works on the
+        # very first visit before two snapshots have accumulated).
         current = st.session_state.get("current_investor_report")
         previous = st.session_state.get("previous_investor_report")
         if current is None or previous is None:
@@ -595,73 +633,77 @@ def render(
     **_kwargs,
 ) -> None:
     """Render the Daily Briefing tab."""
-    try:
-        page_header(
-            title="Daily Briefing",
-            subtitle=(
-                "LLM-narrated synthesis of today's shipping signals. "
-                "Cached per UTC day with template fallback when no API key."
-            ),
-            badge_text="BRIEFING",
-            badge_color=C_ACCENT,
-        )
-
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('briefing'):
         try:
-            from engine.narration_engine import generate_daily_narration
-        except Exception as exc:
-            st.error(f"Narration engine unavailable: {exc}")
-            return
-
-        ctx, signals = _assemble_context(
-            port_results, route_results, freight_data, macro_data,
-        )
-        narration = generate_daily_narration(ctx)
-
-        # Rotate the InvestorReport snapshot through session state so the
-        # "What Changed" widget below has a prev/curr pair to diff.
-        _rotate_investor_report_in_session(
-            port_results, route_results, insights,
-            freight_data, macro_data, stock_data,
-        )
-
-        # ── 1-2. Headline + Body ───────────────────────────────────────────
-        _render_headline_card(narration)
-        _render_body(narration)
-
-        # ── 3. Sections grid ───────────────────────────────────────────────
-        _render_sections_grid(narration)
-
-        # ── 3b. Editorial commentary (per-tab LLM + template fallback) ─────
-        _render_editorial_commentary(narration, signals)
-
-        section_divider("Inputs")
-
-        # ── 4. Transparency panel ──────────────────────────────────────────
-        _render_inputs_panel(signals)
-
-        # ── 4b. What Changed — diff vs. prior briefing in session ──────────
-        _render_report_diff()
-
-        section_divider("Actions")
-
-        # ── 5. Refresh button + PDF export + notes ─────────────────────────
-        _render_actions_bar(ctx, narration, signals)
-
-        # ── 6. Source footer ───────────────────────────────────────────────
-        st.markdown(
-            source_footer([
-                DataSource.modeled(
-                    "Daily Briefing",
-                    notes=(
-                        "Narration via engine.narration_engine. "
-                        "Inputs from shipping_stress_index + disruption_forecast "
-                        "+ macro_data indicators."
-                    ),
+            page_header(
+                title="Daily Briefing",
+                subtitle=(
+                    "LLM-narrated synthesis of today's shipping signals. "
+                    "Cached per UTC day with template fallback when no API key."
                 ),
-            ]),
-            unsafe_allow_html=True,
-        )
+                badge_text="BRIEFING",
+                badge_color=C_ACCENT,
+            )
 
-    except Exception:
-        logger.exception("tab_briefing render failed")
-        st.error("Daily Briefing encountered an error. See logs.")
+            try:
+                from engine.narration_engine import generate_daily_narration
+            except Exception as exc:
+                st.error(f"Narration engine unavailable: {exc}")
+                return
+
+            ctx, signals = _assemble_context(
+                port_results, route_results, freight_data, macro_data,
+            )
+            narration = generate_daily_narration(ctx)
+
+            # Rotate the InvestorReport snapshot through session state so the
+            # "What Changed" widget below has a prev/curr pair to diff.
+            _rotate_investor_report_in_session(
+                port_results, route_results, insights,
+                freight_data, macro_data, stock_data,
+            )
+
+            # ── 1-2. Headline + Body ───────────────────────────────────────────
+            _render_headline_card(narration)
+            _render_body(narration)
+
+            # ── 3. Sections grid ───────────────────────────────────────────────
+            _render_sections_grid(narration)
+
+            # ── 3b. Editorial commentary (per-tab LLM + template fallback) ─────
+            _render_editorial_commentary(narration, signals)
+
+            section_divider("Inputs")
+
+            # ── 4. Transparency panel ──────────────────────────────────────────
+            _render_inputs_panel(signals)
+
+            # ── 4b. What Changed — diff vs. prior briefing in session ──────────
+            _render_report_diff()
+
+            section_divider("Actions")
+
+            # ── 5. Refresh button + PDF export + notes ─────────────────────────
+            _render_actions_bar(ctx, narration, signals)
+
+            # ── 6. Source footer ───────────────────────────────────────────────
+            st.markdown(
+                source_footer([
+                    DataSource.modeled(
+                        "Daily Briefing",
+                        notes=(
+                            "Narration via engine.narration_engine. "
+                            "Inputs from shipping_stress_index + disruption_forecast "
+                            "+ macro_data indicators."
+                        ),
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+
+        except Exception:
+            logger.exception("tab_briefing render failed")
+            st.error("Daily Briefing encountered an error. See logs.")

@@ -405,6 +405,36 @@ def run_perf_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+def run_snapshot_prune_job(keep_n: int = 30) -> int:
+    """Prune ``investor_report_snapshots`` down to the newest ``keep_n``.
+
+    Thin wrapper around ``processing.report_snapshot.prune_old_snapshots``
+    that adds logging and shields the caller from any exception. The
+    briefing-tab diff only ever reads the two most-recent rows, so the
+    long-tail history is purely for ad-hoc post-mortems — 30 rows is
+    plenty and never weighs more than a few tens of KB on disk.
+
+    Designed to be invoked once per day from ``main`` AFTER both the
+    LLM-call prune and the render-event prune so the daily cron handles
+    every snapshot/telemetry retention in a single pass.
+
+    Returns the number of rows deleted (``0`` on no-op or any error).
+    Never raises — a prune failure must never block the briefing job.
+    """
+    try:
+        from processing.report_snapshot import prune_old_snapshots
+
+        deleted = prune_old_snapshots(keep_n=keep_n)
+        logger.info(
+            f"run_snapshot_prune_job: deleted={deleted} rows "
+            f"(keep_n={keep_n})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_snapshot_prune_job: failed: {exc}")
+        return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  CLI entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -444,6 +474,15 @@ def main(argv: Optional[list] = None) -> int:
         run_perf_prune_job()
     except Exception as exc:
         logger.warning(f"main: perf prune step failed: {exc}")
+
+    # InvestorReport snapshot retention. The diff widget only ever
+    # reads the two most-recent rows; the long-tail history is purely
+    # for ad-hoc post-mortems, so 30 rows is plenty. Same belt-and-
+    # braces guard — the helper already swallows errors.
+    try:
+        run_snapshot_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: snapshot prune step failed: {exc}")
 
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)
