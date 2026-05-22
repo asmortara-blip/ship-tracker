@@ -251,12 +251,32 @@ def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list
 
 
 def check_rate_alerts(freight_data: dict, threshold_pct: float = 8.0) -> list[ShippingAlert]:
-    """Fire if any freight rate moves >threshold_pct in 7 days."""
+    """Fire if any freight rate moves >threshold_pct in 7 days.
+
+    Per-route overrides: if ``engine.route_thresholds.load_route_thresholds()``
+    returns an entry for a given route_id, that entry's ``threshold_pct``
+    replaces the function-level default for that route only, and its
+    ``severity`` tier overrides the auto-detected CRITICAL/HIGH that
+    would normally be picked from move magnitude. Routes WITHOUT an
+    override behave exactly as they did before — the override path is
+    backward compatible when no overrides exist (empty dict).
+    """
     alerts: list[ShippingAlert] = []
     try:
         import pandas as pd
     except ImportError:
         return alerts
+
+    # One SELECT for the whole route set — cheap, and keeps the inner
+    # loop free of repeated SQLite hits. Failures inside the helper
+    # return an empty dict so the loop falls through to the function-
+    # level default for every route.
+    try:
+        from engine.route_thresholds import load_route_thresholds
+        route_overrides = load_route_thresholds()
+    except Exception as exc:
+        logger.debug(f"check_rate_alerts: override load failed: {exc}")
+        route_overrides = {}
 
     for route_id, df in (freight_data or {}).items():
         if not isinstance(df, pd.DataFrame) or df.empty:
@@ -280,24 +300,44 @@ def check_rate_alerts(freight_data: dict, threshold_pct: float = 8.0) -> list[Sh
             continue
 
         chg = (current - ref) / ref * 100.0
-        if abs(chg) < threshold_pct:
+
+        # Resolve the effective threshold + severity for this route. The
+        # function parameter remains the default; an override only flips
+        # the behaviour for routes the user has explicitly configured.
+        override = route_overrides.get(str(route_id))
+        if override is not None:
+            effective_threshold = override.threshold_pct
+            # Pinned severity from the override — applied regardless of
+            # move magnitude. This is the whole point of the severity
+            # field: let the user say "this lane is critical to my
+            # book; if it moves at all past my threshold, treat it as
+            # CRITICAL" without me chasing the 2× rule.
+            effective_severity = override.severity
+        else:
+            effective_threshold = threshold_pct
+            # Legacy magnitude-driven severity: CRITICAL at ≥ 2× threshold,
+            # HIGH otherwise. Unchanged from the original implementation.
+            effective_severity = (
+                "CRITICAL" if abs(chg) >= effective_threshold * 2 else "HIGH"
+            )
+
+        if abs(chg) < effective_threshold:
             continue
 
         direction = "surged" if chg > 0 else "collapsed"
-        severity = "CRITICAL" if abs(chg) >= threshold_pct * 2 else "HIGH"
         label = str(route_id).replace("_", " ").title()
         alerts.append(_make(
             alert_type="RATE_SURGE",
-            severity=severity,
+            severity=effective_severity,
             title=f"Rate {direction.title()}: {label} ({chg:+.1f}% / 7d)",
             body=(
                 f"Freight rates on {label} have {direction} {abs(chg):.1f}% over the past 7 days, "
-                f"reaching ${current:,.0f}/FEU against the {threshold_pct:.0f}% threshold. "
+                f"reaching ${current:,.0f}/FEU against the {effective_threshold:.0f}% threshold. "
                 f"{'Consider booking forward capacity before further escalation.' if chg > 0 else 'Spot market opportunity — delay forward bookings if possible.'}"
             ),
             route_id=str(route_id),
             value=current,
-            threshold=threshold_pct,
+            threshold=effective_threshold,
             change_pct=chg,
         ))
     return alerts
