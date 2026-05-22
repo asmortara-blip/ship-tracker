@@ -1571,6 +1571,71 @@ def deliver_pending(channel: DeliveryChannel, since: datetime) -> list[DeliveryR
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Rule → channel routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+def filter_channels_by_rule(rule, channels: list[DeliveryChannel]) -> list[DeliveryChannel]:
+    """Return the subset of ``channels`` eligible for this ``rule``.
+
+    The rule can be a dict (the persisted JSON shape from ``load_rules``)
+    or any object with a ``target_channels`` attribute. The behaviour:
+
+      - When ``target_channels`` is empty (or missing): every enabled
+        channel is eligible — preserves the legacy 'broadcast to all'
+        behaviour for rules saved before routing landed.
+      - When ``target_channels`` is non-empty: only enabled channels
+        whose ``name`` matches one of the listed strings are eligible.
+
+    Disabled channels are always filtered out — the channel.enabled
+    flag wins over any rule-level targeting.
+    """
+    enabled = [c for c in channels if c.enabled]
+    if isinstance(rule, dict):
+        targets = rule.get("target_channels") or []
+    else:
+        targets = getattr(rule, "target_channels", None) or []
+    if not targets:
+        return enabled
+    target_set = {str(t) for t in targets if isinstance(t, str)}
+    return [c for c in enabled if c.name in target_set]
+
+
+def deliver_pending_for_rule(
+    rule,
+    alerts: list[ShippingAlert],
+    all_channels: list[DeliveryChannel],
+) -> list[DeliveryResult]:
+    """Deliver ``alerts`` to every channel eligible under ``rule``.
+
+    Caller supplies the alert list explicitly (vs. ``deliver_pending``
+    which pulls from SQLite by time cutoff) so this is composable with
+    custom queries — e.g. "alerts from rule X in the last 6 hours".
+
+    For each eligible channel, dispatches on the channel's digest_mode
+    just like ``deliver_pending``:
+      - ``"immediate"`` → one ``deliver_alert`` per alert, per channel
+      - ``"daily"``     → one ``deliver_digest`` per channel covering
+                          the whole batch (or no call if alerts is empty)
+
+    Returns the flat list of every ``DeliveryResult`` produced.
+    """
+    out: list[DeliveryResult] = []
+    eligible_channels = filter_channels_by_rule(rule, all_channels)
+    for channel in eligible_channels:
+        # Within-channel severity gating — same rule deliver_pending uses.
+        passing = [
+            a for a in alerts
+            if _meets_threshold(a.severity, channel.severity_threshold)
+        ]
+        if channel.digest_mode == "daily":
+            if passing:
+                out.append(deliver_digest(channel, passing))
+            continue
+        out.extend(deliver_alert(a, channel) for a in passing)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Channel persistence
 # ─────────────────────────────────────────────────────────────────────────────
 

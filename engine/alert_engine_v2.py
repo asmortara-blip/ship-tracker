@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -40,6 +40,14 @@ class AlertRule:
     enabled: bool
     threshold: float        # e.g. 5.0 for 5% BDI move
     severity: str
+    # Optional rule → channel routing. Empty list (default + legacy
+    # behaviour) means alerts from this rule are eligible for every
+    # delivery channel whose severity threshold matches. Non-empty
+    # means only channels whose ``name`` appears in this list are
+    # eligible. Matching is by channel NAME, not channel_id, so users
+    # editing rules in the UI work with the same labels they see on
+    # the channels page.
+    target_channels: list[str] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -600,6 +608,33 @@ def load_rules() -> list[dict]:
         except Exception:
             continue
     return out
+
+
+def normalize_rule(rule_dict: dict) -> dict:
+    """Backfill optional fields on a rule dict.
+
+    Older rule blobs predate the ``target_channels`` field (added when
+    rule-to-channel routing landed). Callers that need a normalized
+    shape — e.g. ``deliver_pending_for_rule`` — should run rules
+    through this helper first. ``load_rules()`` itself is intentionally
+    NOT auto-normalizing so the save→load round-trip stays byte-exact
+    for legacy callers that compare the loaded list against what they
+    saved.
+
+    Returns the same dict object with ``target_channels`` set to a
+    list[str] (empty == 'all eligible channels', the legacy behaviour).
+    Non-dict input passes through unchanged.
+    """
+    if not isinstance(rule_dict, dict):
+        return rule_dict
+    tc = rule_dict.get("target_channels")
+    if not isinstance(tc, list):
+        rule_dict["target_channels"] = []
+    else:
+        # Coerce to strings + drop any non-string entries so a stray
+        # int/None in a hand-edited blob cannot break channel matching.
+        rule_dict["target_channels"] = [x for x in tc if isinstance(x, str)]
+    return rule_dict
 
 
 def reset_rules() -> None:
