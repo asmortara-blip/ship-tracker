@@ -545,27 +545,31 @@ def _space_availability_by_carrier() -> None:
 
 def render(route_results=None, freight_data=None, port_results=None, *args, **kwargs) -> None:
     """Render the Booking Intelligence & Optimization tab."""
-    try:
-        page_header(
-            title="Booking Intelligence & Optimization",
-            subtitle=(
-                "Market-timed booking decisions · Rate comparison across carriers · "
-                "Contract vs spot analytics · Space availability tracker"
-            ),
-            badge_text="BOOKING",
-            badge_color=C_ACCENT,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('booking'):
+        try:
+            page_header(
+                title="Booking Intelligence & Optimization",
+                subtitle=(
+                    "Market-timed booking decisions · Rate comparison across carriers · "
+                    "Contract vs spot analytics · Space availability tracker"
+                ),
+                badge_text="BOOKING",
+                badge_color=C_ACCENT,
+            )
 
-        _booking_market_dashboard(freight_data)
-        section_divider("Rate Comparison")
-        _rate_comparison_tool()
-        section_divider("Timing the Market")
-        _optimal_booking_window()
-        _contract_vs_spot_analysis()
-        section_divider("Capacity Planning")
-        _booking_calendar()
-        _spot_rate_alert()
-        _space_availability_by_carrier()
-    except Exception as exc:
-        logger.exception(f"tab_booking.render() fatal: {exc}")
-        st.error(f"Booking tab render error: {exc}")
+            _booking_market_dashboard(freight_data)
+            section_divider("Rate Comparison")
+            _rate_comparison_tool()
+            section_divider("Timing the Market")
+            _optimal_booking_window()
+            _contract_vs_spot_analysis()
+            section_divider("Capacity Planning")
+            _booking_calendar()
+            _spot_rate_alert()
+            _space_availability_by_carrier()
+        except Exception as exc:
+            logger.exception(f"tab_booking.render() fatal: {exc}")
+            st.error(f"Booking tab render error: {exc}")

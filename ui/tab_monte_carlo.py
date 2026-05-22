@@ -565,91 +565,95 @@ def _render_path_analysis(paths: np.ndarray, s0: float, target: str) -> None:
 
 def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Monte Carlo simulation dashboard for shipping market forecasting."""
-    try:
-        page_header(
-            title="Monte Carlo Simulation",
-            subtitle="Stochastic path simulation for shipping indices and equities using GBM and Jump-Diffusion models.",
-            badge_text="MODELED",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Header render failed")
-
-    # Section 1: config form
-    try:
-        params = _render_config_form()
-        if params is not None:
-            st.session_state["mc_params"] = params
-            st.session_state["mc_paths"] = _simulate(
-                S0=params["s0"],
-                mu_annual=params["mu"],
-                sigma_annual=params["sigma"],
-                T=params["horizon"],
-                n_paths=params["n_paths"],
-                model=params["model"],
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('monte_carlo'):
+        try:
+            page_header(
+                title="Monte Carlo Simulation",
+                subtitle="Stochastic path simulation for shipping indices and equities using GBM and Jump-Diffusion models.",
+                badge_text="MODELED",
+                badge_color=C_ACCENT,
             )
-    except Exception:
-        logger.exception("Config form failed")
-        st.error("Configuration form error.")
+        except Exception:
+            logger.exception("Header render failed")
 
-    # Retrieve cached results
-    paths = st.session_state.get("mc_paths")
-    params = st.session_state.get("mc_params", {})
+        # Section 1: config form
+        try:
+            params = _render_config_form()
+            if params is not None:
+                st.session_state["mc_params"] = params
+                st.session_state["mc_paths"] = _simulate(
+                    S0=params["s0"],
+                    mu_annual=params["mu"],
+                    sigma_annual=params["sigma"],
+                    T=params["horizon"],
+                    n_paths=params["n_paths"],
+                    model=params["model"],
+                )
+        except Exception:
+            logger.exception("Config form failed")
+            st.error("Configuration form error.")
 
-    if paths is None:
-        placeholder = (
-            f'<div style="font-family:var(--serif);font-size:1.02rem;'
-            f'font-weight:700;color:{C_TEXT};margin-bottom:6px;">'
-            f'Awaiting simulation</div>'
-            f'<p style="font-family:var(--sans);font-size:0.84rem;'
-            f'color:{C_TEXT3};line-height:1.6;margin:0;">'
-            f'Set a target, horizon and volatility above, then click '
-            f'<strong style="color:{C_TEXT2};">Run Simulation</strong> — the '
-            f'fan chart, horizon distribution, VaR and path analytics will '
-            f'populate below.</p>'
-        )
-        st.markdown(
-            gradient_card(placeholder, border_color=C_ACCENT),
-            unsafe_allow_html=True,
-        )
-        return
+        # Retrieve cached results
+        paths = st.session_state.get("mc_paths")
+        params = st.session_state.get("mc_params", {})
 
-    target  = params.get("target", "BDI")
-    s0      = params.get("s0", 1000.0)
-    sigma   = params.get("sigma", 0.35)
-    horizon = params.get("horizon", 90)
-    model   = params.get("model", "GBM")
+        if paths is None:
+            placeholder = (
+                f'<div style="font-family:var(--serif);font-size:1.02rem;'
+                f'font-weight:700;color:{C_TEXT};margin-bottom:6px;">'
+                f'Awaiting simulation</div>'
+                f'<p style="font-family:var(--sans);font-size:0.84rem;'
+                f'color:{C_TEXT3};line-height:1.6;margin:0;">'
+                f'Set a target, horizon and volatility above, then click '
+                f'<strong style="color:{C_TEXT2};">Run Simulation</strong> — the '
+                f'fan chart, horizon distribution, VaR and path analytics will '
+                f'populate below.</p>'
+            )
+            st.markdown(
+                gradient_card(placeholder, border_color=C_ACCENT),
+                unsafe_allow_html=True,
+            )
+            return
 
-    n_paths_actual = paths.shape[0]
+        target  = params.get("target", "BDI")
+        s0      = params.get("s0", 1000.0)
+        sigma   = params.get("sigma", 0.35)
+        horizon = params.get("horizon", 90)
+        model   = params.get("model", "GBM")
 
-    # Quick run summary
-    try:
-        finals = paths[:, -1]
-        med_final = float(np.median(finals))
-        chg_pct = (med_final / s0 - 1) * 100
-        chg_col = C_HIGH if chg_pct >= 0 else C_LOW
-        metric_card_row([
-            {"label": "Target",         "value": target,
-             "accent": C_ACCENT, "sublabel": f"{model} model"},
-            {"label": "Paths",          "value": f"{n_paths_actual:,}",
-             "accent": C_TEXT,   "sublabel": f"Horizon: {horizon}d"},
-            {"label": "Start",          "value": f"{s0:,.2f}",
-             "accent": C_TEXT,   "sublabel": "initial value"},
-            {"label": "Median at T",    "value": f"{med_final:,.2f}",
-             "accent": chg_col,  "sublabel": f"{chg_pct:+.1f}%"},
-            {"label": "Annualized Vol", "value": f"{sigma*100:.0f}%",
-             "accent": C_MOD,    "sublabel": "input parameter"},
-        ], columns=5)
-    except Exception:
-        logger.exception("Summary KPI row failed")
+        n_paths_actual = paths.shape[0]
 
-    # Sections 2–7
-    section_divider("Path Simulation")
-    _render_fan_chart(paths, target, s0, n_paths_actual)
-    _render_horizon_dist(paths, s0, target, n_paths_actual)
-    _render_stats_table(paths, s0, horizon, sigma, n_paths_actual)
+        # Quick run summary
+        try:
+            finals = paths[:, -1]
+            med_final = float(np.median(finals))
+            chg_pct = (med_final / s0 - 1) * 100
+            chg_col = C_HIGH if chg_pct >= 0 else C_LOW
+            metric_card_row([
+                {"label": "Target",         "value": target,
+                 "accent": C_ACCENT, "sublabel": f"{model} model"},
+                {"label": "Paths",          "value": f"{n_paths_actual:,}",
+                 "accent": C_TEXT,   "sublabel": f"Horizon: {horizon}d"},
+                {"label": "Start",          "value": f"{s0:,.2f}",
+                 "accent": C_TEXT,   "sublabel": "initial value"},
+                {"label": "Median at T",    "value": f"{med_final:,.2f}",
+                 "accent": chg_col,  "sublabel": f"{chg_pct:+.1f}%"},
+                {"label": "Annualized Vol", "value": f"{sigma*100:.0f}%",
+                 "accent": C_MOD,    "sublabel": "input parameter"},
+            ], columns=5)
+        except Exception:
+            logger.exception("Summary KPI row failed")
 
-    section_divider("Scenario & Risk")
-    _render_scenario_overlays(paths, s0, sigma, horizon, model, target, n_paths_actual)
-    _render_var_cards(paths, s0, n_paths_actual)
-    _render_path_analysis(paths, s0, target)
+        # Sections 2–7
+        section_divider("Path Simulation")
+        _render_fan_chart(paths, target, s0, n_paths_actual)
+        _render_horizon_dist(paths, s0, target, n_paths_actual)
+        _render_stats_table(paths, s0, horizon, sigma, n_paths_actual)
+
+        section_divider("Scenario & Risk")
+        _render_scenario_overlays(paths, s0, sigma, horizon, model, target, n_paths_actual)
+        _render_var_cards(paths, s0, n_paths_actual)
+        _render_path_analysis(paths, s0, target)

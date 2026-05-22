@@ -903,53 +903,57 @@ def _render_methodology() -> None:
 
 def render(freight_data=None, macro_data=None, stock_data=None, *args, **kwargs) -> None:
     """Render Bloomberg-style shipping indices dashboard."""
-    page_header(
-        title="Shipping Indices",
-        subtitle="Baltic Exchange · Drewry · Freightos · Shanghai Shipping Exchange",
-        badge_text="INDICES",
-        badge_color=C_ACCENT,
-    )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('indices'):
+        page_header(
+            title="Shipping Indices",
+            subtitle="Baltic Exchange · Drewry · Freightos · Shanghai Shipping Exchange",
+            badge_text="INDICES",
+            badge_color=C_ACCENT,
+        )
 
-    try:
-        with st.spinner("Loading index data..."):
-            all_series = _cached_series()
-    except Exception as exc:
-        logger.error("Failed to load series: {}", exc)
-        all_series = {}
-        for idx in _INDICES:
-            try:
-                all_series[idx["id"]] = _mock_series(idx)
-            except Exception:
-                pass
-
-    try:
-        baltic_sources = _cached_baltic_sources()
-    except Exception as exc:
-        logger.debug("Baltic sources unavailable: {}", exc)
-        baltic_sources = {}
-
-    # Each section carries the editorial label shown on the divider that
-    # *precedes* the next section, so the page reads as a sequence of named
-    # passages rather than an unbroken scroll.
-    sections = [
-        ("Index dashboard",  _render_index_dashboard,  "Multi-Index Comparison"),
-        ("Multi-index",      _render_multi_index_chart, "BDI Deep Dive"),
-        ("BDI deep dive",    _render_bdi_deep_dive,     "Spread Analysis"),
-        ("Spread analysis",  _render_spread_analysis,   "Cointegration"),
-        ("Cointegration",    _render_cointegration,     "Forward Curve"),
-        ("Forward curve",    _render_forward_curve,     "Cross-Asset"),
-        ("Cross-asset",      _render_cross_asset,       "Methodology"),
-    ]
-    for i, (name, fn, next_label) in enumerate(sections):
         try:
-            fn(all_series, baltic_sources)
+            with st.spinner("Loading index data..."):
+                all_series = _cached_series()
         except Exception as exc:
-            logger.error("{} error: {}", name, exc)
-            st.error(f"{name} error: {exc}")
-        section_divider(next_label)
+            logger.error("Failed to load series: {}", exc)
+            all_series = {}
+            for idx in _INDICES:
+                try:
+                    all_series[idx["id"]] = _mock_series(idx)
+                except Exception:
+                    pass
 
-    try:
-        _render_methodology()
-    except Exception as exc:
-        logger.error("Methodology error: {}", exc)
-        st.error(f"Methodology error: {exc}")
+        try:
+            baltic_sources = _cached_baltic_sources()
+        except Exception as exc:
+            logger.debug("Baltic sources unavailable: {}", exc)
+            baltic_sources = {}
+
+        # Each section carries the editorial label shown on the divider that
+        # *precedes* the next section, so the page reads as a sequence of named
+        # passages rather than an unbroken scroll.
+        sections = [
+            ("Index dashboard",  _render_index_dashboard,  "Multi-Index Comparison"),
+            ("Multi-index",      _render_multi_index_chart, "BDI Deep Dive"),
+            ("BDI deep dive",    _render_bdi_deep_dive,     "Spread Analysis"),
+            ("Spread analysis",  _render_spread_analysis,   "Cointegration"),
+            ("Cointegration",    _render_cointegration,     "Forward Curve"),
+            ("Forward curve",    _render_forward_curve,     "Cross-Asset"),
+            ("Cross-asset",      _render_cross_asset,       "Methodology"),
+        ]
+        for i, (name, fn, next_label) in enumerate(sections):
+            try:
+                fn(all_series, baltic_sources)
+            except Exception as exc:
+                logger.error("{} error: {}", name, exc)
+                st.error(f"{name} error: {exc}")
+            section_divider(next_label)
+
+        try:
+            _render_methodology()
+        except Exception as exc:
+            logger.error("Methodology error: {}", exc)
+            st.error(f"Methodology error: {exc}")

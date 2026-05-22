@@ -664,86 +664,90 @@ def render(
     The function is robust to all-``None`` / empty inputs — every section is
     wrapped in try/except and degrades gracefully rather than raising.
     """
-    # ── A. Page header ──────────────────────────────────────────────────────
-    page_header(
-        title="Supply Linkage",
-        subtitle="From a disrupted lane to an exposed company — the commodity "
-        "layer that links physical shipping stress to shipping equities",
-        badge_text="MODELED",
-        badge_color=C_ACCENT,
-    )
-
-    # Editorial framing — the four-hop chain this tab walks, stated once so the
-    # sections below read as one continuous argument rather than four widgets.
-    try:
-        alert_banner(
-            "Stage 4 of the Disruption Alpha chain. This tab walks four visible "
-            "hops — <b>disrupted lane → the commodity that lane carries → the "
-            "ETF proxying that commodity's demand → the shipping names exposed "
-            "to it</b>. Nothing is a black box: every figure traces back to a "
-            "registry constant or a tracked ETF's 30-day move.",
-            level="info",
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('supply_linkage'):
+        # ── A. Page header ──────────────────────────────────────────────────────
+        page_header(
+            title="Supply Linkage",
+            subtitle="From a disrupted lane to an exposed company — the commodity "
+            "layer that links physical shipping stress to shipping equities",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
         )
-    except Exception:
-        logger.exception("Supply Linkage — intro banner failed")
 
-    # ── Shared compute — the per-route Shipping Stress Index ────────────────
-    # Computed once and shared by Section B. compute_shipping_stress already
-    # tolerates empty inputs; the wrapper degrades to {} on any failure.
-    stress_by_route = _route_stress_lookup(
-        freight_data, macro_data, port_results, route_results
-    )
+        # Editorial framing — the four-hop chain this tab walks, stated once so the
+        # sections below read as one continuous argument rather than four widgets.
+        try:
+            alert_banner(
+                "Stage 4 of the Disruption Alpha chain. This tab walks four visible "
+                "hops — <b>disrupted lane → the commodity that lane carries → the "
+                "ETF proxying that commodity's demand → the shipping names exposed "
+                "to it</b>. Nothing is a black box: every figure traces back to a "
+                "registry constant or a tracked ETF's 30-day move.",
+                level="info",
+            )
+        except Exception:
+            logger.exception("Supply Linkage — intro banner failed")
 
-    # ── B. Commodity KPI strip ──────────────────────────────────────────────
-    try:
-        _render_commodity_kpis(stock_data)
-    except Exception:
-        logger.exception("Supply Linkage — commodity KPI strip failed")
-        st.error("Commodity summary unavailable.")
+        # ── Shared compute — the per-route Shipping Stress Index ────────────────
+        # Computed once and shared by Section B. compute_shipping_stress already
+        # tolerates empty inputs; the wrapper degrades to {} on any failure.
+        stress_by_route = _route_stress_lookup(
+            freight_data, macro_data, port_results, route_results
+        )
 
-    section_divider("Exposure Linkage")
+        # ── B. Commodity KPI strip ──────────────────────────────────────────────
+        try:
+            _render_commodity_kpis(stock_data)
+        except Exception:
+            logger.exception("Supply Linkage — commodity KPI strip failed")
+            st.error("Commodity summary unavailable.")
 
-    # ── B. Disruption → commodity → company table ───────────────────────────
-    try:
-        _render_exposure_table(stock_data, stress_by_route)
-    except Exception:
-        logger.exception("Supply Linkage — exposure table failed")
-        st.error("Exposure table unavailable.")
+        section_divider("Exposure Linkage")
 
-    section_divider("Concentration")
+        # ── B. Disruption → commodity → company table ───────────────────────────
+        try:
+            _render_exposure_table(stock_data, stress_by_route)
+        except Exception:
+            logger.exception("Supply Linkage — exposure table failed")
+            st.error("Exposure table unavailable.")
 
-    # ── C. Company × commodity exposure heatmap ─────────────────────────────
-    try:
-        _render_exposure_heatmap()
-    except Exception:
-        logger.exception("Supply Linkage — exposure heatmap failed")
-        st.error("Exposure heatmap unavailable.")
+        section_divider("Concentration")
 
-    section_divider("Route Detail")
+        # ── C. Company × commodity exposure heatmap ─────────────────────────────
+        try:
+            _render_exposure_heatmap()
+        except Exception:
+            logger.exception("Supply Linkage — exposure heatmap failed")
+            st.error("Exposure heatmap unavailable.")
 
-    # ── D. Per-route cargo-mix drill-down ───────────────────────────────────
-    try:
-        _render_cargo_drilldown(trade_data)
-    except Exception:
-        logger.exception("Supply Linkage — cargo drill-down failed")
-        st.error("Route cargo-mix drill-down unavailable.")
+        section_divider("Route Detail")
 
-    # ── Provenance footer ───────────────────────────────────────────────────
-    try:
-        from data.quality import DataSource
+        # ── D. Per-route cargo-mix drill-down ───────────────────────────────────
+        try:
+            _render_cargo_drilldown(trade_data)
+        except Exception:
+            logger.exception("Supply Linkage — cargo drill-down failed")
+            st.error("Route cargo-mix drill-down unavailable.")
 
-        sources = [
-            DataSource.modeled(
-                "Modeled Commodity Exposure Matrix",
-                notes="Company↔commodity weights derived from trade routes via "
-                "the cargo-mix model; HS categories mapped to tracked ETFs.",
-            ),
-            DataSource.modeled(
-                "Shipping Stress Index",
-                notes="Per-route disruption composite — chokepoint, congestion, "
-                "weather, rate and vulnerability.",
-            ),
-        ]
-        st.markdown(source_footer(sources), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Supply Linkage — source footer failed")
+        # ── Provenance footer ───────────────────────────────────────────────────
+        try:
+            from data.quality import DataSource
+
+            sources = [
+                DataSource.modeled(
+                    "Modeled Commodity Exposure Matrix",
+                    notes="Company↔commodity weights derived from trade routes via "
+                    "the cargo-mix model; HS categories mapped to tracked ETFs.",
+                ),
+                DataSource.modeled(
+                    "Shipping Stress Index",
+                    notes="Per-route disruption composite — chokepoint, congestion, "
+                    "weather, rate and vulnerability.",
+                ),
+            ]
+            st.markdown(source_footer(sources), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Supply Linkage — source footer failed")

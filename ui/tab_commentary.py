@@ -354,57 +354,61 @@ def render(
     **kwargs,
 ) -> None:
     """Render the daily market commentary dashboard."""
-    try:
-        from processing.index_tracker import compute_index_dashboard
-        from processing.market_commentary import (
-            generate_daily_wrap,
-            generate_forward_outlook,
-        )
-    except ImportError as e:
-        st.error(f"Commentary modules unavailable: {e}")
-        return
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('commentary'):
+        try:
+            from processing.index_tracker import compute_index_dashboard
+            from processing.market_commentary import (
+                generate_daily_wrap,
+                generate_forward_outlook,
+            )
+        except ImportError as e:
+            st.error(f"Commentary modules unavailable: {e}")
+            return
 
-    stock_data = stock_data or {}
-    freight_data = freight_data or {}
-    macro_data = macro_data or {}
-    port_results = port_results or []
-    insights = insights or []
+        stock_data = stock_data or {}
+        freight_data = freight_data or {}
+        macro_data = macro_data or {}
+        port_results = port_results or []
+        insights = insights or []
 
-    try:
-        wrap = generate_daily_wrap(
-            stock_data, freight_data, macro_data, port_results, insights
-        )
-        outlook = generate_forward_outlook(insights, macro_data, freight_data)
-        indices = compute_index_dashboard(freight_data, macro_data)
-    except Exception:
-        logger.exception("Commentary generation failed")
-        st.error("Daily Market Commentary could not be generated.")
-        return
+        try:
+            wrap = generate_daily_wrap(
+                stock_data, freight_data, macro_data, port_results, insights
+            )
+            outlook = generate_forward_outlook(insights, macro_data, freight_data)
+            indices = compute_index_dashboard(freight_data, macro_data)
+        except Exception:
+            logger.exception("Commentary generation failed")
+            st.error("Daily Market Commentary could not be generated.")
+            return
 
-    try:
-        _render_header_and_lede(wrap)
-        _render_key_movers(wrap.get("key_movers", []) or [])
-        _render_shipping_indices(indices or [])
-        _render_forward_outlook(outlook or {})
-    except Exception:
-        logger.exception("tab_commentary top-level render failed")
-        st.error("Daily Market Commentary encountered an error.")
-        return
+        try:
+            _render_header_and_lede(wrap)
+            _render_key_movers(wrap.get("key_movers", []) or [])
+            _render_shipping_indices(indices or [])
+            _render_forward_outlook(outlook or {})
+        except Exception:
+            logger.exception("tab_commentary top-level render failed")
+            st.error("Daily Market Commentary encountered an error.")
+            return
 
-    # ── Provenance footer ───────────────────────────────────────────────────
-    try:
-        st.markdown(
-            source_footer([
-                _narration_source(
-                    "Market Commentary Engine",
-                    "Daily wrap and forward outlook",
-                ),
-                DataSource.modeled(
-                    "Index Tracker",
-                    notes="Baltic / Drewry / Freightos composite benchmarks",
-                ),
-            ]),
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        logger.exception("tab_commentary source footer failed")
+        # ── Provenance footer ───────────────────────────────────────────────────
+        try:
+            st.markdown(
+                source_footer([
+                    _narration_source(
+                        "Market Commentary Engine",
+                        "Daily wrap and forward outlook",
+                    ),
+                    DataSource.modeled(
+                        "Index Tracker",
+                        notes="Baltic / Drewry / Freightos composite benchmarks",
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            logger.exception("tab_commentary source footer failed")

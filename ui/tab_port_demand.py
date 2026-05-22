@@ -429,23 +429,27 @@ def render(
     freight_data=None,
     insights=None,
 ) -> None:
-    try:
-        page_header(
-            title="Port Demand Forecasting",
-            subtitle="15 major ports — 3-month and 12-month throughput forecasts, demand drivers, and shock scenarios",
-            badge_text="PORT DEMAND",
-            badge_color=C_HIGH,
-        )
-        _render_hero()
-        section_divider("Forecast")
-        _render_forecast_table()
-        _render_demand_drivers()
-        section_divider("Regional & Seasonal")
-        _render_regional_comparison()
-        _render_seasonal_heatmap()
-        section_divider("Scenarios & Capacity")
-        _render_shock_scenarios()
-        _render_capacity_headroom()
-    except Exception:
-        logger.exception("tab_port_demand top-level render failed")
-        st.error("Port Demand tab encountered an error.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('port_demand'):
+        try:
+            page_header(
+                title="Port Demand Forecasting",
+                subtitle="15 major ports — 3-month and 12-month throughput forecasts, demand drivers, and shock scenarios",
+                badge_text="PORT DEMAND",
+                badge_color=C_HIGH,
+            )
+            _render_hero()
+            section_divider("Forecast")
+            _render_forecast_table()
+            _render_demand_drivers()
+            section_divider("Regional & Seasonal")
+            _render_regional_comparison()
+            _render_seasonal_heatmap()
+            section_divider("Scenarios & Capacity")
+            _render_shock_scenarios()
+            _render_capacity_headroom()
+        except Exception:
+            logger.exception("tab_port_demand top-level render failed")
+            st.error("Port Demand tab encountered an error.")

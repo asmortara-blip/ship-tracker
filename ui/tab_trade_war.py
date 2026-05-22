@@ -563,24 +563,28 @@ def _render_scenario() -> None:
 # ── Main render ────────────────────────────────────────────────────────────────
 def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Trade Policy & Tariff Impact Intelligence tab."""
-    try:
-        logger.info("trade_war | render start")
-        _render_hero(macro_data)
-        section_divider("Tariff Exposure")
-        _render_commodity_table()
-        section_divider("Flow Diversion")
-        _render_diversion_map()
-        section_divider("Supply-Chain Shift")
-        _render_nearshoring()
-        section_divider("Volume Impact")
-        _render_volume_chart()
-        section_divider("Negotiation Tracker")
-        _render_deal_tracker()
-        section_divider("Historical Context")
-        _render_history()
-        section_divider("Scenario")
-        _render_scenario()
-        logger.info("trade_war | render complete")
-    except Exception:
-        logger.exception("trade_war | render failed")
-        st.error("Trade War tab encountered an error. Check logs for details.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('trade_war'):
+        try:
+            logger.info("trade_war | render start")
+            _render_hero(macro_data)
+            section_divider("Tariff Exposure")
+            _render_commodity_table()
+            section_divider("Flow Diversion")
+            _render_diversion_map()
+            section_divider("Supply-Chain Shift")
+            _render_nearshoring()
+            section_divider("Volume Impact")
+            _render_volume_chart()
+            section_divider("Negotiation Tracker")
+            _render_deal_tracker()
+            section_divider("Historical Context")
+            _render_history()
+            section_divider("Scenario")
+            _render_scenario()
+            logger.info("trade_war | render complete")
+        except Exception:
+            logger.exception("trade_war | render failed")
+            st.error("Trade War tab encountered an error. Check logs for details.")

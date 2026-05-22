@@ -623,28 +623,32 @@ def _section_route_profiles(routes: list[dict]) -> None:
 
 def render(route_results, freight_data, forecasts=None, rate_forecasts=None) -> None:
     """Freight Rate Analytics & ML Forecasting tab."""
-    try:
-        page_header(
-            title="Freight Rate Analytics",
-            subtitle="Real-time rates, ML forecasting, volatility, seasonal patterns and route profiles",
-            badge_text="ROUTES",
-            badge_color=C_ACCENT,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('routes'):
+        try:
+            page_header(
+                title="Freight Rate Analytics",
+                subtitle="Real-time rates, ML forecasting, volatility, seasonal patterns and route profiles",
+                badge_text="ROUTES",
+                badge_color=C_ACCENT,
+            )
 
-        routes = _get_routes(freight_data, route_results)
+            routes = _get_routes(freight_data, route_results)
 
-        _section_pulse(routes)
-        section_divider("League Table")
-        _section_league_table(routes)
-        section_divider("Forecasting")
-        _section_ml_forecast(routes, rate_forecasts, forecasts)
-        section_divider("Volatility & Seasonality")
-        _section_volatility(routes)
-        _section_seasonal()
-        section_divider("Drivers & Profiles")
-        _section_rate_drivers()
-        _section_route_profiles(routes)
+            _section_pulse(routes)
+            section_divider("League Table")
+            _section_league_table(routes)
+            section_divider("Forecasting")
+            _section_ml_forecast(routes, rate_forecasts, forecasts)
+            section_divider("Volatility & Seasonality")
+            _section_volatility(routes)
+            _section_seasonal()
+            section_divider("Drivers & Profiles")
+            _section_rate_drivers()
+            _section_route_profiles(routes)
 
-    except Exception:
-        logger.exception("tab_routes render failed")
-        st.error("Freight Rate tab failed to render.")
+        except Exception:
+            logger.exception("tab_routes render failed")
+            st.error("Freight Rate tab failed to render.")

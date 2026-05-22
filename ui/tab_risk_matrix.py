@@ -668,80 +668,84 @@ def _render_alert_queue(alerts: list[dict], source: DataSource) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render(stock_data, macro_data, insights, freight_data=None):
-    try:
-        seed = _seed(stock_data)
-        rng  = random.Random(seed)
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('risk_matrix'):
+        try:
+            seed = _seed(stock_data)
+            rng  = random.Random(seed)
 
-        # Provenance sources — all sections currently draw from synthetic fixtures,
-        # so every pill will display red "DEMO" to signal distrust.
-        kpi_source     = _risk_demo_source("Risk KPI Model")
-        matrix_source  = _risk_demo_source("Risk Factor Matrix")
-        corr_source    = _risk_demo_source("Cross-Asset Correlations")
-        dd_source      = _risk_demo_source("Historical Drawdown Ledger")
-        stress_source  = _risk_demo_source("Macro Stress Scenarios")
-        alert_source   = _risk_demo_source("Alert Engine")
+            # Provenance sources — all sections currently draw from synthetic fixtures,
+            # so every pill will display red "DEMO" to signal distrust.
+            kpi_source     = _risk_demo_source("Risk KPI Model")
+            matrix_source  = _risk_demo_source("Risk Factor Matrix")
+            corr_source    = _risk_demo_source("Cross-Asset Correlations")
+            dd_source      = _risk_demo_source("Historical Drawdown Ledger")
+            stress_source  = _risk_demo_source("Macro Stress Scenarios")
+            alert_source   = _risk_demo_source("Alert Engine")
 
-        page_header(
-            title="Risk Management Dashboard",
-            subtitle="Institutional risk intelligence — shipping & macro factors",
-            badge_text="DEMO",
-            badge_color=C_LOW,
-        )
+            page_header(
+                title="Risk Management Dashboard",
+                subtitle="Institutional risk intelligence — shipping & macro factors",
+                badge_text="DEMO",
+                badge_color=C_LOW,
+            )
 
-        # ── Section 1: KPI hero ─────────────────────────────────────────────
-        section_header(
-            "Risk Dashboard",
-            "Headline risk KPIs across volatility, drawdown, and tail exposure",
-        )
-        kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
-        _render_kpis(kpis, kpi_source)
+            # ── Section 1: KPI hero ─────────────────────────────────────────────
+            section_header(
+                "Risk Dashboard",
+                "Headline risk KPIs across volatility, drawdown, and tail exposure",
+            )
+            kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
+            _render_kpis(kpis, kpi_source)
 
-        # ── Section 2: Risk factor matrix ──────────────────────────────────
-        section_divider("Exposures")
+            # ── Section 2: Risk factor matrix ──────────────────────────────────
+            section_divider("Exposures")
 
-        section_header(
-            "Risk Factor Matrix",
-            "Exposure level, recent trend, and mitigation for 10 core risk factors",
-        )
-        _render_risk_factor_matrix(matrix_source)
+            section_header(
+                "Risk Factor Matrix",
+                "Exposure level, recent trend, and mitigation for 10 core risk factors",
+            )
+            _render_risk_factor_matrix(matrix_source)
 
-        # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
-        section_divider("Correlations & Drawdowns")
+            # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
+            section_divider("Correlations & Drawdowns")
 
-        section_header(
-            "Correlation Heatmap & Historical Drawdowns",
-            "Cross-asset correlations and the largest shipping market drawdowns",
-        )
-        col_left, col_right = st.columns(2, gap="large")
-        with col_left:
-            _render_correlation_heatmap(rng, corr_source)
-        with col_right:
-            _render_drawdown_waterfall(dd_source)
+            section_header(
+                "Correlation Heatmap & Historical Drawdowns",
+                "Cross-asset correlations and the largest shipping market drawdowns",
+            )
+            col_left, col_right = st.columns(2, gap="large")
+            with col_left:
+                _render_correlation_heatmap(rng, corr_source)
+            with col_right:
+                _render_drawdown_waterfall(dd_source)
 
-        # ── Section 5: Stress test ──────────────────────────────────────────
-        section_divider("Stress Testing")
+            # ── Section 5: Stress test ──────────────────────────────────────────
+            section_divider("Stress Testing")
 
-        section_header(
-            "Scenario Stress Test",
-            "Probability-weighted impact across 6 macro and shipping shock scenarios",
-        )
-        _render_stress_test(stress_source)
+            section_header(
+                "Scenario Stress Test",
+                "Probability-weighted impact across 6 macro and shipping shock scenarios",
+            )
+            _render_stress_test(stress_source)
 
-        # ── Section 6: Alert queue ──────────────────────────────────────────
-        section_divider("Alerts")
+            # ── Section 6: Alert queue ──────────────────────────────────────────
+            section_divider("Alerts")
 
-        section_header(
-            "Risk Alert Queue",
-            "Current alerts ranked by severity — most urgent first",
-        )
-        alerts = _build_alerts(insights, macro_data, freight_data, rng)
-        _render_alert_queue(alerts, alert_source)
+            section_header(
+                "Risk Alert Queue",
+                "Current alerts ranked by severity — most urgent first",
+            )
+            alerts = _build_alerts(insights, macro_data, freight_data, rng)
+            _render_alert_queue(alerts, alert_source)
 
-        # Footer timestamp — divider provides the thin top rule; caption handles muted text.
-        now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        st.divider()
-        st.caption(f"Last updated: {now}")
+            # Footer timestamp — divider provides the thin top rule; caption handles muted text.
+            now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            st.divider()
+            st.caption(f"Last updated: {now}")
 
-    except Exception as exc:
-        logger.error(f"tab_risk_matrix render error: {exc}")
-        st.error(f"Risk dashboard render error: {exc}")
+        except Exception as exc:
+            logger.error(f"tab_risk_matrix render error: {exc}")
+            st.error(f"Risk dashboard render error: {exc}")

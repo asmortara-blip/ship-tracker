@@ -478,91 +478,95 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
 
 def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs) -> None:
     """Render the Performance Attribution Analysis tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('attribution'):
 
-    page_header(
-        title="Performance Attribution",
-        subtitle="Brinson-Hood-Beebower factor decomposition and alpha decay analysis",
-        badge_text="ATTRIBUTION",
-        badge_color=C_ACCENT,
-    )
-
-    # ── Return decomposition ────────────────────────────────────────────────
-    try:
-        section_header(
-            "Attribution Hero",
-            subtitle="Total portfolio return decomposed into six factor contributions",
+        page_header(
+            title="Performance Attribution",
+            subtitle="Brinson-Hood-Beebower factor decomposition and alpha decay analysis",
+            badge_text="ATTRIBUTION",
+            badge_color=C_ACCENT,
         )
-        contributions = _build_factor_contributions()
-        _render_hero(contributions)
-        _attribution_footer("Total portfolio return and per-factor contribution (bps).")
-    except Exception:
-        logger.exception("Attribution hero section failed")
-        st.warning("Attribution hero unavailable.")
 
-    try:
-        section_header(
-            "Factor Attribution Table",
-            subtitle="Contribution, significance, and current vs historical average",
-        )
-        factor_df = _build_factor_table()
-        _render_factor_table(factor_df)
-        _attribution_footer("Per-factor contribution with t-stat significance.")
-    except Exception:
-        logger.exception("Attribution factor-table section failed")
-        st.warning("Factor attribution table unavailable.")
+        # ── Return decomposition ────────────────────────────────────────────────
+        try:
+            section_header(
+                "Attribution Hero",
+                subtitle="Total portfolio return decomposed into six factor contributions",
+            )
+            contributions = _build_factor_contributions()
+            _render_hero(contributions)
+            _attribution_footer("Total portfolio return and per-factor contribution (bps).")
+        except Exception:
+            logger.exception("Attribution hero section failed")
+            st.warning("Attribution hero unavailable.")
 
-    try:
-        section_header(
-            "Brinson-Hood-Beebower Attribution",
-            subtitle="Allocation, selection, and interaction effects by sub-sector (bps)",
-        )
-        bhb_df = _build_bhb_data()
-        _render_bhb(bhb_df)
-        _attribution_footer("Allocation / selection / interaction by sub-sector.")
-    except Exception:
-        logger.exception("Attribution BHB section failed")
-        st.warning("BHB attribution table unavailable.")
+        try:
+            section_header(
+                "Factor Attribution Table",
+                subtitle="Contribution, significance, and current vs historical average",
+            )
+            factor_df = _build_factor_table()
+            _render_factor_table(factor_df)
+            _attribution_footer("Per-factor contribution with t-stat significance.")
+        except Exception:
+            logger.exception("Attribution factor-table section failed")
+            st.warning("Factor attribution table unavailable.")
 
-    section_divider("Alpha Decay")
+        try:
+            section_header(
+                "Brinson-Hood-Beebower Attribution",
+                subtitle="Allocation, selection, and interaction effects by sub-sector (bps)",
+            )
+            bhb_df = _build_bhb_data()
+            _render_bhb(bhb_df)
+            _attribution_footer("Allocation / selection / interaction by sub-sector.")
+        except Exception:
+            logger.exception("Attribution BHB section failed")
+            st.warning("BHB attribution table unavailable.")
 
-    # ── Alpha decay ─────────────────────────────────────────────────────────
-    try:
-        section_header(
-            "Alpha Decay Curve",
-            subtitle="Alpha remaining after 1 / 5 / 10 / 20 / 30 days — optimal holding period",
-        )
-        decay_df = _build_alpha_decay()
-        _render_alpha_decay_chart(decay_df)
-        _attribution_footer("Alpha-remaining curve over 1-30 day holding periods.")
-    except Exception:
-        logger.exception("Attribution alpha-decay section failed")
-        st.warning("Alpha decay chart unavailable.")
+        section_divider("Alpha Decay")
 
-    section_divider("Decision Quality")
+        # ── Alpha decay ─────────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Alpha Decay Curve",
+                subtitle="Alpha remaining after 1 / 5 / 10 / 20 / 30 days — optimal holding period",
+            )
+            decay_df = _build_alpha_decay()
+            _render_alpha_decay_chart(decay_df)
+            _attribution_footer("Alpha-remaining curve over 1-30 day holding periods.")
+        except Exception:
+            logger.exception("Attribution alpha-decay section failed")
+            st.warning("Alpha decay chart unavailable.")
 
-    # ── Decision quality ────────────────────────────────────────────────────
-    try:
-        section_header(
-            "Best / Worst Attribution Decisions",
-            subtitle="The five highest and five lowest trades by attribution impact",
-        )
-        best_df, worst_df = _build_best_worst()
-        _render_best_worst(best_df, worst_df)
-        _attribution_footer("Top and bottom 5 trades by attribution impact.")
-    except Exception:
-        logger.exception("Attribution best/worst section failed")
-        st.warning("Best/worst decisions unavailable.")
+        section_divider("Decision Quality")
 
-    st.divider()
+        # ── Decision quality ────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Best / Worst Attribution Decisions",
+                subtitle="The five highest and five lowest trades by attribution impact",
+            )
+            best_df, worst_df = _build_best_worst()
+            _render_best_worst(best_df, worst_df)
+            _attribution_footer("Top and bottom 5 trades by attribution impact.")
+        except Exception:
+            logger.exception("Attribution best/worst section failed")
+            st.warning("Best/worst decisions unavailable.")
 
-    try:
-        section_header(
-            "Attribution Over Time",
-            subtitle="Stacked factor contributions per month across the trailing 12 months",
-        )
-        monthly_df = _build_monthly_attribution()
-        _render_attribution_over_time(monthly_df)
-        _attribution_footer("Rolling 12-month factor contributions (bps).")
-    except Exception:
-        logger.exception("Attribution over-time section failed")
-        st.warning("Attribution over time chart unavailable.")
+        st.divider()
+
+        try:
+            section_header(
+                "Attribution Over Time",
+                subtitle="Stacked factor contributions per month across the trailing 12 months",
+            )
+            monthly_df = _build_monthly_attribution()
+            _render_attribution_over_time(monthly_df)
+            _attribution_footer("Rolling 12-month factor contributions (bps).")
+        except Exception:
+            logger.exception("Attribution over-time section failed")
+            st.warning("Attribution over time chart unavailable.")

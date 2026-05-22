@@ -646,57 +646,61 @@ def render(
     news_items:    Any = None,
 ) -> None:
     """Render the WSJ editorial-style Live Market Feed tab."""
-    try:
-        logger.debug("Rendering tab_live_feed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('live_feed'):
+        try:
+            logger.debug("Rendering tab_live_feed")
 
-        _TS_KEY = "_live_feed_last_ts"
-        if _TS_KEY not in st.session_state:
-            st.session_state[_TS_KEY] = time.time()
+            _TS_KEY = "_live_feed_last_ts"
+            if _TS_KEY not in st.session_state:
+                st.session_state[_TS_KEY] = time.time()
 
-        ctrl_col, _ = st.columns([3, 7])
-        with ctrl_col:
+            ctrl_col, _ = st.columns([3, 7])
+            with ctrl_col:
+                st.markdown(
+                    f'<div style="font-family:var(--sans);font-size:0.66rem;'
+                    f'font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
+                    f'color:{C_TEXT3};margin-bottom:2px;">Feed Control</div>',
+                    unsafe_allow_html=True,
+                )
+                auto_refresh = st.checkbox(
+                    "Auto-refresh every 60 seconds",
+                    value=False,
+                    key="_live_feed_auto",
+                )
+
+            last_ts = st.session_state.get(_TS_KEY, time.time())
+
+            _render_header(auto_refresh, last_ts)
+
+            # ── Movement 1: market pulse ────────────────────────────────────────
+            _render_ticker_strip()
+            _render_breaking_alerts(insights, news_items)
+
+            # ── Movement 2: live stream ─────────────────────────────────────────
+            section_divider("Live Stream")
+            _render_feed_table()
+            _render_signal_chart()
+
+            # ── Movement 3: rates & sentiment ───────────────────────────────────
+            section_divider("Rates & Sentiment")
+            _render_freight_table(freight_data)
+            _render_sentiment_pulse(news_items)
+
+            # ── Provenance footer ───────────────────────────────────────────────
             st.markdown(
-                f'<div style="font-family:var(--sans);font-size:0.66rem;'
-                f'font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
-                f'color:{C_TEXT3};margin-bottom:2px;">Feed Control</div>',
+                source_footer([
+                    _SRC_MULTI_FEED,
+                    _SRC_TICKER,
+                    _SRC_SENTIMENT,
+                ]),
                 unsafe_allow_html=True,
             )
-            auto_refresh = st.checkbox(
-                "Auto-refresh every 60 seconds",
-                value=False,
-                key="_live_feed_auto",
-            )
 
-        last_ts = st.session_state.get(_TS_KEY, time.time())
+            _handle_auto_refresh(auto_refresh)
 
-        _render_header(auto_refresh, last_ts)
-
-        # ── Movement 1: market pulse ────────────────────────────────────────
-        _render_ticker_strip()
-        _render_breaking_alerts(insights, news_items)
-
-        # ── Movement 2: live stream ─────────────────────────────────────────
-        section_divider("Live Stream")
-        _render_feed_table()
-        _render_signal_chart()
-
-        # ── Movement 3: rates & sentiment ───────────────────────────────────
-        section_divider("Rates & Sentiment")
-        _render_freight_table(freight_data)
-        _render_sentiment_pulse(news_items)
-
-        # ── Provenance footer ───────────────────────────────────────────────
-        st.markdown(
-            source_footer([
-                _SRC_MULTI_FEED,
-                _SRC_TICKER,
-                _SRC_SENTIMENT,
-            ]),
-            unsafe_allow_html=True,
-        )
-
-        _handle_auto_refresh(auto_refresh)
-
-    except Exception as exc:
-        logger.error(f"tab_live_feed render error: {exc}")
-        st.error(f"Live feed error: {exc}")
+        except Exception as exc:
+            logger.error(f"tab_live_feed render error: {exc}")
+            st.error(f"Live feed error: {exc}")

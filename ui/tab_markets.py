@@ -431,97 +431,101 @@ def _render_type_breakdown(signals: list) -> None:
 
 def render(stock_data, macro_data, insights, freight_data=None) -> None:
     """Institutional markets & signals dashboard — WSJ editorial style."""
-    # resolve signals: prefer live insights, fallback to mock
-    signals: list = _MOCK_SIGNALS
-    try:
-        if insights and hasattr(insights, "__iter__"):
-            live = []
-            for item in insights:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('markets'):
+        # resolve signals: prefer live insights, fallback to mock
+        signals: list = _MOCK_SIGNALS
+        try:
+            if insights and hasattr(insights, "__iter__"):
+                live = []
+                for item in insights:
+                    try:
+                        sig = (
+                            str(getattr(item, "ticker",    item.get("ticker",    "UNK"))),
+                            str(getattr(item, "signal",    item.get("signal",    "MOMENTUM"))),
+                            str(getattr(item, "conviction",item.get("conviction","MODERATE"))).upper(),
+                            str(getattr(item, "direction", item.get("direction", "LONG"))).upper(),
+                            str(getattr(item, "change",    item.get("change",    "—"))),
+                            str(getattr(item, "time_ago",  item.get("time_ago",  "—"))),
+                            str(getattr(item, "basis",     item.get("basis",     "—"))),
+                        )
+                        live.append(sig)
+                    except Exception:
+                        pass
+                if len(live) >= 5:
+                    signals = live
+        except Exception as exc:
+            logger.debug(f"insights parse skipped: {exc}")
+
+        page_header(
+            title="Markets & Signals Dashboard",
+            subtitle="Live signal monitoring across shipping indices, routes, and equities.",
+            icon="📊",
+            badge_text="Signal Intelligence",
+            badge_color=C_ACCENT,
+        )
+
+        try:
+            _render_signal_hero(signals)
+        except Exception as exc:
+            logger.error(f"signal hero section failed: {exc}")
+
+        section_divider("Signal Intelligence")
+        try:
+            section_header(
+                "Signal Intelligence Table",
+                f"{len(signals)} active signals · sortable by conviction",
+            )
+            _render_signal_table(signals)
+        except Exception as exc:
+            logger.error(f"signal table section failed: {exc}")
+
+        section_divider("Index Performance")
+        try:
+            section_header(
+                "Multi-Index Performance",
+                "BDI · WCI · SCFI · CCFI · indexed to 100 · trailing 90 trading days",
+            )
+            _render_multi_index_chart()
+        except Exception as exc:
+            logger.error(f"multi-index section failed: {exc}")
+
+        section_divider("Cross-Market Structure")
+        try:
+            col_heat, col_corr = st.columns([3, 2], gap="medium")
+            with col_heat:
                 try:
-                    sig = (
-                        str(getattr(item, "ticker",    item.get("ticker",    "UNK"))),
-                        str(getattr(item, "signal",    item.get("signal",    "MOMENTUM"))),
-                        str(getattr(item, "conviction",item.get("conviction","MODERATE"))).upper(),
-                        str(getattr(item, "direction", item.get("direction", "LONG"))).upper(),
-                        str(getattr(item, "change",    item.get("change",    "—"))),
-                        str(getattr(item, "time_ago",  item.get("time_ago",  "—"))),
-                        str(getattr(item, "basis",     item.get("basis",     "—"))),
+                    section_header(
+                        "Freight Rate Heatmap",
+                        "12 trade routes · weekly rate change · green = up, red = down",
                     )
-                    live.append(sig)
-                except Exception:
-                    pass
-            if len(live) >= 5:
-                signals = live
-    except Exception as exc:
-        logger.debug(f"insights parse skipped: {exc}")
+                    _render_freight_heatmap(freight_data)
+                except Exception as exc:
+                    logger.error(f"freight heatmap column failed: {exc}")
+            with col_corr:
+                try:
+                    section_header(
+                        "Correlation Matrix",
+                        "Shipping indices vs macro assets · 90-day rolling",
+                    )
+                    _render_correlation_matrix()
+                except Exception as exc:
+                    logger.error(f"correlation matrix column failed: {exc}")
+        except Exception as exc:
+            logger.error(f"layout columns failed: {exc}")
 
-    page_header(
-        title="Markets & Signals Dashboard",
-        subtitle="Live signal monitoring across shipping indices, routes, and equities.",
-        icon="📊",
-        badge_text="Signal Intelligence",
-        badge_color=C_ACCENT,
-    )
+        section_divider("Signal Composition")
+        try:
+            col_conv, col_meta = st.columns([2, 3], gap="medium")
+            with col_conv:
+                section_header("Conviction Distribution", "Signal count by confidence tier.")
+                _render_conviction_chart(signals)
+            with col_meta:
+                section_header("Signal Type Breakdown", "Distribution by signal methodology.")
+                _render_type_breakdown(signals)
+        except Exception as exc:
+            logger.error(f"conviction section failed: {exc}")
 
-    try:
-        _render_signal_hero(signals)
-    except Exception as exc:
-        logger.error(f"signal hero section failed: {exc}")
-
-    section_divider("Signal Intelligence")
-    try:
-        section_header(
-            "Signal Intelligence Table",
-            f"{len(signals)} active signals · sortable by conviction",
-        )
-        _render_signal_table(signals)
-    except Exception as exc:
-        logger.error(f"signal table section failed: {exc}")
-
-    section_divider("Index Performance")
-    try:
-        section_header(
-            "Multi-Index Performance",
-            "BDI · WCI · SCFI · CCFI · indexed to 100 · trailing 90 trading days",
-        )
-        _render_multi_index_chart()
-    except Exception as exc:
-        logger.error(f"multi-index section failed: {exc}")
-
-    section_divider("Cross-Market Structure")
-    try:
-        col_heat, col_corr = st.columns([3, 2], gap="medium")
-        with col_heat:
-            try:
-                section_header(
-                    "Freight Rate Heatmap",
-                    "12 trade routes · weekly rate change · green = up, red = down",
-                )
-                _render_freight_heatmap(freight_data)
-            except Exception as exc:
-                logger.error(f"freight heatmap column failed: {exc}")
-        with col_corr:
-            try:
-                section_header(
-                    "Correlation Matrix",
-                    "Shipping indices vs macro assets · 90-day rolling",
-                )
-                _render_correlation_matrix()
-            except Exception as exc:
-                logger.error(f"correlation matrix column failed: {exc}")
-    except Exception as exc:
-        logger.error(f"layout columns failed: {exc}")
-
-    section_divider("Signal Composition")
-    try:
-        col_conv, col_meta = st.columns([2, 3], gap="medium")
-        with col_conv:
-            section_header("Conviction Distribution", "Signal count by confidence tier.")
-            _render_conviction_chart(signals)
-        with col_meta:
-            section_header("Signal Type Breakdown", "Distribution by signal methodology.")
-            _render_type_breakdown(signals)
-    except Exception as exc:
-        logger.error(f"conviction section failed: {exc}")
-
-    section_divider(label=datetime.datetime.now().strftime("Markets & Signals · Last updated %Y-%m-%d %H:%M"))
+        section_divider(label=datetime.datetime.now().strftime("Markets & Signals · Last updated %Y-%m-%d %H:%M"))

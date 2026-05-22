@@ -2134,99 +2134,103 @@ def render(
     macro_data:
         Macro data dict from FRED/World Bank feeds.  May be None.
     """
-    logger.debug("tab_equipment.render() called.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('equipment'):
+        logger.debug("tab_equipment.render() called.")
 
-    page_header(
-        title="Equipment & Container Pools",
-        subtitle="Global TEU pool, regional shortage map, repositioning economics, "
-                 "fleet age, and lease-vs-own analytics.",
-        badge_text="OPERATIONS",
-        badge_color=C_ACCENT,
-    )
+        page_header(
+            title="Equipment & Container Pools",
+            subtitle="Global TEU pool, regional shortage map, repositioning economics, "
+                     "fleet age, and lease-vs-own analytics.",
+            badge_text="OPERATIONS",
+            badge_color=C_ACCENT,
+        )
 
-    try:
-        _render_enhanced_equipment_overview()
-    except Exception:
-        logger.exception("tab_equipment: error in enhanced overview")
-        st.error("Error rendering Equipment Overview section.", icon="⚠️")
+        try:
+            _render_enhanced_equipment_overview()
+        except Exception:
+            logger.exception("tab_equipment: error in enhanced overview")
+            st.error("Error rendering Equipment Overview section.", icon="⚠️")
 
-    try:
-        _render_global_pool_overview()
-    except Exception:
-        logger.exception("tab_equipment: error in global pool overview")
-        st.error("Error rendering Global Equipment Pool section.", icon="⚠️")
+        try:
+            _render_global_pool_overview()
+        except Exception:
+            logger.exception("tab_equipment: error in global pool overview")
+            st.error("Error rendering Global Equipment Pool section.", icon="⚠️")
 
-    section_divider("Shortage & Surplus")
+        section_divider("Shortage & Surplus")
 
-    try:
-        _render_shortage_surplus_map()
-    except Exception:
-        logger.exception("tab_equipment: error in shortage/surplus map")
-        st.error("Error rendering Shortage/Surplus Map section.", icon="⚠️")
+        try:
+            _render_shortage_surplus_map()
+        except Exception:
+            logger.exception("tab_equipment: error in shortage/surplus map")
+            st.error("Error rendering Shortage/Surplus Map section.", icon="⚠️")
 
-    section_divider("Repositioning")
+        section_divider("Repositioning")
 
-    try:
-        _render_repositioning_costs()
-    except Exception:
-        logger.exception("tab_equipment: error in repositioning costs")
-        st.error("Error rendering Repositioning Cost section.", icon="⚠️")
+        try:
+            _render_repositioning_costs()
+        except Exception:
+            logger.exception("tab_equipment: error in repositioning costs")
+            st.error("Error rendering Repositioning Cost section.", icon="⚠️")
 
-    section_divider("Turn Time")
+        section_divider("Turn Time")
 
-    try:
-        _render_dwell_times()
-    except Exception:
-        logger.exception("tab_equipment: error in dwell times")
-        st.error("Error rendering Equipment Turn Time section.", icon="⚠️")
+        try:
+            _render_dwell_times()
+        except Exception:
+            logger.exception("tab_equipment: error in dwell times")
+            st.error("Error rendering Equipment Turn Time section.", icon="⚠️")
 
-    section_divider("Reefer Equipment")
+        section_divider("Reefer Equipment")
 
-    try:
-        _render_reefer_section()
-    except Exception:
-        logger.exception("tab_equipment: error in reefer section")
-        st.error("Error rendering Reefer Availability section.", icon="⚠️")
+        try:
+            _render_reefer_section()
+        except Exception:
+            logger.exception("tab_equipment: error in reefer section")
+            st.error("Error rendering Reefer Availability section.", icon="⚠️")
 
-    section_divider("Shortage Alerts")
+        section_divider("Shortage Alerts")
 
-    try:
-        _render_shortage_alerts()
-    except Exception:
-        logger.exception("tab_equipment: error in shortage alerts")
-        st.error("Error rendering Shortage Alert System section.", icon="⚠️")
+        try:
+            _render_shortage_alerts()
+        except Exception:
+            logger.exception("tab_equipment: error in shortage alerts")
+            st.error("Error rendering Shortage Alert System section.", icon="⚠️")
 
-    section_divider("Fleet Age")
+        section_divider("Fleet Age")
 
-    try:
-        _render_age_distribution()
-    except Exception:
-        logger.exception("tab_equipment: error in age distribution")
-        st.error("Error rendering Fleet Age Distribution section.", icon="⚠️")
+        try:
+            _render_age_distribution()
+        except Exception:
+            logger.exception("tab_equipment: error in age distribution")
+            st.error("Error rendering Fleet Age Distribution section.", icon="⚠️")
 
-    section_divider("Lease vs Own")
+        section_divider("Lease vs Own")
 
-    try:
-        _render_lease_vs_own()
-    except Exception:
-        logger.exception("tab_equipment: error in lease vs own")
-        st.error("Error rendering Leasing vs Owned Economics section.", icon="⚠️")
+        try:
+            _render_lease_vs_own()
+        except Exception:
+            logger.exception("tab_equipment: error in lease vs own")
+            st.error("Error rendering Leasing vs Owned Economics section.", icon="⚠️")
 
-    section_divider("Cost Calculator")
+        section_divider("Cost Calculator")
 
-    try:
-        _render_cost_calculator(route_results)
-    except Exception:
-        logger.exception("tab_equipment: error in cost calculator")
-        st.error("Error rendering Equipment Cost Calculator section.", icon="⚠️")
+        try:
+            _render_cost_calculator(route_results)
+        except Exception:
+            logger.exception("tab_equipment: error in cost calculator")
+            st.error("Error rendering Equipment Cost Calculator section.", icon="⚠️")
 
-    section_divider("Balance Timeline")
+        section_divider("Balance Timeline")
 
-    try:
-        _render_balance_timeline()
-    except Exception:
-        logger.exception("tab_equipment: error in balance timeline")
-        st.error("Error rendering Equipment Balance Timeline section.", icon="⚠️")
+        try:
+            _render_balance_timeline()
+        except Exception:
+            logger.exception("tab_equipment: error in balance timeline")
+            st.error("Error rendering Equipment Balance Timeline section.", icon="⚠️")
 
 
 # ── Integration notes ─────────────────────────────────────────────────────

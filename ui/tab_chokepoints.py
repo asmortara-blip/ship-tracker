@@ -720,85 +720,89 @@ def _render_panama_transit_chart() -> None:
 
 def render(port_results=None, freight_data=None, insights=None) -> None:
     """Render the Strategic Waterway & Chokepoint Intelligence tab."""
-    try:
-        page_header(
-            title="Strategic Waterway & Chokepoint Intelligence",
-            subtitle="Real-time status, disruption analysis, and rate impact for the world's critical maritime chokepoints",
-            badge_text="CHOKEPOINTS",
-            badge_color=C_ACCENT,
-        )
-
-        section_header(
-            "Network at a Glance",
-            subtitle="Headline disruption read across the world's critical maritime chokepoints",
-        )
-        metric_card_row(
-            [
-                {"label": "Critical Chokepoints", "value": "2",      "accent": C_LOW,
-                 "sublabel": "Suez + Bab-el-Mandeb"},
-                {"label": "Suez Traffic Rerouted", "value": "~65%",  "accent": C_MOD,
-                 "sublabel": "via Cape of Good Hope"},
-                {"label": "Asia–Europe Premium",   "value": "+$1.8–3.0K", "accent": C_ACCENT,
-                 "sublabel": "per TEU surcharge"},
-            ],
-            columns=3,
-        )
-    except Exception as e:
-        logger.error(f"header render error: {e}")
-
-    # Section 1
-    try:
-        section_divider("Chokepoint Status Board")
-        _render_status_board()
-    except Exception as e:
-        logger.error(f"section 1 render error: {e}")
-
-    # Section 2
-    try:
-        section_divider("Canal Deep Dives")
-        _render_canal_deep_dives()
-    except Exception as e:
-        logger.error(f"section 2 render error: {e}")
-
-    try:
-        with st.expander("Panama Canal — Monthly Transit History"):
-            _render_panama_transit_chart()
-    except Exception as e:
-        logger.error(f"panama chart expander error: {e}")
-
-    # Section 3
-    try:
-        section_divider("Red Sea Crisis Monitor")
-        _render_red_sea_monitor()
-    except Exception as e:
-        logger.error(f"section 3 render error: {e}")
-
-    # Section 4
-    try:
-        section_divider("Chokepoint Traffic Map")
-        _render_traffic_map()
-    except Exception as e:
-        logger.error(f"section 4 render error: {e}")
-
-    # Section 5
-    try:
-        section_divider("Rate Premium Analysis")
-        _render_rate_premiums()
-    except Exception as e:
-        logger.error(f"section 5 render error: {e}")
-
-    # Section 6
-    try:
-        section_divider("Historical Disruption Comparison")
-        _render_historical_comparison()
-    except Exception as e:
-        logger.error(f"section 6 render error: {e}")
-
-    if _CANAL_OK:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('chokepoints'):
         try:
-            impact = get_canal_shipping_impact(fetch_panama_stats(), fetch_suez_stats())
-            if impact:
-                with st.expander("Canal Feed — Live Impact Summary"):
-                    st.json(impact)
+            page_header(
+                title="Strategic Waterway & Chokepoint Intelligence",
+                subtitle="Real-time status, disruption analysis, and rate impact for the world's critical maritime chokepoints",
+                badge_text="CHOKEPOINTS",
+                badge_color=C_ACCENT,
+            )
+
+            section_header(
+                "Network at a Glance",
+                subtitle="Headline disruption read across the world's critical maritime chokepoints",
+            )
+            metric_card_row(
+                [
+                    {"label": "Critical Chokepoints", "value": "2",      "accent": C_LOW,
+                     "sublabel": "Suez + Bab-el-Mandeb"},
+                    {"label": "Suez Traffic Rerouted", "value": "~65%",  "accent": C_MOD,
+                     "sublabel": "via Cape of Good Hope"},
+                    {"label": "Asia–Europe Premium",   "value": "+$1.8–3.0K", "accent": C_ACCENT,
+                     "sublabel": "per TEU surcharge"},
+                ],
+                columns=3,
+            )
         except Exception as e:
-            logger.warning(f"canal_impact summary error: {e}")
+            logger.error(f"header render error: {e}")
+
+        # Section 1
+        try:
+            section_divider("Chokepoint Status Board")
+            _render_status_board()
+        except Exception as e:
+            logger.error(f"section 1 render error: {e}")
+
+        # Section 2
+        try:
+            section_divider("Canal Deep Dives")
+            _render_canal_deep_dives()
+        except Exception as e:
+            logger.error(f"section 2 render error: {e}")
+
+        try:
+            with st.expander("Panama Canal — Monthly Transit History"):
+                _render_panama_transit_chart()
+        except Exception as e:
+            logger.error(f"panama chart expander error: {e}")
+
+        # Section 3
+        try:
+            section_divider("Red Sea Crisis Monitor")
+            _render_red_sea_monitor()
+        except Exception as e:
+            logger.error(f"section 3 render error: {e}")
+
+        # Section 4
+        try:
+            section_divider("Chokepoint Traffic Map")
+            _render_traffic_map()
+        except Exception as e:
+            logger.error(f"section 4 render error: {e}")
+
+        # Section 5
+        try:
+            section_divider("Rate Premium Analysis")
+            _render_rate_premiums()
+        except Exception as e:
+            logger.error(f"section 5 render error: {e}")
+
+        # Section 6
+        try:
+            section_divider("Historical Disruption Comparison")
+            _render_historical_comparison()
+        except Exception as e:
+            logger.error(f"section 6 render error: {e}")
+
+        if _CANAL_OK:
+            try:
+                impact = get_canal_shipping_impact(fetch_panama_stats(), fetch_suez_stats())
+                if impact:
+                    with st.expander("Canal Feed — Live Impact Summary"):
+                        st.json(impact)
+            except Exception as e:
+                logger.warning(f"canal_impact summary error: {e}")

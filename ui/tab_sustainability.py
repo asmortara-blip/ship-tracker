@@ -577,25 +577,29 @@ def _render_speed_optimization() -> None:
 
 def render(port_results=None, insights=None) -> None:
     """Render the full Sustainability & ESG intelligence tab."""
-    try:
-        page_header(
-            title="Shipping ESG & Sustainability Intelligence",
-            subtitle="IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization",
-            icon="🌱",
-        )
-    except Exception:
-        logger.exception("Tab header render error")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('sustainability'):
+        try:
+            page_header(
+                title="Shipping ESG & Sustainability Intelligence",
+                subtitle="IMO 2030/2050 compliance · EU ETS · Green fuel transition · ESG ratings · Speed optimization",
+                icon="🌱",
+            )
+        except Exception:
+            logger.exception("Tab header render error")
 
-    _render_hero_kpis()
-    section_divider("IMO Compliance")
-    _render_cii_tracker()
-    section_divider("Route Carbon Intensity")
-    _render_route_carbon()
-    section_divider("Green Fuel Transition")
-    _render_green_fuel()
-    section_divider("EU ETS Impact")
-    _render_eu_ets()
-    section_divider("ESG Scores")
-    _render_esg_scores()
-    section_divider("Speed Optimization")
-    _render_speed_optimization()
+        _render_hero_kpis()
+        section_divider("IMO Compliance")
+        _render_cii_tracker()
+        section_divider("Route Carbon Intensity")
+        _render_route_carbon()
+        section_divider("Green Fuel Transition")
+        _render_green_fuel()
+        section_divider("EU ETS Impact")
+        _render_eu_ets()
+        section_divider("ESG Scores")
+        _render_esg_scores()
+        section_divider("Speed Optimization")
+        _render_speed_optimization()

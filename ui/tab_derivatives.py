@@ -652,29 +652,33 @@ def _render_vol_surface() -> None:
 
 def render(stock_data=None, macro_data=None, freight_data=None) -> None:
     """Shipping Derivatives & FFA Dashboard."""
-    try:
-        page_header(
-            title="Freight Derivatives Desk",
-            subtitle="FFA forward curves · Quote board · Options Greeks · Basis analysis · Hedging strategies · Vol surface",
-            badge_text="DERIVATIVES",
-            badge_color=C_ACCENT,
-        )
-    except Exception as exc:
-        logger.warning(f"Derivatives banner error: {exc}")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('derivatives'):
+        try:
+            page_header(
+                title="Freight Derivatives Desk",
+                subtitle="FFA forward curves · Quote board · Options Greeks · Basis analysis · Hedging strategies · Vol surface",
+                badge_text="DERIVATIVES",
+                badge_color=C_ACCENT,
+            )
+        except Exception as exc:
+            logger.warning(f"Derivatives banner error: {exc}")
 
-    _render_header()
+        _render_header()
 
-    section_divider("Forward Market")
-    _render_forward_curve()
-    _render_quote_board()
+        section_divider("Forward Market")
+        _render_forward_curve()
+        _render_quote_board()
 
-    section_divider("Options Pricing")
-    _render_options_table()
+        section_divider("Options Pricing")
+        _render_options_table()
 
-    section_divider("Basis & Hedging")
-    _render_basis_analysis()
-    _render_hedging_strategies()
+        section_divider("Basis & Hedging")
+        _render_basis_analysis()
+        _render_hedging_strategies()
 
-    section_divider("Equity Options")
-    _render_options_screen()
-    _render_vol_surface()
+        section_divider("Equity Options")
+        _render_options_screen()
+        _render_vol_surface()

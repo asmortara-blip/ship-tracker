@@ -1083,53 +1083,57 @@ def render(
         live series fall back to a deterministic modeled score, so the tab
         renders cleanly with no inputs at all.
     """
-    try:
-        logger.info("tab_scorecard.render() — building scorecard rows")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('scorecard'):
+        try:
+            logger.info("tab_scorecard.render() — building scorecard rows")
 
-        freight_data = freight_data or {}
-        macro_data   = macro_data   or {}
-        stock_data   = stock_data   or {}
+            freight_data = freight_data or {}
+            macro_data   = macro_data   or {}
+            stock_data   = stock_data   or {}
 
-        rows = _build_rows(freight_data, macro_data, stock_data)
-        overall = _overall_score(rows)
+            rows = _build_rows(freight_data, macro_data, stock_data)
+            overall = _overall_score(rows)
 
-        logger.info("Scorecard: {} metrics, overall={}", len(rows), overall)
+            logger.info("Scorecard: {} metrics, overall={}", len(rows), overall)
 
-        page_header(
-            title="Shipping Market Scorecard",
-            subtitle=f"Executive scorecard of global shipping market conditions — Week of {_week_label()}",
-            badge_text="SCORECARD",
-            badge_color=C_ACCENT,
-        )
+            page_header(
+                title="Shipping Market Scorecard",
+                subtitle=f"Executive scorecard of global shipping market conditions — Week of {_week_label()}",
+                badge_text="SCORECARD",
+                badge_color=C_ACCENT,
+            )
 
-        # ── Chapter 1: the headline read ──
-        _render_executive_summary(overall, rows)
+            # ── Chapter 1: the headline read ──
+            _render_executive_summary(overall, rows)
 
-        # ── Editorial commentary (per-tab LLM + template fallback) ──
-        _render_editorial_commentary(rows, overall)
+            # ── Editorial commentary (per-tab LLM + template fallback) ──
+            _render_editorial_commentary(rows, overall)
 
-        section_divider("Pillar Detail")
-        _render_category_bar(rows)
+            section_divider("Pillar Detail")
+            _render_category_bar(rows)
 
-        st.divider()
-        _render_scorecard_matrix(rows)
+            st.divider()
+            _render_scorecard_matrix(rows)
 
-        # ── Chapter 2: trends and positioning ──
-        section_divider("Trends & Positioning")
-        _render_score_history(overall)
+            # ── Chapter 2: trends and positioning ──
+            section_divider("Trends & Positioning")
+            _render_score_history(overall)
 
-        st.divider()
-        _render_quadrant(rows)
+            st.divider()
+            _render_quadrant(rows)
 
-        # ── Chapter 3: this week, and the month ahead ──
-        section_divider("Week in Review & Outlook")
-        _render_winner_loser(rows)
+            # ── Chapter 3: this week, and the month ahead ──
+            section_divider("Week in Review & Outlook")
+            _render_winner_loser(rows)
 
-        st.divider()
-        _render_outlook(rows, overall)
+            st.divider()
+            _render_outlook(rows, overall)
 
-        logger.success("tab_scorecard.render() complete")
+            logger.success("tab_scorecard.render() complete")
 
-    except Exception as exc:
-        logger.exception("tab_scorecard.render() fatal: {}", exc)
-        st.error(f"Scorecard render error: {exc}")
+        except Exception as exc:
+            logger.exception("tab_scorecard.render() fatal: {}", exc)
+            st.error(f"Scorecard render error: {exc}")

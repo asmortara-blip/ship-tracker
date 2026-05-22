@@ -783,78 +783,82 @@ def render(
     **kwargs,
 ) -> None:
     """Render the Investor Report tab."""
-    report     = st.session_state.get("investor_report")
-    last_ts    = st.session_state.get("investor_report_ts")
-    api_status = _check_api_keys()
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('report'):
+        report     = st.session_state.get("investor_report")
+        last_ts    = st.session_state.get("investor_report_ts")
+        api_status = _check_api_keys()
 
-    try:
-        _render_hero(last_ts)
-    except Exception as exc:
-        logger.error(f"Hero render error: {exc}")
-        st.error("Could not render header.")
-
-    section_divider("Configure")
-
-    config: dict = {}
-    try:
-        config = _render_config_panel(api_status)
-    except Exception as exc:
-        logger.error(f"Config panel error: {exc}")
-        st.error("Could not render configuration panel.")
-
-    try:
-        _render_generate_button(config, port_results, route_results, insights, freight_data, macro_data, stock_data)
-    except Exception as exc:
-        logger.error(f"Generate button error: {exc}")
-        st.error("Could not render generate button.")
-
-    if report is not None:
-        section_divider("Briefing")
         try:
-            _render_report_preview(report, last_ts or _now_utc(), api_status)
+            _render_hero(last_ts)
         except Exception as exc:
-            logger.error(f"Report preview error: {exc}")
-            st.error("Could not render report preview.")
-        section_divider("Export")
+            logger.error(f"Hero render error: {exc}")
+            st.error("Could not render header.")
+
+        section_divider("Configure")
+
+        config: dict = {}
         try:
-            _render_downloads(report)
+            config = _render_config_panel(api_status)
         except Exception as exc:
-            logger.error(f"Download section error: {exc}")
-            st.error("Could not render download buttons.")
-    elif last_ts is not None:
-        st.markdown(
-            insight_card_html(
-                title="Report Data Is None",
-                score=0.05,
-                action="EMPTY",
-                rationale="The engine ran but returned no data. Check logs for details.",
-                category="SYSTEM",
-            ),
-            unsafe_allow_html=True,
-        )
-    else:
-        section_divider("Export")
+            logger.error(f"Config panel error: {exc}")
+            st.error("Could not render configuration panel.")
+
         try:
-            _render_downloads(None)
+            _render_generate_button(config, port_results, route_results, insights, freight_data, macro_data, stock_data)
         except Exception as exc:
-            logger.error(f"Download placeholder error: {exc}")
+            logger.error(f"Generate button error: {exc}")
+            st.error("Could not render generate button.")
 
-    section_divider("History")
-    try:
-        _render_history()
-    except Exception as exc:
-        logger.error(f"History render error: {exc}")
-        st.error("Could not render report history.")
+        if report is not None:
+            section_divider("Briefing")
+            try:
+                _render_report_preview(report, last_ts or _now_utc(), api_status)
+            except Exception as exc:
+                logger.error(f"Report preview error: {exc}")
+                st.error("Could not render report preview.")
+            section_divider("Export")
+            try:
+                _render_downloads(report)
+            except Exception as exc:
+                logger.error(f"Download section error: {exc}")
+                st.error("Could not render download buttons.")
+        elif last_ts is not None:
+            st.markdown(
+                insight_card_html(
+                    title="Report Data Is None",
+                    score=0.05,
+                    action="EMPTY",
+                    rationale="The engine ran but returned no data. Check logs for details.",
+                    category="SYSTEM",
+                ),
+                unsafe_allow_html=True,
+            )
+        else:
+            section_divider("Export")
+            try:
+                _render_downloads(None)
+            except Exception as exc:
+                logger.error(f"Download placeholder error: {exc}")
 
-    section_divider("Data Sources")
-    try:
-        _render_data_sources(api_status)
-    except Exception as exc:
-        logger.error(f"Data source status error: {exc}")
-        st.error("Could not render data source status.")
+        section_divider("History")
+        try:
+            _render_history()
+        except Exception as exc:
+            logger.error(f"History render error: {exc}")
+            st.error("Could not render report history.")
 
-    try:
-        _render_api_config(api_status)
-    except Exception as exc:
-        logger.error(f"API config render error: {exc}")
-        st.error("Could not render API configuration.")
+        section_divider("Data Sources")
+        try:
+            _render_data_sources(api_status)
+        except Exception as exc:
+            logger.error(f"Data source status error: {exc}")
+            st.error("Could not render data source status.")
+
+        try:
+            _render_api_config(api_status)
+        except Exception as exc:
+            logger.error(f"API config render error: {exc}")
+            st.error("Could not render API configuration.")

@@ -624,46 +624,50 @@ def _render_deep_dives(profiles: list) -> None:
 
 def render(port_results=None, route_results=None, insights=None) -> None:
     """Render the Carrier Intelligence tab."""
-    if not _CARRIER_DATA_OK:
-        st.error(
-            "Carrier intelligence data module failed to load. "
-            "Check that `data/carrier_intelligence.py` is present and imports correctly."
-        )
-        return
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('carriers'):
+        if not _CARRIER_DATA_OK:
+            st.error(
+                "Carrier intelligence data module failed to load. "
+                "Check that `data/carrier_intelligence.py` is present and imports correctly."
+            )
+            return
 
-    profiles: list = []
-    alerts: list[dict] = []
-    try:
-        profiles = get_carrier_profiles()
-        logger.info(f"tab_carriers: loaded {len(profiles)} carrier profiles")
-    except Exception as exc:
-        logger.error(f"tab_carriers: get_carrier_profiles failed: {exc}")
-        st.error("Failed to load carrier profiles.")
-        return
+        profiles: list = []
+        alerts: list[dict] = []
+        try:
+            profiles = get_carrier_profiles()
+            logger.info(f"tab_carriers: loaded {len(profiles)} carrier profiles")
+        except Exception as exc:
+            logger.error(f"tab_carriers: get_carrier_profiles failed: {exc}")
+            st.error("Failed to load carrier profiles.")
+            return
 
-    try:
-        alerts = get_blank_sailing_alerts()
-        logger.info(f"tab_carriers: loaded {len(alerts)} blank sailing alerts")
-    except Exception as exc:
-        logger.warning(f"tab_carriers: get_blank_sailing_alerts failed: {exc}")
-        alerts = []
+        try:
+            alerts = get_blank_sailing_alerts()
+            logger.info(f"tab_carriers: loaded {len(alerts)} blank sailing alerts")
+        except Exception as exc:
+            logger.warning(f"tab_carriers: get_blank_sailing_alerts failed: {exc}")
+            alerts = []
 
-    _render_header(profiles)
-    section_divider("Alliance Structure")
-    _render_alliance_panel(profiles)
-    section_divider("Performance Table")
-    _render_performance_table(profiles)
+        _render_header(profiles)
+        section_divider("Alliance Structure")
+        _render_alliance_panel(profiles)
+        section_divider("Performance Table")
+        _render_performance_table(profiles)
 
-    section_divider("Reliability & Concentration")
-    col_a, col_b = st.columns([3, 2])
-    with col_a:
-        _render_reliability_rankings(profiles)
-    with col_b:
-        _render_market_concentration()
+        section_divider("Reliability & Concentration")
+        col_a, col_b = st.columns([3, 2])
+        with col_a:
+            _render_reliability_rankings(profiles)
+        with col_b:
+            _render_market_concentration()
 
-    section_divider("Blank Sailing Tracker")
-    _render_blank_sailing_tracker(alerts)
-    section_divider("News Feed")
-    _render_carrier_news()
-    section_divider("Deep Dive")
-    _render_deep_dives(profiles)
+        section_divider("Blank Sailing Tracker")
+        _render_blank_sailing_tracker(alerts)
+        section_divider("News Feed")
+        _render_carrier_news()
+        section_divider("Deep Dive")
+        _render_deep_dives(profiles)

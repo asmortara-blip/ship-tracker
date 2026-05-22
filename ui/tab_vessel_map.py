@@ -564,70 +564,74 @@ def _render_metrics_strip(vessel_map: dict[str, list[dict]]) -> None:
 
 def render(port_results: Any, route_results: Any, freight_data: Any) -> None:
     """Render the full Live Vessel Tracking Map tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('vessel_map'):
 
-    # ── Page header ───────────────────────────────────────────────────────────
-    page_header(
-        title="Live Vessel Tracking",
-        subtitle="Global AIS vessel positions, port traffic, and fleet composition",
-        badge_text="AIS",
-        badge_color=C_ACCENT,
-    )
-
-    # ── Load vessel data ──────────────────────────────────────────────────────
-    vessel_map: dict[str, list[dict]] = {}
-    try:
-        vessel_map = _load_all_vessels()
-    except Exception as exc:
-        st.warning(f"Could not load vessel data: {exc}")
-
-    if not vessel_map:
-        st.info(
-            "No vessel data loaded. "
-            "Set the **AISSTREAM_KEY** secret for live AIS data, "
-            "or the synthetic fallback will populate shortly."
+        # ── Page header ───────────────────────────────────────────────────────────
+        page_header(
+            title="Live Vessel Tracking",
+            subtitle="Global AIS vessel positions, port traffic, and fleet composition",
+            badge_text="AIS",
+            badge_color=C_ACCENT,
         )
+
+        # ── Load vessel data ──────────────────────────────────────────────────────
+        vessel_map: dict[str, list[dict]] = {}
         try:
-            # Force synthetic load
-            from data.aisstream_feed import fetch_all_port_vessels
-            vessel_map = fetch_all_port_vessels(_PORTS)
-        except Exception as exc2:
-            st.error(f"Synthetic vessel generation failed: {exc2}")
-            return
+            vessel_map = _load_all_vessels()
+        except Exception as exc:
+            st.warning(f"Could not load vessel data: {exc}")
 
-    demand_scores = _port_demand_scores(port_results)
+        if not vessel_map:
+            st.info(
+                "No vessel data loaded. "
+                "Set the **AISSTREAM_KEY** secret for live AIS data, "
+                "or the synthetic fallback will populate shortly."
+            )
+            try:
+                # Force synthetic load
+                from data.aisstream_feed import fetch_all_port_vessels
+                vessel_map = fetch_all_port_vessels(_PORTS)
+            except Exception as exc2:
+                st.error(f"Synthetic vessel generation failed: {exc2}")
+                return
 
-    # ── D. Metrics strip (top) ────────────────────────────────────────────────
-    try:
-        _render_metrics_strip(vessel_map)
-    except Exception:
-        logger.exception("Vessel Map — metrics strip failed")
-        st.error("Metrics strip unavailable.")
+        demand_scores = _port_demand_scores(port_results)
 
-    section_divider("Traffic Map")
-
-    # ── A. Global map ─────────────────────────────────────────────────────────
-    try:
-        _render_global_map(vessel_map, demand_scores)
-    except Exception:
-        logger.exception("Vessel Map — global map failed")
-        st.error("Global vessel map unavailable.")
-
-    section_divider("Port Detail")
-
-    # ── B + C. Port table and donut side by side ──────────────────────────────
-    col_left, col_right = st.columns([3, 2], gap="large")
-
-    with col_left:
-        selected_locode = ""
+        # ── D. Metrics strip (top) ────────────────────────────────────────────────
         try:
-            selected_locode = _render_port_vessel_table(vessel_map)
+            _render_metrics_strip(vessel_map)
         except Exception:
-            logger.exception("Vessel Map — port vessel table failed")
-            st.error("Port vessel table unavailable.")
+            logger.exception("Vessel Map — metrics strip failed")
+            st.error("Metrics strip unavailable.")
 
-    with col_right:
+        section_divider("Traffic Map")
+
+        # ── A. Global map ─────────────────────────────────────────────────────────
         try:
-            _render_fleet_donut(vessel_map, selected_locode or list(vessel_map.keys())[0])
+            _render_global_map(vessel_map, demand_scores)
         except Exception:
-            logger.exception("Vessel Map — fleet donut failed")
-            st.error("Fleet composition chart unavailable.")
+            logger.exception("Vessel Map — global map failed")
+            st.error("Global vessel map unavailable.")
+
+        section_divider("Port Detail")
+
+        # ── B + C. Port table and donut side by side ──────────────────────────────
+        col_left, col_right = st.columns([3, 2], gap="large")
+
+        with col_left:
+            selected_locode = ""
+            try:
+                selected_locode = _render_port_vessel_table(vessel_map)
+            except Exception:
+                logger.exception("Vessel Map — port vessel table failed")
+                st.error("Port vessel table unavailable.")
+
+        with col_right:
+            try:
+                _render_fleet_donut(vessel_map, selected_locode or list(vessel_map.keys())[0])
+            except Exception:
+                logger.exception("Vessel Map — fleet donut failed")
+                st.error("Fleet composition chart unavailable.")

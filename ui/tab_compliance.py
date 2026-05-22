@@ -933,33 +933,37 @@ def _section_8_risk_score() -> None:
 
 def render(port_results=None, insights=None, *args, **kwargs) -> None:
     """Render the full Compliance & Sanctions Intelligence tab."""
-    try:
-        page_header(
-            title="Regulatory Compliance & Sanctions Intelligence",
-            subtitle="Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement",
-            badge_text="COMPLIANCE",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Header render error")
-
-    sections = [
-        ("Compliance Dashboard",          _section_1_dashboard),
-        ("Sanctions Screening",           _section_2_sanctions_table),
-        ("IMO Regulatory Calendar",       _section_3_imo_calendar),
-        ("CII Tracker",                   _section_4_cii_tracker),
-        ("Sanctions Evasion Patterns",    _section_5_evasion_patterns),
-        ("Dark Fleet Tracker",            _section_6_dark_fleet),
-        ("Port State Control",            _section_7_psc),
-        ("Compliance Risk Score",         _section_8_risk_score),
-    ]
-
-    for idx, (label, fn) in enumerate(sections):
-        if idx > 0:
-            section_divider()
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('compliance'):
         try:
-            with st.expander(label, expanded=(label == "Compliance Dashboard")):
-                fn()
+            page_header(
+                title="Regulatory Compliance & Sanctions Intelligence",
+                subtitle="Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement",
+                badge_text="COMPLIANCE",
+                badge_color=C_ACCENT,
+            )
         except Exception:
-            logger.exception(f"Section '{label}' failed to render")
-            st.error(f"{label} section encountered an error.")
+            logger.exception("Header render error")
+
+        sections = [
+            ("Compliance Dashboard",          _section_1_dashboard),
+            ("Sanctions Screening",           _section_2_sanctions_table),
+            ("IMO Regulatory Calendar",       _section_3_imo_calendar),
+            ("CII Tracker",                   _section_4_cii_tracker),
+            ("Sanctions Evasion Patterns",    _section_5_evasion_patterns),
+            ("Dark Fleet Tracker",            _section_6_dark_fleet),
+            ("Port State Control",            _section_7_psc),
+            ("Compliance Risk Score",         _section_8_risk_score),
+        ]
+
+        for idx, (label, fn) in enumerate(sections):
+            if idx > 0:
+                section_divider()
+            try:
+                with st.expander(label, expanded=(label == "Compliance Dashboard")):
+                    fn()
+            except Exception:
+                logger.exception(f"Section '{label}' failed to render")
+                st.error(f"{label} section encountered an error.")

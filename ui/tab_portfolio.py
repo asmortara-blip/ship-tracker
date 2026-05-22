@@ -1214,53 +1214,57 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
 
 def render(stock_data, macro_data, insights) -> None:
     """Render the Portfolio Tracker tab."""
-    try:
-        _init_positions()
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('portfolio'):
+        try:
+            _init_positions()
 
-        _render_hero()
+            _render_hero()
 
-        positions = st.session_state.get("portfolio_positions", [])
-        df = _build_snapshot(positions, stock_data)
+            positions = st.session_state.get("portfolio_positions", [])
+            df = _build_snapshot(positions, stock_data)
 
-        _render_summary_metrics(df)
+            _render_summary_metrics(df)
 
-        _render_add_position_form()
+            _render_add_position_form()
 
-        # Editorial commentary (per-tab LLM + template fallback)
-        _render_editorial_commentary(df)
+            # Editorial commentary (per-tab LLM + template fallback)
+            _render_editorial_commentary(df)
 
-        section_divider("Holdings")
+            section_divider("Holdings")
 
-        _render_holdings_table(df)
+            _render_holdings_table(df)
 
-        # Charts row: donut + performance
-        if not df.empty:
-            col_left, col_right = st.columns([1, 1.6])
-            with col_left:
-                section_header("Sector Allocation", "Donut: market-value share by shipping sub-sector")
-                _render_composition_chart(df)
-            with col_right:
-                section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
-                _render_performance_chart(df)
+            # Charts row: donut + performance
+            if not df.empty:
+                col_left, col_right = st.columns([1, 1.6])
+                with col_left:
+                    section_header("Sector Allocation", "Donut: market-value share by shipping sub-sector")
+                    _render_composition_chart(df)
+                with col_right:
+                    section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
+                    _render_performance_chart(df)
 
-        section_divider("Risk")
+            section_divider("Risk")
 
-        _render_risk_metrics(df)
+            _render_risk_metrics(df)
 
-        section_divider("Optimization Lab")
+            section_divider("Optimization Lab")
 
-        _render_optimization_lab(df)
+            _render_optimization_lab(df)
 
-        section_divider("Factor Attribution")
+            section_divider("Factor Attribution")
 
-        _render_carrier_factor_lens(stock_data, macro_data)
+            _render_carrier_factor_lens(stock_data, macro_data)
 
-        section_divider("Position Detail")
+            section_divider("Position Detail")
 
-        _render_top_movers(df)
+            _render_top_movers(df)
 
-        _render_position_details(df)
+            _render_position_details(df)
 
-    except Exception as e:
-        logger.exception(f"Portfolio tab crash: {e}")
-        st.error(f"Portfolio tracker encountered an error: {e}")
+        except Exception as e:
+            logger.exception(f"Portfolio tab crash: {e}")
+            st.error(f"Portfolio tracker encountered an error: {e}")

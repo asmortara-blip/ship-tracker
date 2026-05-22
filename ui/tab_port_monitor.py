@@ -460,48 +460,52 @@ def _render_rate_cards(lanes: list[dict]) -> None:
 
 def render(port_results: Any = None, freight_data: Optional[Any] = None, *args, **kwargs) -> None:
     """Render the Port Operations Intelligence tab."""
-    try:
-        logger.info("Rendering port monitor tab")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('port_monitor'):
+        try:
+            logger.info("Rendering port monitor tab")
 
-        ports = list(TOP_PORTS)
-        if port_results:
-            try:
-                live_map: dict = {}
-                if hasattr(port_results, "__iter__"):
-                    for item in port_results:
-                        name = getattr(item, "port_name", None) or (item.get("port_name") if isinstance(item, dict) else None)
-                        if name:
-                            live_map[name] = item
-                for p in ports:
-                    if p["port"] in live_map:
-                        live = live_map[p["port"]]
-                        if isinstance(live, dict):
-                            if "status" in live:
-                                p["status"] = live["status"]
-                            if "teu_m" in live:
-                                p["teu_m"] = float(live["teu_m"])
-                        elif hasattr(live, "status"):
-                            p["status"] = str(live.status)
-            except Exception:
-                logger.warning("Could not merge live port_results; using mock data")
+            ports = list(TOP_PORTS)
+            if port_results:
+                try:
+                    live_map: dict = {}
+                    if hasattr(port_results, "__iter__"):
+                        for item in port_results:
+                            name = getattr(item, "port_name", None) or (item.get("port_name") if isinstance(item, dict) else None)
+                            if name:
+                                live_map[name] = item
+                    for p in ports:
+                        if p["port"] in live_map:
+                            live = live_map[p["port"]]
+                            if isinstance(live, dict):
+                                if "status" in live:
+                                    p["status"] = live["status"]
+                                if "teu_m" in live:
+                                    p["teu_m"] = float(live["teu_m"])
+                            elif hasattr(live, "status"):
+                                p["status"] = str(live.status)
+                except Exception:
+                    logger.warning("Could not merge live port_results; using mock data")
 
-        _render_kpi_header(ports)
+            _render_kpi_header(ports)
 
-        section_divider("Global Rankings")
-        _render_rankings_table(ports)
-        _render_efficiency_chart(ports)
+            section_divider("Global Rankings")
+            _render_rankings_table(ports)
+            _render_efficiency_chart(ports)
 
-        section_divider("Status Map")
-        _render_port_map(ports)
+            section_divider("Status Map")
+            _render_port_map(ports)
 
-        section_divider("Regional Breakdown")
-        _render_regional_dashboard(ports)
+            section_divider("Regional Breakdown")
+            _render_regional_dashboard(ports)
 
-        section_divider("Events & Lanes")
-        _render_events_feed(PORT_EVENTS)
-        _render_rate_cards(LANE_RATES)
+            section_divider("Events & Lanes")
+            _render_events_feed(PORT_EVENTS)
+            _render_rate_cards(LANE_RATES)
 
-        logger.success("Port monitor tab rendered successfully")
-    except Exception:
-        logger.exception("Port monitor tab render failed")
-        st.error("Port monitor dashboard encountered an error. Check logs for details.")
+            logger.success("Port monitor tab rendered successfully")
+        except Exception:
+            logger.exception("Port monitor tab render failed")
+            st.error("Port monitor dashboard encountered an error. Check logs for details.")

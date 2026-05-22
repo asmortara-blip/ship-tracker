@@ -786,219 +786,223 @@ def render(stock_data: dict, macro_data: dict = None, insights: object = None,
     ``macro_data`` / ``insights`` are optional and ``**kwargs`` is accepted so
     the tab is robust to caller arg drift.
     """
-    macro_data = macro_data or {}
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('backtest'):
+        macro_data = macro_data or {}
 
-    page_header(
-        title="Signal Validation & Backtester",
-        subtitle="Validate the platform's real signals, then the heuristic backtest — all on synthetic data",
-        badge_text="DEMO",
-        badge_color=C_LOW,
-    )
+        page_header(
+            title="Signal Validation & Backtester",
+            subtitle="Validate the platform's real signals, then the heuristic backtest — all on synthetic data",
+            badge_text="DEMO",
+            badge_color=C_LOW,
+        )
 
-    # ── Real-signal validation (the platform's actual signals) ───────────────
-    try:
-        _render_real_signal_validation(stock_data, insights)
-    except Exception as e:
-        logger.exception("tab_backtest: real-signal validation section crashed")
-        st.error(f"Real-signal validation section error: {e}")
+        # ── Real-signal validation (the platform's actual signals) ───────────────
+        try:
+            _render_real_signal_validation(stock_data, insights)
+        except Exception as e:
+            logger.exception("tab_backtest: real-signal validation section crashed")
+            st.error(f"Real-signal validation section error: {e}")
 
-    section_divider("Heuristic Signal Backtest")
+        section_divider("Heuristic Signal Backtest")
 
-    section_header(
-        "Heuristic Signal Backtest",
-        "The original simulation of hard-coded momentum / mean-reversion / divergence rules",
-    )
+        section_header(
+            "Heuristic Signal Backtest",
+            "The original simulation of hard-coded momentum / mean-reversion / divergence rules",
+        )
 
-    # ── Controls ─────────────────────────────────────────────────────────────
-    with st.expander("Backtest Settings", expanded=False):
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            lookback = st.slider(
-                "Lookback window (days)",
-                min_value=60,
-                max_value=365,
-                value=180,
-                step=30,
-                key="bt_lookback",
-            )
-        with col_b:
-            hold_1w = st.number_input("1W hold (trading days)", value=5, min_value=1, max_value=15, key="bt_hold_1w")
-            hold_1m = st.number_input("1M hold (trading days)", value=21, min_value=5, max_value=45, key="bt_hold_1m")
-        with col_c:
-            hold_3m = st.number_input("3M hold (trading days)", value=63, min_value=20, max_value=90, key="bt_hold_3m")
-
-    hold_days_map = {"1W": int(hold_1w), "1M": int(hold_1m), "3M": int(hold_3m)}
-
-    # ── Run backtest ─────────────────────────────────────────────────────────
-    run_btn = st.button("Run Backtest", type="primary", key="bt_run_btn")
-
-    bt_results_key = "bt_results_cache"
-
-    if run_btn or bt_results_key not in st.session_state:
-        if not stock_data:
-            st.warning("No stock data available — cannot run backtest.")
-            return
-        with st.spinner("Running backtest simulation..."):
-            try:
-                from processing.backtest_engine import run_backtest
-                results = run_backtest(
-                    stock_data=stock_data,
-                    lookback_days=lookback,
-                    hold_days_map=hold_days_map,
+        # ── Controls ─────────────────────────────────────────────────────────────
+        with st.expander("Backtest Settings", expanded=False):
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                lookback = st.slider(
+                    "Lookback window (days)",
+                    min_value=60,
+                    max_value=365,
+                    value=180,
+                    step=30,
+                    key="bt_lookback",
                 )
-                st.session_state[bt_results_key] = results
-            except Exception as e:
-                st.error(f"Backtest engine error: {e}")
-                logger.error(f"Backtest render error: {traceback.format_exc()}")
+            with col_b:
+                hold_1w = st.number_input("1W hold (trading days)", value=5, min_value=1, max_value=15, key="bt_hold_1w")
+                hold_1m = st.number_input("1M hold (trading days)", value=21, min_value=5, max_value=45, key="bt_hold_1m")
+            with col_c:
+                hold_3m = st.number_input("3M hold (trading days)", value=63, min_value=20, max_value=90, key="bt_hold_3m")
+
+        hold_days_map = {"1W": int(hold_1w), "1M": int(hold_1m), "3M": int(hold_3m)}
+
+        # ── Run backtest ─────────────────────────────────────────────────────────
+        run_btn = st.button("Run Backtest", type="primary", key="bt_run_btn")
+
+        bt_results_key = "bt_results_cache"
+
+        if run_btn or bt_results_key not in st.session_state:
+            if not stock_data:
+                st.warning("No stock data available — cannot run backtest.")
                 return
+            with st.spinner("Running backtest simulation..."):
+                try:
+                    from processing.backtest_engine import run_backtest
+                    results = run_backtest(
+                        stock_data=stock_data,
+                        lookback_days=lookback,
+                        hold_days_map=hold_days_map,
+                    )
+                    st.session_state[bt_results_key] = results
+                except Exception as e:
+                    st.error(f"Backtest engine error: {e}")
+                    logger.error(f"Backtest render error: {traceback.format_exc()}")
+                    return
 
-    results = st.session_state.get(bt_results_key)
-    if results is None or results.total_trades == 0:
-        st.info("No trades generated. Try increasing the lookback window or check that stock data is loaded.")
-        return
+        results = st.session_state.get(bt_results_key)
+        if results is None or results.total_trades == 0:
+            st.info("No trades generated. Try increasing the lookback window or check that stock data is loaded.")
+            return
 
-    # ── Hero KPIs ─────────────────────────────────────────────────────────────
-    _demo_source = DataSource.demo("Backtest Engine (simulated)")
+        # ── Hero KPIs ─────────────────────────────────────────────────────────────
+        _demo_source = DataSource.demo("Backtest Engine (simulated)")
 
-    metric_card_row(
-        [
-            {
-                "label":    "Total Return",
-                "value":    f"{results.total_return_pct:+.1f}%",
-                "accent":   _return_color(results.total_return_pct),
-                "sublabel": "sum equal-weight",
-            },
-            {
-                "label":    "Win Rate",
-                "value":    f"{results.win_rate:.1f}%",
-                "accent":   _winrate_color(results.win_rate),
-                "sublabel": "trades in right direction",
-            },
-            {
-                "label":    "Sharpe Ratio",
-                "value":    f"{results.sharpe_ratio:.2f}",
-                "accent":   _sharpe_color(results.sharpe_ratio),
-                "sublabel": "annualized",
-            },
-            {
-                "label":    "Total Trades",
-                "value":    str(results.total_trades),
-                "accent":   C_ACCENT,
-                "sublabel": f"~{lookback}d window",
-            },
-            {
-                "label":    "Max Drawdown",
-                "value":    f"{results.max_drawdown:.1f}%",
-                "accent":   _drawdown_color(results.max_drawdown),
-                "sublabel": "worst intraday",
-            },
-        ],
-        columns=5,
-    )
-    st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-
-    section_divider("Performance")
-
-    # ── Equity Curve ──────────────────────────────────────────────────────────
-    section_header("Equity Curve", "Cumulative alpha vs a buy-and-hold benchmark")
-    try:
-        fig_eq = _equity_curve_chart(results.equity_curve, stock_data)
-        st.plotly_chart(fig_eq, use_container_width=True, key="bt_equity_curve")
+        metric_card_row(
+            [
+                {
+                    "label":    "Total Return",
+                    "value":    f"{results.total_return_pct:+.1f}%",
+                    "accent":   _return_color(results.total_return_pct),
+                    "sublabel": "sum equal-weight",
+                },
+                {
+                    "label":    "Win Rate",
+                    "value":    f"{results.win_rate:.1f}%",
+                    "accent":   _winrate_color(results.win_rate),
+                    "sublabel": "trades in right direction",
+                },
+                {
+                    "label":    "Sharpe Ratio",
+                    "value":    f"{results.sharpe_ratio:.2f}",
+                    "accent":   _sharpe_color(results.sharpe_ratio),
+                    "sublabel": "annualized",
+                },
+                {
+                    "label":    "Total Trades",
+                    "value":    str(results.total_trades),
+                    "accent":   C_ACCENT,
+                    "sublabel": f"~{lookback}d window",
+                },
+                {
+                    "label":    "Max Drawdown",
+                    "value":    f"{results.max_drawdown:.1f}%",
+                    "accent":   _drawdown_color(results.max_drawdown),
+                    "sublabel": "worst intraday",
+                },
+            ],
+            columns=5,
+        )
         st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Equity curve error: {e}")
 
-    # ── Performance by Conviction / Signal Type ───────────────────────────────
-    section_header("Performance Breakdown")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown('<div class="sub-section-header">By Conviction Tier</div>', unsafe_allow_html=True)
+        section_divider("Performance")
+
+        # ── Equity Curve ──────────────────────────────────────────────────────────
+        section_header("Equity Curve", "Cumulative alpha vs a buy-and-hold benchmark")
         try:
-            fig_conv = _conviction_bar_chart(results.by_conviction)
-            st.plotly_chart(fig_conv, use_container_width=True, key="bt_conviction_bar")
-        except Exception as e:
-            st.error(f"Conviction chart error: {e}")
-
-    with col2:
-        st.markdown('<div class="sub-section-header">By Signal Type</div>', unsafe_allow_html=True)
-        try:
-            fig_type = _signal_type_chart(results.by_type)
-            st.plotly_chart(fig_type, use_container_width=True, key="bt_type_bar")
-        except Exception as e:
-            st.error(f"Signal type chart error: {e}")
-
-    st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-
-    # ── By Ticker Table ───────────────────────────────────────────────────────
-    section_header("Performance by Ticker")
-    try:
-        if results.by_ticker:
-            ticker_rows = []
-            for ticker, stats in sorted(
-                results.by_ticker.items(),
-                key=lambda kv: kv[1]["win_rate"],
-                reverse=True,
-            ):
-                ticker_rows.append([
-                    _sans(ticker, color=C_TEXT, weight=700),
-                    _mono(str(stats["count"]), color=C_TEXT2),
-                    _mono(f"{stats['win_rate']:.1f}%", color=_winrate_color(stats["win_rate"])),
-                    _mono(f"{stats['avg_return']:+.2f}%", color=_return_color(stats["avg_return"])),
-                    _mono(f"{stats['total_return']:+.2f}%", color=_return_color(stats["total_return"])),
-                ])
-            wsj_market_table(
-                headers=["Ticker", "Trades", "Win Rate", "Avg Return", "Total Return"],
-                rows=ticker_rows,
-            )
+            fig_eq = _equity_curve_chart(results.equity_curve, stock_data)
+            st.plotly_chart(fig_eq, use_container_width=True, key="bt_equity_curve")
             st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Ticker table error: {e}")
+        except Exception as e:
+            st.error(f"Equity curve error: {e}")
 
-    section_divider("Trade Detail")
+        # ── Performance by Conviction / Signal Type ───────────────────────────────
+        section_header("Performance Breakdown")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown('<div class="sub-section-header">By Conviction Tier</div>', unsafe_allow_html=True)
+            try:
+                fig_conv = _conviction_bar_chart(results.by_conviction)
+                st.plotly_chart(fig_conv, use_container_width=True, key="bt_conviction_bar")
+            except Exception as e:
+                st.error(f"Conviction chart error: {e}")
 
-    # ── Monthly Heatmap ───────────────────────────────────────────────────────
-    section_header("Monthly Return Heatmap", "Average signal return by calendar month")
-    try:
-        fig_heat = _monthly_heatmap(results.monthly_returns)
-        st.plotly_chart(fig_heat, use_container_width=True, key="bt_monthly_heatmap")
+        with col2:
+            st.markdown('<div class="sub-section-header">By Signal Type</div>', unsafe_allow_html=True)
+            try:
+                fig_type = _signal_type_chart(results.by_type)
+                st.plotly_chart(fig_type, use_container_width=True, key="bt_type_bar")
+            except Exception as e:
+                st.error(f"Signal type chart error: {e}")
+
         st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Monthly heatmap error: {e}")
 
-    # ── Trade Log ─────────────────────────────────────────────────────────────
-    section_header("Full Trade Log")
-    try:
-        if results.trades:
-            trade_rows = _build_trade_rows(results.trades)
-            wsj_market_table(
-                headers=["Ticker", "Signal", "Conviction", "Entry Date", "Return %", "Hold", "Result"],
-                rows=trade_rows,
-            )
+        # ── By Ticker Table ───────────────────────────────────────────────────────
+        section_header("Performance by Ticker")
+        try:
+            if results.by_ticker:
+                ticker_rows = []
+                for ticker, stats in sorted(
+                    results.by_ticker.items(),
+                    key=lambda kv: kv[1]["win_rate"],
+                    reverse=True,
+                ):
+                    ticker_rows.append([
+                        _sans(ticker, color=C_TEXT, weight=700),
+                        _mono(str(stats["count"]), color=C_TEXT2),
+                        _mono(f"{stats['win_rate']:.1f}%", color=_winrate_color(stats["win_rate"])),
+                        _mono(f"{stats['avg_return']:+.2f}%", color=_return_color(stats["avg_return"])),
+                        _mono(f"{stats['total_return']:+.2f}%", color=_return_color(stats["total_return"])),
+                    ])
+                wsj_market_table(
+                    headers=["Ticker", "Trades", "Win Rate", "Avg Return", "Total Return"],
+                    rows=ticker_rows,
+                )
+                st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Ticker table error: {e}")
+
+        section_divider("Trade Detail")
+
+        # ── Monthly Heatmap ───────────────────────────────────────────────────────
+        section_header("Monthly Return Heatmap", "Average signal return by calendar month")
+        try:
+            fig_heat = _monthly_heatmap(results.monthly_returns)
+            st.plotly_chart(fig_heat, use_container_width=True, key="bt_monthly_heatmap")
             st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
-        else:
-            st.info("No trades to display.")
-    except Exception as e:
-        st.error(f"Trade log error: {e}")
+        except Exception as e:
+            st.error(f"Monthly heatmap error: {e}")
 
-    section_divider("Takeaways")
-
-    # ── Key Insights ──────────────────────────────────────────────────────────
-    section_header("Key Insights", "Auto-generated takeaways from the backtest run")
-    try:
-        insight_list = _build_insights(results)
-        for title, body, color, score in insight_list:
-            # Map the domain color → closest action label for insight_card_html
-            if color == C_HIGH:
-                action = "Prioritize"
-            elif color == C_MOD:
-                action = "Monitor"
-            elif color == C_LOW:
-                action = "Caution"
+        # ── Trade Log ─────────────────────────────────────────────────────────────
+        section_header("Full Trade Log")
+        try:
+            if results.trades:
+                trade_rows = _build_trade_rows(results.trades)
+                wsj_market_table(
+                    headers=["Ticker", "Signal", "Conviction", "Entry Date", "Return %", "Hold", "Result"],
+                    rows=trade_rows,
+                )
+                st.markdown(source_footer([_demo_source]), unsafe_allow_html=True)
             else:
-                action = "Watch"
-            st.markdown(
-                insight_card_html(title=title, score=score, action=action, rationale=body),
-                unsafe_allow_html=True,
-            )
-    except Exception as e:
-        st.error(f"Insights error: {e}")
+                st.info("No trades to display.")
+        except Exception as e:
+            st.error(f"Trade log error: {e}")
+
+        section_divider("Takeaways")
+
+        # ── Key Insights ──────────────────────────────────────────────────────────
+        section_header("Key Insights", "Auto-generated takeaways from the backtest run")
+        try:
+            insight_list = _build_insights(results)
+            for title, body, color, score in insight_list:
+                # Map the domain color → closest action label for insight_card_html
+                if color == C_HIGH:
+                    action = "Prioritize"
+                elif color == C_MOD:
+                    action = "Monitor"
+                elif color == C_LOW:
+                    action = "Caution"
+                else:
+                    action = "Watch"
+                st.markdown(
+                    insight_card_html(title=title, score=score, action=action, rationale=body),
+                    unsafe_allow_html=True,
+                )
+        except Exception as e:
+            st.error(f"Insights error: {e}")

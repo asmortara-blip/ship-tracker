@@ -1206,127 +1206,131 @@ def render(
     news_items=None,
 ) -> None:
     """Render the Data Health & Freshness Monitoring tab."""
-    try:
-        page_header(
-            title="Data Source Health & Freshness",
-            subtitle=(
-                "Cache state, credential coverage and quality checks across "
-                "every data feed · Last scan "
-                f"{_now_utc().strftime('%Y-%m-%d %H:%M UTC')}"
-            ),
-            badge_text="LIVE SCAN",
-            badge_color=C_ACCENT,
-        )
-
-        source_rows = _build_source_rows()
-
-        # ── Movement 1: feed catalog ────────────────────────────────────────
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('data_health'):
         try:
-            _render_overview(source_rows)
-        except Exception as exc:
-            logger.error(f"Overview render error: {exc}")
-            st.error("Overview unavailable.")
-
-        section_divider("Source Catalog")
-        try:
-            _render_source_table(source_rows)
-        except Exception as exc:
-            logger.error(f"Source table render error: {exc}")
-            st.error("Source table unavailable.")
-
-        # ── Movement 1.5: SLA dashboard ────────────────────────────────────
-        section_divider("SLA")
-        try:
-            _render_sla_dashboard(source_rows)
-        except Exception as exc:
-            logger.error(f"SLA dashboard render error: {exc}")
-            st.error("SLA dashboard unavailable.")
-
-        # ── Movement 1.6: LLM usage telemetry ──────────────────────────────
-        section_divider("LLM Usage")
-        try:
-            _render_llm_usage()
-        except Exception as exc:
-            logger.error(f"LLM usage render error: {exc}")
-            st.error("LLM usage panel unavailable.")
-
-        # ── Movement 1.65: tab render performance ──────────────────────────
-        section_divider("Tab Performance")
-        try:
-            _render_tab_perf()
-        except Exception as exc:
-            logger.error(f"Tab perf render error: {exc}")
-            st.error("Tab performance panel unavailable.")
-
-        # ── Movement 1.7: log viewer ───────────────────────────────────────
-        section_divider("Logs")
-        try:
-            _render_log_viewer()
-        except Exception as exc:
-            logger.error(f"Log viewer render error: {exc}")
-            st.error("Log viewer unavailable.")
-
-        # ── Movement 2: performance & credentials ───────────────────────────
-        section_divider("Cache & Credentials")
-        try:
-            _render_cache_performance(source_rows)
-        except Exception as exc:
-            logger.error(f"Cache performance render error: {exc}")
-            st.error("Cache performance unavailable.")
-
-        st.divider()
-        try:
-            _render_api_keys()
-        except Exception as exc:
-            logger.error(f"API key render error: {exc}")
-            st.error("API key table unavailable.")
-
-        # ── Movement 3: diagnostics ─────────────────────────────────────────
-        section_divider("Diagnostics")
-        try:
-            _render_staleness_heatmap(source_rows)
-        except Exception as exc:
-            logger.error(f"Staleness heatmap render error: {exc}")
-            st.error("Heatmap unavailable.")
-
-        st.divider()
-        try:
-            _render_error_log()
-        except Exception as exc:
-            logger.error(f"Error log render error: {exc}")
-            st.error("Error log unavailable.")
-
-        st.divider()
-        try:
-            _render_manual_refresh(source_rows)
-        except Exception as exc:
-            logger.error(f"Manual refresh render error: {exc}")
-            st.error("Manual refresh unavailable.")
-
-        section_divider("Dataset Quality")
-        try:
-            _render_data_quality(port_results, route_results, macro_data, stock_data, freight_data, news_items)
-        except Exception as exc:
-            logger.error(f"Data quality render error: {exc}")
-            st.error("Data quality metrics unavailable.")
-
-        # ── Provenance footer ───────────────────────────────────────────────
-        try:
-            st.markdown(
-                source_footer([
-                    DataSource.live(
-                        "Cache Scan",
-                        notes="Parquet disk scan + os.environ / st.secrets check",
-                    ),
-                    DataSource.demo(
-                        "Telemetry Fallback (synthetic where no live feed)"
-                    ),
-                ]),
-                unsafe_allow_html=True,
+            page_header(
+                title="Data Source Health & Freshness",
+                subtitle=(
+                    "Cache state, credential coverage and quality checks across "
+                    "every data feed · Last scan "
+                    f"{_now_utc().strftime('%Y-%m-%d %H:%M UTC')}"
+                ),
+                badge_text="LIVE SCAN",
+                badge_color=C_ACCENT,
             )
-        except Exception as exc:
-            logger.warning(f"Source footer render error: {exc}")
 
-    except Exception as exc:
-        logger.error(f"tab_data_health.render critical error: {exc}")
-        st.error(f"Data health tab encountered a critical error: {exc}")
+            source_rows = _build_source_rows()
+
+            # ── Movement 1: feed catalog ────────────────────────────────────────
+            try:
+                _render_overview(source_rows)
+            except Exception as exc:
+                logger.error(f"Overview render error: {exc}")
+                st.error("Overview unavailable.")
+
+            section_divider("Source Catalog")
+            try:
+                _render_source_table(source_rows)
+            except Exception as exc:
+                logger.error(f"Source table render error: {exc}")
+                st.error("Source table unavailable.")
+
+            # ── Movement 1.5: SLA dashboard ────────────────────────────────────
+            section_divider("SLA")
+            try:
+                _render_sla_dashboard(source_rows)
+            except Exception as exc:
+                logger.error(f"SLA dashboard render error: {exc}")
+                st.error("SLA dashboard unavailable.")
+
+            # ── Movement 1.6: LLM usage telemetry ──────────────────────────────
+            section_divider("LLM Usage")
+            try:
+                _render_llm_usage()
+            except Exception as exc:
+                logger.error(f"LLM usage render error: {exc}")
+                st.error("LLM usage panel unavailable.")
+
+            # ── Movement 1.65: tab render performance ──────────────────────────
+            section_divider("Tab Performance")
+            try:
+                _render_tab_perf()
+            except Exception as exc:
+                logger.error(f"Tab perf render error: {exc}")
+                st.error("Tab performance panel unavailable.")
+
+            # ── Movement 1.7: log viewer ───────────────────────────────────────
+            section_divider("Logs")
+            try:
+                _render_log_viewer()
+            except Exception as exc:
+                logger.error(f"Log viewer render error: {exc}")
+                st.error("Log viewer unavailable.")
+
+            # ── Movement 2: performance & credentials ───────────────────────────
+            section_divider("Cache & Credentials")
+            try:
+                _render_cache_performance(source_rows)
+            except Exception as exc:
+                logger.error(f"Cache performance render error: {exc}")
+                st.error("Cache performance unavailable.")
+
+            st.divider()
+            try:
+                _render_api_keys()
+            except Exception as exc:
+                logger.error(f"API key render error: {exc}")
+                st.error("API key table unavailable.")
+
+            # ── Movement 3: diagnostics ─────────────────────────────────────────
+            section_divider("Diagnostics")
+            try:
+                _render_staleness_heatmap(source_rows)
+            except Exception as exc:
+                logger.error(f"Staleness heatmap render error: {exc}")
+                st.error("Heatmap unavailable.")
+
+            st.divider()
+            try:
+                _render_error_log()
+            except Exception as exc:
+                logger.error(f"Error log render error: {exc}")
+                st.error("Error log unavailable.")
+
+            st.divider()
+            try:
+                _render_manual_refresh(source_rows)
+            except Exception as exc:
+                logger.error(f"Manual refresh render error: {exc}")
+                st.error("Manual refresh unavailable.")
+
+            section_divider("Dataset Quality")
+            try:
+                _render_data_quality(port_results, route_results, macro_data, stock_data, freight_data, news_items)
+            except Exception as exc:
+                logger.error(f"Data quality render error: {exc}")
+                st.error("Data quality metrics unavailable.")
+
+            # ── Provenance footer ───────────────────────────────────────────────
+            try:
+                st.markdown(
+                    source_footer([
+                        DataSource.live(
+                            "Cache Scan",
+                            notes="Parquet disk scan + os.environ / st.secrets check",
+                        ),
+                        DataSource.demo(
+                            "Telemetry Fallback (synthetic where no live feed)"
+                        ),
+                    ]),
+                    unsafe_allow_html=True,
+                )
+            except Exception as exc:
+                logger.warning(f"Source footer render error: {exc}")
+
+        except Exception as exc:
+            logger.error(f"tab_data_health.render critical error: {exc}")
+            st.error(f"Data health tab encountered a critical error: {exc}")

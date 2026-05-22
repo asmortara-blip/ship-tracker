@@ -611,30 +611,34 @@ def _render_port_queue() -> None:
 
 def render(port_results=None, route_results=None, freight_data=None,
            macro_data=None, **kwargs) -> None:
-    try:
-        page_header(
-            title="ETA Intelligence & Voyage Tracking",
-            subtitle="Vessel ETA prediction, delay analysis, carrier reliability and port queue monitoring",
-            badge_text="ETA",
-            badge_color=C_ACCENT,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('eta'):
+        try:
+            page_header(
+                title="ETA Intelligence & Voyage Tracking",
+                subtitle="Vessel ETA prediction, delay analysis, carrier reliability and port queue monitoring",
+                badge_text="ETA",
+                badge_color=C_ACCENT,
+            )
 
-        section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
-        _render_kpis()
+            section_header("ETA Intelligence Dashboard", "Fleet-wide on-time performance snapshot")
+            _render_kpis()
 
-        section_divider("Voyage Tracker")
-        _render_voyage_tracker()
-        section_divider("ETA Calculator")
-        _render_eta_calculator()
-        section_divider("Delay Analysis")
-        _render_delay_analysis()
-        section_divider("Reliability Trends")
-        _render_reliability_trends()
-        section_divider("Weather Forecast")
-        _render_weather_forecast()
-        section_divider("Port Queues")
-        _render_port_queue()
+            section_divider("Voyage Tracker")
+            _render_voyage_tracker()
+            section_divider("ETA Calculator")
+            _render_eta_calculator()
+            section_divider("Delay Analysis")
+            _render_delay_analysis()
+            section_divider("Reliability Trends")
+            _render_reliability_trends()
+            section_divider("Weather Forecast")
+            _render_weather_forecast()
+            section_divider("Port Queues")
+            _render_port_queue()
 
-    except Exception:
-        logger.exception("tab_eta render failed")
-        st.error("ETA tab failed to load. Check logs for details.")
+        except Exception:
+            logger.exception("tab_eta render failed")
+            st.error("ETA tab failed to load. Check logs for details.")

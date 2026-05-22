@@ -1502,49 +1502,53 @@ def render(
     stock_data=None,
 ):
     """Render the Alert Center tab."""
-    try:
-        _init_state()
-    except Exception:
-        logger.exception("Alert Center state init failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('alerts'):
+        try:
+            _init_state()
+        except Exception:
+            logger.exception("Alert Center state init failed")
 
-    # Derive active alerts
-    try:
-        scanned = _scan_triggered_alerts(freight_data, insights, stock_data, macro_data)
-        if scanned:
-            st.session_state["active_alerts_cache"] = scanned
-        active_alerts = st.session_state.get("active_alerts_cache", []) or []
-        if not active_alerts:
+        # Derive active alerts
+        try:
+            scanned = _scan_triggered_alerts(freight_data, insights, stock_data, macro_data)
+            if scanned:
+                st.session_state["active_alerts_cache"] = scanned
+            active_alerts = st.session_state.get("active_alerts_cache", []) or []
+            if not active_alerts:
+                active_alerts = _mock_history()[:3]
+        except Exception:
+            logger.exception("Alert scan failed")
             active_alerts = _mock_history()[:3]
-    except Exception:
-        logger.exception("Alert scan failed")
-        active_alerts = _mock_history()[:3]
 
-    dismissed_ids = st.session_state.get("alert_dismissed", set())
-    visible_alerts = [
-        a for i, a in enumerate(active_alerts)
-        if i not in dismissed_ids and not a.get("dismissed", False)
-    ]
+        dismissed_ids = st.session_state.get("alert_dismissed", set())
+        visible_alerts = [
+            a for i, a in enumerate(active_alerts)
+            if i not in dismissed_ids and not a.get("dismissed", False)
+        ]
 
-    try:
-        _render_hero(visible_alerts)
-        _render_configuration_form()
+        try:
+            _render_hero(visible_alerts)
+            _render_configuration_form()
 
-        section_divider("Live Monitoring")
-        _render_active_alerts(visible_alerts)
+            section_divider("Live Monitoring")
+            _render_active_alerts(visible_alerts)
 
-        st.divider()
-        _render_history()
+            st.divider()
+            _render_history()
 
-        _render_acknowledgment_analytics()
-        _render_effectiveness_backtest()
+            _render_acknowledgment_analytics()
+            _render_effectiveness_backtest()
 
-        section_divider("Configuration")
-        _render_notifications()
-        _render_rules_manager()
+            section_divider("Configuration")
+            _render_notifications()
+            _render_rules_manager()
 
-        _render_delivery_channels()
-    except Exception:
-        logger.exception("tab_alerts top-level render failed")
-        st.error("Alert Center tab encountered an error.")
+            _render_delivery_channels()
+        except Exception:
+            logger.exception("tab_alerts top-level render failed")
+            st.error("Alert Center tab encountered an error.")
 
 

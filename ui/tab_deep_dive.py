@@ -921,22 +921,26 @@ def render(
     **kwargs,
 ) -> None:
     """Render the Deep Dive research analyst tab."""
-    try:
-        page_header(
-            title="Deep Dive — Research Analyst View",
-            subtitle="Select a route and commodity to generate comprehensive trade lane intelligence.",
-            badge_text="DEEP DIVE",
-            badge_color=C_ACCENT,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('deep_dive'):
+        try:
+            page_header(
+                title="Deep Dive — Research Analyst View",
+                subtitle="Select a route and commodity to generate comprehensive trade lane intelligence.",
+                badge_text="DEEP DIVE",
+                badge_color=C_ACCENT,
+            )
 
-        route, commodity = _render_selector()
-        _render_route_card(route)
-        _render_commodity_flow(commodity)
-        _render_pressure_points(route, commodity)
-        _render_shipper_intel(route, commodity)
-        _render_analyst_commentary(route, commodity)
-        _render_similar_routes(route)
+            route, commodity = _render_selector()
+            _render_route_card(route)
+            _render_commodity_flow(commodity)
+            _render_pressure_points(route, commodity)
+            _render_shipper_intel(route, commodity)
+            _render_analyst_commentary(route, commodity)
+            _render_similar_routes(route)
 
-    except Exception:
-        logger.exception("tab_deep_dive render failed")
-        st.error("Deep Dive tab encountered an unexpected error. Check logs.")
+        except Exception:
+            logger.exception("tab_deep_dive render failed")
+            st.error("Deep Dive tab encountered an unexpected error. Check logs.")

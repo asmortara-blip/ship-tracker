@@ -621,45 +621,49 @@ def _render_relative_value(df: pd.DataFrame) -> None:
 
 def render(stock_data: Any = None, insights: Any = None, *args, **kwargs) -> None:
     """Render the Goldman Sachs equity research quality fundamentals tab."""
-    try:
-        df = pd.DataFrame(UNIVERSE).sort_values("mktcap", ascending=False).reset_index(drop=True)
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('fundamentals'):
+        try:
+            df = pd.DataFrame(UNIVERSE).sort_values("mktcap", ascending=False).reset_index(drop=True)
 
-        if stock_data is not None:
-            try:
-                if isinstance(stock_data, dict):
-                    for i, row in df.iterrows():
-                        tk = row["ticker"]
-                        if tk in stock_data:
-                            sd = stock_data[tk]
-                            if isinstance(sd, dict) and "price" in sd:
-                                df.at[i, "price"] = float(sd["price"])
-                            elif hasattr(sd, "price"):
-                                df.at[i, "price"] = float(sd.price)
-            except Exception:
-                logger.warning("Could not overlay live prices from stock_data")
+            if stock_data is not None:
+                try:
+                    if isinstance(stock_data, dict):
+                        for i, row in df.iterrows():
+                            tk = row["ticker"]
+                            if tk in stock_data:
+                                sd = stock_data[tk]
+                                if isinstance(sd, dict) and "price" in sd:
+                                    df.at[i, "price"] = float(sd["price"])
+                                elif hasattr(sd, "price"):
+                                    df.at[i, "price"] = float(sd.price)
+                except Exception:
+                    logger.warning("Could not overlay live prices from stock_data")
 
-        page_header(
-            title="Shipping Equity Coverage",
-            subtitle="Goldman Sachs-style equity research universe — 20 global shipping names",
-            badge_text="FUNDAMENTALS",
-            badge_color=C_ACCENT,
-        )
+            page_header(
+                title="Shipping Equity Coverage",
+                subtitle="Goldman Sachs-style equity research universe — 20 global shipping names",
+                badge_text="FUNDAMENTALS",
+                badge_color=C_ACCENT,
+            )
 
-        _render_header(df)
+            _render_header(df)
 
-        section_divider("Screening")
-        _render_screening_table(df)
+            section_divider("Screening")
+            _render_screening_table(df)
 
-        section_divider("Valuation")
-        _render_valuation_matrix(df)
+            section_divider("Valuation")
+            _render_valuation_matrix(df)
 
-        section_divider("Deep Dive")
-        _render_deep_dive(df)
+            section_divider("Deep Dive")
+            _render_deep_dive(df)
 
-        section_divider("Income & Yield")
-        _render_dividend_tracker(df)
-        _render_relative_value(df)
+            section_divider("Income & Yield")
+            _render_dividend_tracker(df)
+            _render_relative_value(df)
 
-    except Exception:
-        logger.exception("tab_fundamentals render failed")
-        st.error("Fundamentals tab encountered an error. Check logs.")
+        except Exception:
+            logger.exception("tab_fundamentals render failed")
+            st.error("Fundamentals tab encountered an error. Check logs.")

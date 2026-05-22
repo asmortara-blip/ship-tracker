@@ -483,50 +483,54 @@ def render(
     macro_data=None,
 ) -> None:
     """Global Trade Flows dashboard."""
-    try:
-        # 1. Page header
-        page_header(
-            title="Global Trade Flows",
-            subtitle=(
-                "Mapping what the world ships — commodity flows by route, "
-                "region, and vessel type"
-            ),
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('trade_flows'):
+        try:
+            # 1. Page header
+            page_header(
+                title="Global Trade Flows",
+                subtitle=(
+                    "Mapping what the world ships — commodity flows by route, "
+                    "region, and vessel type"
+                ),
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
 
-        # 2. Flow map
-        section_header(
-            "Bilateral Trade Arcs",
-            subtitle=(
-                "Route arcs coloured by dominant commodity; arc width scaled to "
-                "illustrative annual trade value ($B)"
-            ),
-        )
-        _render_flow_map()
+            # 2. Flow map
+            section_header(
+                "Bilateral Trade Arcs",
+                subtitle=(
+                    "Route arcs coloured by dominant commodity; arc width scaled to "
+                    "illustrative annual trade value ($B)"
+                ),
+            )
+            _render_flow_map()
 
-        # 3. Sankey + Route breakdown side by side
-        section_divider("Flow Decomposition")
-        section_header(
-            "Origin → Commodity → Destination",
-            subtitle="How bulk flows resolve through commodity categories",
-        )
-        left, right = st.columns([3, 2], gap="large")
-        with left:
-            st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
-            _render_sankey()
-        with right:
-            st.html('<div class="sub-section-header">Route Cargo Breakdown</div>')
-            _render_route_breakdown()
+            # 3. Sankey + Route breakdown side by side
+            section_divider("Flow Decomposition")
+            section_header(
+                "Origin → Commodity → Destination",
+                subtitle="How bulk flows resolve through commodity categories",
+            )
+            left, right = st.columns([3, 2], gap="large")
+            with left:
+                st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
+                _render_sankey()
+            with right:
+                st.html('<div class="sub-section-header">Route Cargo Breakdown</div>')
+                _render_route_breakdown()
 
-        # 4. Commodity deep dive
-        section_divider("Cargo Intelligence")
-        section_header(
-            "Commodity Intelligence",
-            subtitle="Demand signals, seasonal patterns, and key routes by cargo type",
-        )
-        _render_commodity_cards()
+            # 4. Commodity deep dive
+            section_divider("Cargo Intelligence")
+            section_header(
+                "Commodity Intelligence",
+                subtitle="Demand signals, seasonal patterns, and key routes by cargo type",
+            )
+            _render_commodity_cards()
 
-    except Exception as exc:
-        logger.error(f"tab_trade_flows.render fatal: {exc}")
-        st.error(f"Trade Flows error: {exc}")
+        except Exception as exc:
+            logger.error(f"tab_trade_flows.render fatal: {exc}")
+            st.error(f"Trade Flows error: {exc}")

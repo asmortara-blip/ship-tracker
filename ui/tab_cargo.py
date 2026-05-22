@@ -449,19 +449,23 @@ def render(
     *args,
     **kwargs,
 ) -> None:
-    try:
-        _render_hero()
-        section_divider("Cargo Mix")
-        _render_cargo_breakdown()
-        _render_commodity_table()
-        section_divider("Specialised Cargo")
-        _render_hazmat()
-        _render_reefer()
-        section_divider("Shipper Tools")
-        _render_lcl_fcl_optimizer()
-        section_divider("Risk & Equipment")
-        _render_theft_tracker()
-        _render_equipment_balance()
-    except Exception:
-        logger.exception("tab_cargo top-level render failed")
-        st.error("Cargo Intelligence tab encountered an error.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('cargo'):
+        try:
+            _render_hero()
+            section_divider("Cargo Mix")
+            _render_cargo_breakdown()
+            _render_commodity_table()
+            section_divider("Specialised Cargo")
+            _render_hazmat()
+            _render_reefer()
+            section_divider("Shipper Tools")
+            _render_lcl_fcl_optimizer()
+            section_divider("Risk & Equipment")
+            _render_theft_tracker()
+            _render_equipment_balance()
+        except Exception:
+            logger.exception("tab_cargo top-level render failed")
+            st.error("Cargo Intelligence tab encountered an error.")

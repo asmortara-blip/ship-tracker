@@ -476,50 +476,54 @@ def _render_centrality_chart() -> None:
 
 def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Shipping Network Topology & Resilience tab."""
-    try:
-        page_header(
-            title="Shipping Network Topology & Resilience",
-            subtitle="Global network map, port centrality, hub-and-spoke analysis, "
-            "alliance coverage and stress testing",
-            badge_text="NETWORK",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Network — page header render failed")
-
-    _render_hero_stats()
-    _render_network_map()
-
-    section_divider("Centrality")
-
-    col_left, col_right = st.columns([3, 2], gap="large")
-    with col_left:
-        _render_centrality()
-    with col_right:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('network'):
         try:
-            _render_centrality_chart()
+            page_header(
+                title="Shipping Network Topology & Resilience",
+                subtitle="Global network map, port centrality, hub-and-spoke analysis, "
+                "alliance coverage and stress testing",
+                badge_text="NETWORK",
+                badge_color=C_ACCENT,
+            )
         except Exception:
-            logger.exception("Network — centrality chart column failed")
+            logger.exception("Network — page header render failed")
 
-    section_divider("Routing Structure")
-    _render_hub_spoke()
+        _render_hero_stats()
+        _render_network_map()
 
-    section_divider("Alliance Coverage")
-    _render_carrier_services()
+        section_divider("Centrality")
 
-    section_divider("Stress Testing")
-    _render_stress_test()
+        col_left, col_right = st.columns([3, 2], gap="large")
+        with col_left:
+            _render_centrality()
+        with col_right:
+            try:
+                _render_centrality_chart()
+            except Exception:
+                logger.exception("Network — centrality chart column failed")
 
-    section_divider("Methodology")
+        section_divider("Routing Structure")
+        _render_hub_spoke()
 
-    try:
-        section_header(
-            "Methodology & Provenance",
-            "Topology derived from vessel scheduling data, AIS tracking and carrier "
-            "service announcements. Centrality is betweenness weighted by TEU "
-            "throughput; stress-test scenarios are modeled simulations — actual "
-            "outcomes depend on market conditions and carrier response.",
-        )
-        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Network — methodology footer render failed")
+        section_divider("Alliance Coverage")
+        _render_carrier_services()
+
+        section_divider("Stress Testing")
+        _render_stress_test()
+
+        section_divider("Methodology")
+
+        try:
+            section_header(
+                "Methodology & Provenance",
+                "Topology derived from vessel scheduling data, AIS tracking and carrier "
+                "service announcements. Centrality is betweenness weighted by TEU "
+                "throughput; stress-test scenarios are modeled simulations — actual "
+                "outcomes depend on market conditions and carrier response.",
+            )
+            st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Network — methodology footer render failed")

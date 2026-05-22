@@ -491,55 +491,59 @@ def _render_ice_route() -> None:
 
 
 def render(port_results=None, route_results=None, *args, **kwargs) -> None:
-    try:
-        logger.info("Rendering weather risk tab")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('weather'):
+        try:
+            logger.info("Rendering weather risk tab")
 
-        page_header(
-            title="Weather Risk & Routing Intelligence",
-            subtitle="Live disruption events, forecast tables, and deviation recommendations across global shipping lanes",
-            badge_text="WEATHER",
-            badge_color=C_ACCENT,
-        )
+            page_header(
+                title="Weather Risk & Routing Intelligence",
+                subtitle="Live disruption events, forecast tables, and deviation recommendations across global shipping lanes",
+                badge_text="WEATHER",
+                badge_color=C_ACCENT,
+            )
 
-        # Headline disruption alert — the single most urgent active system.
-        alert_banner(
-            "Typhoon <b>MAWAR-3</b> active in the South China Sea — "
-            "<b>34 vessels</b> at risk. Rerouting recommended for Intra-Asia "
-            "and Asia-NA West Coast departures.",
-            level="critical",
-        )
+            # Headline disruption alert — the single most urgent active system.
+            alert_banner(
+                "Typhoon <b>MAWAR-3</b> active in the South China Sea — "
+                "<b>34 vessels</b> at risk. Rerouting recommended for Intra-Asia "
+                "and Asia-NA West Coast departures.",
+                level="critical",
+            )
 
-        # ── Current conditions ──────────────────────────────────────────────
-        section_header("Weather Risk Dashboard", "Current conditions and seasonal status — updated hourly")
-        _render_kpis()
+            # ── Current conditions ──────────────────────────────────────────────
+            section_header("Weather Risk Dashboard", "Current conditions and seasonal status — updated hourly")
+            _render_kpis()
 
-        section_header("Active Weather Events", "Live disruptions affecting global shipping lanes")
-        _render_active_events()
+            section_header("Active Weather Events", "Live disruptions affecting global shipping lanes")
+            _render_active_events()
 
-        section_header("Route Weather Risk Map", "Major shipping lanes colored by current weather risk — storm markers show active systems")
-        _render_risk_map()
+            section_header("Route Weather Risk Map", "Major shipping lanes colored by current weather risk — storm markers show active systems")
+            _render_risk_map()
 
-        # ── Forecast outlook ────────────────────────────────────────────────
-        section_divider("Forecast Outlook")
+            # ── Forecast outlook ────────────────────────────────────────────────
+            section_divider("Forecast Outlook")
 
-        section_header("14-Day Weather Forecast by Route", "Conditions outlook per route — CALM / MODERATE / ROUGH / SEVERE")
-        _render_forecast_table()
+            section_header("14-Day Weather Forecast by Route", "Conditions outlook per route — CALM / MODERATE / ROUGH / SEVERE")
+            _render_forecast_table()
 
-        section_header("Historical Weather Delays by Month", "Average delay hours by route — reveals seasonal risk patterns")
-        _render_historical_delays()
+            section_header("Historical Weather Delays by Month", "Average delay hours by route — reveals seasonal risk patterns")
+            _render_historical_delays()
 
-        # ── Ports & routing ─────────────────────────────────────────────────
-        section_divider("Ports & Routing")
+            # ── Ports & routing ─────────────────────────────────────────────────
+            section_divider("Ports & Routing")
 
-        section_header("Port Weather Closures & Restrictions", "Current berth closures and forecast restrictions at major ports")
-        _render_port_closures()
+            section_header("Port Weather Closures & Restrictions", "Current berth closures and forecast restrictions at major ports")
+            _render_port_closures()
 
-        section_header("Optimal Routing Recommendations", "Current weather-avoidance deviations with cost-benefit analysis")
-        _render_routing_recs()
+            section_header("Optimal Routing Recommendations", "Current weather-avoidance deviations with cost-benefit analysis")
+            _render_routing_recs()
 
-        section_header("Seasonal Ice Route — Northern Sea Route (Arctic)", "Current passability, transit comparison, and operational requirements")
-        _render_ice_route()
+            section_header("Seasonal Ice Route — Northern Sea Route (Arctic)", "Current passability, transit comparison, and operational requirements")
+            _render_ice_route()
 
-    except Exception:
-        logger.exception("Weather tab top-level render failed")
-        st.error("Weather risk tab encountered an error. Check logs for details.")
+        except Exception:
+            logger.exception("Weather tab top-level render failed")
+            st.error("Weather risk tab encountered an error. Check logs for details.")

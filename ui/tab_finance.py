@@ -1809,73 +1809,77 @@ def render(
     stock_data:
         Optional dict of equity/stock DataFrames (accepted for API consistency).
     """
-    macro_data = macro_data or {}
-    n_loaded   = len(macro_data)
-    logger.info(
-        "tab_finance: rendering with {n} FRED series, freight_data={fd},"
-        " route_results={rr}, stock_data={sd}",
-        n=n_loaded,
-        fd=freight_data is not None,
-        rr=route_results is not None,
-        sd=stock_data is not None,
-    )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('finance'):
+        macro_data = macro_data or {}
+        n_loaded   = len(macro_data)
+        logger.info(
+            "tab_finance: rendering with {n} FRED series, freight_data={fd},"
+            " route_results={rr}, stock_data={sd}",
+            n=n_loaded,
+            fd=freight_data is not None,
+            rr=route_results is not None,
+            sd=stock_data is not None,
+        )
 
-    # ── Load processing layer ────────────────────────────────────────────────
-    try:
-        indicators = build_trade_finance_indicators()
-    except Exception as exc:
-        logger.warning("tab_finance: build_trade_finance_indicators failed: {}", exc)
-        indicators = []
+        # ── Load processing layer ────────────────────────────────────────────────
+        try:
+            indicators = build_trade_finance_indicators()
+        except Exception as exc:
+            logger.warning("tab_finance: build_trade_finance_indicators failed: {}", exc)
+            indicators = []
 
-    try:
-        risk_scores = compute_regional_finance_risk()
-    except Exception as exc:
-        logger.warning("tab_finance: compute_regional_finance_risk failed: {}", exc)
-        risk_scores = []
+        try:
+            risk_scores = compute_regional_finance_risk()
+        except Exception as exc:
+            logger.warning("tab_finance: compute_regional_finance_risk failed: {}", exc)
+            risk_scores = []
 
-    # ── Section 0: Intelligence Banner (NEW) ─────────────────────────────────
-    _render_finance_banner(macro_data)
-    section_divider("Trade Finance Overview")
+        # ── Section 0: Intelligence Banner (NEW) ─────────────────────────────────
+        _render_finance_banner(macro_data)
+        section_divider("Trade Finance Overview")
 
-    # ── Section 1: Trade Finance Overview ───────────────────────────────────
-    _render_finance_overview(indicators)
-    section_divider("Financing Cost by Route")
+        # ── Section 1: Trade Finance Overview ───────────────────────────────────
+        _render_finance_overview(indicators)
+        section_divider("Financing Cost by Route")
 
-    # ── Section 2: Financing Cost by Route ──────────────────────────────────
-    _render_route_financing()
-    section_divider("Interest Rate Impact")
+        # ── Section 2: Financing Cost by Route ──────────────────────────────────
+        _render_route_financing()
+        section_divider("Interest Rate Impact")
 
-    # ── Section 3: Interest Rate Impact Model ────────────────────────────────
-    _render_rate_impact(macro_data)
-    section_divider("Bank Availability")
+        # ── Section 3: Interest Rate Impact Model ────────────────────────────────
+        _render_rate_impact(macro_data)
+        section_divider("Bank Availability")
 
-    # ── Section 4: Bank Trade Finance Availability ───────────────────────────
-    _render_bank_availability()
-    section_divider("Credit vs Open Account")
+        # ── Section 4: Bank Trade Finance Availability ───────────────────────────
+        _render_bank_availability()
+        section_divider("Credit vs Open Account")
 
-    # ── Section 5: Documentary Credit vs Open Account ────────────────────────
-    _render_lc_oa_trend()
-    section_divider("Finance Gap")
+        # ── Section 5: Documentary Credit vs Open Account ────────────────────────
+        _render_lc_oa_trend()
+        section_divider("Finance Gap")
 
-    # ── Section 6: Trade Finance Gap Analysis ────────────────────────────────
-    _render_finance_gap()
-    section_divider("FX Hedging")
+        # ── Section 6: Trade Finance Gap Analysis ────────────────────────────────
+        _render_finance_gap()
+        section_divider("FX Hedging")
 
-    # ── Section 7: FX Hedging Costs ──────────────────────────────────────────
-    _render_fx_hedging()
-    section_divider("Supply Chain Finance")
+        # ── Section 7: FX Hedging Costs ──────────────────────────────────────────
+        _render_fx_hedging()
+        section_divider("Supply Chain Finance")
 
-    # ── Section 8: Supply Chain Finance Programs ──────────────────────────────
-    _render_scf_programs()
-    section_divider("Credit Availability Map")
+        # ── Section 8: Supply Chain Finance Programs ──────────────────────────────
+        _render_scf_programs()
+        section_divider("Credit Availability Map")
 
-    # ── Section 9: Credit Availability Map ──────────────────────────────────
-    _render_credit_map(risk_scores)
-    section_divider("De-Dollarization")
+        # ── Section 9: Credit Availability Map ──────────────────────────────────
+        _render_credit_map(risk_scores)
+        section_divider("De-Dollarization")
 
-    # ── Section 10: De-dollarization Monitor ─────────────────────────────────
-    _render_dedollarization()
-    section_divider("Sanctions Impact")
+        # ── Section 10: De-dollarization Monitor ─────────────────────────────────
+        _render_dedollarization()
+        section_divider("Sanctions Impact")
 
-    # ── Section 11: Sanctions Impact Tracker ─────────────────────────────────
-    _render_sanctions_tracker()
+        # ── Section 11: Sanctions Impact Tracker ─────────────────────────────────
+        _render_sanctions_tracker()

@@ -393,136 +393,140 @@ def render(
     **_kwargs,
 ) -> None:
     """Render the Risk Lab tab."""
-    try:
-        page_header(
-            title="Risk Lab",
-            subtitle=(
-                "Portfolio VaR/CVaR, scenario stress test against the "
-                "canonical catalog, and market-regime classification. "
-                "Demo: synthetic returns panel."
-            ),
-            badge_text="RISK",
-            badge_color=C_ACCENT,
-        )
-
-        # ── Controls ──────────────────────────────────────────────────────
-        c1, c2 = st.columns(2, gap="medium")
-        with c1:
-            portfolio_value = st.number_input(
-                "Portfolio value ($)",
-                min_value=10_000, max_value=100_000_000,
-                value=1_000_000, step=50_000,
-                key="risk_lab_value",
-            )
-        with c2:
-            confidence_pct = st.slider(
-                "VaR confidence (%)", 90, 99, 95, step=1,
-                key="risk_lab_confidence",
-            )
-        confidence = confidence_pct / 100.0
-
-        # Build a default equal-weight portfolio over the shipping universe.
-        tickers = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
-        weights = {t: 1.0 / len(tickers) for t in tickers}
-        returns_df = _synth_returns_panel(tickers)
-
-        if returns_df.empty:
-            st.info("Returns panel could not be built. Aborting Risk Lab.")
-            return
-
-        section_divider("Value-at-Risk")
-        _render_var_strip(returns_df, weights, portfolio_value, confidence)
-
-        # ── Editorial commentary (per-tab LLM + template fallback) ──
-        _render_editorial_commentary(
-            returns_df, weights, portfolio_value, confidence,
-        )
-
-        section_divider("Scenario Stress")
-        _render_stress_table(weights, portfolio_value)
-
-        section_divider("Regime")
-        _render_regime_card(returns_df, weights)
-
-        # ── Export this view (PDF) ────────────────────────────────────────
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('risk_lab'):
         try:
-            from utils.view_export import (
-                ViewSection, ViewSnapshot, ViewTable, render_export_button,
-            )
-            from processing.risk_lab import (
-                detect_regime, portfolio_var, stress_test_all_scenarios,
-            )
-            # Recompute the headline numbers (the per-section funcs render
-            # them but don't return them; cheap to redo).
-            hist = portfolio_var(returns_df, weights, confidence=confidence,
-                                method="historical",
-                                portfolio_value=portfolio_value)
-            common = [c for c in returns_df.columns if c in weights]
-            w_vec = np.array([float(weights[c]) for c in common])
-            port_returns = pd.Series(
-                returns_df[common].dropna().to_numpy() @ w_vec,
-                index=returns_df[common].dropna().index,
-            )
-            regime = detect_regime(port_returns)
-            stress = stress_test_all_scenarios(weights, portfolio_value=portfolio_value)
-
-            stress_rows = [
-                [
-                    r.scenario_name,
-                    r.category,
-                    f"{r.pnl_pct*100:+5.2f}%",
-                    f"${r.pnl_dollar:+,.0f}",
-                ]
-                for r in stress
-            ]
-
-            snapshot = ViewSnapshot(
+            page_header(
                 title="Risk Lab",
                 subtitle=(
-                    f"Portfolio ${portfolio_value:,.0f} · "
-                    f"VaR confidence {confidence*100:.0f}%"
+                    "Portfolio VaR/CVaR, scenario stress test against the "
+                    "canonical catalog, and market-regime classification. "
+                    "Demo: synthetic returns panel."
                 ),
-                headline=(
-                    f"VaR {hist.var_pct*100:+.2f}% (${hist.var_dollar:,.0f}) · "
-                    f"CVaR {hist.cvar_pct*100:+.2f}% · "
-                    f"Regime: {regime.label} ({regime.confidence:.2f})"
-                ),
-                body=regime.interpretation,
-                sections=[
-                    ViewSection(
-                        title="Scenario Stress (worst-first)",
-                        tables=[ViewTable(
-                            title=f"{len(stress)} catalog scenarios",
-                            headers=["Scenario", "Category", "P&L %", "P&L $"],
-                            rows=stress_rows,
-                        )],
-                    ),
-                    ViewSection(
-                        title="Regime Indicators",
-                        bullets=[f"{k}: {v}" for k, v in regime.indicators.items()],
-                    ),
-                ],
-                footer_note=(
-                    "VaR + scenario stress + regime detection from "
-                    "processing.risk_lab. Returns panel synthetic (stable_hash)."
-                ),
+                badge_text="RISK",
+                badge_color=C_ACCENT,
             )
-            cols = st.columns([1, 5], gap="small")
-            with cols[0]:
-                render_export_button(snapshot, "risk_lab", key="risk_lab_export")
-        except Exception as exc:
-            logger.debug(f"tab_risk_lab: PDF export skipped: {exc}")
 
-        st.markdown(
-            source_footer([
-                DataSource.demo(
-                    "Synthetic 2-year returns panel (per-ticker mean/vol via "
-                    "stable_hash). Scenario catalog from state/scenarios.py."
-                ),
-            ]),
-            unsafe_allow_html=True,
-        )
+            # ── Controls ──────────────────────────────────────────────────────
+            c1, c2 = st.columns(2, gap="medium")
+            with c1:
+                portfolio_value = st.number_input(
+                    "Portfolio value ($)",
+                    min_value=10_000, max_value=100_000_000,
+                    value=1_000_000, step=50_000,
+                    key="risk_lab_value",
+                )
+            with c2:
+                confidence_pct = st.slider(
+                    "VaR confidence (%)", 90, 99, 95, step=1,
+                    key="risk_lab_confidence",
+                )
+            confidence = confidence_pct / 100.0
 
-    except Exception:
-        logger.exception("tab_risk_lab render failed")
-        st.error("Risk Lab encountered an error. See logs.")
+            # Build a default equal-weight portfolio over the shipping universe.
+            tickers = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
+            weights = {t: 1.0 / len(tickers) for t in tickers}
+            returns_df = _synth_returns_panel(tickers)
+
+            if returns_df.empty:
+                st.info("Returns panel could not be built. Aborting Risk Lab.")
+                return
+
+            section_divider("Value-at-Risk")
+            _render_var_strip(returns_df, weights, portfolio_value, confidence)
+
+            # ── Editorial commentary (per-tab LLM + template fallback) ──
+            _render_editorial_commentary(
+                returns_df, weights, portfolio_value, confidence,
+            )
+
+            section_divider("Scenario Stress")
+            _render_stress_table(weights, portfolio_value)
+
+            section_divider("Regime")
+            _render_regime_card(returns_df, weights)
+
+            # ── Export this view (PDF) ────────────────────────────────────────
+            try:
+                from utils.view_export import (
+                    ViewSection, ViewSnapshot, ViewTable, render_export_button,
+                )
+                from processing.risk_lab import (
+                    detect_regime, portfolio_var, stress_test_all_scenarios,
+                )
+                # Recompute the headline numbers (the per-section funcs render
+                # them but don't return them; cheap to redo).
+                hist = portfolio_var(returns_df, weights, confidence=confidence,
+                                    method="historical",
+                                    portfolio_value=portfolio_value)
+                common = [c for c in returns_df.columns if c in weights]
+                w_vec = np.array([float(weights[c]) for c in common])
+                port_returns = pd.Series(
+                    returns_df[common].dropna().to_numpy() @ w_vec,
+                    index=returns_df[common].dropna().index,
+                )
+                regime = detect_regime(port_returns)
+                stress = stress_test_all_scenarios(weights, portfolio_value=portfolio_value)
+
+                stress_rows = [
+                    [
+                        r.scenario_name,
+                        r.category,
+                        f"{r.pnl_pct*100:+5.2f}%",
+                        f"${r.pnl_dollar:+,.0f}",
+                    ]
+                    for r in stress
+                ]
+
+                snapshot = ViewSnapshot(
+                    title="Risk Lab",
+                    subtitle=(
+                        f"Portfolio ${portfolio_value:,.0f} · "
+                        f"VaR confidence {confidence*100:.0f}%"
+                    ),
+                    headline=(
+                        f"VaR {hist.var_pct*100:+.2f}% (${hist.var_dollar:,.0f}) · "
+                        f"CVaR {hist.cvar_pct*100:+.2f}% · "
+                        f"Regime: {regime.label} ({regime.confidence:.2f})"
+                    ),
+                    body=regime.interpretation,
+                    sections=[
+                        ViewSection(
+                            title="Scenario Stress (worst-first)",
+                            tables=[ViewTable(
+                                title=f"{len(stress)} catalog scenarios",
+                                headers=["Scenario", "Category", "P&L %", "P&L $"],
+                                rows=stress_rows,
+                            )],
+                        ),
+                        ViewSection(
+                            title="Regime Indicators",
+                            bullets=[f"{k}: {v}" for k, v in regime.indicators.items()],
+                        ),
+                    ],
+                    footer_note=(
+                        "VaR + scenario stress + regime detection from "
+                        "processing.risk_lab. Returns panel synthetic (stable_hash)."
+                    ),
+                )
+                cols = st.columns([1, 5], gap="small")
+                with cols[0]:
+                    render_export_button(snapshot, "risk_lab", key="risk_lab_export")
+            except Exception as exc:
+                logger.debug(f"tab_risk_lab: PDF export skipped: {exc}")
+
+            st.markdown(
+                source_footer([
+                    DataSource.demo(
+                        "Synthetic 2-year returns panel (per-ticker mean/vol via "
+                        "stable_hash). Scenario catalog from state/scenarios.py."
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+
+        except Exception:
+            logger.exception("tab_risk_lab render failed")
+            st.error("Risk Lab encountered an error. See logs.")

@@ -428,118 +428,122 @@ def render(
     **_kwargs,
 ) -> None:
     """Render the Idea Engine tab — Signal-to-Trade Ideas synthesis."""
-    try:
-        page_header(
-            title="Idea Engine",
-            subtitle=(
-                "Synthesis of disruption cascade, scenarios, and portfolio "
-                "optimization into a ranked trade-ideas dashboard."
-            ),
-            badge_text="IDEAS",
-            badge_color=C_ACCENT,
-        )
-
-        # Pull the active scenario if any (set in the sidebar).
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('idea_engine'):
         try:
-            from state.scenarios import active_scenario
-            scenario = active_scenario()
-        except Exception:
-            scenario = None
-
-        # ── Build the ideas list ──────────────────────────────────────────
-        ideas = _build_ideas(
-            port_results, route_results, freight_data, macro_data,
-            stock_data, insights,
-        )
-
-        # ── Hero ──────────────────────────────────────────────────────────
-        _render_hero(ideas[0] if ideas else None, scenario)
-
-        if not ideas:
-            st.info("No equity ideas surfaced from the cascade. Try refreshing data.")
-            return
-
-        # ── Ranked table ──────────────────────────────────────────────────
-        section_divider("Ranked Table")
-        _render_ranked_table(ideas, scenario)
-
-        # ── Rationale (top 5 expanders) ───────────────────────────────────
-        section_divider("Rationale")
-        _render_rationale(ideas, limit=5)
-
-        # ── Optimization mini ─────────────────────────────────────────────
-        section_divider("Portfolio Construction")
-        _render_optimization_mini(ideas)
-
-        # ── Export this view (PDF) ────────────────────────────────────────
-        try:
-            from utils.view_export import (
-                ViewSection, ViewSnapshot, ViewTable, render_export_button,
-            )
-            top = ideas[0]
-            top_label = (
-                f"{getattr(top, 'ticker', '?')} — "
-                f"{getattr(top, 'direction', '')} "
-                f"({getattr(top, 'conviction_label', '')})"
-            )
-            ranked_rows = []
-            for rank, idea in enumerate(ideas[:10], start=1):
-                ranked_rows.append([
-                    str(rank),
-                    getattr(idea, "ticker", "?"),
-                    getattr(idea, "direction", ""),
-                    getattr(idea, "conviction_label", ""),
-                    f"{getattr(idea, 'conviction_score', 0.0):.2f}",
-                    (getattr(idea, "thesis", "") or "")[:80],
-                ])
-            scenario_note = (
-                f"Active scenario: {scenario.name}" if scenario else "No active scenario"
-            )
-            snapshot = ViewSnapshot(
-                title="Idea Engine — Trade Ideas",
-                subtitle=scenario_note,
-                headline=f"Top conviction: {top_label}",
-                body=(getattr(top, "thesis", "") or "")[:600],
-                sections=[
-                    ViewSection(
-                        title="Top 10 Ideas",
-                        tables=[ViewTable(
-                            title=f"Sorted by conviction ({len(ideas)} total)",
-                            headers=["#", "Ticker", "Direction", "Conviction",
-                                     "Score", "Thesis (truncated)"],
-                            rows=ranked_rows,
-                        )],
-                    ),
-                ],
-                footer_note=(
-                    "Cascade output from processing.disruption_cascade. "
-                    "Scenario overlay from state.scenarios."
+            page_header(
+                title="Idea Engine",
+                subtitle=(
+                    "Synthesis of disruption cascade, scenarios, and portfolio "
+                    "optimization into a ranked trade-ideas dashboard."
                 ),
+                badge_text="IDEAS",
+                badge_color=C_ACCENT,
             )
-            cols = st.columns([1, 5], gap="small")
-            with cols[0]:
-                render_export_button(
-                    snapshot, "idea_engine", key="idea_engine_export",
+
+            # Pull the active scenario if any (set in the sidebar).
+            try:
+                from state.scenarios import active_scenario
+                scenario = active_scenario()
+            except Exception:
+                scenario = None
+
+            # ── Build the ideas list ──────────────────────────────────────────
+            ideas = _build_ideas(
+                port_results, route_results, freight_data, macro_data,
+                stock_data, insights,
+            )
+
+            # ── Hero ──────────────────────────────────────────────────────────
+            _render_hero(ideas[0] if ideas else None, scenario)
+
+            if not ideas:
+                st.info("No equity ideas surfaced from the cascade. Try refreshing data.")
+                return
+
+            # ── Ranked table ──────────────────────────────────────────────────
+            section_divider("Ranked Table")
+            _render_ranked_table(ideas, scenario)
+
+            # ── Rationale (top 5 expanders) ───────────────────────────────────
+            section_divider("Rationale")
+            _render_rationale(ideas, limit=5)
+
+            # ── Optimization mini ─────────────────────────────────────────────
+            section_divider("Portfolio Construction")
+            _render_optimization_mini(ideas)
+
+            # ── Export this view (PDF) ────────────────────────────────────────
+            try:
+                from utils.view_export import (
+                    ViewSection, ViewSnapshot, ViewTable, render_export_button,
                 )
-        except Exception as exc:
-            logger.debug(f"tab_idea_engine: PDF export skipped: {exc}")
-
-        # ── Source footer ─────────────────────────────────────────────────
-        st.markdown(
-            source_footer([
-                DataSource.modeled(
-                    "Idea Engine",
-                    notes=(
+                top = ideas[0]
+                top_label = (
+                    f"{getattr(top, 'ticker', '?')} — "
+                    f"{getattr(top, 'direction', '')} "
+                    f"({getattr(top, 'conviction_label', '')})"
+                )
+                ranked_rows = []
+                for rank, idea in enumerate(ideas[:10], start=1):
+                    ranked_rows.append([
+                        str(rank),
+                        getattr(idea, "ticker", "?"),
+                        getattr(idea, "direction", ""),
+                        getattr(idea, "conviction_label", ""),
+                        f"{getattr(idea, 'conviction_score', 0.0):.2f}",
+                        (getattr(idea, "thesis", "") or "")[:80],
+                    ])
+                scenario_note = (
+                    f"Active scenario: {scenario.name}" if scenario else "No active scenario"
+                )
+                snapshot = ViewSnapshot(
+                    title="Idea Engine — Trade Ideas",
+                    subtitle=scenario_note,
+                    headline=f"Top conviction: {top_label}",
+                    body=(getattr(top, "thesis", "") or "")[:600],
+                    sections=[
+                        ViewSection(
+                            title="Top 10 Ideas",
+                            tables=[ViewTable(
+                                title=f"Sorted by conviction ({len(ideas)} total)",
+                                headers=["#", "Ticker", "Direction", "Conviction",
+                                         "Score", "Thesis (truncated)"],
+                                rows=ranked_rows,
+                            )],
+                        ),
+                    ],
+                    footer_note=(
                         "Cascade output from processing.disruption_cascade. "
-                        "Scenario overlay from state.scenarios (sidebar-controlled). "
-                        "Portfolio weights from engine.portfolio_optimizer over a "
-                        "synthetic 2-year return panel (seeded via stable_hash)."
+                        "Scenario overlay from state.scenarios."
                     ),
-                ),
-            ]),
-            unsafe_allow_html=True,
-        )
+                )
+                cols = st.columns([1, 5], gap="small")
+                with cols[0]:
+                    render_export_button(
+                        snapshot, "idea_engine", key="idea_engine_export",
+                    )
+            except Exception as exc:
+                logger.debug(f"tab_idea_engine: PDF export skipped: {exc}")
 
-    except Exception:
-        logger.exception("tab_idea_engine render failed")
-        st.error("Idea Engine encountered an error. See logs.")
+            # ── Source footer ─────────────────────────────────────────────────
+            st.markdown(
+                source_footer([
+                    DataSource.modeled(
+                        "Idea Engine",
+                        notes=(
+                            "Cascade output from processing.disruption_cascade. "
+                            "Scenario overlay from state.scenarios (sidebar-controlled). "
+                            "Portfolio weights from engine.portfolio_optimizer over a "
+                            "synthetic 2-year return panel (seeded via stable_hash)."
+                        ),
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+
+        except Exception:
+            logger.exception("tab_idea_engine render failed")
+            st.error("Idea Engine encountered an error. See logs.")

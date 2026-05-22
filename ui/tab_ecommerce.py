@@ -622,36 +622,40 @@ def _render_leading_indicators() -> None:
 
 def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the E-Commerce Driven Shipping Demand Intelligence tab."""
-    try:
-        page_header(
-            title="E-Commerce Driven Shipping Demand",
-            subtitle=(
-                "How global e-commerce platforms — Amazon, Temu, Shein, AliExpress — are reshaping "
-                "freight demand, air cargo pricing, container routes, and last-mile logistics worldwide."
-            ),
-            badge_text="E-COMMERCE",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Header render failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('ecommerce'):
+        try:
+            page_header(
+                title="E-Commerce Driven Shipping Demand",
+                subtitle=(
+                    "How global e-commerce platforms — Amazon, Temu, Shein, AliExpress — are reshaping "
+                    "freight demand, air cargo pricing, container routes, and last-mile logistics worldwide."
+                ),
+                badge_text="E-COMMERCE",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("Header render failed")
 
-    _render_kpi_dashboard()
-    section_divider("Platform Landscape")
-    _render_platform_table()
-    section_divider("China Export Effect")
-    _render_de_minimis()
-    section_divider("Seasonality")
-    _render_peak_calendar()
-    section_divider("Freight Mix")
-    _render_b2c_b2b_split()
-    section_divider("Reverse Logistics")
-    _render_returns()
-    section_divider("Rate Impact")
-    _render_rate_impact_chart()
-    section_divider("Indicators to Watch")
-    _render_leading_indicators()
+        _render_kpi_dashboard()
+        section_divider("Platform Landscape")
+        _render_platform_table()
+        section_divider("China Export Effect")
+        _render_de_minimis()
+        section_divider("Seasonality")
+        _render_peak_calendar()
+        section_divider("Freight Mix")
+        _render_b2c_b2b_split()
+        section_divider("Reverse Logistics")
+        _render_returns()
+        section_divider("Rate Impact")
+        _render_rate_impact_chart()
+        section_divider("Indicators to Watch")
+        _render_leading_indicators()
 
-    try:
-        st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Footer render failed")
+        try:
+            st.markdown(source_footer(_SOURCES), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Footer render failed")

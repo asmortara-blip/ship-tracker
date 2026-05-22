@@ -667,28 +667,32 @@ def _bunker_hedging() -> None:
 
 def render(macro_data=None, freight_data=None, *args, **kwargs) -> None:
     """Render the Bunker Fuel Intelligence tab."""
-    try:
-        page_header(
-            title="Bunker Fuel Intelligence",
-            subtitle=(
-                "Real-time bunker prices & port comparison · Optimization calculator · "
-                "Scrubber spread economics · Alternative fuels · Hedging strategy"
-            ),
-            badge_text="BUNKER",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("tab_bunker: page header failed")
-        section_header("Bunker Fuel Intelligence")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('bunker'):
+        try:
+            page_header(
+                title="Bunker Fuel Intelligence",
+                subtitle=(
+                    "Real-time bunker prices & port comparison · Optimization calculator · "
+                    "Scrubber spread economics · Alternative fuels · Hedging strategy"
+                ),
+                badge_text="BUNKER",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("tab_bunker: page header failed")
+            section_header("Bunker Fuel Intelligence")
 
-    _bunker_dashboard()
-    _bunker_price_by_port()
-    section_divider("Price History")
-    _bunker_price_chart()
-    section_divider("Voyage Economics")
-    _bunker_optimization_calculator()
-    _fuel_spread_analysis()
-    section_divider("Fuel Transition")
-    _alternative_fuels_comparison()
-    section_divider("Risk Management")
-    _bunker_hedging()
+        _bunker_dashboard()
+        _bunker_price_by_port()
+        section_divider("Price History")
+        _bunker_price_chart()
+        section_divider("Voyage Economics")
+        _bunker_optimization_calculator()
+        _fuel_spread_analysis()
+        section_divider("Fuel Transition")
+        _alternative_fuels_comparison()
+        section_divider("Risk Management")
+        _bunker_hedging()

@@ -665,65 +665,69 @@ def _render_efficiency() -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 def render(port_results=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Port Congestion Intelligence tab."""
-    try:
-        ports: list[dict] = _PORTS
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('congestion'):
+        try:
+            ports: list[dict] = _PORTS
 
-        if port_results is not None:
-            try:
-                import pandas as pd
-                if isinstance(port_results, pd.DataFrame):
-                    ingested = port_results.to_dict(orient="records")
-                elif isinstance(port_results, dict):
-                    ingested = list(port_results.values()) if port_results else []
-                elif isinstance(port_results, list):
-                    ingested = port_results
-                else:
-                    ingested = []
-                if (ingested and isinstance(ingested[0], dict)
-                        and all(k in ingested[0] for k in ("port", "score", "vessels", "wait"))):
-                    ports = ingested
-                    logger.info("tab_congestion: using live port_results ({} ports)", len(ports))
-            except Exception as exc:
-                logger.warning("tab_congestion: could not parse port_results, using mock data: {}", exc)
+            if port_results is not None:
+                try:
+                    import pandas as pd
+                    if isinstance(port_results, pd.DataFrame):
+                        ingested = port_results.to_dict(orient="records")
+                    elif isinstance(port_results, dict):
+                        ingested = list(port_results.values()) if port_results else []
+                    elif isinstance(port_results, list):
+                        ingested = port_results
+                    else:
+                        ingested = []
+                    if (ingested and isinstance(ingested[0], dict)
+                            and all(k in ingested[0] for k in ("port", "score", "vessels", "wait"))):
+                        ports = ingested
+                        logger.info("tab_congestion: using live port_results ({} ports)", len(ports))
+                except Exception as exc:
+                    logger.warning("tab_congestion: could not parse port_results, using mock data: {}", exc)
 
-        stats = _global_stats(ports)
+            stats = _global_stats(ports)
 
-        page_header(
-            title="Port Congestion Intelligence",
-            subtitle="Critical-port alerts, global congestion index, rate-impact attribution, and efficiency benchmarks.",
-            icon="⚓",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+            page_header(
+                title="Port Congestion Intelligence",
+                subtitle="Critical-port alerts, global congestion index, rate-impact attribution, and efficiency benchmarks.",
+                icon="⚓",
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
 
-        _render_hero(stats)
-        section_divider("World Map")
-        _render_map(ports)
-        section_divider("Port Detail")
-        _render_table(ports)
-        section_divider("Timeline")
-        _render_timeline(ports)
-        section_divider("Distribution & Rate Impact")
+            _render_hero(stats)
+            section_divider("World Map")
+            _render_map(ports)
+            section_divider("Port Detail")
+            _render_table(ports)
+            section_divider("Timeline")
+            _render_timeline(ports)
+            section_divider("Distribution & Rate Impact")
 
-        col1, col2 = st.columns(2, gap="large")
-        with col1:
-            _render_wait_dist(ports)
-        with col2:
-            _render_correlation(ports)
+            col1, col2 = st.columns(2, gap="large")
+            with col1:
+                _render_wait_dist(ports)
+            with col2:
+                _render_correlation(ports)
 
-        section_divider("Lag Discovery")
-        _render_lag_discovery(ports, freight_data=freight_data)
+            section_divider("Lag Discovery")
+            _render_lag_discovery(ports, freight_data=freight_data)
 
-        section_divider("Efficiency Benchmarks")
-        _render_efficiency()
+            section_divider("Efficiency Benchmarks")
+            _render_efficiency()
 
-        alert_banner(
-            "Congestion data refreshed every 6 hours. Index scores are composite metrics derived from "
-            "vessel AIS data, berth utilization signals, and port authority reports. "
-            "Rate impact estimates reflect 5-day rolling correlation.",
-            level="info",
-        )
+            alert_banner(
+                "Congestion data refreshed every 6 hours. Index scores are composite metrics derived from "
+                "vessel AIS data, berth utilization signals, and port authority reports. "
+                "Rate impact estimates reflect 5-day rolling correlation.",
+                level="info",
+            )
 
-    except Exception:
-        logger.exception("tab_congestion render failed")
-        st.error("Congestion dashboard encountered an error.")
+        except Exception:
+            logger.exception("tab_congestion render failed")
+            st.error("Congestion dashboard encountered an error.")

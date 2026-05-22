@@ -398,39 +398,43 @@ def _render_visibility_chart() -> None:
 
 def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Supply Chain Visibility & Tracking tab."""
-    try:
-        page_header(
-            title="Supply Chain Visibility & Tracking",
-            subtitle="Real-time shipment pipeline, AIS monitoring, exception management, "
-            "milestone tracking and carrier benchmarking",
-            badge_text="VISIBILITY",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Visibility — page header render failed")
-
-    _render_hero_kpis()
-    _render_pipeline()
-
-    section_divider("Lane Visibility")
-
-    col_left, col_right = st.columns([3, 2], gap="large")
-    with col_left:
-        _render_visibility_scores()
-    with col_right:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('visibility'):
         try:
-            _render_visibility_chart()
+            page_header(
+                title="Supply Chain Visibility & Tracking",
+                subtitle="Real-time shipment pipeline, AIS monitoring, exception management, "
+                "milestone tracking and carrier benchmarking",
+                badge_text="VISIBILITY",
+                badge_color=C_ACCENT,
+            )
         except Exception:
-            logger.exception("Visibility — score component chart column failed")
+            logger.exception("Visibility — page header render failed")
 
-    section_divider("Exceptions")
+        _render_hero_kpis()
+        _render_pipeline()
 
-    _render_exception_management()
+        section_divider("Lane Visibility")
 
-    section_divider("Carriers & Milestones")
+        col_left, col_right = st.columns([3, 2], gap="large")
+        with col_left:
+            _render_visibility_scores()
+        with col_right:
+            try:
+                _render_visibility_chart()
+            except Exception:
+                logger.exception("Visibility — score component chart column failed")
 
-    col_a, col_b = st.columns([2, 3], gap="large")
-    with col_a:
-        _render_carrier_rankings()
-    with col_b:
-        _render_milestone_tracking()
+        section_divider("Exceptions")
+
+        _render_exception_management()
+
+        section_divider("Carriers & Milestones")
+
+        col_a, col_b = st.columns([2, 3], gap="large")
+        with col_a:
+            _render_carrier_rankings()
+        with col_b:
+            _render_milestone_tracking()

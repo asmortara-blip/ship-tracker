@@ -525,86 +525,90 @@ def _render_commodities(rows_in: list[dict]) -> None:
 
 def render(macro_data, stock_data=None, insights=None) -> None:
     """Render the Global Macro Intelligence tab."""
-    try:
-        page_header(
-            title="Global Macro Intelligence",
-            subtitle=(
-                "Macro drivers, leading indicators, and commodity dynamics influencing "
-                "global shipping demand across all vessel segments"
-            ),
-            icon="🌐",
-            badge_text="Goldman Sachs Quality",
-            badge_color=C_MACRO,
-        )
-    except Exception as exc:
-        logger.warning(f"Header render error: {exc}")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('macro'):
+        try:
+            page_header(
+                title="Global Macro Intelligence",
+                subtitle=(
+                    "Macro drivers, leading indicators, and commodity dynamics influencing "
+                    "global shipping demand across all vessel segments"
+                ),
+                icon="🌐",
+                badge_text="Goldman Sachs Quality",
+                badge_color=C_MACRO,
+            )
+        except Exception as exc:
+            logger.warning(f"Header render error: {exc}")
 
-    try:
-        if isinstance(macro_data, dict) and "kpis" in macro_data:
-            kpis = macro_data["kpis"]
-        else:
-            kpis = _mock_global_kpis()
-        _render_macro_dashboard(kpis)
-    except Exception as exc:
-        logger.error(f"Section 1 (Macro Dashboard) error: {exc}")
-        st.error("Macro dashboard unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "kpis" in macro_data:
+                kpis = macro_data["kpis"]
+            else:
+                kpis = _mock_global_kpis()
+            _render_macro_dashboard(kpis)
+        except Exception as exc:
+            logger.error(f"Section 1 (Macro Dashboard) error: {exc}")
+            st.error("Macro dashboard unavailable.")
 
-    section_divider("Demand & Leading Signals")
+        section_divider("Demand & Leading Signals")
 
-    try:
-        if isinstance(macro_data, dict) and "demand_drivers" in macro_data:
-            drivers = macro_data["demand_drivers"]
-        else:
-            drivers = _mock_demand_drivers()
-        _render_demand_drivers(drivers)
-    except Exception as exc:
-        logger.error(f"Section 2 (Demand Drivers) error: {exc}")
-        st.error("Demand drivers unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "demand_drivers" in macro_data:
+                drivers = macro_data["demand_drivers"]
+            else:
+                drivers = _mock_demand_drivers()
+            _render_demand_drivers(drivers)
+        except Exception as exc:
+            logger.error(f"Section 2 (Demand Drivers) error: {exc}")
+            st.error("Demand drivers unavailable.")
 
-    st.divider()
+        st.divider()
 
-    try:
-        if isinstance(macro_data, dict) and "leading_indicators" in macro_data:
-            indicators = macro_data["leading_indicators"]
-        else:
-            indicators = _mock_leading_indicators()
-        _render_leading_indicators(indicators)
-    except Exception as exc:
-        logger.error(f"Section 3 (Leading Indicators) error: {exc}")
-        st.error("Leading indicators unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "leading_indicators" in macro_data:
+                indicators = macro_data["leading_indicators"]
+            else:
+                indicators = _mock_leading_indicators()
+            _render_leading_indicators(indicators)
+        except Exception as exc:
+            logger.error(f"Section 3 (Leading Indicators) error: {exc}")
+            st.error("Leading indicators unavailable.")
 
-    section_divider("Institutional Forecasts")
+        section_divider("Institutional Forecasts")
 
-    try:
-        if isinstance(macro_data, dict) and "oecd_imf" in macro_data:
-            oecd_imf_data = macro_data["oecd_imf"]
-        else:
-            oecd_imf_data = _load_oecd_imf()
-        _render_oecd_imf(oecd_imf_data)
-    except Exception as exc:
-        logger.error(f"Section 4 (OECD/IMF) error: {exc}")
-        st.error("OECD/IMF panel unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "oecd_imf" in macro_data:
+                oecd_imf_data = macro_data["oecd_imf"]
+            else:
+                oecd_imf_data = _load_oecd_imf()
+            _render_oecd_imf(oecd_imf_data)
+        except Exception as exc:
+            logger.error(f"Section 4 (OECD/IMF) error: {exc}")
+            st.error("OECD/IMF panel unavailable.")
 
-    section_divider("Rates, Credit & Commodities")
+        section_divider("Rates, Credit & Commodities")
 
-    try:
-        if isinstance(macro_data, dict) and "rates_credit" in macro_data:
-            rates_data = macro_data["rates_credit"]
-        else:
-            rates_data = _mock_rates_credit()
-        _render_rates_credit(rates_data)
-    except Exception as exc:
-        logger.error(f"Section 5 (Rates & Credit) error: {exc}")
-        st.error("Interest rate & credit panel unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "rates_credit" in macro_data:
+                rates_data = macro_data["rates_credit"]
+            else:
+                rates_data = _mock_rates_credit()
+            _render_rates_credit(rates_data)
+        except Exception as exc:
+            logger.error(f"Section 5 (Rates & Credit) error: {exc}")
+            st.error("Interest rate & credit panel unavailable.")
 
-    st.divider()
+        st.divider()
 
-    try:
-        if isinstance(macro_data, dict) and "commodities" in macro_data:
-            commodities = macro_data["commodities"]
-        else:
-            commodities = _mock_commodities()
-        _render_commodities(commodities)
-    except Exception as exc:
-        logger.error(f"Section 6 (Commodities) error: {exc}")
-        st.error("Commodity dashboard unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "commodities" in macro_data:
+                commodities = macro_data["commodities"]
+            else:
+                commodities = _mock_commodities()
+            _render_commodities(commodities)
+        except Exception as exc:
+            logger.error(f"Section 6 (Commodities) error: {exc}")
+            st.error("Commodity dashboard unavailable.")

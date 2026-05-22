@@ -259,151 +259,155 @@ def render(
     **_kwargs,
 ) -> None:
     """Render the Convergence & Divergence Lab tab."""
-    try:
-        page_header(
-            title="Convergence & Divergence Lab",
-            subtitle=(
-                "Pairs of routes / indices / commodities whose correlations "
-                "are converging, diverging, or decoupling. Built on rolling "
-                "Pearson r over short vs long windows."
-            ),
-            badge_text="CONV",
-            badge_color=C_ACCENT,
-        )
-
-        # ── Controls ──────────────────────────────────────────────────────
-        c1, c2, c3 = st.columns(3, gap="medium")
-        with c1:
-            short_window = st.slider(
-                "Short window (days)", 10, 60, 30, step=5,
-                key="conv_short_window",
-            )
-        with c2:
-            long_window = st.slider(
-                "Long window (days)", 60, 180, 90, step=10,
-                key="conv_long_window",
-            )
-        with c3:
-            min_delta = st.slider(
-                "Min |Δr| threshold", 0.05, 0.50, 0.20, step=0.05,
-                key="conv_min_delta",
-            )
-
-        if short_window >= long_window:
-            st.warning(
-                f"Short window ({short_window}) must be less than long "
-                f"window ({long_window}). Adjusting…"
-            )
-            short_window = max(10, long_window - 30)
-
-        # ── Build inputs ──────────────────────────────────────────────────
-        series_dict = _build_series_dict(freight_data, macro_data)
-        if len(series_dict) < 2:
-            st.info(
-                "Need at least 2 series with date+value columns. "
-                "Configure freight feeds or wait for macro data."
-            )
-            return
-
-        from processing.convergence_analyzer import find_pair_convergence
-        pairs = find_pair_convergence(
-            series_dict,
-            short_window=short_window, long_window=long_window,
-            min_delta=min_delta,
-        )
-
-        # ── 1. Hero ───────────────────────────────────────────────────────
-        section_divider("Top Picks")
-        _render_hero(pairs)
-
-        # ── 2. Ranked table ──────────────────────────────────────────────
-        section_divider("All Pairs")
-        _render_ranked_table(pairs)
-
-        # ── 3. Heatmap ───────────────────────────────────────────────────
-        section_divider("Heatmap")
-        _render_heatmap(series_dict, window=long_window)
-
-        # ── Export this view (PDF) ────────────────────────────────────────
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('convergence'):
         try:
-            from utils.view_export import (
-                ViewSection, ViewSnapshot, ViewTable, render_export_button,
-            )
-            from processing.convergence_analyzer import (
-                find_converging, find_decoupling, find_diverging,
-            )
-            top_conv = next(iter(find_converging(pairs)), None)
-            top_div = next(iter(find_diverging(pairs)), None)
-            top_dec = next(iter(find_decoupling(pairs)), None)
-            headline_parts = []
-            if top_conv:
-                headline_parts.append(
-                    f"Converging: {top_conv.name_a} ↔ {top_conv.name_b} "
-                    f"(Δr {top_conv.delta_r:+.2f})"
-                )
-            if top_dec:
-                headline_parts.append(
-                    f"Decoupling: {top_dec.name_a} ↔ {top_dec.name_b}"
-                )
-            headline = " · ".join(headline_parts) if headline_parts else "No significant convergence shifts"
-
-            table_rows = [
-                [
-                    str(i + 1),
-                    f"{p.name_a} ↔ {p.name_b}",
-                    p.direction,
-                    f"{p.short_r:+.2f}",
-                    f"{p.long_r:+.2f}",
-                    f"{p.delta_r:+.2f}",
-                ]
-                for i, p in enumerate(pairs[:15])
-            ]
-            snapshot = ViewSnapshot(
+            page_header(
                 title="Convergence & Divergence Lab",
                 subtitle=(
-                    f"{len(series_dict)} series, {len(pairs)} classifiable pairs · "
-                    f"windows {short_window}d / {long_window}d · "
-                    f"min |Δr| {min_delta:.2f}"
+                    "Pairs of routes / indices / commodities whose correlations "
+                    "are converging, diverging, or decoupling. Built on rolling "
+                    "Pearson r over short vs long windows."
                 ),
-                headline=headline,
-                sections=[
-                    ViewSection(
-                        title="Top 15 Pairs by |Δr|",
-                        tables=[ViewTable(
-                            title="Sorted by absolute change",
-                            headers=["#", "Pair", "Direction",
-                                     "Short r", "Long r", "Δr"],
-                            rows=table_rows,
-                        )],
-                    ),
-                ],
-                footer_note=(
-                    "Rolling-window Pearson correlation from "
-                    "processing.convergence_analyzer."
-                ),
+                badge_text="CONV",
+                badge_color=C_ACCENT,
             )
-            cols = st.columns([1, 5], gap="small")
-            with cols[0]:
-                render_export_button(
-                    snapshot, "convergence", key="convergence_export",
+
+            # ── Controls ──────────────────────────────────────────────────────
+            c1, c2, c3 = st.columns(3, gap="medium")
+            with c1:
+                short_window = st.slider(
+                    "Short window (days)", 10, 60, 30, step=5,
+                    key="conv_short_window",
                 )
-        except Exception as exc:
-            logger.debug(f"tab_convergence: PDF export skipped: {exc}")
+            with c2:
+                long_window = st.slider(
+                    "Long window (days)", 60, 180, 90, step=10,
+                    key="conv_long_window",
+                )
+            with c3:
+                min_delta = st.slider(
+                    "Min |Δr| threshold", 0.05, 0.50, 0.20, step=0.05,
+                    key="conv_min_delta",
+                )
 
-        # ── Source footer ─────────────────────────────────────────────────
-        st.markdown(
-            source_footer([
-                DataSource.modeled(
-                    "Convergence Analyzer",
-                    notes=(
-                        f"{len(series_dict)} input series; "
-                        f"{len(pairs)} classifiable pairs."
+            if short_window >= long_window:
+                st.warning(
+                    f"Short window ({short_window}) must be less than long "
+                    f"window ({long_window}). Adjusting…"
+                )
+                short_window = max(10, long_window - 30)
+
+            # ── Build inputs ──────────────────────────────────────────────────
+            series_dict = _build_series_dict(freight_data, macro_data)
+            if len(series_dict) < 2:
+                st.info(
+                    "Need at least 2 series with date+value columns. "
+                    "Configure freight feeds or wait for macro data."
+                )
+                return
+
+            from processing.convergence_analyzer import find_pair_convergence
+            pairs = find_pair_convergence(
+                series_dict,
+                short_window=short_window, long_window=long_window,
+                min_delta=min_delta,
+            )
+
+            # ── 1. Hero ───────────────────────────────────────────────────────
+            section_divider("Top Picks")
+            _render_hero(pairs)
+
+            # ── 2. Ranked table ──────────────────────────────────────────────
+            section_divider("All Pairs")
+            _render_ranked_table(pairs)
+
+            # ── 3. Heatmap ───────────────────────────────────────────────────
+            section_divider("Heatmap")
+            _render_heatmap(series_dict, window=long_window)
+
+            # ── Export this view (PDF) ────────────────────────────────────────
+            try:
+                from utils.view_export import (
+                    ViewSection, ViewSnapshot, ViewTable, render_export_button,
+                )
+                from processing.convergence_analyzer import (
+                    find_converging, find_decoupling, find_diverging,
+                )
+                top_conv = next(iter(find_converging(pairs)), None)
+                top_div = next(iter(find_diverging(pairs)), None)
+                top_dec = next(iter(find_decoupling(pairs)), None)
+                headline_parts = []
+                if top_conv:
+                    headline_parts.append(
+                        f"Converging: {top_conv.name_a} ↔ {top_conv.name_b} "
+                        f"(Δr {top_conv.delta_r:+.2f})"
+                    )
+                if top_dec:
+                    headline_parts.append(
+                        f"Decoupling: {top_dec.name_a} ↔ {top_dec.name_b}"
+                    )
+                headline = " · ".join(headline_parts) if headline_parts else "No significant convergence shifts"
+
+                table_rows = [
+                    [
+                        str(i + 1),
+                        f"{p.name_a} ↔ {p.name_b}",
+                        p.direction,
+                        f"{p.short_r:+.2f}",
+                        f"{p.long_r:+.2f}",
+                        f"{p.delta_r:+.2f}",
+                    ]
+                    for i, p in enumerate(pairs[:15])
+                ]
+                snapshot = ViewSnapshot(
+                    title="Convergence & Divergence Lab",
+                    subtitle=(
+                        f"{len(series_dict)} series, {len(pairs)} classifiable pairs · "
+                        f"windows {short_window}d / {long_window}d · "
+                        f"min |Δr| {min_delta:.2f}"
                     ),
-                ),
-            ]),
-            unsafe_allow_html=True,
-        )
+                    headline=headline,
+                    sections=[
+                        ViewSection(
+                            title="Top 15 Pairs by |Δr|",
+                            tables=[ViewTable(
+                                title="Sorted by absolute change",
+                                headers=["#", "Pair", "Direction",
+                                         "Short r", "Long r", "Δr"],
+                                rows=table_rows,
+                            )],
+                        ),
+                    ],
+                    footer_note=(
+                        "Rolling-window Pearson correlation from "
+                        "processing.convergence_analyzer."
+                    ),
+                )
+                cols = st.columns([1, 5], gap="small")
+                with cols[0]:
+                    render_export_button(
+                        snapshot, "convergence", key="convergence_export",
+                    )
+            except Exception as exc:
+                logger.debug(f"tab_convergence: PDF export skipped: {exc}")
 
-    except Exception:
-        logger.exception("tab_convergence render failed")
-        st.error("Convergence Lab encountered an error. See logs.")
+            # ── Source footer ─────────────────────────────────────────────────
+            st.markdown(
+                source_footer([
+                    DataSource.modeled(
+                        "Convergence Analyzer",
+                        notes=(
+                            f"{len(series_dict)} input series; "
+                            f"{len(pairs)} classifiable pairs."
+                        ),
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+
+        except Exception:
+            logger.exception("tab_convergence render failed")
+            st.error("Convergence Lab encountered an error. See logs.")

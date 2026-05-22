@@ -274,154 +274,158 @@ def render(
     **_kwargs,
 ) -> None:
     """Render the Trade Nowcast tab."""
-    try:
-        page_header(
-            title="Trade Nowcast",
-            subtitle=(
-                "Leading-indicator nowcast for shipping demand. Composite "
-                "score, per-indicator detail, weighted contributions, and "
-                "lead-lag matrix vs BDI."
-            ),
-            badge_text="NOWCAST",
-            badge_color=C_ACCENT,
-        )
-
-        # Build the analytical inputs.
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('nowcast'):
         try:
-            from processing.leading_indicators import (
-                build_leading_indicators,
-                compute_leading_indicator_score,
-                get_recession_probability,
+            page_header(
+                title="Trade Nowcast",
+                subtitle=(
+                    "Leading-indicator nowcast for shipping demand. Composite "
+                    "score, per-indicator detail, weighted contributions, and "
+                    "lead-lag matrix vs BDI."
+                ),
+                badge_text="NOWCAST",
+                badge_color=C_ACCENT,
             )
-            indicators = build_leading_indicators(macro_data or {})
-            score_data = compute_leading_indicator_score(macro_data or {})
-            recession_prob = float(get_recession_probability(macro_data or {}))
-        except Exception as exc:
-            logger.exception(f"nowcast: model assembly failed: {exc}")
-            st.error("Trade Nowcast could not assemble the leading indicators.")
-            return
 
-        # ── 1. Composite headline ──────────────────────────────────────────
-        _render_composite(score_data, recession_prob)
+            # Build the analytical inputs.
+            try:
+                from processing.leading_indicators import (
+                    build_leading_indicators,
+                    compute_leading_indicator_score,
+                    get_recession_probability,
+                )
+                indicators = build_leading_indicators(macro_data or {})
+                score_data = compute_leading_indicator_score(macro_data or {})
+                recession_prob = float(get_recession_probability(macro_data or {}))
+            except Exception as exc:
+                logger.exception(f"nowcast: model assembly failed: {exc}")
+                st.error("Trade Nowcast could not assemble the leading indicators.")
+                return
 
-        # ── 2. Top-bullish / top-bearish callouts ──────────────────────────
-        top_bull = score_data.get("top_bullish_indicators", []) or []
-        top_bear = score_data.get("top_bearish_indicators", []) or []
-        if top_bull or top_bear:
-            cols = st.columns(2, gap="medium")
-            with cols[0]:
-                if top_bull:
-                    st.markdown(
-                        insight_card_html(
-                            title=f"Bullish leaders: {', '.join(top_bull[:3])}",
-                            score=min(1.0, 0.5 + 0.1 * len(top_bull)),
-                            action="Watch",
-                            category="EXPANSION",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-            with cols[1]:
-                if top_bear:
-                    st.markdown(
-                        insight_card_html(
-                            title=f"Bearish drags: {', '.join(top_bear[:3])}",
-                            score=min(1.0, 0.5 + 0.1 * len(top_bear)),
-                            action="Watch",
-                            category="CONTRACTION",
-                        ),
-                        unsafe_allow_html=True,
-                    )
+            # ── 1. Composite headline ──────────────────────────────────────────
+            _render_composite(score_data, recession_prob)
 
-        section_divider("Indicators")
-        _render_indicators_table(indicators)
-
-        section_divider("Contributions")
-        _render_signal_mix_chart(indicators)
-
-        section_divider("Lead-Lag Matrix")
-        _render_lead_lag_heatmap(macro_data or {}, freight_data or {})
-
-        # ── Export this view (PDF) ────────────────────────────────────────
-        try:
-            from utils.view_export import (
-                ViewSection, ViewSnapshot, ViewTable, render_export_button,
-            )
-            composite = float(score_data.get("composite_score", 0.5))
-            forecast = score_data.get("four_week_forecast", "STABLE")
+            # ── 2. Top-bullish / top-bearish callouts ──────────────────────────
             top_bull = score_data.get("top_bullish_indicators", []) or []
             top_bear = score_data.get("top_bearish_indicators", []) or []
-
-            # Sort indicators by their contribution magnitude for the table.
-            sig_to_w = {"BULLISH": +1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
-            indicator_rows = []
-            sorted_inds = sorted(
-                indicators,
-                key=lambda i: abs(getattr(i, "change_pct", 0.0)) * getattr(i, "weight", 0.0),
-                reverse=True,
-            )[:12]
-            for ind in sorted_inds:
-                contrib = sig_to_w.get(getattr(ind, "signal", "NEUTRAL"), 0.0) * float(getattr(ind, "weight", 0.0))
-                indicator_rows.append([
-                    getattr(ind, "name", ""),
-                    f"{float(getattr(ind, 'current_value', 0.0)):,.2f}",
-                    f"{float(getattr(ind, 'change_pct', 0.0)):+5.2f}%",
-                    getattr(ind, "signal", ""),
-                    f"{contrib:+.3f}",
-                ])
-
-            sections = [
-                ViewSection(
-                    title="Top Indicators by Impact",
-                    tables=[ViewTable(
-                        title=f"{len(indicators)} leading indicators tracked",
-                        headers=["Indicator", "Current", "Δ %", "Signal", "Contrib"],
-                        rows=indicator_rows,
-                    )],
-                ),
-            ]
             if top_bull or top_bear:
-                sections.append(ViewSection(
-                    title="Direction Leaders",
-                    bullets=(
-                        [f"Bullish: {n}" for n in top_bull[:5]]
-                        + [f"Bearish: {n}" for n in top_bear[:5]]
-                    ),
-                ))
+                cols = st.columns(2, gap="medium")
+                with cols[0]:
+                    if top_bull:
+                        st.markdown(
+                            insight_card_html(
+                                title=f"Bullish leaders: {', '.join(top_bull[:3])}",
+                                score=min(1.0, 0.5 + 0.1 * len(top_bull)),
+                                action="Watch",
+                                category="EXPANSION",
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                with cols[1]:
+                    if top_bear:
+                        st.markdown(
+                            insight_card_html(
+                                title=f"Bearish drags: {', '.join(top_bear[:3])}",
+                                score=min(1.0, 0.5 + 0.1 * len(top_bear)),
+                                action="Watch",
+                                category="CONTRACTION",
+                            ),
+                            unsafe_allow_html=True,
+                        )
 
-            snapshot = ViewSnapshot(
-                title="Trade Nowcast",
-                subtitle=f"Composite {composite:.2f} · 4-week forecast {forecast}",
-                headline=(
-                    f"Recession probability {recession_prob*100:.0f}% · "
-                    f"Composite {composite:.2f} ({forecast})"
-                ),
-                sections=sections,
-                footer_note=(
-                    "Composite from processing.leading_indicators (15+ FRED "
-                    "series, weighted by importance + lead time)."
-                ),
+            section_divider("Indicators")
+            _render_indicators_table(indicators)
+
+            section_divider("Contributions")
+            _render_signal_mix_chart(indicators)
+
+            section_divider("Lead-Lag Matrix")
+            _render_lead_lag_heatmap(macro_data or {}, freight_data or {})
+
+            # ── Export this view (PDF) ────────────────────────────────────────
+            try:
+                from utils.view_export import (
+                    ViewSection, ViewSnapshot, ViewTable, render_export_button,
+                )
+                composite = float(score_data.get("composite_score", 0.5))
+                forecast = score_data.get("four_week_forecast", "STABLE")
+                top_bull = score_data.get("top_bullish_indicators", []) or []
+                top_bear = score_data.get("top_bearish_indicators", []) or []
+
+                # Sort indicators by their contribution magnitude for the table.
+                sig_to_w = {"BULLISH": +1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+                indicator_rows = []
+                sorted_inds = sorted(
+                    indicators,
+                    key=lambda i: abs(getattr(i, "change_pct", 0.0)) * getattr(i, "weight", 0.0),
+                    reverse=True,
+                )[:12]
+                for ind in sorted_inds:
+                    contrib = sig_to_w.get(getattr(ind, "signal", "NEUTRAL"), 0.0) * float(getattr(ind, "weight", 0.0))
+                    indicator_rows.append([
+                        getattr(ind, "name", ""),
+                        f"{float(getattr(ind, 'current_value', 0.0)):,.2f}",
+                        f"{float(getattr(ind, 'change_pct', 0.0)):+5.2f}%",
+                        getattr(ind, "signal", ""),
+                        f"{contrib:+.3f}",
+                    ])
+
+                sections = [
+                    ViewSection(
+                        title="Top Indicators by Impact",
+                        tables=[ViewTable(
+                            title=f"{len(indicators)} leading indicators tracked",
+                            headers=["Indicator", "Current", "Δ %", "Signal", "Contrib"],
+                            rows=indicator_rows,
+                        )],
+                    ),
+                ]
+                if top_bull or top_bear:
+                    sections.append(ViewSection(
+                        title="Direction Leaders",
+                        bullets=(
+                            [f"Bullish: {n}" for n in top_bull[:5]]
+                            + [f"Bearish: {n}" for n in top_bear[:5]]
+                        ),
+                    ))
+
+                snapshot = ViewSnapshot(
+                    title="Trade Nowcast",
+                    subtitle=f"Composite {composite:.2f} · 4-week forecast {forecast}",
+                    headline=(
+                        f"Recession probability {recession_prob*100:.0f}% · "
+                        f"Composite {composite:.2f} ({forecast})"
+                    ),
+                    sections=sections,
+                    footer_note=(
+                        "Composite from processing.leading_indicators (15+ FRED "
+                        "series, weighted by importance + lead time)."
+                    ),
+                )
+                cols = st.columns([1, 5], gap="small")
+                with cols[0]:
+                    render_export_button(snapshot, "nowcast", key="nowcast_export")
+            except Exception as exc:
+                logger.debug(f"tab_nowcast: PDF export skipped: {exc}")
+
+            st.markdown(
+                source_footer([
+                    DataSource.modeled(
+                        "Trade Nowcast",
+                        notes=(
+                            "Composite from processing.leading_indicators "
+                            "(15+ FRED series, weighted by importance + lead "
+                            "time). Recession probability from the indicator "
+                            "panel's tail-risk scoring."
+                        ),
+                    ),
+                ]),
+                unsafe_allow_html=True,
             )
-            cols = st.columns([1, 5], gap="small")
-            with cols[0]:
-                render_export_button(snapshot, "nowcast", key="nowcast_export")
-        except Exception as exc:
-            logger.debug(f"tab_nowcast: PDF export skipped: {exc}")
 
-        st.markdown(
-            source_footer([
-                DataSource.modeled(
-                    "Trade Nowcast",
-                    notes=(
-                        "Composite from processing.leading_indicators "
-                        "(15+ FRED series, weighted by importance + lead "
-                        "time). Recession probability from the indicator "
-                        "panel's tail-risk scoring."
-                    ),
-                ),
-            ]),
-            unsafe_allow_html=True,
-        )
-
-    except Exception:
-        logger.exception("tab_nowcast render failed")
-        st.error("Trade Nowcast encountered an error. See logs.")
+        except Exception:
+            logger.exception("tab_nowcast render failed")
+            st.error("Trade Nowcast encountered an error. See logs.")

@@ -1011,106 +1011,110 @@ def render(
     -------
     None
     """
-    # ── A. Page header ──────────────────────────────────────────────────────
-    page_header(
-        title="Macro Projection",
-        subtitle="Fleet-wide disruption projected to a macro read — "
-        "Shipping Stress Index vs Supply Chain Health, plus a scenario lens",
-        badge_text="MODELED",
-        badge_color=C_CONV,
-    )
-    try:
-        _chain_stage_strip()
-    except Exception:  # pragma: no cover - decorative only
-        logger.exception("Macro Projection — chain-stage strip failed")
-
-    # ── Normalise inputs — be robust to all-None / empty ────────────────────
-    freight_data = freight_data or {}
-    macro_data = macro_data or {}
-    port_results = port_results or []
-    route_results = route_results or []
-
-    # Hand the (unhashable) inputs to the cached compute wrappers.
-    _COMPUTE_INPUTS["freight_data"] = freight_data
-    _COMPUTE_INPUTS["macro_data"] = macro_data
-    _COMPUTE_INPUTS["port_results"] = port_results
-    _COMPUTE_INPUTS["route_results"] = route_results
-
-    # ── Compute both composites (cached, date-keyed) ────────────────────────
-    ssi_report = None
-    schi_report = None
-    token = _date_token()
-    try:
-        ssi_report = _cached_ssi_report(token)
-    except Exception:
-        logger.exception("Macro Projection — SSI computation failed")
-    try:
-        schi_report = _cached_schi_report(token)
-    except Exception:
-        logger.exception("Macro Projection — SCHI computation failed")
-
-    if ssi_report is None and schi_report is None:
-        st.error(
-            "Both the Shipping Stress Index and the Supply Chain Health Index "
-            "could not be computed from the supplied inputs."
-        )
-        st.markdown(
-            source_footer([_MACRO_PROJECTION_SOURCE]), unsafe_allow_html=True
-        )
-        return
-
-    # ── B. Side-by-side gauges ──────────────────────────────────────────────
-    if ssi_report is not None and schi_report is not None:
-        section_header(
-            "Composite Read",
-            "Two lenses on the same fleet — disruption (SSI) in, health (SCHI) out",
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('macro_projection'):
+        # ── A. Page header ──────────────────────────────────────────────────────
+        page_header(
+            title="Macro Projection",
+            subtitle="Fleet-wide disruption projected to a macro read — "
+            "Shipping Stress Index vs Supply Chain Health, plus a scenario lens",
+            badge_text="MODELED",
+            badge_color=C_CONV,
         )
         try:
-            _render_gauges(ssi_report, schi_report)
-        except Exception:
-            logger.exception("Macro Projection — gauges failed")
-            st.error("Composite gauges unavailable.")
-    else:
-        # One of the two composites is missing — say so plainly.
-        missing = "Shipping Stress Index" if ssi_report is None \
-            else "Supply Chain Health Index"
-        _empty_state(
-            f"The {missing} could not be computed from the supplied inputs "
-            f"&mdash; the side-by-side composite comparison is unavailable.",
-            accent=C_MOD,
-        )
+            _chain_stage_strip()
+        except Exception:  # pragma: no cover - decorative only
+            logger.exception("Macro Projection — chain-stage strip failed")
 
-    section_divider()
+        # ── Normalise inputs — be robust to all-None / empty ────────────────────
+        freight_data = freight_data or {}
+        macro_data = macro_data or {}
+        port_results = port_results or []
+        route_results = route_results or []
 
-    # ── C. Stress -> health narrative ───────────────────────────────────────
-    if ssi_report is not None and schi_report is not None:
+        # Hand the (unhashable) inputs to the cached compute wrappers.
+        _COMPUTE_INPUTS["freight_data"] = freight_data
+        _COMPUTE_INPUTS["macro_data"] = macro_data
+        _COMPUTE_INPUTS["port_results"] = port_results
+        _COMPUTE_INPUTS["route_results"] = route_results
+
+        # ── Compute both composites (cached, date-keyed) ────────────────────────
+        ssi_report = None
+        schi_report = None
+        token = _date_token()
         try:
-            _render_stress_health_narrative(ssi_report, schi_report)
+            ssi_report = _cached_ssi_report(token)
         except Exception:
-            logger.exception("Macro Projection — stress/health narrative failed")
-            st.error("Stress-to-health linkage narrative unavailable.")
+            logger.exception("Macro Projection — SSI computation failed")
+        try:
+            schi_report = _cached_schi_report(token)
+        except Exception:
+            logger.exception("Macro Projection — SCHI computation failed")
+
+        if ssi_report is None and schi_report is None:
+            st.error(
+                "Both the Shipping Stress Index and the Supply Chain Health Index "
+                "could not be computed from the supplied inputs."
+            )
+            st.markdown(
+                source_footer([_MACRO_PROJECTION_SOURCE]), unsafe_allow_html=True
+            )
+            return
+
+        # ── B. Side-by-side gauges ──────────────────────────────────────────────
+        if ssi_report is not None and schi_report is not None:
+            section_header(
+                "Composite Read",
+                "Two lenses on the same fleet — disruption (SSI) in, health (SCHI) out",
+            )
+            try:
+                _render_gauges(ssi_report, schi_report)
+            except Exception:
+                logger.exception("Macro Projection — gauges failed")
+                st.error("Composite gauges unavailable.")
+        else:
+            # One of the two composites is missing — say so plainly.
+            missing = "Shipping Stress Index" if ssi_report is None \
+                else "Supply Chain Health Index"
+            _empty_state(
+                f"The {missing} could not be computed from the supplied inputs "
+                f"&mdash; the side-by-side composite comparison is unavailable.",
+                accent=C_MOD,
+            )
+
         section_divider()
 
-    # ── D. Scenario projection lens ─────────────────────────────────────────
-    if ssi_report is not None:
+        # ── C. Stress -> health narrative ───────────────────────────────────────
+        if ssi_report is not None and schi_report is not None:
+            try:
+                _render_stress_health_narrative(ssi_report, schi_report)
+            except Exception:
+                logger.exception("Macro Projection — stress/health narrative failed")
+                st.error("Stress-to-health linkage narrative unavailable.")
+            section_divider()
+
+        # ── D. Scenario projection lens ─────────────────────────────────────────
+        if ssi_report is not None:
+            try:
+                _render_scenario_lens(ssi_report, route_results)
+            except Exception:
+                logger.exception("Macro Projection — scenario lens failed")
+                st.error("Scenario projection lens unavailable.")
+            section_divider()
+
+        # ── E. Leading-indicator context strip ──────────────────────────────────
         try:
-            _render_scenario_lens(ssi_report, route_results)
+            _render_leading_indicator_strip(macro_data)
         except Exception:
-            logger.exception("Macro Projection — scenario lens failed")
-            st.error("Scenario projection lens unavailable.")
-        section_divider()
+            logger.exception("Macro Projection — leading-indicator strip failed")
+            st.error("Leading-indicator context strip unavailable.")
 
-    # ── E. Leading-indicator context strip ──────────────────────────────────
-    try:
-        _render_leading_indicator_strip(macro_data)
-    except Exception:
-        logger.exception("Macro Projection — leading-indicator strip failed")
-        st.error("Leading-indicator context strip unavailable.")
-
-    # ── F. Provenance footer ────────────────────────────────────────────────
-    try:
-        st.markdown(
-            source_footer([_MACRO_PROJECTION_SOURCE]), unsafe_allow_html=True
-        )
-    except Exception:
-        logger.exception("Macro Projection — source footer failed")
+        # ── F. Provenance footer ────────────────────────────────────────────────
+        try:
+            st.markdown(
+                source_footer([_MACRO_PROJECTION_SOURCE]), unsafe_allow_html=True
+            )
+        except Exception:
+            logger.exception("Macro Projection — source footer failed")

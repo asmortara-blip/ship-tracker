@@ -318,327 +318,331 @@ def _plotly_decay(decay_df: pd.DataFrame) -> go.Figure:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
-    try:
-        logger.info("tab_results: render start")
-
-        page_header(
-            title="Signal Performance & Backtest Results",
-            subtitle="Aggregate alpha generation across all signal types, instruments, and freight routes.",
-            badge_text="ALPHA SIGNALS",
-            badge_color=C_ACCENT,
-        )
-
-        # ── Build signal log ───────────────────────────────────────────────
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('results'):
         try:
-            df = _build_signal_log(insights, n=300)
-        except Exception as exc:
-            logger.error(f"tab_results: signal log build failed: {exc}")
-            df = pd.DataFrame(columns=["date","instrument","signal_type","direction",
-                                       "conviction","entry","exit","return_pct","hold_days","status","win"])
+            logger.info("tab_results: render start")
 
-        closed = df[df["status"] == "CLOSED"]
-
-        # ── Aggregate KPIs ─────────────────────────────────────────────────
-        try:
-            total_signals    = len(df)
-            correct_calls    = int(df["win"].sum())
-            correct_pct      = (correct_calls / total_signals * 100) if total_signals else 0
-            avg_ret          = closed["return_pct"].mean() if not closed.empty else 0.0
-            avg_hold         = df["hold_days"].mean() if not df.empty else 0.0
-            rets             = closed["return_pct"].dropna().values
-            sharpe           = float((rets.mean() / rets.std()) * np.sqrt(252 / max(avg_hold, 1))) if len(rets) > 1 and rets.std() > 0 else 0.0
-            ic               = float(np.corrcoef(df["conviction"], df["return_pct"])[0, 1]) if len(df) > 2 else 0.0
-            skewness         = float(scipy_stats.skew(rets)) if len(rets) > 2 else 0.0
-            kurt             = float(scipy_stats.kurtosis(rets)) if len(rets) > 2 else 0.0
-            pct_pos          = (rets > 0).mean() * 100 if len(rets) > 0 else 0.0
-        except Exception as exc:
-            logger.error(f"tab_results: KPI calc failed: {exc}")
-            total_signals = correct_calls = 0
-            correct_pct = avg_ret = avg_hold = sharpe = ic = skewness = kurt = pct_pos = 0.0
-
-        signal_sources = [
-            {"name": "Internal alpha-signal backtest", "kind": "modeled", "quality": "demo"},
-            {"name": "Synthetic instrument log",       "kind": "modeled", "quality": "demo"},
-        ]
-
-        # ══════════════════════════════════════════════════════════════════
-        # 1. SIGNAL PERFORMANCE DASHBOARD
-        # ══════════════════════════════════════════════════════════════════
-        section_header(
-            "Signal Performance Dashboard",
-            "Aggregate backtest statistics across all signal types and instruments",
-        )
-
-        try:
-            avg_ret_color = C_HIGH if avg_ret >= 0 else C_LOW
-            metric_card_row([
-                {"label": "Total Signals Generated", "value": f"{total_signals:,}",
-                 "accent": C_ACCENT, "sublabel": "all instruments / routes"},
-                {"label": "Correct Direction Calls", "value": f"{correct_calls:,}",
-                 "accent": C_HIGH,   "sublabel": f"{correct_pct:.1f}% accuracy"},
-                {"label": "Avg Return per Signal",   "value": _fmt_pct(avg_ret),
-                 "accent": avg_ret_color, "sublabel": "closed signals only"},
-                {"label": "Avg Holding Period",      "value": f"{avg_hold:.1f} days",
-                 "accent": C_MOD,    "sublabel": "across all signals"},
-                {"label": "Signal Sharpe Ratio",     "value": f"{sharpe:.2f}",
-                 "accent": C_MOD,    "sublabel": "annualized"},
-                {"label": "Information Coefficient", "value": f"{ic:.3f}",
-                 "accent": C_ACCENT, "sublabel": "conviction vs return corr"},
-            ], columns=3)
-        except Exception as exc:
-            logger.error(f"tab_results: KPI render failed: {exc}")
-            st.warning("KPI render error.")
-
-        section_divider("Rankings")
-
-        # ══════════════════════════════════════════════════════════════════
-        # 2. SIGNAL LEADERBOARD
-        # ══════════════════════════════════════════════════════════════════
-        section_header("Signal Leaderboard", "Top-performing signal types ranked by win rate")
-        try:
-            lb = _leaderboard_stats(df)
-            medal = {0: "🥇", 1: "🥈", 2: "🥉"}
-            lb_rows = []
-            for i, r in lb.head(10).iterrows():
-                wr_color  = C_HIGH if r["Win Rate"] >= 55 else (C_MOD if r["Win Rate"] >= 48 else C_LOW)
-                ret_color = C_HIGH if r["Avg Return"] >= 0 else C_LOW
-                ret_sign  = "+" if r["Avg Return"] >= 0 else ""
-                rank_lbl  = medal.get(i, f"#{i+1}")
-                sig_color = SIGNAL_COLORS.get(r["Signal Type"], C_ACCENT)
-                lb_rows.append([
-                    _sans(rank_lbl, color=C_TEXT, weight=700),
-                    _sans(r["Signal Type"], color=sig_color, weight=700),
-                    _mono(str(r["Total Signals"])),
-                    _mono(f"{r['Win Rate']:.1f}%", color=wr_color),
-                    _mono(f"{ret_sign}{r['Avg Return']:.2f}%", color=ret_color),
-                    _mono(f"{r['Avg Hold (d)']:.1f}d"),
-                    _mono(f"{r['Sharpe']:.2f}", color=C_MOD),
-                    _mono(f"{r['IC']:.3f}"),
-                ])
-            wsj_market_table(
-                ["Rank", "Signal Type", "Total Signals", "Win Rate",
-                 "Avg Return", "Avg Hold", "Sharpe", "IC"],
-                lb_rows,
+            page_header(
+                title="Signal Performance & Backtest Results",
+                subtitle="Aggregate alpha generation across all signal types, instruments, and freight routes.",
+                badge_text="ALPHA SIGNALS",
+                badge_color=C_ACCENT,
             )
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: leaderboard failed: {exc}")
-            st.warning("Leaderboard unavailable.")
 
-        # ══════════════════════════════════════════════════════════════════
-        # 3. INSTRUMENT PERFORMANCE
-        # ══════════════════════════════════════════════════════════════════
-        section_header("Instrument Performance", "Alpha generated per ticker and freight route")
-        try:
-            inst_df = _instrument_stats(df)
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                inst_rows = []
-                for _, r in inst_df.iterrows():
-                    wr_c = C_HIGH if r["Win Rate"] >= 55 else (C_MOD if r["Win Rate"] >= 48 else C_LOW)
-                    ta_c = C_HIGH if r["Total Alpha"] >= 0 else C_LOW
-                    ta_s = "+" if r["Total Alpha"] >= 0 else ""
-                    inst_rows.append([
-                        _sans(r["Instrument"], color=C_TEXT, weight=800),
-                        _mono(str(r["Signals"])),
-                        _mono(f"{r['Win Rate']:.1f}%", color=wr_c),
-                        _mono(f"{ta_s}{r['Total Alpha']:.1f}%", color=ta_c),
-                        _mono(f"+{r['Best Call']:.2f}%", color=C_HIGH),
-                        _mono(f"{r['Worst Call']:.2f}%", color=C_LOW),
+            # ── Build signal log ───────────────────────────────────────────────
+            try:
+                df = _build_signal_log(insights, n=300)
+            except Exception as exc:
+                logger.error(f"tab_results: signal log build failed: {exc}")
+                df = pd.DataFrame(columns=["date","instrument","signal_type","direction",
+                                           "conviction","entry","exit","return_pct","hold_days","status","win"])
+
+            closed = df[df["status"] == "CLOSED"]
+
+            # ── Aggregate KPIs ─────────────────────────────────────────────────
+            try:
+                total_signals    = len(df)
+                correct_calls    = int(df["win"].sum())
+                correct_pct      = (correct_calls / total_signals * 100) if total_signals else 0
+                avg_ret          = closed["return_pct"].mean() if not closed.empty else 0.0
+                avg_hold         = df["hold_days"].mean() if not df.empty else 0.0
+                rets             = closed["return_pct"].dropna().values
+                sharpe           = float((rets.mean() / rets.std()) * np.sqrt(252 / max(avg_hold, 1))) if len(rets) > 1 and rets.std() > 0 else 0.0
+                ic               = float(np.corrcoef(df["conviction"], df["return_pct"])[0, 1]) if len(df) > 2 else 0.0
+                skewness         = float(scipy_stats.skew(rets)) if len(rets) > 2 else 0.0
+                kurt             = float(scipy_stats.kurtosis(rets)) if len(rets) > 2 else 0.0
+                pct_pos          = (rets > 0).mean() * 100 if len(rets) > 0 else 0.0
+            except Exception as exc:
+                logger.error(f"tab_results: KPI calc failed: {exc}")
+                total_signals = correct_calls = 0
+                correct_pct = avg_ret = avg_hold = sharpe = ic = skewness = kurt = pct_pos = 0.0
+
+            signal_sources = [
+                {"name": "Internal alpha-signal backtest", "kind": "modeled", "quality": "demo"},
+                {"name": "Synthetic instrument log",       "kind": "modeled", "quality": "demo"},
+            ]
+
+            # ══════════════════════════════════════════════════════════════════
+            # 1. SIGNAL PERFORMANCE DASHBOARD
+            # ══════════════════════════════════════════════════════════════════
+            section_header(
+                "Signal Performance Dashboard",
+                "Aggregate backtest statistics across all signal types and instruments",
+            )
+
+            try:
+                avg_ret_color = C_HIGH if avg_ret >= 0 else C_LOW
+                metric_card_row([
+                    {"label": "Total Signals Generated", "value": f"{total_signals:,}",
+                     "accent": C_ACCENT, "sublabel": "all instruments / routes"},
+                    {"label": "Correct Direction Calls", "value": f"{correct_calls:,}",
+                     "accent": C_HIGH,   "sublabel": f"{correct_pct:.1f}% accuracy"},
+                    {"label": "Avg Return per Signal",   "value": _fmt_pct(avg_ret),
+                     "accent": avg_ret_color, "sublabel": "closed signals only"},
+                    {"label": "Avg Holding Period",      "value": f"{avg_hold:.1f} days",
+                     "accent": C_MOD,    "sublabel": "across all signals"},
+                    {"label": "Signal Sharpe Ratio",     "value": f"{sharpe:.2f}",
+                     "accent": C_MOD,    "sublabel": "annualized"},
+                    {"label": "Information Coefficient", "value": f"{ic:.3f}",
+                     "accent": C_ACCENT, "sublabel": "conviction vs return corr"},
+                ], columns=3)
+            except Exception as exc:
+                logger.error(f"tab_results: KPI render failed: {exc}")
+                st.warning("KPI render error.")
+
+            section_divider("Rankings")
+
+            # ══════════════════════════════════════════════════════════════════
+            # 2. SIGNAL LEADERBOARD
+            # ══════════════════════════════════════════════════════════════════
+            section_header("Signal Leaderboard", "Top-performing signal types ranked by win rate")
+            try:
+                lb = _leaderboard_stats(df)
+                medal = {0: "🥇", 1: "🥈", 2: "🥉"}
+                lb_rows = []
+                for i, r in lb.head(10).iterrows():
+                    wr_color  = C_HIGH if r["Win Rate"] >= 55 else (C_MOD if r["Win Rate"] >= 48 else C_LOW)
+                    ret_color = C_HIGH if r["Avg Return"] >= 0 else C_LOW
+                    ret_sign  = "+" if r["Avg Return"] >= 0 else ""
+                    rank_lbl  = medal.get(i, f"#{i+1}")
+                    sig_color = SIGNAL_COLORS.get(r["Signal Type"], C_ACCENT)
+                    lb_rows.append([
+                        _sans(rank_lbl, color=C_TEXT, weight=700),
+                        _sans(r["Signal Type"], color=sig_color, weight=700),
+                        _mono(str(r["Total Signals"])),
+                        _mono(f"{r['Win Rate']:.1f}%", color=wr_color),
+                        _mono(f"{ret_sign}{r['Avg Return']:.2f}%", color=ret_color),
+                        _mono(f"{r['Avg Hold (d)']:.1f}d"),
+                        _mono(f"{r['Sharpe']:.2f}", color=C_MOD),
+                        _mono(f"{r['IC']:.3f}"),
                     ])
                 wsj_market_table(
-                    ["Instrument", "Signals", "Win Rate",
-                     "Total Alpha", "Best Call", "Worst Call"],
-                    inst_rows,
+                    ["Rank", "Signal Type", "Total Signals", "Win Rate",
+                     "Avg Return", "Avg Hold", "Sharpe", "IC"],
+                    lb_rows,
                 )
-            with c2:
-                fig_bar = _plotly_win_rate_bar(inst_df)
-                st.plotly_chart(fig_bar, use_container_width=True, key="win_rate_bar")
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: instrument perf failed: {exc}")
-            st.warning("Instrument performance unavailable.")
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: leaderboard failed: {exc}")
+                st.warning("Leaderboard unavailable.")
 
-        section_divider("Return Analytics")
+            # ══════════════════════════════════════════════════════════════════
+            # 3. INSTRUMENT PERFORMANCE
+            # ══════════════════════════════════════════════════════════════════
+            section_header("Instrument Performance", "Alpha generated per ticker and freight route")
+            try:
+                inst_df = _instrument_stats(df)
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    inst_rows = []
+                    for _, r in inst_df.iterrows():
+                        wr_c = C_HIGH if r["Win Rate"] >= 55 else (C_MOD if r["Win Rate"] >= 48 else C_LOW)
+                        ta_c = C_HIGH if r["Total Alpha"] >= 0 else C_LOW
+                        ta_s = "+" if r["Total Alpha"] >= 0 else ""
+                        inst_rows.append([
+                            _sans(r["Instrument"], color=C_TEXT, weight=800),
+                            _mono(str(r["Signals"])),
+                            _mono(f"{r['Win Rate']:.1f}%", color=wr_c),
+                            _mono(f"{ta_s}{r['Total Alpha']:.1f}%", color=ta_c),
+                            _mono(f"+{r['Best Call']:.2f}%", color=C_HIGH),
+                            _mono(f"{r['Worst Call']:.2f}%", color=C_LOW),
+                        ])
+                    wsj_market_table(
+                        ["Instrument", "Signals", "Win Rate",
+                         "Total Alpha", "Best Call", "Worst Call"],
+                        inst_rows,
+                    )
+                with c2:
+                    fig_bar = _plotly_win_rate_bar(inst_df)
+                    st.plotly_chart(fig_bar, use_container_width=True, key="win_rate_bar")
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: instrument perf failed: {exc}")
+                st.warning("Instrument performance unavailable.")
 
-        # ══════════════════════════════════════════════════════════════════
-        # 4. SIGNAL TIMELINE
-        # ══════════════════════════════════════════════════════════════════
-        section_header(
-            "Signal Timeline",
-            "All signals plotted by date vs subsequent return — size = conviction",
-        )
-        try:
-            fig_timeline = _plotly_timeline(df)
-            st.plotly_chart(fig_timeline, use_container_width=True, key="signal_timeline")
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: timeline failed: {exc}")
-            st.warning("Timeline chart unavailable.")
+            section_divider("Return Analytics")
 
-        # ══════════════════════════════════════════════════════════════════
-        # 5. RETURN DISTRIBUTION
-        # ══════════════════════════════════════════════════════════════════
-        section_header("Return Distribution", "Empirical distribution of all signal returns")
-        try:
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                fig_dist = _plotly_return_dist(closed if not closed.empty else df)
-                st.plotly_chart(fig_dist, use_container_width=True, key="return_dist")
-            with c2:
-                std_dev = closed["return_pct"].std() if not closed.empty else 0.0
-                stat_rows = [
-                    [_sans("Mean Return", color=C_TEXT2),
-                     _mono(_fmt_pct(avg_ret), color=(C_HIGH if avg_ret >= 0 else C_LOW))],
-                    [_sans("Std Dev", color=C_TEXT2),
-                     _mono(f"{std_dev:.2f}%")],
-                    [_sans("Skewness", color=C_TEXT2),
-                     _mono(f"{skewness:.3f}")],
-                    [_sans("Kurtosis", color=C_TEXT2),
-                     _mono(f"{kurt:.3f}")],
-                    [_sans("% Positive", color=C_TEXT2),
-                     _mono(f"{pct_pos:.1f}%", color=C_HIGH)],
-                    [_sans("Sharpe", color=C_TEXT2),
-                     _mono(f"{sharpe:.2f}", color=C_MOD)],
-                    [_sans("IC", color=C_TEXT2),
-                     _mono(f"{ic:.3f}", color=C_ACCENT)],
-                ]
-                wsj_market_table(["Distribution Stats", "Value"], stat_rows)
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: return dist failed: {exc}")
-            st.warning("Return distribution unavailable.")
-
-        # ══════════════════════════════════════════════════════════════════
-        # 6. MONTHLY ATTRIBUTION
-        # ══════════════════════════════════════════════════════════════════
-        section_header(
-            "Monthly Attribution",
-            "Alpha generated per month per signal type — red=negative, green=positive",
-        )
-        try:
-            pivot = _monthly_attribution(df)
-
-            def _heat_cell(v: float) -> str:
-                if v > 8:
-                    bg = "rgba(46,158,110,0.55)"
-                elif v > 3:
-                    bg = "rgba(46,158,110,0.30)"
-                elif v > 0:
-                    bg = "rgba(46,158,110,0.12)"
-                elif v > -3:
-                    bg = "rgba(192,57,43,0.12)"
-                elif v > -8:
-                    bg = "rgba(192,57,43,0.30)"
-                else:
-                    bg = "rgba(192,57,43,0.55)"
-                color = C_HIGH if v >= 0 else C_LOW
-                sign  = "+" if v >= 0 else ""
-                return (
-                    f'<span style="display:inline-block;width:100%;padding:2px 4px;'
-                    f'background:{bg};color:{color};font-family:var(--mono);'
-                    f'font-weight:600;font-variant-numeric:tabular-nums;">'
-                    f'{sign}{v:.1f}%</span>'
-                )
-
-            heat_rows = []
-            for month, row in pivot.iterrows():
-                cells = [_sans(str(month), color=C_TEXT2, weight=600)]
-                for col in pivot.columns:
-                    cells.append(_heat_cell(row[col]))
-                heat_rows.append(cells)
-            wsj_market_table(["Month"] + list(pivot.columns), heat_rows)
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: monthly attribution failed: {exc}")
-            st.warning("Monthly attribution unavailable.")
-
-        section_divider("Signal Log & Decay")
-
-        # ══════════════════════════════════════════════════════════════════
-        # 7. RECENT SIGNAL LOG
-        # ══════════════════════════════════════════════════════════════════
-        section_header("Recent Signal Log", "Last 50 signals — open and closed")
-        try:
-            sample = df.head(50)
-            log_rows = []
-            for _, r in sample.iterrows():
-                ret = r["return_pct"]
-                ret_color = C_HIGH if ret >= 0 else C_LOW
-                ret_sign  = "+" if ret >= 0 else ""
-                dir_color = C_HIGH if r["direction"] == "LONG" else C_LOW
-                status_color = C_ACCENT if r["status"] == "OPEN" else C_TEXT3
-                conv_bar = int(r["conviction"] * 10)
-                conv_str = f'{"█" * conv_bar}{"░" * (10 - conv_bar)} {r["conviction"]:.2f}'
-                date_str = (
-                    r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime")
-                    else str(r["date"])[:10]
-                )
-                sig_color = SIGNAL_COLORS.get(r["signal_type"], C_ACCENT)
-                log_rows.append([
-                    _mono(date_str, color=C_TEXT2),
-                    _sans(r["instrument"], color=C_TEXT, weight=700),
-                    badge(r["signal_type"], color=sig_color),
-                    _sans(r["direction"], color=dir_color, weight=700),
-                    _mono(conv_str, color=C_TEXT3),
-                    _mono(f"${r['entry']:.2f}"),
-                    _mono(f"${r['exit']:.2f}"),
-                    _mono(f"{ret_sign}{ret:.2f}%", color=ret_color),
-                    _sans(r["status"], color=status_color, weight=700),
-                ])
-            wsj_market_table(
-                ["Date", "Instrument", "Signal Type", "Dir", "Conv",
-                 "Entry", "Exit", "Return", "Status"],
-                log_rows,
+            # ══════════════════════════════════════════════════════════════════
+            # 4. SIGNAL TIMELINE
+            # ══════════════════════════════════════════════════════════════════
+            section_header(
+                "Signal Timeline",
+                "All signals plotted by date vs subsequent return — size = conviction",
             )
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
-        except Exception as exc:
-            logger.error(f"tab_results: signal log render failed: {exc}")
-            st.warning("Signal log unavailable.")
+            try:
+                fig_timeline = _plotly_timeline(df)
+                st.plotly_chart(fig_timeline, use_container_width=True, key="signal_timeline")
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: timeline failed: {exc}")
+                st.warning("Timeline chart unavailable.")
 
-        # ══════════════════════════════════════════════════════════════════
-        # 8. SIGNAL DECAY ANALYSIS
-        # ══════════════════════════════════════════════════════════════════
-        section_header(
-            "Signal Decay Analysis",
-            "Average return by holding day — shows how quickly each signal type decays",
-        )
-        try:
-            decay_df = _decay_data(df)
-            fig_decay = _plotly_decay(decay_df)
-            st.plotly_chart(fig_decay, use_container_width=True, key="signal_decay")
+            # ══════════════════════════════════════════════════════════════════
+            # 5. RETURN DISTRIBUTION
+            # ══════════════════════════════════════════════════════════════════
+            section_header("Return Distribution", "Empirical distribution of all signal returns")
+            try:
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    fig_dist = _plotly_return_dist(closed if not closed.empty else df)
+                    st.plotly_chart(fig_dist, use_container_width=True, key="return_dist")
+                with c2:
+                    std_dev = closed["return_pct"].std() if not closed.empty else 0.0
+                    stat_rows = [
+                        [_sans("Mean Return", color=C_TEXT2),
+                         _mono(_fmt_pct(avg_ret), color=(C_HIGH if avg_ret >= 0 else C_LOW))],
+                        [_sans("Std Dev", color=C_TEXT2),
+                         _mono(f"{std_dev:.2f}%")],
+                        [_sans("Skewness", color=C_TEXT2),
+                         _mono(f"{skewness:.3f}")],
+                        [_sans("Kurtosis", color=C_TEXT2),
+                         _mono(f"{kurt:.3f}")],
+                        [_sans("% Positive", color=C_TEXT2),
+                         _mono(f"{pct_pos:.1f}%", color=C_HIGH)],
+                        [_sans("Sharpe", color=C_TEXT2),
+                         _mono(f"{sharpe:.2f}", color=C_MOD)],
+                        [_sans("IC", color=C_TEXT2),
+                         _mono(f"{ic:.3f}", color=C_ACCENT)],
+                    ]
+                    wsj_market_table(["Distribution Stats", "Value"], stat_rows)
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: return dist failed: {exc}")
+                st.warning("Return distribution unavailable.")
 
-            decay_drop = decay_df.groupby("signal_type").apply(
-                lambda g: g.set_index("hold_days")["avg_return"].get(1, 0) -
-                          g.set_index("hold_days")["avg_return"].get(30, 0)
+            # ══════════════════════════════════════════════════════════════════
+            # 6. MONTHLY ATTRIBUTION
+            # ══════════════════════════════════════════════════════════════════
+            section_header(
+                "Monthly Attribution",
+                "Alpha generated per month per signal type — red=negative, green=positive",
             )
-            fastest = decay_drop.idxmax()
-            slowest = decay_drop.idxmin()
+            try:
+                pivot = _monthly_attribution(df)
 
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.markdown(insight_card_html(
-                    title=f"Fastest Decay — {fastest}",
-                    score=0.85,
-                    action="Caution",
-                    rationale="Signal degrades most quickly over the holding period; treat as short-half-life and exit promptly.",
-                    category="DECAY",
-                ), unsafe_allow_html=True)
-            with col_b:
-                st.markdown(insight_card_html(
-                    title=f"Slowest Decay — {slowest}",
-                    score=0.25,
-                    action="Watch",
-                    rationale="Maintains alpha across longer holding windows; suitable for multi-day positioning.",
-                    category="DECAY",
-                ), unsafe_allow_html=True)
-            st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+                def _heat_cell(v: float) -> str:
+                    if v > 8:
+                        bg = "rgba(46,158,110,0.55)"
+                    elif v > 3:
+                        bg = "rgba(46,158,110,0.30)"
+                    elif v > 0:
+                        bg = "rgba(46,158,110,0.12)"
+                    elif v > -3:
+                        bg = "rgba(192,57,43,0.12)"
+                    elif v > -8:
+                        bg = "rgba(192,57,43,0.30)"
+                    else:
+                        bg = "rgba(192,57,43,0.55)"
+                    color = C_HIGH if v >= 0 else C_LOW
+                    sign  = "+" if v >= 0 else ""
+                    return (
+                        f'<span style="display:inline-block;width:100%;padding:2px 4px;'
+                        f'background:{bg};color:{color};font-family:var(--mono);'
+                        f'font-weight:600;font-variant-numeric:tabular-nums;">'
+                        f'{sign}{v:.1f}%</span>'
+                    )
+
+                heat_rows = []
+                for month, row in pivot.iterrows():
+                    cells = [_sans(str(month), color=C_TEXT2, weight=600)]
+                    for col in pivot.columns:
+                        cells.append(_heat_cell(row[col]))
+                    heat_rows.append(cells)
+                wsj_market_table(["Month"] + list(pivot.columns), heat_rows)
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: monthly attribution failed: {exc}")
+                st.warning("Monthly attribution unavailable.")
+
+            section_divider("Signal Log & Decay")
+
+            # ══════════════════════════════════════════════════════════════════
+            # 7. RECENT SIGNAL LOG
+            # ══════════════════════════════════════════════════════════════════
+            section_header("Recent Signal Log", "Last 50 signals — open and closed")
+            try:
+                sample = df.head(50)
+                log_rows = []
+                for _, r in sample.iterrows():
+                    ret = r["return_pct"]
+                    ret_color = C_HIGH if ret >= 0 else C_LOW
+                    ret_sign  = "+" if ret >= 0 else ""
+                    dir_color = C_HIGH if r["direction"] == "LONG" else C_LOW
+                    status_color = C_ACCENT if r["status"] == "OPEN" else C_TEXT3
+                    conv_bar = int(r["conviction"] * 10)
+                    conv_str = f'{"█" * conv_bar}{"░" * (10 - conv_bar)} {r["conviction"]:.2f}'
+                    date_str = (
+                        r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime")
+                        else str(r["date"])[:10]
+                    )
+                    sig_color = SIGNAL_COLORS.get(r["signal_type"], C_ACCENT)
+                    log_rows.append([
+                        _mono(date_str, color=C_TEXT2),
+                        _sans(r["instrument"], color=C_TEXT, weight=700),
+                        badge(r["signal_type"], color=sig_color),
+                        _sans(r["direction"], color=dir_color, weight=700),
+                        _mono(conv_str, color=C_TEXT3),
+                        _mono(f"${r['entry']:.2f}"),
+                        _mono(f"${r['exit']:.2f}"),
+                        _mono(f"{ret_sign}{ret:.2f}%", color=ret_color),
+                        _sans(r["status"], color=status_color, weight=700),
+                    ])
+                wsj_market_table(
+                    ["Date", "Instrument", "Signal Type", "Dir", "Conv",
+                     "Entry", "Exit", "Return", "Status"],
+                    log_rows,
+                )
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: signal log render failed: {exc}")
+                st.warning("Signal log unavailable.")
+
+            # ══════════════════════════════════════════════════════════════════
+            # 8. SIGNAL DECAY ANALYSIS
+            # ══════════════════════════════════════════════════════════════════
+            section_header(
+                "Signal Decay Analysis",
+                "Average return by holding day — shows how quickly each signal type decays",
+            )
+            try:
+                decay_df = _decay_data(df)
+                fig_decay = _plotly_decay(decay_df)
+                st.plotly_chart(fig_decay, use_container_width=True, key="signal_decay")
+
+                decay_drop = decay_df.groupby("signal_type").apply(
+                    lambda g: g.set_index("hold_days")["avg_return"].get(1, 0) -
+                              g.set_index("hold_days")["avg_return"].get(30, 0)
+                )
+                fastest = decay_drop.idxmax()
+                slowest = decay_drop.idxmin()
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown(insight_card_html(
+                        title=f"Fastest Decay — {fastest}",
+                        score=0.85,
+                        action="Caution",
+                        rationale="Signal degrades most quickly over the holding period; treat as short-half-life and exit promptly.",
+                        category="DECAY",
+                    ), unsafe_allow_html=True)
+                with col_b:
+                    st.markdown(insight_card_html(
+                        title=f"Slowest Decay — {slowest}",
+                        score=0.25,
+                        action="Watch",
+                        rationale="Maintains alpha across longer holding windows; suitable for multi-day positioning.",
+                        category="DECAY",
+                    ), unsafe_allow_html=True)
+                st.markdown(source_footer(signal_sources), unsafe_allow_html=True)
+            except Exception as exc:
+                logger.error(f"tab_results: decay analysis failed: {exc}")
+                st.warning("Signal decay analysis unavailable.")
+
+            logger.info("tab_results: render complete")
+
         except Exception as exc:
-            logger.error(f"tab_results: decay analysis failed: {exc}")
-            st.warning("Signal decay analysis unavailable.")
-
-        logger.info("tab_results: render complete")
-
-    except Exception as exc:
-        logger.error(f"tab_results: fatal render error: {exc}")
-        st.error(f"Results tab encountered an error: {exc}")
+            logger.error(f"tab_results: fatal render error: {exc}")
+            st.error(f"Results tab encountered an error: {exc}")

@@ -701,43 +701,47 @@ def _render_canonical_catalog():
 # ── Main Entry Point ───────────────────────────────────────────────────────────
 def render(macro_data=None, freight_data=None, insights=None):
     """Render the Scenario Analysis & Stress Testing tab."""
-    logger.info("tab_scenarios.render() called")
-    try:
-        page_header(
-            title="Scenario Analysis & Stress Testing",
-            subtitle="Institutional scenario modeling - base/bull/bear cases, event probabilities, and Monte Carlo simulation",
-            badge_text="SCENARIOS",
-            badge_color=C_ACCENT,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('scenarios'):
+        logger.info("tab_scenarios.render() called")
+        try:
+            page_header(
+                title="Scenario Analysis & Stress Testing",
+                subtitle="Institutional scenario modeling - base/bull/bear cases, event probabilities, and Monte Carlo simulation",
+                badge_text="SCENARIOS",
+                badge_color=C_ACCENT,
+            )
 
-        _render_canonical_catalog()
+            _render_canonical_catalog()
 
-        section_divider("Reference Cases")
+            section_divider("Reference Cases")
 
-        _render_dashboard(macro_data, freight_data)
+            _render_dashboard(macro_data, freight_data)
 
-        section_header(
-            "Base / Bull / Bear Comparison",
-            subtitle="Three reference cases scaled from current BDI and WCI prints",
-        )
-        _render_three_scenarios(macro_data, freight_data)
+            section_header(
+                "Base / Bull / Bear Comparison",
+                subtitle="Three reference cases scaled from current BDI and WCI prints",
+            )
+            _render_three_scenarios(macro_data, freight_data)
 
-        _render_comparison_table()
+            _render_comparison_table()
 
-        section_divider("Custom Modeling")
+            section_divider("Custom Modeling")
 
-        _render_scenario_builder()
+            _render_scenario_builder()
 
-        section_divider("Events & Simulation")
+            section_divider("Events & Simulation")
 
-        _render_event_tracker()
+            _render_event_tracker()
 
-        section_header(
-            "Monte Carlo Simulation",
-            subtitle="Stochastic BDI paths to bound rate volatility expectations",
-        )
-        _render_monte_carlo(macro_data)
+            section_header(
+                "Monte Carlo Simulation",
+                subtitle="Stochastic BDI paths to bound rate volatility expectations",
+            )
+            _render_monte_carlo(macro_data)
 
-    except Exception as exc:
-        logger.exception("tab_scenarios.render() top-level error")
-        st.error(f"Scenario tab error: {exc}")
+        except Exception as exc:
+            logger.exception("tab_scenarios.render() top-level error")
+            st.error(f"Scenario tab error: {exc}")

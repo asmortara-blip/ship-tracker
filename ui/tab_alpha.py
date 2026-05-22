@@ -573,88 +573,92 @@ def render(
     **kwargs,
 ) -> None:
     """Render the Alpha Signal Generator tab."""
-    try:
-        page_header(
-            title="Alpha Signal Generator",
-            subtitle="Multi-factor alpha signals across container ships, dry bulk, tankers, and ports.",
-            badge_text="ALPHA",
-            badge_color=C_ACCENT,
-        )
-
-        # ── Resolve signals ──────────────────────────────────────────────────
-        signals: list[dict] = []
-
-        # Try live engine first
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('alpha'):
         try:
-            if stock_data:
-                raw = generate_all_signals(stock_data)
-                for s in (raw or []):
-                    try:
-                        signals.append({
-                            "ticker":    getattr(s, "ticker", "—"),
-                            "direction": getattr(s, "direction", "FLAT"),
-                            "conviction": getattr(s, "conviction", "LOW"),
-                            "strength":  float(getattr(s, "strength", 0.5)),
-                            "sig_type":  getattr(s, "signal_type", "Momentum").replace("_", " ").title(),
-                            "basis":     getattr(s, "rationale", "—")[:60],
-                            "entry":     float(getattr(s, "entry_price", 0.0)),
-                            "stop":      float(getattr(s, "stop_loss", 0.0)),
-                            "target":    float(getattr(s, "target_price", 0.0)),
-                            "rr":        float(getattr(s, "risk_reward", 1.5)),
-                            "mins_ago":  random.randint(1, 120),
-                        })
-                    except Exception:
-                        pass
-        except Exception as eng_exc:
-            logger.debug(f"[tab_alpha] engine signals skipped: {eng_exc}")
+            page_header(
+                title="Alpha Signal Generator",
+                subtitle="Multi-factor alpha signals across container ships, dry bulk, tankers, and ports.",
+                badge_text="ALPHA",
+                badge_color=C_ACCENT,
+            )
 
-        # Fall back to mock if empty
-        if not signals:
-            for row in _MOCK_SIGNALS:
-                ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, mins_ago = row
-                signals.append({
-                    "ticker": ticker, "direction": direction, "conviction": conviction,
-                    "strength": strength, "sig_type": sig_type, "basis": basis,
-                    "entry": entry, "stop": stop, "target": target,
-                    "rr": rr, "mins_ago": mins_ago,
-                })
+            # ── Resolve signals ──────────────────────────────────────────────────
+            signals: list[dict] = []
 
-        # Sort: HIGH first, then by strength desc
-        signals.sort(key=lambda s: (
-            0 if s.get("conviction") == "HIGH" else (1 if s.get("conviction") in ("MODERATE", "MOD") else 2),
-            -s.get("strength", 0.0),
-        ))
+            # Try live engine first
+            try:
+                if stock_data:
+                    raw = generate_all_signals(stock_data)
+                    for s in (raw or []):
+                        try:
+                            signals.append({
+                                "ticker":    getattr(s, "ticker", "—"),
+                                "direction": getattr(s, "direction", "FLAT"),
+                                "conviction": getattr(s, "conviction", "LOW"),
+                                "strength":  float(getattr(s, "strength", 0.5)),
+                                "sig_type":  getattr(s, "signal_type", "Momentum").replace("_", " ").title(),
+                                "basis":     getattr(s, "rationale", "—")[:60],
+                                "entry":     float(getattr(s, "entry_price", 0.0)),
+                                "stop":      float(getattr(s, "stop_loss", 0.0)),
+                                "target":    float(getattr(s, "target_price", 0.0)),
+                                "rr":        float(getattr(s, "risk_reward", 1.5)),
+                                "mins_ago":  random.randint(1, 120),
+                            })
+                        except Exception:
+                            pass
+            except Exception as eng_exc:
+                logger.debug(f"[tab_alpha] engine signals skipped: {eng_exc}")
 
-        # ── Section 1: Hero KPIs ─────────────────────────────────────────────
-        _render_hero(signals)
+            # Fall back to mock if empty
+            if not signals:
+                for row in _MOCK_SIGNALS:
+                    ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, mins_ago = row
+                    signals.append({
+                        "ticker": ticker, "direction": direction, "conviction": conviction,
+                        "strength": strength, "sig_type": sig_type, "basis": basis,
+                        "entry": entry, "stop": stop, "target": target,
+                        "rr": rr, "mins_ago": mins_ago,
+                    })
 
-        # ── Signal Book ──────────────────────────────────────────────────────
-        section_divider("Signal Book")
+            # Sort: HIGH first, then by strength desc
+            signals.sort(key=lambda s: (
+                0 if s.get("conviction") == "HIGH" else (1 if s.get("conviction") in ("MODERATE", "MOD") else 2),
+                -s.get("strength", 0.0),
+            ))
 
-        # ── Section 2: Conviction Matrix ─────────────────────────────────────
-        _render_conviction_matrix()
+            # ── Section 1: Hero KPIs ─────────────────────────────────────────────
+            _render_hero(signals)
 
-        # ── Section 3: Top Signals Table ─────────────────────────────────────
-        _render_signals_table(signals)
+            # ── Signal Book ──────────────────────────────────────────────────────
+            section_divider("Signal Book")
 
-        # ── Methodology ──────────────────────────────────────────────────────
-        section_divider("Methodology")
+            # ── Section 2: Conviction Matrix ─────────────────────────────────────
+            _render_conviction_matrix()
 
-        # ── Section 4: Engine Diagram ─────────────────────────────────────────
-        _render_engine_diagram()
+            # ── Section 3: Top Signals Table ─────────────────────────────────────
+            _render_signals_table(signals)
 
-        # ── Section 5: Factor Breakdown ───────────────────────────────────────
-        _render_factor_breakdown(signals)
+            # ── Methodology ──────────────────────────────────────────────────────
+            section_divider("Methodology")
 
-        # ── Live Tape ────────────────────────────────────────────────────────
-        section_divider("Live Tape")
+            # ── Section 4: Engine Diagram ─────────────────────────────────────────
+            _render_engine_diagram()
 
-        # ── Section 6: Price + Signal Chart ──────────────────────────────────
-        _render_price_signal_chart(stock_data or {}, signals)
+            # ── Section 5: Factor Breakdown ───────────────────────────────────────
+            _render_factor_breakdown(signals)
 
-        # ── Section 7: Live Monitor ───────────────────────────────────────────
-        _render_live_monitor(signals)
+            # ── Live Tape ────────────────────────────────────────────────────────
+            section_divider("Live Tape")
 
-    except Exception as top_exc:
-        logger.error(f"[tab_alpha] top-level render failed: {top_exc}")
-        st.error("Alpha Signal tab encountered an unexpected error. Please refresh.")
+            # ── Section 6: Price + Signal Chart ──────────────────────────────────
+            _render_price_signal_chart(stock_data or {}, signals)
+
+            # ── Section 7: Live Monitor ───────────────────────────────────────────
+            _render_live_monitor(signals)
+
+        except Exception as top_exc:
+            logger.error(f"[tab_alpha] top-level render failed: {top_exc}")
+            st.error("Alpha Signal tab encountered an unexpected error. Please refresh.")

@@ -529,81 +529,85 @@ def render(
         ``None`` or empty — the processing modules degrade to neutral defaults,
         so this tab renders cleanly with no inputs at all.
     """
-    # ── A. Page header ──────────────────────────────────────────────────────
-    page_header(
-        title="Disruption Radar",
-        subtitle="Fleet-wide Shipping Stress Index, per-route disruption "
-        "detail and a 7/30-day stress forecast",
-        badge_text="MODELED",
-        badge_color=C_ACCENT,
-    )
-
-    # ── Compute the Shipping Stress Index report ────────────────────────────
-    try:
-        report = _compute_stress(
-            freight_data, macro_data, port_results, route_results
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('disruption_radar'):
+        # ── A. Page header ──────────────────────────────────────────────────────
+        page_header(
+            title="Disruption Radar",
+            subtitle="Fleet-wide Shipping Stress Index, per-route disruption "
+            "detail and a 7/30-day stress forecast",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
         )
-    except Exception:
-        logger.exception("Disruption Radar — SSI computation failed")
-        st.error("Could not compute the Shipping Stress Index.")
-        return
 
-    if report is None:
-        alert_banner("No Shipping Stress Index report available.", level="info")
-        return
+        # ── Compute the Shipping Stress Index report ────────────────────────────
+        try:
+            report = _compute_stress(
+                freight_data, macro_data, port_results, route_results
+            )
+        except Exception:
+            logger.exception("Disruption Radar — SSI computation failed")
+            st.error("Could not compute the Shipping Stress Index.")
+            return
 
-    # ── B. Fleet-wide SSI overview ──────────────────────────────────────────
-    try:
-        _render_ssi_overview(report)
-    except Exception:
-        logger.exception("Disruption Radar — SSI overview failed")
-        st.error("Shipping Stress Index overview unavailable.")
+        if report is None:
+            alert_banner("No Shipping Stress Index report available.", level="info")
+            return
 
-    section_divider("Route Detail")
+        # ── B. Fleet-wide SSI overview ──────────────────────────────────────────
+        try:
+            _render_ssi_overview(report)
+        except Exception:
+            logger.exception("Disruption Radar — SSI overview failed")
+            st.error("Shipping Stress Index overview unavailable.")
 
-    # ── C. Per-route stress heat bar ────────────────────────────────────────
-    try:
-        _render_heat_bar(report)
-    except Exception:
-        logger.exception("Disruption Radar — heat bar failed")
-        st.error("Route stress heat bar unavailable.")
+        section_divider("Route Detail")
 
-    st.divider()
+        # ── C. Per-route stress heat bar ────────────────────────────────────────
+        try:
+            _render_heat_bar(report)
+        except Exception:
+            logger.exception("Disruption Radar — heat bar failed")
+            st.error("Route stress heat bar unavailable.")
 
-    # ── D. Per-route disruption table ───────────────────────────────────────
-    try:
-        _render_route_table(report)
-    except Exception:
-        logger.exception("Disruption Radar — route table failed")
-        st.error("Route disruption table unavailable.")
+        st.divider()
 
-    section_divider("Forecast")
+        # ── D. Per-route disruption table ───────────────────────────────────────
+        try:
+            _render_route_table(report)
+        except Exception:
+            logger.exception("Disruption Radar — route table failed")
+            st.error("Route disruption table unavailable.")
 
-    # ── E. 7/30-day stress forecast ─────────────────────────────────────────
-    try:
-        forecasts = _compute_forecast(
-            freight_data, macro_data, route_results, report
-        )
-        _render_forecast_table(forecasts)
-    except Exception:
-        logger.exception("Disruption Radar — stress forecast failed")
-        st.error("Stress forecast unavailable.")
+        section_divider("Forecast")
 
-    # ── Provenance footer ───────────────────────────────────────────────────
-    try:
-        from data.quality import DataSource
-        sources = [
-            DataSource.modeled(
-                "Modeled Shipping Stress Index",
-                notes="Composite of chokepoint, congestion, weather, rate "
-                "and vulnerability components.",
-            ),
-            DataSource.modeled(
-                "Modeled Disruption Forecast",
-                notes="7/30-day stress projection over rate and congestion "
-                "forecasters.",
-            ),
-        ]
-        st.markdown(source_footer(sources), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Disruption Radar — source footer failed")
+        # ── E. 7/30-day stress forecast ─────────────────────────────────────────
+        try:
+            forecasts = _compute_forecast(
+                freight_data, macro_data, route_results, report
+            )
+            _render_forecast_table(forecasts)
+        except Exception:
+            logger.exception("Disruption Radar — stress forecast failed")
+            st.error("Stress forecast unavailable.")
+
+        # ── Provenance footer ───────────────────────────────────────────────────
+        try:
+            from data.quality import DataSource
+            sources = [
+                DataSource.modeled(
+                    "Modeled Shipping Stress Index",
+                    notes="Composite of chokepoint, congestion, weather, rate "
+                    "and vulnerability components.",
+                ),
+                DataSource.modeled(
+                    "Modeled Disruption Forecast",
+                    notes="7/30-day stress projection over rate and congestion "
+                    "forecasters.",
+                ),
+            ]
+            st.markdown(source_footer(sources), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Disruption Radar — source footer failed")

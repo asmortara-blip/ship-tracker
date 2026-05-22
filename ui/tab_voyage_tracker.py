@@ -755,112 +755,116 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
         Accepted for call-site symmetry with the rest of the platform; the
         voyage fleet is self-contained (modeled), so they are not required.
     """
-    # ── A. Page header ──────────────────────────────────────────────────────
-    page_header(
-        title="Voyage Tracker",
-        subtitle="Search and inspect any vessel in the modeled fleet — "
-        "route, progress, ETA, congestion and disruption exposure",
-        badge_text="MODELED",
-        badge_color=C_ACCENT,
-    )
-
-    # ── Load the modeled fleet ──────────────────────────────────────────────
-    try:
-        fleet = _load_fleet()
-    except Exception:
-        logger.exception("Voyage Tracker — fleet build failed")
-        st.error("Could not build the modeled voyage fleet.")
-        return
-
-    if not fleet:
-        st.info("No voyages in the modeled fleet.")
-        return
-
-    # ── B. Fleet KPI strip ──────────────────────────────────────────────────
-    try:
-        _render_kpi_strip(fleet)
-    except Exception:
-        logger.exception("Voyage Tracker — KPI strip failed")
-        st.error("Fleet KPI strip unavailable.")
-
-    # ── B'. Fleet utilization composite + backtest panel ───────────────────
-    section_divider("Utilization")
-    _render_fleet_utilization(fleet, freight_data=freight_data)
-
-    section_divider("Vessel Search")
-
-    # ── C. Vessel search ────────────────────────────────────────────────────
-    selected_voyage = None
-    matched = True
-    try:
-        from data.voyage_dataset import search_voyages
-
-        section_header(
-            "Find a Vessel",
-            "Search by vessel name, voyage ID, MMSI, route or port code",
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('voyage_tracker'):
+        # ── A. Page header ──────────────────────────────────────────────────────
+        page_header(
+            title="Voyage Tracker",
+            subtitle="Search and inspect any vessel in the modeled fleet — "
+            "route, progress, ETA, congestion and disruption exposure",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
         )
-        query = st.text_input(
-            "Search vessels",
-            value="",
-            placeholder="e.g. EVER, asia_europe, CNSHA, VY-ASIA…",
-            key="voyage_tracker_search",
-        )
-        matches = search_voyages(query, fleet)
 
-        if not matches:
-            matched = False
-            alert_banner(
-                f"No voyages match <b>'{query}'</b> — clear the search to "
-                f"browse the full fleet below.",
-                level="info",
+        # ── Load the modeled fleet ──────────────────────────────────────────────
+        try:
+            fleet = _load_fleet()
+        except Exception:
+            logger.exception("Voyage Tracker — fleet build failed")
+            st.error("Could not build the modeled voyage fleet.")
+            return
+
+        if not fleet:
+            st.info("No voyages in the modeled fleet.")
+            return
+
+        # ── B. Fleet KPI strip ──────────────────────────────────────────────────
+        try:
+            _render_kpi_strip(fleet)
+        except Exception:
+            logger.exception("Voyage Tracker — KPI strip failed")
+            st.error("Fleet KPI strip unavailable.")
+
+        # ── B'. Fleet utilization composite + backtest panel ───────────────────
+        section_divider("Utilization")
+        _render_fleet_utilization(fleet, freight_data=freight_data)
+
+        section_divider("Vessel Search")
+
+        # ── C. Vessel search ────────────────────────────────────────────────────
+        selected_voyage = None
+        matched = True
+        try:
+            from data.voyage_dataset import search_voyages
+
+            section_header(
+                "Find a Vessel",
+                "Search by vessel name, voyage ID, MMSI, route or port code",
             )
-        else:
-            # Build a stable, human-readable label per voyage.
-            def _label(v) -> str:
-                return (
-                    f"{v.vessel_name} · {v.voyage_id} · "
-                    f"{v.origin_locode}→{v.dest_locode} · {v.status}"
+            query = st.text_input(
+                "Search vessels",
+                value="",
+                placeholder="e.g. EVER, asia_europe, CNSHA, VY-ASIA…",
+                key="voyage_tracker_search",
+            )
+            matches = search_voyages(query, fleet)
+
+            if not matches:
+                matched = False
+                alert_banner(
+                    f"No voyages match <b>'{query}'</b> — clear the search to "
+                    f"browse the full fleet below.",
+                    level="info",
                 )
+            else:
+                # Build a stable, human-readable label per voyage.
+                def _label(v) -> str:
+                    return (
+                        f"{v.vessel_name} · {v.voyage_id} · "
+                        f"{v.origin_locode}→{v.dest_locode} · {v.status}"
+                    )
 
-            label_map = {_label(v): v for v in matches}
-            n = len(matches)
-            chosen_label = st.selectbox(
-                f"Select a voyage — {n} match{'' if n == 1 else 'es'}",
-                options=list(label_map.keys()),
-                key="voyage_tracker_select",
-            )
-            selected_voyage = label_map.get(chosen_label)
-    except Exception:
-        logger.exception("Voyage Tracker — vessel search failed")
-        st.error("Vessel search unavailable.")
-
-    # ── D. Selected-voyage detail ───────────────────────────────────────────
-    if selected_voyage is not None:
-        section_divider("Voyage Detail")
-        try:
-            _render_voyage_detail(selected_voyage)
+                label_map = {_label(v): v for v in matches}
+                n = len(matches)
+                chosen_label = st.selectbox(
+                    f"Select a voyage — {n} match{'' if n == 1 else 'es'}",
+                    options=list(label_map.keys()),
+                    key="voyage_tracker_select",
+                )
+                selected_voyage = label_map.get(chosen_label)
         except Exception:
-            logger.exception("Voyage Tracker — voyage detail failed")
-            st.error("Voyage detail unavailable.")
-    elif matched:
-        # Matches exist but none resolved to a voyage — quiet prompt.
+            logger.exception("Voyage Tracker — vessel search failed")
+            st.error("Vessel search unavailable.")
+
+        # ── D. Selected-voyage detail ───────────────────────────────────────────
+        if selected_voyage is not None:
+            section_divider("Voyage Detail")
+            try:
+                _render_voyage_detail(selected_voyage)
+            except Exception:
+                logger.exception("Voyage Tracker — voyage detail failed")
+                st.error("Voyage detail unavailable.")
+        elif matched:
+            # Matches exist but none resolved to a voyage — quiet prompt.
+            try:
+                _render_search_hint()
+            except Exception:
+                logger.exception("Voyage Tracker — search hint failed")
+
+        section_divider("Fleet Roster")
+
+        # ── E. Full-fleet table ─────────────────────────────────────────────────
         try:
-            _render_search_hint()
+            _render_fleet_table(fleet)
         except Exception:
-            logger.exception("Voyage Tracker — search hint failed")
+            logger.exception("Voyage Tracker — fleet table failed")
+            st.error("Fleet table unavailable.")
 
-    section_divider("Fleet Roster")
-
-    # ── E. Full-fleet table ─────────────────────────────────────────────────
-    try:
-        _render_fleet_table(fleet)
-    except Exception:
-        logger.exception("Voyage Tracker — fleet table failed")
-        st.error("Fleet table unavailable.")
-
-    # ── Provenance footer ───────────────────────────────────────────────────
-    try:
-        from data.voyage_dataset import VOYAGE_DATA_SOURCE
-        st.markdown(source_footer([VOYAGE_DATA_SOURCE]), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Voyage Tracker — source footer failed")
+        # ── Provenance footer ───────────────────────────────────────────────────
+        try:
+            from data.voyage_dataset import VOYAGE_DATA_SOURCE
+            st.markdown(source_footer([VOYAGE_DATA_SOURCE]), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Voyage Tracker — source footer failed")

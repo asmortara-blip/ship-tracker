@@ -714,73 +714,77 @@ def render(
     neutral defaults rather than raising, and each section here is independently
     guarded.
     """
-    # ── A. Page header ──────────────────────────────────────────────────────
-    page_header(
-        title="Equity Signals",
-        subtitle="Ranked, fully traceable candidate equity ideas — the "
-        "conclusion of the disruption → commodity → company cascade",
-        badge_text="MODELED",
-        badge_color=C_ACCENT,
-    )
-
-    # ── A. Unconditional not-investment-advice banner (always above the fold) ─
-    # This MUST render on every load, before any data is touched. It is an
-    # alert_banner (a styled markdown panel), deliberately NOT an st.error —
-    # the verification step asserts 0 st.error and that this banner is present.
-    try:
-        alert_banner(
-            "<b>Modeled, rule-based idea generation — not investment advice.</b> "
-            "All data is synthetic / modeled. Ideas are framed Bullish / Bearish "
-            "/ Neutral with a transparent rationale; they are not Buy / Sell "
-            "calls and carry no price targets. Every signal traces back through "
-            "the visible cascade hops below.",
-            level="warning",
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('equity_signals'):
+        # ── A. Page header ──────────────────────────────────────────────────────
+        page_header(
+            title="Equity Signals",
+            subtitle="Ranked, fully traceable candidate equity ideas — the "
+            "conclusion of the disruption → commodity → company cascade",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
         )
-    except Exception:
-        logger.exception("Equity Signals — disclaimer banner failed")
 
-    # ── Build the ranked ideas via the full cascade ─────────────────────────
-    try:
-        ideas = _build_ideas(
-            stock_data, freight_data, macro_data,
-            port_results, route_results, insights,
-        )
-    except Exception:
-        logger.exception("Equity Signals — idea build failed")
-        ideas = []
+        # ── A. Unconditional not-investment-advice banner (always above the fold) ─
+        # This MUST render on every load, before any data is touched. It is an
+        # alert_banner (a styled markdown panel), deliberately NOT an st.error —
+        # the verification step asserts 0 st.error and that this banner is present.
+        try:
+            alert_banner(
+                "<b>Modeled, rule-based idea generation — not investment advice.</b> "
+                "All data is synthetic / modeled. Ideas are framed Bullish / Bearish "
+                "/ Neutral with a transparent rationale; they are not Buy / Sell "
+                "calls and carry no price targets. Every signal traces back through "
+                "the visible cascade hops below.",
+                level="warning",
+            )
+        except Exception:
+            logger.exception("Equity Signals — disclaimer banner failed")
 
-    if not ideas:
-        _render_empty_note(
-            "No equity ideas available",
-            "The cascade produced no ideas from the current inputs — it "
-            "requires the modeled exposure matrix. Try reloading; every "
-            "upstream stage degrades gracefully rather than failing.",
-        )
-        # Still emit the provenance footer so the tab is well-formed.
+        # ── Build the ranked ideas via the full cascade ─────────────────────────
+        try:
+            ideas = _build_ideas(
+                stock_data, freight_data, macro_data,
+                port_results, route_results, insights,
+            )
+        except Exception:
+            logger.exception("Equity Signals — idea build failed")
+            ideas = []
+
+        if not ideas:
+            _render_empty_note(
+                "No equity ideas available",
+                "The cascade produced no ideas from the current inputs — it "
+                "requires the modeled exposure matrix. Try reloading; every "
+                "upstream stage degrades gracefully rather than failing.",
+            )
+            # Still emit the provenance footer so the tab is well-formed.
+            _render_source_footer()
+            return
+
+        section_divider("Cascade Output")
+
+        # ── B. Consensus strip ──────────────────────────────────────────────────
+        try:
+            _render_consensus_strip(ideas)
+        except Exception:
+            logger.exception("Equity Signals — consensus strip failed")
+            st.error("Consensus strip unavailable.")
+
+        section_divider("Idea Ledger")
+
+        # ── C + D. Ranked idea cards with traceable per-idea detail ─────────────
+        try:
+            _render_idea_cards(ideas)
+        except Exception:
+            logger.exception("Equity Signals — idea cards failed")
+            st.error("Ranked idea cards unavailable.")
+
+        # ── E. Provenance footer ────────────────────────────────────────────────
+        section_divider()
         _render_source_footer()
-        return
-
-    section_divider("Cascade Output")
-
-    # ── B. Consensus strip ──────────────────────────────────────────────────
-    try:
-        _render_consensus_strip(ideas)
-    except Exception:
-        logger.exception("Equity Signals — consensus strip failed")
-        st.error("Consensus strip unavailable.")
-
-    section_divider("Idea Ledger")
-
-    # ── C + D. Ranked idea cards with traceable per-idea detail ─────────────
-    try:
-        _render_idea_cards(ideas)
-    except Exception:
-        logger.exception("Equity Signals — idea cards failed")
-        st.error("Ranked idea cards unavailable.")
-
-    # ── E. Provenance footer ────────────────────────────────────────────────
-    section_divider()
-    _render_source_footer()
 
 
 def _render_source_footer() -> None:

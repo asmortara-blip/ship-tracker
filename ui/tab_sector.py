@@ -385,47 +385,51 @@ def _render_trade_flows(trade_data: dict, port_results: list,
 def render(stock_data=None, freight_data=None, trade_data=None,
            port_results=None, **kwargs) -> None:
     """Render the Shipping Sector Dashboard."""
-    try:
-        from processing.sector_dashboard import compute_sector_performance
-    except ImportError as e:
-        st.error(f"Sector dashboard module not available: {e}")
-        return
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('sector'):
+        try:
+            from processing.sector_dashboard import compute_sector_performance
+        except ImportError as e:
+            st.error(f"Sector dashboard module not available: {e}")
+            return
 
-    stock_data = stock_data or {}
-    freight_data = freight_data or {}
-    port_results = port_results or []
+        stock_data = stock_data or {}
+        freight_data = freight_data or {}
+        port_results = port_results or []
 
-    try:
-        sectors = compute_sector_performance(stock_data, freight_data)
-    except Exception:
-        logger.exception("compute_sector_performance failed")
-        st.error("Sector performance computation failed.")
-        return
+        try:
+            sectors = compute_sector_performance(stock_data, freight_data)
+        except Exception:
+            logger.exception("compute_sector_performance failed")
+            st.error("Sector performance computation failed.")
+            return
 
-    # Provenance: equity prices are live/scraped via yfinance; freight indices
-    # are scraped from Baltic/SCFI feeds; the downstream composition is
-    # therefore a modeled aggregate.
-    equities_source = DataSource.scraped(
-        "Equity prices (yfinance composite)",
-        notes="Aggregated from per-ticker feeds",
-    )
-    sector_source = DataSource.modeled(
-        "Sector performance composite",
-        notes="Aggregated returns + freight indices",
-    )
-    trade_source = DataSource.modeled(
-        "Port trade volumes",
-        notes="Aggregated from port monitor results",
-    )
+        # Provenance: equity prices are live/scraped via yfinance; freight indices
+        # are scraped from Baltic/SCFI feeds; the downstream composition is
+        # therefore a modeled aggregate.
+        equities_source = DataSource.scraped(
+            "Equity prices (yfinance composite)",
+            notes="Aggregated from per-ticker feeds",
+        )
+        sector_source = DataSource.modeled(
+            "Sector performance composite",
+            notes="Aggregated returns + freight indices",
+        )
+        trade_source = DataSource.modeled(
+            "Port trade volumes",
+            notes="Aggregated from port monitor results",
+        )
 
-    _render_hero(sectors, sector_source)
+        _render_hero(sectors, sector_source)
 
-    section_divider("Comparative Performance")
-    _render_performance_table(sectors, sector_source)
+        section_divider("Comparative Performance")
+        _render_performance_table(sectors, sector_source)
 
-    section_divider("Segment Detail")
-    _render_sector_profiles(sectors, equities_source)
+        section_divider("Segment Detail")
+        _render_sector_profiles(sectors, equities_source)
 
-    if port_results:
-        section_divider("Trade Flows")
-        _render_trade_flows(trade_data or {}, port_results, trade_source)
+        if port_results:
+            section_divider("Trade Flows")
+            _render_trade_flows(trade_data or {}, port_results, trade_source)

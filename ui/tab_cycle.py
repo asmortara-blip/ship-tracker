@@ -562,120 +562,124 @@ def _render_trade_recommendations(current_phase: str) -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -> None:
     """Render the Shipping Market Cycle Positioning tab."""
-    try:
-        phase     = _current_phase()
-        pos_score = _cycle_position_score()
-    except Exception:
-        logger.exception("Failed to resolve current cycle phase")
-        phase, pos_score = "RECOVERY", 0.35
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('cycle'):
+        try:
+            phase     = _current_phase()
+            pos_score = _cycle_position_score()
+        except Exception:
+            logger.exception("Failed to resolve current cycle phase")
+            phase, pos_score = "RECOVERY", 0.35
 
-    current_color = _PHASE_COLOR.get(phase, C_ACCENT)
+        current_color = _PHASE_COLOR.get(phase, C_ACCENT)
 
-    page_header(
-        title="Shipping Cycle Positioning",
-        subtitle="~7-year cycle analysis and trade recommendations",
-        badge_text=phase,
-        badge_color=current_color,
-    )
-
-    # Hero KPI strip summarising the current cycle read
-    try:
-        metric_card_row(
-            [
-                {
-                    "label": "Current Phase",
-                    "value": phase,
-                    "accent": current_color,
-                    "sublabel": _PHASE_HIST.get(phase, ""),
-                },
-                {
-                    "label": "Cycle Position",
-                    "value": f"{pos_score:.0%}",
-                    "accent": current_color,
-                    "sublabel": "0% = trough, 100% = peak",
-                },
-                {
-                    "label": "Next Likely Phase",
-                    "value": _next_phase(phase),
-                    "accent": _PHASE_COLOR.get(_next_phase(phase), C_ACCENT),
-                    "sublabel": "Based on typical ordering",
-                },
-                {
-                    "label": "Playbook",
-                    "value": "Accumulate",
-                    "accent": C_HIGH,
-                    "sublabel": "Quality names on dips",
-                },
-            ],
-            columns=4,
+        page_header(
+            title="Shipping Cycle Positioning",
+            subtitle="~7-year cycle analysis and trade recommendations",
+            badge_text=phase,
+            badge_color=current_color,
         )
-    except Exception:
-        logger.exception("Hero metrics render failed")
 
-    # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
-    section_divider("Cycle Position")
+        # Hero KPI strip summarising the current cycle read
+        try:
+            metric_card_row(
+                [
+                    {
+                        "label": "Current Phase",
+                        "value": phase,
+                        "accent": current_color,
+                        "sublabel": _PHASE_HIST.get(phase, ""),
+                    },
+                    {
+                        "label": "Cycle Position",
+                        "value": f"{pos_score:.0%}",
+                        "accent": current_color,
+                        "sublabel": "0% = trough, 100% = peak",
+                    },
+                    {
+                        "label": "Next Likely Phase",
+                        "value": _next_phase(phase),
+                        "accent": _PHASE_COLOR.get(_next_phase(phase), C_ACCENT),
+                        "sublabel": "Based on typical ordering",
+                    },
+                    {
+                        "label": "Playbook",
+                        "value": "Accumulate",
+                        "accent": C_HIGH,
+                        "sublabel": "Quality names on dips",
+                    },
+                ],
+                columns=4,
+            )
+        except Exception:
+            logger.exception("Hero metrics render failed")
 
-    try:
-        section_header(
-            "Cycle Dashboard",
-            "Current phase with historical context",
-        )
-        _render_cycle_dashboard(phase)
-    except Exception:
-        logger.exception("Section 1 render failed")
-        st.warning("Cycle dashboard section unavailable.")
+        # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
+        section_divider("Cycle Position")
 
-    # ── 2. Cycle Clock ────────────────────────────────────────────────────────
-    try:
-        section_header(
-            "Cycle Clock",
-            "12 o'clock = PEAK, 6 o'clock = TROUGH",
-        )
-        _render_cycle_clock(phase, pos_score)
-    except Exception:
-        logger.exception("Section 2 render failed")
-        st.warning("Cycle clock section unavailable.")
+        try:
+            section_header(
+                "Cycle Dashboard",
+                "Current phase with historical context",
+            )
+            _render_cycle_dashboard(phase)
+        except Exception:
+            logger.exception("Section 1 render failed")
+            st.warning("Cycle dashboard section unavailable.")
 
-    # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
-    section_divider("Indicators")
+        # ── 2. Cycle Clock ────────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Cycle Clock",
+                "12 o'clock = PEAK, 6 o'clock = TROUGH",
+            )
+            _render_cycle_clock(phase, pos_score)
+        except Exception:
+            logger.exception("Section 2 render failed")
+            st.warning("Cycle clock section unavailable.")
 
-    try:
-        section_header(
-            "Cycle Indicator Scorecard",
-            "10 indicators — current reading, cycle signal, composite score",
-        )
-        ind_df = _build_indicators()
-        _render_indicator_table(ind_df)
-    except Exception:
-        logger.exception("Section 3 render failed")
-        st.warning("Cycle indicator section unavailable.")
+        # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
+        section_divider("Indicators")
 
-    # ── 4. Historical Cycle Map ───────────────────────────────────────────────
-    section_divider("Historical Context")
+        try:
+            section_header(
+                "Cycle Indicator Scorecard",
+                "10 indicators — current reading, cycle signal, composite score",
+            )
+            ind_df = _build_indicators()
+            _render_indicator_table(ind_df)
+        except Exception:
+            logger.exception("Section 3 render failed")
+            st.warning("Cycle indicator section unavailable.")
 
-    try:
-        section_header(
-            "Historical Cycle Map",
-            "BDI 2000–2025 with cycle phase regions — key events marked",
-        )
-        bdi_df = _build_bdi_history()
-        _render_historical_cycle_map(bdi_df)
-    except Exception:
-        logger.exception("Section 4 render failed")
-        st.warning("Historical cycle map section unavailable.")
+        # ── 4. Historical Cycle Map ───────────────────────────────────────────────
+        section_divider("Historical Context")
 
-    # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
-    section_divider("Playbook")
+        try:
+            section_header(
+                "Historical Cycle Map",
+                "BDI 2000–2025 with cycle phase regions — key events marked",
+            )
+            bdi_df = _build_bdi_history()
+            _render_historical_cycle_map(bdi_df)
+        except Exception:
+            logger.exception("Section 4 render failed")
+            st.warning("Historical cycle map section unavailable.")
 
-    try:
-        section_header(
-            "Cycle-Based Trade Recommendations",
-            "What to buy / sell in each phase — current phase highlighted",
-        )
-        _render_trade_recommendations(phase)
-    except Exception:
-        logger.exception("Section 5 render failed")
-        st.warning("Trade recommendations section unavailable.")
+        # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
+        section_divider("Playbook")
+
+        try:
+            section_header(
+                "Cycle-Based Trade Recommendations",
+                "What to buy / sell in each phase — current phase highlighted",
+            )
+            _render_trade_recommendations(phase)
+        except Exception:
+            logger.exception("Section 5 render failed")
+            st.warning("Trade recommendations section unavailable.")
 
 
 def _next_phase(phase: str) -> str:

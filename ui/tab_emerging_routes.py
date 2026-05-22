@@ -496,24 +496,28 @@ def render(
     port_results=None,
     insights=None,
 ) -> None:
-    try:
-        page_header(
-            title="Emerging Routes Intelligence",
-            subtitle="12 new corridors identified across macro drivers and carrier adoption tracking",
-            badge_text="EMERGING",
-            badge_color=C_ACCENT,
-        )
-        _render_hero()
-        section_divider("Route Discovery")
-        _render_route_discovery_table()
-        section_divider("Strategic Drivers")
-        _render_strategic_drivers()
-        section_divider("Corridor Map")
-        _render_route_map()
-        section_divider("Carrier Adoption")
-        _render_carrier_adoption()
-        section_divider("Risk Assessment")
-        _render_risk_assessment()
-    except Exception:
-        logger.exception("tab_emerging_routes top-level render failed")
-        st.error("Emerging Routes tab encountered an error.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('emerging_routes'):
+        try:
+            page_header(
+                title="Emerging Routes Intelligence",
+                subtitle="12 new corridors identified across macro drivers and carrier adoption tracking",
+                badge_text="EMERGING",
+                badge_color=C_ACCENT,
+            )
+            _render_hero()
+            section_divider("Route Discovery")
+            _render_route_discovery_table()
+            section_divider("Strategic Drivers")
+            _render_strategic_drivers()
+            section_divider("Corridor Map")
+            _render_route_map()
+            section_divider("Carrier Adoption")
+            _render_carrier_adoption()
+            section_divider("Risk Assessment")
+            _render_risk_assessment()
+        except Exception:
+            logger.exception("tab_emerging_routes top-level render failed")
+            st.error("Emerging Routes tab encountered an error.")

@@ -500,230 +500,234 @@ def render(
     route_results_all=None,
 ):
     """Render the AI Shipping Intelligence Assistant tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('assistant'):
 
-    st.markdown(_CHAT_CSS, unsafe_allow_html=True)
+        st.markdown(_CHAT_CSS, unsafe_allow_html=True)
 
-    # ── Session state ────────────────────────────────────────────────────────
-    if "asst_messages" not in st.session_state:
-        st.session_state.asst_messages = []
-    if "asst_input_val" not in st.session_state:
-        st.session_state.asst_input_val = ""
-
-    page_header(
-        title="Shipping Intelligence Assistant",
-        subtitle="Rule-based Q&A over live freight, macro, port, and signal context — no external API calls.",
-        badge_text="ASSISTANT",
-        badge_color=C_ACCENT,
-    )
-
-    # ── Top-of-tab KPIs: assistant context snapshot ─────────────────────────
-    msg_count = len(st.session_state.asst_messages)
-    long_count = len(_long_signals(stock_data))
-    feeds_live = sum(
-        bool(x) for x in (freight_data, macro_data, stock_data, port_results)
-    )
-    metric_card_row(
-        [
-            {"label": "Live Data Feeds", "value": f"{feeds_live} / 4",
-             "accent": C_HIGH if feeds_live == 4 else C_MOD,
-             "sublabel": "freight, macro, signals, ports"},
-            {"label": "LONG Signals",   "value": f"{long_count}",
-             "accent": C_HIGH, "sublabel": "tickers flagged by engine"},
-            {"label": "Messages",        "value": f"{msg_count}",
-             "accent": C_ACCENT, "sublabel": "this session"},
-            {"label": "Quick Prompts",   "value": f"{len(QUICK_QUESTIONS)}",
-             "accent": C_ACCENT, "sublabel": "preset starter questions"},
-        ],
-        columns=4,
-    )
-
-    section_divider("Workspace")
-
-    # ── Layout: chat column + sidebar ───────────────────────────────────────
-    col_chat, col_sidebar = st.columns([3, 1], gap="large")
-
-    with col_chat:
-        # Quick-question chips render as buttons; section_header gives the WSJ rule.
-        section_header("Quick Questions",
-                       "Tap a prompt to seed the input below.")
-
-        chip_cols = st.columns(4)
-        for i, q in enumerate(QUICK_QUESTIONS):
-            with chip_cols[i % 4]:
-                if st.button(q, key=f"chip_{i}", use_container_width=True,
-                             help="Click to ask this question"):
-                    st.session_state.asst_input_val = q
-
-        section_header("Conversation",
-                       "Threaded answers with follow-up suggestions.")
-
-        # ── Chat window ──────────────────────────────────────────────────────
-        messages = st.session_state.asst_messages
-
-        if not messages:
-            st.info(
-                "No questions yet — tap a prompt above or type below. "
-                "The assistant covers freight rates, shipping equities, "
-                "geopolitical disruptions and market signals."
-            )
-        else:
-            # Render all messages
-            for i, msg in enumerate(messages):
-                st.markdown(
-                    _message_html(msg["role"], msg["content"], msg["ts"]), unsafe_allow_html=True)
-                # After last assistant message, show follow-ups
-                if (msg["role"] == "assistant"
-                        and i == len(messages) - 1
-                        and msg.get("followups")):
-                    fu_cols = st.columns(3)
-                    for j, fu in enumerate(msg["followups"]):
-                        with fu_cols[j]:
-                            if st.button(fu, key=f"fu_{i}_{j}",
-                                         use_container_width=True,
-                                         help="Click to ask this follow-up"):
-                                st.session_state.asst_input_val = fu
-
-        # ── Input row ────────────────────────────────────────────────────────
-        inp_col, btn_col = st.columns([5, 1])
-        with inp_col:
-            user_input = st.text_input(
-                label="Ask a shipping intelligence question",
-                value=st.session_state.asst_input_val,
-                placeholder="e.g. What are current Asia-Europe freight rates?",
-                label_visibility="collapsed",
-                key="asst_text_input",
-            )
-        with btn_col:
-            send = st.button("Send", type="primary", use_container_width=True,
-                             key="asst_send_btn")
-
-        # ── Process send ─────────────────────────────────────────────────────
-        question = (user_input or "").strip()
-        if send and question:
-            ts = _ts()
-
-            # Append user message
-            st.session_state.asst_messages.append({
-                "role": "user",
-                "content": question,
-                "ts": ts,
-                "followups": [],
-            })
-
-            # Generate response
-            try:
-                answer, followups = _build_response(
-                    question, freight_data, macro_data, stock_data,
-                    port_results, route_results, insights,
-                )
-            except Exception as exc:
-                logger.exception("Assistant response error")
-                answer = (
-                    "Unable to generate a response at this time. "
-                    f"Error: {exc}"
-                )
-                followups = [
-                    "Try asking about freight rates",
-                    "Ask about the BDI",
-                    "Ask about shipping stock signals",
-                ]
-
-            st.session_state.asst_messages.append({
-                "role": "assistant",
-                "content": answer,
-                "ts": _ts(),
-                "followups": followups,
-            })
-
-            # Clear input and rerun
+        # ── Session state ────────────────────────────────────────────────────────
+        if "asst_messages" not in st.session_state:
+            st.session_state.asst_messages = []
+        if "asst_input_val" not in st.session_state:
             st.session_state.asst_input_val = ""
-            st.rerun()
 
-        elif send and not question:
-            st.warning("Please enter a question before sending.")
+        page_header(
+            title="Shipping Intelligence Assistant",
+            subtitle="Rule-based Q&A over live freight, macro, port, and signal context — no external API calls.",
+            badge_text="ASSISTANT",
+            badge_color=C_ACCENT,
+        )
 
-        # ── Conversation controls ────────────────────────────────────────────
-        if st.session_state.asst_messages:
-            st.divider()
-            export_text = _export_text(st.session_state.asst_messages)
-            ctl_export, ctl_clear = st.columns(2, gap="medium")
-            with ctl_export:
-                st.download_button(
-                    label="Export Chat",
-                    data=export_text,
-                    file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    mime="text/plain",
-                    key="asst_export_btn",
-                    use_container_width=True,
-                    help="Download the conversation as plain text.",
+        # ── Top-of-tab KPIs: assistant context snapshot ─────────────────────────
+        msg_count = len(st.session_state.asst_messages)
+        long_count = len(_long_signals(stock_data))
+        feeds_live = sum(
+            bool(x) for x in (freight_data, macro_data, stock_data, port_results)
+        )
+        metric_card_row(
+            [
+                {"label": "Live Data Feeds", "value": f"{feeds_live} / 4",
+                 "accent": C_HIGH if feeds_live == 4 else C_MOD,
+                 "sublabel": "freight, macro, signals, ports"},
+                {"label": "LONG Signals",   "value": f"{long_count}",
+                 "accent": C_HIGH, "sublabel": "tickers flagged by engine"},
+                {"label": "Messages",        "value": f"{msg_count}",
+                 "accent": C_ACCENT, "sublabel": "this session"},
+                {"label": "Quick Prompts",   "value": f"{len(QUICK_QUESTIONS)}",
+                 "accent": C_ACCENT, "sublabel": "preset starter questions"},
+            ],
+            columns=4,
+        )
+
+        section_divider("Workspace")
+
+        # ── Layout: chat column + sidebar ───────────────────────────────────────
+        col_chat, col_sidebar = st.columns([3, 1], gap="large")
+
+        with col_chat:
+            # Quick-question chips render as buttons; section_header gives the WSJ rule.
+            section_header("Quick Questions",
+                           "Tap a prompt to seed the input below.")
+
+            chip_cols = st.columns(4)
+            for i, q in enumerate(QUICK_QUESTIONS):
+                with chip_cols[i % 4]:
+                    if st.button(q, key=f"chip_{i}", use_container_width=True,
+                                 help="Click to ask this question"):
+                        st.session_state.asst_input_val = q
+
+            section_header("Conversation",
+                           "Threaded answers with follow-up suggestions.")
+
+            # ── Chat window ──────────────────────────────────────────────────────
+            messages = st.session_state.asst_messages
+
+            if not messages:
+                st.info(
+                    "No questions yet — tap a prompt above or type below. "
+                    "The assistant covers freight rates, shipping equities, "
+                    "geopolitical disruptions and market signals."
                 )
-            with ctl_clear:
-                if st.button("Clear Chat", key="asst_clear_btn",
-                             use_container_width=True,
-                             help="Discard all messages in this session."):
-                    st.session_state.asst_messages = []
-                    st.session_state.asst_input_val = ""
-                    st.rerun()
+            else:
+                # Render all messages
+                for i, msg in enumerate(messages):
+                    st.markdown(
+                        _message_html(msg["role"], msg["content"], msg["ts"]), unsafe_allow_html=True)
+                    # After last assistant message, show follow-ups
+                    if (msg["role"] == "assistant"
+                            and i == len(messages) - 1
+                            and msg.get("followups")):
+                        fu_cols = st.columns(3)
+                        for j, fu in enumerate(msg["followups"]):
+                            with fu_cols[j]:
+                                if st.button(fu, key=f"fu_{i}_{j}",
+                                             use_container_width=True,
+                                             help="Click to ask this follow-up"):
+                                    st.session_state.asst_input_val = fu
 
-    # ── Right sidebar ────────────────────────────────────────────────────────
-    with col_sidebar:
-        section_header("Available Data Context",
-                       "Live feeds wired into the answer engine.")
+            # ── Input row ────────────────────────────────────────────────────────
+            inp_col, btn_col = st.columns([5, 1])
+            with inp_col:
+                user_input = st.text_input(
+                    label="Ask a shipping intelligence question",
+                    value=st.session_state.asst_input_val,
+                    placeholder="e.g. What are current Asia-Europe freight rates?",
+                    label_visibility="collapsed",
+                    key="asst_text_input",
+                )
+            with btn_col:
+                send = st.button("Send", type="primary", use_container_width=True,
+                                 key="asst_send_btn")
 
-        ctx_sources = _context_sources(freight_data, macro_data, stock_data,
-                                       port_results, route_results)
-        _STATUS_FOR = {"good": "success", "stale": "warning", "demo": "danger"}
-        ctx_rows = []
-        for s in ctx_sources:
-            label = _sans(s["name"], color=C_TEXT, weight=600)
-            status_text = s.get("notes") or (
-                "Live" if s["quality"] == "good" else
-                "Cached" if s["quality"] == "stale" else
-                "Unavailable"
-            )
-            ctx_rows.append([
-                label,
-                status_badge(status_text, _STATUS_FOR.get(s["quality"], "info")),
-            ])
-        wsj_market_table(["Source", "Status"], ctx_rows)
-        st.markdown(source_footer(ctx_sources), unsafe_allow_html=True)
+            # ── Process send ─────────────────────────────────────────────────────
+            question = (user_input or "").strip()
+            if send and question:
+                ts = _ts()
 
-        section_header("How to Use", "Quick reference for the assistant.")
-        howto_rows = [
-            [_sans("1", color=C_ACCENT, weight=700),
-             _sans("Click any quick-question button to seed the input.",
-                   color=C_TEXT)],
-            [_sans("2", color=C_ACCENT, weight=700),
-             _sans("Ask about specific tickers (ZIM, MATX, GOGL, ...).",
-                   color=C_TEXT)],
-            [_sans("3", color=C_ACCENT, weight=700),
-             _sans("Ask about freight routes or geopolitical disruptions.",
-                   color=C_TEXT)],
-            [_sans("4", color=C_ACCENT, weight=700),
-             _sans("Use follow-up chips to drill deeper into context.",
-                   color=C_TEXT)],
-            [_sans("5", color=C_ACCENT, weight=700),
-             _sans("Export your chat history as plain text.",
-                   color=C_TEXT)],
-        ]
-        wsj_market_table(["#", "Tip"], howto_rows)
+                # Append user message
+                st.session_state.asst_messages.append({
+                    "role": "user",
+                    "content": question,
+                    "ts": ts,
+                    "followups": [],
+                })
 
-        # Signal summary mini-panel
-        longs = _long_signals(stock_data)
-        if longs:
-            section_header("Active LONG Signals",
-                           "Tickers flagged by the multi-factor signal engine.")
-            long_rows = [
-                [_sans(t, color=C_TEXT, weight=700),
-                 badge("LONG", color=C_HIGH)]
-                for t in longs[:6]
+                # Generate response
+                try:
+                    answer, followups = _build_response(
+                        question, freight_data, macro_data, stock_data,
+                        port_results, route_results, insights,
+                    )
+                except Exception as exc:
+                    logger.exception("Assistant response error")
+                    answer = (
+                        "Unable to generate a response at this time. "
+                        f"Error: {exc}"
+                    )
+                    followups = [
+                        "Try asking about freight rates",
+                        "Ask about the BDI",
+                        "Ask about shipping stock signals",
+                    ]
+
+                st.session_state.asst_messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "ts": _ts(),
+                    "followups": followups,
+                })
+
+                # Clear input and rerun
+                st.session_state.asst_input_val = ""
+                st.rerun()
+
+            elif send and not question:
+                st.warning("Please enter a question before sending.")
+
+            # ── Conversation controls ────────────────────────────────────────────
+            if st.session_state.asst_messages:
+                st.divider()
+                export_text = _export_text(st.session_state.asst_messages)
+                ctl_export, ctl_clear = st.columns(2, gap="medium")
+                with ctl_export:
+                    st.download_button(
+                        label="Export Chat",
+                        data=export_text,
+                        file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                        mime="text/plain",
+                        key="asst_export_btn",
+                        use_container_width=True,
+                        help="Download the conversation as plain text.",
+                    )
+                with ctl_clear:
+                    if st.button("Clear Chat", key="asst_clear_btn",
+                                 use_container_width=True,
+                                 help="Discard all messages in this session."):
+                        st.session_state.asst_messages = []
+                        st.session_state.asst_input_val = ""
+                        st.rerun()
+
+        # ── Right sidebar ────────────────────────────────────────────────────────
+        with col_sidebar:
+            section_header("Available Data Context",
+                           "Live feeds wired into the answer engine.")
+
+            ctx_sources = _context_sources(freight_data, macro_data, stock_data,
+                                           port_results, route_results)
+            _STATUS_FOR = {"good": "success", "stale": "warning", "demo": "danger"}
+            ctx_rows = []
+            for s in ctx_sources:
+                label = _sans(s["name"], color=C_TEXT, weight=600)
+                status_text = s.get("notes") or (
+                    "Live" if s["quality"] == "good" else
+                    "Cached" if s["quality"] == "stale" else
+                    "Unavailable"
+                )
+                ctx_rows.append([
+                    label,
+                    status_badge(status_text, _STATUS_FOR.get(s["quality"], "info")),
+                ])
+            wsj_market_table(["Source", "Status"], ctx_rows)
+            st.markdown(source_footer(ctx_sources), unsafe_allow_html=True)
+
+            section_header("How to Use", "Quick reference for the assistant.")
+            howto_rows = [
+                [_sans("1", color=C_ACCENT, weight=700),
+                 _sans("Click any quick-question button to seed the input.",
+                       color=C_TEXT)],
+                [_sans("2", color=C_ACCENT, weight=700),
+                 _sans("Ask about specific tickers (ZIM, MATX, GOGL, ...).",
+                       color=C_TEXT)],
+                [_sans("3", color=C_ACCENT, weight=700),
+                 _sans("Ask about freight routes or geopolitical disruptions.",
+                       color=C_TEXT)],
+                [_sans("4", color=C_ACCENT, weight=700),
+                 _sans("Use follow-up chips to drill deeper into context.",
+                       color=C_TEXT)],
+                [_sans("5", color=C_ACCENT, weight=700),
+                 _sans("Export your chat history as plain text.",
+                       color=C_TEXT)],
             ]
-            wsj_market_table(["Ticker", "Signal"], long_rows)
-            st.markdown(
-                source_footer([{
-                    "name": "Internal signal engine",
-                    "kind": "modeled",
-                    "quality": "good",
-                }]),
-                unsafe_allow_html=True,
-            )
+            wsj_market_table(["#", "Tip"], howto_rows)
+
+            # Signal summary mini-panel
+            longs = _long_signals(stock_data)
+            if longs:
+                section_header("Active LONG Signals",
+                               "Tickers flagged by the multi-factor signal engine.")
+                long_rows = [
+                    [_sans(t, color=C_TEXT, weight=700),
+                     badge("LONG", color=C_HIGH)]
+                    for t in longs[:6]
+                ]
+                wsj_market_table(["Ticker", "Signal"], long_rows)
+                st.markdown(
+                    source_footer([{
+                        "name": "Internal signal engine",
+                        "kind": "modeled",
+                        "quality": "good",
+                    }]),
+                    unsafe_allow_html=True,
+                )

@@ -638,32 +638,36 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
 
 def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Global Fleet Analytics tab."""
-    try:
-        page_header(
-            title="Global Fleet Analytics",
-            subtitle=(
-                "Comprehensive supply-side analysis — fleet composition, orderbook, "
-                "scrapping dynamics, capacity vs demand, and trade lane deployment. "
-                "Data as of Q1 2026."
-            ),
-            badge_text="FLEET",
-            badge_color=C_ACCENT,
-        )
-    except Exception:
-        logger.exception("Fleet header failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('fleet'):
+        try:
+            page_header(
+                title="Global Fleet Analytics",
+                subtitle=(
+                    "Comprehensive supply-side analysis — fleet composition, orderbook, "
+                    "scrapping dynamics, capacity vs demand, and trade lane deployment. "
+                    "Data as of Q1 2026."
+                ),
+                badge_text="FLEET",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("Fleet header failed")
 
-    _render_kpis(insights)
-    section_divider("Fleet Composition")
-    _render_composition()
-    section_divider("Orderbook & Scrapping")
-    _render_orderbook()
-    st.divider()
-    _render_scrapping()
-    section_divider("Deployment")
-    _render_utilization_map()
-    st.divider()
-    _render_capacity_vs_demand()
-    section_divider("Renewal Risk")
-    _render_age_risk()
-    section_divider("Trade Lane Detail")
-    _render_route_metrics(route_results)
+        _render_kpis(insights)
+        section_divider("Fleet Composition")
+        _render_composition()
+        section_divider("Orderbook & Scrapping")
+        _render_orderbook()
+        st.divider()
+        _render_scrapping()
+        section_divider("Deployment")
+        _render_utilization_map()
+        st.divider()
+        _render_capacity_vs_demand()
+        section_divider("Renewal Risk")
+        _render_age_risk()
+        section_divider("Trade Lane Detail")
+        _render_route_metrics(route_results)

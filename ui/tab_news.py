@@ -620,78 +620,82 @@ def _render_geo_map(articles: list[dict]) -> None:
 
 def render(news_items: list[dict] | None = None, insights: Any = None, *args, **kwargs) -> None:
     """Render the Shipping News Intelligence tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('news'):
 
-    try:
-        raw = news_items if news_items else []
-        articles = _normalise(raw)
-        if not articles:
-            articles = _normalise(_MOCK_ARTICLES)
+        try:
+            raw = news_items if news_items else []
+            articles = _normalise(raw)
+            if not articles:
+                articles = _normalise(_MOCK_ARTICLES)
+                using_mock = True
+            else:
+                using_mock = False
+        except Exception:
+            articles   = _normalise(_MOCK_ARTICLES)
             using_mock = True
-        else:
-            using_mock = False
-    except Exception:
-        articles   = _normalise(_MOCK_ARTICLES)
-        using_mock = True
 
-    try:
-        updated = max((a["published_at"] for a in articles), default=_now())
-        page_header(
-            title="Shipping News Intelligence",
-            subtitle="Sentiment, topics, and entity flow across 20+ shipping articles",
-            icon="📰",
-            badge_text="Demo Data" if using_mock else "Live Feed",
-            badge_color=C_MOD if using_mock else C_HIGH,
-        )
-        news_source = (
+        try:
+            updated = max((a["published_at"] for a in articles), default=_now())
+            page_header(
+                title="Shipping News Intelligence",
+                subtitle="Sentiment, topics, and entity flow across 20+ shipping articles",
+                icon="📰",
+                badge_text="Demo Data" if using_mock else "Live Feed",
+                badge_color=C_MOD if using_mock else C_HIGH,
+            )
+            news_source = (
+                DataSource.demo("NewsAPI + Reuters RSS (stub)")
+                if using_mock
+                else DataSource.scraped(
+                    "NewsAPI + Reuters RSS",
+                    notes="Entity feed is a Track B stub — replace with engine.news_sentiment when live",
+                )
+            )
+            st.markdown(
+                live_data_badge(news_source, as_of=updated),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            st.subheader("Shipping News Intelligence")
+
+        section_header("Sentiment Pulse",
+                       "Tone across the last 24 hours of coverage")
+        _render_sentiment_pulse(articles)
+
+        section_header("Topic Heatmap",
+                       "Nine coverage topics across five days — sentiment and volume")
+        _render_topic_heatmap(articles)
+
+        section_divider("Coverage")
+
+        section_header("Breaking News",
+                       "Five most urgent stories, ranked by importance")
+        _render_breaking_news(articles)
+
+        section_header("Full News Feed",
+                       "Every tracked article — filterable by topic")
+        _render_news_feed(articles)
+
+        section_divider("Entities & Geography")
+
+        section_header("Named Entity Tracker",
+                       "Most-mentioned carriers, ports, regions and commodities")
+        _render_entity_tracker(articles, _MOCK_ENTITIES)
+
+        section_header("Geographic Sentiment Map",
+                       "Regional tone and volume on an ocean-basin view")
+        _render_geo_map(articles)
+
+        # Footer provenance pill
+        footer_source = (
             DataSource.demo("NewsAPI + Reuters RSS (stub)")
             if using_mock
-            else DataSource.scraped(
-                "NewsAPI + Reuters RSS",
-                notes="Entity feed is a Track B stub — replace with engine.news_sentiment when live",
-            )
+            else DataSource.scraped("NewsAPI + Reuters RSS")
         )
         st.markdown(
-            live_data_badge(news_source, as_of=updated),
+            source_footer([footer_source]),
             unsafe_allow_html=True,
         )
-    except Exception:
-        st.subheader("Shipping News Intelligence")
-
-    section_header("Sentiment Pulse",
-                   "Tone across the last 24 hours of coverage")
-    _render_sentiment_pulse(articles)
-
-    section_header("Topic Heatmap",
-                   "Nine coverage topics across five days — sentiment and volume")
-    _render_topic_heatmap(articles)
-
-    section_divider("Coverage")
-
-    section_header("Breaking News",
-                   "Five most urgent stories, ranked by importance")
-    _render_breaking_news(articles)
-
-    section_header("Full News Feed",
-                   "Every tracked article — filterable by topic")
-    _render_news_feed(articles)
-
-    section_divider("Entities & Geography")
-
-    section_header("Named Entity Tracker",
-                   "Most-mentioned carriers, ports, regions and commodities")
-    _render_entity_tracker(articles, _MOCK_ENTITIES)
-
-    section_header("Geographic Sentiment Map",
-                   "Regional tone and volume on an ocean-basin view")
-    _render_geo_map(articles)
-
-    # Footer provenance pill
-    footer_source = (
-        DataSource.demo("NewsAPI + Reuters RSS (stub)")
-        if using_mock
-        else DataSource.scraped("NewsAPI + Reuters RSS")
-    )
-    st.markdown(
-        source_footer([footer_source]),
-        unsafe_allow_html=True,
-    )

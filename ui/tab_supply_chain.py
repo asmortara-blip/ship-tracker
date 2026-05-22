@@ -736,43 +736,47 @@ def _render_forecast() -> None:
 
 def render(port_results=None, route_results=None, insights=None, macro_data=None, *args, **kwargs) -> None:
     """Render the Supply Chain Resilience & Visibility tab."""
-    try:
-        port_results  = port_results  or []
-        route_results = route_results or []
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('supply_chain'):
+        try:
+            port_results  = port_results  or []
+            route_results = route_results or []
 
-        seed_val = len(port_results) * 17 + len(route_results) * 31
-        rng = random.Random(seed_val + 42)
+            seed_val = len(port_results) * 17 + len(route_results) * 31
+            rng = random.Random(seed_val + 42)
 
-        page_header(
-            title="Supply Chain Resilience & Visibility",
-            subtitle="End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times",
-            badge_text="SUPPLY CHAIN",
-            badge_color=C_ACCENT,
-        )
+            page_header(
+                title="Supply Chain Resilience & Visibility",
+                subtitle="End-to-end supply chain health monitoring — disruptions, inventory signals, reshoring trends, and lead times",
+                badge_text="SUPPLY CHAIN",
+                badge_color=C_ACCENT,
+            )
 
-        _render_health_index(rng)
+            _render_health_index(rng)
 
-        section_divider("Active Disruptions")
-        _render_disruption_monitor()
+            section_divider("Active Disruptions")
+            _render_disruption_monitor()
 
-        section_divider("Demand Signals")
-        _render_inventory_sales(rng)
+            section_divider("Demand Signals")
+            _render_inventory_sales(rng)
 
-        st.divider()
-        _render_nearshoring()
+            st.divider()
+            _render_nearshoring()
 
-        st.divider()
-        _render_lead_times()
+            st.divider()
+            _render_lead_times()
 
-        section_divider("Resilience")
-        _render_resilience_scorecard(rng)
+            section_divider("Resilience")
+            _render_resilience_scorecard(rng)
 
-        st.divider()
-        _render_jit_vs_jic()
+            st.divider()
+            _render_jit_vs_jic()
 
-        section_divider("90-Day Outlook")
-        _render_forecast()
+            section_divider("90-Day Outlook")
+            _render_forecast()
 
-    except Exception:
-        logger.exception("Supply chain tab render failed")
-        st.error("Supply chain tab failed to render.")
+        except Exception:
+            logger.exception("Supply chain tab render failed")
+            st.error("Supply chain tab failed to render.")

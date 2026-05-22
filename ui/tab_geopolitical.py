@@ -861,42 +861,46 @@ def _render_war_risk_premiums() -> None:
 # ---------------------------------------------------------------------------
 
 def render(macro_data=None, insights=None, news_items=None, *args, **kwargs) -> None:
-    try:
-        page_header(
-            title="Geopolitical Risk Intelligence",
-            subtitle=(
-                "Institutional-grade geopolitical risk monitoring for global shipping operations — "
-                "hotspots, sanctions, trade wars, rerouting, and war risk insurance"
-            ),
-            icon="🌐",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('geopolitical'):
+        try:
+            page_header(
+                title="Geopolitical Risk Intelligence",
+                subtitle=(
+                    "Institutional-grade geopolitical risk monitoring for global shipping operations — "
+                    "hotspots, sanctions, trade wars, rerouting, and war risk insurance"
+                ),
+                icon="🌐",
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
 
-        _render_global_risk_heat(macro_data, insights)
-        section_divider("Risk Geography")
-        _render_risk_map()
-        section_divider("Active Hotspots")
-        _render_hotspot_monitor()
-        section_divider("Sanctions & Embargoes")
-        _render_sanctions_tracker()
-        section_divider("Trade War")
-        _render_trade_war_monitor()
-        section_divider("Rerouting Impact")
-        _render_rerouting_impact()
-        section_divider("War Risk Insurance")
-        _render_war_risk_premiums()
+            _render_global_risk_heat(macro_data, insights)
+            section_divider("Risk Geography")
+            _render_risk_map()
+            section_divider("Active Hotspots")
+            _render_hotspot_monitor()
+            section_divider("Sanctions & Embargoes")
+            _render_sanctions_tracker()
+            section_divider("Trade War")
+            _render_trade_war_monitor()
+            section_divider("Rerouting Impact")
+            _render_rerouting_impact()
+            section_divider("War Risk Insurance")
+            _render_war_risk_premiums()
 
-        st.markdown(
-            source_footer([
-                {"name": "IMO / BIMCO", "kind": "demo", "quality": "demo"},
-                {"name": "Lloyd's MIU", "kind": "demo", "quality": "demo"},
-                {"name": "US OFAC / EU Sanctions Map", "kind": "demo", "quality": "demo"},
-                {"name": "Joint War Committee", "kind": "demo", "quality": "demo"},
-            ], align="center"),
-            unsafe_allow_html=True,
-        )
+            st.markdown(
+                source_footer([
+                    {"name": "IMO / BIMCO", "kind": "demo", "quality": "demo"},
+                    {"name": "Lloyd's MIU", "kind": "demo", "quality": "demo"},
+                    {"name": "US OFAC / EU Sanctions Map", "kind": "demo", "quality": "demo"},
+                    {"name": "Joint War Committee", "kind": "demo", "quality": "demo"},
+                ], align="center"),
+                unsafe_allow_html=True,
+            )
 
-    except Exception as exc:
-        logger.error(f"[tab_geopolitical] render: {exc}")
-        st.error(f"Geopolitical tab error: {exc}")
+        except Exception as exc:
+            logger.error(f"[tab_geopolitical] render: {exc}")
+            st.error(f"Geopolitical tab error: {exc}")

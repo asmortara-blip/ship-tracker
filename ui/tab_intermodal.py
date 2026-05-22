@@ -691,42 +691,46 @@ def _render_market_signals() -> None:
 # ---------------------------------------------------------------------------
 def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Intermodal & Supply Chain Connectivity tab."""
-    try:
-        page_header(
-            title="Intermodal & Supply Chain Connectivity",
-            subtitle=("Port-to-inland rail corridors \u00b7 Chassis availability \u00b7 "
-                      "Dwell times \u00b7 Multi-modal cost analysis \u00b7 Market signals"),
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
-    except Exception:
-        logger.exception("Header render failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('intermodal'):
+        try:
+            page_header(
+                title="Intermodal & Supply Chain Connectivity",
+                subtitle=("Port-to-inland rail corridors \u00b7 Chassis availability \u00b7 "
+                          "Dwell times \u00b7 Multi-modal cost analysis \u00b7 Market signals"),
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
+        except Exception:
+            logger.exception("Header render failed")
 
-    _render_kpi_strip()
-    _render_port_inland_table()
-    _render_network_map()
+        _render_kpi_strip()
+        _render_port_inland_table()
+        _render_network_map()
 
-    section_divider("Capacity & Equipment")
+        section_divider("Capacity & Equipment")
 
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        _render_dwell_tracker()
-    with c2:
-        _render_equipment_availability()
+        c1, c2 = st.columns(2, gap="large")
+        with c1:
+            _render_dwell_tracker()
+        with c2:
+            _render_equipment_availability()
 
-    section_divider("Inland Flows")
-    _render_inland_destination()
+        section_divider("Inland Flows")
+        _render_inland_destination()
 
-    section_divider("Routing Economics")
-    _render_cost_comparison()
+        section_divider("Routing Economics")
+        _render_cost_comparison()
 
-    section_divider("Market Signals")
-    _render_market_signals()
+        section_divider("Market Signals")
+        _render_market_signals()
 
-    try:
-        st.markdown(source_footer([
-            _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
-            _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
-        ], align="left"), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Footer failed")
+        try:
+            st.markdown(source_footer([
+                _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
+                _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
+            ], align="left"), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Footer failed")
