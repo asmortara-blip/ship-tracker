@@ -55,6 +55,87 @@ RISK_COLORS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  WCAG COLOR-CONTRAST HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Streamlit doesn't expose deep a11y APIs, but our custom HTML emits explicit
+# foreground/background pairs. WCAG 2.1 AA requires a contrast ratio of at
+# least 4.5:1 for normal text (3:1 for large text). The helpers below let us
+# verify, in tests, that every documented text/badge combination clears AA.
+#
+# The formula follows the WCAG spec exactly:
+#   1. Hex string -> sRGB channels in [0, 1].
+#   2. Linearize each channel (gamma-2.4 with a low-end linear ramp).
+#   3. Relative luminance L = 0.2126*R + 0.7152*G + 0.0722*B.
+#   4. Contrast ratio = (L_lighter + 0.05) / (L_darker + 0.05).
+# Identical colors give ratio 1.0; pure white-on-black gives 21.0.
+
+def _srgb_channel_to_linear(c: float) -> float:
+    """Convert one sRGB channel in [0, 1] to its linear-light equivalent."""
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _hex_to_relative_luminance(hex_color: str) -> float:
+    """Compute WCAG relative luminance for a #RRGGBB hex color."""
+    h = hex_color.lstrip("#")
+    r = int(h[0:2], 16) / 255.0
+    g = int(h[2:4], 16) / 255.0
+    b = int(h[4:6], 16) / 255.0
+    return (
+        0.2126 * _srgb_channel_to_linear(r)
+        + 0.7152 * _srgb_channel_to_linear(g)
+        + 0.0722 * _srgb_channel_to_linear(b)
+    )
+
+
+def _contrast_ratio(fg_hex: str, bg_hex: str) -> float:
+    """Return the WCAG contrast ratio between two #RRGGBB hex colors.
+
+    Output ranges from 1.0 (identical) to 21.0 (white-on-black). WCAG 2.1 AA
+    passes at 4.5+ for normal text, 3.0+ for large/UI components.
+    """
+    l1 = _hex_to_relative_luminance(fg_hex)
+    l2 = _hex_to_relative_luminance(bg_hex)
+    lighter, darker = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+# WCAG 2.1 contrast thresholds.
+#   - 4.5:1 — normal body text (AA)
+#   - 3.0:1 — large text (>=18pt or 14pt bold) and non-text UI components (AA)
+WCAG_AA_THRESHOLD = 4.5
+WCAG_AA_LARGE_THRESHOLD = 3.0
+
+# The app's primary body-text combinations. Every pair below must pass AA
+# (>= 4.5:1) — `tests/test_a11y.py` enforces this so palette tweaks can't
+# silently regress accessibility. Keep this list in sync with any new
+# body-text foreground/background combo introduced in custom HTML.
+A11Y_TEXT_PAIRS: list[tuple[str, str, str]] = [
+    # (foreground, background, human-readable label)
+    (C_TEXT,   C_BG,      "body text on app background"),
+    (C_TEXT,   C_SURFACE, "body text on surface"),
+    (C_TEXT,   C_CARD,    "body text on card"),
+    (C_TEXT2,  C_BG,      "secondary text on app background"),
+    (C_TEXT2,  C_CARD,    "secondary text on card"),
+    (C_HIGH,   C_BG,      "high/positive accent on background"),
+    (C_MOD,    C_BG,      "moderate/warning accent on background"),
+]
+
+# Large-text / UI-component combinations. These are used for headlines (>=18pt
+# or 14pt bold), badge chips, progress bars, and chart marks where WCAG 2.1
+# permits the relaxed 3.0:1 threshold. Documenting them here keeps tests aware
+# of the actual usage and surfaces any future regression.
+#
+# C_LOW (#c0392b) and C_ACCENT (#3572b0) are intentionally below the 4.5 body
+# threshold but above 3.0 — they are reserved for large headings, badges, and
+# graphical accents, never small body copy.
+A11Y_LARGE_TEXT_PAIRS: list[tuple[str, str, str]] = [
+    (C_LOW,    C_BG, "low/negative accent (large/UI only) on background"),
+    (C_ACCENT, C_BG, "steel-blue accent (large/UI only) on background"),
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  PLOTLY LAYOUT HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1281,12 +1362,12 @@ def badge(text: str, color: str = C_ACCENT) -> str:
 def section_header(title: str, subtitle: str = "") -> None:
     """Render a WSJ-style section header with top rule."""
     sub_html = (
-        f'<div class="wsj-section-subtitle">{subtitle}</div>'
+        f'<div class="wsj-section-subtitle" role="presentation">{subtitle}</div>'
         if subtitle else ""
     )
     st.markdown(f"""
-    <div class="wsj-section-header">
-        <div class="wsj-section-title">{title}</div>
+    <div class="wsj-section-header" role="presentation">
+        <div class="wsj-section-title" role="heading" aria-level="2">{title}</div>
         {sub_html}
     </div>
     """, unsafe_allow_html=True)
@@ -1438,19 +1519,22 @@ def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
             d_color = m.get("delta_color", C_TEXT2)
             sub     = m.get("sublabel", "")
             delta_html = (
-                f'<div style="font-size:0.78rem;color:{d_color};'
+                f'<div role="presentation" style="font-size:0.78rem;color:{d_color};'
                 f'font-family:var(--mono);font-weight:500;margin-top:4px;">'
                 f'{delta}</div>'
                 if delta else ""
             )
             sub_html = (
-                f'<div style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
+                f'<div role="presentation" style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
                 if sub else ""
             )
+            label_text = m.get("label", "")
+            value_text = m.get("value", "")
+            aria_label = f"{label_text}: {value_text}".strip(": ").strip()
             st.markdown(
-                f'<div class="kpi-card slide-in" style="border-top:2px solid {accent};">'
-                f'<div class="kpi-label">{m.get("label","")}</div>'
-                f'<div class="kpi-value">{m.get("value","")}</div>'
+                f'<div class="kpi-card slide-in" role="group" aria-label=\'{aria_label}\' style="border-top:2px solid {accent};">'
+                f'<div class="kpi-label" role="presentation">{label_text}</div>'
+                f'<div class="kpi-value" role="presentation">{value_text}</div>'
                 f'{delta_html}'
                 f'{sub_html}'
                 f'</div>',
@@ -1485,27 +1569,27 @@ def insight_card_html(
         if rationale else ""
     )
     return f"""
-    <div class="insight-card">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
-            <div style="flex:1;min-width:0;">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+    <div class="insight-card" role="article" aria-label='{title}'>
+        <div role="presentation" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div role="presentation" style="flex:1;min-width:0;">
+                <div role="presentation" style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
                     {cat_html}
                 </div>
-                <div style="font-family:var(--serif);font-size:0.92rem;font-weight:700;color:var(--text);
+                <div role="heading" aria-level="3" style="font-family:var(--serif);font-size:0.92rem;font-weight:700;color:var(--text);
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>
                 {rationale_html}
             </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-                <span style="background:{action_bg};color:{action_color};border:1px solid {action_bord};
+            <div role="presentation" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+                <span role="status" aria-label='Action: {action}' style="background:{action_bg};color:{action_color};border:1px solid {action_bord};
                     padding:2px 9px;border-radius:3px;font-size:0.68rem;font-weight:700;
                     text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;
                     font-family:var(--sans);">{action}</span>
-                <span style="font-family:var(--mono);font-size:0.82rem;
+                <span aria-label='Score: {score_pct} percent' style="font-family:var(--mono);font-size:0.82rem;
                     font-weight:700;color:{score_color};">{score_pct}%</span>
             </div>
         </div>
-        <div class="progress-bar-custom">
-            <div class="progress-bar-fill" style="width:{score_pct}%;background:{bar_fill};"></div>
+        <div class="progress-bar-custom" role="progressbar" aria-valuenow="{score_pct}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar-fill" role="presentation" style="width:{score_pct}%;background:{bar_fill};"></div>
         </div>
     </div>
     """
@@ -1526,8 +1610,8 @@ def status_badge(text: str, status: str = "info") -> str:
     dot_color = color
     pulse = ' animation:pulse-dot 2s ease-in-out infinite;' if status == "danger" else ""
     return (
-        f'<span class="status-chip" style="background:{bg};color:{color};border:1px solid {bord};">'
-        f'<span class="status-chip-dot" style="background:{dot_color};{pulse}"></span>'
+        f'<span class="status-chip" role="status" aria-label=\'{text}\' style="background:{bg};color:{color};border:1px solid {bord};">'
+        f'<span class="status-chip-dot" role="presentation" aria-hidden="true" style="background:{dot_color};{pulse}"></span>'
         f'{text}</span>'
     )
 
@@ -1601,16 +1685,25 @@ def wsj_news_list(items: list[str]) -> None:
     """, unsafe_allow_html=True)
 
 
-def wsj_market_table(headers: list[str], rows: list[list[str]]) -> None:
-    """Render a WSJ-style market data table."""
-    thead = "".join(f"<th>{h}</th>" for h in headers)
+def wsj_market_table(headers: list[str], rows: list[list[str]], title: str = "") -> None:
+    """Render a WSJ-style market data table.
+
+    Accessibility: emits explicit ARIA roles for screen readers — when ``title``
+    is non-empty, a ``<caption>`` element is rendered so assistive tech can
+    announce the table's purpose. Roles mirror native semantics (the table is
+    already a ``<table>``) which is redundant but safe and keeps the contract
+    explicit for tests.
+    """
+    thead = "".join(f'<th role="columnheader" scope="col">{h}</th>' for h in headers)
     tbody = ""
     for row in rows:
-        cells = "".join(f"<td>{c}</td>" for c in row)
-        tbody += f"<tr>{cells}</tr>"
+        cells = "".join(f'<td role="cell">{c}</td>' for c in row)
+        tbody += f'<tr role="row">{cells}</tr>'
+    caption = f"<caption>{title}</caption>" if title else ""
     st.markdown(f"""
-    <table class="wsj-market-table">
-        <thead><tr>{thead}</tr></thead>
+    <table class="wsj-market-table" role="table">
+        {caption}
+        <thead><tr role="row">{thead}</tr></thead>
         <tbody>{tbody}</tbody>
     </table>
     """, unsafe_allow_html=True)
@@ -1972,10 +2065,10 @@ def alert_banner(message: str, level: str = "info", dismissible: bool = False) -
     border = _hex_to_rgba(color, 0.35)
     anim   = "pulse-glow" if pulse else ""
     st.markdown(f"""
-        <div class="{anim}" style="background:{bg};border:1px solid {border};
+        <div class="{anim}" role="alert" aria-live="polite" style="background:{bg};border:1px solid {border};
             border-left:4px solid {color};border-radius:8px;padding:12px 16px;
             display:flex;align-items:flex-start;gap:10px;margin:8px 0;">
-          <span style="font-size:1.1rem;line-height:1.4">{icon}</span>
+          <span role="presentation" aria-hidden="true" style="font-size:1.1rem;line-height:1.4">{icon}</span>
           <span style="color:{C_TEXT};font-size:0.88rem;line-height:1.5">{message}</span>
         </div>
     """, unsafe_allow_html=True)
@@ -2088,4 +2181,7 @@ __all__ = [
     # Folded in from components.py
     "stat_counter", "mini_sparkline", "gauge_ring", "alert_banner",
     "kpi_row", "shipping_heat_bar", "section_divider",
+    # Accessibility
+    "_contrast_ratio", "A11Y_TEXT_PAIRS", "A11Y_LARGE_TEXT_PAIRS",
+    "WCAG_AA_THRESHOLD", "WCAG_AA_LARGE_THRESHOLD",
 ]
