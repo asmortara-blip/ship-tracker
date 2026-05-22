@@ -368,4 +368,139 @@ def logout() -> None:
     state.authenticated = False
     state.attempt_count = 0
     state.locked_until = ""
+    # Multi-user session: also clear the per-user session token so the
+    # next page render bounces back to the login form.
+    if "current_user" in st.session_state:
+        try:
+            del st.session_state["current_user"]
+        except Exception:
+            st.session_state["current_user"] = None
     st.rerun()
+
+
+# ── Multi-user (v7+) gate ─────────────────────────────────────────────────
+
+def require_auth_with_users() -> bool:
+    """Multi-user-aware authentication gate.
+
+    Mode selection (the function decides at call time):
+
+      * ``count_users() > 0`` — render the multi-user login / signup
+        tabs. On success, the authenticated ``User`` is stored in
+        ``st.session_state.current_user``; subsequent calls return
+        immediately while that session-state key is set.
+      * ``count_users() == 0`` AND ``APP_PASSWORD_HASH`` set — fall
+        back to the legacy single-password gate (delegates to
+        ``require_auth``).
+      * ``count_users() == 0`` AND ``APP_PASSWORD_HASH`` not set —
+        OPEN MODE: returns ``True`` immediately. ``is_authenticated``
+        already logs the warning on first call.
+
+    Adopting multi-user auth is therefore opt-in via the call site:
+    the existing ``require_auth`` keeps working unchanged, and this
+    new entry point is what app.py would call once it's ready to
+    switch.
+
+    Returns ``True`` when the request may proceed. Calls ``st.stop()``
+    and does not return on the un-authenticated path (matching the
+    contract of ``require_auth``).
+    """
+    # Defer the streamlit import: the engine layer above must stay
+    # importable without a running Streamlit runtime.
+    import streamlit as st
+
+    # Defer the users import too — it touches the SQLite layer.
+    from auth.users import User, count_users, login, signup
+
+    n_users = count_users()
+
+    # Mode 2 / 3: no users registered → fall back to legacy behaviour.
+    if n_users == 0:
+        # require_auth() handles both the open-mode and single-password
+        # cases on its own. We just delegate.
+        return require_auth()
+
+    # Mode 1: at least one user → render the multi-user UI. If a
+    # session token is already set, allow through immediately.
+    existing = st.session_state.get("current_user")
+    if isinstance(existing, User):
+        return True
+
+    # Render the auth surface. Same Refined-Steel container styling as
+    # the single-password gate.
+    st.markdown(
+        '<div style="max-width:420px;margin:64px auto 0 auto;'
+        'padding:32px 28px;background:rgba(232,230,225,0.02);'
+        'border:1px solid rgba(232,230,225,0.08);border-radius:6px">'
+        '<div style="font-family:Libre Baskerville,Georgia,serif;'
+        'font-size:1.4rem;font-weight:700;color:#e8e6e1;'
+        'margin-bottom:4px">The Ship Tracker</div>'
+        '<div style="font-family:Libre Franklin,sans-serif;'
+        'font-size:0.7rem;font-weight:600;color:#6b6760;'
+        'letter-spacing:0.12em;text-transform:uppercase;'
+        'margin-bottom:24px">Sign in or create an account</div>',
+        unsafe_allow_html=True,
+    )
+
+    login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
+
+    with login_tab:
+        with st.form("auth_users_login_form", clear_on_submit=False):
+            u = st.text_input(
+                "Username",
+                key="auth_users_login_username",
+                label_visibility="collapsed",
+                placeholder="Username",
+            )
+            p = st.text_input(
+                "Password",
+                type="password",
+                key="auth_users_login_password",
+                label_visibility="collapsed",
+                placeholder="Password",
+            )
+            submitted = st.form_submit_button(
+                "Log in", use_container_width=True
+            )
+        if submitted:
+            user = login(u or "", p or "")
+            if user is not None:
+                st.session_state["current_user"] = user
+                st.markdown("</div>", unsafe_allow_html=True)
+                st.rerun()
+                return True  # unreachable in practice
+            st.error("Invalid username or password.")
+
+    with signup_tab:
+        with st.form("auth_users_signup_form", clear_on_submit=False):
+            new_u = st.text_input(
+                "Username (3-32 chars: letters, digits, _ or -)",
+                key="auth_users_signup_username",
+                label_visibility="collapsed",
+                placeholder="Username",
+            )
+            new_p = st.text_input(
+                "Password (min 8 chars)",
+                type="password",
+                key="auth_users_signup_password",
+                label_visibility="collapsed",
+                placeholder="Password",
+            )
+            create = st.form_submit_button(
+                "Create account", use_container_width=True
+            )
+        if create:
+            user = signup(new_u or "", new_p or "")
+            if user is not None:
+                st.session_state["current_user"] = user
+                st.markdown("</div>", unsafe_allow_html=True)
+                st.rerun()
+                return True  # unreachable in practice
+            st.error(
+                "Could not create account. Check the username and "
+                "password requirements above."
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+    return False  # unreachable — st.stop() halts execution
