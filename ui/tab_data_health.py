@@ -632,6 +632,165 @@ def _render_llm_usage() -> None:
         st.error("LLM usage panel unavailable.")
 
 
+def _render_tab_perf() -> None:
+    """Tab render-performance telemetry — median/p95 durations + error counts.
+
+    Consumes ``engine.perf_telemetry.get_perf_summary`` directly (no
+    re-aggregation). Wrapped in a single try/except so a telemetry DB
+    outage cannot break the rest of the Data Health tab. Imports are
+    lazy/defensive — same pattern as ``_render_llm_usage`` above.
+    """
+    try:
+        from engine.perf_telemetry import get_perf_summary
+
+        section_header(
+            "Tab Performance",
+            "Per-tab render latency (median + p95) and exception counts. "
+            "Source: tab_render_events table via engine.perf_telemetry.",
+        )
+
+        window = st.selectbox(
+            "Window",
+            options=[1, 6, 24, 72],
+            index=2,  # 24h default
+            format_func=lambda h: f"Last {h}h",
+            key="perf_telemetry_window_h",
+        )
+
+        summary = get_perf_summary(window_hours=int(window))
+        total_renders = int(summary.get("total_renders", 0))
+
+        if total_renders == 0:
+            st.info("No render data yet.")
+            st.caption(
+                "Only tabs wrapped with `track_render` produce telemetry. "
+                "Currently: tab_overview."
+            )
+            return
+
+        by_tab: dict[str, dict] = summary.get("by_tab", {}) or {}
+        top_slow: list[dict] = summary.get("top_slow_tabs", []) or []
+        success_rate = float(summary.get("success_rate", 0.0))
+
+        # ── KPI strip ─────────────────────────────────────────────────
+        n_tabs = len(by_tab)
+        total_errors = sum(int(v.get("error_count", 0)) for v in by_tab.values())
+        sr_pct = success_rate * 100
+        sr_color = C_HIGH if sr_pct >= 99 else (C_MOD if sr_pct >= 95 else C_LOW)
+
+        if top_slow:
+            slowest_name = top_slow[0].get("tab_name", "—")
+            slowest_ms = int(top_slow[0].get("median_ms", 0))
+            slowest_label = (
+                f"{slowest_ms / 1000:.2f}s median"
+                if slowest_ms >= 1000
+                else f"{slowest_ms:,} ms median"
+            )
+        else:
+            slowest_name = "—"
+            slowest_label = "no data"
+
+        metric_card_row(
+            [
+                {"label": "TOTAL RENDERS",
+                 "value": f"{total_renders:,}",
+                 "accent": C_ACCENT,
+                 "sublabel": f"Last {int(window)}h window"},
+                {"label": "SUCCESS RATE",
+                 "value": f"{sr_pct:.2f}%",
+                 "accent": sr_color,
+                 "sublabel": f"across {n_tabs} tab{'s' if n_tabs != 1 else ''}"},
+                {"label": "SLOWEST TAB",
+                 "value": slowest_name,
+                 "accent": C_TEXT,
+                 "sublabel": slowest_label},
+                {"label": "TOTAL ERRORS",
+                 "value": f"{total_errors:,}",
+                 "accent": C_HIGH if total_errors == 0 else (
+                     C_MOD if total_errors < 5 else C_LOW
+                 ),
+                 "sublabel": "exceptions caught"},
+            ],
+            columns=4,
+        )
+
+        # ── Side-by-side tables ───────────────────────────────────────
+        def _fmt_ms(ms: int) -> str:
+            ms = int(ms)
+            return f"{ms / 1000:.2f}s" if ms >= 1000 else f"{ms:,} ms"
+
+        col_l, col_r = st.columns(2, gap="small")
+        with col_l:
+            st.markdown(
+                f'<div style="font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+                f'margin:6px 0 6px 0">Slowest Tabs (by median)</div>',
+                unsafe_allow_html=True,
+            )
+            if top_slow:
+                headers = ["Tab", "Count", "Median", "P95"]
+                rows: list[list[str]] = []
+                for entry in top_slow[:10]:
+                    rows.append([
+                        _sans(str(entry.get("tab_name", "—")), weight=600),
+                        _mono(f"{int(entry.get('count', 0)):,}", color=C_TEXT2),
+                        _mono(_fmt_ms(entry.get("median_ms", 0)), color=C_TEXT),
+                        _mono(_fmt_ms(entry.get("p95_ms", 0)), color=C_TEXT2),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.info("No slow-tab data.")
+
+        with col_r:
+            st.markdown(
+                f'<div style="font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+                f'margin:6px 0 6px 0">Most Errors</div>',
+                unsafe_allow_html=True,
+            )
+            err_entries = sorted(
+                (
+                    {"tab_name": name, **payload}
+                    for name, payload in by_tab.items()
+                    if int(payload.get("error_count", 0)) > 0
+                ),
+                key=lambda e: int(e.get("error_count", 0)),
+                reverse=True,
+            )[:10]
+            if err_entries:
+                headers = ["Tab", "Errors", "Total Renders", "Error Rate"]
+                rows = []
+                for entry in err_entries:
+                    errs = int(entry.get("error_count", 0))
+                    cnt = int(entry.get("count", 0))
+                    rate = (errs / cnt * 100) if cnt else 0.0
+                    rate_col = C_HIGH if rate < 1 else (C_MOD if rate < 5 else C_LOW)
+                    rows.append([
+                        _sans(str(entry.get("tab_name", "—")), weight=600),
+                        _mono(f"{errs:,}", color=C_LOW, weight=700),
+                        _mono(f"{cnt:,}", color=C_TEXT2),
+                        _mono(f"{rate:.2f}%", color=rate_col, weight=700),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.info("No errors in this window.")
+
+        st.caption(
+            "Only tabs wrapped with `track_render` produce telemetry. "
+            "Currently: tab_overview."
+        )
+        st.markdown(
+            live_data_badge(DataSource.live(
+                "tab_render_events table",
+                notes="engine.perf_telemetry",
+            )),
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.exception(f"Tab perf panel render error: {exc}")
+        st.error("Tab performance panel unavailable.")
+
+
 def _render_log_viewer() -> None:
     """In-app log viewer — tail the active log file with level/text filters.
 
@@ -1090,6 +1249,14 @@ def render(
         except Exception as exc:
             logger.error(f"LLM usage render error: {exc}")
             st.error("LLM usage panel unavailable.")
+
+        # ── Movement 1.65: tab render performance ──────────────────────────
+        section_divider("Tab Performance")
+        try:
+            _render_tab_perf()
+        except Exception as exc:
+            logger.error(f"Tab perf render error: {exc}")
+            st.error("Tab performance panel unavailable.")
 
         # ── Movement 1.7: log viewer ───────────────────────────────────────
         section_divider("Logs")
