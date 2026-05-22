@@ -102,9 +102,16 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
 
     Returns:
         A populated ReportMeta on success, or None if saving fails.
+
+    The row is stamped with the active user's id (resolved via
+    ``state.user_scope.current_user_id``) so subsequent
+    ``list_reports(user_id=...)`` calls can filter on it. Outside a
+    Streamlit session the stamp is ``""`` and the report joins the
+    legacy global bucket.
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id
 
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -131,6 +138,7 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
             file_size_kb=file_size_kb,
         )
 
+        uid = current_user_id()
         conn = get_connection()
         with conn:
             conn.execute(
@@ -138,13 +146,13 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
                 INSERT INTO report_history
                   (report_id, generated_at, report_date, sentiment_label,
                    sentiment_score, risk_level, signal_count, data_quality,
-                   file_path, file_size_kb)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   file_path, file_size_kb, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (meta.report_id, meta.generated_at, meta.report_date,
                  meta.sentiment_label, meta.sentiment_score, meta.risk_level,
                  meta.signal_count, meta.data_quality, meta.file_path,
-                 meta.file_size_kb),
+                 meta.file_size_kb, uid),
             )
 
         # Prune any rows over MAX_REPORTS, oldest first. Also delete the
@@ -162,18 +170,29 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
         return None
 
 
-def list_reports() -> list[ReportMeta]:
+def list_reports(*, user_id: str | None = None) -> list[ReportMeta]:
     """Return all saved reports sorted newest-first, skipping missing files.
 
     If any rows reference files that have been deleted outside this module,
     those rows are removed from the SQLite index before returning.
+
+    Honours per-user scoping with dual-set semantics — when ``user_id``
+    resolves to a non-empty string, rows belonging to that user PLUS
+    legacy ``user_id=''`` rows are returned. The empty-string case
+    returns every row (legacy behaviour).
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         conn = get_connection()
         rows = conn.execute(
-            "SELECT * FROM report_history ORDER BY generated_at DESC"
+            f"SELECT * FROM report_history WHERE 1=1 {scope_sql} "
+            f"ORDER BY generated_at DESC",
+            scope_params,
         ).fetchall()
         valid: list[ReportMeta] = []
         stale_ids: list[str] = []
@@ -196,19 +215,31 @@ def list_reports() -> list[ReportMeta]:
         return []
 
 
-def load_report_html(report_id: str) -> str | None:
+def load_report_html(report_id: str, *, user_id: str | None = None) -> str | None:
     """Read and return the HTML for the given report_id.
+
+    Honours per-user scoping: a user can only read reports in their
+    own scope (their own rows + legacy ``user_id=''`` rows). Crossing
+    scope returns ``None`` exactly like an unknown report_id — no
+    distinguishable "permission denied" leak. Public-link reads go
+    through :func:`load_public_report` instead and bypass scoping by
+    design.
 
     Returns:
         HTML string, or None if the report is not found or unreadable.
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         conn = get_connection()
         row = conn.execute(
-            "SELECT file_path FROM report_history WHERE report_id = ?",
-            (report_id,),
+            f"SELECT file_path FROM report_history WHERE report_id = ? "
+            f"{scope_sql}",
+            (report_id, *scope_params),
         ).fetchone()
         if row is None:
             logger.debug(f"load_report_html: report_id not found: {report_id}")
@@ -223,19 +254,28 @@ def load_report_html(report_id: str) -> str | None:
         return None
 
 
-def delete_report(report_id: str) -> bool:
+def delete_report(report_id: str, *, user_id: str | None = None) -> bool:
     """Remove a report from the index and delete its file from disk.
+
+    Honours per-user scoping the same way as ``load_report_html`` —
+    crossing scope returns ``False`` indistinguishably from an unknown
+    report_id, and no row is deleted.
 
     Returns:
         True if the report was found and removed; False otherwise.
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         conn = get_connection()
         row = conn.execute(
-            "SELECT file_path FROM report_history WHERE report_id = ?",
-            (report_id,),
+            f"SELECT file_path FROM report_history WHERE report_id = ? "
+            f"{scope_sql}",
+            (report_id, *scope_params),
         ).fetchone()
         if row is None:
             logger.debug(f"delete_report: report_id not found: {report_id}")
@@ -260,7 +300,7 @@ def delete_report(report_id: str) -> bool:
         return False
 
 
-def make_public(report_id: str, expires_in_days: int = 30) -> str | None:
+def make_public(report_id: str, expires_in_days: int = 30, *, user_id: str | None = None) -> str | None:
     """Generate a public-share slug for *report_id* and persist it.
 
     The slug is a URL-safe base64url token from
@@ -284,11 +324,19 @@ def make_public(report_id: str, expires_in_days: int = 30) -> str | None:
             return None
 
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         conn = get_connection()
+        # Scope the lookup so only the report's owner (or a legacy
+        # report under the empty-string user_id) can publish it. A
+        # non-owner gets the same None return as an unknown report_id.
         row = conn.execute(
-            "SELECT report_id FROM report_history WHERE report_id = ?",
-            (report_id,),
+            f"SELECT report_id FROM report_history WHERE report_id = ? "
+            f"{scope_sql}",
+            (report_id, *scope_params),
         ).fetchone()
         if row is None:
             logger.debug(f"make_public: report_id not found: {report_id}")
@@ -314,11 +362,15 @@ def make_public(report_id: str, expires_in_days: int = 30) -> str | None:
         return None
 
 
-def revoke_public(report_id: str) -> bool:
+def revoke_public(report_id: str, *, user_id: str | None = None) -> bool:
     """Clear the public-share slug + expiry for *report_id*.
 
     After revoke, any prior call to :func:`load_public_report` with the
     old slug returns ``None`` (slug not found).
+
+    Honours per-user scoping — only the report's owner (or the legacy
+    ``user_id=''`` owner) can revoke its public link. A non-owner gets
+    the same ``False`` return as an unknown report_id.
 
     Returns:
         True if a row was updated, False if the report_id is unknown or
@@ -326,11 +378,16 @@ def revoke_public(report_id: str) -> bool:
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         conn = get_connection()
         row = conn.execute(
-            "SELECT report_id FROM report_history WHERE report_id = ?",
-            (report_id,),
+            f"SELECT report_id FROM report_history WHERE report_id = ? "
+            f"{scope_sql}",
+            (report_id, *scope_params),
         ).fetchone()
         if row is None:
             logger.debug(f"revoke_public: report_id not found: {report_id}")
@@ -417,15 +474,21 @@ def load_public_report(slug: str) -> str | None:
         return None
 
 
-def get_report_stats() -> dict:
+def get_report_stats(*, user_id: str | None = None) -> dict:
     """Return aggregate statistics across all saved reports.
+
+    Honours per-user scoping via the underlying ``list_reports`` call —
+    when ``user_id`` is non-empty, the stats only cover that user's
+    rows plus legacy ``user_id=''`` rows.
 
     Returns a dict with keys:
         total_reports, total_size_mb, oldest_date, newest_date,
         avg_sentiment_score, sentiment_distribution
     """
     try:
-        entries = list_reports()  # already filtered + sorted newest-first
+        # Forward the scope parameter so the stats match whatever
+        # list_reports would have surfaced for the same user.
+        entries = list_reports(user_id=user_id)  # already filtered + sorted newest-first
         if not entries:
             return {
                 "total_reports": 0,

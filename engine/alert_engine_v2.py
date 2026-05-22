@@ -424,18 +424,42 @@ def _row_to_alert(row) -> ShippingAlert:
     )
 
 
-def save_alerts(alerts: list[ShippingAlert]) -> None:
+def _resolve_user_id(user_id: Optional[str]) -> str:
+    """Pick the explicit ``user_id`` parameter, or fall back to the
+    Streamlit session's ``current_user``.
+
+    ``None`` means "caller did not specify" → consult the session via
+    ``current_user_id()``. An explicit empty string means "force legacy
+    mode" and is returned as-is. The session helper itself can never
+    raise.
+    """
+    if user_id is None:
+        from state.user_scope import current_user_id
+        return current_user_id()
+    return user_id
+
+
+def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -> None:
     """Persist alerts to the SQLite store; dedupe by alert_id; trim to
-    _MAX_STORED keeping the newest (by created_at)."""
+    _MAX_STORED keeping the newest (by created_at).
+
+    When ``user_id`` is ``None`` (default), the active Streamlit user's
+    id is resolved via ``state.user_scope.current_user_id`` — outside
+    Streamlit that returns ``""`` and rows land in the legacy global
+    bucket exactly like before. Pass an explicit string to override
+    (useful in tests). The user_id stamp is applied to every inserted
+    row.
+    """
     if not alerts:
         return
     from state.db import get_connection
 
+    uid = _resolve_user_id(user_id)
     conn = get_connection()
     rows = [
         (a.alert_id, a.created_at, a.alert_type, a.severity, a.title, a.body,
          a.ticker, a.route_id, a.port_locode, a.value, a.threshold,
-         a.change_pct, 1 if a.acknowledged else 0)
+         a.change_pct, 1 if a.acknowledged else 0, uid)
         for a in alerts
     ]
     try:
@@ -446,8 +470,8 @@ def save_alerts(alerts: list[ShippingAlert]) -> None:
                 INSERT OR IGNORE INTO alerts
                   (alert_id, created_at, alert_type, severity, title, body,
                    ticker, route_id, port_locode, value, threshold, change_pct,
-                   acknowledged)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   acknowledged, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -469,16 +493,29 @@ def save_alerts(alerts: list[ShippingAlert]) -> None:
         logger.warning(f"save_alerts: SQLite write failed: {exc}")
 
 
-def load_alerts(max_age_days: int = 30) -> list[ShippingAlert]:
-    """Load alerts created within the last ``max_age_days``."""
-    from state.db import get_connection
+def load_alerts(max_age_days: int = 30, *, user_id: Optional[str] = None) -> list[ShippingAlert]:
+    """Load alerts created within the last ``max_age_days``.
 
+    When ``user_id`` is ``None`` (default), falls back to the Streamlit
+    session's ``current_user``. When the resolved id is the empty
+    string (legacy / no session), every row is returned (the
+    pre-multi-user behaviour). When it is non-empty, dual-set
+    semantics apply — rows belonging to that user PLUS legacy
+    ``user_id=''`` rows are returned together so existing data
+    remains visible after the first login.
+    """
+    from state.db import get_connection
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM alerts WHERE created_at >= ? ORDER BY created_at DESC",
-            (cutoff,),
+            f"SELECT * FROM alerts WHERE created_at >= ? {scope_sql} "
+            f"ORDER BY created_at DESC",
+            (cutoff, *scope_params),
         ).fetchall()
     except Exception as exc:
         logger.warning(f"load_alerts: SQLite read failed: {exc}")
@@ -486,29 +523,38 @@ def load_alerts(max_age_days: int = 30) -> list[ShippingAlert]:
     return [_row_to_alert(r) for r in rows]
 
 
-def acknowledge_alert(alert_id: str) -> None:
+def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
     """Mark a single alert as acknowledged.
 
     Also stamps ``acknowledged_at`` with the current ISO UTC timestamp
     so the alert-analytics module can compute median time-to-ack.
     Pre-v4 rows that were acked before this column existed keep an
     empty string here and are excluded from the time-to-ack metric.
+
+    Honours per-user scoping: when ``user_id`` resolves to a non-empty
+    string, the UPDATE matches only rows the user can SEE (their own
+    rows PLUS legacy rows). A user cannot ACK another user's alert by
+    knowing its id — the UPDATE silently no-ops.
     """
     from state.db import get_connection
+    from state.user_scope import scope_filter_sql
 
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     ack_ts = _now_iso()
     try:
         with conn:
             conn.execute(
-                "UPDATE alerts SET acknowledged = 1, acknowledged_at = ? WHERE alert_id = ?",
-                (ack_ts, alert_id),
+                f"UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
+                f"WHERE alert_id = ? {scope_sql}",
+                (ack_ts, alert_id, *scope_params),
             )
     except Exception as exc:
         logger.warning(f"acknowledge_alert: SQLite update failed: {exc}")
 
 
-def acknowledge_all() -> None:
+def acknowledge_all(*, user_id: Optional[str] = None) -> None:
     """Mark every alert in the store as acknowledged.
 
     Sets ``acknowledged_at`` for every row whose flag flips from 0 → 1
@@ -516,30 +562,45 @@ def acknowledge_all() -> None:
     acknowledged_at (we only fill in the timestamp for rows we are
     transitioning here — overwriting would lie about WHEN the user
     acked the alert).
+
+    Honours per-user scoping the same way as ``acknowledge_alert``:
+    when ``user_id`` resolves to a non-empty string, only rows in the
+    user's scope (own + legacy) are ACK'd.
     """
     from state.db import get_connection
+    from state.user_scope import scope_filter_sql
 
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     ack_ts = _now_iso()
     try:
         with conn:
             conn.execute(
-                "UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
-                "WHERE acknowledged = 0",
-                (ack_ts,),
+                f"UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
+                f"WHERE acknowledged = 0 {scope_sql}",
+                (ack_ts, *scope_params),
             )
     except Exception as exc:
         logger.warning(f"acknowledge_all: SQLite update failed: {exc}")
 
 
-def get_unread_count() -> int:
-    """Count unacknowledged alerts."""
-    from state.db import get_connection
+def get_unread_count(*, user_id: Optional[str] = None) -> int:
+    """Count unacknowledged alerts.
 
+    Honours per-user scoping — when ``user_id`` resolves to a non-empty
+    string, only rows in the user's scope (own + legacy) are counted.
+    """
+    from state.db import get_connection
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM alerts WHERE acknowledged = 0"
+            f"SELECT COUNT(*) AS n FROM alerts WHERE acknowledged = 0 {scope_sql}",
+            scope_params,
         ).fetchone()
         return int(row["n"]) if row else 0
     except Exception as exc:
@@ -552,7 +613,7 @@ def get_unread_count() -> int:
 #  configuration, alerts are the fired events those rules produce).
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_rules(rules: list[dict]) -> None:
+def save_rules(rules: list[dict], *, user_id: Optional[str] = None) -> None:
     """Persist the user's alert-rule list to the SQLite store.
 
     Rules are stored as JSON blobs keyed by rule_id (or id) — matching the
@@ -560,14 +621,34 @@ def save_rules(rules: list[dict]) -> None:
     ``AlertRule`` dataclass is reserved for future use; the dict shape
     keeps the editor UI flexible while still being durable across sessions.
 
-    Replaces the entire rule set (matches the JSON-file write-everything
-    semantics callers already rely on)."""
+    Replaces the rule set for the given user_id scope:
+      * Legacy mode (``user_id=""``, resolved or explicit): wipes EVERY
+        row in the table and reinserts — matches the original
+        write-everything semantics callers rely on.
+      * Per-user mode (non-empty ``user_id``): wipes only this user's
+        rows AND legacy ``user_id=''`` rows (since the user just
+        adopted them via the dual-set read), then reinserts stamped
+        with the user's id.
+    """
     from state.db import get_connection
+    from state.user_scope import scope_filter_sql
 
+    uid = _resolve_user_id(user_id)
     conn = get_connection()
     try:
         with conn:
-            conn.execute("DELETE FROM alert_rules")
+            if uid:
+                # Per-user replace: drop rows the user "owns" (their own
+                # + legacy) and rewrite them under this user. WHERE 1=1
+                # gives the scope fragment something to AND against.
+                scope_sql, scope_params = scope_filter_sql(uid)
+                conn.execute(
+                    f"DELETE FROM alert_rules WHERE 1=1 {scope_sql}",
+                    scope_params,
+                )
+            else:
+                # Legacy global replace.
+                conn.execute("DELETE FROM alert_rules")
             rows = []
             for r in rules:
                 if not isinstance(r, dict):
@@ -575,25 +656,38 @@ def save_rules(rules: list[dict]) -> None:
                 rule_id = r.get("rule_id") or r.get("id")
                 if not rule_id:
                     continue
-                rows.append((str(rule_id), json.dumps(r, default=str)))
+                rows.append((str(rule_id), json.dumps(r, default=str), uid))
             if rows:
                 conn.executemany(
-                    "INSERT INTO alert_rules (rule_id, data) VALUES (?, ?)",
+                    "INSERT INTO alert_rules (rule_id, data, user_id) "
+                    "VALUES (?, ?, ?)",
                     rows,
                 )
     except Exception as exc:
         logger.warning(f"save_rules: SQLite write failed: {exc}")
 
 
-def load_rules() -> list[dict]:
+def load_rules(*, user_id: Optional[str] = None) -> list[dict]:
     """Load the persisted user rule list. Returns [] if no rules exist
-    or the read fails — callers can fall back to defaults in that case."""
-    from state.db import get_connection
+    or the read fails — callers can fall back to defaults in that case.
 
+    Honours per-user scoping with the same dual-set semantics as
+    ``load_alerts``: when ``user_id`` resolves to a non-empty string,
+    rows belonging to that user PLUS legacy ``user_id=''`` rows are
+    returned. The empty-string case returns every row (legacy
+    behaviour).
+    """
+    from state.db import get_connection
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT data FROM alert_rules ORDER BY rule_id"
+            f"SELECT data FROM alert_rules WHERE 1=1 {scope_sql} "
+            f"ORDER BY rule_id",
+            scope_params,
         ).fetchall()
     except Exception as exc:
         logger.warning(f"load_rules: SQLite read failed: {exc}")

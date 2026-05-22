@@ -99,6 +99,8 @@ def record_call(
     tokens_out: int,
     cached_tokens: int = 0,
     tab_name: str = "",
+    *,
+    user_id: Optional[str] = None,
 ) -> None:
     """Persist one LLM call to the ``llm_calls`` table.
 
@@ -130,10 +132,18 @@ def record_call(
     tab_name:
         Optional — for ``source="commentary"`` rows, the tab the
         commentary was for. Empty string when not applicable.
+    user_id:
+        Optional — pass explicitly to override, or leave as ``None``
+        to resolve from ``st.session_state.current_user`` via
+        ``state.user_scope.current_user_id``. Outside Streamlit this
+        falls back to ``""`` and the row joins the legacy global
+        bucket — pre-multi-user behaviour.
     """
     try:
         from state.db import get_connection
+        from state.user_scope import current_user_id
 
+        uid = current_user_id() if user_id is None else user_id
         call_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         est_cost = _estimate_cost(model, int(tokens_in), int(tokens_out))
@@ -143,8 +153,8 @@ def record_call(
             """
             INSERT INTO llm_calls
               (call_id, created_at, source, tab_name, model,
-               tokens_in, tokens_out, cached_tokens, est_cost_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               tokens_in, tokens_out, cached_tokens, est_cost_usd, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 call_id,
@@ -156,6 +166,7 @@ def record_call(
                 int(tokens_out or 0),
                 int(cached_tokens or 0),
                 float(est_cost),
+                uid,
             ),
         )
     except Exception as exc:
@@ -179,7 +190,7 @@ def _empty_summary(window_days: int) -> dict[str, Any]:
     }
 
 
-def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
+def get_usage_summary(window_days: int = 7, *, user_id: Optional[str] = None) -> dict[str, Any]:
     """Aggregate LLM-call telemetry over the last ``window_days`` days.
 
     Returns a dict shaped for direct rendering in a tab or CLI:
@@ -230,24 +241,31 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
             return _empty_summary(window_days)
 
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
         conn = get_connection()
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
 
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=window_days)
         ).isoformat()
+        # Bound-parameter tuple used by every query in this function.
+        # cutoff first, then any scope binds.
+        where_params = (cutoff, *scope_params)
 
         # Totals — one round-trip, narrow projection.
         totals_row = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*)              AS n,
                 COALESCE(SUM(tokens_in),  0) AS sum_in,
                 COALESCE(SUM(tokens_out), 0) AS sum_out,
                 COALESCE(SUM(est_cost_usd), 0.0) AS sum_cost
             FROM llm_calls
-            WHERE created_at >= ?
+            WHERE created_at >= ? {scope_sql}
             """,
-            (cutoff,),
+            where_params,
         ).fetchone()
 
         if totals_row is None or int(totals_row["n"]) == 0:
@@ -255,7 +273,7 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
 
         # By source.
         by_source_rows = conn.execute(
-            """
+            f"""
             SELECT
                 source,
                 COUNT(*)              AS n,
@@ -263,11 +281,11 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
                 COALESCE(SUM(tokens_out), 0) AS sum_out,
                 COALESCE(SUM(est_cost_usd), 0.0) AS sum_cost
             FROM llm_calls
-            WHERE created_at >= ?
+            WHERE created_at >= ? {scope_sql}
             GROUP BY source
             ORDER BY source
             """,
-            (cutoff,),
+            where_params,
         ).fetchall()
         by_source: dict[str, dict[str, Any]] = {}
         for r in by_source_rows:
@@ -280,7 +298,7 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
 
         # By model.
         by_model_rows = conn.execute(
-            """
+            f"""
             SELECT
                 model,
                 COUNT(*)              AS n,
@@ -288,11 +306,11 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
                 COALESCE(SUM(tokens_out), 0) AS sum_out,
                 COALESCE(SUM(est_cost_usd), 0.0) AS sum_cost
             FROM llm_calls
-            WHERE created_at >= ?
+            WHERE created_at >= ? {scope_sql}
             GROUP BY model
             ORDER BY model
             """,
-            (cutoff,),
+            where_params,
         ).fetchall()
         by_model: dict[str, dict[str, Any]] = {}
         for r in by_model_rows:
@@ -306,17 +324,17 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
         # By day — SQLite's substr(created_at, 1, 10) gives the ISO YYYY-MM-DD
         # prefix from every well-formed ISO 8601 timestamp this module writes.
         by_day_rows = conn.execute(
-            """
+            f"""
             SELECT
                 substr(created_at, 1, 10) AS day,
                 COUNT(*)                  AS n,
                 COALESCE(SUM(est_cost_usd), 0.0) AS sum_cost
             FROM llm_calls
-            WHERE created_at >= ?
+            WHERE created_at >= ? {scope_sql}
             GROUP BY day
             ORDER BY day ASC
             """,
-            (cutoff,),
+            where_params,
         ).fetchall()
         by_day = [
             {
@@ -342,7 +360,7 @@ def get_usage_summary(window_days: int = 7) -> dict[str, Any]:
         return _empty_summary(window_days if isinstance(window_days, int) else 7)
 
 
-def get_recent_calls(limit: int = 50) -> list[dict[str, Any]]:
+def get_recent_calls(limit: int = 50, *, user_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Return the most recent ``limit`` LLM calls, newest first.
 
     Each row is a plain dict matching the column names of the
@@ -350,25 +368,38 @@ def get_recent_calls(limit: int = 50) -> list[dict[str, Any]]:
     serializing as JSON. Empty DB → empty list. Never raises; on any
     DB failure returns ``[]`` and logs at debug.
 
+    Honours per-user scoping: when ``user_id`` resolves to a non-empty
+    string, only rows in the user's scope (own + legacy) are returned.
+    Default (``None``) consults Streamlit; explicit ``""`` forces the
+    legacy "all rows" behaviour.
+
     Parameters
     ----------
     limit:
         Maximum number of rows to return. Default 50; clipped to a
         minimum of 1.
+    user_id:
+        Per-user scope override. See module docstring for semantics.
     """
     try:
         limit = max(1, int(limit) if limit else 50)
         from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
         conn = get_connection()
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
         rows = conn.execute(
-            """
+            f"""
             SELECT call_id, created_at, source, tab_name, model,
                    tokens_in, tokens_out, cached_tokens, est_cost_usd
             FROM llm_calls
+            WHERE 1=1 {scope_sql}
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (*scope_params, limit),
         ).fetchall()
         return [
             {

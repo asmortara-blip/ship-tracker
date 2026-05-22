@@ -1639,13 +1639,24 @@ def deliver_pending_for_rule(
 #  Channel persistence
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_channel(channel: DeliveryChannel) -> None:
+def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> None:
     """Insert or update a delivery channel in SQLite. ``created_at`` is
     populated server-side if blank so callers can construct
-    ``DeliveryChannel`` without providing it."""
+    ``DeliveryChannel`` without providing it.
+
+    Honours per-user scoping: when ``user_id`` is ``None`` (default),
+    the active Streamlit user's id is resolved via
+    ``state.user_scope.current_user_id`` and stamped onto the row.
+    Outside a session that resolves to ``""`` and the channel joins
+    the legacy global bucket — pre-multi-user behaviour. On an UPSERT
+    (channel_id collision) the user_id column is also updated so a
+    channel migrated from legacy into a user's scope sticks.
+    """
     from datetime import datetime, timezone
     from state.db import get_connection
+    from state.user_scope import current_user_id
 
+    uid = current_user_id() if user_id is None else user_id
     created_at = channel.created_at or datetime.now(timezone.utc).isoformat()
     # Normalize digest_mode to one of the two supported values; any
     # other string falls back to "immediate" so a stale/invalid value
@@ -1658,15 +1669,16 @@ def save_channel(channel: DeliveryChannel) -> None:
                 """
                 INSERT INTO delivery_channels
                   (channel_id, name, kind, target, severity_threshold,
-                   enabled, created_at, digest_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   enabled, created_at, digest_mode, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                   name = excluded.name,
                   kind = excluded.kind,
                   target = excluded.target,
                   severity_threshold = excluded.severity_threshold,
                   enabled = excluded.enabled,
-                  digest_mode = excluded.digest_mode
+                  digest_mode = excluded.digest_mode,
+                  user_id = excluded.user_id
                 """,
                 (
                     channel.channel_id,
@@ -1677,6 +1689,7 @@ def save_channel(channel: DeliveryChannel) -> None:
                     1 if channel.enabled else 0,
                     created_at,
                     digest_mode,
+                    uid,
                 ),
             )
         # Mirror created_at back onto the dataclass so the caller can
@@ -1686,15 +1699,27 @@ def save_channel(channel: DeliveryChannel) -> None:
         logger.warning(f"save_channel: SQLite write failed: {exc}")
 
 
-def load_channels() -> list[DeliveryChannel]:
+def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
     """Return every persisted channel, ordered by created_at ASC (oldest
-    first — matches the order they were added)."""
+    first — matches the order they were added).
+
+    Honours per-user scoping with dual-set semantics: when ``user_id``
+    resolves to a non-empty string, rows belonging to that user PLUS
+    legacy ``user_id=''`` rows are returned together. The empty-string
+    case returns every channel (legacy behaviour).
+    """
     from state.db import get_connection
+    from state.user_scope import current_user_id, scope_filter_sql
+
+    uid = current_user_id() if user_id is None else user_id
+    scope_sql, scope_params = scope_filter_sql(uid)
 
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM delivery_channels ORDER BY created_at ASC, channel_id ASC"
+            f"SELECT * FROM delivery_channels WHERE 1=1 {scope_sql} "
+            f"ORDER BY created_at ASC, channel_id ASC",
+            scope_params,
         ).fetchall()
     except Exception as exc:
         logger.warning(f"load_channels: SQLite read failed: {exc}")
@@ -1724,16 +1749,28 @@ def load_channels() -> list[DeliveryChannel]:
     ]
 
 
-def delete_channel(channel_id: str) -> None:
-    """Remove a channel by id. No-op if the id doesn't exist."""
+def delete_channel(channel_id: str, *, user_id: Optional[str] = None) -> None:
+    """Remove a channel by id. No-op if the id doesn't exist.
+
+    Honours per-user scoping: when ``user_id`` resolves to a non-empty
+    string, only channels in the user's scope (own + legacy) can be
+    deleted. A cross-user delete attempt silently no-ops — same
+    visible outcome as deleting an unknown id, so callers cannot
+    enumerate other users' channel ids.
+    """
     from state.db import get_connection
+    from state.user_scope import current_user_id, scope_filter_sql
+
+    uid = current_user_id() if user_id is None else user_id
+    scope_sql, scope_params = scope_filter_sql(uid)
 
     conn = get_connection()
     try:
         with conn:
             conn.execute(
-                "DELETE FROM delivery_channels WHERE channel_id = ?",
-                (channel_id,),
+                f"DELETE FROM delivery_channels WHERE channel_id = ? "
+                f"{scope_sql}",
+                (channel_id, *scope_params),
             )
     except Exception as exc:
         logger.warning(f"delete_channel: SQLite delete failed: {exc}")
