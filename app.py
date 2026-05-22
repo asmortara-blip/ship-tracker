@@ -114,6 +114,26 @@ except Exception as _css_err:
     logger.warning(f"CSS load error: {_css_err}")
 
 
+# ── First-run setup wizard ───────────────────────────────────────────────
+# Fresh install = zero registered users + the user hasn't already
+# completed the wizard this session. Once an admin user exists, this
+# block becomes invisible on the next rerun. Wrapped in try/except so a
+# broken wizard never takes down the whole app — falling through to the
+# regular render is the safe default.
+try:
+    from auth.users import count_users as _setup_count_users
+    from ui import tab_setup as _setup_tab
+    _SETUP_DONE_KEY = "setup_wizard_complete"
+    if (
+        _setup_count_users() == 0
+        and not st.session_state.get(_SETUP_DONE_KEY, False)
+    ):
+        _setup_tab.render()
+        st.stop()
+except Exception as _setup_exc:
+    logger.warning(f"Setup wizard check failed; rendering normally: {_setup_exc}")
+
+
 # ── Data loading (cached) ─────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner="Loading stock data...")
 def get_stock_data(lookback_days: int):

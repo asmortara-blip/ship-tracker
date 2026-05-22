@@ -85,6 +85,7 @@ _TAB_MODULES = [
     "ui.tab_scenarios",
     "ui.tab_scorecard",
     "ui.tab_sector",
+    "ui.tab_setup",
     "ui.tab_supply_chain",
     "ui.tab_supply_linkage",
     "ui.tab_sustainability",
