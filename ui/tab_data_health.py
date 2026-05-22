@@ -13,6 +13,7 @@ Sections
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import time
@@ -791,6 +792,210 @@ def _render_tab_perf() -> None:
         st.error("Tab performance panel unavailable.")
 
 
+def _render_audit_log() -> None:
+    """Audit log panel — recent privileged actions with filter controls.
+
+    Consumes ``auth.audit.query_audit`` directly (no re-aggregation).
+    Wrapped in a single try/except so a DB outage cannot break the rest
+    of the Data Health tab. Imports are lazy/defensive — same pattern
+    as ``_render_tab_perf`` above.
+    """
+    try:
+        from auth.audit import query_audit
+        from auth import users as auth_users
+
+        section_divider("Audit Log")
+        section_header(
+            "Audit Log",
+            "Recent privileged actions across alert / channel / report / "
+            "auth touchpoints. Source: audit_events table via auth.audit.",
+        )
+
+        # ── Filter controls ─────────────────────────────────────────────
+        # Window options map directly to hour deltas so the cutoff math
+        # stays trivial and the labels stay human-readable.
+        window_options: dict[str, int] = {
+            "1h": 1, "6h": 6, "24h": 24, "7d": 168,
+        }
+        # The eleven distinct actions emitted by the audit hooks today.
+        action_options: list[str] = [
+            "all",
+            "ack_alert", "ack_all_alerts",
+            "save_rules", "reset_rules",
+            "save_channel", "delete_channel",
+            "delete_report", "make_public", "revoke_public",
+            "signup", "login",
+        ]
+        limit_options: list[int] = [50, 100, 250, 500]
+
+        c1, c2, c3 = st.columns(3, gap="small")
+        with c1:
+            window_label = st.selectbox(
+                "Window",
+                options=list(window_options.keys()),
+                index=2,  # 24h default
+                key="audit_log_window",
+            )
+        with c2:
+            action_filter = st.selectbox(
+                "Action",
+                options=action_options,
+                index=0,  # all
+                key="audit_log_action",
+            )
+        with c3:
+            limit = st.selectbox(
+                "Limit",
+                options=limit_options,
+                index=1,  # 100 default
+                key="audit_log_limit",
+            )
+
+        window_h = window_options[window_label]
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=window_h)
+        ).isoformat()
+
+        events = query_audit(
+            action=(action_filter if action_filter != "all" else None),
+            since=since,
+            limit=int(limit),
+        )
+
+        if not events:
+            st.info("No audit events in this window yet.")
+            return
+
+        # ── KPI strip ───────────────────────────────────────────────────
+        total = len(events)
+        distinct_users = len({e.user_id for e in events if e.user_id})
+        action_counts: dict[str, int] = {}
+        for e in events:
+            action_counts[e.action] = action_counts.get(e.action, 0) + 1
+        if action_counts:
+            top_action, top_count = max(
+                action_counts.items(), key=lambda kv: kv[1],
+            )
+            top_action_label = top_action
+            top_action_sub = f"{top_count} event{'s' if top_count != 1 else ''}"
+        else:
+            top_action_label = "—"
+            top_action_sub = "no data"
+
+        metric_card_row(
+            [
+                {"label": "TOTAL EVENTS",
+                 "value": f"{total:,}",
+                 "accent": C_ACCENT,
+                 "sublabel": f"Last {window_label} window"},
+                {"label": "DISTINCT USERS",
+                 "value": f"{distinct_users:,}",
+                 "accent": C_TEXT,
+                 "sublabel": "Unique non-empty user_ids"},
+                {"label": "MOST COMMON ACTION",
+                 "value": top_action_label,
+                 "accent": C_TEXT,
+                 "sublabel": top_action_sub},
+            ],
+            columns=3,
+        )
+
+        # ── Relative time helper ────────────────────────────────────────
+        def _relative_time(iso_str: str) -> str:
+            """Format ``iso_str`` as 'Xm ago' / 'Xh ago' for events <24h
+            old, otherwise return the original ISO string. Falls back to
+            the raw string on any parse failure so a malformed row still
+            renders something."""
+            try:
+                ts = datetime.fromisoformat(iso_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                delta = datetime.now(timezone.utc) - ts
+                secs = delta.total_seconds()
+                if secs < 0:
+                    return iso_str
+                if secs < 60:
+                    return f"{int(secs)}s ago"
+                if secs < 3600:
+                    return f"{int(secs // 60)}m ago"
+                if secs < 86400:
+                    return f"{int(secs // 3600)}h ago"
+                return iso_str
+            except Exception:
+                return iso_str
+
+        # ── Events table ────────────────────────────────────────────────
+        # Resolve usernames once per unique user_id so the table render
+        # does not fan out to N lookups when the same user dominates the
+        # window. Each lookup is individually try/except'd — a deleted
+        # account must not break the row render.
+        username_cache: dict[str, str] = {}
+        for e in events:
+            if not e.user_id or e.user_id in username_cache:
+                continue
+            try:
+                u = auth_users.get_user(e.user_id)
+                if u is not None and u.username:
+                    username_cache[e.user_id] = u.username
+                else:
+                    username_cache[e.user_id] = e.user_id[:8]
+            except Exception:
+                username_cache[e.user_id] = e.user_id[:8]
+
+        headers = ["Time", "User", "Action", "Entity", "Detail"]
+        rows: list[list[str]] = []
+        for e in events:
+            time_str = _relative_time(e.created_at)
+            if not e.user_id:
+                user_str = "system"
+                user_col = C_TEXT3
+            else:
+                user_str = username_cache.get(e.user_id, e.user_id[:8])
+                user_col = C_TEXT
+            # Entity is ``entity_type:entity_id`` when both present,
+            # just one of them when partial, em-dash when neither.
+            if e.entity_type and e.entity_id:
+                entity_str = f"{e.entity_type}:{e.entity_id}"
+            elif e.entity_type:
+                entity_str = e.entity_type
+            elif e.entity_id:
+                entity_str = e.entity_id
+            else:
+                entity_str = "—"
+            # Compact JSON serialization, truncated at 80 chars for
+            # table readability. The full payload is in the DB for a
+            # security reviewer who needs it.
+            try:
+                detail_raw = (
+                    json.dumps(e.detail_json, default=str)
+                    if e.detail_json else ""
+                )
+            except Exception:
+                detail_raw = str(e.detail_json) if e.detail_json else ""
+            detail_str = (
+                detail_raw[:77] + "..." if len(detail_raw) > 80 else detail_raw
+            ) or "—"
+            rows.append([
+                _mono(time_str, color=C_TEXT2),
+                _sans(user_str, color=user_col, weight=600),
+                _sans(e.action, color=C_TEXT, weight=600),
+                _mono(entity_str, color=C_TEXT2),
+                _mono(detail_str, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
+
+        st.markdown(
+            live_data_badge(DataSource.live(
+                "audit_events table",
+                notes="auth.audit.query_audit",
+            )),
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.exception(f"Audit log panel render error: {exc}")
+        st.error("Audit log panel unavailable.")
+
+
 def _render_log_viewer() -> None:
     """In-app log viewer — tail the active log file with level/text filters.
 
@@ -1261,6 +1466,13 @@ def render(
             except Exception as exc:
                 logger.error(f"Tab perf render error: {exc}")
                 st.error("Tab performance panel unavailable.")
+
+            # ── Movement 1.68: audit log ───────────────────────────────────────
+            try:
+                _render_audit_log()
+            except Exception as exc:
+                logger.error(f"Audit log render error: {exc}")
+                st.error("Audit log panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")
