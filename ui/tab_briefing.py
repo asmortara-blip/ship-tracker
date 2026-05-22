@@ -476,6 +476,63 @@ def _build_export_snapshot(narration, signals: dict):
     )
 
 
+def _rotate_investor_report_in_session(
+    port_results, route_results, insights, freight_data, macro_data, stock_data,
+) -> None:
+    """Build a fresh InvestorReport and rotate it through session state.
+
+    Pattern: each briefing-tab visit rotates ``current`` → ``previous`` and
+    sets ``current`` to a freshly-built InvestorReport. First visit leaves
+    ``previous`` as None; second visit yields a real diff for the
+    ``_render_report_diff`` helper to consume.
+
+    Wrapped in try/except so failures here cannot break the rest of the tab.
+    """
+    try:
+        from processing.investor_report_engine import build_investor_report
+
+        current_report = build_investor_report(
+            port_results=port_results or [],
+            route_results=route_results or [],
+            insights=insights or [],
+            freight_data=freight_data or {},
+            macro_data=macro_data or {},
+            stock_data=stock_data or {},
+        )
+        prev = st.session_state.get("current_investor_report")
+        if prev is not None:
+            st.session_state["previous_investor_report"] = prev
+        st.session_state["current_investor_report"] = current_report
+    except Exception:
+        logger.exception("tab_briefing: investor-report session rotation failed")
+
+
+def _render_report_diff() -> None:
+    """Render a "What Changed" widget comparing today vs. previous report.
+
+    Pulls two InvestorReport snapshots from session state (rotated on each
+    briefing-tab visit by ``_rotate_investor_report_in_session``). When
+    either is missing, surfaces an empty-state notice and returns.
+    """
+    section_divider("What Changed")
+    try:
+        from processing.report_diff import compute_report_diff, format_diff_html
+
+        current = st.session_state.get("current_investor_report")
+        previous = st.session_state.get("previous_investor_report")
+        if current is None or previous is None:
+            st.info(
+                "No prior report to diff against yet. Generate a fresh "
+                "briefing to populate."
+            )
+            return
+        diff = compute_report_diff(previous, current)
+        html = format_diff_html(diff)
+        st.markdown(html, unsafe_allow_html=True)
+    except Exception:
+        logger.exception("tab_briefing: report-diff render failed")
+
+
 def _render_actions_bar(ctx, narration, signals: dict) -> None:
     """Refresh button + PDF export + usage notes."""
     cols = st.columns([1, 1, 4], gap="small")
@@ -560,6 +617,13 @@ def render(
         )
         narration = generate_daily_narration(ctx)
 
+        # Rotate the InvestorReport snapshot through session state so the
+        # "What Changed" widget below has a prev/curr pair to diff.
+        _rotate_investor_report_in_session(
+            port_results, route_results, insights,
+            freight_data, macro_data, stock_data,
+        )
+
         # ── 1-2. Headline + Body ───────────────────────────────────────────
         _render_headline_card(narration)
         _render_body(narration)
@@ -574,6 +638,9 @@ def render(
 
         # ── 4. Transparency panel ──────────────────────────────────────────
         _render_inputs_panel(signals)
+
+        # ── 4b. What Changed — diff vs. prior briefing in session ──────────
+        _render_report_diff()
 
         section_divider("Actions")
 
