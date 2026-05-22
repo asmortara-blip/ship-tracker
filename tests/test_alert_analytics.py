@@ -50,7 +50,14 @@ def _mk_alert(
     created_at: str | None = None,
     acknowledged: bool = False,
 ) -> ShippingAlert:
-    """Construct a ShippingAlert with a deterministic id + created_at."""
+    """Construct a ShippingAlert with a deterministic id + created_at.
+
+    The ``ticker`` field is stamped with the alert_id so each row gets a
+    unique v14 dedup_key — this helper is shared across analytics tests
+    that need N distinct rows of the same severity, and the v14
+    window-based dedup would otherwise collapse them. Tests that
+    actually care about the ticker value override it after construction.
+    """
     return ShippingAlert(
         alert_id=alert_id,
         created_at=created_at if created_at is not None else _now().isoformat(),
@@ -58,7 +65,7 @@ def _mk_alert(
         severity=severity,
         title=f"title-{alert_id}",
         body=f"body-{alert_id}",
-        ticker="",
+        ticker=alert_id,
         route_id="",
         port_locode="",
         value=0.0,

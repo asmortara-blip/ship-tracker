@@ -446,8 +446,14 @@ def test_acknowledge_all_marks_every_record() -> None:
 
 
 def test_get_unread_count_returns_unacknowledged_total() -> None:
-    save_alerts([_mk_alert(ack=False), _mk_alert(ack=False),
-                _mk_alert(ack=True)])
+    # Each alert needs a DIFFERENT dedup_key — otherwise the v14
+    # window-based dedup collapses them to one row. Distinct tickers
+    # are the cheapest way to keep three rows distinct without
+    # changing what this test is actually checking (the unread count).
+    a1 = _mk_alert(ack=False); a1.ticker = "ZIM"
+    a2 = _mk_alert(ack=False); a2.ticker = "MATX"
+    a3 = _mk_alert(ack=True);  a3.ticker = "SBLK"
+    save_alerts([a1, a2, a3])
     assert get_unread_count() == 2
 
 
@@ -460,10 +466,14 @@ def test_save_alerts_caps_at_max_stored(monkeypatch) -> None:
     """Stored records trim to _MAX_STORED, keeping the newest."""
     monkeypatch.setattr(engv2, "_MAX_STORED", 3)
     base = datetime.now(timezone.utc)
-    alerts = [
-        _mk_alert(created_at=(base + timedelta(seconds=i)).isoformat())
-        for i in range(5)
-    ]
+    alerts = []
+    for i in range(5):
+        a = _mk_alert(created_at=(base + timedelta(seconds=i)).isoformat())
+        # Distinct ticker per alert so the v14 dedup_key does not
+        # collapse them — this test is about the MAX_STORED trim,
+        # which is independent of the dedup layer.
+        a.ticker = f"TKR{i}"
+        alerts.append(a)
     save_alerts(alerts)
     loaded = load_alerts(max_age_days=30)
     assert len(loaded) == 3

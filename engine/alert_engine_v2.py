@@ -12,6 +12,21 @@ from loguru import logger
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Dedup window
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Default time window for collapsing repeat alert fires of the same
+# dedup_key into one row (incrementing fire_count instead of inserting
+# a new row). Sixty minutes is the right ballpark for a flaky data
+# feed that bounces a value across its threshold a few times an hour —
+# long enough to absorb realistic feed jitter, short enough that a
+# genuinely re-triggered alert the next morning shows up as a new row.
+# Tests monkeypatch this via ``monkeypatch.setattr(engv2,
+# "_DEDUP_WINDOW_MINUTES", N)`` to exercise the boundary.
+_DEDUP_WINDOW_MINUTES: int = 60
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Dataclasses
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -67,6 +82,39 @@ def _now_iso() -> str:
 
 def _new_id() -> str:
     return str(uuid.uuid4())
+
+
+def _dedup_key(alert: "ShippingAlert") -> str:
+    """Build a stable string key identifying "the same alert" for dedup
+    purposes.
+
+    The key is the five-tuple (``alert_type``, ``severity``, ``ticker``,
+    ``route_id``, ``port_locode``) joined by ``|`` after escaping any
+    literal ``|`` characters in the source fields. Two alerts share a
+    dedup_key iff they are reporting the same condition on the same
+    entity at the same severity — e.g. two BDI_MOVE alerts at HIGH
+    severity collide; a BDI_MOVE at HIGH and a BDI_MOVE at CRITICAL on
+    the same data do not (severity escalation should surface as a new
+    row, not a fire_count bump on the prior HIGH row).
+
+    The pipe escape exists so a hypothetical port_locode like
+    ``A|B`` cannot smuggle a separator into the key and collide with
+    a different (route_id="A", port_locode="B") shape. The
+    ``backslash → \\\\`` escape goes first so the pipe escape's
+    backslash is not itself re-escaped on the second pass.
+    """
+    def _esc(s: str) -> str:
+        # Order matters: escape backslash FIRST so the pipe-escape's
+        # introduced backslash is not re-escaped on the second pass.
+        return (s or "").replace("\\", "\\\\").replace("|", "\\|")
+
+    return "|".join((
+        _esc(alert.alert_type),
+        _esc(alert.severity),
+        _esc(alert.ticker),
+        _esc(alert.route_id),
+        _esc(alert.port_locode),
+    ))
 
 
 def _make(
@@ -464,6 +512,87 @@ def _row_to_alert(row) -> ShippingAlert:
     )
 
 
+def _row_to_alert_full(row) -> dict:
+    """Map a sqlite3.Row to a dict carrying every column.
+
+    The dataclass projection in ``_row_to_alert`` drops the v14
+    ``fire_count`` / ``last_fired_at`` columns and the v7 ``user_id``
+    column to keep ``ShippingAlert`` back-compatible. Callers that
+    NEED those fields (e.g. UI rendering of "fired 5 times in the
+    last hour") use this helper to get the full row as a plain dict
+    they can index by column name.
+
+    ``fire_count`` falls back to 1 when the column is NULL (pre-v14
+    legacy rows) so the UI never has to special-case the missing
+    value. ``last_fired_at`` falls back to ``created_at`` for the
+    same reason — pre-v14 rows have an empty ``last_fired_at`` but
+    the implicit "fired once at created_at" reading is correct.
+    """
+    out: dict = {
+        "alert_id":     row["alert_id"],
+        "created_at":   row["created_at"],
+        "alert_type":   row["alert_type"],
+        "severity":     row["severity"],
+        "title":        row["title"],
+        "body":         row["body"],
+        "ticker":       row["ticker"] or "",
+        "route_id":     row["route_id"] or "",
+        "port_locode":  row["port_locode"] or "",
+        "value":        float(row["value"]),
+        "threshold":    float(row["threshold"]),
+        "change_pct":   float(row["change_pct"]),
+        "acknowledged": bool(row["acknowledged"]),
+    }
+    # The v14 columns may be absent on a row from a pre-v14 schema if
+    # tests bypass the migration; the try/except keeps the helper safe.
+    try:
+        fc = row["fire_count"]
+        out["fire_count"] = int(fc) if fc is not None else 1
+    except (IndexError, KeyError):
+        out["fire_count"] = 1
+    try:
+        lf = row["last_fired_at"]
+        out["last_fired_at"] = lf if lf else row["created_at"]
+    except (IndexError, KeyError):
+        out["last_fired_at"] = row["created_at"]
+    # The v7 user_id column is also nice-to-have for callers that want
+    # to render "alice's alert" tags. Same safe lookup.
+    try:
+        out["user_id"] = row["user_id"] or ""
+    except (IndexError, KeyError):
+        out["user_id"] = ""
+    return out
+
+
+def get_alert_with_fire_count(alert_id: str) -> Optional[dict]:
+    """Return the full alert row for ``alert_id`` as a dict (including
+    fire_count + last_fired_at), or ``None`` if no row matches.
+
+    Used by the UI to render a "fired N times in the last hour" badge
+    on alerts that have collapsed multiple bounces into a single row.
+    The query is NOT user-scoped — the alert_id is a uuid and the
+    caller is expected to have authorized the lookup via the ack
+    path; this helper is read-only and the ShippingAlert dataclass it
+    returns alongside (via ``_row_to_alert_full``) does not include
+    any field the caller did not already have access to via
+    ``load_alerts``.
+    """
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM alerts WHERE alert_id = ?",
+            (alert_id,),
+        ).fetchone()
+    except Exception as exc:
+        logger.warning(f"get_alert_with_fire_count: SQLite read failed: {exc}")
+        return None
+    if row is None:
+        return None
+    return _row_to_alert_full(row)
+
+
 def _resolve_user_id(user_id: Optional[str]) -> str:
     """Pick the explicit ``user_id`` parameter, or fall back to the
     Streamlit session's ``current_user``.
@@ -480,8 +609,31 @@ def _resolve_user_id(user_id: Optional[str]) -> str:
 
 
 def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -> None:
-    """Persist alerts to the SQLite store; dedupe by alert_id; trim to
-    _MAX_STORED keeping the newest (by created_at).
+    """Persist alerts to the SQLite store with two-layer dedup, then trim
+    to _MAX_STORED keeping the newest (by created_at).
+
+    Two dedup layers operate at different scopes:
+
+      1. ``alert_id``-based INSERT OR IGNORE — blocks EXACT duplicates
+         within (or across) save calls. Two writes of the SAME alert_id
+         collapse to one row. This layer is unchanged from the original
+         implementation.
+      2. ``_dedup_key``-based time-window dedup — blocks NEAR duplicates
+         of the same dedup_key (alert_type + severity + ticker +
+         route_id + port_locode) within the last
+         ``_DEDUP_WINDOW_MINUTES``. When a match is found, the existing
+         row's ``fire_count`` is incremented, its ``last_fired_at`` is
+         set to "now", and the ``value`` + ``change_pct`` are refreshed
+         to the new (most-recent) reading. The new alert_id is
+         discarded — the bounce shares the original row's id.
+
+    Per-user scoping: dedup is per-user. Alice's BDI_MOVE/HIGH/(empty
+    entity tuple) does NOT collide with Bob's BDI_MOVE/HIGH/(same).
+    The exact-match user_id filter on the dedup lookup makes this so —
+    note that the dedup query does NOT use the dual-set
+    ``scope_filter_sql`` semantics; legacy rows belonging to ``""``
+    only collide with new ``""`` writes, never with an authenticated
+    user's writes.
 
     When ``user_id`` is ``None`` (default), the active Streamlit user's
     id is resolved via ``state.user_scope.current_user_id`` — outside
@@ -496,25 +648,89 @@ def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -
 
     uid = _resolve_user_id(user_id)
     conn = get_connection()
-    rows = [
-        (a.alert_id, a.created_at, a.alert_type, a.severity, a.title, a.body,
-         a.ticker, a.route_id, a.port_locode, a.value, a.threshold,
-         a.change_pct, 1 if a.acknowledged else 0, uid)
-        for a in alerts
-    ]
+    now_iso = _now_iso()
+    cutoff_iso = (
+        datetime.now(timezone.utc) - timedelta(minutes=_DEDUP_WINDOW_MINUTES)
+    ).isoformat()
+
     try:
         with conn:
-            # INSERT OR IGNORE — dedupe by alert_id primary key.
-            conn.executemany(
-                """
-                INSERT OR IGNORE INTO alerts
-                  (alert_id, created_at, alert_type, severity, title, body,
-                   ticker, route_id, port_locode, value, threshold, change_pct,
-                   acknowledged, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+            # Process alerts one at a time — the dedup lookup needs to
+            # see the side-effects of earlier alerts in the same call
+            # (so two identical-key alerts in one save_alerts list
+            # collapse correctly: first inserts, second bumps the first's
+            # fire_count). Doing this in Python rather than a giant
+            # UPSERT keeps the logic readable and the bumped row's
+            # value/change_pct refresh trivial.
+            for a in alerts:
+                key = _dedup_key(a)
+                # Window-based dedup query: find the MOST RECENT
+                # existing row with the same dedup_key created within
+                # the window, for the SAME user_id (not the dual-set
+                # scope — alice's row must not collide with bob's).
+                existing = conn.execute(
+                    """
+                    SELECT alert_id, fire_count FROM alerts
+                    WHERE alert_type = ?
+                      AND severity   = ?
+                      AND ticker     = ?
+                      AND route_id   = ?
+                      AND port_locode= ?
+                      AND user_id    = ?
+                      AND created_at >= ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        a.alert_type, a.severity, a.ticker, a.route_id,
+                        a.port_locode, uid, cutoff_iso,
+                    ),
+                ).fetchone()
+
+                if existing is not None:
+                    # Window-dedup hit: bump fire_count + last_fired_at +
+                    # refresh value/change_pct on the existing row. The
+                    # most-recent fire wins on the freshness fields so
+                    # the UI shows the latest reading. Do NOT touch
+                    # created_at — that anchors the window for future
+                    # bumps and surfaces "when did this start" to the UI.
+                    new_count = int(existing["fire_count"] or 1) + 1
+                    conn.execute(
+                        """
+                        UPDATE alerts
+                        SET fire_count    = ?,
+                            last_fired_at = ?,
+                            value         = ?,
+                            change_pct    = ?
+                        WHERE alert_id = ?
+                        """,
+                        (new_count, now_iso, a.value, a.change_pct,
+                         existing["alert_id"]),
+                    )
+                    # _dedup_key matched — skip the INSERT entirely.
+                    # The bounce shares the original row's alert_id.
+                    continue
+
+                # Window-dedup miss: fresh INSERT. INSERT OR IGNORE
+                # preserves the original alert_id-PK dedup behaviour
+                # (a caller passing the SAME alert_id twice in one
+                # save call gets one row — the second is silently
+                # dropped here, not at the dedup_key layer).
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO alerts
+                      (alert_id, created_at, alert_type, severity, title, body,
+                       ticker, route_id, port_locode, value, threshold, change_pct,
+                       acknowledged, user_id, fire_count, last_fired_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    """,
+                    (
+                        a.alert_id, a.created_at, a.alert_type, a.severity,
+                        a.title, a.body, a.ticker, a.route_id, a.port_locode,
+                        a.value, a.threshold, a.change_pct,
+                        1 if a.acknowledged else 0, uid, now_iso,
+                    ),
+                )
             # Trim to _MAX_STORED keeping the newest created_at. SQLite's
             # ROWID order matches insertion order, but we sort by created_at
             # to be robust against backfilled or out-of-order writes.
