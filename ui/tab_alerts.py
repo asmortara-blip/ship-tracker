@@ -1046,6 +1046,155 @@ def _render_acknowledgment_analytics() -> None:
         st.error("Acknowledgment analytics unavailable.")
 
 
+def _render_effectiveness_backtest() -> None:
+    """Render Alert Effectiveness panel — backtest of persisted alerts vs realized moves.
+
+    Reads the AlertBacktestReport from ``engine.alert_backtest.backtest_alerts`` and
+    surfaces a 4-KPI strip + per-type / per-severity breakdowns. The realized-move
+    scoring needs the underlying time-series dicts; we pull those from session_state
+    (populated by the cached data loaders in app.py), falling back to empty dicts —
+    the backtest engine tolerates that and simply reports nothing-to-score.
+    """
+    try:
+        from engine.alert_backtest import backtest_alerts
+
+        section_divider("Alert Effectiveness")
+
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            window = st.selectbox(
+                "Realized window",
+                options=[7, 14, 30],
+                index=0,
+                format_func=lambda d: f"{d} days",
+                key="backtest_window_days",
+                help="How many days after each alert to measure the realized move.",
+            )
+        with c2:
+            lookback = st.selectbox(
+                "Lookback",
+                options=[30, 60, 90],
+                index=2,
+                format_func=lambda d: f"{d} days",
+                key="backtest_lookback_days",
+                help="How far back to pull alerts whose realized window is fully in the past.",
+            )
+
+        stock_data   = st.session_state.get("stock_data", {}) or {}
+        freight_data = st.session_state.get("freight_data", {}) or {}
+        macro_data   = st.session_state.get("macro_data", {}) or {}
+
+        report = backtest_alerts(
+            stock_data, freight_data, macro_data,
+            window_days=int(window),
+            lookback_days=int(lookback),
+        )
+
+        if report.n_alerts_evaluated == 0:
+            st.info(
+                "No alerts to backtest yet — alerts need at least "
+                f"{int(window)} days of post-fire data to score."
+            )
+            return
+
+        # ── KPI strip ──────────────────────────────────────────────────────
+        hit_pct = report.hit_rate * 100.0
+        hit_accent = (
+            C_HIGH if report.hit_rate >= 0.55
+            else (C_MOD if report.hit_rate >= 0.45 else C_LOW)
+        )
+        hits = int(round(report.hit_rate * report.n_alerts_evaluated))
+
+        metric_card_row([
+            {
+                "label":    "Alerts Evaluated",
+                "value":    str(report.n_alerts_evaluated),
+                "accent":   C_ACCENT,
+                "sublabel": f"window {int(window)}d · lookback {int(lookback)}d",
+            },
+            {
+                "label":    "Hit Rate",
+                "value":    f"{hit_pct:.1f}%",
+                "accent":   hit_accent,
+                "sublabel": f"{hits} of {report.n_alerts_evaluated}",
+            },
+            {
+                "label":    "Median Magnitude Ratio",
+                "value":    f"{report.median_magnitude_ratio:.2f}",
+                "accent":   C_MOD,
+                "sublabel": "1.0 = exactly as predicted, >1 = overshoot",
+            },
+            {
+                "label":    "Skipped",
+                "value":    str(report.n_skipped),
+                "accent":   C_TEXT3,
+                "sublabel": "no realized data",
+            },
+        ], columns=4)
+
+        # ── By-type / By-severity breakdown tables ─────────────────────────
+        bc1, bc2 = st.columns(2, gap="medium")
+        with bc1:
+            st.html('<div class="sub-section-header">By Alert Type</div>')
+            if report.by_alert_type:
+                headers = ["Type", "Count", "Hits", "Hit Rate"]
+                rows = []
+                for atype in sorted(report.by_alert_type.keys()):
+                    stats = report.by_alert_type[atype]
+                    count = int(stats.get("count", 0))
+                    hit_count = int(stats.get("hit_count", 0))
+                    rate_pct = stats.get("hit_rate", 0.0) * 100.0
+                    rate_color = (
+                        C_HIGH if rate_pct >= 55
+                        else (C_MOD if rate_pct >= 45 else C_LOW)
+                    )
+                    rows.append([
+                        _sans(atype, color=C_TEXT, weight=700),
+                        _mono(str(count), color=C_TEXT, weight=600),
+                        _mono(str(hit_count), color=C_TEXT2, weight=600),
+                        _mono(f"{rate_pct:.1f}%", color=rate_color, weight=700),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.caption("No type breakdown in this window.")
+
+        with bc2:
+            st.html('<div class="sub-section-header">By Severity</div>')
+            if report.by_severity:
+                headers = ["Severity", "Count", "Hits", "Hit Rate"]
+                rows = []
+                for sev_key in sorted(
+                    report.by_severity.keys(),
+                    key=lambda s: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(s, 99),
+                ):
+                    stats = report.by_severity[sev_key]
+                    count = int(stats.get("count", 0))
+                    hit_count = int(stats.get("hit_count", 0))
+                    rate_pct = stats.get("hit_rate", 0.0) * 100.0
+                    rate_color = (
+                        C_HIGH if rate_pct >= 55
+                        else (C_MOD if rate_pct >= 45 else C_LOW)
+                    )
+                    rows.append([
+                        _sev_badge(sev_key.title()),
+                        _mono(str(count), color=C_TEXT, weight=600),
+                        _mono(str(hit_count), color=C_TEXT2, weight=600),
+                        _mono(f"{rate_pct:.1f}%", color=rate_color, weight=700),
+                    ])
+                wsj_market_table(headers, rows)
+            else:
+                st.caption("No severity breakdown in this window.")
+
+        # ── Avg predicted vs avg realized footer ───────────────────────────
+        st.caption(
+            f"Avg predicted {report.avg_predicted_pct:+.1f}% · "
+            f"Avg realized {report.avg_realized_pct:+.1f}%"
+        )
+    except Exception:
+        logger.exception("Alert effectiveness backtest render failed")
+        st.error("Alert effectiveness panel unavailable.")
+
+
 def _render_delivery_channels() -> None:
     """Manage outbound delivery channels and trigger pending deliveries.
 
@@ -1387,6 +1536,7 @@ def render(
         _render_history()
 
         _render_acknowledgment_analytics()
+        _render_effectiveness_backtest()
 
         section_divider("Configuration")
         _render_notifications()
