@@ -1303,9 +1303,9 @@ elif active_section == "supply_chain":
 
 # ── 8. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
-    t0, t1, t2, t3, t4, t5 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
         "Risk Matrix", "Risk Lab", "Weather", "Compliance",
-        "Market Cycle", "Fundamentals",
+        "Market Cycle", "Fundamentals", "Operator",
     ])
     with t0:
         try:
@@ -1347,6 +1347,15 @@ elif active_section == "risk":
             _r(stock_data, freight_data, macro_data)
         except Exception as e:
             st.error(f"Fundamentals error: {e}")
+    with t6:
+        try:
+            from ui import tab_operator
+            tab_operator.render(
+                stock_data=stock_data, freight_data=freight_data, macro_data=macro_data,
+                port_results=port_results, route_results=route_results, insights=insights,
+            )
+        except Exception as e:
+            st.error(f"Operator error: {e}")
 
 # ── 9. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":

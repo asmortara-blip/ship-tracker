@@ -70,6 +70,7 @@ _TAB_MODULES = [
     "ui.tab_network",
     "ui.tab_news",
     "ui.tab_nowcast",
+    "ui.tab_operator",
     "ui.tab_options",
     "ui.tab_overview",
     "ui.tab_port_demand",
