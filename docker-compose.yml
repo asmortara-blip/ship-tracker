@@ -94,3 +94,13 @@ services:
       - ./cache:/app/cache
       - ./logs:/app/logs
     command: ["python3", "-m", "worker.webhook_listener", "--host", "0.0.0.0", "--port", "8502"]
+    # Liveness via the GET /health endpoint (no HMAC required — see
+    # docs/DEPLOYMENT.md). wget over busybox is used instead of curl
+    # because the python:3.11-slim base image doesn't ship curl, but
+    # busybox wget IS available. --spider does a HEAD-style check
+    # against a GET — exits 0 on 200, non-zero on 5xx (e.g. 503/down).
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8502/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

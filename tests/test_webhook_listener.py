@@ -365,8 +365,17 @@ def test_pagerduty_wrong_hmac_returns_401(server, monkeypatch) -> None:
 # ─── Method + path routing ────────────────────────────────────────────────
 
 
-def test_get_returns_405(server) -> None:
+def test_get_unknown_path_returns_404(server) -> None:
+    """GET /<anything-but-/health> → 404 (not 405). The 405 surface is
+    reserved for PUT/DELETE/PATCH/HEAD; GET is partially supported
+    (/health) so unknown GET paths are just unknown resources."""
     r = requests.get(f"{server}/ack/anything", timeout=5)
+    assert r.status_code == 404
+
+
+def test_put_returns_405(server) -> None:
+    """PUT remains a blanket 405 — we don't expose any PUT routes."""
+    r = requests.put(f"{server}/anything", timeout=5)
     assert r.status_code == 405
 
 
@@ -379,6 +388,212 @@ def test_unknown_path_returns_404(server) -> None:
         headers={"X-Signature-SHA256": sig},
         timeout=5,
     )
+    assert r.status_code == 404
+
+
+# ─── GET /health ──────────────────────────────────────────────────────────
+
+# These tests monkeypatch the *imported* symbol locations the handler
+# reaches into at call time. Because ``_handle_health`` does an
+# ``from auth.users import count_users`` INSIDE the method body (lazy
+# import keeps the listener startup fast and avoids importing the
+# whole DB stack on a 401 path), the patch target is ``auth.users``
+# module attribute — that's where Python resolves the name. Same for
+# the other telemetry layers.
+
+
+_HEALTH_KEYS = {
+    "status",
+    "schema_version",
+    "users",
+    "now_utc",
+    "up_seconds",
+    "unacked_critical_count",
+    "recent_render_success_rate",
+    "current_outages",
+}
+
+
+def test_health_returns_200_with_expected_keys(server) -> None:
+    """Happy path — fresh DB, no outages, no critical alerts. Expect
+    200 + the full key set + status='ok'."""
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    payload = r.json()
+    # Key set MUST match exactly — extra keys are fine, missing keys
+    # break monitoring dashboards that parse this shape.
+    assert _HEALTH_KEYS.issubset(set(payload.keys()))
+    # On a freshly isolated tmp DB count_users returns 0 (empty users
+    # table). That's healthy, NOT 'down'.
+    assert payload["status"] in ("ok", "degraded")
+    assert isinstance(payload["users"], int)
+    assert isinstance(payload["schema_version"], int)
+    assert isinstance(payload["up_seconds"], (int, float))
+    assert payload["up_seconds"] >= 0
+
+
+def test_health_ok_path_when_everything_healthy(server, monkeypatch) -> None:
+    """All telemetry layers green → status='ok'."""
+    from auth import users as users_mod
+    from engine import perf_telemetry as perf_mod
+    from engine import source_health as sh_mod
+    from engine import alert_engine_v2 as alert_mod
+
+    monkeypatch.setattr(users_mod, "count_users", lambda: 3)
+    monkeypatch.setattr(perf_mod, "get_perf_summary",
+                        lambda window_hours=24: {
+                            "window_hours": window_hours,
+                            "total_renders": 50,
+                            "success_rate": 0.99,
+                        })
+    monkeypatch.setattr(sh_mod, "get_health_summary",
+                        lambda window_hours=24: {
+                            "window_hours": window_hours,
+                            "total_pings": 24,
+                            "current_outages": [],
+                        })
+    monkeypatch.setattr(alert_mod, "load_alerts",
+                        lambda max_age_days=30, user_id=None: [])
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["status"] == "ok"
+    assert payload["users"] == 3
+    assert payload["unacked_critical_count"] == 0
+    assert payload["recent_render_success_rate"] == 0.99
+    assert payload["current_outages"] == []
+
+
+def test_health_returns_503_when_count_users_raises(server, monkeypatch) -> None:
+    """count_users → exception → 503 + status='down' + error string."""
+    from auth import users as users_mod
+
+    def boom() -> int:
+        raise RuntimeError("DB connection refused")
+
+    monkeypatch.setattr(users_mod, "count_users", boom)
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 503
+    payload = r.json()
+    assert payload["status"] == "down"
+    assert "error" in payload
+    assert "DB connection refused" in payload["error"]
+
+
+def test_health_returns_503_when_count_users_returns_minus_one(
+    server, monkeypatch,
+) -> None:
+    """A future count_users variant might return -1 as a DB-down
+    sentinel (the spec asks for this explicitly). Health must treat
+    that the same as a raised exception."""
+    from auth import users as users_mod
+    monkeypatch.setattr(users_mod, "count_users", lambda: -1)
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 503
+    payload = r.json()
+    assert payload["status"] == "down"
+
+
+def test_health_degraded_when_perf_below_threshold(server, monkeypatch) -> None:
+    """recent_render_success_rate < 0.95 → degraded."""
+    from engine import perf_telemetry as perf_mod
+    from engine import source_health as sh_mod
+    from engine import alert_engine_v2 as alert_mod
+
+    monkeypatch.setattr(perf_mod, "get_perf_summary",
+                        lambda window_hours=24: {
+                            "window_hours": window_hours,
+                            "total_renders": 50,
+                            "success_rate": 0.80,   # below 0.95 threshold
+                        })
+    monkeypatch.setattr(sh_mod, "get_health_summary",
+                        lambda window_hours=24: {"current_outages": []})
+    monkeypatch.setattr(alert_mod, "load_alerts",
+                        lambda max_age_days=30, user_id=None: [])
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["status"] == "degraded"
+    assert payload["recent_render_success_rate"] == 0.80
+
+
+def test_health_degraded_when_current_outages_non_empty(server, monkeypatch) -> None:
+    """current_outages with any source → degraded."""
+    from engine import perf_telemetry as perf_mod
+    from engine import source_health as sh_mod
+    from engine import alert_engine_v2 as alert_mod
+
+    monkeypatch.setattr(perf_mod, "get_perf_summary",
+                        lambda window_hours=24: {
+                            "window_hours": window_hours,
+                            "total_renders": 50,
+                            "success_rate": 0.99,
+                        })
+    monkeypatch.setattr(sh_mod, "get_health_summary",
+                        lambda window_hours=24: {
+                            "current_outages": ["worldbank", "fred"],
+                        })
+    monkeypatch.setattr(alert_mod, "load_alerts",
+                        lambda max_age_days=30, user_id=None: [])
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["status"] == "degraded"
+    assert payload["current_outages"] == ["worldbank", "fred"]
+
+
+def test_health_degraded_when_unacked_critical_present(server, monkeypatch) -> None:
+    """Unacked CRITICAL alert in the last 30d → degraded."""
+    from engine import alert_engine_v2 as alert_mod
+    from engine.alert_engine_v2 import ShippingAlert
+
+    crit_alert = ShippingAlert(
+        alert_id="crit-1",
+        created_at="2026-05-22T00:00:00+00:00",
+        alert_type="BDI_MOVE",
+        severity="CRITICAL",
+        title="BDI plummeted",
+        body="BDI fell 12% in a day.",
+        ticker="",
+        route_id="",
+        port_locode="",
+        value=1234.0,
+        threshold=5.0,
+        change_pct=-12.0,
+        acknowledged=False,    # NOT acked → triggers degraded
+    )
+    monkeypatch.setattr(alert_mod, "load_alerts",
+                        lambda max_age_days=30, user_id=None: [crit_alert])
+
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["status"] == "degraded"
+    assert payload["unacked_critical_count"] == 1
+
+
+def test_health_does_not_require_hmac(server) -> None:
+    """No X-Signature-SHA256 header at all — must still return 200.
+    /health is a public liveness probe; load balancers don't sign."""
+    r = requests.get(f"{server}/health", timeout=5)
+    assert r.status_code == 200
+    # And conspicuously: no 401 anywhere in the response.
+    payload = r.json()
+    assert payload.get("status") in ("ok", "degraded")
+
+
+def test_health_other_get_path_returns_404(server) -> None:
+    """The split do_GET routes ONLY /health to a handler. Any other
+    GET path returns 404 — NOT 405 (the old behaviour), because GET
+    is partially supported."""
+    r = requests.get(f"{server}/healthz", timeout=5)
+    assert r.status_code == 404
+    r = requests.get(f"{server}/status", timeout=5)
     assert r.status_code == 404
 
 

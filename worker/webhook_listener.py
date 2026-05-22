@@ -43,11 +43,20 @@ import hmac
 import json
 import os
 import sys
+import time
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 
 from loguru import logger
+
+
+# Wall-clock anchor captured at module load. ``GET /health`` uses this
+# to expose process uptime. Module-level rather than per-handler because
+# every handler instance is created per-request — only a module global
+# survives across requests.
+_START_TIME: float = time.time()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,8 +135,10 @@ class _DispatchHandler(BaseHTTPRequestHandler):
       POST /ack/{alert_id}        → AckWebhookHandler logic
       POST /ack-all               → AckWebhookHandler logic
       POST /webhooks/pagerduty    → PagerDutyEventHandler logic
-      anything else               → 404
-      GET/PUT/DELETE/…            → 405
+      GET  /health                → _handle_health (public, no HMAC)
+      POST other                  → 404
+      GET  other                  → 404
+      PUT/DELETE/PATCH/HEAD       → 405
 
     We use ONE BaseHTTPRequestHandler subclass instead of multiple
     HTTPServers on different ports because that lets the whole worker
@@ -174,14 +185,29 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-    # Block every other method with 405. We don't expose any GET / PUT
-    # / DELETE / PATCH surface — even a HEAD probe should fail loudly so
+    # Block every other method with 405. GET is split out below — the
+    # /health liveness probe is the only allowed GET path, every other
+    # GET is a 404. PUT / DELETE / PATCH / HEAD remain blanket 405s so
     # operators don't think they can scrape state from this listener.
     def _method_not_allowed(self) -> None:
         _send_json(self, HTTPStatus.METHOD_NOT_ALLOWED, {"error": "method not allowed"})
 
-    def do_GET(self) -> None:  # noqa: N802
-        self._method_not_allowed()
+    def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+        try:
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if path == "/health":
+                self._handle_health()
+                return
+            # Any other GET path — 404, NOT 405. /health is the only
+            # GET surface; everything else is just an unknown resource.
+            _send_json(self, HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+        except Exception as exc:
+            logger.exception(f"webhook GET handler crashed: {exc}")
+            try:
+                _send_json(self, HTTPStatus.INTERNAL_SERVER_ERROR,
+                           {"error": "internal server error"})
+            except Exception:
+                pass
 
     def do_PUT(self) -> None:  # noqa: N802
         self._method_not_allowed()
@@ -194,6 +220,163 @@ class _DispatchHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._method_not_allowed()
+
+    # ── Endpoint: GET /health ──────────────────────────────────────
+
+    def _handle_health(self) -> None:
+        """Liveness + light system-health probe.
+
+        Public on purpose — no HMAC. This is the endpoint Docker /
+        load balancers / k8s readiness probes hit, and forcing a
+        signed request on those callers would mean every operator
+        ships a signing helper alongside the probe. The response
+        carries no secrets; it's the same shape an unauthenticated
+        observer could derive from public outputs anyway.
+
+        Response keys:
+            status                       'ok' | 'degraded' | 'down'
+            schema_version               state.db.SCHEMA_VERSION
+            users                        auth.users.count_users()
+            now_utc                      ISO timestamp (UTC)
+            up_seconds                   process uptime
+            unacked_critical_count       count of unacked CRITICAL alerts (30d)
+            recent_render_success_rate   from get_perf_summary(1h) or None
+            current_outages              from get_health_summary() or []
+
+        Status semantics:
+            down      — count_users raised OR returned -1 (DB unreadable)
+            degraded  — unacked_critical_count > 0
+                        OR recent_render_success_rate < 0.95
+                        OR current_outages non-empty
+            ok        — none of the above
+
+        HTTP status:
+            200 — status in {'ok', 'degraded'} (load balancers can keep
+                  the container in rotation; degraded is informational)
+            503 — status == 'down' (LB should pull this instance out)
+
+        Each underlying telemetry call sits in its own try/except so a
+        single failing layer (e.g. perf telemetry tables not yet
+        created) doesn't cascade into a 503. Only ``count_users``
+        failure flips status to 'down', because count_users IS our
+        proxy for "can we open the DB at all".
+        """
+        # The handler body is itself wrapped so a fully unexpected
+        # exception (e.g. JSON-encode failure) still produces a 503
+        # rather than a wire-level 500. The outer logger.exception
+        # path is the last-resort fallback shared with do_POST.
+        try:
+            # ── DB liveness probe ────────────────────────────────
+            # count_users itself swallows exceptions and returns 0 on
+            # error, but in case a future refactor changes that contract
+            # we still wrap it here. We also flag -1 as a DB-down
+            # sentinel because the spec asks for it explicitly: if a
+            # future variant uses -1 to distinguish "DB error" from
+            # "no rows", health should treat that as down.
+            db_down: bool = False
+            db_error: str = ""
+            users_n: int = 0
+            try:
+                from auth.users import count_users
+                users_n = count_users()
+                if users_n is None or users_n == -1:
+                    db_down = True
+                    db_error = "count_users returned -1"
+            except Exception as exc:  # noqa: BLE001
+                db_down = True
+                db_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(f"webhook /health: count_users failed: {exc}")
+
+            if db_down:
+                _send_json(
+                    self,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"status": "down", "error": db_error},
+                )
+                return
+
+            # ── Schema version ───────────────────────────────────
+            schema_version: int = 0
+            try:
+                from state.db import SCHEMA_VERSION
+                schema_version = int(SCHEMA_VERSION)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"webhook /health: SCHEMA_VERSION read failed: {exc}")
+
+            # ── Unacked CRITICAL count (last 30d) ─────────────────
+            # Per spec — surfaces "we still owe someone an ack" as a
+            # degraded signal. load_alerts already defaults to 30d.
+            unacked_critical: int = 0
+            try:
+                from engine.alert_engine_v2 import load_alerts
+                alerts = load_alerts(max_age_days=30)
+                unacked_critical = sum(
+                    1 for a in alerts
+                    if getattr(a, "severity", "") == "CRITICAL"
+                    and not getattr(a, "acknowledged", False)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"webhook /health: load_alerts failed: {exc}")
+
+            # ── Recent render success rate (last hour) ───────────
+            # None when the telemetry layer is empty / unconfigured —
+            # we explicitly distinguish "no data" from 0.0 so health
+            # doesn't degrade on a fresh deploy that hasn't rendered
+            # anything yet.
+            recent_success_rate: Optional[float] = None
+            try:
+                from engine.perf_telemetry import get_perf_summary
+                perf = get_perf_summary(window_hours=1) or {}
+                if perf.get("total_renders", 0) > 0:
+                    raw = perf.get("success_rate")
+                    if raw is not None:
+                        recent_success_rate = float(raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"webhook /health: get_perf_summary failed: {exc}")
+
+            # ── Current source-health outages ────────────────────
+            current_outages: list = []
+            try:
+                from engine.source_health import get_health_summary
+                health = get_health_summary() or {}
+                outages = health.get("current_outages", [])
+                if isinstance(outages, list):
+                    current_outages = list(outages)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"webhook /health: get_health_summary failed: {exc}")
+
+            # ── Aggregate to a single status verdict ─────────────
+            degraded = (
+                unacked_critical > 0
+                or (recent_success_rate is not None and recent_success_rate < 0.95)
+                or bool(current_outages)
+            )
+            status = "degraded" if degraded else "ok"
+
+            payload = {
+                "status": status,
+                "schema_version": schema_version,
+                "users": users_n,
+                "now_utc": datetime.now(timezone.utc).isoformat(),
+                "up_seconds": round(time.time() - _START_TIME, 3),
+                "unacked_critical_count": unacked_critical,
+                "recent_render_success_rate": recent_success_rate,
+                "current_outages": current_outages,
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            # Anything truly unexpected — JSON encode error, etc. We
+            # surface it as 503/down so probes pull the container OUT
+            # of rotation rather than treat it as healthy.
+            logger.exception(f"webhook /health crashed: {exc}")
+            try:
+                _send_json(
+                    self,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+                )
+            except Exception:
+                pass
 
     # ── Endpoint: POST /ack/{alert_id} ─────────────────────────────
 
