@@ -487,3 +487,96 @@ def _migrate_to_v12(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v12 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v12 → v13 ─────────────────────────────────────────────────────
+
+def _migrate_to_v13(conn: sqlite3.Connection) -> None:
+    """Add the three quiet-hours columns to ``delivery_channels``.
+
+    Columns added (all NOT NULL, all with sensible legacy defaults so
+    pre-v13 rows preserve their old "no quiet hours" behaviour):
+
+      * ``quiet_start``               — ``TEXT NOT NULL DEFAULT ''``.
+        HH:MM UTC string; empty disables the quiet window.
+      * ``quiet_end``                 — ``TEXT NOT NULL DEFAULT ''``.
+        HH:MM UTC string; empty disables the quiet window.
+      * ``quiet_override_critical``   — ``INTEGER NOT NULL DEFAULT 1``.
+        When 1, a CRITICAL alert bypasses the quiet window; when 0, even
+        CRITICAL alerts are suppressed during the window.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v6``: SQLite does NOT support
+    ``IF NOT EXISTS`` on ALTER TABLE, so each statement is wrapped in
+    try/except and "duplicate column name" errors are swallowed. This
+    makes the helper safe to re-run on every database open. Each column
+    is added in its own try/except so partial completion of a prior run
+    is also tolerated.
+    """
+    for col_name, col_def in (
+        ("quiet_start", "TEXT NOT NULL DEFAULT ''"),
+        ("quiet_end", "TEXT NOT NULL DEFAULT ''"),
+        ("quiet_override_critical", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE delivery_channels ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v13 ALTER TABLE "
+                f"({col_name}) failed: {exc}"
+            )
+
+
+# ─── Schema v13 → v14 ─────────────────────────────────────────────────────
+
+def _migrate_to_v14(conn: sqlite3.Connection) -> None:
+    """Add the ``fire_count`` and ``last_fired_at`` columns to ``alerts``.
+
+    These two columns power time-window alert deduplication in
+    ``engine.alert_engine_v2.save_alerts``. When the same dedup_key
+    (``alert_type`` + ``severity`` + ``ticker`` + ``route_id`` +
+    ``port_locode``) fires multiple times within the configured
+    ``_DEDUP_WINDOW_MINUTES`` (default 60), the engine UPDATEs the
+    existing row's ``fire_count`` and ``last_fired_at`` instead of
+    inserting a new row — a flaky data feed that bounces a value
+    across its threshold N times in an hour leaves one row, not N.
+
+    Columns added (both NOT NULL with sensible legacy defaults so
+    pre-v14 rows preserve their old meaning):
+
+      * ``fire_count``    — ``INTEGER NOT NULL DEFAULT 1``. Pre-v14
+        rows pick up 1, which matches the implicit pre-feature meaning
+        ("this alert fired once").
+      * ``last_fired_at`` — ``TEXT NOT NULL DEFAULT ''``. ISO-8601 UTC.
+        Pre-v14 rows pick up the empty string; callers that surface
+        the value in the UI should fall back to ``created_at`` when
+        ``last_fired_at`` is empty.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13``:
+    SQLite does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so each
+    statement is wrapped in try/except and "duplicate column name"
+    errors are swallowed. Each column is added in its own try/except
+    so partial completion of a prior run is also tolerated.
+    """
+    for col_name, col_def in (
+        ("fire_count", "INTEGER NOT NULL DEFAULT 1"),
+        ("last_fired_at", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE alerts ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v14 ALTER TABLE "
+                f"({col_name}) failed: {exc}"
+            )

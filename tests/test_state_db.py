@@ -814,3 +814,171 @@ def test_v12_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> No
         "WHERE type='table' AND name='data_source_health'"
     ).fetchall()
     assert len(rows) == 1
+
+
+# ─── Schema v13: delivery_channels quiet-hours columns ────────────────────
+
+def test_v13_migration_adds_quiet_hours_columns() -> None:
+    """v13 ALTER TABLE adds three columns to ``delivery_channels``:
+
+      * ``quiet_start`` TEXT NOT NULL DEFAULT ''
+      * ``quiet_end``   TEXT NOT NULL DEFAULT ''
+      * ``quiet_override_critical`` INTEGER NOT NULL DEFAULT 1
+
+    Verifies the columns exist with the documented types + defaults,
+    and that a fresh INSERT picks up the defaults.
+    """
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(delivery_channels)"
+        ).fetchall()
+    }
+    assert "quiet_start" in cols
+    assert "quiet_end" in cols
+    assert "quiet_override_critical" in cols
+
+    assert cols["quiet_start"]["type"].upper() == "TEXT"
+    assert cols["quiet_end"]["type"].upper() == "TEXT"
+    assert cols["quiet_override_critical"]["type"].upper() == "INTEGER"
+
+    # NOT NULL is enforced (notnull == 1 in PRAGMA output).
+    assert cols["quiet_start"]["notnull"] == 1
+    assert cols["quiet_end"]["notnull"] == 1
+    assert cols["quiet_override_critical"]["notnull"] == 1
+
+    # New rows must default the two TEXT columns to '' and the BOOL
+    # column to 1 (CRITICAL bypasses the window by default).
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO delivery_channels
+              (channel_id, name, kind, target, severity_threshold,
+               enabled, created_at)
+            VALUES ('v13c', 'Q', 'slack',
+                    'https://hooks.slack.com/services/x',
+                    'LOW', 1, '2026-05-21T00:00:00+00:00')
+            """
+        )
+    row = conn.execute(
+        "SELECT quiet_start, quiet_end, quiet_override_critical "
+        "FROM delivery_channels WHERE channel_id = 'v13c'"
+    ).fetchone()
+    assert row["quiet_start"] == ""
+    assert row["quiet_end"] == ""
+    assert row["quiet_override_critical"] == 1
+
+
+def test_v13_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v13+ database must not raise even though the
+    ALTER TABLE in _migrate_to_v13 would otherwise complain about
+    duplicate columns on the second invocation. Mirrors the v5 / v7
+    idempotency tests."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v13.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(delivery_channels)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("quiet_start") == 1
+    assert col_names.count("quiet_end") == 1
+    assert col_names.count("quiet_override_critical") == 1
+
+
+# ─── Schema v14: alerts fire_count + last_fired_at ────────────────────────
+
+def test_v14_migration_adds_fire_count_and_last_fired_at_columns() -> None:
+    """v14 ALTER TABLE adds two columns to ``alerts`` for time-window
+    deduplication:
+
+      * ``fire_count``    INTEGER NOT NULL DEFAULT 1
+      * ``last_fired_at`` TEXT    NOT NULL DEFAULT ''
+
+    Verifies the columns exist with the documented types + defaults
+    and that a fresh INSERT picks up the defaults (matching the
+    pre-v14 implicit "fired once at created_at" reading)."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(alerts)"
+        ).fetchall()
+    }
+    assert "fire_count" in cols
+    assert "last_fired_at" in cols
+
+    assert cols["fire_count"]["type"].upper() == "INTEGER"
+    assert cols["last_fired_at"]["type"].upper() == "TEXT"
+
+    # NOT NULL is enforced (notnull == 1 in PRAGMA output).
+    assert cols["fire_count"]["notnull"] == 1
+    assert cols["last_fired_at"]["notnull"] == 1
+
+    # New rows must default fire_count to 1 and last_fired_at to ''.
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO alerts
+              (alert_id, created_at, alert_type, severity, title, body)
+            VALUES ('v14c', '2026-05-22T00:00:00+00:00', 'MACRO', 'LOW',
+                    't', 'b')
+            """
+        )
+    row = conn.execute(
+        "SELECT fire_count, last_fired_at FROM alerts WHERE alert_id = 'v14c'"
+    ).fetchone()
+    assert row["fire_count"] == 1
+    assert row["last_fired_at"] == ""
+
+
+def test_v14_schema_version_stamped() -> None:
+    """After init, the stored schema_version must be at least 14.
+
+    Guards against an accidental SCHEMA_VERSION rollback — the alert
+    dedup layer relies on the fire_count + last_fired_at columns being
+    present, so v14+ must always ship.
+    """
+    from state.db import SCHEMA_VERSION, get_connection
+
+    assert SCHEMA_VERSION >= 14
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) >= 14
+
+
+def test_v14_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v14+ database must not raise even though the
+    ALTER TABLE in _migrate_to_v14 would otherwise complain about
+    duplicate columns on the second invocation. Mirrors the v5 / v7 /
+    v13 idempotency tests."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v14.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(alerts)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("fire_count") == 1
+    assert col_names.count("last_fired_at") == 1

@@ -39,6 +39,14 @@ Design notes
   into a single ``deliver_digest`` call. The cron/worker that calls
   ``deliver_pending`` decides the cadence — this module only chooses
   between per-alert and batched dispatch.
+* ``quiet_start`` / ``quiet_end`` / ``quiet_override_critical`` (schema
+  v13) let an operator silence a channel during a daily HH:MM window —
+  e.g. "no deliveries between 22:00 and 07:00 UTC". When the time-of-
+  day check at delivery time falls inside the window, the alert is
+  suppressed with a ``"channel in quiet hours"`` failure result; the
+  alert remains in SQLite, this is suppress-only with no queue-and-
+  drain. ``quiet_override_critical=True`` (the default) lets CRITICAL
+  alerts page through anyway.
 """
 from __future__ import annotations
 
@@ -76,6 +84,17 @@ class DeliveryChannel:
     # caller's cron / worker decides when ``deliver_pending`` runs, this
     # field only changes how it dispatches the alerts it finds.
     digest_mode: str = "immediate"  # "immediate" | "daily"
+    # Quiet-hours window (v13). When ``quiet_start`` and ``quiet_end``
+    # are both non-empty HH:MM UTC strings, ``deliver_alert`` suppresses
+    # deliveries whose wall-clock time-of-day falls inside the window.
+    # Empty strings disable the check (the legacy default — "no quiet
+    # hours configured"). ``quiet_override_critical`` lets CRITICAL
+    # alerts page through anyway; flip it to False to mute even those.
+    # The check is purely time-of-day — no per-day calendar; that's a
+    # follow-up.
+    quiet_start: str = ""                 # "HH:MM" UTC, "" = disabled
+    quiet_end: str = ""                   # "HH:MM" UTC, "" = disabled
+    quiet_override_critical: bool = True  # CRITICAL bypasses the window
 
 
 @dataclass
@@ -100,6 +119,85 @@ def _meets_threshold(alert_severity: str, channel_threshold: str) -> bool:
     a = _SEVERITY_ORDER.get(alert_severity, 99)
     t = _SEVERITY_ORDER.get(channel_threshold, 99)
     return a <= t
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Quiet-hours gating (schema v13)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_hhmm_to_minutes(hhmm: str) -> Optional[int]:
+    """Parse an ``"HH:MM"`` string into total minutes-since-midnight, or
+    return ``None`` on any failure. Never raises.
+
+    Accepts the canonical zero-padded form (``"22:00"``) plus the
+    unpadded form (``"7:30"``); rejects anything outside 0-23 hours /
+    0-59 minutes so a typo doesn't silently match a different window.
+    """
+    if not isinstance(hhmm, str) or not hhmm:
+        return None
+    try:
+        # ``strptime`` would also accept multi-line / surrounding spaces;
+        # split-and-int is stricter and gives clean error handling.
+        parts = hhmm.split(":")
+        if len(parts) != 2:
+            return None
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+            return None
+        return hours * 60 + minutes
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_in_quiet_window(channel: DeliveryChannel, now_utc: datetime) -> bool:
+    """True when ``now_utc`` falls inside ``channel``'s quiet window.
+
+    Behaviour:
+      * Returns ``False`` when either ``quiet_start`` or ``quiet_end`` is
+        empty (i.e. no window configured).
+      * Parses both as ``HH:MM`` UTC. Returns ``False`` on any parse
+        failure (defensive — a malformed string must never silently
+        suppress deliveries).
+      * Normal window (``quiet_start < quiet_end``, e.g. 10:00 → 12:00):
+        returns ``True`` for ``quiet_start <= now < quiet_end``.
+      * Wraparound window (``quiet_start > quiet_end``, e.g. 22:00 →
+        07:00 spanning midnight): returns ``True`` when ``now >=
+        quiet_start`` OR ``now < quiet_end``.
+      * Degenerate window (``quiet_start == quiet_end``): returns
+        ``False`` — treats the window as having zero duration rather
+        than a 24h silence, which is the safer default for a config
+        someone might have left half-edited.
+
+    Never raises — returns ``False`` on any unexpected error so a delivery
+    can't be silently swallowed by a config bug.
+    """
+    try:
+        start_raw = getattr(channel, "quiet_start", "") or ""
+        end_raw = getattr(channel, "quiet_end", "") or ""
+        if not start_raw or not end_raw:
+            return False
+
+        start_min = _parse_hhmm_to_minutes(start_raw)
+        end_min = _parse_hhmm_to_minutes(end_raw)
+        if start_min is None or end_min is None:
+            return False
+
+        if start_min == end_min:
+            # Zero-duration window — treat as "not configured" so a
+            # half-edited config doesn't silence everything 24/7.
+            return False
+
+        now_min = now_utc.hour * 60 + now_utc.minute
+
+        if start_min < end_min:
+            # Normal same-day window: [start, end).
+            return start_min <= now_min < end_min
+        # Wraparound (e.g. 22:00 → 07:00): we are in the window if we
+        # are at or past start OR before end.
+        return now_min >= start_min or now_min < end_min
+    except Exception:
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -911,6 +1009,20 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             error_msg=f"below threshold ({alert.severity} < {channel.severity_threshold})",
         )
 
+    # Quiet-hours gating (v13). Suppress non-CRITICAL alerts (and even
+    # CRITICAL alerts when ``quiet_override_critical`` is False) when the
+    # current time-of-day falls inside the channel's quiet window. Pre-
+    # v13 channels have empty quiet_start/quiet_end strings, so
+    # ``_is_in_quiet_window`` short-circuits to False and the legacy
+    # behaviour is preserved untouched.
+    if _is_in_quiet_window(channel, datetime.now(timezone.utc)):
+        if not (channel.quiet_override_critical and alert.severity == "CRITICAL"):
+            return DeliveryResult(
+                success=False,
+                status_code=0,
+                error_msg="channel in quiet hours",
+            )
+
     if channel.kind == "email":
         config = _get_smtp_config()
         if config is None:
@@ -1662,6 +1774,16 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
     # other string falls back to "immediate" so a stale/invalid value
     # in the dataclass can't poison the DB.
     digest_mode = channel.digest_mode if channel.digest_mode in ("immediate", "daily") else "immediate"
+    # Normalize quiet_start/quiet_end (v13). Empty strings disable the
+    # window; anything that fails to parse falls back to empty so a
+    # malformed value can't silently create a 24h silence on disk.
+    quiet_start = channel.quiet_start if isinstance(channel.quiet_start, str) else ""
+    quiet_end = channel.quiet_end if isinstance(channel.quiet_end, str) else ""
+    if quiet_start and _parse_hhmm_to_minutes(quiet_start) is None:
+        quiet_start = ""
+    if quiet_end and _parse_hhmm_to_minutes(quiet_end) is None:
+        quiet_end = ""
+    quiet_override_critical = 1 if channel.quiet_override_critical else 0
     conn = get_connection()
     try:
         with conn:
@@ -1669,8 +1791,9 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
                 """
                 INSERT INTO delivery_channels
                   (channel_id, name, kind, target, severity_threshold,
-                   enabled, created_at, digest_mode, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   enabled, created_at, digest_mode, user_id,
+                   quiet_start, quiet_end, quiet_override_critical)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                   name = excluded.name,
                   kind = excluded.kind,
@@ -1678,7 +1801,10 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
                   severity_threshold = excluded.severity_threshold,
                   enabled = excluded.enabled,
                   digest_mode = excluded.digest_mode,
-                  user_id = excluded.user_id
+                  user_id = excluded.user_id,
+                  quiet_start = excluded.quiet_start,
+                  quiet_end = excluded.quiet_end,
+                  quiet_override_critical = excluded.quiet_override_critical
                 """,
                 (
                     channel.channel_id,
@@ -1690,6 +1816,9 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
                     created_at,
                     digest_mode,
                     uid,
+                    quiet_start,
+                    quiet_end,
+                    quiet_override_critical,
                 ),
             )
         # Mirror created_at back onto the dataclass so the caller can
@@ -1750,6 +1879,35 @@ def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
             return "immediate"
         return val if val in ("immediate", "daily") else "immediate"
 
+    # Same defensive read pattern for the v13 quiet-hours columns. A
+    # pre-v13 row (or a Row whose schema cache predates the bump) falls
+    # back to the dataclass defaults ("" / "" / True) so the legacy
+    # behaviour ("no quiet hours configured") is preserved.
+    def _quiet_start_of(row) -> str:
+        try:
+            val = row["quiet_start"]
+        except (KeyError, IndexError):
+            return ""
+        return val if isinstance(val, str) else ""
+
+    def _quiet_end_of(row) -> str:
+        try:
+            val = row["quiet_end"]
+        except (KeyError, IndexError):
+            return ""
+        return val if isinstance(val, str) else ""
+
+    def _quiet_override_of(row) -> bool:
+        try:
+            val = row["quiet_override_critical"]
+        except (KeyError, IndexError):
+            return True
+        # SQLite stores BOOL as INTEGER. Treat anything truthy as True.
+        try:
+            return bool(int(val))
+        except (TypeError, ValueError):
+            return bool(val)
+
     return [
         DeliveryChannel(
             channel_id=r["channel_id"],
@@ -1760,6 +1918,9 @@ def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
             enabled=bool(r["enabled"]),
             created_at=r["created_at"],
             digest_mode=_digest_mode_of(r),
+            quiet_start=_quiet_start_of(r),
+            quiet_end=_quiet_end_of(r),
+            quiet_override_critical=_quiet_override_of(r),
         )
         for r in rows
     ]

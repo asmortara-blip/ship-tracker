@@ -105,12 +105,32 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       source, started_at, duration_ms, status (up | degraded | down)
 #       and an error_msg. Populated by ``engine.source_health`` from
 #       the worker scheduler; pruned by ``prune_old_pings``.
+#  13 — adds three quiet-hours columns to delivery_channels:
+#       ``quiet_start`` (HH:MM UTC, empty = no quiet window),
+#       ``quiet_end`` (HH:MM UTC), and ``quiet_override_critical``
+#       (INTEGER 0/1, default 1 — CRITICAL alerts always deliver).
+#       Lets an operator silence a channel during e.g. overnight hours
+#       without disabling it outright. Alerts that fire during the
+#       window are still persisted to SQLite, just not delivered (no
+#       queue-then-drain; this is suppress-only).
+#  14 — adds two columns to the alerts table for time-window alert
+#       deduplication: ``fire_count INTEGER NOT NULL DEFAULT 1`` and
+#       ``last_fired_at TEXT NOT NULL DEFAULT ''``. A flaky data feed
+#       that bounces the BDI across its threshold N times in an hour
+#       previously inserted N alert rows; with v14, the engine collapses
+#       repeat fires of the same (alert_type, severity, ticker,
+#       route_id, port_locode) tuple within a configurable window
+#       (default 60 min) into one row whose fire_count counts the
+#       bounces and whose last_fired_at marks the most-recent fire.
+#       The existing alert_id-based INSERT-OR-IGNORE dedup is unchanged
+#       — that one still blocks EXACT-duplicate inserts within a single
+#       save call; v14 layers a NEAR-duplicate window-based dedup on top.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 12
+SCHEMA_VERSION: int = 14
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -490,6 +510,59 @@ _SCHEMA_V12_NOTE: str = (
     "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v12)"
 )
 
+# Schema v13 adds three quiet-hours columns to ``delivery_channels`` so
+# an operator can silence a channel during e.g. overnight hours without
+# disabling it outright:
+#
+#   * ``quiet_start``  — HH:MM UTC ("22:00"); empty = no quiet window.
+#   * ``quiet_end``    — HH:MM UTC ("07:00"); empty = no quiet window.
+#   * ``quiet_override_critical`` — INTEGER 0/1, default 1. When 1, a
+#     CRITICAL alert bypasses the quiet window. When 0, even CRITICAL
+#     alerts are suppressed during the window.
+#
+# Pre-v13 rows pick up the column DEFAULTs (empty strings / 1) so the
+# legacy behaviour ("no quiet hours configured") is preserved.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v6 —
+# SQLite does not support IF NOT EXISTS on ALTER TABLE. Each column is
+# added in its own try/except so partial completion of a prior run is
+# also tolerated. Added via ``_migrate_to_v13`` in ``state/migrations.py``.
+_SCHEMA_V13_NOTE: str = (
+    "v13: delivery_channels.quiet_start TEXT NOT NULL DEFAULT '' + "
+    "delivery_channels.quiet_end TEXT NOT NULL DEFAULT '' + "
+    "delivery_channels.quiet_override_critical INTEGER NOT NULL DEFAULT 1 "
+    "(added via ALTER TABLE in _migrate_to_v13)"
+)
+
+# Schema v14 adds two columns to the ``alerts`` table for time-window
+# alert deduplication:
+#
+#   * ``fire_count``    — INTEGER NOT NULL DEFAULT 1. Tracks how many
+#     times the same dedup_key fired within the configured window.
+#     Pre-v14 rows pick up the default (1) which matches the implicit
+#     pre-feature meaning ("this alert fired once").
+#   * ``last_fired_at`` — TEXT NOT NULL DEFAULT ''. ISO-8601 UTC
+#     timestamp of the most-recent fire. Empty for pre-v14 rows; the
+#     engine fills it in on every save and on every dedup-bump.
+#
+# The dedup_key itself is computed in-engine from (alert_type, severity,
+# ticker, route_id, port_locode) — it is NOT stored in a dedicated
+# column. Storing it would add a redundant denormalised field; the
+# in-engine WHERE clause filters by the same five columns directly,
+# which the existing ``idx_alerts_created_at`` index can cover in
+# combination with the row-set filter SQLite applies.
+#
+# Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+# ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13``: SQLite
+# does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so each statement
+# is wrapped in try/except and "duplicate column name" errors are
+# swallowed. Added via ``_migrate_to_v14`` in ``state/migrations.py``.
+_SCHEMA_V14_NOTE: str = (
+    "v14: alerts.fire_count INTEGER NOT NULL DEFAULT 1 + "
+    "alerts.last_fired_at TEXT NOT NULL DEFAULT '' "
+    "(added via ALTER TABLE in _migrate_to_v14)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -558,6 +631,27 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # probes (FRED, yfinance, World Bank, etc.) leave a queryable
     # liveness/freshness record.
     conn.executescript(_SCHEMA_V12)
+    # v13 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6. Adds the quiet_start / quiet_end /
+    # quiet_override_critical columns to delivery_channels. Safe to run
+    # on every open (fresh DB: adds the columns; existing DB: no-op when
+    # the columns already exist).
+    try:
+        from state.migrations import _migrate_to_v13
+        _migrate_to_v13(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v13 column adds skipped: {exc}")
+    # v14 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13. Adds fire_count + last_fired_at to alerts
+    # so the engine can collapse repeat fires of the same dedup_key
+    # within a configurable window into a single row. Safe to run on
+    # every open (fresh DB: adds the columns; existing DB: no-op when
+    # the columns already exist).
+    try:
+        from state.migrations import _migrate_to_v14
+        _migrate_to_v14(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v14 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -703,6 +797,32 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v12(conn)
         except Exception as exc:
             logger.warning(f"state.db: v12 migration skipped: {exc}")
+
+    # Migration 12 → 13: add the quiet-hours columns to
+    # delivery_channels. Same idempotent ALTER-TABLE-in-try/except
+    # pattern as v4 / v5 / v6 — the helper is already invoked
+    # unconditionally above; this branch keeps the version-step ladder
+    # explicit.
+    if current < 13:
+        try:
+            from state.migrations import _migrate_to_v13
+            _migrate_to_v13(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v13 migration skipped: {exc}")
+
+    # Migration 13 → 14: add the alerts.fire_count + alerts.last_fired_at
+    # columns so the alert engine can collapse repeat fires of the same
+    # (alert_type, severity, ticker, route_id, port_locode) dedup_key
+    # within the configurable _DEDUP_WINDOW_MINUTES into one row. Same
+    # idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v6 —
+    # the helper is already invoked unconditionally above; this branch
+    # keeps the version-step ladder explicit.
+    if current < 14:
+        try:
+            from state.migrations import _migrate_to_v14
+            _migrate_to_v14(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v14 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
