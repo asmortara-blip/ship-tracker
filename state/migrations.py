@@ -704,3 +704,57 @@ def _migrate_to_v17(conn: sqlite3.Connection) -> None:
                 f"state.migrations: _migrate_to_v17 ALTER TABLE "
                 f"({col_name}) failed: {exc}"
             )
+
+
+# ─── Schema v17 → v18 ─────────────────────────────────────────────────────
+
+def _migrate_to_v18(conn: sqlite3.Connection) -> None:
+    """Add per-rule cooldown support to the alert engine.
+
+    Two columns land in this migration, on two different tables:
+
+      * ``alert_rules.cooldown_minutes`` — ``INTEGER NOT NULL DEFAULT 0``.
+        0 (the default) means "no cooldown, fire on every evaluation"
+        — the pre-v18 behaviour, preserved for existing rules. A
+        positive value N means a successful fire of this rule_id
+        suppresses subsequent fires of the SAME rule_id for the next
+        N minutes (per user). Cooldown is orthogonal to the v14
+        time-window dedup_key collapse — both can apply on the same
+        alert (cooldown stops the rule from firing in the first place;
+        dedup collapses bounces of an alert that DID fire).
+
+      * ``alerts.rule_id`` — ``TEXT`` (NULLable, no DEFAULT). The
+        rule_id of the AlertRule that produced this alert, stamped
+        by ``fire_rule``. NULLable on purpose: alerts that come from
+        the detection helpers (``check_bdi_alerts`` / ``check_signal_alerts``
+        / etc.) pre-date the rule-engine path and have no associated
+        rule_id, and the cooldown lookup can use ``WHERE rule_id = ?``
+        to skip those rows naturally. Distinguishing "from a rule"
+        (non-NULL) from "from a detector" (NULL) at the SQL level is
+        the design goal here.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13`` /
+    ``_migrate_to_v14`` / ``_migrate_to_v16`` / ``_migrate_to_v17``:
+    SQLite does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so each
+    statement is wrapped in try/except and "duplicate column name"
+    errors are swallowed. Each column is added in its own try/except
+    so partial completion of a prior run is also tolerated, and
+    re-running on a fully-migrated DB is a no-op.
+    """
+    for table, col_name, col_def in (
+        ("alert_rules", "cooldown_minutes", "INTEGER NOT NULL DEFAULT 0"),
+        ("alerts",      "rule_id",          "TEXT"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v18 ALTER TABLE "
+                f"({table}.{col_name}) failed: {exc}"
+            )

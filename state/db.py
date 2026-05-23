@@ -165,12 +165,26 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       password columns these are declared NULLable (no DEFAULT) so
 #       "no password set" is distinguishable from "empty-string
 #       password" at the SQL level.
+#  18 — adds per-rule cooldown so an AlertRule whose condition stays
+#       tripped does not spam downstream channels. Two ALTERs:
+#         * ``alert_rules.cooldown_minutes INTEGER NOT NULL DEFAULT 0``
+#           — 0 (the default) means no cooldown, preserving the legacy
+#           behaviour that every evaluation that trips the rule fires.
+#           A positive value N means a successful fire suppresses the
+#           same rule_id for the next N minutes (per user).
+#         * ``alerts.rule_id TEXT`` — NULLable. Stamped on every alert
+#           that is fire_rule()-dispatched so the cooldown query can
+#           ask "when did this rule_id last fire?". NULL on legacy /
+#           detection-path alerts that never went through fire_rule.
+#       Same idempotent ALTER-TABLE-in-try/except pattern as
+#       v4/v5/v6/v13/v14/v16/v17 — each column add is independently
+#       safe to re-run.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 17
+SCHEMA_VERSION: int = 18
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -690,6 +704,36 @@ _SCHEMA_V17_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v17)"
 )
 
+# Schema v18 adds per-rule cooldown so an ``AlertRule`` whose
+# condition stays tripped doesn't spam downstream channels. Two
+# ALTERs land in this migration:
+#
+#   * ``alert_rules.cooldown_minutes`` — ``INTEGER NOT NULL DEFAULT 0``.
+#     0 means "no cooldown, fire on every evaluation" (the pre-v18
+#     behaviour, preserved for existing rows). A positive N means
+#     successful fires of this rule suppress subsequent fires of the
+#     same rule_id for N minutes (per user).
+#   * ``alerts.rule_id`` — ``TEXT`` (NULLable, no DEFAULT). Stamped
+#     by ``fire_rule`` so the cooldown query can ask "when did this
+#     rule_id last fire for this user?". NULL on alerts that came
+#     from the detection helpers (``check_bdi_alerts`` et al.) which
+#     pre-date the rule-engine path — those alerts have no associated
+#     rule_id so the cooldown logic skips them entirely.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v6 /
+# v13 / v14 / v16 / v17. The ``cooldown_minutes`` column lands on
+# ``alert_rules`` (which is currently a thin two-column JSON-blob
+# store, but a real column lets callers query "rules with cooldown >
+# 0" without parsing every blob). The ``rule_id`` column is NULLable
+# on purpose — distinguishing "alert came from a rule" (non-NULL)
+# from "alert came from a detection helper" (NULL) at the SQL level
+# matters because only the former participates in cooldown.
+_SCHEMA_V18_NOTE: str = (
+    "v18: alert_rules.cooldown_minutes INTEGER NOT NULL DEFAULT 0 + "
+    "alerts.rule_id TEXT "
+    "(added via ALTER TABLE in _migrate_to_v18)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -808,6 +852,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v17(conn)
     except Exception as exc:
         logger.warning(f"state.db: v17 column adds skipped: {exc}")
+    # v18 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14 / v16 / v17. Adds alert_rules.
+    # cooldown_minutes (per-rule cooldown that suppresses repeat fires of
+    # the same rule_id within N minutes) and alerts.rule_id (stamped by
+    # fire_rule so the cooldown query can ask "when did this rule last
+    # fire?"). Both columns are safe to re-add on every open — the
+    # OperationalError "duplicate column" is swallowed.
+    try:
+        from state.migrations import _migrate_to_v18
+        _migrate_to_v18(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v18 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1020,6 +1076,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v17(conn)
         except Exception as exc:
             logger.warning(f"state.db: v17 migration skipped: {exc}")
+
+    # Migration 17 → 18: add the alert_rules.cooldown_minutes column
+    # (per-rule cooldown that suppresses repeat fires of the same
+    # rule_id within N minutes) + the alerts.rule_id column (stamped
+    # by fire_rule). Same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14 / v16 / v17 — the helper is already
+    # invoked unconditionally above; this branch keeps the version-step
+    # ladder explicit.
+    if current < 18:
+        try:
+            from state.migrations import _migrate_to_v18
+            _migrate_to_v18(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v18 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

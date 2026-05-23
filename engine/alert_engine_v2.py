@@ -63,6 +63,16 @@ class AlertRule:
     # editing rules in the UI work with the same labels they see on
     # the channels page.
     target_channels: list[str] = field(default_factory=list)
+    # Per-rule cooldown in minutes (v18). 0 (the default) preserves
+    # the legacy "fire on every evaluation that trips the rule"
+    # behaviour — existing rules without the field load as 0 and act
+    # exactly as they did before. A positive value N suppresses
+    # repeat fires of the SAME rule_id (for the SAME user) for N
+    # minutes after a successful fire. Cooldown is orthogonal to the
+    # v14 dedup_key collapse — dedup merges bounces of an alert that
+    # already fired; cooldown stops the rule from firing in the
+    # first place.
+    cooldown_minutes: int = 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -608,7 +618,12 @@ def _resolve_user_id(user_id: Optional[str]) -> str:
     return user_id
 
 
-def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -> None:
+def save_alerts(
+    alerts: list[ShippingAlert],
+    *,
+    user_id: Optional[str] = None,
+    rule_id: Optional[str] = None,
+) -> None:
     """Persist alerts to the SQLite store with two-layer dedup, then trim
     to _MAX_STORED keeping the newest (by created_at).
 
@@ -641,6 +656,16 @@ def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -
     bucket exactly like before. Pass an explicit string to override
     (useful in tests). The user_id stamp is applied to every inserted
     row.
+
+    ``rule_id`` (v18) stamps the originating AlertRule on every inserted
+    row when supplied. ``None`` (default) means "this alert did not come
+    from a rule" — the column lands NULL and the cooldown machinery in
+    ``_in_cooldown`` skips it naturally. Callers that DO route through
+    the rule engine (i.e. ``fire_rule``) pass the rule_id so the
+    cooldown query can answer "when did rule X last successfully fire?".
+    The dedup-bump UPDATE path intentionally does NOT overwrite rule_id
+    on an existing row — the originating rule_id is set at INSERT time
+    and is immutable across bumps.
     """
     if not alerts:
         return
@@ -716,19 +741,26 @@ def save_alerts(alerts: list[ShippingAlert], *, user_id: Optional[str] = None) -
                 # (a caller passing the SAME alert_id twice in one
                 # save call gets one row — the second is silently
                 # dropped here, not at the dedup_key layer).
+                #
+                # ``rule_id`` is stamped from the caller-supplied
+                # parameter (NULL when None — preserves the legacy
+                # "alert came from a detection helper, not a rule"
+                # path). The column is only used by the v18 cooldown
+                # query, which already filters by rule_id = ?, so a
+                # NULL row is invisible to it.
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO alerts
                       (alert_id, created_at, alert_type, severity, title, body,
                        ticker, route_id, port_locode, value, threshold, change_pct,
-                       acknowledged, user_id, fire_count, last_fired_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                       acknowledged, user_id, fire_count, last_fired_at, rule_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         a.alert_id, a.created_at, a.alert_type, a.severity,
                         a.title, a.body, a.ticker, a.route_id, a.port_locode,
                         a.value, a.threshold, a.change_pct,
-                        1 if a.acknowledged else 0, uid, now_iso,
+                        1 if a.acknowledged else 0, uid, now_iso, rule_id,
                     ),
                 )
             # Trim to _MAX_STORED keeping the newest created_at. SQLite's
@@ -1058,15 +1090,23 @@ def normalize_rule(rule_dict: dict) -> dict:
     """Backfill optional fields on a rule dict.
 
     Older rule blobs predate the ``target_channels`` field (added when
-    rule-to-channel routing landed). Callers that need a normalized
-    shape — e.g. ``deliver_pending_for_rule`` — should run rules
+    rule-to-channel routing landed) and the v18 ``cooldown_minutes``
+    field. Callers that need a normalized shape — e.g.
+    ``deliver_pending_for_rule`` or ``fire_rule`` — should run rules
     through this helper first. ``load_rules()`` itself is intentionally
     NOT auto-normalizing so the save→load round-trip stays byte-exact
     for legacy callers that compare the loaded list against what they
     saved.
 
-    Returns the same dict object with ``target_channels`` set to a
-    list[str] (empty == 'all eligible channels', the legacy behaviour).
+    Returns the same dict object with:
+      * ``target_channels`` coerced to a list[str] (empty == 'all
+        eligible channels', the legacy behaviour).
+      * ``cooldown_minutes`` coerced to a non-negative int. Values
+        that fail to coerce fall back to 0 (no cooldown). Negative
+        values are clamped to 0 — "cooldown of -5 minutes" is
+        nonsensical and a hand-edited blob with a stray minus sign
+        should not turn into "fire forever, never cool down".
+
     Non-dict input passes through unchanged.
     """
     if not isinstance(rule_dict, dict):
@@ -1078,6 +1118,23 @@ def normalize_rule(rule_dict: dict) -> dict:
         # Coerce to strings + drop any non-string entries so a stray
         # int/None in a hand-edited blob cannot break channel matching.
         rule_dict["target_channels"] = [x for x in tc if isinstance(x, str)]
+    # Cooldown coercion (v18). The blob may carry an int, a numeric
+    # string, a bool (Python: True coerces to 1, False to 0 — both
+    # acceptable cooldown values), a None, or a garbage string. We
+    # accept anything int() will swallow, clamp the result to >= 0,
+    # and fall back to 0 (no cooldown) on TypeError/ValueError. The
+    # default key ``cooldown_minutes`` is created if missing — that's
+    # the v18 contract: every rule has a cooldown_minutes field
+    # going forward, with 0 meaning "no cooldown".
+    raw_cd = rule_dict.get("cooldown_minutes", 0)
+    try:
+        # int(bool) and int("10") and int(10.0) all work; int("abc")
+        # raises ValueError; int(None) raises TypeError. The int()
+        # cast is the canonical "permissive numeric coerce" idiom.
+        cd = int(raw_cd)
+    except (TypeError, ValueError):
+        cd = 0
+    rule_dict["cooldown_minutes"] = max(0, cd)
     return rule_dict
 
 
@@ -1099,3 +1156,233 @@ def reset_rules() -> None:
         record_audit("reset_rules")
     except Exception:  # noqa: BLE001
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Per-rule cooldown (v18)
+#
+#  An AlertRule whose condition stays tripped used to fire on every
+#  evaluation, spamming downstream channels. v18 introduces a per-rule
+#  ``cooldown_minutes`` field that suppresses the SAME rule_id from
+#  firing more than once per cooldown window (per user). Cooldown is
+#  orthogonal to the v14 dedup_key collapse: dedup merges bounces of
+#  an alert that ALREADY fired; cooldown stops the rule from firing
+#  in the first place.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Key the counter under a stable kv_state row so the operator overview /
+# data health tabs can surface "N alert fires suppressed by cooldown
+# this run" without us needing a dedicated table. The value is the
+# stringified running count (kv_state.value is TEXT) — callers parse it
+# with int() and treat a missing row as 0.
+_COOLDOWN_SUPPRESSED_KEY: str = "alerts_suppressed_by_cooldown"
+
+
+def _in_cooldown(
+    rule_id: str,
+    cooldown_minutes: int,
+    *,
+    user_id: Optional[str] = None,
+) -> bool:
+    """Return True when ``rule_id`` is INSIDE its cooldown window for
+    ``user_id`` and a fresh fire should be suppressed.
+
+    A rule is in cooldown when there exists a prior alert in the alerts
+    table with the same ``rule_id`` and ``user_id`` whose ``created_at``
+    is within the last ``cooldown_minutes`` minutes. The check uses
+    ``MAX(created_at)`` so multiple prior fires within the window
+    behave the same as one — only the most-recent fire anchors the
+    window.
+
+    Short-circuits to False in two cases:
+      * ``cooldown_minutes <= 0`` — explicit "no cooldown configured",
+        which is the v18 default for legacy rules.
+      * empty / falsy ``rule_id`` — the cooldown table is keyed by
+        rule_id so a missing rule_id has no meaningful prior to look
+        up. ``fire_rule`` always supplies a non-empty rule_id; this
+        guard is belt-and-braces for callers that wire the helper
+        directly.
+
+    Per-user scoping is by exact match (NOT the dual-set scope
+    semantics used by ``load_alerts``): alice's prior fire of rule X
+    does NOT trip bob's cooldown on the same rule_id. The legacy
+    bucket (``user_id=""``) only collides with other legacy fires.
+    """
+    if cooldown_minutes <= 0:
+        return False
+    if not rule_id:
+        return False
+    from state.db import get_connection
+
+    uid = _resolve_user_id(user_id)
+    cutoff_iso = (
+        datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)
+    ).isoformat()
+    conn = get_connection()
+    try:
+        # MAX over the per-row "most recent activity" timestamp:
+        # ``last_fired_at`` when populated (v14+ row that may have
+        # been dedup-bumped), else fall back to ``created_at`` (the
+        # original insertion time, also correct as "when did this
+        # rule last fire" for rows that have only been INSERTed and
+        # never bumped). The COALESCE in the SELECT makes this
+        # robust to either column being empty.
+        #
+        # Comparing against ``last_fired_at`` (and not just
+        # ``created_at``) matters when the dedup window is LONGER
+        # than the cooldown window: a row that keeps getting dedup-
+        # bumped on every evaluation would otherwise look like
+        # "fired once long ago" to a cooldown check that only saw
+        # created_at, and the cooldown gate would let every bump
+        # through.
+        row = conn.execute(
+            """
+            SELECT MAX(
+                CASE
+                    WHEN last_fired_at IS NOT NULL AND last_fired_at != ''
+                        THEN last_fired_at
+                    ELSE created_at
+                END
+            ) AS last_fire
+            FROM alerts
+            WHERE rule_id = ?
+              AND user_id = ?
+            """,
+            (rule_id, uid),
+        ).fetchone()
+    except Exception as exc:
+        # Read failure → fail OPEN (allow the fire). A cooldown that
+        # silently breaks because of a DB hiccup is far less harmful
+        # than a cooldown that silently blocks every alert because of
+        # one. Same defensive posture as the rest of save_alerts /
+        # load_alerts.
+        logger.warning(f"_in_cooldown: SQLite read failed: {exc}")
+        return False
+    if row is None:
+        return False
+    last_fire = row["last_fire"]
+    if not last_fire:
+        # No prior fire exists for this rule_id under this user — no
+        # cooldown to enforce.
+        return False
+    # last_fire is ISO-8601 UTC; string comparison against cutoff_iso
+    # is correct because the format is fixed-width and timezone-aware.
+    return last_fire >= cutoff_iso
+
+
+def _bump_suppressed_counter() -> None:
+    """Increment the kv_state counter of cooldown-suppressed fires.
+
+    Read-modify-write under the connection's autocommit boundary —
+    SQLite serializes writers via WAL so the increment is atomic for
+    a single-process app. Best-effort: any failure is swallowed and
+    logged because the counter is for operator-overview telemetry,
+    not correctness.
+    """
+    from state.db import get_connection
+
+    conn = get_connection()
+    now_iso = _now_iso()
+    try:
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_COOLDOWN_SUPPRESSED_KEY,),
+        ).fetchone()
+        try:
+            current = int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            # A corrupt counter value resets to 0 so a single bad
+            # write does not jam the increment path forever.
+            current = 0
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+            "VALUES (?, ?, ?)",
+            (_COOLDOWN_SUPPRESSED_KEY, str(current + 1), now_iso),
+        )
+    except Exception as exc:
+        logger.warning(f"_bump_suppressed_counter: kv_state write failed: {exc}")
+
+
+def get_suppressed_by_cooldown_count() -> int:
+    """Return the cumulative count of rule fires suppressed by
+    cooldown since the app started writing the counter (or since the
+    last manual reset). Returns 0 when the kv_state row does not yet
+    exist."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_COOLDOWN_SUPPRESSED_KEY,),
+        ).fetchone()
+    except Exception as exc:
+        logger.warning(f"get_suppressed_by_cooldown_count: read failed: {exc}")
+        return 0
+    if row is None:
+        return 0
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return 0
+
+
+def fire_rule(
+    rule: dict,
+    alerts: list[ShippingAlert],
+    *,
+    user_id: Optional[str] = None,
+) -> bool:
+    """Persist + dispatch the given alerts under the supplied rule,
+    respecting the rule's per-rule cooldown (v18).
+
+    Returns True when the alerts were persisted (the fire was
+    permitted), False when the rule was suppressed by cooldown.
+
+    The cooldown gate is checked ONCE at the entry of the function
+    using ``_in_cooldown`` and the rule's normalized cooldown_minutes.
+    When the gate trips:
+      * NO row is inserted (the underlying condition is still True;
+        we just decline to re-notify).
+      * The suppressed counter is incremented via kv_state.
+      * A logger.info line records the suppression for the operator
+        log trail.
+      * The function returns False so the caller can short-circuit
+        any downstream dispatch (Slack / email / webhook).
+
+    Dispatch itself is NOT performed here — that lives in
+    ``engine.alert_delivery``. ``fire_rule`` is responsible only for
+    the gate + the persistence stamp. Callers wire dispatch downstream
+    of a True return.
+
+    The rule dict is normalized in-place (cooldown_minutes coerced /
+    target_channels coerced) so callers do not need to pre-normalize.
+    """
+    # Normalize so cooldown_minutes is a clean non-negative int and
+    # target_channels is a clean list[str]. Mutates rule in-place,
+    # which is fine — callers re-load from save_rules anyway.
+    normalize_rule(rule)
+    rule_id = str(rule.get("rule_id") or rule.get("id") or "")
+    cooldown = int(rule.get("cooldown_minutes", 0))
+
+    if _in_cooldown(rule_id, cooldown, user_id=user_id):
+        # Gate tripped — suppress the fire. The condition that
+        # produced these alerts is still True; we just decline to
+        # re-notify until the window expires. The counter bump lets
+        # the operator-overview surface "N suppressions" without a
+        # dedicated table.
+        logger.info(
+            f"rule {rule_id} suppressed by cooldown "
+            f"({cooldown}m window, user={_resolve_user_id(user_id)})"
+        )
+        _bump_suppressed_counter()
+        return False
+
+    # Cooldown gate cleared — persist with the rule_id stamp so the
+    # NEXT cooldown check can see this fire as the prior. Empty
+    # alerts list is a legitimate fire (the rule ran but produced no
+    # rows): we still return True so the caller's audit trail records
+    # an evaluation, but no INSERT happens.
+    if alerts:
+        save_alerts(alerts, user_id=user_id, rule_id=rule_id)
+    return True
