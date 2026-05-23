@@ -9,10 +9,36 @@ Sections
 3. History         — last 20 alerts (mock + session state)
 4. Notifications   — email, frequency, digest toggle
 5. Rules Manager   — table of all configured rules with toggles
+
+Active filter payload (``st.session_state.active_filter_payload``)
+------------------------------------------------------------------
+The Saved Filters panel persists an operator-chosen filter as a dict
+in ``st.session_state.active_filter_payload``. The dict may be ``None``
+or ``{}`` (no filter active). For this commit, the downstream consumers
+(incidents panel, ack-analytics panel, main alert table) honor the
+following standard keys via ``_apply_active_filter``:
+
+  * ``severity`` (str) — one of ``CRITICAL`` / ``HIGH`` / ``MEDIUM`` /
+    ``LOW``. Keeps alerts whose severity is AT LEAST as severe (i.e.
+    ``severity=HIGH`` keeps both HIGH and CRITICAL).
+  * ``window_hours`` (int) — keeps alerts created within the last N
+    hours (uses ``created_at`` / ``triggered_at`` ISO timestamp).
+  * ``ticker`` (str) — exact match against the alert's ticker field.
+  * ``alert_type`` (str) — one of ``BDI_MOVE`` / ``MACRO`` / ``EVENT``
+    / ``RATE_SURGE`` / ``STOCK_MOVE`` / ``CONGESTION`` / etc. Exact
+    string match.
+  * ``acknowledged`` (bool) — ``True`` keeps only ack'd rows; ``False``
+    keeps only un-ack'd rows.
+
+Unrecognized keys are silently ignored — operators may shove arbitrary
+keys in via the API and the panel must remain forward-compatible.
+Malformed values (a bad severity string, a non-int window, etc.) drop
+the offending predicate silently; the rest of the filter still applies.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import streamlit as st
 from loguru import logger
@@ -58,6 +84,253 @@ _METRIC_ICONS: dict[str, str] = {
     "Port Congestion":  "PORT",
     "Macro Indicator":  "MAC",
 }
+
+
+# ---------------------------------------------------------------------------
+# Active-filter helper — consumes ``st.session_state.active_filter_payload``
+# (set by the Saved Filters panel) and returns the filtered alerts list.
+# Pure function, no Streamlit imports → trivially unit-testable. See the
+# module docstring for the supported payload keys.
+# ---------------------------------------------------------------------------
+_FILTER_SEVERITY_RANK: dict[str, int] = {
+    "CRITICAL": 4,
+    "HIGH":     3,
+    "MEDIUM":   2,
+    "LOW":      1,
+}
+
+
+def _alert_field(alert: Any, name: str, default: Any = None) -> Any:
+    """Return ``alert[name]`` for dicts or ``getattr(alert, name, default)``
+    for dataclass instances. Lets one helper handle both the dict-based
+    active-alerts shape AND the ShippingAlert dataclass without branching
+    at every call site.
+    """
+    try:
+        if isinstance(alert, dict):
+            return alert.get(name, default)
+        return getattr(alert, name, default)
+    except Exception:
+        return default
+
+
+def _apply_active_filter(
+    alerts: list, payload: dict | None
+) -> list:
+    """Return ``alerts`` filtered by ``payload`` — pure function.
+
+    Each predicate is wrapped in its own try/except: a malformed value
+    for one key drops THAT predicate, the rest of the filter still
+    applies. Unrecognized keys are silently ignored (forward-compat).
+    A ``None`` or empty payload returns the input list unchanged.
+
+    Severity uses the ranking ``CRITICAL=4, HIGH=3, MEDIUM=2, LOW=1``;
+    a row with rank ≥ payload-rank passes (i.e. ``severity=HIGH`` keeps
+    HIGH and CRITICAL). Severity strings that don't appear in the
+    ranking are treated as rank 0 — they fail unless the filter itself
+    is below LOW (it can't be, so unknown severities are filtered out
+    when a severity predicate is active). When the operator's chosen
+    severity is itself unknown, the predicate silently drops.
+
+    ``window_hours`` filters by ``created_at`` (ShippingAlert) or
+    ``triggered_at`` (dict-based active-alerts) — whichever is present.
+    Rows with no parseable timestamp are dropped when the predicate is
+    active (a row with no timestamp can't be proven "within" the window).
+
+    The helper is intentionally permissive about the alert shape so
+    every call site (incidents/correlator, ack analytics, main table)
+    can pass whichever list it already has.
+    """
+    if not alerts:
+        return list(alerts) if alerts is not None else []
+    if not payload or not isinstance(payload, dict):
+        return list(alerts)
+
+    out = list(alerts)
+
+    # ── severity (>= rank) ─────────────────────────────────────────────────
+    try:
+        if "severity" in payload:
+            min_rank = _FILTER_SEVERITY_RANK.get(
+                str(payload["severity"]).upper()
+            )
+            if min_rank is not None:
+                out = [
+                    a for a in out
+                    if _FILTER_SEVERITY_RANK.get(
+                        str(_alert_field(a, "severity", "")).upper(), 0
+                    ) >= min_rank
+                ]
+            # Unknown severity string (e.g. "BANANA") → silently drop the
+            # predicate, leave the list as-is.
+    except Exception:
+        logger.exception("active_filter: severity predicate failed; dropping")
+
+    # ── window_hours (recent N hours) ──────────────────────────────────────
+    try:
+        if "window_hours" in payload:
+            hours = int(payload["window_hours"])
+            if hours > 0:
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+                kept = []
+                for a in out:
+                    ts_raw = (
+                        _alert_field(a, "created_at", "")
+                        or _alert_field(a, "triggered_at", "")
+                    )
+                    if not ts_raw:
+                        continue
+                    try:
+                        dt = datetime.fromisoformat(
+                            str(ts_raw).replace("Z", "+00:00")
+                        )
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        if dt >= cutoff:
+                            kept.append(a)
+                    except (ValueError, TypeError):
+                        # Unparseable timestamp → cannot prove "within"
+                        # the window; drop the row.
+                        continue
+                out = kept
+    except Exception:
+        logger.exception("active_filter: window_hours predicate failed; dropping")
+
+    # ── ticker (exact match) ───────────────────────────────────────────────
+    try:
+        if "ticker" in payload:
+            target = str(payload["ticker"])
+            out = [a for a in out if str(_alert_field(a, "ticker", "")) == target]
+    except Exception:
+        logger.exception("active_filter: ticker predicate failed; dropping")
+
+    # ── alert_type (exact match) ───────────────────────────────────────────
+    try:
+        if "alert_type" in payload:
+            target = str(payload["alert_type"])
+            out = [
+                a for a in out
+                if str(_alert_field(a, "alert_type", "")) == target
+            ]
+    except Exception:
+        logger.exception("active_filter: alert_type predicate failed; dropping")
+
+    # ── acknowledged (bool) ────────────────────────────────────────────────
+    try:
+        if "acknowledged" in payload:
+            want = bool(payload["acknowledged"])
+            out = [
+                a for a in out
+                if bool(_alert_field(a, "acknowledged", False)) == want
+            ]
+    except Exception:
+        logger.exception("active_filter: acknowledged predicate failed; dropping")
+
+    return out
+
+
+def _metrics_from_alerts(alerts: list) -> Any:
+    """Compute an ``AlertMetrics`` shape from an in-memory alerts list.
+
+    Mirrors the aggregation in ``engine.alert_analytics.compute_alert_metrics``
+    so the filtered ack-analytics panel can render the same KPI strip,
+    severity-breakdown, daily-volume chart, and median-time-to-ack KPI
+    without touching the engine module.
+
+    Imports ``AlertMetrics`` lazily and returns the lazily-imported type
+    so callers don't take the engine import unless they actually need
+    filtered metrics. Never raises — on any error returns an empty
+    ``AlertMetrics``.
+    """
+    try:
+        import statistics
+
+        from engine.alert_analytics import AlertMetrics
+
+        if not alerts:
+            return AlertMetrics()
+
+        total = len(alerts)
+        ack_count = sum(
+            1 for a in alerts if bool(getattr(a, "acknowledged", False))
+        )
+        unack_count = total - ack_count
+        ack_rate = (ack_count / total) if total > 0 else 0.0
+
+        by_severity: dict[str, dict[str, Any]] = {}
+        for a in alerts:
+            sev = str(getattr(a, "severity", "")).upper() or "UNKNOWN"
+            bucket = by_severity.setdefault(
+                sev, {"total": 0, "ack_count": 0, "ack_rate": 0.0}
+            )
+            bucket["total"] += 1
+            if bool(getattr(a, "acknowledged", False)):
+                bucket["ack_count"] += 1
+        for sev, stats in by_severity.items():
+            t = stats["total"]
+            stats["ack_rate"] = (stats["ack_count"] / t) if t > 0 else 0.0
+
+        # Daily volume — group by YYYY-MM-DD prefix of created_at.
+        by_day_dict: dict[str, dict[str, int]] = {}
+        for a in alerts:
+            ts = str(getattr(a, "created_at", ""))
+            if not ts or len(ts) < 10:
+                continue
+            day = ts[:10]
+            d = by_day_dict.setdefault(day, {"total": 0, "ack_count": 0})
+            d["total"] += 1
+            if bool(getattr(a, "acknowledged", False)):
+                d["ack_count"] += 1
+        by_day = [
+            {"date": day, "total": d["total"], "ack_count": d["ack_count"]}
+            for day, d in sorted(by_day_dict.items())
+        ]
+
+        # Median time-to-ack — only acked rows with both timestamps.
+        durations: list[float] = []
+        for a in alerts:
+            if not bool(getattr(a, "acknowledged", False)):
+                continue
+            t0_raw = str(getattr(a, "created_at", "") or "")
+            t1_raw = str(getattr(a, "acknowledged_at", "") or "")
+            if not t0_raw or not t1_raw:
+                continue
+            try:
+                t0 = datetime.fromisoformat(t0_raw.replace("Z", "+00:00"))
+                t1 = datetime.fromisoformat(t1_raw.replace("Z", "+00:00"))
+                durations.append((t1 - t0).total_seconds() / 3600.0)
+            except (ValueError, TypeError):
+                continue
+        median_hours = (
+            float(statistics.median(durations)) if durations else None
+        )
+
+        return AlertMetrics(
+            total_alerts=total,
+            acknowledged_count=ack_count,
+            unacknowledged_count=unack_count,
+            ack_rate=ack_rate,
+            by_severity=by_severity,
+            median_time_to_ack_hours=median_hours,
+            by_day=by_day,
+        )
+    except Exception:
+        logger.exception("metrics_from_alerts failed")
+        try:
+            from engine.alert_analytics import AlertMetrics
+            return AlertMetrics()
+        except Exception:
+            # Final fallback — return an object that mimics the
+            # zero-valued AlertMetrics so the render below never crashes.
+            class _Empty:
+                total_alerts = 0
+                acknowledged_count = 0
+                unacknowledged_count = 0
+                ack_rate = 0.0
+                by_severity: dict = {}
+                median_time_to_ack_hours = None
+                by_day: list = []
+            return _Empty()
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +892,17 @@ def _render_saved_filters() -> None:
         if active_name and isinstance(active_payload, dict):
             keys = ", ".join(sorted(active_payload.keys())) or "(empty)"
             st.caption(f"Active filter: {active_name} — keys: {keys}")
+            # Inline Clear link — wipes the active payload + name and
+            # reruns so downstream panels (incidents, ack analytics,
+            # alert table) re-render unfiltered.
+            if st.button(
+                "Clear filter",
+                key="saved_filter_clear_btn",
+                help="Remove the active filter — show all alerts again.",
+            ):
+                st.session_state.pop("active_filter_payload", None)
+                st.session_state.pop("active_filter_name", None)
+                st.rerun()
         else:
             st.caption("No active filter")
     except Exception:
@@ -704,11 +988,25 @@ def _render_configuration_form() -> None:
 
 def _render_active_alerts(visible_alerts: list[dict]) -> None:
     try:
+        # Apply the active filter (if any) BEFORE sorting/display so the
+        # row counts in the header and the banner reflect the post-filter
+        # list. Pure-function helper → never raises.
+        active_payload = st.session_state.get("active_filter_payload")
+        active_name = st.session_state.get("active_filter_name")
+        original_count = len(visible_alerts)
+        visible_alerts = _apply_active_filter(visible_alerts, active_payload)
+
         section_header(
             "Active Alerts",
             f"{len(visible_alerts)} triggered · evaluated from live feeds",
         )
         st.html(live_data_badge(_ACTIVE_SRC))
+
+        if active_name and isinstance(active_payload, dict) and active_payload:
+            st.info(
+                f"⚙ Filter active: {active_name} — "
+                f"{len(visible_alerts)} of {original_count} alerts shown"
+            )
 
         if not visible_alerts:
             st.success("All clear. No alerts are currently active.")
@@ -1193,10 +1491,14 @@ def _render_incidents_panel() -> None:
     so a correlator failure cannot break the rest of the Alert Center tab.
     """
     try:
+        from collections import Counter
+
         from engine.alert_correlator import (
+            correlate_alerts,
             get_incident_summary,
             get_recent_incidents,
         )
+        from engine.alert_engine_v2 import load_alerts
         from utils.tz import format_user_tz
 
         section_divider("Active Incidents")
@@ -1214,14 +1516,63 @@ def _render_incidents_panel() -> None:
         )
         window_int = int(window)
 
-        summary = get_incident_summary(window_days=window_int)
-        incidents = get_recent_incidents(window_days=window_int)
+        # Active filter — when present, load alerts directly so we can
+        # filter BEFORE correlation (the prompt's contract: incidents
+        # themselves reflect the active filter, not a post-correlation
+        # filter on incidents).
+        active_payload = st.session_state.get("active_filter_payload")
+        active_name = st.session_state.get("active_filter_name")
+        filter_active = bool(
+            active_name
+            and isinstance(active_payload, dict)
+            and active_payload
+        )
 
-        n_inc = int(summary.get("n_incidents", 0))
-        n_total = int(summary.get("n_total_alerts", 0))
-        largest = int(summary.get("largest_incident_size", 0))
-        avg = float(summary.get("avg_alerts_per_incident", 0.0))
-        breakdown = summary.get("breakdown_by_dominant_type") or {}
+        if filter_active:
+            try:
+                raw_alerts = load_alerts(max_age_days=window_int) or []
+            except Exception:
+                logger.exception("incidents panel: load_alerts failed")
+                raw_alerts = []
+            original_alert_count = len(raw_alerts)
+            filtered_alerts = _apply_active_filter(raw_alerts, active_payload)
+            incidents = correlate_alerts(filtered_alerts)
+            incidents.sort(key=lambda inc: inc.started_at, reverse=True)
+            # Synthesize the same summary shape as get_incident_summary
+            # so the KPI strip below works unchanged.
+            n_inc = len(incidents)
+            n_total = sum(inc.alert_count for inc in incidents)
+            largest = max((inc.alert_count for inc in incidents), default=0)
+            avg = (n_total / n_inc) if n_inc > 0 else 0.0
+            breakdown = dict(
+                sorted(
+                    Counter(
+                        inc.dominant_alert_type for inc in incidents
+                    ).items()
+                )
+            )
+            summary = {
+                "n_incidents": n_inc,
+                "n_total_alerts": n_total,
+                "avg_alerts_per_incident": avg,
+                "largest_incident_size": largest,
+                "breakdown_by_dominant_type": breakdown,
+            }
+        else:
+            summary = get_incident_summary(window_days=window_int)
+            incidents = get_recent_incidents(window_days=window_int)
+            original_alert_count = int(summary.get("n_total_alerts", 0))
+            n_inc = int(summary.get("n_incidents", 0))
+            n_total = int(summary.get("n_total_alerts", 0))
+            largest = int(summary.get("largest_incident_size", 0))
+            avg = float(summary.get("avg_alerts_per_incident", 0.0))
+            breakdown = summary.get("breakdown_by_dominant_type") or {}
+
+        if filter_active:
+            st.info(
+                f"⚙ Filter active: {active_name} — "
+                f"{n_total} of {original_alert_count} alerts shown"
+            )
         # Most common dominant_alert_type across incidents (ties broken by
         # alphabetical order to keep the KPI stable across runs).
         if breakdown:
@@ -1332,8 +1683,46 @@ def _render_acknowledgment_analytics() -> None:
             help="Look-back window for ack metrics over the alerts table.",
         )
 
-        metrics = compute_alert_metrics(window_days=int(window))
-        unack_critical = get_unacknowledged_critical(window_days=int(window))
+        # Active filter — when present, load alerts + filter, then
+        # recompute metrics + unack-critical list LOCALLY from the
+        # filtered set. The engine helpers run a SQL query that can't
+        # be parameterized with arbitrary payload keys, so we replicate
+        # the small aggregation here. Both paths produce the same shape
+        # (AlertMetrics + list[ShippingAlert]) so the render below is
+        # unchanged.
+        active_payload = st.session_state.get("active_filter_payload")
+        active_name = st.session_state.get("active_filter_name")
+        filter_active = bool(
+            active_name
+            and isinstance(active_payload, dict)
+            and active_payload
+        )
+
+        if filter_active:
+            try:
+                from engine.alert_engine_v2 import load_alerts
+                raw_alerts = load_alerts(max_age_days=int(window)) or []
+            except Exception:
+                logger.exception("ack analytics: load_alerts failed")
+                raw_alerts = []
+            original_alert_count = len(raw_alerts)
+            filtered_alerts = _apply_active_filter(raw_alerts, active_payload)
+            metrics = _metrics_from_alerts(filtered_alerts)
+            unack_critical = [
+                a for a in filtered_alerts
+                if not bool(getattr(a, "acknowledged", False))
+                and str(getattr(a, "severity", "")).upper() == "CRITICAL"
+            ]
+        else:
+            metrics = compute_alert_metrics(window_days=int(window))
+            unack_critical = get_unacknowledged_critical(window_days=int(window))
+            original_alert_count = metrics.total_alerts
+
+        if filter_active:
+            st.info(
+                f"⚙ Filter active: {active_name} — "
+                f"{metrics.total_alerts} of {original_alert_count} alerts shown"
+            )
 
         if metrics.total_alerts == 0:
             st.info("No alerts yet in this window.")
