@@ -28,6 +28,7 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from utils.tz import format_user_tz
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -150,6 +151,15 @@ def _render_headline_card(narration) -> None:
             f'{narration.tokens_in}→{narration.tokens_out} tok</span>'
         )
 
+    # Render generated_at in the user's timezone (UTC fallback when no
+    # user is set or settings/zoneinfo lookup fails — format_user_tz
+    # returns "" on failure, which renders as no chip).
+    gen_at_local = format_user_tz(narration.generated_at) if narration.generated_at else ""
+    gen_chip = (
+        f' · <span style="font-size:0.66rem;color:{C_TEXT3}">'
+        f'generated {gen_at_local}</span>'
+    ) if gen_at_local else ""
+
     st.markdown(
         f'<div style="background:rgba(53,114,176,0.08);'
         f'border-left:3px solid {C_ACCENT};padding:20px 24px;'
@@ -157,7 +167,7 @@ def _render_headline_card(narration) -> None:
         f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
         f'color:{C_TEXT3};font-weight:600;margin-bottom:8px">'
         f'Source: <span style="color:{source_label[1]}">{source_label[0]}</span>'
-        f' · {narration.date}{model_chip}{token_chip}</div>'
+        f' · {narration.date}{model_chip}{token_chip}{gen_chip}</div>'
         f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.5rem;'
         f'line-height:1.35;color:{C_TEXT};font-weight:700">{narration.headline}</div>'
         f'</div>',
@@ -461,6 +471,12 @@ def _build_export_snapshot(narration, signals: dict):
         ))
 
     source_label = "LLM (Claude)" if narration.source == "claude" else "Template"
+    # The PDF footer renders generated_at user-facing — convert from
+    # the stored UTC ISO 8601 string to a localized "YYYY-MM-DD HH:MM TZ"
+    # rendering in the active user's timezone. format_user_tz returns
+    # the empty string on any failure; pass that through so ViewSnapshot
+    # falls back to its own default rendering.
+    generated_at_local = format_user_tz(narration.generated_at) if narration.generated_at else ""
     return ViewSnapshot(
         title=f"Daily Briefing — {narration.date}",
         subtitle=f"Source: {source_label}"
@@ -472,7 +488,7 @@ def _build_export_snapshot(narration, signals: dict):
             "Ship Tracker daily briefing. Narration via engine.narration_engine; "
             "structured inputs from shipping_stress_index + disruption_forecast."
         ),
-        generated_at=narration.generated_at,
+        generated_at=generated_at_local or narration.generated_at,
     )
 
 
