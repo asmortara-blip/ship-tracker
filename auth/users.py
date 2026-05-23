@@ -328,10 +328,36 @@ def count_users() -> int:
         return 0
 
 
+def list_users() -> list[User]:
+    """Return every registered user, ordered newest-first.
+
+    Returns ``[]`` on any error — the helper is consumed by operator
+    tooling (``python -m tools.ops users list``) and must never raise
+    into the CLI. Credential material (``password_hash`` / ``password_salt``)
+    is dropped at the ``_row_to_user`` boundary so this list can be
+    JSON-serialized without leaking secrets.
+    """
+    try:
+        from state.db import get_connection
+        conn = get_connection()
+        rows = conn.execute(
+            """
+            SELECT user_id, username, role, created_at, last_login_at
+              FROM users
+             ORDER BY created_at DESC
+            """,
+        ).fetchall()
+        return [_row_to_user(r) for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"auth.users.list_users: failed: {exc}")
+        return []
+
+
 __all__ = [
     "User",
     "signup",
     "login",
     "get_user",
     "count_users",
+    "list_users",
 ]

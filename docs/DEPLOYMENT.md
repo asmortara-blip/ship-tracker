@@ -263,11 +263,56 @@ destination = "/app/cache"
 | `NEWS_API_KEY`         | https://newsapi.org | Optional | RSS feeds only |
 | `AISSTREAM_KEY`        | https://aisstream.io | Optional | Synthetic vessel data |
 | `ANTHROPIC_API_KEY`    | https://console.anthropic.com | Optional | tab_briefing uses template path |
+| `VAULT_KEY`            | `python3 -c "import secrets; print(secrets.token_hex(32))"` | Recommended in prod | Auto-generated master key lands in kv_state (equivalent to no at-rest encryption against a DB-file leak) |
 
 The app never crashes on a missing key — every feed degrades to either
 a synthetic-data fallback or a clearly-labeled "not configured"
 status. The "Data Sources" panel in the sidebar shows the freshness
 state of every configured source.
+
+### `VAULT_KEY` — opt-in delivery-channel secret encryption
+
+`state.vault` wraps sensitive `delivery_channels.target` values
+(Slack webhook URLs, PagerDuty integration keys, future user-supplied
+secrets) in a self-describing `vault:v1:<base64>` envelope at rest in
+SQLite. The vault is **opt-in per channel** — `save_channel(...,
+encrypt_target=True)` persists the encrypted envelope while keeping
+the dataclass field plaintext for the rest of the alert pipeline;
+`load_channels()` decrypts transparently on read.
+
+**Threat model.** This is a *"protect against casual DB leaks"* scheme:
+it stops a copied-off `ship_tracker.db` or a leaked
+`bulk_export.tar.gz` archive from immediately exposing every webhook
+URL. It does **NOT** protect against an attacker with access to the
+running process — the master key has to be readable by the process at
+delivery time, so anyone who can read process memory, attach a
+debugger, or read the same `VAULT_KEY` env var can read every secret.
+
+**Master-key sources (in order of precedence).**
+
+  1. `VAULT_KEY` env var (hex-encoded, 64 chars recommended).
+  2. `st.secrets['VAULT_KEY']` if Streamlit secrets are configured.
+  3. `kv_state['vault_master_key']` — auto-generated on first call,
+     stored hex-encoded in the same SQLite file as the secrets it
+     protects. Convenient for local development; **DO NOT rely on
+     this in production** — it is equivalent to no at-rest encryption
+     against a DB-file leak.
+
+**Rotation.** `state.vault.rotate_key()` generates a fresh master key
+and re-encrypts every currently-encrypted `delivery_channels.target`
+against it. Plaintext targets (channels saved with the default
+`encrypt_target=False`) are untouched — opt-in semantics persist
+through rotation. The rotation records a `rotate_vault_key` event in
+`audit_events` with `{"channels_rerencrypted": N}` — key material is
+deliberately omitted from the audit payload.
+
+**Stdlib only.** The implementation deliberately avoids adding the
+`cryptography` library as a dependency. It uses `hashlib.blake2b` to
+derive a per-message subkey, `hashlib.sha256` for the keystream, XOR
+for the cipher, and `hmac.HMAC(SHA256)` (verified with
+`hmac.compare_digest`) for authentication. This is **not** a
+recommended construction against a motivated attacker; rotate the
+key regularly to limit blast radius if it ever leaks.
 
 ## Backup / Restore
 
