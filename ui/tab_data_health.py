@@ -1449,6 +1449,217 @@ def _render_security_panel() -> None:
         st.error("Security panel unavailable.")
 
 
+def _render_mfa_panel(user_id: str) -> None:
+    """Self-service Multi-factor Authentication setup panel.
+
+    A dedicated, single-purpose panel for TOTP MFA enrollment. Branches
+    on the current ``mfa_enabled`` flag:
+
+      * **Disabled** → "Enable MFA" button mints a fresh secret (held in
+        ``st.session_state.mfa_pending_secret``), shows it in monospace
+        ``st.code`` plus a "Show as QR" expander, and gates the actual
+        enable behind a TOTP-code verification step so a bad-QR-scan
+        cannot lock the user out.
+      * **Enabled** → "Disable MFA" plus a confirmation second click
+        (``st.session_state.mfa_confirm_disable``) before we wipe the
+        secret. Returns the account to password-only login.
+
+    Sibling panel to ``_render_security_panel`` (which surfaces API
+    tokens). All imports are lazy so the tab-load critical path stays
+    auth-free. The whole helper is wrapped in try/except so an MFA DB
+    outage cannot break the rest of Data Health.
+
+    Args:
+        user_id: The currently logged-in user's id. Caller is
+                 responsible for sourcing this (typically
+                 ``state.user_scope.current_user_id()``). An empty
+                 ``user_id`` renders a "log in to manage" hint and
+                 returns without raising.
+    """
+    try:
+        from auth.mfa import (
+            disable_mfa,
+            enable_mfa,
+            generate_secret,
+            is_mfa_enabled,
+            provisioning_uri,
+            verify_totp,
+        )
+
+        section_divider("Multi-factor Authentication")
+
+        if not isinstance(user_id, str) or not user_id:
+            st.info("Log in to manage MFA.")
+            return
+
+        current_user = st.session_state.get("current_user")
+        username = getattr(current_user, "username", "") or user_id
+
+        if bool(is_mfa_enabled(user_id)):
+            st.success("MFA active — required at next sign-in.")
+            st.caption(
+                "Disabling MFA returns the account to password-only "
+                "login. Re-enabling later requires fresh enrollment."
+            )
+            confirm = bool(st.session_state.get("mfa_confirm_disable", False))
+            if not confirm:
+                if st.button("Disable MFA", key="mfa_panel_disable_btn"):
+                    st.session_state["mfa_confirm_disable"] = True
+                    st.rerun()
+            else:
+                st.warning(
+                    "Click again to confirm — this wipes the current "
+                    "TOTP secret."
+                )
+                act_col1, act_col2 = st.columns([2, 2])
+                with act_col1:
+                    if st.button(
+                        "Confirm disable",
+                        key="mfa_panel_disable_confirm_btn",
+                    ):
+                        try:
+                            if disable_mfa(user_id):
+                                st.session_state.pop(
+                                    "mfa_confirm_disable", None
+                                )
+                                st.warning("MFA disabled.")
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Disable failed — check the logs."
+                                )
+                        except Exception as exc:
+                            logger.exception(
+                                f"MFA panel disable failed: {exc}"
+                            )
+                            st.error("Disable failed — check the logs.")
+                with act_col2:
+                    if st.button(
+                        "Cancel",
+                        key="mfa_panel_disable_cancel_btn",
+                    ):
+                        st.session_state.pop("mfa_confirm_disable", None)
+                        st.rerun()
+            return
+
+        # ─── Disabled branch ─────────────────────────────────────────────
+        st.caption(
+            "Add a 6-digit code from an authenticator app (Google "
+            "Authenticator, 1Password, Authy, …) to your login. The "
+            "second factor blunts password-leak risk: an attacker with "
+            "your password still cannot sign in without the rotating "
+            "code on your phone."
+        )
+
+        pending = st.session_state.get("mfa_pending_secret")
+        if not pending:
+            if st.button("Enable MFA", key="mfa_panel_enable_btn"):
+                try:
+                    st.session_state["mfa_pending_secret"] = generate_secret()
+                    st.rerun()
+                except Exception as exc:
+                    logger.exception(f"MFA panel enable mint failed: {exc}")
+                    st.error("Could not generate secret — check the logs.")
+            return
+
+        # Mid-enrollment: show the secret + optional QR + verify input.
+        st.markdown(
+            "<strong>Step 1.</strong> Add this secret to your "
+            "authenticator app — either by scanning the QR code or by "
+            "typing the raw secret manually.",
+            unsafe_allow_html=True,
+        )
+        # Secret displayed via st.code (NOT st.write) — st.code preserves
+        # exact whitespace and skips markdown parsing, so a stray ``*`` in
+        # a base32 secret cannot accidentally italicize the display.
+        st.code(pending, language="text")
+
+        try:
+            uri = provisioning_uri(
+                pending,
+                account=username,
+                issuer="Ship Tracker",
+            )
+        except Exception as exc:
+            logger.exception(f"MFA panel provisioning_uri failed: {exc}")
+            uri = ""
+
+        with st.expander("Show as QR", expanded=False):
+            st.markdown(
+                "<strong>Provisioning URI</strong> (paste into any QR "
+                "generator, or import directly):",
+                unsafe_allow_html=True,
+            )
+            st.code(uri or "(unavailable)", language="text")
+            try:
+                import qrcode  # type: ignore[import-not-found]
+                import io as _io
+
+                qr = qrcode.QRCode(box_size=6, border=2)
+                qr.add_data(uri)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                buf = _io.BytesIO()
+                img.save(buf, format="PNG")
+                st.image(
+                    buf.getvalue(),
+                    caption="Scan with your authenticator app",
+                )
+            except ImportError:
+                st.caption(
+                    "QR rendering unavailable — the `qrcode` library "
+                    "is not installed. Scan the URI text above with any "
+                    "QR generator, or run `pip install qrcode[pil]` to "
+                    "render inline. The raw secret above also works for "
+                    "manual entry."
+                )
+            except Exception as exc:
+                logger.exception(f"MFA panel QR render failed: {exc}")
+                st.caption(
+                    "QR rendering failed — use the URI text above."
+                )
+
+        st.markdown(
+            "<strong>Step 2.</strong> Enter the current 6-digit code "
+            "from the app to confirm the secret is correctly loaded.",
+            unsafe_allow_html=True,
+        )
+        code = st.text_input(
+            "6-digit code",
+            max_chars=6,
+            key="mfa_panel_code_input",
+        )
+        act_col1, act_col2 = st.columns([2, 2])
+        with act_col1:
+            if st.button(
+                "Verify and enable",
+                key="mfa_panel_verify_btn",
+            ):
+                try:
+                    if verify_totp(pending, code or ""):
+                        if enable_mfa(user_id, pending):
+                            st.session_state.pop("mfa_pending_secret", None)
+                            st.session_state.pop("mfa_panel_code_input", None)
+                            st.success("MFA enabled.")
+                            st.rerun()
+                        else:
+                            st.error("Enable failed — check the logs.")
+                    else:
+                        st.error("Code didn't verify — try again.")
+                except Exception as exc:
+                    logger.exception(f"MFA panel verify failed: {exc}")
+                    st.error("Verification failed — check the logs.")
+        with act_col2:
+            if st.button("Cancel setup", key="mfa_panel_cancel_btn"):
+                st.session_state.pop("mfa_pending_secret", None)
+                st.session_state.pop("mfa_panel_code_input", None)
+                st.rerun()
+
+    except Exception as exc:
+        logger.exception(f"MFA panel render error: {exc}")
+        st.error("MFA panel unavailable.")
+
+
 def _render_source_health() -> None:
     """Render the data-source health panel — periodic liveness checks
     against each external feed. Sourced from ``engine.source_health``."""
@@ -2060,6 +2271,14 @@ def render(
             except Exception as exc:
                 logger.error(f"Security panel render error: {exc}")
                 st.error("Security panel unavailable.")
+
+            # ── Movement 1.697: dedicated MFA self-service panel ───────────────
+            try:
+                from state.user_scope import current_user_id
+                _render_mfa_panel(current_user_id())
+            except Exception as exc:
+                logger.error(f"MFA panel render error: {exc}")
+                st.error("MFA panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")
