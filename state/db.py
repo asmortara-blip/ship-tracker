@@ -125,12 +125,35 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       The existing alert_id-based INSERT-OR-IGNORE dedup is unchanged
 #       — that one still blocks EXACT-duplicate inserts within a single
 #       save call; v14 layers a NEAR-duplicate window-based dedup on top.
+#  15 — adds the ``user_settings`` table for per-user preferences (NOT
+#       domain data — these are UI/UX knobs like timezone, theme,
+#       default report window, default alert severity threshold). One
+#       row per user, keyed by ``user_id``, with a free-form
+#       ``settings_json`` TEXT blob so future preferences can be added
+#       by bumping the ``UserSettings`` dataclass without a schema
+#       bump. Pre-v15 users have no row; ``get_settings`` returns the
+#       defaults dataclass for unknown users so the absence-of-row case
+#       is invisible to callers. Populated by ``auth.settings``.
+#  16 — adds two columns to the ``users`` table for optional TOTP MFA
+#       as a second factor on top of the password login:
+#       ``mfa_secret TEXT NOT NULL DEFAULT ''`` (canonical 32-char
+#       base32 secret compatible with every standard authenticator app)
+#       and ``mfa_enabled INTEGER NOT NULL DEFAULT 0``. Pre-v16 rows
+#       pick up the empty/0 defaults — MFA is off, legacy accounts
+#       keep logging in with just the password. The TOTP implementation
+#       lives in ``auth.mfa`` (stdlib hmac/hashlib/struct — no pyotp
+#       dependency). The login surface in ``auth.users.login`` grows an
+#       optional ``mfa_code`` kwarg, and ``auth.gate.require_auth_with_users``
+#       grows a third "MFA code" form field that only matters once a
+#       user enables MFA. Same idempotent ALTER-TABLE-in-try/except
+#       pattern as v4 / v5 / v6 / v13 / v14 — each column add is
+#       independently safe to re-run.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 14
+SCHEMA_VERSION: int = 16
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -563,6 +586,60 @@ _SCHEMA_V14_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v14)"
 )
 
+# Schema v15 adds the ``user_settings`` table for per-user preferences
+# (NOT domain data — these are UI/UX knobs like timezone, theme, default
+# report window, default alert severity threshold). One row per user
+# keyed by ``user_id``; the actual prefs live JSON-encoded in
+# ``settings_json``. Storing them as JSON in a single column means
+# adding a NEW preference is a one-line change to the
+# ``auth.settings.UserSettings`` dataclass — no schema bump required.
+# Pre-v15 users have no row; ``auth.settings.get_settings`` returns the
+# defaults dataclass for unknown users so the absence-of-row case is
+# invisible to callers.
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10 / v11 / v12: a fresh DB picks up the table via the executescript
+# path in ``_init_schema``; the explicit ``_migrate_to_v15`` helper
+# re-runs the same script on upgrade. No supporting index — the table
+# is keyed by ``user_id`` (the PRIMARY KEY auto-indexes it).
+_SCHEMA_V15 = """
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id       TEXT PRIMARY KEY,
+    settings_json TEXT NOT NULL DEFAULT '{}',
+    updated_at    TEXT NOT NULL
+);
+"""
+
+_SCHEMA_V15_NOTE: str = (
+    "v15: user_settings table (user_id PK, settings_json, updated_at) "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v15)"
+)
+
+# Schema v16 adds two columns to the ``users`` table for optional TOTP
+# MFA as a second factor on top of the password login:
+#
+#   * ``mfa_secret``  TEXT NOT NULL DEFAULT ''   — canonical 32-char
+#     base32 secret used by every standard authenticator app
+#     (Google Authenticator, 1Password, Authy, …). Empty when MFA is
+#     not enabled.
+#   * ``mfa_enabled`` INTEGER NOT NULL DEFAULT 0 — 0/1 flag. Pre-v16
+#     rows pick up 0, which preserves the password-only behaviour;
+#     ``auth.users.login`` only requires the second factor when this
+#     column is 1 for the looked-up user.
+#
+# Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+# ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13`` /
+# ``_migrate_to_v14``: SQLite does NOT support ``IF NOT EXISTS`` on
+# ALTER TABLE, so each statement is wrapped in try/except and "duplicate
+# column name" errors are swallowed. Each column is added in its own
+# try/except so partial completion of a prior run is also tolerated.
+# Added via ``_migrate_to_v16`` in ``state/migrations.py``.
+_SCHEMA_V16_NOTE: str = (
+    "v16: users.mfa_secret TEXT NOT NULL DEFAULT '' + "
+    "users.mfa_enabled INTEGER NOT NULL DEFAULT 0 "
+    "(added via ALTER TABLE in _migrate_to_v16)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -652,6 +729,24 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v14(conn)
     except Exception as exc:
         logger.warning(f"state.db: v14 column adds skipped: {exc}")
+    # v15 add-only schema (CREATE TABLE IF NOT EXISTS) — same pattern as
+    # v2 / v3 / v8 / v9 / v10 / v11 / v12. Adds the user_settings table
+    # so the platform has a place to persist per-user preferences
+    # (timezone, theme, default report window, default alert severity
+    # threshold, plus a free-form extras dict) without polluting the
+    # domain tables.
+    conn.executescript(_SCHEMA_V15)
+    # v16 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14. Adds the mfa_secret + mfa_enabled
+    # columns to the users table so the platform can offer optional TOTP
+    # MFA as a second factor on top of password login. Safe to run on
+    # every open (fresh DB: adds the columns; existing DB: no-op when
+    # the columns already exist).
+    try:
+        from state.migrations import _migrate_to_v16
+        _migrate_to_v16(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v16 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -823,6 +918,33 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v14(conn)
         except Exception as exc:
             logger.warning(f"state.db: v14 migration skipped: {exc}")
+
+    # Migration 14 → 15: add the ``user_settings`` table so per-user
+    # preferences (timezone / theme / default report window / default
+    # alert severity threshold / extras) survive across sessions
+    # without polluting the domain tables. Same CREATE-IF-NOT-EXISTS
+    # idempotency as v2 / v3 / v8 — the helper is already invoked
+    # unconditionally above; this branch keeps the version-step ladder
+    # explicit.
+    if current < 15:
+        try:
+            from state.migrations import _migrate_to_v15
+            _migrate_to_v15(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v15 migration skipped: {exc}")
+
+    # Migration 15 → 16: add the users.mfa_secret + users.mfa_enabled
+    # columns so accounts can opt in to TOTP MFA as a second factor on
+    # top of the password login. Same idempotent ALTER-TABLE-in-try/
+    # except pattern as v4 / v5 / v6 / v13 / v14 — the helper is
+    # already invoked unconditionally above; this branch keeps the
+    # version-step ladder explicit.
+    if current < 16:
+        try:
+            from state.migrations import _migrate_to_v16
+            _migrate_to_v16(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v16 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

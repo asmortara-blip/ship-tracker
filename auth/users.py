@@ -201,16 +201,43 @@ def signup(username: str, password: str) -> Optional[User]:
         return None
 
 
-def login(username: str, password: str) -> Optional[User]:
+def login(
+    username: str,
+    password: str,
+    *,
+    mfa_code: Optional[str] = None,
+) -> Optional[User]:
     """Verify credentials and return the matching ``User``.
 
-    Returns ``None`` for either a missing user OR a bad password — the
-    same return shape, so the UI cannot tell which one failed (no info
-    leak about which usernames exist).
+    Returns ``None`` for either a missing user OR a bad password OR
+    (when MFA is enabled on the account) a missing/wrong second-factor
+    code — the same return shape, so the UI cannot tell which step
+    failed (no info leak about which usernames exist or whether MFA is
+    enabled on a given account).
+
+    MFA handling
+    ------------
+    If the account has ``mfa_enabled = 1`` in the database:
+
+      * ``mfa_code=None`` → returns ``None``. The caller (the login
+        form) is expected to call ``login_requires_mfa(username)``
+        AFTER a password-only attempt fails to decide whether to
+        surface "MFA required" vs. "wrong password" in the UI.
+      * ``mfa_code=<6 digits>`` → the code is verified against the
+        account's ``mfa_secret`` via ``auth.mfa.verify_totp``. On
+        mismatch this function returns ``None`` — same shape as bad
+        password, same enumeration resistance.
+
+    Accounts WITHOUT MFA enabled ignore ``mfa_code`` entirely. This is
+    deliberate: legacy callers that do not pass the kwarg continue to
+    work, and a caller that passes a bogus code for a non-MFA account
+    is not punished for it (the second factor is opt-in, not required).
 
     On success, ``last_login_at`` is updated to the current ISO-8601
     UTC timestamp before the ``User`` is returned, and the returned
-    instance carries the new value.
+    instance carries the new value. The login audit row carries
+    ``detail={'mfa': True}`` when the second factor was exercised on
+    this login, so a security review can spot which logins used MFA.
     """
     try:
         if not isinstance(username, str) or not isinstance(password, str):
@@ -222,7 +249,8 @@ def login(username: str, password: str) -> Optional[User]:
         row = conn.execute(
             """
             SELECT user_id, username, password_hash, password_salt,
-                   role, created_at, last_login_at
+                   role, created_at, last_login_at,
+                   mfa_secret, mfa_enabled
               FROM users
              WHERE username = ?
             """,
@@ -245,6 +273,35 @@ def login(username: str, password: str) -> Optional[User]:
 
         if not _verify_password(password, stored_hash, salt):
             return None
+
+        # MFA gate. The columns are nullable-with-default-0 from the v16
+        # migration, but ``row[...]`` could still surface ``None`` on a
+        # row that was hand-edited; coerce defensively.
+        mfa_enabled = bool(int(row["mfa_enabled"] or 0))
+        mfa_used = False
+        if mfa_enabled:
+            if mfa_code is None:
+                # Caller must prompt for the second factor and retry.
+                # Returning None (same shape as bad password) keeps the
+                # enumeration-resistance contract; the public
+                # ``login_requires_mfa`` helper exists for the UI to ask
+                # explicitly whether this username carries MFA.
+                return None
+            try:
+                from auth.mfa import verify_totp
+                ok = verify_totp(row["mfa_secret"] or "", str(mfa_code))
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    f"auth.users.login: mfa verify failed "
+                    f"for username={username!r}: {exc}"
+                )
+                ok = False
+            if not ok:
+                # Same return shape as bad password — no info leak about
+                # which step failed. Failed MFA does NOT audit (same
+                # enumeration-protection as failed password).
+                return None
+            mfa_used = True
 
         # Stamp last_login_at. A failure here doesn't fail the login —
         # the user has already authenticated; analytics is best-effort.
@@ -273,6 +330,9 @@ def login(username: str, password: str) -> Optional[User]:
         # log (which is queryable by user_id). Keeping success-only
         # matches the bad_user / bad_password symmetry above — there
         # is no observable difference between the two failure paths.
+        # The detail payload carries ``{'mfa': True}`` when the second
+        # factor was exercised, so a security review can spot which
+        # logins used MFA without digging through the timeline.
         try:
             from auth.audit import record_audit
             record_audit(
@@ -280,6 +340,7 @@ def login(username: str, password: str) -> Optional[User]:
                 entity_type="user",
                 entity_id=authenticated.user_id,
                 user_id=authenticated.user_id,
+                detail={"mfa": True} if mfa_used else None,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -287,6 +348,51 @@ def login(username: str, password: str) -> Optional[User]:
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
         logger.warning(f"auth.users.login: failed for username={username!r}: {exc}")
         return None
+
+
+def login_requires_mfa(username: str) -> bool:
+    """True iff ``username`` exists AND has ``mfa_enabled = 1``.
+
+    The login UI calls this AFTER a password-only ``login`` attempt
+    returns ``None`` to decide between:
+
+      * "Wrong password" (username unknown, password wrong on a non-MFA
+        account, password right on an MFA account but no code) and
+      * "MFA code required" (password presumed right but the account
+        carries MFA).
+
+    The function does NOT verify the password — it only inspects the
+    flag column. This is intentional: the caller has already tried the
+    password and gotten ``None``, so the only useful additional bit is
+    "should we now ask for the second factor?".
+
+    Returns ``False`` on unknown user or any DB error. NEVER raises.
+
+    NOTE: This helper does leak the boolean "does this username carry
+    MFA?" to anyone who can call it. That is a deliberate trade-off —
+    without this signal, the login form cannot decide whether to render
+    the second-factor input field. Pair with a rate-limited login
+    surface (the existing ``auth.gate`` lockout policy) to keep brute-
+    force enumeration costly.
+    """
+    try:
+        if not isinstance(username, str) or not username:
+            return False
+        from state.db import get_connection
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT mfa_enabled FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if row is None:
+            return False
+        return bool(int(row["mfa_enabled"] or 0))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"auth.users.login_requires_mfa: failed for "
+            f"username={username!r}: {exc}"
+        )
+        return False
 
 
 def get_user(user_id: str) -> Optional[User]:
@@ -357,6 +463,7 @@ __all__ = [
     "User",
     "signup",
     "login",
+    "login_requires_mfa",
     "get_user",
     "count_users",
     "list_users",

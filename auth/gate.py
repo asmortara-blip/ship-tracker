@@ -410,7 +410,13 @@ def require_auth_with_users() -> bool:
     import streamlit as st
 
     # Defer the users import too — it touches the SQLite layer.
-    from auth.users import User, count_users, login, signup
+    from auth.users import (
+        User,
+        count_users,
+        login,
+        login_requires_mfa,
+        signup,
+    )
 
     n_users = count_users()
 
@@ -459,17 +465,57 @@ def require_auth_with_users() -> bool:
                 label_visibility="collapsed",
                 placeholder="Password",
             )
+            # Third field: 6-digit TOTP code from the user's
+            # authenticator app. Optional in the form — non-MFA accounts
+            # ignore it; MFA-enabled accounts require it. We always
+            # render the field (rather than conditionally showing it
+            # after the password is accepted) so the login flow is one
+            # round-trip and there is no observable "MFA prompt
+            # appeared" signal an attacker could use to enumerate which
+            # accounts have MFA on. The placeholder spells out the
+            # intent so first-time non-MFA users know to ignore it.
+            mfa = st.text_input(
+                "MFA code (if enabled)",
+                key="auth_users_login_mfa",
+                label_visibility="collapsed",
+                placeholder="MFA code (only if enabled)",
+                max_chars=10,
+            )
             submitted = st.form_submit_button(
                 "Log in", use_container_width=True
             )
         if submitted:
-            user = login(u or "", p or "")
+            username_in = u or ""
+            password_in = p or ""
+            mfa_in = (mfa or "").strip()
+
+            # First-pass: try password (and MFA if supplied). On success
+            # we are done. On None, distinguish the "MFA required" case
+            # so the user gets actionable feedback rather than the
+            # generic "wrong credentials" toast.
+            user = login(
+                username_in,
+                password_in,
+                mfa_code=(mfa_in or None),
+            )
             if user is not None:
                 st.session_state["current_user"] = user
                 st.markdown("</div>", unsafe_allow_html=True)
                 st.rerun()
                 return True  # unreachable in practice
-            st.error("Invalid username or password.")
+            # MFA-enabled account, no code supplied → tell the user
+            # what is missing. We only consult ``login_requires_mfa``
+            # AFTER the password-only attempt has failed, so we never
+            # leak the MFA flag for usernames that nobody is logging
+            # into. (If the password was wrong, the second branch
+            # below fires regardless of the MFA flag.)
+            if not mfa_in and login_requires_mfa(username_in):
+                st.error(
+                    "MFA code required for this account. Enter the "
+                    "current code from your authenticator app."
+                )
+            else:
+                st.error("Invalid username, password, or MFA code.")
 
     with signup_tab:
         with st.form("auth_users_signup_form", clear_on_submit=False):

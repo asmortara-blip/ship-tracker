@@ -982,3 +982,175 @@ def test_v14_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> No
     # No duplicates from re-running the ALTER TABLE.
     assert col_names.count("fire_count") == 1
     assert col_names.count("last_fired_at") == 1
+
+
+# ─── Schema v15: user_settings table ──────────────────────────────────────
+
+def test_v15_migration_adds_user_settings_table() -> None:
+    """v15 adds the ``user_settings`` table for per-user preferences
+    (timezone, theme, default report window, default alert severity,
+    plus a free-form extras dict). Confirms the table exists with the
+    documented columns and that a fresh INSERT round-trips with the
+    expected default."""
+    from state.db import get_connection
+
+    conn = get_connection()
+
+    # 1. Table exists with the documented columns.
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(user_settings)"
+        ).fetchall()
+    }
+    assert set(cols.keys()) >= {"user_id", "settings_json", "updated_at"}
+    # user_id is the primary key.
+    assert cols["user_id"]["pk"] == 1
+    # settings_json defaults to '{}'.
+    assert cols["settings_json"]["dflt_value"] in ("'{}'", '"{}"')
+    # NOT NULL on the load-bearing columns.
+    assert cols["settings_json"]["notnull"] == 1
+    assert cols["updated_at"]["notnull"] == 1
+
+    # 2. A fresh INSERT round-trips and the default lands.
+    conn.execute(
+        """
+        INSERT INTO user_settings
+          (user_id, updated_at)
+        VALUES ('v15c', '2026-05-22T00:00:00+00:00')
+        """
+    )
+    row = conn.execute(
+        "SELECT * FROM user_settings WHERE user_id = 'v15c'"
+    ).fetchone()
+    assert row is not None
+    assert row["settings_json"] == "{}"
+
+
+def test_v15_schema_version_stamped() -> None:
+    """After init, the stored schema_version must be at least 15.
+
+    Guards against an accidental SCHEMA_VERSION rollback — the per-user
+    preferences layer must continue to ship at v15+ so the
+    user_settings table is always present.
+    """
+    from state.db import SCHEMA_VERSION, get_connection
+
+    assert SCHEMA_VERSION >= 15
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) >= 15
+
+
+def test_v15_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v15+ DB must not raise — CREATE TABLE IF NOT EXISTS
+    is inherently idempotent, but we exercise the path anyway to lock
+    in the contract."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v15.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    # Exactly one table named user_settings (no duplicates from re-run).
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='user_settings'"
+    ).fetchall()
+    assert len(rows) == 1
+
+
+# ─── Schema v16: users.mfa_secret + users.mfa_enabled ─────────────────────
+
+def test_v16_migration_adds_mfa_columns_to_users() -> None:
+    """v16 ALTER TABLE adds two columns to ``users`` for optional TOTP
+    MFA as a second factor on top of the password login:
+
+      * ``mfa_secret``  TEXT NOT NULL DEFAULT ''
+      * ``mfa_enabled`` INTEGER NOT NULL DEFAULT 0
+
+    Verifies the columns exist with the documented types + defaults
+    and that a fresh INSERT picks up the defaults (which means MFA is
+    OFF — pre-v16 accounts keep logging in with just the password).
+    """
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(users)"
+        ).fetchall()
+    }
+    assert "mfa_secret" in cols
+    assert "mfa_enabled" in cols
+
+    assert cols["mfa_secret"]["type"].upper() == "TEXT"
+    assert cols["mfa_enabled"]["type"].upper() == "INTEGER"
+
+    # NOT NULL is enforced (notnull == 1 in PRAGMA output).
+    assert cols["mfa_secret"]["notnull"] == 1
+    assert cols["mfa_enabled"]["notnull"] == 1
+
+    # New rows must default mfa_secret to '' and mfa_enabled to 0.
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO users
+              (user_id, username, password_hash, password_salt,
+               role, created_at)
+            VALUES ('v16c', 'v16user', 'abcd', 'ef01', 'user',
+                    '2026-05-22T00:00:00+00:00')
+            """
+        )
+    row = conn.execute(
+        "SELECT mfa_secret, mfa_enabled FROM users WHERE user_id = 'v16c'"
+    ).fetchone()
+    assert row["mfa_secret"] == ""
+    assert row["mfa_enabled"] == 0
+
+
+def test_v16_schema_version_stamped() -> None:
+    """After init, the stored schema_version must be at least 16.
+
+    Guards against an accidental SCHEMA_VERSION rollback — the MFA
+    layer relies on the mfa_secret + mfa_enabled columns being present,
+    so v16+ must always ship.
+    """
+    from state.db import SCHEMA_VERSION, get_connection
+
+    assert SCHEMA_VERSION >= 16
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM kv_state WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) >= 16
+
+
+def test_v16_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v16+ database must not raise even though the
+    ALTER TABLE in _migrate_to_v16 would otherwise complain about
+    duplicate columns on the second invocation. Mirrors the v5 / v7 /
+    v13 / v14 idempotency tests."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v16.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(users)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("mfa_secret") == 1
+    assert col_names.count("mfa_enabled") == 1
