@@ -558,12 +558,89 @@ python -m tools.ops_cli settings set --user-id <id> \
 
 ## Backup / Restore
 
-The `utils.bulk_export` module bundles durable state — the SQLite DB,
-per-source parquet caches, and saved HTML reports — into a single
-timestamped tar.gz archive. Use it before a schema migration, when
-handing a dataset to a colleague, or as a regular backup.
+Two complementary tools cover backups:
 
-### Create an archive
+* **`tools.backup_cli`** — operator CLI for snapshot-and-restore of the
+  SQLite DB and the generated-reports tree. The recommended path when
+  you need an in-app, recoverable backup before a risky change.
+* **`utils.bulk_export`** — wider-scope dataset export that ALSO
+  includes per-source parquet caches. Use this for hand-off / migration
+  scenarios, not for routine backup-and-restore (it does not have a
+  matching `restore` command).
+
+### `tools.backup_cli` — snapshot + restore the state DB
+
+Four subcommands. Exit codes follow the operator-CLI contract (0 ok,
+1 handler failure with stderr message, 2 argparse rejection).
+
+```bash
+# Create — default output is ./backups/ship_tracker_<timestamp>.tar.gz
+python -m tools.backup_cli create
+python -m tools.backup_cli create --out /tmp/before_migration.tar.gz
+
+# List backups in a directory (default: ./backups)
+python -m tools.backup_cli list
+python -m tools.backup_cli list --dir /var/backups/ship
+
+# Verify a backup — opens the snapshot, re-derives schema + row counts,
+# compares to the manifest. Exits 1 + FAIL lines if any check failed.
+python -m tools.backup_cli verify --from ./backups/ship_tracker_<ts>.tar.gz
+
+# Restore — REQUIRES --confirm because it overwrites cache/ship_tracker.db
+python -m tools.backup_cli restore --from /tmp/before_migration.tar.gz --confirm
+```
+
+Archive layout:
+
+```
+ship_tracker_<timestamp>.tar.gz
+  manifest.json              # schema_version, created_at, table row counts,
+                             # hostname, tool_version
+  ship_tracker.db            # SQLite snapshot via Connection.backup() —
+                             # safe against concurrent WAL writes
+  cache/reports/*.html       # saved investor-briefing reports (if any)
+```
+
+What is intentionally NOT in a backup: logs (`logs/`), secrets
+(`.env`, vault-key material), and the per-source parquet caches under
+`cache/<source>/*.parquet`. The parquets are derived state and the
+secrets are out-of-band by design — they should never end up in a
+backup archive on disk.
+
+Safety properties enforced by the CLI:
+
+* **DB snapshot via the online-backup API.** A plain `shutil.copy`
+  races against WAL writes; `Connection.backup` is the only safe way
+  to copy a live SQLite DB at a transactionally-consistent point.
+* **Restore requires `--confirm`.** Restore is destructive — without
+  the flag the CLI exits 1 and tells the operator what to add.
+* **No restore-forward.** If the backup's `manifest.schema_version`
+  is greater than the running code's `state.db.SCHEMA_VERSION`, the
+  CLI refuses. Upgrade the running code first.
+* **Atomic swap.** The restored DB is moved into place via
+  `os.replace`, so a concurrent reader sees either the old DB or the
+  new DB, never a half-written file. Stale `-wal` / `-shm` sidecars
+  are unlinked after the swap.
+
+#### Recommended cron entry
+
+Take a backup every night at 03:30 server time and keep the newest 30:
+
+```cron
+30 3 * * * cd /path/to/ship && /usr/bin/python3 -m tools.backup_cli create >> logs/backup.log 2>&1 && ls -1t backups/ship_tracker_*.tar.gz | tail -n +31 | xargs -r rm --
+```
+
+(Adjust the retention number to taste; on a small DB the archives are
+a few MB each, so a 30-day rolling window is cheap. Skip the second
+half of the line — the `ls … xargs rm` — if you'd rather keep every
+archive forever.)
+
+### `utils.bulk_export` — wider-scope dataset export
+
+Use this when you want to hand someone a working copy of every
+parquet cache alongside the DB and reports — for example, migrating
+from laptop A to laptop B without losing alerts / reports / cached
+feeds, or sharing a known-good dataset with a colleague.
 
 ```bash
 # Default — writes cache/exports/ship-tracker-YYYYMMDD-HHMMSS.tar.gz
@@ -594,27 +671,28 @@ ship-tracker-YYYYMMDD-HHMMSS.tar.gz
 `logs/` and `cache/exports/` are intentionally excluded — logs grow
 unbounded, and including prior exports would cause recursive bloat.
 
-### Restore
+To restore manually from a `utils.bulk_export` archive:
 
 ```bash
-# From a clean checkout
 tar -xzf ship-tracker-20260522-143012.tar.gz -C /path/to/ship
 # The DB lands at the archive root; move it into cache/:
 mv /path/to/ship/ship_tracker.db /path/to/ship/cache/
 ```
 
-The `MANIFEST.json` at the archive root records the SQLite schema
-version at export time — refuse a restore where the archive's
-`schema_version` is **greater** than `state.db.SCHEMA_VERSION` in your
-checkout (the running code does not know the newer schema yet).
+The `MANIFEST.json` records the schema version at export time —
+refuse a restore where the archive's `schema_version` is **greater**
+than `state.db.SCHEMA_VERSION` in your checkout (the running code
+does not know the newer schema yet). The `tools.backup_cli restore`
+command enforces this automatically; manual `tar -xzf` does not.
 
 ### Automatic retention
 
 `worker.scheduler.run_bulk_export_prune_job` runs once per daily cron
 pass (alongside the LLM-call / render-event / health-ping prunes) and
-keeps the newest 5 archives, deleting the rest. Override the policy by
-calling `prune_old_exports(keep_n=N)` directly or running the CLI with
-`--prune`.
+keeps the newest 5 `bulk_export` archives, deleting the rest. The
+backups produced by `tools.backup_cli create` are NOT pruned by this
+job — they live under `./backups/` and the operator decides retention
+via the cron one-liner above.
 
 ## Logs
 
