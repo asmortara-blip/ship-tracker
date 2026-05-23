@@ -1751,7 +1751,12 @@ def deliver_pending_for_rule(
 #  Channel persistence
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> None:
+def save_channel(
+    channel: DeliveryChannel,
+    *,
+    user_id: Optional[str] = None,
+    encrypt_target: bool = False,
+) -> None:
     """Insert or update a delivery channel in SQLite. ``created_at`` is
     populated server-side if blank so callers can construct
     ``DeliveryChannel`` without providing it.
@@ -1763,6 +1768,15 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
     the legacy global bucket — pre-multi-user behaviour. On an UPSERT
     (channel_id collision) the user_id column is also updated so a
     channel migrated from legacy into a user's scope sticks.
+
+    When ``encrypt_target=True``, ``channel.target`` is wrapped via
+    :func:`state.vault.encrypt` before being persisted. The dataclass
+    instance is NOT mutated — only the persisted value is encrypted —
+    so the caller keeps the plaintext target on the in-memory object
+    (useful when they immediately deliver an alert with this channel
+    after a save). ``load_channels`` transparently decrypts on read.
+    The default ``encrypt_target=False`` preserves today's behaviour
+    exactly: the target is persisted as plain text.
     """
     from datetime import datetime, timezone
     from state.db import get_connection
@@ -1770,6 +1784,22 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
 
     uid = current_user_id() if user_id is None else user_id
     created_at = channel.created_at or datetime.now(timezone.utc).isoformat()
+    # Opt-in field-level encryption — see state/vault.py for the threat
+    # model + envelope format. encrypt() never raises and returns the
+    # plaintext on internal failure, so the worst case is "encryption
+    # silently skipped" which matches today's behaviour exactly.
+    if encrypt_target:
+        try:
+            from state import vault
+            target_to_persist = vault.encrypt(channel.target)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"save_channel: vault.encrypt failed: {exc}; persisting "
+                f"plaintext target"
+            )
+            target_to_persist = channel.target
+    else:
+        target_to_persist = channel.target
     # Normalize digest_mode to one of the two supported values; any
     # other string falls back to "immediate" so a stale/invalid value
     # in the dataclass can't poison the DB.
@@ -1810,7 +1840,7 @@ def save_channel(channel: DeliveryChannel, *, user_id: Optional[str] = None) -> 
                     channel.channel_id,
                     channel.name,
                     channel.kind,
-                    channel.target,
+                    target_to_persist,
                     channel.severity_threshold,
                     1 if channel.enabled else 0,
                     created_at,
@@ -1908,12 +1938,38 @@ def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
         except (TypeError, ValueError):
             return bool(val)
 
+    # Opt-in field-level decryption — a row whose target was persisted
+    # via save_channel(..., encrypt_target=True) is wrapped in a
+    # ``vault:v1:`` envelope. We unwrap it here so the rest of the
+    # delivery pipeline (deliver_alert, format_*_payload) sees the
+    # plaintext target it expects. A bad envelope / HMAC mismatch
+    # / missing key falls back to the raw stored value with a WARNING
+    # so the operator can act — the alternative ("silently drop the
+    # row") would hide misconfiguration from the alert-routing UI.
+    def _maybe_decrypt(stored: str) -> str:
+        try:
+            from state import vault
+            if not vault.is_encrypted(stored):
+                return stored
+            pt = vault.decrypt(stored)
+            if pt is None:
+                logger.warning(
+                    "load_channels: vault.decrypt returned None for an "
+                    "encrypted target; falling back to the raw envelope "
+                    "(channel will likely fail to deliver until re-saved)"
+                )
+                return stored
+            return pt
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"load_channels: vault decrypt failed: {exc}")
+            return stored
+
     return [
         DeliveryChannel(
             channel_id=r["channel_id"],
             name=r["name"],
             kind=r["kind"],
-            target=r["target"],
+            target=_maybe_decrypt(r["target"]),
             severity_threshold=r["severity_threshold"],
             enabled=bool(r["enabled"]),
             created_at=r["created_at"],
