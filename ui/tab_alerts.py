@@ -495,6 +495,137 @@ def _render_hero(visible_alerts: list[dict]) -> None:
         st.error("Hero section unavailable.")
 
 
+def _render_saved_filters() -> None:
+    """Render the Saved Filters panel for the Alert Center.
+
+    Operators frequently re-apply the same filter combinations ("all
+    CRITICAL last 24h", "transpacific only", "my watchlist"). This panel
+    lets them name, recall, and delete those combinations via
+    ``state.user_filters``.
+
+    Layout:
+      * Section header.
+      * Three-column row: preset picker, Load button, Delete button.
+      * Expander to save the currently-active payload under a new name.
+      * Small caption summarising the active filter.
+
+    The active payload is persisted in ``st.session_state.active_filter_payload``
+    so downstream panels (incidents, ack analytics, alert table) can read
+    it and decide what to honor — that integration is a follow-up; this
+    commit only manages persistence and display.
+
+    Wrapped in try/except + logger.exception so a presets-store failure
+    never breaks the rest of the Alert Center tab.
+    """
+    try:
+        from state.user_filters import (
+            FilterPreset,
+            delete_preset,
+            get_preset,
+            load_presets,
+            save_preset,
+        )
+
+        section_divider("Saved Filters")
+
+        presets = load_presets(scope="alerts") or []
+        preset_names = sorted(p.name for p in presets)
+        options = ["(none)"] + preset_names
+
+        col_pick, col_load, col_delete = st.columns([3, 1, 1])
+        with col_pick:
+            chosen = st.selectbox(
+                "Saved preset",
+                options=options,
+                index=0,
+                key="saved_filter_select",
+                help=(
+                    "Pick a saved filter combination to load. Presets are "
+                    "scoped to the Alert Center surface."
+                ),
+            )
+        with col_load:
+            st.write("")  # vertical alignment with the selectbox label
+            load_clicked = st.button(
+                "Load", key="saved_filter_load_btn", use_container_width=True
+            )
+        with col_delete:
+            st.write("")
+            delete_clicked = st.button(
+                "Delete", key="saved_filter_delete_btn", use_container_width=True
+            )
+
+        if load_clicked and chosen and chosen != "(none)":
+            try:
+                preset = get_preset(chosen, scope="alerts")
+                if preset is None:
+                    st.warning(f"Preset '{chosen}' no longer exists.")
+                else:
+                    st.session_state["active_filter_payload"] = dict(preset.payload or {})
+                    st.session_state["active_filter_name"] = preset.name
+                    st.success(f"Loaded filter preset '{preset.name}'.")
+                    st.rerun()
+            except Exception:
+                logger.exception("Saved filters: load failed")
+                st.error("Could not load that preset.")
+
+        if delete_clicked and chosen and chosen != "(none)":
+            try:
+                ok = delete_preset(chosen, scope="alerts")
+                if ok:
+                    if st.session_state.get("active_filter_name") == chosen:
+                        st.session_state.pop("active_filter_payload", None)
+                        st.session_state.pop("active_filter_name", None)
+                    st.success(f"Deleted preset '{chosen}'.")
+                    st.rerun()
+                else:
+                    st.warning(f"Could not delete '{chosen}' — preset not found.")
+            except Exception:
+                logger.exception("Saved filters: delete failed")
+                st.error("Could not delete that preset.")
+
+        with st.expander("Save current filter as preset…", expanded=False):
+            new_name = st.text_input(
+                "Preset name",
+                key="saved_filter_name_input",
+                help="A short label, e.g. 'critical-24h' or 'transpacific'.",
+            )
+            save_clicked = st.button("Save", key="saved_filter_save_btn")
+            if save_clicked:
+                try:
+                    nm = (new_name or "").strip()
+                    if not nm:
+                        st.warning("Please enter a preset name before saving.")
+                    else:
+                        payload = dict(
+                            st.session_state.get("active_filter_payload") or {}
+                        )
+                        ok = save_preset(
+                            FilterPreset(name=nm, scope="alerts", payload=payload)
+                        )
+                        if ok:
+                            st.session_state["active_filter_payload"] = payload
+                            st.session_state["active_filter_name"] = nm
+                            st.success(f"Saved preset '{nm}'.")
+                            st.rerun()
+                        else:
+                            st.error("Save failed. Check logs for details.")
+                except Exception:
+                    logger.exception("Saved filters: save failed")
+                    st.error("Could not save that preset.")
+
+        active_name = st.session_state.get("active_filter_name")
+        active_payload = st.session_state.get("active_filter_payload")
+        if active_name and isinstance(active_payload, dict):
+            keys = ", ".join(sorted(active_payload.keys())) or "(empty)"
+            st.caption(f"Active filter: {active_name} — keys: {keys}")
+        else:
+            st.caption("No active filter")
+    except Exception:
+        logger.exception("Saved filters panel render failed")
+        st.error("Saved filters panel unavailable.")
+
+
 def _render_configuration_form() -> None:
     try:
         with st.expander("Alert Configuration — Create New Rule", expanded=False):
@@ -1849,6 +1980,7 @@ def render(
 
         try:
             _render_hero(visible_alerts)
+            _render_saved_filters()
             _render_configuration_form()
 
             _render_incidents_panel()
