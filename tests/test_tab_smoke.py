@@ -71,6 +71,7 @@ _TAB_MODULES = [
     "ui.tab_news",
     "ui.tab_nowcast",
     "ui.tab_operator",
+    "ui.tab_operator_overview",
     "ui.tab_options",
     "ui.tab_overview",
     "ui.tab_port_demand",
