@@ -894,6 +894,57 @@ def get_unread_count(*, user_id: Optional[str] = None) -> int:
         return 0
 
 
+def prune_old_alerts(
+    retention_days: int = 180,
+    *,
+    only_acknowledged: bool = True,
+) -> int:
+    """Delete alerts older than ``retention_days`` from the alerts table.
+
+    Companion to ``prune_old_calls`` / ``prune_old_events`` / etc. By
+    default only ACKNOWLEDGED alerts are pruned — unacknowledged ones
+    stay around indefinitely so a 10-month-old unack'd CRITICAL doesn't
+    disappear from the operator's view because of routine retention.
+
+    Pass ``only_acknowledged=False`` to also prune unacked rows past
+    the cutoff (admin-only — useful for one-off cleanup of legacy data).
+
+    Args:
+        retention_days: rows with created_at < (now - retention_days)
+                        are eligible for deletion. Defaults to 180 days
+                        (~6 months). Negative values are a no-op (returns 0).
+        only_acknowledged: when True (the default), only acknowledged
+                           rows are deleted. When False, everything past
+                           the cutoff is deleted regardless of ack state.
+
+    Returns:
+        The count of rows deleted. Never raises (returns 0 on error).
+    """
+    if retention_days < 0:
+        return 0
+    from state.db import get_connection
+
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(days=retention_days)).isoformat()
+    conn = get_connection()
+    try:
+        with conn:
+            if only_acknowledged:
+                cur = conn.execute(
+                    "DELETE FROM alerts WHERE created_at < ? AND acknowledged = 1",
+                    (cutoff_iso,),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM alerts WHERE created_at < ?",
+                    (cutoff_iso,),
+                )
+        return int(cur.rowcount or 0)
+    except Exception as exc:
+        logger.warning(f"prune_old_alerts: SQLite delete failed: {exc}")
+        return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Rule persistence (separate from alert persistence — rules are user-authored
 #  configuration, alerts are the fired events those rules produce).

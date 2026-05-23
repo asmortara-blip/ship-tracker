@@ -996,6 +996,113 @@ def _render_audit_log() -> None:
         st.error("Audit log panel unavailable.")
 
 
+def _render_vault_panel() -> None:
+    """Render the secrets-vault management panel — rotate the master
+    key + see how many channels carry encrypted targets."""
+    try:
+        from state.vault import rotate_key, is_encrypted
+        from engine.alert_delivery import load_channels
+
+        section_divider("Secrets Vault")
+
+        st.caption(
+            "Channel targets (Slack webhook URLs, integration keys) can be "
+            "stored encrypted-at-rest in SQLite. Protects against casual DB "
+            "leaks; not against attackers with process access. "
+            "See docs/DEPLOYMENT.md → Vault for the threat model."
+        )
+
+        try:
+            channels = load_channels()
+        except Exception as exc:
+            logger.exception(f"Vault panel: load_channels failed: {exc}")
+            channels = []
+
+        # Inspect the persisted form of each channel.target rather than
+        # the decrypted runtime value — load_channels transparently
+        # decrypts, so we need a separate SQLite peek to count encrypted
+        # rows. Use the cheap raw-SELECT path.
+        encrypted_count = 0
+        plaintext_count = 0
+        try:
+            from state.db import get_connection
+            conn = get_connection()
+            rows = conn.execute("SELECT target FROM delivery_channels").fetchall()
+            for r in rows:
+                if is_encrypted(r["target"]):
+                    encrypted_count += 1
+                else:
+                    plaintext_count += 1
+        except Exception as exc:
+            logger.debug(f"Vault panel: raw-target SELECT failed: {exc}")
+
+        total = encrypted_count + plaintext_count
+
+        metric_card_row(
+            [
+                {
+                    "label": "Total Channels", "value": str(total),
+                    "accent": C_ACCENT,
+                    "sublabel": "across all delivery kinds",
+                },
+                {
+                    "label": "Encrypted", "value": str(encrypted_count),
+                    "accent": C_HIGH if encrypted_count > 0 else C_TEXT3,
+                    "sublabel": "vault:v1: prefix on target",
+                },
+                {
+                    "label": "Plaintext", "value": str(plaintext_count),
+                    "accent": C_MOD if plaintext_count > 0 else C_HIGH,
+                    "sublabel": "consider re-saving with encrypt_target=True",
+                },
+            ],
+            columns=3,
+        )
+
+        # ─── Rotate master key ─────────────────────────────────────────────
+        st.markdown(
+            "<div style='margin-top:10px'>"
+            "<strong>Rotate master key</strong> — generates a fresh key + "
+            "re-encrypts every currently-encrypted channel target with it. "
+            "Old envelopes become unreadable after rotation. Audit-logged."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        rot_left, rot_right = st.columns([2, 6])
+        with rot_left:
+            confirm = st.checkbox(
+                "I understand", value=False, key="vault_rotate_confirm",
+                help=(
+                    "The old key is overwritten. Re-encrypted channels are "
+                    "re-readable; any unwrapped backups of the old key "
+                    "become useless."
+                ),
+            )
+        with rot_right:
+            if st.button("Rotate now", disabled=not confirm,
+                         key="vault_rotate_btn"):
+                try:
+                    ok = rotate_key()
+                except Exception as exc:
+                    logger.exception(f"Vault rotate_key failed: {exc}")
+                    ok = False
+                if ok:
+                    st.success(
+                        f"Rotated. {encrypted_count} channel target(s) "
+                        "re-encrypted with the new key."
+                    )
+                else:
+                    st.error(
+                        "Rotation reported partial failure — check the logs. "
+                        "Some channels may now have unreadable targets."
+                    )
+
+    except Exception as exc:
+        logger.exception(f"Vault panel render error: {exc}")
+        st.error("Vault panel unavailable.")
+
+
 def _render_source_health() -> None:
     """Render the data-source health panel — periodic liveness checks
     against each external feed. Sourced from ``engine.source_health``."""
@@ -1593,6 +1700,13 @@ def render(
             except Exception as exc:
                 logger.error(f"Source health render error: {exc}")
                 st.error("Source health panel unavailable.")
+
+            # ── Movement 1.695: secrets vault ──────────────────────────────────
+            try:
+                _render_vault_panel()
+            except Exception as exc:
+                logger.error(f"Vault panel render error: {exc}")
+                st.error("Vault panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")

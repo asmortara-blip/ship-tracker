@@ -496,6 +496,35 @@ def run_bulk_export_prune_job(keep_n: int = 5) -> int:
         return 0
 
 
+def run_alert_prune_job(retention_days: int = 180) -> int:
+    """Prune ack'd alerts older than ``retention_days`` from SQLite.
+
+    Thin wrapper around ``engine.alert_engine_v2.prune_old_alerts``
+    that adds logging and shields the caller. Defaults to 180 days
+    (~6 months) — long enough to backtest months of alert effectiveness,
+    short enough that the table doesn't grow without bound.
+
+    Unacknowledged alerts are NEVER auto-pruned — a 10-month-old unack'd
+    CRITICAL should still be visible. Pass only_acknowledged=False from
+    the CLI/admin path for a hard cleanup.
+
+    Returns the count deleted (``0`` on no-op or any error). Never raises.
+    """
+    try:
+        from engine.alert_engine_v2 import prune_old_alerts
+
+        deleted = prune_old_alerts(retention_days=retention_days,
+                                   only_acknowledged=True)
+        logger.info(
+            f"run_alert_prune_job: deleted={deleted} acknowledged alerts "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_alert_prune_job: failed: {exc}")
+        return 0
+
+
 def run_operator_digest_job() -> list:
     """Dispatch the daily Operator Dashboard digest to every ``ops-*`` channel.
 
@@ -656,6 +685,15 @@ def main(argv: Optional[list] = None) -> int:
         run_bulk_export_prune_job()
     except Exception as exc:
         logger.warning(f"main: bulk export prune step failed: {exc}")
+
+    # Stale acknowledged alerts. Default keeps 180 days so multi-month
+    # backtests over alert_backtest still find the rows. Unacknowledged
+    # alerts are never auto-pruned regardless of age. Same belt-and-
+    # braces guard.
+    try:
+        run_alert_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: alert prune step failed: {exc}")
 
     # Operator Dashboard daily digest. Runs LAST so the digest reflects
     # the state after every prune / health ping has settled. Subscribers
