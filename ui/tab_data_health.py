@@ -996,6 +996,119 @@ def _render_audit_log() -> None:
         st.error("Audit log panel unavailable.")
 
 
+def _render_source_health() -> None:
+    """Render the data-source health panel — periodic liveness checks
+    against each external feed. Sourced from ``engine.source_health``."""
+    try:
+        from engine.source_health import get_health_summary, ping_all_sources
+
+        section_divider("Data Source Health")
+
+        col_a, col_b = st.columns([6, 2])
+        with col_a:
+            st.caption(
+                "Periodic liveness probes against each external data feed. "
+                "Status reflects the latest ping per source."
+            )
+        with col_b:
+            run_now = st.button("Ping now", key="src_health_ping_now")
+
+        if run_now:
+            try:
+                ping_all_sources()
+                st.success("Probes complete — table refreshes on next render.")
+            except Exception as exc:
+                logger.exception(f"Source-health on-demand ping failed: {exc}")
+                st.error(f"Ping failed: {exc}")
+
+        try:
+            summary = get_health_summary(window_hours=24)
+        except Exception as exc:
+            logger.exception(f"get_health_summary failed: {exc}")
+            st.error("Couldn't load source-health summary.")
+            return
+
+        total = int(summary.get("total_pings", 0) or 0)
+        by_source = summary.get("by_source", {}) or {}
+        outages = summary.get("current_outages", []) or []
+
+        # ─── 3 KPIs ────────────────────────────────────────────────────────
+        sources_tracked = len(by_source)
+        ok_count = sum(1 for s in by_source.values()
+                       if s.get("last_status") == "up")
+        outage_count = len(outages)
+
+        metric_card_row(
+            [
+                {
+                    "label": "Sources Tracked", "value": str(sources_tracked),
+                    "accent": C_ACCENT,
+                    "sublabel": f"{total:,} pings (24h)",
+                },
+                {
+                    "label": "Currently OK", "value": str(ok_count),
+                    "accent": C_HIGH if ok_count == sources_tracked and sources_tracked > 0 else C_MOD,
+                    "sublabel": "latest ping = up",
+                },
+                {
+                    "label": "Active Outages", "value": str(outage_count),
+                    "accent": C_LOW if outage_count > 0 else C_HIGH,
+                    "sublabel": ", ".join(outages[:3]) if outages else "all clear",
+                },
+            ],
+            columns=3,
+        )
+
+        # ─── by-source table ──────────────────────────────────────────────
+        if not by_source:
+            st.info("No source health data yet — run a ping to populate.")
+            return
+
+        # Sort by last_status (down → degraded → up) then alphabetically
+        _status_order = {"down": 0, "degraded": 1, "up": 2}
+        rows_sorted = sorted(
+            by_source.items(),
+            key=lambda kv: (_status_order.get(kv[1].get("last_status", ""), 9), kv[0]),
+        )
+
+        rows = []
+        for source, stats in rows_sorted:
+            status = stats.get("last_status", "—")
+            badge_color = (
+                C_HIGH if status == "up"
+                else C_MOD if status == "degraded"
+                else C_LOW if status == "down"
+                else C_TEXT3
+            )
+            count = int(stats.get("count", 0))
+            up = int(stats.get("up_count", 0))
+            down = int(stats.get("down_count", 0))
+            avg_ms = float(stats.get("avg_duration_ms", 0.0))
+            last_at = str(stats.get("last_started_at", ""))[:19].replace("T", " ")
+
+            rows.append([
+                source,
+                f"<span style='color:{badge_color};font-weight:600'>{status.upper()}</span>",
+                f"{up}/{count}",
+                str(down),
+                f"{avg_ms:,.0f} ms" if avg_ms < 1000 else f"{avg_ms/1000:.2f} s",
+                last_at,
+            ])
+
+        st.markdown(
+            wsj_market_table(
+                headers=["Source", "Status", "Up / Total", "Down", "Avg Latency", "Last Ping"],
+                rows=rows,
+                title="Per-source health (last 24h)",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    except Exception as exc:
+        logger.exception(f"Source health panel render error: {exc}")
+        st.error("Source health panel unavailable.")
+
+
 def _render_log_viewer() -> None:
     """In-app log viewer — tail the active log file with level/text filters.
 
@@ -1473,6 +1586,13 @@ def render(
             except Exception as exc:
                 logger.error(f"Audit log render error: {exc}")
                 st.error("Audit log panel unavailable.")
+
+            # ── Movement 1.69: data source health ──────────────────────────────
+            try:
+                _render_source_health()
+            except Exception as exc:
+                logger.error(f"Source health render error: {exc}")
+                st.error("Source health panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")

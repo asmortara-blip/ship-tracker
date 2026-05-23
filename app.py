@@ -73,8 +73,13 @@ st.set_page_config(
 # for local dev). See docs/AUTH.md for setup. Wrapped in try/except so
 # a broken auth module never takes down the whole app.
 try:
-    from auth.gate import require_auth
-    require_auth()  # calls st.stop() if not authenticated
+    # require_auth_with_users() activates the multi-user surface when
+    # the users table is populated; it transparently falls back to the
+    # legacy single-password gate (or open mode) when count_users() == 0,
+    # so this one-line switch is safe to ship without breaking existing
+    # deployments. See docs/AUTH.md for the migration path.
+    from auth.gate import require_auth_with_users
+    require_auth_with_users()  # calls st.stop() if not authenticated
 except Exception as _auth_exc:
     logger.warning(f"Auth gate unavailable, allowing through: {_auth_exc}")
 
