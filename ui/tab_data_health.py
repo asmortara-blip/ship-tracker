@@ -1103,6 +1103,253 @@ def _render_vault_panel() -> None:
         st.error("Vault panel unavailable.")
 
 
+def _render_security_panel() -> None:
+    """Render the per-user Security panel — MFA enrollment + API tokens.
+
+    Surfaces ``auth.mfa`` and ``auth.tokens`` for the currently-logged-in
+    user (taken from ``st.session_state.current_user``). The panel is
+    purely user-scoped: it never reveals another account's MFA secret or
+    tokens, and it never persists raw secrets/tokens beyond the
+    single-render display in an ``st.code`` block.
+
+    Sub-sections:
+      * MFA — enable (with TOTP-code confirmation) / disable (with a
+        confirm checkbox so a stray click cannot lock out an account).
+      * API Tokens — list / create / revoke. The raw token is shown
+        ONCE at create time and never re-derivable from the DB.
+    """
+    try:
+        # Lazy imports keep this panel off the tab-load critical path
+        # AND keep the auth modules optional at module-import time —
+        # tests that stub out auth do not need to provide these.
+        from auth.mfa import (
+            disable_mfa,
+            enable_mfa,
+            generate_secret,
+            is_mfa_enabled,
+            provisioning_uri,
+            verify_totp,
+        )
+        from auth.tokens import create_token, list_tokens, revoke_token
+
+        section_divider("My Security")
+
+        current_user = st.session_state.get("current_user")
+        if current_user is None:
+            st.info("Log in to manage your security settings.")
+            return
+
+        user_id = getattr(current_user, "user_id", None)
+        username = getattr(current_user, "username", "")
+        if not isinstance(user_id, str) or not user_id:
+            st.info("Log in to manage your security settings.")
+            return
+
+        # ─── MFA sub-section ──────────────────────────────────────────────
+        st.markdown(
+            "<div style='margin-top:6px'><strong>Two-Factor Authentication "
+            "(TOTP)</strong></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Add a 6-digit code from an authenticator app (Google "
+            "Authenticator, 1Password, Authy, …) to your login. Strictly "
+            "opt-in per account."
+        )
+
+        mfa_on = bool(is_mfa_enabled(user_id))
+        if mfa_on:
+            st.success("MFA is ON for this account.")
+            confirm_disable = st.checkbox(
+                "I understand this removes my second factor",
+                value=False,
+                key="security_disable_mfa_confirm",
+                help=(
+                    "Disabling MFA returns the account to password-only "
+                    "login. The current secret is wiped — re-enabling "
+                    "later requires fresh enrollment."
+                ),
+            )
+            if st.button(
+                "Disable MFA",
+                disabled=not confirm_disable,
+                key="security_disable_mfa",
+            ):
+                if disable_mfa(user_id):
+                    st.success("MFA disabled.")
+                    st.rerun()
+                else:
+                    st.error("Disable failed — check the logs.")
+        else:
+            st.info("MFA is OFF for this account.")
+            pending = st.session_state.get("pending_mfa_secret")
+            if not pending:
+                if st.button("Enable MFA", key="security_enable_mfa"):
+                    st.session_state["pending_mfa_secret"] = generate_secret()
+                    st.rerun()
+            else:
+                # Mid-enrollment: show provisioning URI + raw secret + a
+                # code input. The user types a code from their app to
+                # prove the secret is correctly loaded BEFORE we commit
+                # to the DB — protects against a bad-QR-scan lockout.
+                uri = provisioning_uri(
+                    pending,
+                    account=username or user_id,
+                    issuer="Ship Tracker",
+                )
+                st.markdown(
+                    "<strong>Step 1.</strong> Scan this URI with your "
+                    "authenticator app (or paste the raw secret manually).",
+                    unsafe_allow_html=True,
+                )
+                st.code(uri, language="text")
+                st.markdown(
+                    "<strong>Raw secret</strong> (for manual entry):",
+                    unsafe_allow_html=True,
+                )
+                st.code(pending, language="text")
+                st.markdown(
+                    "<strong>Step 2.</strong> Enter the current 6-digit "
+                    "code from the app to confirm.",
+                    unsafe_allow_html=True,
+                )
+                code = st.text_input(
+                    "6-digit code from your authenticator app",
+                    max_chars=6,
+                    key="security_mfa_code",
+                )
+                act_col1, act_col2 = st.columns([2, 2])
+                with act_col1:
+                    if st.button(
+                        "Confirm and enable",
+                        key="security_mfa_confirm",
+                    ):
+                        if verify_totp(pending, code or ""):
+                            if enable_mfa(user_id, pending):
+                                st.session_state.pop(
+                                    "pending_mfa_secret", None
+                                )
+                                st.session_state.pop(
+                                    "security_mfa_code", None
+                                )
+                                st.success("MFA enabled.")
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Enable failed — check the logs."
+                                )
+                        else:
+                            st.error(
+                                "Code didn't verify — try again."
+                            )
+                with act_col2:
+                    if st.button("Cancel setup", key="security_mfa_cancel"):
+                        st.session_state.pop("pending_mfa_secret", None)
+                        st.session_state.pop("security_mfa_code", None)
+                        st.rerun()
+
+        st.divider()
+
+        # ─── API tokens sub-section ──────────────────────────────────────
+        st.markdown(
+            "<div><strong>API Tokens</strong></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Long-lived per-user secrets for scripts / CI to authenticate "
+            "without your password. The raw token is shown ONCE at "
+            "creation — copy it immediately."
+        )
+
+        try:
+            tokens = list_tokens(user_id)
+        except Exception as exc:
+            logger.exception(
+                f"Security panel: list_tokens failed: {exc}"
+            )
+            tokens = []
+
+        with st.expander("New token", expanded=False):
+            label = st.text_input(
+                "Label (so you can tell tokens apart)",
+                key="security_new_token_label",
+                placeholder="e.g. CI bot, Personal laptop",
+            )
+            if st.button("Create", key="security_new_token_create"):
+                if not label or not label.strip():
+                    st.error("Label is required.")
+                else:
+                    result = create_token(user_id, label.strip())
+                    if result is None:
+                        st.error(
+                            "Token creation failed — check the logs."
+                        )
+                    else:
+                        _meta, raw_token = result
+                        st.warning(
+                            "Copy this token NOW. It will not be shown "
+                            "again."
+                        )
+                        st.code(raw_token, language="text")
+                        st.session_state.pop(
+                            "security_new_token_label", None
+                        )
+
+        if not tokens:
+            st.caption("No API tokens for this account yet.")
+        else:
+            for tok in tokens:
+                col_label, col_created, col_used, col_action = st.columns(
+                    [3, 3, 3, 2]
+                )
+                with col_label:
+                    suffix = " (revoked)" if tok.revoked else ""
+                    st.markdown(
+                        f"<div>{_sans(tok.label + suffix, weight=600)}"
+                        f"<br><span style='color:{C_TEXT3};font-size:11px'>"
+                        f"prefix {tok.token_prefix}…</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_created:
+                    st.markdown(
+                        f"<div style='color:{C_TEXT2};font-size:12px'>"
+                        f"created<br>{tok.created_at[:19]}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_used:
+                    last = tok.last_used_at or "never"
+                    if last != "never":
+                        last = last[:19]
+                    st.markdown(
+                        f"<div style='color:{C_TEXT2};font-size:12px'>"
+                        f"last used<br>{last}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_action:
+                    if tok.revoked:
+                        st.caption("—")
+                    else:
+                        if st.button(
+                            "Revoke",
+                            key=f"security_token_revoke_{tok.token_id}",
+                        ):
+                            if revoke_token(
+                                tok.token_id, user_id=user_id
+                            ):
+                                st.success(
+                                    f"Revoked '{tok.label}'."
+                                )
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Revoke failed — check the logs."
+                                )
+
+    except Exception as exc:
+        logger.exception(f"Security panel render error: {exc}")
+        st.error("Security panel unavailable.")
+
+
 def _render_source_health() -> None:
     """Render the data-source health panel — periodic liveness checks
     against each external feed. Sourced from ``engine.source_health``."""
@@ -1707,6 +1954,13 @@ def render(
             except Exception as exc:
                 logger.error(f"Vault panel render error: {exc}")
                 st.error("Vault panel unavailable.")
+
+            # ── Movement 1.696: per-user security (MFA + API tokens) ───────────
+            try:
+                _render_security_panel()
+            except Exception as exc:
+                logger.error(f"Security panel render error: {exc}")
+                st.error("Security panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")
