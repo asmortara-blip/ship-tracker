@@ -1000,7 +1000,12 @@ def _render_vault_panel() -> None:
     """Render the secrets-vault management panel — rotate the master
     key + see how many channels carry encrypted targets."""
     try:
-        from state.vault import rotate_key, is_encrypted
+        from state.vault import (
+            rotate_key,
+            is_encrypted,
+            encrypt_all_channel_targets,
+            decrypt_all_channel_targets,
+        )
         from engine.alert_delivery import load_channels
 
         section_divider("Secrets Vault")
@@ -1096,6 +1101,100 @@ def _render_vault_panel() -> None:
                     st.error(
                         "Rotation reported partial failure — check the logs. "
                         "Some channels may now have unreadable targets."
+                    )
+
+        # ─── Bulk encrypt every plaintext target ───────────────────────────
+        st.markdown(
+            "<div style='margin-top:14px'>"
+            "<strong>Encrypt all plaintext targets</strong> — sweeps every "
+            "channel and wraps any plaintext target in a vault envelope. "
+            "Already-encrypted rows are left alone. Audit-logged."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        enc_left, enc_right = st.columns([2, 6])
+        with enc_left:
+            enc_confirm = st.checkbox(
+                "I understand", value=False,
+                key="vault_encrypt_all_confirm",
+                help=(
+                    "Every plaintext channel target is encrypted in place. "
+                    "load_channels transparently decrypts on read, so the "
+                    "delivery pipeline is unaffected."
+                ),
+            )
+        with enc_right:
+            if st.button("Encrypt all plaintext targets",
+                         disabled=not enc_confirm,
+                         key="vault_encrypt_all_btn"):
+                try:
+                    enc_result = encrypt_all_channel_targets()
+                except Exception as exc:
+                    logger.exception(
+                        f"Vault encrypt_all_channel_targets failed: {exc}"
+                    )
+                    enc_result = {
+                        "total": 0, "already_encrypted": 0,
+                        "newly_encrypted": 0, "failed": 0,
+                    }
+                st.success(
+                    f"Encrypted {enc_result.get('newly_encrypted', 0)} of "
+                    f"{enc_result.get('total', 0)} channel targets."
+                )
+                if enc_result.get("failed", 0) > 0:
+                    st.warning(
+                        f"{enc_result['failed']} channel(s) failed to "
+                        "encrypt — check the logs."
+                    )
+
+        # ─── Bulk decrypt (rollback) ────────────────────────────────────────
+        st.markdown(
+            "<div style='margin-top:14px'>"
+            "<strong>Decrypt all (rollback)</strong> — inverse of the bulk "
+            "encrypt. Restores every encrypted target to plaintext in the "
+            "SQLite table. Use before disabling encryption / migrating to "
+            "a non-vault setup. Audit-logged."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.warning(
+            "This re-exposes every channel target as plaintext in SQLite."
+        )
+
+        dec_left, dec_right = st.columns([2, 6])
+        with dec_left:
+            dec_confirm = st.checkbox(
+                "I understand", value=False,
+                key="vault_decrypt_all_confirm",
+                help=(
+                    "Every encrypted channel target becomes plaintext on "
+                    "disk. Anyone with read access to the SQLite file can "
+                    "see the webhook URLs / integration keys."
+                ),
+            )
+        with dec_right:
+            if st.button("Decrypt all (rollback)",
+                         disabled=not dec_confirm,
+                         key="vault_decrypt_all_btn"):
+                try:
+                    dec_result = decrypt_all_channel_targets()
+                except Exception as exc:
+                    logger.exception(
+                        f"Vault decrypt_all_channel_targets failed: {exc}"
+                    )
+                    dec_result = {
+                        "total": 0, "already_encrypted": 0,
+                        "newly_decrypted": 0, "failed": 0,
+                    }
+                st.success(
+                    f"Decrypted {dec_result.get('newly_decrypted', 0)} of "
+                    f"{dec_result.get('total', 0)} channel targets."
+                )
+                if dec_result.get("failed", 0) > 0:
+                    st.warning(
+                        f"{dec_result['failed']} channel(s) failed to "
+                        "decrypt — they remain encrypted. Check the logs."
                     )
 
     except Exception as exc:

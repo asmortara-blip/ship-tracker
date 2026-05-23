@@ -473,9 +473,207 @@ def rotate_key() -> bool:
     return failures == 0
 
 
+def encrypt_all_channel_targets() -> dict:
+    """Encrypt every plaintext ``delivery_channels.target`` in one shot.
+
+    Today encryption is opt-in per channel save (``save_channel`` with
+    ``encrypt_target=True``). Most users will have left the bulk of
+    their channels plaintext. This helper sweeps the table once and
+    wraps every plaintext target in a ``vault:v1:`` envelope under the
+    current master key. Already-encrypted rows are skipped (the prefix
+    is checked via :func:`is_encrypted`, not by attempting a decrypt).
+
+    Returns:
+        ``{'total': M, 'already_encrypted': X, 'newly_encrypted': N,
+        'failed': F}`` — ``M = X + N + F``. ``failed`` counts rows
+        that could not be re-encrypted (e.g. a per-row UPDATE that
+        raised). On a fully empty DB returns
+        ``{'total': 0, 'already_encrypted': 0, 'newly_encrypted': 0,
+        'failed': 0}``.
+
+    **Never raises.** A read failure returns the empty-DB result so
+    the caller (a UI button) cannot crash the page.
+
+    Records an ``encrypt_all_channels`` audit event with the
+    ``newly_encrypted`` + ``total`` counts. Targets are deliberately
+    NOT logged.
+    """
+    total = 0
+    already_encrypted = 0
+    newly_encrypted = 0
+    failed = 0
+    try:
+        from state.db import get_connection
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT channel_id, target FROM delivery_channels"
+            ).fetchall()
+        except Exception as exc:
+            logger.warning(
+                f"state.vault.encrypt_all_channel_targets: read failed: {exc}"
+            )
+            rows = []
+
+        for r in rows:
+            total += 1
+            try:
+                cid = r["channel_id"] if hasattr(r, "keys") else r[0]
+                tgt = r["target"] if hasattr(r, "keys") else r[1]
+            except Exception:
+                failed += 1
+                continue
+            if is_encrypted(tgt):
+                already_encrypted += 1
+                continue
+            # Plaintext target — wrap it. encrypt() never raises and
+            # returns the plaintext unchanged on internal failure, so
+            # we double-check the result IS an envelope before counting
+            # the row as newly_encrypted.
+            try:
+                envelope = encrypt(tgt if isinstance(tgt, str) else str(tgt))
+                if not is_encrypted(envelope):
+                    failed += 1
+                    continue
+                with conn:
+                    conn.execute(
+                        "UPDATE delivery_channels SET target = ? "
+                        "WHERE channel_id = ?",
+                        (envelope, cid),
+                    )
+                newly_encrypted += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"state.vault.encrypt_all_channel_targets: "
+                    f"channel {cid} encrypt failed: {exc}"
+                )
+                failed += 1
+    except Exception as exc:  # noqa: BLE001 — MUST NOT raise
+        logger.warning(
+            f"state.vault.encrypt_all_channel_targets: unexpected "
+            f"failure: {exc}"
+        )
+
+    # Audit hook — metadata only, no targets / key material.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "encrypt_all_channels",
+            detail={"newly_encrypted": newly_encrypted, "total": total},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "total": total,
+        "already_encrypted": already_encrypted,
+        "newly_encrypted": newly_encrypted,
+        "failed": failed,
+    }
+
+
+def decrypt_all_channel_targets() -> dict:
+    """Inverse of :func:`encrypt_all_channel_targets` — for every
+    encrypted ``delivery_channels.target``, decrypt back to plaintext
+    and persist. Useful before disabling encryption / before rotating
+    to a non-vault setup.
+
+    Plaintext rows are skipped. A row whose envelope cannot be
+    decrypted under the current master key is counted as ``failed``
+    (and left in its encrypted form so the operator can investigate).
+
+    Returns:
+        ``{'total': M, 'already_encrypted': X, 'newly_decrypted': N,
+        'failed': F}`` — using the same key names as
+        ``encrypt_all_channel_targets`` for symmetry. Note
+        ``already_encrypted`` here means "already plaintext" (i.e. a
+        row that was already in the target state of THIS operation);
+        we keep the same key name so a UI can render both functions
+        with one shape.
+
+    **Never raises.**
+
+    Records a ``decrypt_all_channels`` audit event with
+    ``newly_decrypted`` + ``total``.
+    """
+    total = 0
+    already_plain = 0
+    newly_decrypted = 0
+    failed = 0
+    try:
+        from state.db import get_connection
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT channel_id, target FROM delivery_channels"
+            ).fetchall()
+        except Exception as exc:
+            logger.warning(
+                f"state.vault.decrypt_all_channel_targets: read failed: {exc}"
+            )
+            rows = []
+
+        for r in rows:
+            total += 1
+            try:
+                cid = r["channel_id"] if hasattr(r, "keys") else r[0]
+                tgt = r["target"] if hasattr(r, "keys") else r[1]
+            except Exception:
+                failed += 1
+                continue
+            if not is_encrypted(tgt):
+                already_plain += 1
+                continue
+            pt = decrypt(tgt)
+            if pt is None:
+                # Envelope is unreadable under the current key — leave
+                # it alone so the operator can investigate. Counting
+                # this as failed (not silently dropping the row).
+                failed += 1
+                continue
+            try:
+                with conn:
+                    conn.execute(
+                        "UPDATE delivery_channels SET target = ? "
+                        "WHERE channel_id = ?",
+                        (pt, cid),
+                    )
+                newly_decrypted += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"state.vault.decrypt_all_channel_targets: "
+                    f"channel {cid} persist failed: {exc}"
+                )
+                failed += 1
+    except Exception as exc:  # noqa: BLE001 — MUST NOT raise
+        logger.warning(
+            f"state.vault.decrypt_all_channel_targets: unexpected "
+            f"failure: {exc}"
+        )
+
+    # Audit hook — metadata only.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "decrypt_all_channels",
+            detail={"newly_decrypted": newly_decrypted, "total": total},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "total": total,
+        "already_encrypted": already_plain,
+        "newly_decrypted": newly_decrypted,
+        "failed": failed,
+    }
+
+
 __all__ = [
     "encrypt",
     "decrypt",
     "is_encrypted",
     "rotate_key",
+    "encrypt_all_channel_targets",
+    "decrypt_all_channel_targets",
 ]

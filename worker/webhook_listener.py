@@ -20,8 +20,12 @@ Design constraints
   pinning a second web framework alongside Streamlit.
 - **HMAC SHA256 authentication.** Every endpoint verifies a shared-secret
   HMAC signature against the raw request body before doing anything. The
-  secret comes from the ``WEBHOOK_SECRET`` env variable; ``hmac.compare_digest``
-  gives us constant-time comparison so we don't leak timing info.
+  current secret comes from the ``WEBHOOK_SECRET`` env variable. During a
+  rotation window an operator can set ``WEBHOOK_SECRET_PREVIOUS`` to the
+  old value — both then verify, exhausting the loop so timing doesn't
+  reveal which one matched. ``hmac.compare_digest`` gives us constant-time
+  comparison so we don't leak timing info. See ``_get_secrets`` and
+  ``docs/DEPLOYMENT.md`` for the rotation playbook.
 - **Two endpoints, two handlers.** A generic ``AckWebhookHandler``
   (``POST /ack/{alert_id}`` + ``POST /ack-all``) for CLI / curl /
   generic integrations, and a PagerDuty-shaped ``PagerDutyEventHandler``
@@ -63,29 +67,67 @@ _START_TIME: float = time.time()
 #  HMAC verification
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _verify_hmac(body: bytes, signature: str, secret: str) -> bool:
-    """Constant-time HMAC SHA256 verification.
-
-    The expected signature is the lowercase hex digest of
-    ``HMAC-SHA256(secret, body)``. We allow a ``"sha256="`` prefix
-    (GitHub / Stripe convention) so callers using either convention
-    work without a per-source code path.
-
-    Empty secret / signature / body all fail closed — never authenticate
-    a request that hasn't carried an explicit signature.
+def _verify_hmac(body: bytes, signature: str, secrets) -> bool:
+    """Polymorphic in ``secrets``: accepts either a ``str`` (legacy
+    single-secret callers + existing tests) OR a ``list[str]`` (the
+    two-secret rotation window). Internally normalizes to a list so
+    the constant-time loop below is identical for both shapes.
     """
-    if not secret or not signature:
+    if isinstance(secrets, str):
+        secrets = [secrets] if secrets else []
+    # Constant-time HMAC SHA256 verification against a LIST of secrets.
+    #
+    # Returns True iff ANY secret in ``secrets`` produces a digest that
+    # matches ``signature`` via ``hmac.compare_digest``. The loop is
+    # deliberately exhausted on EVERY call — we OR the per-secret result
+    # into a single boolean accumulator rather than ``return True`` on
+    # the first match. That keeps the wall-clock cost of a verification
+    # constant in the number of configured secrets so timing doesn't
+    # leak which secret matched (or even WHETHER one matched, modulo the
+    # fixed work).
+    #
+    # The expected signature is the lowercase hex digest of
+    # HMAC-SHA256(secret, body). We allow a "sha256=" prefix (GitHub /
+    # Stripe convention) so callers using either convention work
+    # without a per-source code path.
+    #
+    # The list shape is what enables the two-secret rotation window:
+    # operators set the new value as WEBHOOK_SECRET and the old value
+    # as WEBHOOK_SECRET_PREVIOUS during the transition, and requests
+    # signed with EITHER verify. Once external systems have migrated,
+    # dropping WEBHOOK_SECRET_PREVIOUS collapses back to single-secret
+    # behaviour. See _get_secrets for the env-var resolution rules.
+    #
+    # Empty signature / empty secrets list / empty body-without-signature
+    # all fail closed — never authenticate a request that hasn't carried
+    # an explicit signature.
+    if not signature or not secrets:
         return False
     # Strip the common ``sha256=`` prefix if the caller included it.
     if signature.lower().startswith("sha256="):
         signature = signature.split("=", 1)[1]
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    # hmac.compare_digest is constant-time and length-safe.
-    return hmac.compare_digest(expected, signature.lower())
+    provided = signature.lower()
+    body_bytes = bytes(body)
+    # Accumulate the OR into a single boolean. We MUST NOT short-circuit
+    # on a match — exhausting the loop keeps the verification time
+    # constant across the list and prevents a timing oracle from
+    # distinguishing "matched the first secret" from "matched the
+    # second" from "matched neither".
+    matched = False
+    for secret in secrets:
+        if not secret:
+            # Skip empties but still consume the loop iteration. An
+            # empty secret can never produce a valid digest anyway.
+            continue
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            body_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+        # hmac.compare_digest is constant-time and length-safe.
+        # ``|=`` accumulates — never ``return True`` inside the loop.
+        matched |= hmac.compare_digest(expected, provided)
+    return matched
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,12 +158,39 @@ def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
     return handler.rfile.read(length)
 
 
-def _get_secret() -> str:
-    """Resolve the shared HMAC secret from env. An unset secret is a
-    deployment misconfiguration — we still let the server start (so
-    healthchecks pass and logs explain the problem) but every request
-    will fail HMAC verification with 401."""
-    return os.environ.get("WEBHOOK_SECRET", "")
+def _get_secrets() -> list[str]:
+    """Resolve the active HMAC secrets from env, in verification order.
+
+    Returns:
+        * ``[WEBHOOK_SECRET]`` — when only the current secret is set
+          (the steady-state, no-rotation path).
+        * ``[WEBHOOK_SECRET, WEBHOOK_SECRET_PREVIOUS]`` — when both are
+          set (rotation in progress). The CURRENT secret is tried
+          first so the common case in a rotation window is still a
+          first-pass match.
+        * ``[]`` — when neither env var carries a non-empty value.
+          The handler converts this to a 401 the same way an empty
+          single secret used to.
+
+    Empty / whitespace-only values are filtered. An accidentally-set
+    but blank ``WEBHOOK_SECRET_PREVIOUS=`` does not count as "rotation
+    is in progress" — it just collapses back to single-secret mode.
+
+    A misconfigured deployment with ONLY ``WEBHOOK_SECRET_PREVIOUS``
+    set (and ``WEBHOOK_SECRET`` empty) is intentionally rejected: the
+    function returns ``[]`` so every request 401s. Allowing "previous
+    only" would let an operator finish a rotation by deleting the
+    NEW secret instead of the OLD one — exactly the wrong direction.
+    """
+    current = (os.environ.get("WEBHOOK_SECRET", "") or "").strip()
+    previous = (os.environ.get("WEBHOOK_SECRET_PREVIOUS", "") or "").strip()
+    if not current:
+        # Without a CURRENT secret there's nothing to rotate INTO.
+        # Treat the whole listener as unconfigured — fail closed.
+        return []
+    if previous:
+        return [current, previous]
+    return [current]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -384,7 +453,7 @@ class _DispatchHandler(BaseHTTPRequestHandler):
         try:
             body = _read_body(self)
             sig = self.headers.get("X-Signature-SHA256", "")
-            if not _verify_hmac(body, sig, _get_secret()):
+            if not _verify_hmac(body, sig, _get_secrets()):
                 logger.warning(f"webhook /ack: HMAC mismatch for alert_id={alert_id}")
                 _send_json(self, HTTPStatus.UNAUTHORIZED,
                            {"error": "invalid signature"})
@@ -410,7 +479,7 @@ class _DispatchHandler(BaseHTTPRequestHandler):
         try:
             body = _read_body(self)
             sig = self.headers.get("X-Signature-SHA256", "")
-            if not _verify_hmac(body, sig, _get_secret()):
+            if not _verify_hmac(body, sig, _get_secrets()):
                 logger.warning("webhook /ack-all: HMAC mismatch")
                 _send_json(self, HTTPStatus.UNAUTHORIZED,
                            {"error": "invalid signature"})
@@ -446,7 +515,7 @@ class _DispatchHandler(BaseHTTPRequestHandler):
         try:
             body = _read_body(self)
             sig = self.headers.get("X-PagerDuty-Signature", "")
-            if not _verify_hmac(body, sig, _get_secret()):
+            if not _verify_hmac(body, sig, _get_secrets()):
                 logger.warning("webhook /webhooks/pagerduty: HMAC mismatch")
                 _send_json(self, HTTPStatus.UNAUTHORIZED,
                            {"error": "invalid signature"})
@@ -538,11 +607,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not _get_secret():
+    active_secrets = _get_secrets()
+    if not active_secrets:
         logger.warning(
             "WEBHOOK_SECRET is unset — every request will fail HMAC "
             "verification with 401. Set WEBHOOK_SECRET in .env before "
             "going live."
+        )
+    elif len(active_secrets) > 1:
+        # Two-secret window — the operator is mid-rotation. Surface it
+        # in the log so a forgotten ``WEBHOOK_SECRET_PREVIOUS`` doesn't
+        # silently linger past the transition.
+        logger.info(
+            "webhook listener running with TWO active secrets "
+            "(WEBHOOK_SECRET + WEBHOOK_SECRET_PREVIOUS). Drop "
+            "WEBHOOK_SECRET_PREVIOUS once external systems have "
+            "migrated to the new secret."
         )
 
     try:
