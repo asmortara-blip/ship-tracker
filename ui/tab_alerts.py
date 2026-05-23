@@ -915,6 +915,139 @@ def _render_rules_manager() -> None:
         st.error("Rules management unavailable.")
 
 
+def _render_route_thresholds() -> None:
+    """Per-route alert threshold override editor.
+
+    Surfaces ``engine.route_thresholds`` so operators can tighten or loosen the
+    rate-surge alert threshold on a per-route basis (e.g. "transpacific_eb gets
+    3%, asia_europe gets 6%") without editing SQLite by hand. Routes not
+    explicitly enabled on save fall back to the global default (8%).
+
+    Rows iterate ``routes.route_registry.ROUTES`` so the editor stays in sync
+    with the catalog. Each row has 4 cols: name | threshold_pct | severity |
+    enabled-checkbox. On save we only persist rows where Enabled is checked —
+    everything else is dropped from the blob (returning that route to the
+    global default).
+
+    All paths wrapped in try/except + logger.exception so a kv_state outage
+    cannot break the rest of the Alert Center tab.
+    """
+    try:
+        from engine.route_thresholds import (
+            RouteThreshold,
+            load_route_thresholds,
+            save_route_thresholds,
+        )
+        from routes.route_registry import ROUTES
+
+        section_divider("Per-route Alert Thresholds")
+        st.caption(
+            "Override the default rate-alert threshold per route. Routes "
+            "with no override fall back to the global default (8%)."
+        )
+
+        # Single SELECT — reuse the loaded dict to initialise every row.
+        current = load_route_thresholds()
+        severity_options = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+
+        # Header row to anchor the columns visually.
+        h1, h2, h3, h4 = st.columns([3, 2, 2, 1], gap="small")
+        with h1:
+            st.html(f'<div style="font-size:0.75rem;color:{C_TEXT3};font-weight:600;">Route</div>')
+        with h2:
+            st.html(f'<div style="font-size:0.75rem;color:{C_TEXT3};font-weight:600;">Threshold %</div>')
+        with h3:
+            st.html(f'<div style="font-size:0.75rem;color:{C_TEXT3};font-weight:600;">Severity</div>')
+        with h4:
+            st.html(f'<div style="font-size:0.75rem;color:{C_TEXT3};font-weight:600;">Enabled</div>')
+
+        # Per-row inputs. Streamlit keys are route_id-scoped so reruns
+        # preserve user edits across saves.
+        row_inputs: dict[str, tuple[float, str, bool]] = {}
+        for route in ROUTES:
+            route_id = route.id
+            label = getattr(route, "name", "") or route_id
+            override = current.get(route_id)
+            default_threshold = float(override.threshold_pct) if override else 8.0
+            default_severity = override.severity if override else "HIGH"
+            default_enabled = override is not None
+
+            r1, r2, r3, r4 = st.columns([3, 2, 2, 1], gap="small")
+            with r1:
+                st.markdown(
+                    f'<div style="padding-top:8px;color:{C_TEXT};font-weight:600;">'
+                    f'{label}</div>',
+                    unsafe_allow_html=True,
+                )
+            with r2:
+                thr = st.number_input(
+                    "Threshold %",
+                    value=default_threshold,
+                    min_value=0.5,
+                    max_value=50.0,
+                    step=0.5,
+                    format="%.1f",
+                    key=f"route_thr_pct_{route_id}",
+                    label_visibility="collapsed",
+                )
+            with r3:
+                sev_idx = (
+                    severity_options.index(default_severity)
+                    if default_severity in severity_options else 1
+                )
+                sev = st.selectbox(
+                    "Severity",
+                    options=severity_options,
+                    index=sev_idx,
+                    key=f"route_thr_sev_{route_id}",
+                    label_visibility="collapsed",
+                )
+            with r4:
+                enabled = st.checkbox(
+                    "Enabled",
+                    value=default_enabled,
+                    key=f"route_thr_en_{route_id}",
+                    label_visibility="collapsed",
+                )
+            row_inputs[route_id] = (float(thr), str(sev), bool(enabled))
+
+        # ── Save / Reset action buttons ────────────────────────────────────
+        bcols = st.columns([1, 1, 4], gap="small")
+        with bcols[0]:
+            if st.button("Save thresholds", key="route_thr_save",
+                         use_container_width=True, type="primary"):
+                try:
+                    payload = {
+                        rid: RouteThreshold(
+                            route_id=rid,
+                            threshold_pct=thr,
+                            severity=sev,
+                        )
+                        for rid, (thr, sev, enabled) in row_inputs.items()
+                        if enabled
+                    }
+                    if save_route_thresholds(payload):
+                        st.success(f"Saved {len(payload)} overrides")
+                    else:
+                        st.error("Failed to save route thresholds.")
+                except Exception as exc:
+                    logger.exception("save route thresholds failed")
+                    st.error(f"Save failed: {exc}")
+        with bcols[1]:
+            if st.button("Reset all", key="route_thr_reset",
+                         use_container_width=True):
+                try:
+                    save_route_thresholds({})
+                    st.success("Cleared all route overrides.")
+                    st.rerun()
+                except Exception as exc:
+                    logger.exception("reset route thresholds failed")
+                    st.error(f"Reset failed: {exc}")
+    except Exception:
+        logger.exception("Per-route alert thresholds render failed")
+        st.error("Per-route thresholds section unavailable.")
+
+
 def _render_acknowledgment_analytics() -> None:
     """Render acknowledgment analytics for the persisted alerts table.
 
@@ -1254,11 +1387,22 @@ def _render_delivery_channels() -> None:
             channels = []
 
         if channels:
-            headers = ["Name", "Kind", "Threshold", "Digest", "Enabled", "Created"]
+            headers = ["Name", "Kind", "Threshold", "Digest", "Quiet", "Enabled", "Created"]
             rows = []
             for ch in channels:
                 kind_label = _KIND_LABEL.get(ch.kind, ch.kind)
                 digest_label = getattr(ch, "digest_mode", "immediate") or "immediate"
+                q_start = (getattr(ch, "quiet_start", "") or "").strip()
+                q_end = (getattr(ch, "quiet_end", "") or "").strip()
+                q_override = bool(getattr(ch, "quiet_override_critical", True))
+                if q_start and q_end:
+                    quiet_text = f"{q_start}→{q_end}"
+                    if not q_override:
+                        # When override=False, even CRITICAL is silenced.
+                        quiet_text += " ⚠"
+                    quiet_cell = _sans(quiet_text, color=C_ACCENT, weight=600)
+                else:
+                    quiet_cell = _sans("—", color=C_TEXT3, weight=400)
                 rows.append([
                     _sans(ch.name, color=C_TEXT, weight=700),
                     _sans(kind_label, color=C_TEXT2, weight=600),
@@ -1268,6 +1412,7 @@ def _render_delivery_channels() -> None:
                     _sans(digest_label,
                           color=C_ACCENT if digest_label == "daily" else C_TEXT2,
                           weight=600),
+                    quiet_cell,
                     _sans("On" if ch.enabled else "Off",
                           color=C_HIGH if ch.enabled else C_TEXT3, weight=600),
                     _mono(_fmt_dt(ch.created_at), color=C_TEXT3, weight=400),
@@ -1398,6 +1543,22 @@ def _render_delivery_channels() -> None:
                         "Daily: batch alerts into a single daily message."
                     ),
                 )
+                ch_quiet_start = st.text_input(
+                    "Quiet hours start (UTC HH:MM)",
+                    placeholder="22:00",
+                )
+                ch_quiet_end = st.text_input(
+                    "Quiet hours end (UTC HH:MM)",
+                    placeholder="07:00",
+                )
+                ch_quiet_override = st.checkbox(
+                    "CRITICAL alerts always deliver during quiet hours",
+                    value=True,
+                )
+                st.caption(
+                    "Leave both blank to disable quiet hours. Wraparound is "
+                    "supported (e.g. 22:00 → 07:00 spans midnight)."
+                )
                 ch_enabled = st.checkbox("Enabled", value=True)
                 submitted = st.form_submit_button(
                     "Save channel", use_container_width=True, type="primary",
@@ -1406,10 +1567,37 @@ def _render_delivery_channels() -> None:
             if submitted:
                 target_clean = ch_target.strip()
                 pd_shape_warning = False
+                # Quiet-hours validation: both set + HH:MM (0-23):(0-59), or both blank.
+                _QUIET_RE = re.compile(r"^\d{1,2}:\d{2}$")
+                q_start_clean = (ch_quiet_start or "").strip()
+                q_end_clean = (ch_quiet_end or "").strip()
+
+                def _valid_hhmm(s: str) -> bool:
+                    if not _QUIET_RE.match(s):
+                        return False
+                    try:
+                        h, m = s.split(":")
+                        return 0 <= int(h) <= 23 and 0 <= int(m) <= 59
+                    except Exception:
+                        return False
+
+                quiet_ok = (
+                    (not q_start_clean and not q_end_clean)
+                    or (
+                        _valid_hhmm(q_start_clean)
+                        and _valid_hhmm(q_end_clean)
+                    )
+                )
+
                 if not ch_name.strip():
                     st.warning("Please enter a channel name.")
                 elif not target_clean:
                     st.warning(f"Please enter a {_copy['label'].lower()}.")
+                elif not quiet_ok:
+                    st.error(
+                        "Quiet hours must be both set with HH:MM (24h) — "
+                        "leave both blank to disable."
+                    )
                 elif ch_kind == "slack" and not _SLACK_URL_RE.match(target_clean):
                     st.error(
                         "Slack webhook URLs must start with https://hooks.slack.com/"
@@ -1454,6 +1642,9 @@ def _render_delivery_channels() -> None:
                             severity_threshold=ch_threshold,
                             enabled=bool(ch_enabled),
                             digest_mode=ch_digest,
+                            quiet_start=q_start_clean,
+                            quiet_end=q_end_clean,
+                            quiet_override_critical=bool(ch_quiet_override),
                         ))
                         st.success(f"Saved channel '{ch_name.strip()}'.")
                         if not pd_shape_warning:
@@ -1545,6 +1736,7 @@ def render(
             section_divider("Configuration")
             _render_notifications()
             _render_rules_manager()
+            _render_route_thresholds()
 
             _render_delivery_channels()
         except Exception:
