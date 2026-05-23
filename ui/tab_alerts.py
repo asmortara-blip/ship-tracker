@@ -939,6 +939,23 @@ def _render_configuration_form() -> None:
                         format="%.2f",
                         help="Numeric threshold. Units depend on the metric.",
                     )
+                    # Per-rule cooldown (v18). 0 = no cooldown, fire on
+                    # every evaluation that trips the rule (the legacy
+                    # behaviour). A positive value suppresses repeat
+                    # fires of this rule for N minutes after a
+                    # successful fire — keeps a flaky condition from
+                    # spamming the downstream channels.
+                    cooldown_minutes = st.number_input(
+                        "Cooldown (minutes)",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        help=(
+                            "Suppress repeat fires of this rule for N "
+                            "minutes after a successful fire. 0 = no "
+                            "cooldown (fire every evaluation)."
+                        ),
+                    )
                 with fc2:
                     condition = st.selectbox(
                         "Condition",
@@ -977,6 +994,12 @@ def _render_configuration_form() -> None:
                             "severity": severity,
                             "email_notify": email_notify,
                             "enabled": True,
+                            # v18 per-rule cooldown. Clamped to a
+                            # non-negative int by the st.number_input
+                            # min_value=0; engine.normalize_rule is
+                            # the second line of defence against
+                            # hand-edited blobs.
+                            "cooldown_minutes": int(cooldown_minutes),
                         }
                         st.session_state["user_alerts"].append(new_rule)
                         st.success(f'Rule "{alert_name.strip()}" created successfully.')
@@ -1162,6 +1185,181 @@ def _render_notifications() -> None:
         logger.exception("Notification settings render failed")
 
 
+def _render_rule_template_panel() -> None:
+    """Quick-add panel that lets a cold-starting operator instantiate a
+    pre-baked rule from the catalog at ``engine.rule_templates.TEMPLATES``
+    without having to fill in the full editor form.
+
+    The panel is wrapped in a collapsed expander so it does not dominate
+    the page for power users who already have rules they care about —
+    they can ignore it; new operators can find it as the first thing
+    inside the Rules Management section.
+
+    Save flow:
+      1. Read selected template's ``slug`` from session state.
+      2. Materialize to AlertRule via ``template_to_alert_rule``.
+      3. Project the AlertRule back to the dict shape ``user_alerts``
+         stores (the same shape ``_default_rules()`` emits — UI editor
+         understands this; AlertRule itself is the engine's runtime
+         contract and not what the editor consumes).
+      4. Append to ``st.session_state['user_alerts']`` and call
+         ``save_rules`` to persist immediately, mirroring the per-rule
+         Save button's eager-persist behaviour.
+
+    All paths wrapped in try/except + st.error / logger.exception so a
+    template-import or DB-write failure cannot break the rules manager
+    section.
+    """
+    try:
+        # Lazy import so the engine module is loaded only when this
+        # panel actually renders — keeps the tab_alerts import light.
+        from engine.rule_templates import (
+            ALLOWED_CATEGORIES,
+            list_templates,
+            template_to_alert_rule,
+        )
+        from engine.alert_engine_v2 import save_rules as engine_save_rules
+
+        with st.expander("📋 Rule templates — quick-add from catalog",
+                         expanded=False):
+            section_divider("Quick-add from template")
+            st.markdown(
+                f'<div style="font-size:0.78rem;color:{C_TEXT2};line-height:1.5;'
+                f'margin-bottom:10px">Pick a pre-baked rule template to '
+                f'instantiate it in one click. Templates are a starting '
+                f'point — edit the resulting rule below to tune thresholds, '
+                f'severity, or delivery channels for your book.</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Two-column layout: category picker on the left, template
+            # picker on the right. The "(all)" sentinel matches what
+            # list_templates(category='(all)') expects so the helper
+            # call below stays a clean one-liner.
+            cat_options = ["(all)"] + sorted(ALLOWED_CATEGORIES)
+            tc1, tc2 = st.columns([1, 2], gap="medium")
+            with tc1:
+                cat_choice = st.selectbox(
+                    "Category",
+                    options=cat_options,
+                    index=0,
+                    key="rule_template_category",
+                    help="Narrow the template list to a single category.",
+                )
+            filtered = list_templates(
+                category=cat_choice if cat_choice != "(all)" else None
+            )
+            with tc2:
+                if not filtered:
+                    st.info("No templates in this category.")
+                    return
+                # Map name → template so the selectbox shows operator-
+                # facing labels but we still recover the full template
+                # object (with slug) on click.
+                name_to_tpl = {t.name: t for t in filtered}
+                tpl_name = st.selectbox(
+                    "Template",
+                    options=list(name_to_tpl.keys()),
+                    key="rule_template_choice",
+                    help="A starter rule with sensible defaults — edit "
+                         "after adding to tune for your book.",
+                )
+
+            tpl = name_to_tpl.get(tpl_name)
+            if tpl is None:
+                return
+
+            # Description block — the only context the operator gets
+            # before clicking Add.
+            st.markdown(
+                f'<div style="background:rgba(255,255,255,0.03);'
+                f'border-left:3px solid {C_ACCENT};padding:10px 14px;'
+                f'margin:8px 0;font-size:0.82rem;color:{C_TEXT};'
+                f'line-height:1.5">{tpl.description}</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Compact summary row — at-a-glance metadata.
+            meta = (
+                f"<b>Metric:</b> {tpl.metric} &nbsp;·&nbsp; "
+                f"<b>Threshold:</b> {tpl.threshold_pct} &nbsp;·&nbsp; "
+                f"<b>Severity:</b> {tpl.severity} &nbsp;·&nbsp; "
+                f"<b>Cooldown:</b> {tpl.cooldown_minutes} min"
+            )
+            st.markdown(
+                f'<div style="font-size:0.74rem;color:{C_TEXT3};'
+                f'margin-bottom:10px">{meta}</div>',
+                unsafe_allow_html=True,
+            )
+
+            if st.button(
+                "➕ Add this rule",
+                key=f"rule_template_add_{tpl.slug}",
+                use_container_width=True,
+                type="primary",
+            ):
+                try:
+                    rule = template_to_alert_rule(tpl)
+                    # Project the AlertRule back to the dict shape the
+                    # editor / save_rules consume. We carry through
+                    # cooldown_minutes when it exists on the dataclass
+                    # so the parallel cooldown commit gets full
+                    # round-trip support without a coupling change here.
+                    new_rule_dict: dict = {
+                        "id": rule.rule_id,
+                        "rule_id": rule.rule_id,
+                        "name": rule.name,
+                        "metric": rule.alert_type,
+                        "threshold": float(rule.threshold),
+                        "condition": "Above",
+                        "severity": rule.severity,
+                        "email_notify": False,
+                        "enabled": bool(rule.enabled),
+                        "target_channels": list(rule.target_channels),
+                        # Template metadata stamped on the rule for
+                        # future "rule was added from template X"
+                        # surfacing in the editor / audit log.
+                        "template_slug": tpl.slug,
+                        "template_category": tpl.category,
+                    }
+                    cooldown = getattr(rule, "cooldown_minutes", None)
+                    if cooldown is not None:
+                        new_rule_dict["cooldown_minutes"] = int(cooldown)
+
+                    current = st.session_state.get("user_alerts") or []
+                    # Skip if a rule with this slug already exists —
+                    # the operator probably double-clicked, and silent
+                    # duplicates would confuse the editor count.
+                    existing_ids = {
+                        r.get("id") or r.get("rule_id") for r in current
+                    }
+                    if rule.rule_id in existing_ids:
+                        st.warning(
+                            f"A rule with id '{rule.rule_id}' already "
+                            f"exists. Edit or delete it before re-adding."
+                        )
+                        return
+
+                    current.append(new_rule_dict)
+                    st.session_state["user_alerts"] = current
+                    engine_save_rules(current)
+                    st.success(
+                        f"Added '{tpl.name}' from template. Scroll down "
+                        f"to the rule editor to tune thresholds, channels, "
+                        f"or delivery options."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not add template rule: {exc}")
+                    logger.exception("rule template add failed")
+
+    except Exception:
+        logger.exception("Rule template panel render failed")
+        # Do not surface st.error here — the panel is supplementary, so
+        # a silent failure that leaves the rest of the rules manager
+        # operational is preferable to a red banner.
+
+
 def _render_rules_manager() -> None:
     """Full rule editor: per-rule expander with editable fields + save / delete
     per rule, plus top-level "Save All to Disk" and "Reset to Defaults" actions.
@@ -1187,6 +1385,12 @@ def _render_rules_manager() -> None:
             "toggle, delete, or persist to disk.",
         )
         st.html(live_data_badge(_RULES_SRC))
+
+        # ── Quick-add from template ────────────────────────────────────────
+        # Cold-start helper: lets a new operator instantiate a pre-baked
+        # rule in one click. Collapsed by default so it does not dominate
+        # the page for power users.
+        _render_rule_template_panel()
 
         # ── Top-level actions: Save All / Reset / Reload ───────────────────
         action_cols = st.columns([1, 1, 1, 3], gap="small")
