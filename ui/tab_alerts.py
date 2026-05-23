@@ -1048,6 +1048,133 @@ def _render_route_thresholds() -> None:
         st.error("Per-route thresholds section unavailable.")
 
 
+def _render_incidents_panel() -> None:
+    """Render the Active Incidents panel — alerts grouped into incidents.
+
+    Reads from ``engine.alert_correlator.get_recent_incidents`` /
+    ``get_incident_summary`` so operators see "3 alerts collapsed into one
+    incident" rather than 3 separate rows in the alert table. The grouping
+    is computed at READ time (see engine.alert_correlator docstring) so
+    nothing here writes back to persisted alert rows.
+
+    Slotted BEFORE the alert table because incidents are the higher-level
+    view; the table is the drill-down. Wrapped in try/except + lazy import
+    so a correlator failure cannot break the rest of the Alert Center tab.
+    """
+    try:
+        from engine.alert_correlator import (
+            get_incident_summary,
+            get_recent_incidents,
+        )
+        from utils.tz import format_user_tz
+
+        section_divider("Active Incidents")
+
+        window = st.selectbox(
+            "Incident window",
+            options=[1, 3, 7, 14],
+            index=2,
+            format_func=lambda d: f"{d} day" if d == 1 else f"{d} days",
+            key="incidents_window_days",
+            help=(
+                "Group alerts that fired within ~30 min of each other and "
+                "share a ticker / route / port / type into incidents."
+            ),
+        )
+        window_int = int(window)
+
+        summary = get_incident_summary(window_days=window_int)
+        incidents = get_recent_incidents(window_days=window_int)
+
+        n_inc = int(summary.get("n_incidents", 0))
+        n_total = int(summary.get("n_total_alerts", 0))
+        largest = int(summary.get("largest_incident_size", 0))
+        avg = float(summary.get("avg_alerts_per_incident", 0.0))
+        breakdown = summary.get("breakdown_by_dominant_type") or {}
+        # Most common dominant_alert_type across incidents (ties broken by
+        # alphabetical order to keep the KPI stable across runs).
+        if breakdown:
+            top_count = max(breakdown.values())
+            dominant_type = sorted(
+                k for k, v in breakdown.items() if v == top_count
+            )[0]
+        else:
+            dominant_type = "—"
+
+        metric_card_row([
+            {
+                "label":    "Incidents",
+                "value":    str(n_inc),
+                "accent":   C_ACCENT,
+                "sublabel": f"last {window_int} day" + ("" if window_int == 1 else "s"),
+            },
+            {
+                "label":    "Total Alerts in Incidents",
+                "value":    str(n_total),
+                "accent":   C_MOD,
+                "sublabel": f"Avg {avg:.1f} per incident",
+            },
+            {
+                "label":    "Largest Incident",
+                "value":    str(largest),
+                "accent":   C_LOW if largest >= 5 else C_HIGH,
+                "sublabel": "alerts in the biggest group",
+            },
+            {
+                "label":    "Dominant Type",
+                "value":    dominant_type,
+                "accent":   C_ACCENT,
+                "sublabel": (
+                    f"{breakdown.get(dominant_type, 0)} of {n_inc} incidents"
+                    if dominant_type != "—" and n_inc else "no incidents yet"
+                ),
+            },
+        ], columns=4)
+
+        if not incidents:
+            st.info(
+                "No incidents in this window yet — alerts haven't clustered."
+            )
+            return
+
+        headers = [
+            "Started", "Severity", "Count", "Dominant Type", "Entities",
+            "Incident ID",
+        ]
+        rows = []
+        for inc in incidents:
+            sev_label = inc.severity_max.title() if inc.severity_max else "—"
+            sev_col = (
+                C_LOW if inc.severity_max == "CRITICAL"
+                else (C_MOD if inc.severity_max == "HIGH" else C_TEXT3)
+            )
+            ents = inc.entities_touched or {}
+            entity_parts = (
+                list(ents.get("tickers", []))
+                + list(ents.get("routes", []))
+                + list(ents.get("ports", []))
+            )
+            entity_str = ", ".join(entity_parts) if entity_parts else "—"
+            started_local = (
+                format_user_tz(inc.started_at) if inc.started_at else ""
+            ) or inc.started_at[:16].replace("T", " ")
+
+            rows.append([
+                _mono(started_local, color=C_TEXT2, weight=500),
+                _sev_badge(sev_label),
+                _mono(str(inc.alert_count), color=sev_col, weight=700),
+                _sans(inc.dominant_alert_type or "—",
+                      color=C_TEXT, weight=600),
+                _sans(entity_str, color=C_TEXT2, weight=500),
+                _mono((inc.incident_id or "")[:8], color=C_TEXT3, weight=500),
+            ])
+
+        wsj_market_table(headers, rows)
+    except Exception:
+        logger.exception("Active incidents panel render failed")
+        st.error("Active incidents panel unavailable.")
+
+
 def _render_acknowledgment_analytics() -> None:
     """Render acknowledgment analytics for the persisted alerts table.
 
@@ -1723,6 +1850,8 @@ def render(
         try:
             _render_hero(visible_alerts)
             _render_configuration_form()
+
+            _render_incidents_panel()
 
             section_divider("Live Monitoring")
             _render_active_alerts(visible_alerts)
