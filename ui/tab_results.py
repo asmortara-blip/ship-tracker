@@ -612,9 +612,12 @@ def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs):
                 fig_decay = _plotly_decay(decay_df)
                 st.plotly_chart(fig_decay, use_container_width=True, key="signal_decay")
 
+                # include_groups=False silences the pandas 2.x FutureWarning
+                # about groupby.apply operating on the grouping column.
                 decay_drop = decay_df.groupby("signal_type").apply(
                     lambda g: g.set_index("hold_days")["avg_return"].get(1, 0) -
-                              g.set_index("hold_days")["avg_return"].get(30, 0)
+                              g.set_index("hold_days")["avg_return"].get(30, 0),
+                    include_groups=False,
                 )
                 fastest = decay_drop.idxmax()
                 slowest = decay_drop.idxmin()
