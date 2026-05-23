@@ -571,6 +571,19 @@ def _row_to_alert_full(row) -> dict:
         out["user_id"] = row["user_id"] or ""
     except (IndexError, KeyError):
         out["user_id"] = ""
+    # The v19 bulk-ack metadata columns: optional free-form note +
+    # ack-by attribution. Both are NULLable in SQLite so they may come
+    # back as None — None falls through to None on the dict so callers
+    # can distinguish "no note" (None) from "empty-string note" (a
+    # caller passed ``note=''`` explicitly).
+    try:
+        out["acknowledged_note"] = row["acknowledged_note"]
+    except (IndexError, KeyError):
+        out["acknowledged_note"] = None
+    try:
+        out["acknowledged_by_user_id"] = row["acknowledged_by_user_id"]
+    except (IndexError, KeyError):
+        out["acknowledged_by_user_id"] = None
     return out
 
 
@@ -811,7 +824,12 @@ def load_alerts(max_age_days: int = 30, *, user_id: Optional[str] = None) -> lis
     return [_row_to_alert(r) for r in rows]
 
 
-def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
+def acknowledge_alert(
+    alert_id: str,
+    *,
+    user_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
     """Mark a single alert as acknowledged.
 
     Also stamps ``acknowledged_at`` with the current ISO UTC timestamp
@@ -823,6 +841,19 @@ def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
     string, the UPDATE matches only rows the user can SEE (their own
     rows PLUS legacy rows). A user cannot ACK another user's alert by
     knowing its id — the UPDATE silently no-ops.
+
+    ``note`` (v19) — optional free-form string the operator attaches
+    when acking the alert. ``None`` (the default) preserves the legacy
+    "no note" behaviour and leaves the ``acknowledged_note`` column
+    NULL. An empty string is persisted as the empty string (NOT NULL)
+    so callers can distinguish "operator explicitly attached an empty
+    note" from "no note ever set". The note value is NEVER included in
+    logger output — it may contain operator-sensitive context.
+
+    ``user_id`` (v19) — when resolved to a non-empty string, also gets
+    stamped into the new ``acknowledged_by_user_id`` column so the
+    alert row itself can answer "who acked this?" without a join
+    against the audit log.
     """
     from state.db import get_connection
     from state.user_scope import scope_filter_sql
@@ -831,12 +862,17 @@ def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
     scope_sql, scope_params = scope_filter_sql(uid)
     conn = get_connection()
     ack_ts = _now_iso()
+    # v19 column stamps: store NULL for the user-id column when the
+    # resolved uid is empty so we do not pollute legacy rows with an
+    # empty-string attribution; the note column accepts None → NULL.
+    ack_by = uid if uid else None
     try:
         with conn:
             conn.execute(
-                f"UPDATE alerts SET acknowledged = 1, acknowledged_at = ? "
+                f"UPDATE alerts SET acknowledged = 1, acknowledged_at = ?, "
+                f"acknowledged_note = ?, acknowledged_by_user_id = ? "
                 f"WHERE alert_id = ? {scope_sql}",
-                (ack_ts, alert_id, *scope_params),
+                (ack_ts, note, ack_by, alert_id, *scope_params),
             )
     except Exception as exc:
         logger.warning(f"acknowledge_alert: SQLite update failed: {exc}")
@@ -844,13 +880,22 @@ def acknowledge_alert(alert_id: str, *, user_id: Optional[str] = None) -> None:
     # try/except here as belt-and-braces — this hook sits inside the
     # critical user-action path and an audit-write bug must never block
     # the ACK from completing.
+    #
+    # The note (when supplied) is truncated to 200 chars in the audit
+    # payload to keep the audit log compact — the FULL note still
+    # persists on the alert row above. The note string is intentionally
+    # NOT logged via logger.* anywhere in this function — operators may
+    # paste sensitive context into the note field.
     try:
         from auth.audit import record_audit
+        detail: dict = {"acknowledged_at": ack_ts}
+        if note is not None:
+            detail["note_truncated_to_200_chars"] = str(note)[:200]
         record_audit(
             "ack_alert",
             entity_type="alert",
             entity_id=alert_id,
-            detail={"acknowledged_at": ack_ts},
+            detail=detail,
             user_id=user_id,
         )
     except Exception:  # noqa: BLE001
@@ -901,6 +946,365 @@ def acknowledge_all(*, user_id: Optional[str] = None) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Bulk acknowledgement (v19)
+#
+#  Single-ack costs one click per row. When 30 LOW alerts fire, that is
+#  30 clicks. The bulk helpers below ack a SET of alerts in one round-
+#  trip and record ONE audit event covering the whole batch. Per-user
+#  scoping is required — no operator can ack another's alerts even with
+#  the alert_id, just like ``acknowledge_alert``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Notes are persisted in full on the alert row (see ``acknowledged_note``).
+# The audit-event copy is truncated to this length so a long note does
+# not bloat the audit log, which is queried more often than a single
+# alert's note. The constant is exposed at module scope so tests can
+# pin the truncation length without monkey-patching internals.
+_BULK_ACK_AUDIT_NOTE_MAXLEN: int = 200
+
+
+def bulk_acknowledge_alerts(
+    alert_ids: list[str],
+    *,
+    note: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> dict:
+    """Mark many alerts as acknowledged in a single round-trip.
+
+    Returns a dict with four integer keys whose sum equals
+    ``len(alert_ids)`` (every input id is counted exactly once):
+
+      * ``acked``                 — rows flipped from unack → ack by
+                                     this call.
+      * ``skipped_already_acked`` — rows that were already acked in
+                                     the user's scope. The note + ack
+                                     timestamp + ack-by-user-id on
+                                     those rows are NOT overwritten —
+                                     bulk-ack is additive, not
+                                     destructive, so a row acked by
+                                     alice yesterday with note "FOO"
+                                     stays acked by alice with note
+                                     "FOO" when bob's bulk-ack pass
+                                     hits it.
+      * ``not_found``             — ids the caller passed that do not
+                                     exist in the user's scope. Could
+                                     mean the alert was pruned, the
+                                     id was mistyped, or the row
+                                     belongs to a different user
+                                     (per-user scoping is enforced).
+      * ``failed``                — ids the caller passed that the
+                                     UPDATE round-trip could not
+                                     classify (almost always 0; bumps
+                                     to ``len(alert_ids)`` on the
+                                     except-path when SQLite errors).
+
+    Per-user scoping mirrors ``acknowledge_alert`` exactly: when
+    ``user_id`` resolves to a non-empty string, only rows whose
+    ``user_id`` matches that user OR the legacy ``''`` bucket are
+    eligible. A user passing alice's alert_id silently lands the id
+    in ``not_found`` rather than acking it.
+
+    NEVER raises. Every code path is wrapped in try/except; on any
+    catastrophic failure the function returns
+    ``{"acked": 0, "skipped_already_acked": 0, "not_found": 0,
+    "failed": len(alert_ids)}`` so the caller can surface "all N ack
+    attempts failed" without crashing the UI.
+
+    Records ONE audit event with ``action='bulk_acknowledge'`` covering
+    the whole batch — operationally clearer than N events, and lets a
+    security review answer "did someone bulk-ack 50 CRITICALs at 3 a.m.?"
+    with a single row. The audit detail carries the input id list, the
+    output counts, and (when supplied) the note TRUNCATED to 200 chars.
+    The full note is on the alert rows themselves. The note value is
+    NEVER passed to ``logger.*`` — it may contain operator-sensitive
+    context.
+
+    Empty ``alert_ids`` list short-circuits: returns all-zero counts and
+    does NOT record an audit event (a no-op call is not auditable
+    activity).
+    """
+    # Defensive normalization — accept any iterable of ids but coerce
+    # to a deduplicated list of non-empty strings so the IN-clause is
+    # well-formed. dict.fromkeys preserves insertion order while
+    # dropping duplicates so the audit payload reads in caller order.
+    try:
+        ids_in: list[str] = list(alert_ids or [])
+    except Exception:
+        ids_in = []
+    # Drop None / empty / non-string entries so the IN-clause is clean.
+    clean_ids: list[str] = [
+        i for i in dict.fromkeys(ids_in) if isinstance(i, str) and i
+    ]
+    n_input = len(ids_in)
+
+    # Empty-input short-circuit. No DB hit, no audit row — a no-op call
+    # is invisible to security review on purpose (otherwise every UI
+    # render of an empty multiselect would log a spurious bulk_ack
+    # event).
+    if not clean_ids:
+        return {
+            "acked": 0,
+            "skipped_already_acked": 0,
+            "not_found": n_input,
+            "failed": 0,
+        }
+
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
+    ack_ts = _now_iso()
+    ack_by = uid if uid else None
+
+    # Build the IN-clause placeholder string ONCE — the same shape is
+    # used by both the pre-UPDATE classification query AND the UPDATE.
+    placeholders = ",".join(["?"] * len(clean_ids))
+
+    try:
+        # get_connection() lives inside the try so a broken
+        # connection helper (e.g. a forced "database is locked")
+        # also lands in the failed bucket rather than escaping. The
+        # whole function is by-contract non-raising.
+        from state.db import get_connection
+        conn = get_connection()
+        with conn:
+            # First classify each input id under the user's scope:
+            #   already-acked → goes to skipped_already_acked
+            #   unack         → eligible for the UPDATE
+            #   not in scope  → goes to not_found
+            #
+            # One SELECT (not N) — that is the whole point of the bulk
+            # helper. The IN-clause + scope filter rides on the
+            # alert_id PK + the existing idx_alerts_unacknowledged
+            # index, so even a 500-id batch round-trips fast.
+            rows = conn.execute(
+                f"SELECT alert_id, acknowledged FROM alerts "
+                f"WHERE alert_id IN ({placeholders}) {scope_sql}",
+                (*clean_ids, *scope_params),
+            ).fetchall()
+            visible: dict[str, int] = {
+                r["alert_id"]: int(r["acknowledged"]) for r in rows
+            }
+            to_ack: list[str] = [i for i in clean_ids if visible.get(i) == 0]
+            already_acked = sum(1 for i in clean_ids if visible.get(i) == 1)
+            not_found = sum(1 for i in clean_ids if i not in visible)
+
+            if to_ack:
+                # One UPDATE for the whole eligible set. The scope
+                # filter is reapplied here belt-and-braces — the
+                # classification SELECT above already filtered, but
+                # the UPDATE is the authoritative write and must not
+                # depend on the SELECT having executed atomically with
+                # it (we use an explicit ``with conn:`` block, but the
+                # extra WHERE costs nothing and defends against future
+                # refactors that split the SELECT off).
+                up_placeholders = ",".join(["?"] * len(to_ack))
+                conn.execute(
+                    f"UPDATE alerts "
+                    f"SET acknowledged = 1, "
+                    f"    acknowledged_at = ?, "
+                    f"    acknowledged_note = ?, "
+                    f"    acknowledged_by_user_id = ? "
+                    f"WHERE alert_id IN ({up_placeholders}) {scope_sql}",
+                    (ack_ts, note, ack_by, *to_ack, *scope_params),
+                )
+            acked = len(to_ack)
+    except Exception as exc:
+        # Catastrophic write failure. Count every input id as "failed"
+        # so the sum still equals len(alert_ids) — the operator's UI
+        # can show "0 acked / 0 skipped / 0 not found / N failed" and
+        # the caller can surface a single error toast.
+        logger.warning(
+            f"bulk_acknowledge_alerts: SQLite update failed: {exc}"
+        )
+        return {
+            "acked": 0,
+            "skipped_already_acked": 0,
+            "not_found": 0,
+            "failed": n_input,
+        }
+
+    # We dropped duplicate / empty entries from ``ids_in`` above; any
+    # difference between ``n_input`` and the four counted buckets is
+    # those discarded entries. Bucket them under ``not_found`` so the
+    # sum invariant (acked + skipped + not_found + failed == n_input)
+    # still holds — a caller passing the same id twice or an empty
+    # string sees the second copy / empty land in not_found rather
+    # than silently disappearing.
+    counted = acked + already_acked + not_found
+    discarded = max(0, n_input - counted)
+    not_found += discarded
+
+    # Audit-log the bulk ack. ONE event, not N. The detail carries the
+    # input ids + output counts so a security review can reconstruct
+    # "what got acked" without joining against the alerts table. The
+    # note (when supplied) is truncated to 200 chars in the detail —
+    # the full note is on each acked row. The note is NEVER passed to
+    # logger.* anywhere in this function.
+    try:
+        from auth.audit import record_audit
+        detail: dict = {
+            "count": acked,
+            "skipped_already_acked": already_acked,
+            "not_found": not_found,
+            "ids": list(clean_ids),
+            "acknowledged_at": ack_ts,
+        }
+        if note is not None:
+            detail["note_truncated_to_200_chars"] = (
+                str(note)[:_BULK_ACK_AUDIT_NOTE_MAXLEN]
+            )
+        record_audit(
+            "bulk_acknowledge",
+            entity_type="alert",
+            detail=detail,
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        # record_audit is by-contract non-raising; the extra wrapper
+        # is belt-and-braces in case a future hook on the audit path
+        # leaks. We deliberately do NOT log the note here.
+        pass
+
+    return {
+        "acked": acked,
+        "skipped_already_acked": already_acked,
+        "not_found": not_found,
+        "failed": 0,
+    }
+
+
+def bulk_acknowledge_alerts_by_filter(
+    *,
+    severity: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    before_iso: Optional[str] = None,
+    user_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> dict:
+    """Convenience helper: resolve a set of alert_ids by WHERE filter,
+    then delegate to ``bulk_acknowledge_alerts``.
+
+    The UI patterns this enables:
+
+      * "Ack every CRITICAL"           → severity='CRITICAL'
+      * "Ack every BDI_MOVE"           → alert_type='BDI_MOVE'
+      * "Ack everything older than 7d" → before_iso=(now - 7d).isoformat()
+      * Combined: "Ack every LOW from yesterday or earlier" →
+        severity='LOW', before_iso=(now - 1d).isoformat()
+
+    Filter semantics:
+
+      * ``severity``   — TIER-OR-WORSE match. Passing 'HIGH' acks rows
+                          whose severity is HIGH OR CRITICAL; passing
+                          'MEDIUM' acks MEDIUM + HIGH + CRITICAL; passing
+                          'LOW' acks everything. This matches the
+                          operator's mental model ("ack at least HIGH")
+                          and mirrors the severity-tier semantics used
+                          by the saved-filter payload in
+                          ``ui/tab_alerts.py``. None means "any severity".
+                          An unknown severity string is treated as exact
+                          match (the IN-clause degrades to a single
+                          value) — safer than the alternative of
+                          silently expanding to nothing.
+      * ``alert_type`` — EXACT match.
+      * ``before_iso`` — keeps rows whose ``created_at < before_iso``.
+                          ISO-8601 UTC string. The comparison is the
+                          string compare SQLite does natively; ISO-8601
+                          is fixed-width and tz-aware so lex order
+                          matches chronological order.
+
+    Only UNACKED rows are selected for the bulk pass — already-acked
+    rows are excluded at the SELECT stage so they do NOT show up in
+    ``skipped_already_acked`` (the by-filter helper is "ack everything
+    that still needs acking under this filter", not "re-process every
+    matching row"). This is the SHAPE difference from
+    ``bulk_acknowledge_alerts``: that one takes a caller-supplied id
+    list and reports back what happened to each id; this one filters
+    THEN delegates, so ``skipped_already_acked`` and ``not_found`` are
+    always 0.
+
+    Per-user scoping mirrors the other ack helpers exactly: rows
+    belonging to the resolved user OR the legacy ``''`` bucket are
+    eligible.
+
+    Returns the same dict shape as ``bulk_acknowledge_alerts``. NEVER
+    raises: a SQLite read failure during the WHERE-clause SELECT
+    returns ``{"acked": 0, "skipped_already_acked": 0, "not_found": 0,
+    "failed": 0}`` (zero of everything — there was no id list to fail
+    on).
+
+    No filter at all (every arg defaulting to None) is treated as
+    "ack every unacked row in your scope" — convenient but the UI is
+    expected to gate this behind a confirmation since it is identical
+    to ``acknowledge_all``. We do NOT short-circuit to
+    ``acknowledge_all`` here because the bulk helper records a
+    different audit event (``bulk_acknowledge`` vs ``ack_all_alerts``)
+    and carries the id list in the audit detail.
+    """
+    from state.db import get_connection
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
+
+    # Build the WHERE clause dynamically. Start with "unacked rows in
+    # the user's scope"; each provided filter adds an AND clause.
+    where_parts: list[str] = ["acknowledged = 0"]
+    where_params: list = []
+    if severity is not None and isinstance(severity, str) and severity:
+        # Tier-or-worse expansion: pull the requested severity AND every
+        # more-severe tier so "ack at least HIGH" includes CRITICAL.
+        # The ordering comes from ``_SEVERITY_ORDER`` (CRITICAL=0,
+        # HIGH=1, MEDIUM=2, LOW=3) — every row whose rank is <= the
+        # requested rank qualifies. Unknown severity strings fall back
+        # to exact match.
+        req_rank = _SEVERITY_ORDER.get(severity)
+        if req_rank is None:
+            where_parts.append("severity = ?")
+            where_params.append(severity)
+        else:
+            tiers = [
+                name for name, rank in _SEVERITY_ORDER.items()
+                if rank <= req_rank
+            ]
+            placeholders = ",".join(["?"] * len(tiers))
+            where_parts.append(f"severity IN ({placeholders})")
+            where_params.extend(tiers)
+    if alert_type is not None and isinstance(alert_type, str) and alert_type:
+        where_parts.append("alert_type = ?")
+        where_params.append(alert_type)
+    if before_iso is not None and isinstance(before_iso, str) and before_iso:
+        where_parts.append("created_at < ?")
+        where_params.append(before_iso)
+
+    where_clause = " AND ".join(where_parts)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT alert_id FROM alerts WHERE {where_clause} {scope_sql}",
+            (*where_params, *scope_params),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            f"bulk_acknowledge_alerts_by_filter: SELECT failed: {exc}"
+        )
+        return {
+            "acked": 0,
+            "skipped_already_acked": 0,
+            "not_found": 0,
+            "failed": 0,
+        }
+
+    ids = [r["alert_id"] for r in rows]
+    # Delegate to the id-list helper for the actual UPDATE + audit. The
+    # delegate handles the empty-list short-circuit (returns all zeros
+    # and skips the audit event) so an "ack by filter" pass that finds
+    # nothing does not pollute the audit log.
+    return bulk_acknowledge_alerts(ids, note=note, user_id=user_id)
 
 
 def get_unread_count(*, user_id: Optional[str] = None) -> int:

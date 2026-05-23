@@ -179,12 +179,34 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       Same idempotent ALTER-TABLE-in-try/except pattern as
 #       v4/v5/v6/v13/v14/v16/v17 — each column add is independently
 #       safe to re-run.
+#  19 — adds bulk acknowledgement metadata to the alerts table so an
+#       operator can ack many alerts in one operation with an optional
+#       free-form note. Two ALTERs, both on ``alerts``:
+#         * ``alerts.acknowledged_note TEXT`` — NULLable. The optional
+#           free-form note an operator attaches when acking (single or
+#           bulk). NULL means "no note", which is also the value for
+#           every existing acked row from pre-v19. Storing the FULL
+#           note on the row (not just the audit detail) lets the UI
+#           render a tooltip / popover next to the ack badge without a
+#           second join.
+#         * ``alerts.acknowledged_by_user_id TEXT`` — NULLable. The
+#           ``user_id`` of the operator who acked the row. Auto-stamped
+#           from the user_id kwarg passed to ``acknowledge_alert`` /
+#           ``bulk_acknowledge_alerts`` so the alert table itself can
+#           answer "who acked this?" without a join against
+#           audit_events. NULL on rows acked before v19 — fall back to
+#           the audit log for those.
+#       Same idempotent ALTER-TABLE-in-try/except pattern as
+#       v4/v5/v6/v13/v14/v16/v17/v18 — each column add is independently
+#       safe to re-run. Both are NULLable (no ``NOT NULL DEFAULT ''``)
+#       so the SQL layer can distinguish "no note attached" (NULL) from
+#       "empty-string note" (caller passed ``note=''``).
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 18
+SCHEMA_VERSION: int = 19
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -734,6 +756,35 @@ _SCHEMA_V18_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v18)"
 )
 
+# Schema v19 adds bulk-acknowledgement metadata to ``alerts``. Two
+# columns, both NULLable on purpose so the SQL layer can distinguish
+# "no note attached" (NULL) from "empty-string note" (caller passed
+# ``note=''``):
+#
+#   * ``acknowledged_note`` — ``TEXT``. The optional free-form note an
+#     operator attaches when acking a single alert or a bulk set. The
+#     full note is persisted on the row; a 200-char truncation lands in
+#     the audit detail. NULL for rows acked before v19 (the column is
+#     freshly added so every pre-existing row picks up NULL).
+#   * ``acknowledged_by_user_id`` — ``TEXT``. The ``user_id`` of the
+#     operator who acked the row. Auto-stamped from the ``user_id``
+#     kwarg passed to ``acknowledge_alert`` /
+#     ``bulk_acknowledge_alerts``. NULL on rows acked before v19 —
+#     callers that need attribution for those rows fall back to the
+#     audit_events log keyed by alert_id.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v6 /
+# v13 / v14 / v16 / v17 / v18 — SQLite does not support IF NOT EXISTS
+# on ALTER TABLE, so each statement is wrapped in try/except and
+# "duplicate column name" errors are swallowed. Each column is added
+# in its own try/except so partial completion of a prior run is also
+# tolerated.
+_SCHEMA_V19_NOTE: str = (
+    "v19: alerts.acknowledged_note TEXT + "
+    "alerts.acknowledged_by_user_id TEXT "
+    "(added via ALTER TABLE in _migrate_to_v19)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -864,6 +915,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v18(conn)
     except Exception as exc:
         logger.warning(f"state.db: v18 column adds skipped: {exc}")
+    # v19 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18. Adds
+    # alerts.acknowledged_note + alerts.acknowledged_by_user_id so a
+    # single or bulk ack call can persist (a) the operator's free-form
+    # note and (b) the operator's user_id directly on the row. Both
+    # columns are NULLable; pre-v19 acked rows pick up NULL for both.
+    try:
+        from state.migrations import _migrate_to_v19
+        _migrate_to_v19(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v19 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1090,6 +1152,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v18(conn)
         except Exception as exc:
             logger.warning(f"state.db: v18 migration skipped: {exc}")
+
+    # Migration 18 → 19: add the alerts.acknowledged_note +
+    # alerts.acknowledged_by_user_id columns so single + bulk ack can
+    # persist (a) the operator's free-form note and (b) the operator's
+    # user_id directly on the row. Both columns are NULLable so a
+    # pre-v19 acked row is distinguishable from a v19-acked row whose
+    # operator did not attach a note. Same idempotent ALTER-TABLE-in-
+    # try/except pattern as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18 —
+    # the helper is already invoked unconditionally above; this branch
+    # keeps the version-step ladder explicit.
+    if current < 19:
+        try:
+            from state.migrations import _migrate_to_v19
+            _migrate_to_v19(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v19 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

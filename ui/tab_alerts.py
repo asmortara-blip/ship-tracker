@@ -1031,6 +1031,13 @@ def _render_active_alerts(visible_alerts: list[dict]) -> None:
                 f"{len(visible_alerts)} of {original_count} alerts shown"
             )
 
+        # ── Bulk acknowledgement panel (v19) ───────────────────────────────
+        # Renders ABOVE the table so an operator can pick from the
+        # persisted alert set and ack the selection in one click. Wrapped
+        # in its own try/except so a bulk-panel failure cannot break the
+        # rest of the Active Alerts render below.
+        _render_bulk_ack_panel()
+
         if not visible_alerts:
             st.success("All clear. No alerts are currently active.")
             return
@@ -1083,6 +1090,288 @@ def _render_active_alerts(visible_alerts: list[dict]) -> None:
     except Exception:
         logger.exception("Active alerts render failed")
         st.error("Active alerts section unavailable.")
+
+
+# ---------------------------------------------------------------------------
+# Bulk acknowledgement panel (v19)
+# ---------------------------------------------------------------------------
+# Operators today click each row's "Ack" button individually. When 30
+# LOW alerts fire that's 30 clicks. The bulk panel below lets them pick
+# a subset (or apply a filter — severity / alert_type / before_iso) and
+# ack everything in one operation, with an optional free-form note that
+# persists on each acked row.
+#
+# Both helpers wrap the entire surface in try/except so the bulk panel
+# can never break the Active Alerts section. A confirmation step is
+# required when the selection exceeds _BULK_ACK_CONFIRM_THRESHOLD so an
+# accidental "ack 50 CRITICALs" cannot happen on a single click.
+_BULK_ACK_CONFIRM_THRESHOLD: int = 10
+
+
+def _format_alert_for_multiselect(alert) -> str:
+    """Build a one-line label for an alert in the bulk-ack multiselect.
+
+    Uses the engine's ShippingAlert attributes (severity / title /
+    alert_type) so a busy operator can identify the row without
+    cross-referencing the alert_id. The id is appended at the tail as
+    a short suffix to disambiguate same-titled rows from different
+    fires.
+    """
+    try:
+        sev   = getattr(alert, "severity", "?")
+        atype = getattr(alert, "alert_type", "?")
+        title = getattr(alert, "title", "") or "(untitled)"
+        aid   = getattr(alert, "alert_id", "") or ""
+        short_id = aid[:8] if aid else "????????"
+        return f"[{sev}] {atype} — {title} (#{short_id})"
+    except Exception:
+        return "(unrenderable alert)"
+
+
+def _render_bulk_ack_panel() -> None:
+    """Render the bulk-acknowledgement controls above the Active Alerts
+    table.
+
+    Two surfaces:
+
+      1. The default panel: a multiselect of unacked alert IDs, an
+         optional note field, and a "Bulk acknowledge selected" button.
+         When the selection exceeds ``_BULK_ACK_CONFIRM_THRESHOLD`` a
+         confirmation second-click is required via session state.
+      2. An "Ack by filter…" expander with severity / alert_type /
+         before_iso pickers that calls
+         ``bulk_acknowledge_alerts_by_filter``. This is the path for
+         "ack all CRITICAL" / "ack all > 7 days old" patterns.
+
+    NEVER raises — every surface is wrapped in try/except and a panel
+    failure surfaces as ``st.warning`` rather than breaking the parent
+    Active Alerts render.
+    """
+    try:
+        from engine.alert_engine_v2 import (
+            bulk_acknowledge_alerts,
+            bulk_acknowledge_alerts_by_filter,
+            load_alerts,
+        )
+
+        # Pull the engine-persisted alerts (last 30 days is a generous
+        # window — the by-filter helper can still hit older rows via
+        # before_iso, but the multiselect needs a populated dropdown).
+        try:
+            persisted = load_alerts(max_age_days=30) or []
+        except Exception:
+            logger.exception("bulk-ack panel: load_alerts failed")
+            persisted = []
+
+        # Only unacked rows show in the multiselect — acked rows are
+        # not actionable from here (the by-filter expander includes its
+        # own selection so it's fine for those to ignore the picker).
+        unacked = [a for a in persisted if not getattr(a, "acknowledged", False)]
+
+        with st.container():
+            st.caption(
+                "Bulk acknowledge: select multiple alerts and ack them "
+                "(with an optional note) in one operation."
+            )
+            if not unacked:
+                st.info("No unacknowledged alerts to bulk-ack.")
+            else:
+                # Map label → alert_id so the multiselect surfaces a
+                # human-readable label but we ack by id.
+                label_to_id: dict[str, str] = {}
+                for a in unacked:
+                    label = _format_alert_for_multiselect(a)
+                    # Disambiguate identical labels by appending the
+                    # 12-char id suffix when collisions exist; in
+                    # practice the (#xxxxxxxx) suffix already makes
+                    # labels unique because alert_ids are UUIDs.
+                    base = label
+                    suffix = 0
+                    while label in label_to_id:
+                        suffix += 1
+                        label = f"{base} [{suffix}]"
+                    label_to_id[label] = getattr(a, "alert_id", "")
+
+                selected_labels = st.multiselect(
+                    "Alerts to acknowledge",
+                    options=list(label_to_id.keys()),
+                    key="bulk_ack_selection",
+                    help=(
+                        "Pick one or more alerts. The full list reflects "
+                        "the alerts you can see; severity / type filters "
+                        "live in the expander below."
+                    ),
+                )
+                note = st.text_input(
+                    "Note (optional)",
+                    key="bulk_ack_note",
+                    help=(
+                        "Free-form note attached to every acked row. "
+                        "Truncated to 200 chars in the audit log; full "
+                        "value persisted on the alert."
+                    ),
+                )
+
+                # Resolve ids in the SAME order the operator selected
+                # so the audit log reads in the order they picked.
+                selected_ids = [
+                    label_to_id[lbl]
+                    for lbl in selected_labels
+                    if lbl in label_to_id
+                ]
+
+                # Confirmation-on-large-selection guard. Session-state
+                # boolean flips on the first click; a second click on
+                # the same selection then executes. The flag is cleared
+                # whenever the selection size changes (to prevent
+                # "stale confirmation" if the operator changes their
+                # mind between clicks).
+                confirm_key = "bulk_ack_confirmed_count"
+                prior_confirm = st.session_state.get(confirm_key, -1)
+                needs_confirm = len(selected_ids) > _BULK_ACK_CONFIRM_THRESHOLD
+                if prior_confirm != len(selected_ids):
+                    # Selection changed → drop any stale confirmation so
+                    # the operator has to re-confirm for the new count.
+                    st.session_state[confirm_key] = -1
+
+                btn_label = (
+                    f"Confirm bulk ack ({len(selected_ids)} alerts)"
+                    if needs_confirm and st.session_state.get(confirm_key) == len(selected_ids)
+                    else f"Bulk acknowledge {len(selected_ids)} selected"
+                )
+                if st.button(
+                    btn_label,
+                    key="bulk_ack_button",
+                    use_container_width=True,
+                    disabled=not selected_ids,
+                ):
+                    if needs_confirm and st.session_state.get(confirm_key) != len(selected_ids):
+                        # First click on a large selection: arm the
+                        # confirmation. Don't ack yet — the operator
+                        # must click again. Show a warning so they know
+                        # what's about to happen.
+                        st.session_state[confirm_key] = len(selected_ids)
+                        st.warning(
+                            f"You are about to acknowledge "
+                            f"{len(selected_ids)} alerts. Click the "
+                            f"button again to confirm."
+                        )
+                    else:
+                        # Either small selection (no confirm needed) or
+                        # second click on a large selection. Execute.
+                        try:
+                            result = bulk_acknowledge_alerts(
+                                selected_ids,
+                                note=(note or None),
+                            )
+                            _show_bulk_ack_result(result)
+                        except Exception:
+                            # bulk_acknowledge_alerts is by-contract
+                            # non-raising; this catch is belt-and-braces.
+                            logger.exception("bulk-ack panel: bulk ack call failed")
+                            st.error("Bulk acknowledgement failed.")
+                        # Clear the confirmation flag for the next pass.
+                        st.session_state[confirm_key] = -1
+
+            # ── Ack by filter expander ─────────────────────────────────
+            with st.expander("Ack by filter…", expanded=False):
+                st.caption(
+                    "Acknowledge every unacked alert matching the "
+                    "filter below. Severity matches tier-or-worse "
+                    "(HIGH includes CRITICAL)."
+                )
+                sev = st.selectbox(
+                    "Severity",
+                    options=["(any)", "CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                    index=0,
+                    key="bulk_ack_filter_severity",
+                )
+                # Distinct alert_type values from the persisted set so
+                # the picker is grounded in real data.
+                types = sorted({
+                    getattr(a, "alert_type", "")
+                    for a in persisted
+                    if getattr(a, "alert_type", "")
+                })
+                atype = st.selectbox(
+                    "Alert type",
+                    options=["(any)"] + types,
+                    index=0,
+                    key="bulk_ack_filter_alert_type",
+                )
+                older_than_days = st.number_input(
+                    "Older than (days, 0 = any age)",
+                    min_value=0,
+                    max_value=365,
+                    value=0,
+                    step=1,
+                    key="bulk_ack_filter_older_days",
+                )
+                filter_note = st.text_input(
+                    "Note (optional)",
+                    key="bulk_ack_filter_note",
+                )
+                if st.button(
+                    "Acknowledge by filter",
+                    key="bulk_ack_by_filter_button",
+                    use_container_width=True,
+                ):
+                    sev_arg = None if sev == "(any)" else sev
+                    atype_arg = None if atype == "(any)" else atype
+                    before_iso_arg = None
+                    if older_than_days > 0:
+                        before_iso_arg = (
+                            datetime.now(timezone.utc)
+                            - timedelta(days=int(older_than_days))
+                        ).isoformat()
+                    try:
+                        result = bulk_acknowledge_alerts_by_filter(
+                            severity=sev_arg,
+                            alert_type=atype_arg,
+                            before_iso=before_iso_arg,
+                            note=(filter_note or None),
+                        )
+                        _show_bulk_ack_result(result)
+                    except Exception:
+                        logger.exception(
+                            "bulk-ack panel: by-filter call failed"
+                        )
+                        st.error("Bulk acknowledgement by filter failed.")
+    except Exception:
+        # Surface the failure without leaking it — the parent Active
+        # Alerts render below should continue to work even if the
+        # bulk panel itself is broken.
+        logger.exception("bulk-ack panel render failed")
+        st.warning("Bulk acknowledge panel unavailable.")
+
+
+def _show_bulk_ack_result(result: dict) -> None:
+    """Surface the dict returned by ``bulk_acknowledge_alerts`` /
+    ``bulk_acknowledge_alerts_by_filter`` as a single status message.
+
+    Picks ``st.success`` when at least one row was acked AND nothing
+    failed; ``st.warning`` when some rows failed or none were acked;
+    ``st.info`` when the input was empty (no acks, no failures).
+    """
+    try:
+        acked   = int(result.get("acked", 0))
+        skipped = int(result.get("skipped_already_acked", 0))
+        nf      = int(result.get("not_found", 0))
+        failed  = int(result.get("failed", 0))
+        msg = (
+            f"{acked} acked · {skipped} already acked · "
+            f"{nf} not found · {failed} failed"
+        )
+        if failed > 0:
+            st.warning(msg)
+        elif acked > 0:
+            st.success(msg)
+        else:
+            st.info(msg)
+    except Exception:
+        # An unexpected shape should not crash the UI; just show
+        # whatever we got as a generic info message.
+        st.info(str(result))
 
 
 def _render_history() -> None:

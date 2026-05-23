@@ -758,3 +758,55 @@ def _migrate_to_v18(conn: sqlite3.Connection) -> None:
                 f"state.migrations: _migrate_to_v18 ALTER TABLE "
                 f"({table}.{col_name}) failed: {exc}"
             )
+
+
+# ─── Schema v18 → v19 ─────────────────────────────────────────────────────
+
+def _migrate_to_v19(conn: sqlite3.Connection) -> None:
+    """Add bulk-acknowledgement metadata to the ``alerts`` table.
+
+    Two columns land in this migration, both on ``alerts`` and both
+    NULLable on purpose so the SQL layer can distinguish "no note set"
+    (NULL) from "empty-string note" (caller passed ``note=''``):
+
+      * ``acknowledged_note`` — ``TEXT``. The free-form note an
+        operator attaches when acking a single alert via
+        :func:`acknowledge_alert` (now with the optional ``note`` kwarg)
+        or a set of alerts via :func:`bulk_acknowledge_alerts`. The
+        full note is persisted on the row; the audit-event ``detail``
+        payload truncates to 200 chars so a long note does not bloat
+        the audit log. NULL on every alert acked before v19 because
+        the column is freshly added.
+      * ``acknowledged_by_user_id`` — ``TEXT``. The ``user_id`` of the
+        operator who acked the row. Auto-stamped on every ack call
+        from the ``user_id`` kwarg (resolved via ``_resolve_user_id``
+        so the active Streamlit user is picked up when nothing is
+        passed explicitly). NULL on rows acked before v19 — callers
+        that need attribution for those rows fall back to the
+        ``audit_events`` log keyed by the alert's id.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13`` /
+    ``_migrate_to_v14`` / ``_migrate_to_v16`` / ``_migrate_to_v17`` /
+    ``_migrate_to_v18``: SQLite does NOT support ``IF NOT EXISTS`` on
+    ALTER TABLE, so each statement is wrapped in try/except and
+    "duplicate column name" errors are swallowed. Each column is added
+    in its own try/except so partial completion of a prior run is also
+    tolerated, and re-running on a fully-migrated DB is a no-op.
+    """
+    for col_name, col_def in (
+        ("acknowledged_note", "TEXT"),
+        ("acknowledged_by_user_id", "TEXT"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE alerts ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v19 ALTER TABLE "
+                f"(alerts.{col_name}) failed: {exc}"
+            )
