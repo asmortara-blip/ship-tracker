@@ -512,6 +512,217 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  mfa — TOTP second factor (commit 1ac149b)
+#
+#  The interesting handler is ``mfa enable``: it generates a fresh secret
+#  + provisioning URI, prints BOTH to stdout (the operator scans the QR
+#  built from the URI, or pastes the raw secret into an authenticator
+#  app that doesn't ship a scanner), then flips the DB row.
+#
+#  The raw secret MUST land on stdout only — never stderr, never the
+#  loguru sink (we explicitly do NOT log it from this CLI). Tests assert
+#  it shows up exactly once.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_mfa_enable(args: argparse.Namespace) -> None:
+    from auth.mfa import enable_mfa, generate_secret, provisioning_uri
+    from auth.users import get_user
+
+    # Resolve the username for the provisioning URI label. Falls back to
+    # ``user_id`` when the user has no username (legacy / synthetic ids).
+    user = get_user(args.user_id)
+    account = user.username if user is not None else args.user_id
+
+    secret = generate_secret()
+    uri = provisioning_uri(secret, account=account)
+    ok = enable_mfa(args.user_id, secret)
+    if not ok:
+        raise RuntimeError(
+            f"enable_mfa failed for user_id={args.user_id!r} — "
+            "unknown user or DB error"
+        )
+
+    payload = {"user_id": args.user_id, "secret": secret, "provisioning_uri": uri, "enabled": True}
+    if args.json:
+        _print_json(payload)
+    else:
+        # Print both pieces explicitly so an operator copy-pasting from
+        # the terminal can spot each on its own line. The raw secret is
+        # what the user types into an authenticator app that can't scan
+        # a QR; the URI is the canonical otpauth:// form for QR-capable
+        # apps. Both must appear EXACTLY ONCE on stdout.
+        print(f"secret: {secret}")
+        print(f"provisioning_uri: {uri}")
+        _print_kv({"user_id": args.user_id, "enabled": True})
+
+
+def _cmd_mfa_disable(args: argparse.Namespace) -> None:
+    from auth.mfa import disable_mfa
+
+    ok = disable_mfa(args.user_id)
+    if not ok:
+        raise RuntimeError(
+            f"disable_mfa failed for user_id={args.user_id!r} — "
+            "unknown user or DB error"
+        )
+    payload = {"user_id": args.user_id, "enabled": False}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_mfa_status(args: argparse.Namespace) -> None:
+    from auth.mfa import is_mfa_enabled
+
+    enabled = is_mfa_enabled(args.user_id)
+    payload = {"user_id": args.user_id, "enabled": bool(enabled)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  filters — per-user saved filter presets (commit e471855)
+#
+#  Only list + delete here. Save is the UI's job — the CLI would need a
+#  way to encode the per-scope payload vocabulary on the command line,
+#  and that's a follow-up if anyone asks.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_filters_list(args: argparse.Namespace) -> None:
+    from state.user_filters import load_presets
+
+    presets = load_presets(user_id=args.user_id, scope=args.scope)
+    if args.json:
+        _print_json(presets)
+        return
+    rows = [
+        {
+            "name":     p.name,
+            "scope":    p.scope,
+            "keys":     ",".join(sorted(p.payload.keys())) if isinstance(p.payload, dict) else "",
+        }
+        for p in presets
+    ]
+    _print_table(rows, columns=["name", "scope", "keys"])
+
+
+def _cmd_filters_delete(args: argparse.Namespace) -> None:
+    from state.user_filters import delete_preset
+
+    ok = delete_preset(args.name, args.scope, user_id=args.user_id)
+    payload = {"name": args.name, "scope": args.scope, "deleted": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  incidents — alert correlation read-side (commit 665487d)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_incidents_list(args: argparse.Namespace) -> None:
+    from engine.alert_correlator import get_recent_incidents
+
+    incidents = get_recent_incidents(window_days=int(args.window))
+    if args.json:
+        _print_json(incidents)
+        return
+    rows = [
+        {
+            "incident_id":  inc.incident_id[:10],
+            "started_at":   inc.started_at,
+            "severity_max": inc.severity_max,
+            "alerts":       inc.alert_count,
+            "dominant":     inc.dominant_alert_type,
+        }
+        for inc in incidents
+    ]
+    _print_table(rows, columns=["incident_id", "started_at", "severity_max", "alerts", "dominant"])
+
+
+def _cmd_incidents_stats(args: argparse.Namespace) -> None:
+    from engine.alert_correlator import get_incident_summary
+
+    summary = get_incident_summary(window_days=int(args.window))
+    if args.json:
+        _print_json(summary)
+        return
+    # The breakdown dict is nested — show the headline numbers and the
+    # number of distinct dominant types as a cheap one-liner. Full
+    # breakdown is JSON-only (matches ``telemetry usage`` pattern).
+    headline = {
+        "window_days":              int(args.window),
+        "n_incidents":              summary.get("n_incidents", 0),
+        "n_total_alerts":           summary.get("n_total_alerts", 0),
+        "avg_alerts_per_incident":  round(float(summary.get("avg_alerts_per_incident", 0.0)), 4),
+        "largest_incident_size":    summary.get("largest_incident_size", 0),
+        "n_dominant_types":         len(summary.get("breakdown_by_dominant_type", {})),
+    }
+    _print_kv(headline)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  settings — per-user preferences (commit 9f79568)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_settings_show(args: argparse.Namespace) -> None:
+    from auth.settings import get_settings
+
+    settings = get_settings(args.user_id)
+    if args.json:
+        _print_json(settings)
+        return
+    _print_kv({
+        "user_id":                    settings.user_id,
+        "timezone":                   settings.timezone,
+        "theme":                      settings.theme,
+        "default_report_window_days": settings.default_report_window_days,
+        "default_alert_severity":     settings.default_alert_severity,
+        "extras":                     settings.extras or "(none)",
+    })
+
+
+def _cmd_settings_set(args: argparse.Namespace) -> None:
+    from auth.settings import update_setting
+
+    # Build a mapping of (flag → settings key) so the loop below applies
+    # only the flags the operator actually passed. ``argparse`` leaves
+    # un-provided string args as ``None``; report-window comes through
+    # as ``None`` when not provided.
+    updates: dict[str, Any] = {}
+    if args.timezone is not None:
+        updates["timezone"] = args.timezone
+    if args.theme is not None:
+        updates["theme"] = args.theme
+    if args.report_window is not None:
+        updates["default_report_window_days"] = int(args.report_window)
+    if args.alert_severity is not None:
+        updates["default_alert_severity"] = args.alert_severity
+
+    if not updates:
+        raise RuntimeError(
+            "settings set requires at least one of --timezone / --theme "
+            "/ --report-window / --alert-severity"
+        )
+
+    applied: dict[str, Any] = {}
+    for key, value in updates.items():
+        ok = update_setting(args.user_id, key, value)
+        applied[key] = bool(ok)
+
+    payload = {"user_id": args.user_id, "applied": applied}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({"user_id": args.user_id})
+        _print_kv(applied)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -671,6 +882,76 @@ def _build_parser() -> argparse.ArgumentParser:
     se.add_argument("--output", default=None, help="Custom output path")
     se.add_argument("--json", action="store_true")
     se.set_defaults(func=_cmd_export)
+
+    # ── mfa ───────────────────────────────────────────────────────────────
+    p_mfa = sub.add_parser("mfa", help="TOTP second-factor subcommands")
+    sm = p_mfa.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sm1 = sm.add_parser("enable", help="Generate a secret + enable MFA for a user")
+    sm1.add_argument("user_id")
+    sm1.add_argument("--json", action="store_true")
+    sm1.set_defaults(func=_cmd_mfa_enable)
+
+    sm2 = sm.add_parser("disable", help="Clear the MFA secret + flag for a user")
+    sm2.add_argument("user_id")
+    sm2.add_argument("--json", action="store_true")
+    sm2.set_defaults(func=_cmd_mfa_disable)
+
+    sm3 = sm.add_parser("status", help="Show whether MFA is enabled for a user")
+    sm3.add_argument("user_id")
+    sm3.add_argument("--json", action="store_true")
+    sm3.set_defaults(func=_cmd_mfa_status)
+
+    # ── filters ───────────────────────────────────────────────────────────
+    p_fl = sub.add_parser("filters", help="Saved filter-preset subcommands")
+    sf = p_fl.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sf1 = sf.add_parser("list", help="List a user's saved filter presets")
+    sf1.add_argument("--user-id", dest="user_id", required=True)
+    sf1.add_argument("--scope", default=None, help="Filter by preset scope (e.g. alerts)")
+    sf1.add_argument("--json", action="store_true")
+    sf1.set_defaults(func=_cmd_filters_list)
+
+    sf2 = sf.add_parser("delete", help="Delete one preset by name+scope")
+    sf2.add_argument("name")
+    sf2.add_argument("--scope", required=True)
+    sf2.add_argument("--user-id", dest="user_id", required=True)
+    sf2.add_argument("--json", action="store_true")
+    sf2.set_defaults(func=_cmd_filters_delete)
+
+    # ── incidents ─────────────────────────────────────────────────────────
+    p_in = sub.add_parser("incidents", help="Alert-correlation subcommands")
+    si = p_in.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    si1 = si.add_parser("list", help="List recent correlated incidents")
+    si1.add_argument("--window", type=int, default=7)
+    si1.add_argument("--json", action="store_true")
+    si1.set_defaults(func=_cmd_incidents_list)
+
+    si2 = si.add_parser("stats", help="Aggregate incident summary stats")
+    si2.add_argument("--window", type=int, default=7)
+    si2.add_argument("--json", action="store_true")
+    si2.set_defaults(func=_cmd_incidents_stats)
+
+    # ── settings ──────────────────────────────────────────────────────────
+    p_st = sub.add_parser("settings", help="Per-user preferences subcommands")
+    ss = p_st.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    ss1 = ss.add_parser("show", help="Show a user's saved preferences (or defaults)")
+    ss1.add_argument("--user-id", dest="user_id", required=True)
+    ss1.add_argument("--json", action="store_true")
+    ss1.set_defaults(func=_cmd_settings_show)
+
+    ss2 = ss.add_parser("set", help="Update one or more preference keys")
+    ss2.add_argument("--user-id", dest="user_id", required=True)
+    ss2.add_argument("--timezone", default=None, help="IANA timezone (e.g. America/New_York)")
+    ss2.add_argument("--theme", default=None, choices=["auto", "light", "dark"])
+    ss2.add_argument("--report-window", dest="report_window", default=None, type=int,
+                     help="Default report window in days")
+    ss2.add_argument("--alert-severity", dest="alert_severity", default=None,
+                     choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+    ss2.add_argument("--json", action="store_true")
+    ss2.set_defaults(func=_cmd_settings_set)
 
     return p
 

@@ -409,6 +409,265 @@ def test_export_writes_to_custom_path(capsys, tmp_path) -> None:
     assert out_path.exists()
 
 
+# ─── mfa ─────────────────────────────────────────────────────────────────
+
+def _mk_user(username: str = "alice", password: str = "longenough") -> str:
+    """Create a real user via auth.users.signup and return the user_id.
+
+    MFA + settings handlers need an existing users row to operate on —
+    they hit ``UPDATE users WHERE user_id = ?`` (mfa) or read the
+    username for the provisioning URI (mfa enable). signup() is the
+    public way to plant one in the same DB the CLI will read.
+    """
+    from auth.users import signup
+
+    user = signup(username, password)
+    assert user is not None
+    return user.user_id
+
+
+def test_mfa_enable_prints_secret_and_uri(capsys) -> None:
+    """The text-mode output must carry BOTH the raw secret and the
+    provisioning URI so an operator can either scan a QR or paste the
+    secret into an authenticator app that doesn't ship a scanner."""
+    uid = _mk_user("alice")
+    code, out, _ = _run(["mfa", "enable", uid], capsys)
+    assert code == 0
+    assert "secret:" in out
+    assert "provisioning_uri:" in out
+    assert "otpauth://" in out  # canonical KeyURI form
+    # Each piece appears EXACTLY ONCE — operator copy-paste safety.
+    secret_lines = [ln for ln in out.splitlines() if ln.startswith("secret:")]
+    assert len(secret_lines) == 1
+    raw_secret = secret_lines[0].split("secret:", 1)[1].strip()
+    assert out.count(raw_secret) == 2  # once on the secret: line, once inside the URI
+
+
+def test_mfa_enable_persists_flag(capsys) -> None:
+    """After ``mfa enable``, ``is_mfa_enabled`` should return True."""
+    uid = _mk_user("alice")
+    code, _, _ = _run(["mfa", "enable", uid], capsys)
+    assert code == 0
+    from auth.mfa import is_mfa_enabled
+    assert is_mfa_enabled(uid) is True
+
+
+def test_mfa_enable_unknown_user_exits_1(capsys) -> None:
+    """enable_mfa returns False for an unknown user_id; the CLI must
+    convert that to exit 1 with a stderr message (no traceback)."""
+    code, _, err = _run(["mfa", "enable", "user-does-not-exist"], capsys)
+    assert code == 1
+    assert "error:" in err.lower()
+
+
+def test_mfa_disable_round_trip(capsys) -> None:
+    """enable then disable: the second call should leave is_mfa_enabled
+    False and return exit 0."""
+    uid = _mk_user("alice")
+    _run(["mfa", "enable", uid], capsys)
+    code, _, _ = _run(["mfa", "disable", uid], capsys)
+    assert code == 0
+    from auth.mfa import is_mfa_enabled
+    assert is_mfa_enabled(uid) is False
+
+
+def test_mfa_status_reflects_state(capsys) -> None:
+    """status before enable → enabled=False; after enable → enabled=True."""
+    uid = _mk_user("alice")
+    code, out, _ = _run(["mfa", "status", uid, "--json"], capsys)
+    assert code == 0
+    assert json.loads(out)["enabled"] is False
+    _run(["mfa", "enable", uid], capsys)
+    code2, out2, _ = _run(["mfa", "status", uid, "--json"], capsys)
+    assert code2 == 0
+    assert json.loads(out2)["enabled"] is True
+
+
+def test_mfa_enable_json_carries_all_fields(capsys) -> None:
+    """--json output for enable carries secret, provisioning_uri,
+    enabled, user_id."""
+    uid = _mk_user("alice")
+    code, out, _ = _run(["mfa", "enable", uid, "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["user_id"] == uid
+    assert payload["enabled"] is True
+    assert isinstance(payload["secret"], str) and len(payload["secret"]) >= 16
+    assert payload["provisioning_uri"].startswith("otpauth://")
+
+
+# ─── filters ─────────────────────────────────────────────────────────────
+
+def _mk_preset(name: str, scope: str, user_id: str, payload: dict) -> None:
+    """Plant a saved filter preset directly via the module API so the
+    CLI's list/delete handlers have something to read."""
+    from state.user_filters import FilterPreset, save_preset
+
+    ok = save_preset(FilterPreset(name=name, scope=scope, payload=payload), user_id=user_id)
+    assert ok is True
+
+
+def test_filters_list_empty_returns_no_rows(capsys) -> None:
+    """A user with no saved presets → "(no rows)" table, exit 0."""
+    code, out, _ = _run(["filters", "list", "--user-id", "u-none"], capsys)
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_filters_list_empty_json_returns_empty_list(capsys) -> None:
+    code, out, _ = _run(["filters", "list", "--user-id", "u-none", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload == []
+
+
+def test_filters_list_returns_saved_preset(capsys) -> None:
+    _mk_preset("24h-critical", "alerts", "u-1", {"severity": "CRITICAL"})
+    code, out, _ = _run(["filters", "list", "--user-id", "u-1"], capsys)
+    assert code == 0
+    assert "24h-critical" in out
+    assert "alerts" in out
+
+
+def test_filters_list_scope_filter(capsys) -> None:
+    """--scope filters to that surface only."""
+    _mk_preset("for-alerts", "alerts", "u-1", {})
+    _mk_preset("for-reports", "reports", "u-1", {})
+    code, out, _ = _run(
+        ["filters", "list", "--user-id", "u-1", "--scope", "alerts", "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    names = [p["name"] for p in payload]
+    assert names == ["for-alerts"]
+
+
+def test_filters_delete_round_trip(capsys) -> None:
+    """Plant a preset → delete it → list returns empty."""
+    _mk_preset("to-delete", "alerts", "u-1", {"severity": "HIGH"})
+    code, out, _ = _run(
+        ["filters", "delete", "to-delete", "--scope", "alerts", "--user-id", "u-1", "--json"],
+        capsys,
+    )
+    assert code == 0
+    assert json.loads(out)["deleted"] is True
+    # Confirm it's actually gone.
+    from state.user_filters import load_presets
+    assert load_presets(user_id="u-1") == []
+
+
+def test_filters_delete_missing_returns_false(capsys) -> None:
+    """Deleting a preset that never existed returns deleted=False, exit
+    still 0 (the underlying call didn't raise)."""
+    code, out, _ = _run(
+        ["filters", "delete", "nope", "--scope", "alerts", "--user-id", "u-1", "--json"],
+        capsys,
+    )
+    assert code == 0
+    assert json.loads(out)["deleted"] is False
+
+
+# ─── incidents ───────────────────────────────────────────────────────────
+
+def test_incidents_list_empty(capsys) -> None:
+    """No alerts → no incidents → "(no rows)" table."""
+    code, out, _ = _run(["incidents", "list"], capsys)
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_incidents_list_with_synthetic_alerts(capsys) -> None:
+    """Insert two alerts that should correlate into one incident
+    (same ticker, within the 30-minute window) — the incidents list
+    must surface at least one row."""
+    _mk_alert_row(severity="HIGH", idx=1)
+    _mk_alert_row(severity="CRITICAL", idx=1)  # same idx → same TKR1 ticker
+    code, out, _ = _run(["incidents", "list", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert isinstance(payload, list)
+    assert len(payload) >= 1
+    # Each incident carries the documented top-level fields.
+    inc = payload[0]
+    assert "incident_id" in inc
+    assert "severity_max" in inc
+    assert "alert_count" in inc
+
+
+def test_incidents_stats_empty_returns_zeroed_shape(capsys) -> None:
+    """Empty DB → zeroed dict with the documented keys still present."""
+    code, out, _ = _run(["incidents", "stats", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["n_incidents"] == 0
+    assert payload["n_total_alerts"] == 0
+    assert payload["breakdown_by_dominant_type"] == {}
+
+
+def test_incidents_stats_with_alerts(capsys) -> None:
+    """With alerts present, the stats panel reports non-zero counts."""
+    _mk_alert_row(severity="HIGH", idx=1)
+    _mk_alert_row(severity="CRITICAL", idx=2)
+    code, out, _ = _run(["incidents", "stats"], capsys)
+    assert code == 0
+    assert "n_incidents" in out
+    assert "n_total_alerts" in out
+
+
+# ─── settings ────────────────────────────────────────────────────────────
+
+def test_settings_show_defaults_for_unknown_user(capsys) -> None:
+    """A user that has never saved preferences → the defaults dataclass
+    is returned (timezone=UTC, theme=auto, etc.)."""
+    code, out, _ = _run(["settings", "show", "--user-id", "u-1", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["timezone"] == "UTC"
+    assert payload["theme"] == "auto"
+    assert payload["default_alert_severity"] == "LOW"
+
+
+def test_settings_set_then_show_reflects_change(capsys) -> None:
+    """settings set --timezone … should be visible to a follow-up show."""
+    code, _, _ = _run(
+        ["settings", "set", "--user-id", "u-1", "--timezone", "America/New_York"],
+        capsys,
+    )
+    assert code == 0
+    code2, out, _ = _run(["settings", "show", "--user-id", "u-1", "--json"], capsys)
+    assert code2 == 0
+    payload = json.loads(out)
+    assert payload["timezone"] == "America/New_York"
+
+
+def test_settings_set_multiple_keys_in_one_call(capsys) -> None:
+    """Passing multiple flags at once applies all of them."""
+    code, _, _ = _run(
+        [
+            "settings", "set", "--user-id", "u-1",
+            "--theme", "dark",
+            "--report-window", "60",
+            "--alert-severity", "HIGH",
+        ],
+        capsys,
+    )
+    assert code == 0
+    code2, out, _ = _run(["settings", "show", "--user-id", "u-1", "--json"], capsys)
+    assert code2 == 0
+    payload = json.loads(out)
+    assert payload["theme"] == "dark"
+    assert payload["default_report_window_days"] == 60
+    assert payload["default_alert_severity"] == "HIGH"
+
+
+def test_settings_set_no_flags_exits_1(capsys) -> None:
+    """settings set with no preference flags is operator error → exit 1."""
+    code, _, err = _run(["settings", "set", "--user-id", "u-1"], capsys)
+    assert code == 1
+    assert "error:" in err.lower()
+
+
 # ─── argparse rejection paths ────────────────────────────────────────────
 
 def test_unknown_subcommand_exits_2(capsys) -> None:
@@ -453,6 +712,12 @@ def test_every_json_subcommand_produces_valid_json(capsys) -> None:
         ["health", "summary", "--json"],
         ["users", "list", "--json"],
         ["tokens", "list", "--user-id", "u-x", "--json"],
+        # New read-only --json handlers from commit 3782580+
+        ["mfa", "status", "u-x", "--json"],
+        ["filters", "list", "--user-id", "u-x", "--json"],
+        ["incidents", "list", "--json"],
+        ["incidents", "stats", "--json"],
+        ["settings", "show", "--user-id", "u-x", "--json"],
     ]
     for argv in invocations:
         code, out, err = _run(argv, capsys)
