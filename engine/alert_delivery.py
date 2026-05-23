@@ -2021,3 +2021,147 @@ def delete_channel(channel_id: str, *, user_id: Optional[str] = None) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Test ping — operator-driven channel verification
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TEST_PING_BODY_PREFIX = "\U0001f9ea Test ping from Ship Tracker"
+
+
+def _build_test_ping_alert(channel: "DeliveryChannel") -> "ShippingAlert":
+    """Build the synthetic alert used by ``send_test_ping``.
+
+    Carries a clear ``"TEST"`` prefix in the title + an unambiguous body
+    referencing the channel so the receiving operator can confirm which
+    channel was being verified. The alert is constructed via
+    :func:`engine.alert_engine_v2._make` so it gets a fresh UUID +
+    ``created_at`` timestamp identical in shape to a real alert.
+    """
+    from engine.alert_engine_v2 import _make as _make_alert
+    now_iso = datetime.now(timezone.utc).isoformat()
+    body = (
+        f"{_TEST_PING_BODY_PREFIX} — channel {channel.name} "
+        f"(id={channel.channel_id}). If you see this, delivery is working. "
+        f"Sent at {now_iso}."
+    )
+    return _make_alert(
+        alert_type="TEST_PING",
+        severity="LOW",
+        title=f"[TEST] Channel verification — {channel.name}",
+        body=body,
+    )
+
+
+def send_test_ping(channel: "DeliveryChannel") -> tuple[bool, str]:
+    """Send a synthetic "test ping" delivery to ``channel`` so an operator
+    can verify the channel works WITHOUT manufacturing a real alert.
+
+    Behaviour:
+      * Constructs a synthetic ``ShippingAlert`` via
+        :func:`_build_test_ping_alert` with a clear "TEST" prefix.
+      * Dispatches on ``channel.kind`` to the same per-kind helper
+        ``deliver_alert`` would use (slack inline, email/sms/webhook/
+        discord/pagerduty via their ``_deliver_*`` helpers).
+      * Bypasses ``channel.enabled`` and ``channel.severity_threshold`` —
+        the operator might be testing a channel they just configured and
+        haven't enabled yet, and severity gating would mask the synthetic
+        LOW alert behind a HIGH/CRITICAL threshold.
+      * NEVER raises. Every path is wrapped in try/except; any unexpected
+        exception is returned in the failure tuple.
+      * Records an audit row with ``action='test_ping'`` and
+        ``detail={'kind': channel.kind, ...}`` so the operator can
+        confirm what got sent.
+
+    Returns:
+        Tuple of ``(success, message)``. On success ``message`` is
+        ``"Test ping delivered"``. On failure ``message`` carries the
+        underlying error text (HTTP status, exception text, or
+        ``"unsupported kind: <kind>"``).
+    """
+    success = False
+    message = ""
+    try:
+        alert = _build_test_ping_alert(channel)
+        kind = channel.kind
+
+        if kind == "slack":
+            payload = format_slack_payload(alert)
+            try:
+                resp = requests.post(channel.target, json=payload, timeout=_REQUEST_TIMEOUT_S)
+                status = getattr(resp, "status_code", 0)
+                if 200 <= status < 300:
+                    success = True
+                    message = "Test ping delivered"
+                else:
+                    body = ""
+                    try:
+                        body = (resp.text or "")[:500]
+                    except Exception:
+                        pass
+                    message = f"HTTP {status}: {body}" if body else f"HTTP {status}"
+            except Exception as exc:  # noqa: BLE001
+                message = str(exc) or exc.__class__.__name__
+
+        elif kind == "email":
+            cfg = _get_smtp_config()
+            if cfg is None:
+                message = "SMTP not configured"
+            else:
+                result = _deliver_email(channel, alert, cfg)
+                success = bool(result.success)
+                message = "Test ping delivered" if success else (result.error_msg or "delivery failed")
+
+        elif kind == "sms":
+            cfg = _get_twilio_config()
+            if cfg is None:
+                message = "Twilio not configured"
+            else:
+                result = _deliver_sms(channel, alert, cfg)
+                success = bool(result.success)
+                message = "Test ping delivered" if success else (result.error_msg or "delivery failed")
+
+        elif kind == "webhook":
+            result = _deliver_webhook(channel, alert)
+            success = bool(result.success)
+            message = "Test ping delivered" if success else (result.error_msg or "delivery failed")
+
+        elif kind == "discord":
+            result = _deliver_discord(channel, alert)
+            success = bool(result.success)
+            message = "Test ping delivered" if success else (result.error_msg or "delivery failed")
+
+        elif kind == "pagerduty":
+            result = _deliver_pagerduty(channel, alert)
+            success = bool(result.success)
+            message = "Test ping delivered" if success else (result.error_msg or "delivery failed")
+
+        else:
+            message = f"unsupported kind: {kind}"
+
+    except Exception as exc:  # noqa: BLE001 — never raise
+        success = False
+        message = str(exc) or exc.__class__.__name__
+
+    # Audit-log the test ping. ``record_audit`` is itself never-raise,
+    # but wrap defensively so a stray import error can't turn into a
+    # propagated exception. target / webhook URL deliberately NOT logged
+    # — matches the save_channel audit shape.
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "test_ping",
+            entity_type="channel",
+            entity_id=getattr(channel, "channel_id", ""),
+            detail={
+                "kind": getattr(channel, "kind", ""),
+                "name": getattr(channel, "name", ""),
+                "success": bool(success),
+                "message": message,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return bool(success), message

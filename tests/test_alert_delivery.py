@@ -50,6 +50,7 @@ from engine.alert_delivery import (
     format_webhook_payload,
     load_channels,
     save_channel,
+    send_test_ping,
 )
 from engine.alert_engine_v2 import (
     _SEVERITY_ORDER,
@@ -2217,3 +2218,255 @@ def test_deliver_pending_daily_disabled_channel_returns_empty(monkeypatch) -> No
     results = deliver_pending(channel, cutoff)
     assert results == []
     assert posted["n"] == 0
+
+
+# ─── send_test_ping (operator-driven channel verification) ─────────────────
+
+
+def _capture_post(monkeypatch, response):
+    """Patch ``alert_delivery.requests.post`` with a recorder that returns
+    the supplied response object. Returns the call-capture dict so the
+    test can assert URL / json payload after the fact."""
+    calls: dict = {"calls": []}
+
+    def fake_post(url, json=None, data=None, auth=None, timeout=None, **kw):
+        calls["calls"].append({
+            "url": url,
+            "json": json,
+            "data": data,
+            "auth": auth,
+            "timeout": timeout,
+        })
+        return response
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    return calls
+
+
+def test_send_test_ping_slack_invokes_http_post_with_synthetic_message(monkeypatch) -> None:
+    """slack kind hits requests.post with a synthetic 'TEST'/'Test ping'
+    payload — no real alert manufactured."""
+    captured = _capture_post(monkeypatch, _FakeResponse(200))
+    channel = _make_channel(
+        "CRITICAL",  # severity gate bypassed — synthetic alert is LOW
+        kind="slack",
+        target="https://hooks.slack.com/services/T1/B1/secret",
+        enabled=False,  # disabled gate bypassed too
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    assert len(captured["calls"]) == 1
+    call = captured["calls"][0]
+    assert call["url"] == "https://hooks.slack.com/services/T1/B1/secret"
+    # The slack payload should carry the "TEST" prefix in the title (text
+    # fallback) and the "Test ping" body identifier somewhere in the
+    # serialized payload.
+    serialized = repr(call["json"])
+    assert "[TEST]" in serialized
+    assert "Test ping" in serialized
+
+
+def test_send_test_ping_email_invokes_smtp_with_synthetic_message(monkeypatch) -> None:
+    import email as _email
+    from email import policy as _email_policy
+
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", _smtp_cfg)
+    instances = _install_fake_smtp(monkeypatch)
+    channel = _make_channel("HIGH", kind="email", target="ops@example.com", enabled=False)
+
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    assert len(instances) == 1
+    send_call = next(c for c in instances[0].calls if c[0] == "sendmail")
+    raw_msg = send_call[3]
+    # The MIME serializer may encode non-ASCII subjects as RFC 2047
+    # ?utf-8?q?...?= words — parse the message to compare the decoded
+    # subject + decoded text body for the "TEST" + "Test ping" markers.
+    parsed = _email.message_from_string(raw_msg, policy=_email_policy.default)
+    assert "[TEST]" in str(parsed["Subject"])
+    body_text = ""
+    for part in parsed.walk():
+        if part.get_content_type() == "text/plain":
+            body_text = part.get_content()
+            break
+    assert "Test ping" in body_text
+
+
+def test_send_test_ping_sms_invokes_twilio_with_synthetic_message(monkeypatch) -> None:
+    monkeypatch.setattr(alert_delivery, "_get_twilio_config", _twilio_cfg)
+    capture: dict = {}
+
+    def fake_post(url, auth=None, data=None, timeout=None, **kw):
+        capture["url"] = url
+        capture["data"] = data
+        return _FakeTwilioResponse(status_code=201, json_payload={"sid": "SMtest"})
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("CRITICAL", kind="sms", target="+15551234567", enabled=False)
+
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    assert capture["url"].startswith("https://api.twilio.com/")
+    body = capture["data"]["Body"]
+    assert "[TEST]" in body
+    assert "Test ping" in body
+
+
+def test_send_test_ping_webhook_invokes_http_post_with_synthetic_message(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _FakeResponse(200))
+    channel = _make_channel(
+        "CRITICAL", kind="webhook", target="https://hooks.example.com/x", enabled=False,
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    assert len(captured["calls"]) == 1
+    payload = captured["calls"][0]["json"]
+    assert payload["event_type"] == "alert"
+    assert "[TEST]" in payload["title"]
+    assert "Test ping" in payload["body"]
+
+
+def test_send_test_ping_discord_invokes_http_post_with_synthetic_message(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _FakeResponse(204))
+    channel = _make_channel(
+        "CRITICAL",
+        kind="discord",
+        target="https://discord.com/api/webhooks/12345/secret",
+        enabled=False,
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    payload = captured["calls"][0]["json"]
+    # The discord content / embed title carries the synthetic TEST prefix
+    serialized = repr(payload)
+    assert "[TEST]" in serialized
+    assert "Test ping" in serialized
+
+
+def test_send_test_ping_pagerduty_invokes_http_post_with_synthetic_message(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _FakeResponse(202))
+    channel = _make_channel(
+        "CRITICAL",
+        kind="pagerduty",
+        target="R0123ABCDEFG_pagerduty_integration_key_xx",
+        enabled=False,
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    assert captured["calls"][0]["url"] == _PAGERDUTY_EVENTS_URL
+    payload = captured["calls"][0]["json"]
+    assert "[TEST]" in payload["payload"]["summary"]
+    assert "Test ping" in payload["payload"]["custom_details"]["body"]
+
+
+def test_send_test_ping_unknown_kind_returns_failure(monkeypatch) -> None:
+    """Unknown channel.kind → (False, "unsupported kind: X"), no HTTP
+    request made."""
+    posted = {"n": 0}
+
+    def fake_post(*a, **kw):
+        posted["n"] += 1
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    channel = _make_channel("LOW", kind="opsgenie", target="https://x/y")
+    ok, msg = send_test_ping(channel)
+    assert ok is False
+    assert msg == "unsupported kind: opsgenie"
+    assert posted["n"] == 0
+
+
+def test_send_test_ping_disabled_channel_still_delivers(monkeypatch) -> None:
+    """An operator may be testing a channel before they enable it. The
+    enabled=False flag must NOT short-circuit the test ping."""
+    captured = _capture_post(monkeypatch, _FakeResponse(200))
+    channel = _make_channel(
+        "LOW",
+        kind="slack",
+        target="https://hooks.slack.com/services/T1/B1/X",
+        enabled=False,
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+    assert msg == "Test ping delivered"
+    # Exactly one HTTP request reached the slack webhook — gating did not
+    # silently drop the test.
+    assert len(captured["calls"]) == 1
+
+
+def test_send_test_ping_underlying_delivery_raises_returns_failure(monkeypatch) -> None:
+    """When the underlying transport raises, send_test_ping must catch +
+    return (False, exc_text) rather than propagate."""
+
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError("no route to host")
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    channel = _make_channel(
+        "LOW", kind="slack", target="https://hooks.slack.com/services/T1/B1/X",
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is False
+    assert "no route to host" in msg
+
+
+def test_send_test_ping_unexpected_internal_error_does_not_propagate(monkeypatch) -> None:
+    """Defence-in-depth: if even the synthetic-alert builder blows up,
+    send_test_ping must still return a clean (False, msg) tuple."""
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("synthetic builder failure")
+
+    monkeypatch.setattr(alert_delivery, "_build_test_ping_alert", boom)
+    channel = _make_channel(
+        "LOW", kind="slack", target="https://hooks.slack.com/services/T1/B1/X",
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is False
+    assert "synthetic builder failure" in msg
+
+
+def test_send_test_ping_records_audit_row_with_test_ping_action(monkeypatch) -> None:
+    """send_test_ping must record an audit_events row with action=
+    'test_ping' carrying the channel.kind in the detail JSON so an
+    operator can confirm what got sent (parallel to save_channel /
+    delete_channel)."""
+    import json as _json
+    _capture_post(monkeypatch, _FakeResponse(200))
+    channel = _make_channel(
+        "LOW",
+        kind="slack",
+        channel_id="ch-test-ping-audit",
+        target="https://hooks.slack.com/services/T1/B1/X",
+    )
+    ok, msg = send_test_ping(channel)
+    assert ok is True
+
+    from state.db import get_connection
+    row = get_connection().execute(
+        "SELECT * FROM audit_events WHERE action = 'test_ping'"
+    ).fetchone()
+    assert row is not None
+    assert row["entity_type"] == "channel"
+    assert row["entity_id"] == "ch-test-ping-audit"
+    detail = _json.loads(row["detail_json"])
+    assert detail["kind"] == "slack"
+    assert detail["success"] is True
+    # target / webhook URL deliberately NOT logged — keep parity with the
+    # save_channel audit shape.
+    assert "target" not in detail
+
+
+def test_send_test_ping_email_no_smtp_config_returns_failure(monkeypatch) -> None:
+    """kind=email with no SMTP config → (False, "SMTP not configured")."""
+    monkeypatch.setattr(alert_delivery, "_get_smtp_config", lambda: None)
+    channel = _make_channel("LOW", kind="email", target="ops@example.com")
+    ok, msg = send_test_ping(channel)
+    assert ok is False
+    assert msg == "SMTP not configured"

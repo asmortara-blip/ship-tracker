@@ -1996,8 +1996,69 @@ def _render_delivery_channels() -> None:
             deliver_pending,
             load_channels,
             save_channel,
+            send_test_ping,
         )
         from engine.alert_engine_v2 import _make as _make_alert
+
+        # Per-channel rate limit for the "Send test ping" button. Purely
+        # session-scoped (no DB row) — 30s between consecutive pings to
+        # the same channel so an over-eager operator can't spam a Slack
+        # workspace by clicking the button repeatedly.
+        _TEST_PING_RATELIMIT_S = 30.0
+
+        def _render_test_ping_section(ch: DeliveryChannel) -> None:
+            """Render the "Send test ping" button + click handler for one
+            channel. Rate-limited per-channel via st.session_state.
+
+            On click: calls :func:`engine.alert_delivery.send_test_ping`
+            and surfaces ``st.success`` / ``st.error`` with the returned
+            message. The button itself is disabled while inside the
+            rate-limit window so the operator gets immediate UI feedback
+            rather than a silent reject.
+            """
+            ts_key = f"test_ping_ts::{ch.channel_id}"
+            now_ts = datetime.now(timezone.utc).timestamp()
+            last_ts = st.session_state.get(ts_key, 0.0)
+            try:
+                last_ts_f = float(last_ts)
+            except (TypeError, ValueError):
+                last_ts_f = 0.0
+            remaining = _TEST_PING_RATELIMIT_S - (now_ts - last_ts_f)
+            cooling = remaining > 0
+            btn_label = (
+                f"\U0001f9ea Send test ping ({int(remaining)}s)"
+                if cooling
+                else f"\U0001f9ea Send test ping ({ch.name})"
+            )
+            if st.button(
+                btn_label,
+                key=f"send_test_ping_{ch.channel_id}",
+                use_container_width=True,
+                disabled=cooling,
+            ):
+                # Re-check just before firing — the disabled flag is a UI
+                # nicety; the timestamp gate is the actual rate limit.
+                now_ts2 = datetime.now(timezone.utc).timestamp()
+                last_ts2 = st.session_state.get(ts_key, 0.0)
+                try:
+                    last_ts2_f = float(last_ts2)
+                except (TypeError, ValueError):
+                    last_ts2_f = 0.0
+                if (now_ts2 - last_ts2_f) < _TEST_PING_RATELIMIT_S:
+                    st.warning(
+                        "Please wait at least 30 seconds between test pings "
+                        "to the same channel."
+                    )
+                else:
+                    st.session_state[ts_key] = now_ts2
+                    try:
+                        ok, msg = send_test_ping(ch)
+                    except Exception as exc:  # defence-in-depth
+                        ok, msg = False, str(exc)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
 
         # Forgiving validation patterns: case-insensitive checks where it
         # matters; pragmatic shape checks elsewhere. PagerDuty keys vary
@@ -2066,33 +2127,14 @@ def _render_delivery_channels() -> None:
                 ])
             wsj_market_table(headers, rows)
 
-            # Per-channel action buttons — Test + Delete laid out side by side.
+            # Per-channel action buttons — Test ping + Delete laid out side
+            # by side. The test-ping button calls send_test_ping (synthetic
+            # "TEST" alert + delivery_log row); the older "Test {name}"
+            # button manufactured a real alert and is replaced here.
             for ch in channels:
                 act_cols = st.columns([1, 1, 4], gap="small")
                 with act_cols[0]:
-                    if st.button(
-                        f"📨 Test {ch.name}",
-                        key=f"test_channel_{ch.channel_id}",
-                        use_container_width=True,
-                    ):
-                        try:
-                            test_alert = _make_alert(
-                                alert_type="TEST",
-                                severity=ch.severity_threshold,
-                                title=f"Test alert from {ch.name}",
-                                body="If you can see this, delivery is working.",
-                            )
-                            result = deliver_alert(test_alert, ch)
-                            if result.success:
-                                st.success(
-                                    f"Test sent — channel delivered successfully "
-                                    f"(status {result.status_code})."
-                                )
-                            else:
-                                st.error(f"Test failed: {result.error_msg}")
-                        except Exception as exc:
-                            logger.exception("test channel delivery failed")
-                            st.error(f"Test failed: {exc}")
+                    _render_test_ping_section(ch)
                 with act_cols[1]:
                     if st.button(
                         f"🗑 Delete {ch.name}",
