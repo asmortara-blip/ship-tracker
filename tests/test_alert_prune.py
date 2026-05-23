@@ -135,3 +135,75 @@ def test_run_alert_prune_job_swallows_engine_error(monkeypatch) -> None:
     )
     # run_alert_prune_job catches the exception → returns 0
     assert sched.run_alert_prune_job() == 0
+
+
+# ─── run_audit_prune_job ──────────────────────────────────────────────────
+
+def test_run_audit_prune_job_wraps_helper() -> None:
+    """Insert a stale audit row + verify the worker prune cleans it."""
+    from datetime import datetime, timedelta, timezone
+    from state.db import get_connection
+    from worker.scheduler import run_audit_prune_job
+
+    conn = get_connection()
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO audit_events
+              (event_id, created_at, user_id, action, entity_type, entity_id, detail_json)
+            VALUES (?, ?, '', 'test_action', '', '', '{}')
+            """,
+            ("ev1", old_iso),
+        )
+    deleted = run_audit_prune_job(retention_days=365)
+    assert deleted == 1
+
+
+def test_run_audit_prune_job_swallows_engine_error(monkeypatch) -> None:
+    from worker import scheduler as sched
+
+    def _boom(*a, **kw):
+        raise RuntimeError("simulated")
+
+    monkeypatch.setattr("auth.audit.prune_old_audit_events", _boom)
+    assert sched.run_audit_prune_job() == 0
+
+
+# ─── run_report_prune_job ─────────────────────────────────────────────────
+
+def test_run_report_prune_job_keeps_only_newest_n() -> None:
+    """Seed N+2 report rows + verify the worker prune leaves only N."""
+    from datetime import datetime, timedelta, timezone
+    from state.db import get_connection
+    from worker.scheduler import run_report_prune_job
+
+    conn = get_connection()
+    base = datetime.now(timezone.utc)
+    with conn:
+        for i in range(5):
+            conn.execute(
+                """
+                INSERT INTO report_history
+                  (report_id, generated_at, report_date, sentiment_label,
+                   sentiment_score, risk_level, signal_count, data_quality,
+                   file_path, file_size_kb)
+                VALUES (?, ?, '', 'NEUTRAL', 0.0, 'MODERATE', 0,
+                        'PARTIAL', '/no/such/path', 0.0)
+                """,
+                (f"r{i}", (base - timedelta(hours=i)).isoformat()),
+            )
+    deleted = run_report_prune_job(keep_n=2)
+    assert deleted == 3
+    n_left = conn.execute("SELECT COUNT(*) AS n FROM report_history").fetchone()["n"]
+    assert n_left == 2
+
+
+def test_run_report_prune_job_swallows_error(monkeypatch) -> None:
+    from worker import scheduler as sched
+
+    def _boom(*a, **kw):
+        raise RuntimeError("simulated")
+
+    monkeypatch.setattr("utils.report_history.prune_old_reports", _boom)
+    assert sched.run_report_prune_job() == 0

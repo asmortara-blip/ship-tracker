@@ -615,6 +615,45 @@ def _prune_old_reports() -> None:
         logger.error(f"_prune_old_reports failed: {exc}")
 
 
+def prune_old_reports(keep_n: int | None = None) -> int:
+    """Public wrapper around ``_prune_old_reports`` for CLI / worker calls.
+
+    Returns the count of rows that were pruned. Counts before + after
+    the call to compute the delta; the underlying helper returns None
+    so a row-count would otherwise require duplicating the SELECT.
+
+    Args:
+        keep_n: optional override for ``MAX_REPORTS``. When None (the
+                default), uses the module-level constant.
+
+    Returns:
+        Number of rows pruned (0 on no-op or any error). Never raises.
+    """
+    try:
+        from state.db import get_connection
+        global MAX_REPORTS
+
+        before = get_connection().execute(
+            "SELECT COUNT(*) AS n FROM report_history"
+        ).fetchone()["n"]
+        if keep_n is not None:
+            original = MAX_REPORTS
+            MAX_REPORTS = int(keep_n)
+            try:
+                _prune_old_reports()
+            finally:
+                MAX_REPORTS = original
+        else:
+            _prune_old_reports()
+        after = get_connection().execute(
+            "SELECT COUNT(*) AS n FROM report_history"
+        ).fetchone()["n"]
+        return max(0, int(before) - int(after))
+    except Exception as exc:
+        logger.warning(f"prune_old_reports: failed: {exc}")
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Attribute extraction helpers
 # ---------------------------------------------------------------------------

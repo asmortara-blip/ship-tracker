@@ -496,6 +496,54 @@ def run_bulk_export_prune_job(keep_n: int = 5) -> int:
         return 0
 
 
+def run_audit_prune_job(retention_days: int = 365) -> int:
+    """Prune audit_events older than ``retention_days`` from SQLite.
+
+    Thin wrapper around ``auth.audit.prune_old_audit_events`` that
+    adds logging and shields the caller. Default 365 days — audit is
+    explicitly long-lived for forensic / compliance review, but it
+    can't grow forever.
+
+    Returns the count deleted (``0`` on no-op or any error). Never raises.
+    """
+    try:
+        from auth.audit import prune_old_audit_events
+
+        deleted = prune_old_audit_events(retention_days=retention_days)
+        logger.info(
+            f"run_audit_prune_job: deleted={deleted} audit events "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_audit_prune_job: failed: {exc}")
+        return 0
+
+
+def run_report_prune_job(keep_n: int = 30) -> int:
+    """Prune report_history down to ``keep_n`` newest rows.
+
+    Thin wrapper around ``utils.report_history.prune_old_reports`` that
+    adds logging and shields the caller. The auto-prune inside save_report
+    already does this on every write — this job is the belt-and-suspenders
+    pass that catches any drift (e.g. someone changed MAX_REPORTS mid-day).
+
+    Returns the count deleted (``0`` on no-op or any error). Never raises.
+    """
+    try:
+        from utils.report_history import prune_old_reports
+
+        deleted = prune_old_reports(keep_n=keep_n)
+        logger.info(
+            f"run_report_prune_job: deleted={deleted} reports "
+            f"(keep_n={keep_n})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_report_prune_job: failed: {exc}")
+        return 0
+
+
 def run_alert_prune_job(retention_days: int = 180) -> int:
     """Prune ack'd alerts older than ``retention_days`` from SQLite.
 
@@ -694,6 +742,21 @@ def main(argv: Optional[list] = None) -> int:
         run_alert_prune_job()
     except Exception as exc:
         logger.warning(f"main: alert prune step failed: {exc}")
+
+    # Audit retention — defaults to a full year. Audit is forensic
+    # state so we keep it longer than telemetry. Same try/except guard.
+    try:
+        run_audit_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: audit prune step failed: {exc}")
+
+    # Report retention — keep the newest 30 reports on disk. save_report
+    # auto-prunes on every write already; this is the belt-and-suspenders
+    # pass that catches any drift.
+    try:
+        run_report_prune_job()
+    except Exception as exc:
+        logger.warning(f"main: report prune step failed: {exc}")
 
     # Operator Dashboard daily digest. Runs LAST so the digest reflects
     # the state after every prune / health ping has settled. Subscribers
