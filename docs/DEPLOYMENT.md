@@ -314,6 +314,211 @@ for the cipher, and `hmac.HMAC(SHA256)` (verified with
 recommended construction against a motivated attacker; rotate the
 key regularly to limit blast radius if it ever leaks.
 
+## API server (`worker/api_server.py`)
+
+A stdlib HTTP API bound to port `8503` that exposes the read +
+narrow-write surface of Ship Tracker to external scripts. Sibling
+to `worker/webhook_listener.py` (port `8502`, INBOUND ack /
+webhooks); the API server is the OUTBOUND read + scoped-write
+surface. Every authenticated endpoint requires an
+`Authorization: Bearer <token>` header — generate a token per user
+via `python -m tools.ops_cli tokens create <user_id> <label>` and
+hand the raw secret to the script.
+
+Run the server:
+
+```bash
+python -m worker.api_server --host 0.0.0.0 --port 8503
+```
+
+Endpoints:
+
+| Method · Path                                | Body                              | Effect                                                                                  |
+|----------------------------------------------|-----------------------------------|-----------------------------------------------------------------------------------------|
+| `GET    /api/v1/health`                      | n/a                               | Public liveness + system-health probe. Same shape as `webhook_listener` `/health`.       |
+| `GET    /api/v1/alerts`                      | n/a                               | Caller's alerts (window, severity filter, capped at 500).                               |
+| `GET    /api/v1/alerts/<id>`                 | n/a                               | One alert, scoped to caller; 404 on cross-user.                                          |
+| `POST   /api/v1/alerts/<id>/ack`             | empty                             | Acknowledge one alert. Idempotent; cross-user no-ops silently.                          |
+| `GET    /api/v1/reports`                     | n/a                               | Caller's saved reports (metadata only).                                                  |
+| `GET    /api/v1/reports/<id>/html`           | n/a                               | Raw HTML of one saved report.                                                            |
+| `POST   /api/v1/reports/<id>/public`         | `{"expires_in_days": 30}` (opt)   | Generate a public-share slug; returns `{"slug": "..."}`. 404 on unknown/cross-user.      |
+| `DELETE /api/v1/reports/<id>/public`         | empty                             | Revoke a public slug; returns `{"revoked": true}`. 404 on unknown/cross-user.            |
+| `GET    /api/v1/rules`                       | n/a                               | Caller's alert-rule list.                                                                |
+| `POST   /api/v1/rules`                       | `[ {rule}, … ]`                   | Replace caller's rule set. 415 on non-JSON Content-Type, 400 on malformed JSON.          |
+| `DELETE /api/v1/rules`                       | empty                             | Wipe caller's rule set (per-user — does NOT touch other users' rules).                   |
+| `GET    /api/v1/channels`                    | n/a                               | Caller's delivery channels (`target` omitted to avoid leaking webhook URLs).             |
+| `POST   /api/v1/channels`                    | `DeliveryChannel` JSON dict       | Insert/upsert a delivery channel. 400 if `channel_id` missing.                           |
+| `DELETE /api/v1/channels/<channel_id>`       | empty                             | Delete one channel. Cross-user deletes silently no-op (returns 200; row untouched).      |
+| `GET    /api/v1/telemetry/llm`               | n/a                               | LLM-call usage summary, scoped to caller.                                                |
+| `GET    /api/v1/telemetry/perf`              | n/a                               | Render-performance summary (process-wide; still gated by auth).                          |
+
+**Per-user scoping.** Every write threads the `user_id` resolved from
+the bearer token to the underlying engine call. Alice's token cannot
+delete Bob's channel — the engine's `scope_filter_sql` excludes
+Bob's row from the DELETE. The API still returns `200` in that case
+so a caller cannot enumerate other users' channel ids by status code.
+
+**Body conventions for writes.**
+
+- `Content-Type: application/json` is required when a body is
+  present; anything else → `415`.
+- Malformed JSON → `400`.
+- Empty body is permitted on `DELETE` and on `POST /reports/<id>/public`
+  (in the latter case it defaults to 30 days).
+
+### curl examples — one per write endpoint
+
+```bash
+TOKEN="<raw bearer token from tokens create>"
+BASE="http://localhost:8503"
+
+# POST /api/v1/rules — replace the caller's rule set.
+curl -X POST "$BASE/api/v1/rules" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '[{"rule_id":"r1","name":"BDI surge","metric":"bdi","threshold_pct":5.0,"severity":"HIGH"}]'
+# → {"saved": true, "count": 1}
+
+# DELETE /api/v1/rules — wipe the caller's rules.
+curl -X DELETE "$BASE/api/v1/rules" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"reset": true}
+
+# POST /api/v1/channels — add a Slack delivery channel.
+curl -X POST "$BASE/api/v1/channels" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "channel_id": "ch-trading-desk",
+           "name": "Trading desk Slack",
+           "kind": "slack",
+           "target": "https://hooks.slack.com/services/AAA/BBB/CCC",
+           "severity_threshold": "HIGH",
+           "enabled": true
+         }'
+# → {"saved": true, "channel_id": "ch-trading-desk"}
+
+# DELETE /api/v1/channels/<id> — remove one channel.
+curl -X DELETE "$BASE/api/v1/channels/ch-trading-desk" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"deleted": true, "channel_id": "ch-trading-desk"}
+
+# POST /api/v1/reports/<id>/public — issue a public-share slug.
+curl -X POST "$BASE/api/v1/reports/<report-uuid>/public" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"expires_in_days": 7}'
+# → {"slug": "xK3pYqR-ab12"}
+
+# DELETE /api/v1/reports/<id>/public — revoke the slug.
+curl -X DELETE "$BASE/api/v1/reports/<report-uuid>/public" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"revoked": true}
+```
+
+`GET /api/v1/health` is intentionally **unauthenticated** so load
+balancers / k8s probes can poll it without shipping a token:
+
+```bash
+curl http://localhost:8503/api/v1/health
+```
+
+The response shape is identical to `webhook_listener`'s `/health`
+(see [GET /health — liveness + system probe](#get-health--liveness--system-probe)
+above) so a single probe template works for both ports.
+
+## Operator CLI (`python -m tools.ops_cli`)
+
+Every common admin action the Streamlit UI exposes is also reachable
+from the shell via `python -m tools.ops_cli <command>`. Useful when
+SSH'd into the container, in CI for bulk maintenance, or wired into
+host cron. Every subcommand accepts `--json` for machine-readable
+output and follows the exit-code contract: `0` success, `1` handler
+raised (single-line stderr message — no traceback), `2` argparse
+rejected the invocation.
+
+| Subcommand                         | What it does                                                       |
+|------------------------------------|--------------------------------------------------------------------|
+| `status`                           | Schema version + counts (users, alerts, channels).                 |
+| `alerts list / ack / ack-all / metrics` | Recent alerts, acknowledge one or all, aggregate ack metrics. |
+| `channels list / delete`           | Delivery-channel admin.                                            |
+| `reports list / delete / stats`    | Saved-report admin.                                                |
+| `telemetry usage / recent / prune` | LLM call telemetry.                                                |
+| `perf summary`                     | Render-performance summary.                                        |
+| `health summary / ping`            | Data-source health.                                                |
+| `users list / create`              | User-account admin.                                                |
+| `tokens list / create / revoke`    | Per-user API-token admin.                                          |
+| `export`                           | Build a bulk-state tar.gz (see `Backup / Restore` below).          |
+| `mfa enable / disable / status`    | TOTP second-factor enrollment per user.                            |
+| `filters list / delete`            | Per-user saved filter presets.                                     |
+| `incidents list / stats`           | Correlated-incident view over the alert table.                     |
+| `settings show / set`              | Per-user preferences (timezone, theme, defaults).                  |
+
+### MFA enrollment from the CLI
+
+```bash
+# 1. Generate a fresh secret + provisioning URI and flip the DB flag.
+python -m tools.ops_cli mfa enable <user_id>
+# stdout carries two lines an operator can copy-paste into an
+# authenticator app:
+#   secret: JBSWY3DPEHPK3PXP...
+#   provisioning_uri: otpauth://totp/Ship%20Tracker:alice?secret=...
+# The secret is what you paste into apps that don't ship a QR scanner;
+# the URI is the canonical KeyURI form a QR generator consumes.
+
+# 2. Confirm enrollment.
+python -m tools.ops_cli mfa status <user_id>
+#   user_id : <user_id>
+#   enabled : True
+
+# 3. Disable (falls back to password-only on next login).
+python -m tools.ops_cli mfa disable <user_id>
+```
+
+### Saved filter presets
+
+```bash
+# List a user's saved presets, optionally narrowed to one surface.
+python -m tools.ops_cli filters list --user-id <id>
+python -m tools.ops_cli filters list --user-id <id> --scope alerts
+
+# Delete one preset by name + scope.
+python -m tools.ops_cli filters delete <name> --scope alerts --user-id <id>
+```
+
+Saving a new preset is a UI-only operation — encoding the per-scope
+payload vocabulary on the command line isn't worth the surface area.
+
+### Incident correlation
+
+The correlation engine groups alerts that fired together (same window,
+related entities) into incidents at read time — no schema bump, no
+back-fill.
+
+```bash
+# List the most recent correlated incidents.
+python -m tools.ops_cli incidents list --window 7
+
+# One-shot summary (incident count, avg alerts/incident, breakdown).
+python -m tools.ops_cli incidents stats --window 7 --json
+```
+
+### Per-user preferences
+
+```bash
+# Show a user's saved preferences (or the defaults if none saved).
+python -m tools.ops_cli settings show --user-id <id>
+
+# Set one or more keys in a single call. Invalid values coerce to the
+# default rather than raising (defensive — UI is responsible for
+# offering valid choices, but the CLI is forgiving).
+python -m tools.ops_cli settings set --user-id <id> \
+    --timezone America/New_York \
+    --theme dark \
+    --report-window 60 \
+    --alert-severity HIGH
+```
+
 ## Backup / Restore
 
 The `utils.bulk_export` module bundles durable state — the SQLite DB,

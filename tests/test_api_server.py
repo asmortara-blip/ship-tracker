@@ -765,3 +765,492 @@ def test_response_content_type_is_json_for_list_alerts(server):
     )
     assert r.status_code == 200
     assert r.headers.get("Content-Type", "").startswith("application/json")
+
+
+# ─── Write endpoints — auth on all new write paths ────────────────────────
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST",   "/api/v1/rules"),
+    ("GET",    "/api/v1/rules"),
+    ("DELETE", "/api/v1/rules"),
+    ("POST",   "/api/v1/channels"),
+    ("GET",    "/api/v1/channels"),
+    ("DELETE", "/api/v1/channels/abc"),
+    ("POST",   "/api/v1/reports/some-id/public"),
+    ("DELETE", "/api/v1/reports/some-id/public"),
+])
+def test_write_endpoint_returns_401_without_auth_header(server, method, path):
+    """Every WRITE endpoint must 401 with no Authorization header.
+    Same contract as the read endpoints — never leak data on auth
+    miss."""
+    r = requests.request(method, f"{server}{path}", timeout=5)
+    assert r.status_code == 401
+    assert r.json() == {"error": "unauthorized"}
+
+
+# ─── POST /api/v1/rules ───────────────────────────────────────────────────
+
+
+def _sample_rules() -> list[dict]:
+    """A pair of well-formed rule dicts for the rule-write tests.
+
+    Shape mirrors ``ui/tab_alerts.py``'s session-state rule entries —
+    a ``rule_id`` is the only required field for ``save_rules`` to
+    pick up the dict."""
+    return [
+        {"rule_id": "r1", "name": "BDI surge", "metric": "bdi",
+         "threshold_pct": 5.0, "severity": "HIGH"},
+        {"rule_id": "r2", "name": "Port congestion", "metric": "congestion",
+         "threshold": 0.8, "severity": "MEDIUM"},
+    ]
+
+
+def test_post_rules_saves_and_get_retrieves(server):
+    """POST /api/v1/rules persists the body; the subsequent GET returns
+    the same set (modulo ordering — ``load_rules`` orders by rule_id)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    rules = _sample_rules()
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        json=rules,
+        headers=_bearer(token),
+        timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"saved": True, "count": 2}
+
+    r2 = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    loaded = r2.json()
+    assert isinstance(loaded, list)
+    assert len(loaded) == 2
+    loaded_ids = {x["rule_id"] for x in loaded}
+    assert loaded_ids == {"r1", "r2"}
+
+
+def test_post_rules_without_auth_returns_401(server):
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        json=_sample_rules(),
+        timeout=5,
+    )
+    assert r.status_code == 401
+
+
+def test_post_rules_with_non_json_content_type_returns_415(server):
+    """Body present but ``Content-Type: text/plain`` → 415."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        data="not json",
+        headers={**_bearer(token), "Content-Type": "text/plain"},
+        timeout=5,
+    )
+    assert r.status_code == 415
+
+
+def test_post_rules_with_malformed_json_returns_400(server):
+    """``Content-Type: application/json`` but the body does not
+    decode → 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        data="{not valid json",
+        headers={**_bearer(token), "Content-Type": "application/json"},
+        timeout=5,
+    )
+    assert r.status_code == 400
+
+
+def test_post_rules_with_non_list_body_returns_400(server):
+    """Body decodes as JSON but is a dict (not a list) → 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        json={"not": "a list"},
+        headers=_bearer(token),
+        timeout=5,
+    )
+    assert r.status_code == 400
+
+
+def test_get_rules_empty_for_user_with_no_rules(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_post_rules_is_user_scoped(server):
+    """Alice's POST must not appear in Bob's GET. The engine's per-user
+    scope keeps them apart."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    r = requests.post(
+        f"{server}/api/v1/rules",
+        json=_sample_rules(),
+        headers=_bearer(alice_token),
+        timeout=5,
+    )
+    assert r.status_code == 200
+
+    # Bob still sees zero rules.
+    r2 = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(bob_token), timeout=5,
+    )
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+
+# ─── DELETE /api/v1/rules ─────────────────────────────────────────────────
+
+
+def test_delete_rules_wipes_users_rules(server):
+    """After DELETE, GET returns []. The engine call routes through
+    ``save_rules([], user_id=...)`` which is the per-user equivalent
+    of ``reset_rules``."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    requests.post(
+        f"{server}/api/v1/rules", json=_sample_rules(),
+        headers=_bearer(token), timeout=5,
+    )
+
+    r = requests.delete(
+        f"{server}/api/v1/rules", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"reset": True}
+
+    r2 = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(token), timeout=5,
+    )
+    assert r2.json() == []
+
+
+def test_delete_rules_does_not_wipe_other_users_rules(server):
+    """Alice's DELETE must NOT affect Bob's rules — per-user scope.
+
+    ``alert_rules.rule_id`` is a global PRIMARY KEY (schema v1), so
+    each user picks disjoint ids — this matches reality: rule ids are
+    UUID-ish in the UI, never colliding across users."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    alice_rules = [{"rule_id": "alice-r1", "name": "a-rule-1"},
+                   {"rule_id": "alice-r2", "name": "a-rule-2"}]
+    bob_rules = [{"rule_id": "bob-r1", "name": "b-rule-1"},
+                 {"rule_id": "bob-r2", "name": "b-rule-2"}]
+
+    requests.post(
+        f"{server}/api/v1/rules", json=alice_rules,
+        headers=_bearer(alice_token), timeout=5,
+    )
+    requests.post(
+        f"{server}/api/v1/rules", json=bob_rules,
+        headers=_bearer(bob_token), timeout=5,
+    )
+
+    # Alice nukes hers.
+    r = requests.delete(
+        f"{server}/api/v1/rules", headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 200
+
+    # Bob's rules survive intact.
+    r2 = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(bob_token), timeout=5,
+    )
+    assert r2.status_code == 200
+    bobs = r2.json()
+    bob_ids = {x["rule_id"] for x in bobs}
+    assert bob_ids == {"bob-r1", "bob-r2"}
+
+    # Alice should now have an empty set.
+    r3 = requests.get(
+        f"{server}/api/v1/rules", headers=_bearer(alice_token), timeout=5,
+    )
+    assert r3.json() == []
+
+
+# ─── POST /api/v1/channels ────────────────────────────────────────────────
+
+
+def _sample_channel(channel_id: str = "ch-alpha") -> dict:
+    return {
+        "channel_id": channel_id,
+        "name": "Trading desk Slack",
+        "kind": "slack",
+        "target": "https://hooks.slack.com/services/AAA/BBB/CCC",
+        "severity_threshold": "HIGH",
+        "enabled": True,
+    }
+
+
+def test_post_channel_saves_and_appears_in_get(server):
+    """POST /api/v1/channels with a valid DeliveryChannel dict persists;
+    GET /api/v1/channels lists it."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    ch = _sample_channel()
+
+    r = requests.post(
+        f"{server}/api/v1/channels", json=ch,
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"saved": True, "channel_id": "ch-alpha"}
+
+    r2 = requests.get(
+        f"{server}/api/v1/channels", headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    listed = r2.json()
+    assert isinstance(listed, list)
+    assert len(listed) == 1
+    assert listed[0]["channel_id"] == "ch-alpha"
+    assert listed[0]["name"] == "Trading desk Slack"
+    assert listed[0]["kind"] == "slack"
+    # Defensive: the API list intentionally OMITS `target` to avoid
+    # leaking the Slack webhook URL on a token compromise.
+    assert "target" not in listed[0]
+
+
+def test_post_channel_missing_channel_id_returns_400(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel()
+    body.pop("channel_id")
+    r = requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+
+
+def test_post_channel_with_non_json_content_type_returns_415(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/channels",
+        data="not json",
+        headers={**_bearer(token), "Content-Type": "text/plain"},
+        timeout=5,
+    )
+    assert r.status_code == 415
+
+
+def test_post_channel_with_malformed_json_returns_400(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/channels",
+        data="{also-bad",
+        headers={**_bearer(token), "Content-Type": "application/json"},
+        timeout=5,
+    )
+    assert r.status_code == 400
+
+
+# ─── DELETE /api/v1/channels/<id> ─────────────────────────────────────────
+
+
+def test_delete_channel_removes_only_that_channel(server):
+    """Insert two channels, delete one, the other survives."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    requests.post(
+        f"{server}/api/v1/channels", json=_sample_channel("ch-A"),
+        headers=_bearer(token), timeout=5,
+    )
+    requests.post(
+        f"{server}/api/v1/channels", json=_sample_channel("ch-B"),
+        headers=_bearer(token), timeout=5,
+    )
+
+    r = requests.delete(
+        f"{server}/api/v1/channels/ch-A",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True, "channel_id": "ch-A"}
+
+    r2 = requests.get(
+        f"{server}/api/v1/channels", headers=_bearer(token), timeout=5,
+    )
+    listed = r2.json()
+    ids = {c["channel_id"] for c in listed}
+    assert ids == {"ch-B"}, f"only ch-B should remain, got {ids}"
+
+
+def test_delete_channel_as_different_user_does_not_delete(server):
+    """Alice owns ch-X. Bob's DELETE with his token must NOT delete it
+    — the engine's per-user scope filter excludes Alice's row from
+    Bob's UPDATE/DELETE. Bob still gets 200 (no info leak about
+    other users' channel ids), but Alice's row survives."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    requests.post(
+        f"{server}/api/v1/channels", json=_sample_channel("ch-X"),
+        headers=_bearer(alice_token), timeout=5,
+    )
+
+    # Bob tries to delete ch-X.
+    r = requests.delete(
+        f"{server}/api/v1/channels/ch-X",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r.status_code == 200  # no enumeration
+
+    # Verify via engine: Alice's channel survives.
+    from engine.alert_delivery import load_channels
+    alice_chs = load_channels(user_id=alice_uid)
+    alice_ids = {c.channel_id for c in alice_chs}
+    assert "ch-X" in alice_ids, \
+        "Bob's DELETE must not have removed Alice's channel"
+
+
+# ─── POST + DELETE /api/v1/reports/<id>/public ────────────────────────────
+
+
+def test_post_report_public_returns_slug_and_load_works(
+    server, tmp_path, monkeypatch,
+):
+    """POST returns a slug; ``load_public_report(slug)`` then returns
+    the report's HTML. Round-trip proves the slug actually wired up."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="pub")
+
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "slug" in body
+    slug = body["slug"]
+    assert isinstance(slug, str) and len(slug) > 0
+
+    from utils.report_history import load_public_report
+    html = load_public_report(slug)
+    assert html is not None
+    assert "pub" in html
+
+
+def test_post_report_public_unknown_id_returns_404(
+    server, tmp_path, monkeypatch,
+):
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/reports/no-such-report/public",
+        json={"expires_in_days": 30},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_post_report_public_cross_user_returns_404(
+    server, tmp_path, monkeypatch,
+):
+    """Alice cannot publish Bob's report — 404 (NOT 403), matching the
+    no-info-leak contract used elsewhere."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_rid = _seed_report(bob_uid, label="bobs")
+    r = requests.post(
+        f"{server}/api/v1/reports/{bob_rid}/public",
+        json={"expires_in_days": 30},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_post_report_public_with_empty_body_defaults_to_30_days(
+    server, tmp_path, monkeypatch,
+):
+    """Body is optional — when absent, defaults to 30 days. The slug
+    is still issued."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="default")
+    # No body, no Content-Type — should still succeed.
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert "slug" in r.json()
+
+
+def test_delete_report_public_clears_slug(server, tmp_path, monkeypatch):
+    """POST grants a slug, DELETE revokes it. After revoke
+    ``load_public_report(old_slug)`` returns None."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="revokeme")
+
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 30},
+        headers=_bearer(token), timeout=5,
+    )
+    slug = r.json()["slug"]
+
+    r2 = requests.delete(
+        f"{server}/api/v1/reports/{rid}/public",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    assert r2.json() == {"revoked": True}
+
+    from utils.report_history import load_public_report
+    assert load_public_report(slug) is None, \
+        "slug should be invalidated after revoke"
+
+
+def test_delete_report_public_unknown_id_returns_404(
+    server, tmp_path, monkeypatch,
+):
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.delete(
+        f"{server}/api/v1/reports/no-such-report/public",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 404

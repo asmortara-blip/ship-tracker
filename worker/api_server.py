@@ -24,13 +24,16 @@ Design constraints — kept deliberately tight so the cost surface of
   access (e.g. acking bob's alert with alice's token) silently no-ops
   because the engine UPDATE matches zero rows; that mirrors the
   Streamlit UI's contract exactly.
-* **READ-ONLY + one ack.** The endpoints map 1:1 to existing engine
-  reads. The single exception is ``POST /api/v1/alerts/<id>/ack`` —
-  acking an alert is the smallest write the API supports because
-  there's no read equivalent (you can't observe "this alert was
-  acked" without flipping the bit). Every other write surface is
-  out of scope; deliberate gatekeeping so this endpoint doesn't
-  accrue mutation creep.
+* **Read + scoped write.** The read endpoints map 1:1 to existing
+  engine reads. The write surface is intentionally narrow and per-
+  user: rule management (POST/GET/DELETE ``/api/v1/rules``),
+  delivery-channel management (POST ``/api/v1/channels``, DELETE
+  ``/api/v1/channels/<id>``), report-public-share state (POST /
+  DELETE ``/api/v1/reports/<id>/public``), and the historical
+  acknowledge endpoint (POST ``/api/v1/alerts/<id>/ack``). Every
+  write threads the resolved ``user_id`` through to the engine call
+  so cross-user writes cannot succeed (alice's token cannot delete
+  bob's channel; the SQL scope filter excludes bob's row).
 * **Crash-proof.** Every endpoint method wraps its body in a
   try/except → 500 with ``{"error": "internal server error"}``.
   An exception in one request must never kill the serve loop.
@@ -192,6 +195,78 @@ def _parse_int(raw: Optional[str], default: int) -> int:
         return default
 
 
+# Sentinel for "read the request body but the Content-Type was wrong"
+# — the read helper returns this so callers can distinguish "415" from
+# "valid empty body" cleanly without juggling Optional[Optional[…]].
+_BODY_BAD_CTYPE = object()
+# Sentinel for "Content-Type was JSON but the body did not parse as
+# JSON" → 400.
+_BODY_BAD_JSON = object()
+
+
+def _read_json_body(handler: BaseHTTPRequestHandler) -> Any:
+    """Read the request body and parse it as JSON.
+
+    Returns one of:
+      * The parsed value (dict / list / scalar) on success.
+      * ``_BODY_BAD_CTYPE`` when ``Content-Type`` is set and is NOT
+        ``application/json`` (caller → 415).
+      * ``_BODY_BAD_JSON`` when the body is present but does not parse
+        as JSON (caller → 400).
+      * ``None`` when ``Content-Length`` is missing / zero (caller
+        decides whether an empty body is acceptable).
+
+    The Content-Type check accepts ``application/json`` and any
+    parameterised variant (e.g. ``application/json; charset=utf-8``).
+    A *missing* Content-Type is tolerated when the body is empty
+    (so e.g. ``DELETE /api/v1/rules`` with no body doesn't 415); a
+    missing Content-Type WITH a non-empty body is treated as bad
+    because the wire shape is ambiguous.
+    """
+    raw_ctype = (handler.headers.get("Content-Type", "") or "").strip().lower()
+    raw_len = handler.headers.get("Content-Length", "") or "0"
+    try:
+        clen = int(raw_len)
+    except (TypeError, ValueError):
+        clen = 0
+    if clen <= 0:
+        # No body. If a Content-Type was set anyway we still enforce
+        # it must be JSON — otherwise the caller is mis-signalling
+        # their intent.
+        if raw_ctype and not raw_ctype.startswith("application/json"):
+            return _BODY_BAD_CTYPE
+        return None
+    # Body present — Content-Type MUST be application/json. We do
+    # NOT try to sniff JSON out of an unmarked body because callers
+    # have to opt-in to the contract.
+    if not raw_ctype.startswith("application/json"):
+        return _BODY_BAD_CTYPE
+    try:
+        # Cap the read at Content-Length so a malicious client can't
+        # stream an unbounded body. The HTTP layer already enforces
+        # Content-Length on the framing side; this is belt-and-braces.
+        raw = handler.rfile.read(clen)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"api: rfile.read failed: {exc}")
+        return _BODY_BAD_JSON
+    if not raw:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.warning(f"api: json decode failed: {exc}")
+        return _BODY_BAD_JSON
+
+
+def _send_bad_request(handler: BaseHTTPRequestHandler, msg: str = "bad request") -> None:
+    _send_json(handler, HTTPStatus.BAD_REQUEST, {"error": msg})
+
+
+def _send_unsupported_media(handler: BaseHTTPRequestHandler) -> None:
+    _send_json(handler, HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+               {"error": "content-type must be application/json"})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Path patterns — compiled once at import so per-request dispatch is
 #  a single regex match, not a chain of string startswith checks.
@@ -202,9 +277,14 @@ _RE_ALERT_ONE = re.compile(r"^/api/v1/alerts/([^/]+)/?$")
 _RE_ALERT_ACK = re.compile(r"^/api/v1/alerts/([^/]+)/ack/?$")
 _RE_REPORTS_LIST = re.compile(r"^/api/v1/reports/?$")
 _RE_REPORT_HTML = re.compile(r"^/api/v1/reports/([^/]+)/html/?$")
+_RE_REPORT_PUBLIC = re.compile(r"^/api/v1/reports/([^/]+)/public/?$")
 _RE_TELEMETRY_LLM = re.compile(r"^/api/v1/telemetry/llm/?$")
 _RE_TELEMETRY_PERF = re.compile(r"^/api/v1/telemetry/perf/?$")
 _RE_HEALTH = re.compile(r"^/api/v1/health/?$")
+# WRITE endpoints (v2 — rule + channel + report-public management).
+_RE_RULES = re.compile(r"^/api/v1/rules/?$")
+_RE_CHANNELS = re.compile(r"^/api/v1/channels/?$")
+_RE_CHANNEL_ONE = re.compile(r"^/api/v1/channels/([^/]+)/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,14 +297,22 @@ class APIHandler(BaseHTTPRequestHandler):
 
     Routing rules:
 
-      GET  /api/v1/alerts                 → _list_alerts          (auth)
-      GET  /api/v1/alerts/<id>            → _get_alert            (auth)
-      POST /api/v1/alerts/<id>/ack        → _ack_alert            (auth)
-      GET  /api/v1/reports                → _list_reports         (auth)
-      GET  /api/v1/reports/<id>/html      → _get_report_html      (auth)
-      GET  /api/v1/telemetry/llm          → _get_llm_telemetry    (auth)
-      GET  /api/v1/telemetry/perf         → _get_perf_telemetry   (auth)
-      GET  /api/v1/health                 → _health               (public)
+      GET    /api/v1/alerts                 → _list_alerts          (auth)
+      GET    /api/v1/alerts/<id>            → _get_alert            (auth)
+      POST   /api/v1/alerts/<id>/ack        → _ack_alert            (auth)
+      GET    /api/v1/reports                → _list_reports         (auth)
+      GET    /api/v1/reports/<id>/html      → _get_report_html      (auth)
+      POST   /api/v1/reports/<id>/public    → _make_report_public   (auth, write)
+      DELETE /api/v1/reports/<id>/public    → _revoke_report_public (auth, write)
+      GET    /api/v1/rules                  → _list_rules           (auth)
+      POST   /api/v1/rules                  → _save_rules           (auth, write)
+      DELETE /api/v1/rules                  → _reset_rules          (auth, write)
+      GET    /api/v1/channels               → _list_channels        (auth)
+      POST   /api/v1/channels               → _save_channel         (auth, write)
+      DELETE /api/v1/channels/<id>          → _delete_channel       (auth, write)
+      GET    /api/v1/telemetry/llm          → _get_llm_telemetry    (auth)
+      GET    /api/v1/telemetry/perf         → _get_perf_telemetry   (auth)
+      GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
     spec explicitly calls out 405 for "wrong method on a known
@@ -257,9 +345,10 @@ class APIHandler(BaseHTTPRequestHandler):
         return any(
             r.match(path) for r in (
                 _RE_ALERTS_LIST, _RE_ALERT_ONE, _RE_ALERT_ACK,
-                _RE_REPORTS_LIST, _RE_REPORT_HTML,
+                _RE_REPORTS_LIST, _RE_REPORT_HTML, _RE_REPORT_PUBLIC,
                 _RE_TELEMETRY_LLM, _RE_TELEMETRY_PERF,
                 _RE_HEALTH,
+                _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
             )
         )
 
@@ -313,10 +402,20 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_TELEMETRY_PERF.match(path):
                 self._get_perf_telemetry(query)
                 return
+            if _RE_RULES.match(path):
+                self._list_rules(user_id)
+                return
+            if _RE_CHANNELS.match(path):
+                self._list_channels(user_id)
+                return
 
             # GET on /api/v1/alerts/<id>/ack — this IS a known route
             # but only under POST. 405 it.
             if _RE_ALERT_ACK.match(path):
+                _send_method_not_allowed(self)
+                return
+            # GET on routes that exist only under write verbs → 405.
+            if _RE_CHANNEL_ONE.match(path) or _RE_REPORT_PUBLIC.match(path):
                 _send_method_not_allowed(self)
                 return
 
@@ -342,6 +441,16 @@ class APIHandler(BaseHTTPRequestHandler):
             if m:
                 self._ack_alert(user_id, m.group(1))
                 return
+            if _RE_RULES.match(path):
+                self._save_rules(user_id)
+                return
+            if _RE_CHANNELS.match(path):
+                self._save_channel(user_id)
+                return
+            m = _RE_REPORT_PUBLIC.match(path)
+            if m:
+                self._make_report_public(user_id, m.group(1))
+                return
 
             # POST on any other known route → 405. Unknown path → 404.
             if self._path_matches_any_route(path):
@@ -355,8 +464,46 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        """DELETE dispatch. The three DELETE endpoints are:
+          /api/v1/rules                       → wipe the caller's rules
+          /api/v1/channels/<channel_id>       → delete one channel
+          /api/v1/reports/<report_id>/public  → revoke a public slug
+        Any other known path → 405; unknown → 404."""
+        try:
+            path, _ = self._path_and_query()
+            logger.info(f"api DELETE {path}")
+
+            user_id = _authenticate(self)
+            if user_id is None:
+                _send_unauthorized(self)
+                return
+
+            if _RE_RULES.match(path):
+                self._reset_rules(user_id)
+                return
+            m = _RE_CHANNEL_ONE.match(path)
+            if m:
+                self._delete_channel(user_id, m.group(1))
+                return
+            m = _RE_REPORT_PUBLIC.match(path)
+            if m:
+                self._revoke_report_public(user_id, m.group(1))
+                return
+
+            if self._path_matches_any_route(path):
+                _send_method_not_allowed(self)
+                return
+            _send_not_found(self)
+        except Exception as exc:
+            logger.exception(f"api DELETE handler crashed: {exc}")
+            try:
+                _send_internal_error(self)
+            except Exception:
+                pass
+
     def _dispatch_unknown_method(self) -> None:
-        """For PUT / DELETE / PATCH / HEAD: 405 if the path is known
+        """For PUT / PATCH / HEAD: 405 if the path is known
         under any verb, 404 otherwise. Matches the do_POST behaviour
         for non-ack paths."""
         try:
@@ -373,9 +520,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 pass
 
     def do_PUT(self) -> None:  # noqa: N802
-        self._dispatch_unknown_method()
-
-    def do_DELETE(self) -> None:  # noqa: N802
         self._dispatch_unknown_method()
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -689,6 +833,228 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 pass
+
+
+    # ── Endpoint: GET /api/v1/rules ───────────────────────────────
+
+    def _list_rules(self, user_id: str) -> None:
+        """Return the caller's persisted alert rules as a JSON list.
+        Empty list when the user has no rules (matches ``load_rules``)."""
+        try:
+            from engine.alert_engine_v2 import load_rules
+            rules = load_rules(user_id=user_id)
+            _send_json(self, HTTPStatus.OK, rules)
+        except Exception as exc:
+            logger.exception(f"api GET /rules crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/rules ──────────────────────────────
+
+    def _save_rules(self, user_id: str) -> None:
+        """Replace the caller's rule set with the posted list.
+
+        Body must be ``application/json`` and decode to a list of
+        rule dicts; anything else → 415 / 400. The engine call is
+        per-user (only wipes + rewrites rows in this user's scope —
+        legacy rules belonging to ``user_id=""`` are also adopted by
+        this call, matching ``save_rules``'s contract).
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, list):
+                _send_bad_request(self, "body must be a JSON array of rule dicts")
+                return
+            from engine.alert_engine_v2 import save_rules
+            save_rules(body, user_id=user_id)
+            _send_json(self, HTTPStatus.OK,
+                       {"saved": True, "count": len(body)})
+        except Exception as exc:
+            logger.exception(f"api POST /rules crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/rules ────────────────────────────
+
+    def _reset_rules(self, user_id: str) -> None:
+        """Wipe the caller's rules.
+
+        We deliberately route this through ``save_rules([],
+        user_id=user_id)`` rather than ``reset_rules()`` — the latter
+        is a global, non-user-scoped wipe (per its docstring), which
+        would let any token-holder erase every user's rules. The
+        per-user save-with-empty-list achieves the same observable
+        outcome for the caller WITHOUT crossing the scope boundary.
+        """
+        try:
+            from engine.alert_engine_v2 import save_rules
+            save_rules([], user_id=user_id)
+            _send_json(self, HTTPStatus.OK, {"reset": True})
+        except Exception as exc:
+            logger.exception(f"api DELETE /rules crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/channels ────────────────────────────
+
+    def _list_channels(self, user_id: str) -> None:
+        """Return the caller's delivery channels as a JSON list.
+
+        Each row carries the same fields the UI sees, except the
+        ``target`` field — that's a Slack webhook URL / PagerDuty
+        integration key / email address and is the secret we are
+        protecting. Withholding it from the API response means a
+        compromised token can enumerate WHAT channels exist (so
+        users can list / delete them) without leaking the delivery
+        secret to the attacker.
+        """
+        try:
+            from engine.alert_delivery import load_channels
+            channels = load_channels(user_id=user_id)
+            payload = [
+                {
+                    "channel_id":              c.channel_id,
+                    "name":                    c.name,
+                    "kind":                    c.kind,
+                    "severity_threshold":      c.severity_threshold,
+                    "enabled":                 c.enabled,
+                    "created_at":              c.created_at,
+                    "digest_mode":             c.digest_mode,
+                    "quiet_start":             c.quiet_start,
+                    "quiet_end":               c.quiet_end,
+                    "quiet_override_critical": c.quiet_override_critical,
+                }
+                for c in channels
+            ]
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api GET /channels crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/channels ───────────────────────────
+
+    def _save_channel(self, user_id: str) -> None:
+        """Insert / upsert a channel from a posted ``DeliveryChannel``
+        dict. ``channel_id`` and ``target`` are required; everything
+        else falls back to the dataclass defaults.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+            channel_id = (body.get("channel_id") or "").strip()
+            if not channel_id:
+                _send_bad_request(self, "channel_id is required")
+                return
+            from engine.alert_delivery import DeliveryChannel, save_channel
+            # Build the dataclass with all defaults — fields the caller
+            # didn't supply fall back to the DeliveryChannel defaults
+            # (``digest_mode='immediate'``, ``enabled=True``, …) which
+            # matches how the UI persists a fresh row.
+            channel = DeliveryChannel(
+                channel_id=channel_id,
+                name=str(body.get("name") or ""),
+                kind=str(body.get("kind") or ""),
+                target=str(body.get("target") or ""),
+                severity_threshold=str(body.get("severity_threshold") or "LOW"),
+                enabled=bool(body.get("enabled", True)),
+                created_at=str(body.get("created_at") or ""),
+                digest_mode=str(body.get("digest_mode") or "immediate"),
+                quiet_start=str(body.get("quiet_start") or ""),
+                quiet_end=str(body.get("quiet_end") or ""),
+                quiet_override_critical=bool(body.get("quiet_override_critical", True)),
+            )
+            save_channel(channel, user_id=user_id)
+            _send_json(self, HTTPStatus.OK,
+                       {"saved": True, "channel_id": channel_id})
+        except Exception as exc:
+            logger.exception(f"api POST /channels crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/channels/<id> ────────────────────
+
+    def _delete_channel(self, user_id: str, channel_id: str) -> None:
+        """Remove a channel by id, scoped to the caller. Cross-user
+        deletes silently no-op (engine's ``scope_filter_sql``); same
+        200 response either way so a caller can't probe for other
+        users' channel ids by status code."""
+        try:
+            from engine.alert_delivery import delete_channel
+            delete_channel(channel_id, user_id=user_id)
+            _send_json(self, HTTPStatus.OK,
+                       {"deleted": True, "channel_id": channel_id})
+        except Exception as exc:
+            logger.exception(f"api DELETE /channels/<id> crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/reports/<id>/public ────────────────
+
+    def _make_report_public(self, user_id: str, report_id: str) -> None:
+        """Generate a public-share slug for one of the caller's reports.
+
+        Body is OPTIONAL — when absent or empty, defaults to 30 days.
+        When present, must be valid JSON dict with an
+        ``expires_in_days`` int. Returns 404 when the report doesn't
+        belong to the caller (matches ``make_public``'s scope check).
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            expires_in_days = 30
+            if isinstance(body, dict):
+                raw = body.get("expires_in_days", 30)
+                try:
+                    expires_in_days = int(raw)
+                except (TypeError, ValueError):
+                    _send_bad_request(self, "expires_in_days must be an int")
+                    return
+            from utils.report_history import make_public
+            slug = make_public(
+                report_id, expires_in_days=expires_in_days, user_id=user_id,
+            )
+            if slug is None:
+                # Could be: unknown id, cross-user, expires<=0,
+                # internal error. All collapse to 404 (preserves the
+                # "no info leak about other users' report ids"
+                # contract that the GET-html endpoint uses).
+                _send_not_found(self)
+                return
+            _send_json(self, HTTPStatus.OK, {"slug": slug})
+        except Exception as exc:
+            logger.exception(f"api POST /reports/<id>/public crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/reports/<id>/public ──────────────
+
+    def _revoke_report_public(self, user_id: str, report_id: str) -> None:
+        """Clear the public-share slug + expiry for one of the
+        caller's reports. 404 when the report doesn't belong to the
+        caller (mirror of ``make_public``'s 404 path)."""
+        try:
+            from utils.report_history import revoke_public
+            ok = revoke_public(report_id, user_id=user_id)
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(self, HTTPStatus.OK, {"revoked": True})
+        except Exception as exc:
+            logger.exception(f"api DELETE /reports/<id>/public crashed: {exc}")
+            _send_internal_error(self)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
