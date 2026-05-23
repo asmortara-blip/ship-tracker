@@ -130,6 +130,21 @@ def _send_html(handler: BaseHTTPRequestHandler, status: int, html: str) -> None:
     handler.wfile.write(body)
 
 
+def _send_markdown(
+    handler: BaseHTTPRequestHandler, status: int, markdown: str,
+) -> None:
+    """Write a Markdown response — same wire-shape as ``_send_html``
+    but with ``text/markdown; charset=utf-8`` so downstream tools
+    (curl, fetch, etc.) treat the body as Markdown source rather than
+    rendered HTML or a JSON envelope."""
+    body = markdown.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/markdown; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 def _extract_bearer_token(handler: BaseHTTPRequestHandler) -> Optional[str]:
     """Extract the raw token from the ``Authorization`` header.
 
@@ -286,6 +301,7 @@ _RE_ALERT_ONE = re.compile(r"^/api/v1/alerts/([^/]+)/?$")
 _RE_ALERT_ACK = re.compile(r"^/api/v1/alerts/([^/]+)/ack/?$")
 _RE_REPORTS_LIST = re.compile(r"^/api/v1/reports/?$")
 _RE_REPORT_HTML = re.compile(r"^/api/v1/reports/([^/]+)/html/?$")
+_RE_REPORT_MARKDOWN = re.compile(r"^/api/v1/reports/([^/]+)/markdown/?$")
 _RE_REPORT_PUBLIC = re.compile(r"^/api/v1/reports/([^/]+)/public/?$")
 _RE_TELEMETRY_LLM = re.compile(r"^/api/v1/telemetry/llm/?$")
 _RE_TELEMETRY_PERF = re.compile(r"^/api/v1/telemetry/perf/?$")
@@ -317,6 +333,7 @@ class APIHandler(BaseHTTPRequestHandler):
       POST   /api/v1/alerts/<id>/ack        → _ack_alert            (auth)
       GET    /api/v1/reports                → _list_reports         (auth)
       GET    /api/v1/reports/<id>/html      → _get_report_html      (auth)
+      GET    /api/v1/reports/<id>/markdown  → _get_report_markdown  (auth)
       POST   /api/v1/reports/<id>/public    → _make_report_public   (auth, write)
       DELETE /api/v1/reports/<id>/public    → _revoke_report_public (auth, write)
       GET    /api/v1/rules                  → _list_rules           (auth)
@@ -363,7 +380,8 @@ class APIHandler(BaseHTTPRequestHandler):
         return any(
             r.match(path) for r in (
                 _RE_ALERTS_LIST, _RE_ALERT_ONE, _RE_ALERT_ACK,
-                _RE_REPORTS_LIST, _RE_REPORT_HTML, _RE_REPORT_PUBLIC,
+                _RE_REPORTS_LIST, _RE_REPORT_HTML, _RE_REPORT_MARKDOWN,
+                _RE_REPORT_PUBLIC,
                 _RE_TELEMETRY_LLM, _RE_TELEMETRY_PERF,
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
@@ -414,6 +432,10 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_REPORT_HTML.match(path)
             if m:
                 self._get_report_html(user_id, m.group(1), query)
+                return
+            m = _RE_REPORT_MARKDOWN.match(path)
+            if m:
+                self._get_report_markdown(user_id, m.group(1), query)
                 return
             if _RE_TELEMETRY_LLM.match(path):
                 self._get_llm_telemetry(user_id, query)
@@ -792,6 +814,129 @@ class APIHandler(BaseHTTPRequestHandler):
             _send_html(self, HTTPStatus.OK, html)
         except Exception as exc:
             logger.exception(f"api /reports/<id>/html crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/reports/<id>/markdown ───────────────
+
+    def _get_report_markdown(
+        self,
+        user_id: str,
+        report_id: str,
+        query: dict[str, list[str]],
+    ) -> None:
+        """Return a Markdown rendering of a saved report.
+
+        Same auth + password contract as :meth:`_get_report_html`:
+
+          * Bearer token resolves a user; the lookup is scoped to that
+            user, so a cross-user id collapses to 404.
+          * When the report row carries a non-empty
+            ``public_password_hash``, the caller must supply the
+            password via ``X-Report-Password`` or ``?password=``.
+            Missing → 401 ``password required``; wrong → 401 ``wrong
+            password``; correct → 200 + Markdown body. An unprotected
+            report ignores any password input.
+
+        The on-disk file is HTML — Markdown is reconstructed at
+        request time from the ``ReportMeta`` row (the structured
+        metadata: sentiment label/score, risk level, data quality,
+        report_date, generated_at). We deliberately do NOT include
+        the rendered HTML body in the Markdown — embedding HTML as a
+        code block in Markdown produces an unreadable wall of tags
+        that defeats the purpose of the export. Instead the Markdown
+        carries the structured fields the renderer can format
+        natively. This matches the spec's "Markdown is shareable on
+        GitHub/Notion/Slack" use case — the audience wants the
+        summary, not the source.
+
+        Content-Type: ``text/markdown; charset=utf-8``.
+        """
+        try:
+            # Auth + password gate — identical structure to the HTML
+            # endpoint so a permission change here doesn't drift from
+            # the existing surface.
+            from state.db import get_connection
+            from state.user_scope import scope_filter_sql
+
+            scope_sql, scope_params = scope_filter_sql(user_id)
+            conn = get_connection()
+            row = conn.execute(
+                f"SELECT report_id, generated_at, report_date, "
+                f"sentiment_label, sentiment_score, risk_level, "
+                f"signal_count, data_quality, "
+                f"public_password_hash, public_password_salt "
+                f"FROM report_history WHERE report_id = ? {scope_sql}",
+                (report_id, *scope_params),
+            ).fetchone()
+            if row is None:
+                _send_not_found(self)
+                return
+
+            try:
+                stored_hash = row["public_password_hash"]
+            except (IndexError, KeyError):
+                stored_hash = None
+            try:
+                stored_salt = row["public_password_salt"]
+            except (IndexError, KeyError):
+                stored_salt = None
+            if stored_hash and stored_salt:
+                supplied_pw = self.headers.get("X-Report-Password", "") or ""
+                if not supplied_pw:
+                    supplied_pw = (query.get("password", [""])[0] or "")
+                if not supplied_pw:
+                    _send_json(
+                        self,
+                        HTTPStatus.UNAUTHORIZED,
+                        {"error": "password required"},
+                    )
+                    return
+                from utils.report_history import _verify_public_password
+                if not _verify_public_password(
+                    supplied_pw, stored_hash, stored_salt,
+                ):
+                    _send_json(
+                        self,
+                        HTTPStatus.UNAUTHORIZED,
+                        {"error": "wrong password"},
+                    )
+                    return
+
+            # Assemble a Markdown-renderable payload from the row.
+            # Vault-encrypted fields are NOT in the report_history
+            # table — this construction touches only the metadata
+            # columns we explicitly select above, so by construction
+            # nothing sensitive can leak into the Markdown.
+            payload = {
+                "title": (
+                    f"Investor Report — {row['report_date']}"
+                    if row["report_date"] else "Investor Report"
+                ),
+                "generated_at": row["generated_at"] or "",
+                "sentiment_label": row["sentiment_label"] or "—",
+                "sentiment_score": row["sentiment_score"],
+                "risk_level": row["risk_level"] or "—",
+                "signal_count": int(row["signal_count"] or 0),
+                "data_quality": row["data_quality"] or "—",
+                # The HTML body is intentionally NOT embedded — see the
+                # docstring for the rationale.
+                "executive_summary": (
+                    f"Report generated {row['generated_at']}. "
+                    f"{int(row['signal_count'] or 0)} alpha signals "
+                    f"detected. Data quality: "
+                    f"{row['data_quality'] or 'unknown'}. "
+                    f"Open the HTML or PDF export for full prose."
+                ),
+                "signals": [],
+                "routes": [],
+                "macro": {},
+                "key_findings": [],
+            }
+            from utils.markdown_export import report_to_markdown
+            md_body = report_to_markdown(payload)
+            _send_markdown(self, HTTPStatus.OK, md_body)
+        except Exception as exc:
+            logger.exception(f"api /reports/<id>/markdown crashed: {exc}")
             _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/telemetry/llm ───────────────────────

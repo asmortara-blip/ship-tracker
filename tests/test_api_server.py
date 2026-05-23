@@ -1691,3 +1691,175 @@ def test_post_report_public_non_string_password_returns_400(
         headers=_bearer(token), timeout=5,
     )
     assert r.status_code == 400
+
+
+# ─── GET /api/v1/reports/<id>/markdown ────────────────────────────────────
+# The Markdown export endpoint mirrors the HTML one's auth + password
+# contract; these tests cover the wire shape, the 404 paths, and the
+# password gate.
+
+
+def test_get_report_markdown_returns_markdown_content_type(
+    server, tmp_path, monkeypatch,
+):
+    """Successful Markdown export returns text/markdown with the
+    expected sections in the body."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="md-export")
+
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/markdown",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    ctype = r.headers.get("Content-Type", "")
+    assert ctype.startswith("text/markdown")
+    body = r.text
+    # The Markdown body always carries the schema-version footer and
+    # the documented section headers.
+    assert "schema v" in body
+    assert "## Executive Summary" in body
+    assert "## Signals" in body
+
+
+def test_get_report_markdown_unknown_id_returns_404(
+    server, tmp_path, monkeypatch,
+):
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/reports/this-id-does-not-exist/markdown",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 404
+    assert r.json() == {"error": "not found"}
+
+
+def test_get_report_markdown_cross_user_returns_404(
+    server, tmp_path, monkeypatch,
+):
+    """Bob's report id with Alice's token → 404 (no info leak)."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_rid = _seed_report(bob_uid, label="bobs-md")
+    r = requests.get(
+        f"{server}/api/v1/reports/{bob_rid}/markdown",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_get_report_markdown_requires_auth(server):
+    """No bearer header → 401, same as every other authed endpoint."""
+    r = requests.get(
+        f"{server}/api/v1/reports/any-id/markdown",
+        timeout=5,
+    )
+    assert r.status_code == 401
+
+
+def test_get_report_markdown_password_required_when_protected(
+    server, tmp_path, monkeypatch,
+):
+    """A password-protected report's Markdown endpoint must enforce
+    the same 401 ``password required`` contract as the HTML
+    endpoint."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="md-locked")
+    # Publish with a password.
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "openme"},
+        headers=_bearer(token), timeout=5,
+    )
+    # Bare GET → 401 ``password required``.
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/markdown",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 401
+    assert r.json() == {"error": "password required"}
+
+
+def test_get_report_markdown_with_correct_password_returns_body(
+    server, tmp_path, monkeypatch,
+):
+    """X-Report-Password header unlocks the Markdown body."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="md-unlock")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "secret"},
+        headers=_bearer(token), timeout=5,
+    )
+    headers = _bearer(token)
+    headers["X-Report-Password"] = "secret"
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/markdown",
+        headers=headers, timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.headers.get("Content-Type", "").startswith("text/markdown")
+    assert "Investor Report" in r.text
+
+
+def test_get_report_markdown_with_wrong_password_returns_401(
+    server, tmp_path, monkeypatch,
+):
+    """Wrong password → 401 ``wrong password`` (distinguished from
+    missing-password so a viewer knows to retry)."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="md-wrong-pw")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "right"},
+        headers=_bearer(token), timeout=5,
+    )
+    headers = _bearer(token)
+    headers["X-Report-Password"] = "WRONG"
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/markdown",
+        headers=headers, timeout=5,
+    )
+    assert r.status_code == 401
+    assert r.json() == {"error": "wrong password"}
+
+
+def test_get_report_markdown_password_via_query_string_unlocks(
+    server, tmp_path, monkeypatch,
+):
+    """?password= query parameter works the same as the header."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="md-qs")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "qspw"},
+        headers=_bearer(token), timeout=5,
+    )
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/markdown",
+        params={"password": "qspw"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert "schema v" in r.text

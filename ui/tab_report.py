@@ -78,6 +78,16 @@ except Exception:
     def _export_full_report(*args, **kwargs) -> bytes:
         raise ImportError("utils.excel_export not available")
 
+# Markdown export — pure function, no heavy deps, so the try/except
+# here is belt-and-braces against the module being deleted or renamed.
+try:
+    from utils.markdown_export import report_to_markdown as _report_to_markdown
+    _MD_OK = True
+except Exception:
+    _MD_OK = False
+    def _report_to_markdown(report_data) -> str:
+        raise ImportError("utils.markdown_export not available")
+
 try:
     from utils.report_history import (
         delete_report as _delete_report,
@@ -441,7 +451,8 @@ def _dl_unavailable(message: str) -> None:
 
 def _render_downloads(report: Any) -> None:
     section_header("Download Report", "Pick a format to export the latest build.")
-    col_pdf, col_html, col_xl = st.columns([2, 1, 1], gap="medium")
+    # 4 columns now: PDF (primary, wider), HTML, Excel, Markdown.
+    col_pdf, col_html, col_xl, col_md = st.columns([2, 1, 1, 1], gap="medium")
     with col_pdf:
         st.markdown(
             '<div class="sub-section-header">PDF &mdash; Print-Ready</div>',
@@ -510,6 +521,37 @@ def _render_downloads(report: Any) -> None:
                 _dl_error(exc)
         elif not _EXCEL_OK:
             _dl_unavailable("Excel export unavailable.")
+        else:
+            _dl_unavailable("Generate a report first.")
+
+    with col_md:
+        # Markdown download — pure function, no extra dependency, so the
+        # button is disabled only when no report has been generated yet
+        # (matching the PDF/HTML/Excel pattern above). The slug uses the
+        # same timestamp shape so a side-by-side download lines up
+        # alphabetically with its PDF sibling.
+        st.markdown(
+            '<div class="sub-section-header">Markdown &mdash; Share</div>',
+            unsafe_allow_html=True,
+        )
+        if _MD_OK and report is not None:
+            try:
+                md_text = _report_to_markdown(report)
+                md_bytes = md_text.encode("utf-8")
+                size_kb = max(1, len(md_bytes) // 1024)
+                slug = f"investor_report_{datetime.now().strftime('%Y%m%d_%H%M')}"
+                st.download_button(
+                    label=f"Download as Markdown ({size_kb} KB)",
+                    data=md_bytes,
+                    file_name=f"{slug}.md",
+                    mime="text/markdown",
+                    key="dl_md", use_container_width=True,
+                )
+            except Exception as exc:
+                logger.error(f"Markdown export failed: {exc}")
+                _dl_error(exc)
+        elif not _MD_OK:
+            _dl_unavailable("Markdown export unavailable.")
         else:
             _dl_unavailable("Generate a report first.")
 
