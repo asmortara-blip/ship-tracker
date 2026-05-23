@@ -148,12 +148,29 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       user enables MFA. Same idempotent ALTER-TABLE-in-try/except
 #       pattern as v4 / v5 / v6 / v13 / v14 — each column add is
 #       independently safe to re-run.
+#  17 — adds two columns to the ``report_history`` table for optional
+#       password-gated public report links (layered on top of the v5
+#       unguessable slug, so the slug is still required and the
+#       password is an EXTRA factor):
+#       ``public_password_hash TEXT`` (hex-encoded pbkdf2-sha256 hash;
+#       NULL when no password is set → link behaves as today) and
+#       ``public_password_salt TEXT`` (hex-encoded random salt; NULL
+#       when no password is set). Pre-v17 rows pick up NULL for both
+#       columns — viewing any existing public link still works without
+#       a password. The hash uses ``hashlib.pbkdf2_hmac('sha256', …,
+#       200_000)`` to match the iteration count used elsewhere in
+#       ``auth/`` (PBKDF2_ITERATIONS). Same idempotent ALTER-TABLE-in-
+#       try/except pattern as v4 / v5 / v6 / v13 / v14 / v16 — each
+#       column add is independently safe to re-run. Unlike the other
+#       password columns these are declared NULLable (no DEFAULT) so
+#       "no password set" is distinguishable from "empty-string
+#       password" at the SQL level.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 16
+SCHEMA_VERSION: int = 17
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -640,6 +657,39 @@ _SCHEMA_V16_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v16)"
 )
 
+# Schema v17 adds two NULLable columns to ``report_history`` for
+# optional password-gated public report links:
+#
+#   * ``public_password_hash`` TEXT — hex-encoded PBKDF2-HMAC-SHA256
+#     digest of the user-chosen password. NULL when no password is set
+#     for this report's public link (the default — preserves the v5
+#     "anyone with the slug can view" behaviour).
+#   * ``public_password_salt`` TEXT — hex-encoded random salt that was
+#     used to derive ``public_password_hash``. NULL when no password is
+#     set.
+#
+# Unlike most other columns in this database these are NULLable (no
+# ``NOT NULL DEFAULT ''``) so the platform can distinguish "no
+# password set on this share link" (NULL) from "empty-string password"
+# at the SQL level. ``make_public(report_id, password=...)`` populates
+# both columns when a password is supplied; ``verify_public_report_
+# password`` and ``load_public_report(slug, password=...)`` consume
+# them. The password is hashed immediately on ``make_public`` and is
+# never persisted in plaintext.
+#
+# Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+# ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13`` /
+# ``_migrate_to_v14`` / ``_migrate_to_v16``: SQLite does NOT support
+# ``IF NOT EXISTS`` on ALTER TABLE, so each statement is wrapped in
+# try/except and "duplicate column name" errors are swallowed. Each
+# column is added in its own try/except so partial completion of a
+# prior run is also tolerated.
+_SCHEMA_V17_NOTE: str = (
+    "v17: report_history.public_password_hash TEXT + "
+    "report_history.public_password_salt TEXT "
+    "(added via ALTER TABLE in _migrate_to_v17)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -747,6 +797,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v16(conn)
     except Exception as exc:
         logger.warning(f"state.db: v16 column adds skipped: {exc}")
+    # v17 column adds — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14 / v16. Adds public_password_hash +
+    # public_password_salt to report_history so a public share link can
+    # be guarded by an optional password (layered on top of the
+    # unguessable v5 slug). NULL on both columns means "no password set",
+    # which preserves the existing v5 behaviour.
+    try:
+        from state.migrations import _migrate_to_v17
+        _migrate_to_v17(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v17 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -945,6 +1006,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v16(conn)
         except Exception as exc:
             logger.warning(f"state.db: v16 migration skipped: {exc}")
+
+    # Migration 16 → 17: add the report_history.public_password_hash +
+    # report_history.public_password_salt columns so a public share
+    # link can be guarded by an optional user-chosen password (layered
+    # on top of the unguessable slug from v5). Same idempotent ALTER-
+    # TABLE-in-try/except pattern as v4 / v5 / v6 / v13 / v14 / v16 —
+    # the helper is already invoked unconditionally above; this branch
+    # keeps the version-step ladder explicit.
+    if current < 17:
+        try:
+            from state.migrations import _migrate_to_v17
+            _migrate_to_v17(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v17 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

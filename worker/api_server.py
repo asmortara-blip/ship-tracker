@@ -82,6 +82,15 @@ _MAX_ALERTS_RESPONSE = 500
 _DEFAULT_REPORTS_LIMIT = 50
 
 
+# Default + hard cap for the audit-events endpoint. The default matches
+# ``auth.audit.query_audit``'s default; the cap protects against a
+# caller asking for ``limit=10**9`` and blowing the JSON payload — the
+# engine call itself enforces the SQL ``LIMIT`` clause but we double-
+# clamp on the API layer so the contract is visible at the wire.
+_DEFAULT_AUDIT_LIMIT = 100
+_MAX_AUDIT_LIMIT = 1000
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Shared response helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,6 +294,12 @@ _RE_HEALTH = re.compile(r"^/api/v1/health/?$")
 _RE_RULES = re.compile(r"^/api/v1/rules/?$")
 _RE_CHANNELS = re.compile(r"^/api/v1/channels/?$")
 _RE_CHANNEL_ONE = re.compile(r"^/api/v1/channels/([^/]+)/?$")
+# OBSERVABILITY endpoints (v3 — mirrors what tab_data_health +
+# tab_operator_overview render, so external monitoring scripts don't
+# have to scrape the Streamlit UI).
+_RE_AUDIT = re.compile(r"^/api/v1/audit/?$")
+_RE_INCIDENTS = re.compile(r"^/api/v1/incidents/?$")
+_RE_SOURCE_HEALTH = re.compile(r"^/api/v1/source-health/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,6 +327,9 @@ class APIHandler(BaseHTTPRequestHandler):
       DELETE /api/v1/channels/<id>          → _delete_channel       (auth, write)
       GET    /api/v1/telemetry/llm          → _get_llm_telemetry    (auth)
       GET    /api/v1/telemetry/perf         → _get_perf_telemetry   (auth)
+      GET    /api/v1/audit                  → _list_audit           (auth)
+      GET    /api/v1/incidents              → _list_incidents       (auth)
+      GET    /api/v1/source-health          → _get_source_health    (auth)
       GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
@@ -349,6 +367,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_TELEMETRY_LLM, _RE_TELEMETRY_PERF,
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
+                _RE_AUDIT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
             )
         )
 
@@ -394,7 +413,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             m = _RE_REPORT_HTML.match(path)
             if m:
-                self._get_report_html(user_id, m.group(1))
+                self._get_report_html(user_id, m.group(1), query)
                 return
             if _RE_TELEMETRY_LLM.match(path):
                 self._get_llm_telemetry(user_id, query)
@@ -407,6 +426,15 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             if _RE_CHANNELS.match(path):
                 self._list_channels(user_id)
+                return
+            if _RE_AUDIT.match(path):
+                self._list_audit(user_id, query)
+                return
+            if _RE_INCIDENTS.match(path):
+                self._list_incidents(user_id, query)
+                return
+            if _RE_SOURCE_HEALTH.match(path):
+                self._get_source_health(query)
                 return
 
             # GET on /api/v1/alerts/<id>/ack — this IS a known route
@@ -677,13 +705,86 @@ class APIHandler(BaseHTTPRequestHandler):
 
     # ── Endpoint: GET /api/v1/reports/<id>/html ───────────────────
 
-    def _get_report_html(self, user_id: str, report_id: str) -> None:
+    def _get_report_html(
+        self,
+        user_id: str,
+        report_id: str,
+        query: dict[str, list[str]],
+    ) -> None:
         """Return the raw HTML for a saved report. 404 when the
         report does not exist in the caller's scope (which collapses
         the unknown-id and cross-user cases into the same response,
-        matching ``load_report_html``'s contract)."""
+        matching ``load_report_html``'s contract).
+
+        When the report has been published with a password (v17 —
+        ``public_password_hash`` set on the row), the caller must
+        additionally supply the password via either the
+        ``X-Report-Password`` request header OR the ``password`` query
+        string parameter:
+
+          * missing  → 401 with ``{"error": "password required"}``
+          * wrong    → 401 with ``{"error": "wrong password"}``
+          * correct  → 200 + HTML body, behaviour as today
+
+        For an unprotected report the password input (if supplied) is
+        ignored and the behaviour matches the pre-v17 path exactly.
+        """
         try:
             from utils.report_history import load_report_html
+            # Resolve the password state for this report before we
+            # touch the file system. We deliberately query directly
+            # rather than going through ``load_report_html`` so the
+            # password check can short-circuit BEFORE any disk read.
+            # The lookup is user-scoped via the same SQL helper so a
+            # cross-user request still collapses to 404 (not 401) —
+            # we do NOT want the password layer to leak the existence
+            # of another user's report id.
+            from state.db import get_connection
+            from state.user_scope import scope_filter_sql
+
+            scope_sql, scope_params = scope_filter_sql(user_id)
+            conn = get_connection()
+            row = conn.execute(
+                f"SELECT public_password_hash, public_password_salt "
+                f"FROM report_history WHERE report_id = ? {scope_sql}",
+                (report_id, *scope_params),
+            ).fetchone()
+            if row is None:
+                # Unknown id OR cross-user — collapse to 404 to match
+                # the no-info-leak contract used by the v5/v17 surface.
+                _send_not_found(self)
+                return
+
+            try:
+                stored_hash = row["public_password_hash"]
+            except (IndexError, KeyError):
+                stored_hash = None
+            try:
+                stored_salt = row["public_password_salt"]
+            except (IndexError, KeyError):
+                stored_salt = None
+            if stored_hash and stored_salt:
+                supplied_pw = self.headers.get("X-Report-Password", "") or ""
+                if not supplied_pw:
+                    supplied_pw = (query.get("password", [""])[0] or "")
+                if not supplied_pw:
+                    _send_json(
+                        self,
+                        HTTPStatus.UNAUTHORIZED,
+                        {"error": "password required"},
+                    )
+                    return
+                from utils.report_history import _verify_public_password
+                if not _verify_public_password(
+                    supplied_pw, stored_hash, stored_salt,
+                ):
+                    _send_json(
+                        self,
+                        HTTPStatus.UNAUTHORIZED,
+                        {"error": "wrong password"},
+                    )
+                    return
+
             html = load_report_html(report_id, user_id=user_id)
             if html is None:
                 _send_not_found(self)
@@ -726,6 +827,174 @@ class APIHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.OK, summary)
         except Exception as exc:
             logger.exception(f"api /telemetry/perf crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/audit ───────────────────────────────
+
+    def _list_audit(self, user_id: str, query: dict[str, list[str]]) -> None:
+        """Return audit-log rows scoped to the caller.
+
+        Query parameters:
+          * ``limit``  — cap on rows returned. Default 100, hard max
+            ``_MAX_AUDIT_LIMIT`` (1000). Values <= 0 fall back to the
+            default. We clamp at the API layer so a malicious caller
+            asking ``limit=10**9`` never gets past us into the engine.
+          * ``action`` — optional filter on the action verb (e.g.
+            ``login_success``, ``save_rules``). Forwarded into
+            ``query_audit``'s native ``action`` parameter so the
+            filter applies BEFORE the SQL LIMIT — critical because a
+            user with thousands of rows shouldn't get an empty result
+            when their last 100 happen to be ``save_rules`` events.
+
+        Per-user: ``user_id`` is taken from the bearer token and
+        passed verbatim into ``query_audit`` — Alice cannot see Bob's
+        rows. ``detail_json`` is whatever the recorder stored; channel
+        ``target`` (Slack webhook URL / PagerDuty key / email) is
+        already suppressed at the recording site in
+        ``engine.alert_delivery.save_channel`` so we don't need to
+        re-redact here.
+        """
+        try:
+            limit = _parse_int(
+                query.get("limit", [None])[0], default=_DEFAULT_AUDIT_LIMIT,
+            )
+            if limit <= 0:
+                limit = _DEFAULT_AUDIT_LIMIT
+            if limit > _MAX_AUDIT_LIMIT:
+                limit = _MAX_AUDIT_LIMIT
+            action_raw = (query.get("action", [""])[0] or "").strip()
+            action_filter: Optional[str] = action_raw or None
+
+            from auth.audit import query_audit
+            events = query_audit(
+                user_id=user_id, action=action_filter, limit=limit,
+            )
+            payload = {
+                "items": [
+                    {
+                        "event_id":    e.event_id,
+                        "created_at":  e.created_at,
+                        "user_id":     e.user_id,
+                        "action":      e.action,
+                        "entity_type": e.entity_type,
+                        "entity_id":   e.entity_id,
+                        "detail_json": e.detail_json,
+                    }
+                    for e in events
+                ],
+                "count": len(events),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api /audit crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/incidents ───────────────────────────
+
+    def _list_incidents(self, user_id: str, query: dict[str, list[str]]) -> None:
+        """Return correlated alert-incidents for the caller's window.
+
+        Query parameters:
+          * ``window`` — look-back in DAYS (default 7). The underlying
+            ``get_recent_incidents`` takes ``window_days``; the API
+            param is unsuffixed ``window`` to match the spec.
+
+        Per-user: ``user_id`` is threaded into ``get_recent_incidents``
+        which forwards it to ``load_alerts`` — alice's incidents view
+        cannot include bob's alerts.
+
+        The ``alerts`` list inside each incident is intentionally
+        emitted as a list of dicts (not the raw dataclass) so the JSON
+        payload is stable across engine refactors.
+        """
+        try:
+            window_days = _parse_int(
+                query.get("window", [None])[0], default=7,
+            )
+
+            from engine.alert_correlator import get_recent_incidents
+            incidents = get_recent_incidents(
+                window_days=window_days, user_id=user_id,
+            )
+            payload = {
+                "items": [
+                    {
+                        "incident_id":         inc.incident_id,
+                        "started_at":          inc.started_at,
+                        "severity_max":        inc.severity_max,
+                        "alert_count":         inc.alert_count,
+                        "dominant_alert_type": inc.dominant_alert_type,
+                        "entities_touched":    inc.entities_touched,
+                        "alert_ids":           [a.alert_id for a in inc.alerts],
+                    }
+                    for inc in incidents
+                ],
+                "count": len(incidents),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api /incidents crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/source-health ───────────────────────
+
+    def _get_source_health(self, query: dict[str, list[str]]) -> None:
+        """Return per-source liveness/freshness telemetry.
+
+        Query parameters:
+          * ``window_hours`` — look-back in hours (default 24).
+
+        NOT user-scoped: source-health is global platform telemetry
+        (every user looks at the same FRED / yfinance / canal feeds),
+        so different users see the same response. We still require
+        auth — the endpoint is behind the bearer check in ``do_GET``.
+
+        Returned shape: ``{"items": [...], "count": N}`` where each
+        item is one source with its bucketed counters. This is a
+        deliberate flattening of the engine's ``by_source`` dict
+        (which keys by source name) into a stable list shape that
+        matches the rest of the API's envelope contract; ``source``
+        is added as a top-level field on each item.
+        """
+        try:
+            window_hours = _parse_int(
+                query.get("window_hours", [None])[0], default=24,
+            )
+
+            from engine.source_health import get_health_summary
+            summary = get_health_summary(window_hours=window_hours) or {}
+            by_source = summary.get("by_source") or {}
+            current_outages = summary.get("current_outages") or []
+
+            items: list[dict[str, Any]] = []
+            for src, row in by_source.items():
+                if not isinstance(row, dict):
+                    continue
+                items.append({
+                    "source":           src,
+                    "count":            row.get("count", 0),
+                    "up_count":         row.get("up_count", 0),
+                    "degraded_count":   row.get("degraded_count", 0),
+                    "down_count":       row.get("down_count", 0),
+                    "avg_duration_ms":  row.get("avg_duration_ms", 0.0),
+                    "last_status":      row.get("last_status", ""),
+                    "last_started_at":  row.get("last_started_at", ""),
+                    "is_outage":        src in current_outages,
+                })
+            # Stable ordering — alphabetical by source so dashboards
+            # diff cleanly across polls.
+            items.sort(key=lambda r: str(r.get("source", "")))
+
+            payload = {
+                "items":           items,
+                "count":           len(items),
+                "window_hours":    summary.get("window_hours", window_hours),
+                "total_pings":     summary.get("total_pings", 0),
+                "current_outages": list(current_outages),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api /source-health crashed: {exc}")
             _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/health ──────────────────────────────
@@ -1002,10 +1271,14 @@ class APIHandler(BaseHTTPRequestHandler):
     def _make_report_public(self, user_id: str, report_id: str) -> None:
         """Generate a public-share slug for one of the caller's reports.
 
-        Body is OPTIONAL — when absent or empty, defaults to 30 days.
-        When present, must be valid JSON dict with an
-        ``expires_in_days`` int. Returns 404 when the report doesn't
-        belong to the caller (matches ``make_public``'s scope check).
+        Body is OPTIONAL — when absent or empty, defaults to 30 days
+        and no password. When present, must be valid JSON dict with
+        optional ``expires_in_days`` (int) and optional ``password``
+        (str) fields. When ``password`` is a non-empty string, the
+        share link additionally requires the password before the
+        report can be viewed via ``GET /api/v1/reports/<id>/html``.
+        Returns 404 when the report doesn't belong to the caller
+        (matches ``make_public``'s scope check).
         """
         try:
             body = _read_json_body(self)
@@ -1016,6 +1289,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _send_bad_request(self, "malformed json")
                 return
             expires_in_days = 30
+            password: Optional[str] = None
             if isinstance(body, dict):
                 raw = body.get("expires_in_days", 30)
                 try:
@@ -1023,9 +1297,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     _send_bad_request(self, "expires_in_days must be an int")
                     return
+                raw_pw = body.get("password")
+                if raw_pw is not None:
+                    if not isinstance(raw_pw, str):
+                        _send_bad_request(self, "password must be a string")
+                        return
+                    # Treat empty-string as "no password" so callers
+                    # don't accidentally lock the link with an unusable
+                    # blank password.
+                    password = raw_pw if raw_pw else None
             from utils.report_history import make_public
             slug = make_public(
-                report_id, expires_in_days=expires_in_days, user_id=user_id,
+                report_id,
+                expires_in_days=expires_in_days,
+                password=password,
+                user_id=user_id,
             )
             if slug is None:
                 # Could be: unknown id, cross-user, expires<=0,

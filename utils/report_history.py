@@ -11,6 +11,8 @@ exceptions and returns a sensible default (empty list, None, False, {}).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -35,6 +37,15 @@ MAX_REPORTS: int = 30  # keep the last N reports on disk
 # reads/writes go through SQLite.
 _INDEX_FILE: Path = REPORT_DIR / "report_index.json"
 
+# ── Public-link password KDF parameters ───────────────────────────────────
+# Matches the iteration count used by ``auth.gate._hash_password`` in the
+# pbkdf2 fallback path. The hash is stored hex-encoded for SQLite TEXT
+# columns; the salt is stored hex-encoded for the same reason.
+_PUBLIC_PASSWORD_KDF: str = "sha256"
+_PUBLIC_PASSWORD_ITERATIONS: int = 200_000
+_PUBLIC_PASSWORD_SALT_BYTES: int = 16
+_PUBLIC_PASSWORD_DKLEN: int = 32
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -54,6 +65,81 @@ class ReportMeta:
     file_size_kb: float          # file size in kilobytes
     public_slug: str = ""        # URL-safe base64url token; "" = not shared
     public_expires_at: str = ""  # ISO-8601 UTC; "" or past time = invalid
+    public_password_protected: bool = False  # True iff public link requires a password
+
+
+# ---------------------------------------------------------------------------
+# Password-hashing helpers for optional public-link password protection
+# ---------------------------------------------------------------------------
+
+
+def _hash_public_password(
+    password: str,
+    salt: bytes | None = None,
+) -> tuple[str, str]:
+    """Derive a (hex_hash, hex_salt) pair from *password*.
+
+    Uses ``hashlib.pbkdf2_hmac('sha256', …, 200_000)`` — the same KDF
+    family and iteration count the rest of ``auth/`` uses for password
+    hashing — so the cost profile is consistent across the codebase.
+
+    Args:
+        password: The user-supplied plaintext. Encoded as UTF-8 before
+                  hashing.
+        salt:     Optional pre-generated salt (bytes). When ``None``,
+                  a fresh random salt is generated via
+                  ``secrets.token_bytes``. Explicit salts are accepted
+                  so :func:`_verify_public_password` can re-derive a
+                  candidate hash against the stored salt.
+
+    Returns:
+        ``(hex_hash, hex_salt)`` — both hex-encoded so they fit cleanly
+        into SQLite TEXT columns.
+    """
+    if salt is None:
+        salt = secrets.token_bytes(_PUBLIC_PASSWORD_SALT_BYTES)
+    derived = hashlib.pbkdf2_hmac(
+        _PUBLIC_PASSWORD_KDF,
+        password.encode("utf-8"),
+        salt,
+        _PUBLIC_PASSWORD_ITERATIONS,
+        dklen=_PUBLIC_PASSWORD_DKLEN,
+    )
+    return derived.hex(), salt.hex()
+
+
+def _verify_public_password(
+    password: str,
+    stored_hash: str,
+    stored_salt: str,
+) -> bool:
+    """Constant-time verification of *password* against the stored pair.
+
+    Returns ``True`` iff PBKDF2(password, decode_hex(stored_salt))
+    matches ``decode_hex(stored_hash)``. Uses ``hmac.compare_digest``
+    so a timing attacker cannot iterate hash-prefix bytes.
+
+    Any decoding error (bad hex) or any other exception returns
+    ``False`` — this function never raises. A missing / empty stored
+    hash or salt is treated as "not protected" by the caller; this
+    helper is only consulted when both are non-empty.
+    """
+    try:
+        salt_bytes = bytes.fromhex(stored_salt)
+        expected = bytes.fromhex(stored_hash)
+    except (TypeError, ValueError):
+        return False
+    try:
+        candidate = hashlib.pbkdf2_hmac(
+            _PUBLIC_PASSWORD_KDF,
+            password.encode("utf-8"),
+            salt_bytes,
+            _PUBLIC_PASSWORD_ITERATIONS,
+            dklen=len(expected) if expected else _PUBLIC_PASSWORD_DKLEN,
+        )
+    except Exception:
+        return False
+    return hmac.compare_digest(candidate, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +151,11 @@ def _row_to_meta(row) -> ReportMeta:
 
     Tolerates rows missing the v5 public-share columns — older databases
     that haven't run the v5 migration yet, or row factories that strip
-    columns — by defaulting both fields to the empty string."""
+    columns — by defaulting both fields to the empty string. The v17
+    ``public_password_hash`` column is reduced to a single boolean
+    ``public_password_protected`` so the metadata never carries the
+    hash itself (defence-in-depth: a row returned to a logger or a UI
+    cannot leak the hash)."""
     # sqlite3.Row does not implement .get(); reach for the column by key
     # and fall back if it does not exist on the row.
     try:
@@ -76,6 +166,13 @@ def _row_to_meta(row) -> ReportMeta:
         public_expires_at = row["public_expires_at"] or ""
     except (IndexError, KeyError):
         public_expires_at = ""
+    try:
+        # NULL / empty-string both count as "no password set". We only
+        # want the BOOLEAN exposed on the meta — never the hash itself.
+        _pw_hash = row["public_password_hash"]
+        public_password_protected = bool(_pw_hash)
+    except (IndexError, KeyError):
+        public_password_protected = False
     return ReportMeta(
         report_id=row["report_id"],
         generated_at=row["generated_at"],
@@ -89,6 +186,7 @@ def _row_to_meta(row) -> ReportMeta:
         file_size_kb=float(row["file_size_kb"]),
         public_slug=public_slug,
         public_expires_at=public_expires_at,
+        public_password_protected=public_password_protected,
     )
 
 
@@ -314,7 +412,13 @@ def delete_report(report_id: str, *, user_id: str | None = None) -> bool:
         return False
 
 
-def make_public(report_id: str, expires_in_days: int = 30, *, user_id: str | None = None) -> str | None:
+def make_public(
+    report_id: str,
+    expires_in_days: int = 30,
+    *,
+    password: str | None = None,
+    user_id: str | None = None,
+) -> str | None:
     """Generate a public-share slug for *report_id* and persist it.
 
     The slug is a URL-safe base64url token from
@@ -324,9 +428,24 @@ def make_public(report_id: str, expires_in_days: int = 30, *, user_id: str | Non
     ``file_path``. The expiry is stored as an ISO-8601 UTC timestamp
     and enforced on read by :func:`load_public_report`.
 
+    When ``password`` is provided and non-empty, an additional layer
+    of protection is added: the link still requires the unguessable
+    slug, BUT the viewer must also supply the password before the
+    report renders. The password is hashed via
+    :func:`_hash_public_password` (PBKDF2-HMAC-SHA256, 200_000
+    iterations, random salt) and ONLY the hex hash + hex salt are
+    persisted — the plaintext is never written to disk or logged.
+    When ``password`` is ``None`` or empty, the password columns are
+    cleared (NULL), preserving the v5 "slug is sufficient" behaviour.
+
     Args:
         report_id:        The internal UUID of the report to share.
         expires_in_days:  Lifetime of the link in days. Must be > 0.
+        password:         Optional plaintext password. When ``None``
+                          or empty, no password protection is applied.
+        user_id:          Optional explicit owner id. ``None`` resolves
+                          to the active Streamlit user via
+                          ``current_user_id``.
 
     Returns:
         The newly-generated slug on success, or ``None`` if the report
@@ -361,27 +480,42 @@ def make_public(report_id: str, expires_in_days: int = 30, *, user_id: str | Non
             datetime.now(timezone.utc) + timedelta(days=expires_in_days)
         ).isoformat()
 
+        # Derive password hash + salt up-front so the plaintext lives
+        # only as a stack-local variable for the duration of this call
+        # — never touches the DB, the audit row, or any log line.
+        pw_hash_hex: str | None = None
+        pw_salt_hex: str | None = None
+        if password:
+            pw_hash_hex, pw_salt_hex = _hash_public_password(password)
+
         with conn:
             conn.execute(
                 """
                 UPDATE report_history
-                   SET public_slug = ?, public_expires_at = ?
+                   SET public_slug = ?,
+                       public_expires_at = ?,
+                       public_password_hash = ?,
+                       public_password_salt = ?
                  WHERE report_id = ?
                 """,
-                (slug, expires_at, report_id),
+                (slug, expires_at, pw_hash_hex, pw_salt_hex, report_id),
             )
         # Audit-log the share-link generation. The slug itself is NOT
         # logged — a stolen audit row should not give an attacker the
         # working URL. expires_in_days is the only payload field; it's
         # what a security review actually wants to see ("user shared
-        # report X with a 30-day link").
+        # report X with a 30-day link"). ``password_protected`` is a
+        # boolean — we never log the plaintext or the hash.
         try:
             from auth.audit import record_audit
             record_audit(
                 "make_public",
                 entity_type="report",
                 entity_id=report_id,
-                detail={"expires_in_days": expires_in_days},
+                detail={
+                    "expires_in_days": expires_in_days,
+                    "password_protected": bool(password),
+                },
                 user_id=user_id,
             )
         except Exception:  # noqa: BLE001
@@ -427,7 +561,10 @@ def revoke_public(report_id: str, *, user_id: str | None = None) -> bool:
             conn.execute(
                 """
                 UPDATE report_history
-                   SET public_slug = '', public_expires_at = ''
+                   SET public_slug = '',
+                       public_expires_at = '',
+                       public_password_hash = NULL,
+                       public_password_salt = NULL
                  WHERE report_id = ?
                 """,
                 (report_id,),
@@ -451,7 +588,7 @@ def revoke_public(report_id: str, *, user_id: str | None = None) -> bool:
         return False
 
 
-def load_public_report(slug: str) -> str | None:
+def load_public_report(slug: str, password: str | None = None) -> str | None:
     """Return the HTML for the report identified by *slug*, if the link is valid.
 
     Validity requires all of:
@@ -459,11 +596,20 @@ def load_public_report(slug: str) -> str | None:
       * A ``report_history`` row exists with that ``public_slug``.
       * ``public_expires_at`` parses as a future ISO-8601 UTC timestamp.
       * The on-disk HTML file referenced by ``file_path`` still exists.
+      * **If the row carries a non-empty ``public_password_hash``**,
+        ``password`` must be supplied AND must verify against the
+        stored hash via :func:`_verify_public_password`. A missing or
+        wrong password collapses to the same ``None`` return as an
+        unknown slug — no distinction is surfaced so a probing client
+        cannot enumerate which slugs require a password by status
+        code alone. When the row has no password (NULL / empty hash),
+        the ``password`` argument is ignored and the behaviour matches
+        the pre-v17 path exactly.
 
     Returns:
         The HTML string on success, or ``None`` for any failure
         condition (slug unknown / empty / expired / file deleted /
-        unreadable). Never raises.
+        unreadable / missing-or-wrong password). Never raises.
     """
     try:
         if not slug:
@@ -474,7 +620,8 @@ def load_public_report(slug: str) -> str | None:
         conn = get_connection()
         row = conn.execute(
             """
-            SELECT file_path, public_slug, public_expires_at
+            SELECT file_path, public_slug, public_expires_at,
+                   public_password_hash, public_password_salt
               FROM report_history
              WHERE public_slug = ?
             """,
@@ -507,6 +654,30 @@ def load_public_report(slug: str) -> str | None:
             logger.debug(f"load_public_report: slug expired: {slug}")
             return None
 
+        # Password gate. ``public_password_hash`` is NULL (or empty)
+        # for legacy / unprotected reports; only enforce when both the
+        # hash AND the salt are present. The two-column AND avoids a
+        # half-migrated row from accidentally locking out viewers.
+        try:
+            stored_hash = row["public_password_hash"]
+        except (IndexError, KeyError):
+            stored_hash = None
+        try:
+            stored_salt = row["public_password_salt"]
+        except (IndexError, KeyError):
+            stored_salt = None
+        if stored_hash and stored_salt:
+            if not password:
+                logger.debug(
+                    f"load_public_report: password required for slug {slug}"
+                )
+                return None
+            if not _verify_public_password(password, stored_hash, stored_salt):
+                logger.debug(
+                    f"load_public_report: wrong password for slug {slug}"
+                )
+                return None
+
         path = Path(row["file_path"])
         if not path.exists():
             logger.debug(f"load_public_report: file missing for slug {slug}")
@@ -515,6 +686,72 @@ def load_public_report(slug: str) -> str | None:
     except Exception as exc:
         logger.error(f"load_public_report failed for slug {slug!r}: {exc}")
         return None
+
+
+def verify_public_report_password(slug: str, password: str) -> bool:
+    """Return True iff ``password`` unlocks the public link at ``slug``.
+
+    Semantics:
+      * Slug unknown / empty / expired → ``False``. Never raises.
+      * Slug found AND no password set on the row → ``True`` (the
+        link is open; any caller asking should be allowed through).
+      * Slug found AND password set → constant-time compare via
+        :func:`_verify_public_password`.
+
+    This helper exists so a UI / API layer can pre-check a password
+    without forcing a full HTML load. The viewer endpoint can still
+    call :func:`load_public_report` directly — both paths apply the
+    same gate.
+    """
+    try:
+        if not slug:
+            return False
+
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            """
+            SELECT public_slug, public_expires_at,
+                   public_password_hash, public_password_salt
+              FROM report_history
+             WHERE public_slug = ?
+            """,
+            (slug,),
+        ).fetchone()
+        if row is None or not row["public_slug"]:
+            return False
+
+        expires_at_raw = row["public_expires_at"] or ""
+        try:
+            expires_at = datetime.fromisoformat(expires_at_raw)
+        except ValueError:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
+
+        try:
+            stored_hash = row["public_password_hash"]
+        except (IndexError, KeyError):
+            stored_hash = None
+        try:
+            stored_salt = row["public_password_salt"]
+        except (IndexError, KeyError):
+            stored_salt = None
+        if not stored_hash or not stored_salt:
+            # No password set → viewing is permitted with or without
+            # one; "verify" of any candidate trivially succeeds.
+            return True
+        if password is None:
+            return False
+        return _verify_public_password(password, stored_hash, stored_salt)
+    except Exception as exc:
+        logger.error(
+            f"verify_public_report_password failed for slug {slug!r}: {exc}"
+        )
+        return False
 
 
 def get_report_stats(*, user_id: str | None = None) -> dict:

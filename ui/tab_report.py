@@ -644,12 +644,30 @@ def _render_share_links(reports: list) -> None:
             with st.expander(f"Share - {rep_label} ({rep_id[:8]})", expanded=False):
                 # State 1: no slug -> Generate
                 if not slug:
+                    pw_input = st.text_input(
+                        "Public password (optional)",
+                        type="password",
+                        key=f"share_pw_{rep_id}",
+                        help=(
+                            "Leave blank for a link that anyone with the URL "
+                            "can open. Provide a password to additionally "
+                            "require it before the report renders."
+                        ),
+                    )
                     if st.button("Generate share link", key=f"share_{rep_id}"):
                         try:
-                            new_slug = make_public(rep_id, expires_in_days=30)
+                            new_slug = make_public(
+                                rep_id,
+                                expires_in_days=30,
+                                password=(pw_input or None),
+                            )
                             if new_slug:
                                 expires_at = now_utc + timedelta(days=30)
-                                st.success(f"Share link created. Expires {expires_at.strftime('%Y-%m-%d %H:%M UTC')}.")
+                                lock_note = " (password required)" if pw_input else ""
+                                st.success(
+                                    f"Share link created{lock_note}. "
+                                    f"Expires {expires_at.strftime('%Y-%m-%d %H:%M UTC')}."
+                                )
                                 st.code(new_slug)
                                 st.code(f"{base_url}/r/{new_slug}")
                                 st.rerun()
@@ -662,11 +680,25 @@ def _render_share_links(reports: list) -> None:
                 elif expires_dt is not None and expires_dt < now_utc:
                     st.warning(f"Link expired on {expires_dt.strftime('%Y-%m-%d %H:%M UTC')}.")
                     st.code(slug)
+                    pw_input = st.text_input(
+                        "Public password (optional)",
+                        type="password",
+                        key=f"regen_pw_{rep_id}",
+                        help=(
+                            "Leave blank to regenerate an open link. Provide "
+                            "a password to require it before viewing."
+                        ),
+                    )
                     if st.button("Regenerate share link", key=f"regen_{rep_id}"):
                         try:
-                            new_slug = make_public(rep_id, expires_in_days=30)
+                            new_slug = make_public(
+                                rep_id,
+                                expires_in_days=30,
+                                password=(pw_input or None),
+                            )
                             if new_slug:
-                                st.success("Share link regenerated.")
+                                lock_note = " (password required)" if pw_input else ""
+                                st.success(f"Share link regenerated{lock_note}.")
                                 st.code(new_slug)
                                 st.code(f"{base_url}/r/{new_slug}")
                                 st.rerun()
@@ -682,6 +714,8 @@ def _render_share_links(reports: list) -> None:
                         if expires_dt is not None else "unknown"
                     )
                     st.caption(f"Active - expires {expiry_str}")
+                    if getattr(rep, "public_password_protected", False):
+                        st.caption("Password-protected - viewers must enter the password.")
                     st.code(slug)
                     st.code(f"{base_url}/r/{slug}")
                     if st.button("Revoke", key=f"revoke_{rep_id}"):

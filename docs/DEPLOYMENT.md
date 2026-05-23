@@ -351,6 +351,9 @@ Endpoints:
 | `DELETE /api/v1/channels/<channel_id>`       | empty                             | Delete one channel. Cross-user deletes silently no-op (returns 200; row untouched).      |
 | `GET    /api/v1/telemetry/llm`               | n/a                               | LLM-call usage summary, scoped to caller.                                                |
 | `GET    /api/v1/telemetry/perf`              | n/a                               | Render-performance summary (process-wide; still gated by auth).                          |
+| `GET    /api/v1/audit`                       | n/a                               | Caller's audit-log rows. Query: `?limit=100` (max 1000), `?action=login_success` filter. |
+| `GET    /api/v1/incidents`                   | n/a                               | Caller's correlated alert incidents. Query: `?window=7` (days).                          |
+| `GET    /api/v1/source-health`               | n/a                               | Global feed-health summary (NOT user-scoped). Query: `?window_hours=24`.                 |
 
 **Per-user scoping.** Every write threads the `user_id` resolved from
 the bearer token to the underlying engine call. Alice's token cannot
@@ -414,6 +417,40 @@ curl -X POST "$BASE/api/v1/reports/<report-uuid>/public" \
 curl -X DELETE "$BASE/api/v1/reports/<report-uuid>/public" \
      -H "Authorization: Bearer $TOKEN"
 # → {"revoked": true}
+
+# GET /api/v1/audit — caller's audit-log rows, newest-first.
+#   Optional ?action=<verb> filters to one action verb.
+#   ?limit defaults to 100, hard cap 1000.
+curl "$BASE/api/v1/audit?limit=50&action=login_success" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"items": [{"event_id": "...", "created_at": "...", "user_id": "...",
+#               "action": "login_success", "entity_type": "...",
+#               "entity_id": "...", "detail_json": {...}}, ...],
+#    "count": 12}
+
+# GET /api/v1/incidents — caller's correlated alert incidents.
+#   Optional ?window=<days> (default 7).
+curl "$BASE/api/v1/incidents?window=7" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"items": [{"incident_id": "...", "started_at": "...",
+#               "severity_max": "HIGH", "alert_count": 3,
+#               "dominant_alert_type": "RATE_SURGE",
+#               "entities_touched": {"tickers": [...], "routes": [...],
+#                                    "ports": [...]},
+#               "alert_ids": [...]}, ...],
+#    "count": 4}
+
+# GET /api/v1/source-health — global feed-health summary. NOT
+#   user-scoped: every authenticated caller sees the same response.
+#   Optional ?window_hours=<n> (default 24).
+curl "$BASE/api/v1/source-health?window_hours=24" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"items": [{"source": "fred", "count": 24, "up_count": 22,
+#               "degraded_count": 1, "down_count": 1,
+#               "avg_duration_ms": 312.5, "last_status": "up",
+#               "last_started_at": "...", "is_outage": false}, ...],
+#    "count": 9, "window_hours": 24, "total_pings": 216,
+#    "current_outages": ["worldbank"]}
 ```
 
 `GET /api/v1/health` is intentionally **unauthenticated** so load

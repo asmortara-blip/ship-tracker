@@ -1254,3 +1254,440 @@ def test_delete_report_public_unknown_id_returns_404(
         headers=_bearer(token), timeout=5,
     )
     assert r.status_code == 404
+
+
+# ─── GET /api/v1/audit ────────────────────────────────────────────────────
+
+
+def test_audit_endpoint_returns_401_without_auth(server):
+    """Audit log is privileged — no bearer header → 401, never the
+    audit rows themselves (which would expose every action verb)."""
+    r = requests.get(f"{server}/api/v1/audit", timeout=5)
+    assert r.status_code == 401
+    assert r.json() == {"error": "unauthorized"}
+
+
+def test_audit_endpoint_is_user_scoped(server):
+    """Alice's token must NOT see Bob's audit rows. We insert one
+    distinct audit event under each user_id, then fetch as Alice —
+    only Alice's row comes back (along with whatever signup /
+    token-create rows the auth helpers wrote earlier under HER id).
+    This is the core safety property of the endpoint: cross-user
+    audit access is a privilege escalation in disguise.
+
+    We use a distinct action verb (``ut_marker``) for the seeded rows
+    so the assertion isn't brittle against the signup / token-create
+    rows that ``_make_user`` / ``_mint_token`` themselves write."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+
+    from auth.audit import record_audit
+    record_audit("ut_marker", user_id=alice_uid, detail={"who": "alice"})
+    record_audit("ut_marker", user_id=bob_uid, detail={"who": "bob"})
+
+    r = requests.get(
+        f"{server}/api/v1/audit",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] >= 1
+    # CORE PROPERTY: every returned row belongs to Alice — Bob's
+    # row must be invisible regardless of what other rows ride along.
+    assert all(
+        it["user_id"] == alice_uid for it in body["items"]
+    ), "Alice's audit list leaked another user's rows"
+    # The marker action came back, and detail_json is a dict (parsed),
+    # not a JSON string — the endpoint hands the parsed value through.
+    markers = [it for it in body["items"] if it["action"] == "ut_marker"]
+    assert len(markers) == 1
+    assert markers[0]["detail_json"] == {"who": "alice"}
+
+
+def test_audit_endpoint_filters_by_action(server):
+    """``?action=login_success`` must filter to just that verb. We
+    seed three different action verbs and confirm only the matching
+    one comes back."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from auth.audit import record_audit
+    record_audit("login_success", user_id=uid)
+    record_audit("save_rules", user_id=uid)
+    record_audit("login_success", user_id=uid)
+
+    r = requests.get(
+        f"{server}/api/v1/audit",
+        params={"action": "login_success"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+    assert all(it["action"] == "login_success" for it in body["items"])
+
+
+def test_audit_endpoint_respects_limit(server):
+    """``?limit=5`` must cap the response at 5 rows even when more
+    audit events exist for the user."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from auth.audit import record_audit
+    for i in range(10):
+        record_audit("some_action", user_id=uid, detail={"i": i})
+
+    r = requests.get(
+        f"{server}/api/v1/audit",
+        params={"limit": 5},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 5
+    assert len(body["items"]) == 5
+
+
+# ─── GET /api/v1/incidents ────────────────────────────────────────────────
+
+
+def test_incidents_endpoint_returns_401_without_auth(server):
+    r = requests.get(f"{server}/api/v1/incidents", timeout=5)
+    assert r.status_code == 401
+
+
+def test_incidents_endpoint_empty_when_no_alerts(server):
+    """No alerts → no incidents. Response is the empty envelope, not
+    a top-level list (so the shape is uniform with the seeded case)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/incidents",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"items": [], "count": 0}
+
+
+def test_incidents_endpoint_returns_correlated_incidents(server):
+    """Seed a cluster of alerts of the same alert_type within the
+    correlator's 30-minute window — they should collapse into one
+    incident the endpoint surfaces. We use distinct tickers per row
+    so ``save_alerts``'s dedup_key logic doesn't collapse them at the
+    SQL layer (dedup_key = alert_type+severity+ticker); the correlator
+    then still groups them because they share the same alert_type."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from datetime import datetime, timezone, timedelta
+    from engine.alert_engine_v2 import ShippingAlert, save_alerts, _new_id
+
+    base = datetime.now(timezone.utc) - timedelta(minutes=10)
+    alerts = []
+    for i in range(3):
+        alerts.append(ShippingAlert(
+            alert_id=_new_id(),
+            created_at=(base + timedelta(minutes=i)).isoformat(),
+            alert_type="RATE_SURGE",
+            severity="HIGH",
+            title=f"surge #{i}",
+            body="seeded",
+            ticker=f"TKR{i:02d}",  # distinct tickers → not dedup'd
+            route_id="",
+            port_locode="",
+            value=float(i),
+            threshold=0.0,
+            change_pct=float(i),
+            acknowledged=False,
+        ))
+    save_alerts(alerts, user_id=uid)
+
+    r = requests.get(
+        f"{server}/api/v1/incidents",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] >= 1
+    # The three same-alert_type rows in the recent past should
+    # collapse into a single incident (correlated by alert_type +
+    # time window).
+    inc = body["items"][0]
+    assert inc["alert_count"] == 3
+    assert inc["dominant_alert_type"] == "RATE_SURGE"
+    assert inc["severity_max"] == "HIGH"
+    # The incident's entities_touched aggregates the per-alert
+    # tickers — all three should be present.
+    tickers = set(inc["entities_touched"].get("tickers", []))
+    assert {"TKR00", "TKR01", "TKR02"} <= tickers
+    assert len(inc["alert_ids"]) == 3
+
+
+# ─── GET /api/v1/source-health ────────────────────────────────────────────
+
+
+def test_source_health_endpoint_returns_401_without_auth(server):
+    r = requests.get(f"{server}/api/v1/source-health", timeout=5)
+    assert r.status_code == 401
+
+
+def test_source_health_endpoint_returns_envelope_when_empty(server):
+    """No health pings in the DB → empty items list, count=0.
+    Confirms the endpoint emits the canonical envelope even on an
+    empty engine result so callers don't need a conditional shape
+    check."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/source-health",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, dict)
+    assert isinstance(body["items"], list)
+    assert body["count"] == 0
+    # Outer envelope still carries the engine's window + outage list.
+    assert "current_outages" in body
+    assert "window_hours" in body
+
+
+def test_source_health_endpoint_is_not_user_scoped(server):
+    """Source health is global platform telemetry — Alice and Bob
+    must see the IDENTICAL response. This is the inverse of
+    /audit and /incidents (which ARE per-user)."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    # Seed a health ping via the real engine call so both users see
+    # the same source listed (we use a low-level write directly to
+    # the DB to avoid hitting the network from a probe function).
+    from state.db import get_connection
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO data_source_health
+              (ping_id, source, started_at, duration_ms, status, error_msg)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("ping-test-1", "fred", now, 100, "up", ""),
+        )
+
+    r_alice = requests.get(
+        f"{server}/api/v1/source-health",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    r_bob = requests.get(
+        f"{server}/api/v1/source-health",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r_alice.status_code == 200
+    assert r_bob.status_code == 200
+
+    body_alice = r_alice.json()
+    body_bob = r_bob.json()
+    # Bytewise identical: global telemetry, not user-scoped.
+    assert body_alice == body_bob
+    # And the seeded source actually shows up.
+    sources = {it["source"] for it in body_alice["items"]}
+    assert "fred" in sources
+
+
+# ─── v17: optional password-protected public report links ──────────────────
+
+
+def test_post_report_public_with_password_sets_password(
+    server, tmp_path, monkeypatch,
+):
+    """POST with a ``password`` field sets the hash on the row. The
+    slug-only round trip then refuses to load without a password."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="locked")
+
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "open-sesame"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    slug = r.json()["slug"]
+    # Slug-only load (back-compat path) must now refuse.
+    from utils.report_history import load_public_report
+    assert load_public_report(slug) is None
+    assert load_public_report(slug, password="open-sesame") is not None
+
+
+def test_get_report_html_without_password_on_protected_report_returns_401(
+    server, tmp_path, monkeypatch,
+):
+    """Bearer-auth'd GET on a password-protected report's HTML must
+    return 401 ``password required`` when no password header / query is
+    sent — even when the caller IS the owner."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="protected")
+    # Publish with a password.
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "secret"},
+        headers=_bearer(token), timeout=5,
+    )
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 401
+    assert r.json() == {"error": "password required"}
+
+
+def test_get_report_html_wrong_password_returns_401_wrong_password(
+    server, tmp_path, monkeypatch,
+):
+    """``X-Report-Password: wrong`` on a protected report → 401 with
+    ``wrong password`` (the message distinguishes ``missing`` from
+    ``wrong`` so a viewer can know to retry)."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="protected")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "right"},
+        headers=_bearer(token), timeout=5,
+    )
+    headers = _bearer(token)
+    headers["X-Report-Password"] = "WRONG"
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        headers=headers, timeout=5,
+    )
+    assert r.status_code == 401
+    assert r.json() == {"error": "wrong password"}
+
+
+def test_get_report_html_correct_password_via_header_returns_html(
+    server, tmp_path, monkeypatch,
+):
+    """Correct ``X-Report-Password`` header unlocks the HTML body."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="unlock-me")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "magic"},
+        headers=_bearer(token), timeout=5,
+    )
+    headers = _bearer(token)
+    headers["X-Report-Password"] = "magic"
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        headers=headers, timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.headers.get("Content-Type", "").startswith("text/html")
+    assert "unlock-me" in r.text
+
+
+def test_get_report_html_correct_password_via_query_string_returns_html(
+    server, tmp_path, monkeypatch,
+):
+    """Correct ``?password=…`` query-string also unlocks the HTML."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="qs-unlock")
+    requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": "pw-qs"},
+        headers=_bearer(token), timeout=5,
+    )
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        params={"password": "pw-qs"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert "qs-unlock" in r.text
+
+
+def test_get_report_html_unprotected_still_returns_200_back_compat(
+    server, tmp_path, monkeypatch,
+):
+    """Pre-v17 contract: a report with no password on its public
+    share (or no public share at all) must load via the bearer-auth'd
+    GET endpoint exactly as it did before. Any supplied
+    ``X-Report-Password`` is ignored."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="no-pw")
+    # No make_public call, no password column set.
+    r = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert "no-pw" in r.text
+    # Spurious password header is harmless on an unprotected report.
+    headers = _bearer(token)
+    headers["X-Report-Password"] = "ignored"
+    r2 = requests.get(
+        f"{server}/api/v1/reports/{rid}/html",
+        headers=headers, timeout=5,
+    )
+    assert r2.status_code == 200
+
+
+def test_post_report_public_with_empty_password_is_no_password(
+    server, tmp_path, monkeypatch,
+):
+    """An empty-string password in the body MUST NOT lock the link
+    behind an unusable blank password — collapsed to no-password."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="empty-pw")
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": ""},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    # Slug must load WITHOUT a password — empty-string did not lock.
+    from utils.report_history import load_public_report
+    assert load_public_report(r.json()["slug"]) is not None
+
+
+def test_post_report_public_non_string_password_returns_400(
+    server, tmp_path, monkeypatch,
+):
+    """A non-string ``password`` value is a client error → 400."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    rid = _seed_report(uid, label="bad-pw-type")
+    r = requests.post(
+        f"{server}/api/v1/reports/{rid}/public",
+        json={"expires_in_days": 7, "password": 42},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400

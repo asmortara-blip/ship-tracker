@@ -511,3 +511,185 @@ def test_list_reports_carries_public_fields_after_make_public() -> None:
     assert len(matching) == 1
     assert matching[0].public_slug == slug
     assert matching[0].public_expires_at != ""
+
+
+# ─── v17: optional public-link password protection ─────────────────────────
+
+def test_hash_public_password_returns_hex_hash_and_salt() -> None:
+    """The KDF helper round-trips: hashing twice with the same salt
+    yields the same hash; hashing with a fresh salt yields a different
+    one."""
+    h1, s1 = rh._hash_public_password("hunter2")
+    h2, s2 = rh._hash_public_password("hunter2", salt=bytes.fromhex(s1))
+    assert h1 == h2
+    assert s1 == s2
+    # Default path -> fresh salt -> different hash output.
+    h3, s3 = rh._hash_public_password("hunter2")
+    assert s3 != s1
+    assert h3 != h1
+    # Hex-encoded (no `b'...'` leakage, no spaces).
+    int(h1, 16)
+    int(s1, 16)
+
+
+def test_verify_public_password_happy_and_sad_paths() -> None:
+    """``_verify_public_password`` is constant-time AND functional."""
+    h, s = rh._hash_public_password("correct horse")
+    assert rh._verify_public_password("correct horse", h, s) is True
+    assert rh._verify_public_password("wrong horse", h, s) is False
+    # Bad hex -> False (never raises).
+    assert rh._verify_public_password("anything", "zz", "zz") is False
+    # Empty stored values -> False (callers gate on "is set" first).
+    assert rh._verify_public_password("anything", "", "") is False
+
+
+def test_make_public_with_password_persists_hash_and_salt() -> None:
+    """``make_public(password='…')`` populates BOTH the password_hash
+    and password_salt columns, AND never persists the plaintext."""
+    from state.db import get_connection
+
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7, password="s3cret!")
+    assert slug is not None
+
+    row = get_connection().execute(
+        "SELECT public_password_hash, public_password_salt "
+        "FROM report_history WHERE report_id = ?",
+        (meta.report_id,),
+    ).fetchone()
+    assert row["public_password_hash"], "hash column should be populated"
+    assert row["public_password_salt"], "salt column should be populated"
+    # Hash is hex (PBKDF2-SHA256 → 32 bytes → 64 hex chars).
+    assert len(row["public_password_hash"]) == 64
+    # Plaintext MUST NOT live in either column.
+    assert "s3cret!" not in row["public_password_hash"]
+    assert "s3cret!" not in row["public_password_salt"]
+
+
+def test_make_public_without_password_leaves_columns_null() -> None:
+    """When no password is supplied, both new columns stay NULL — pre-
+    v17 reads of the slug still work without supplying a password."""
+    from state.db import get_connection
+
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7)
+    assert slug is not None
+
+    row = get_connection().execute(
+        "SELECT public_password_hash, public_password_salt "
+        "FROM report_history WHERE report_id = ?",
+        (meta.report_id,),
+    ).fetchone()
+    assert row["public_password_hash"] is None
+    assert row["public_password_salt"] is None
+
+
+def test_load_public_report_protected_requires_password() -> None:
+    """A password-protected report cannot be loaded with the slug alone."""
+    meta = save_report("<html>body</html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7, password="open-sesame")
+    assert slug is not None
+    assert rh.load_public_report(slug) is None
+    assert rh.load_public_report(slug, password="") is None
+
+
+def test_load_public_report_wrong_password_returns_none() -> None:
+    """Wrong password collapses to None — same shape as unknown slug."""
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7, password="rightpw")
+    assert slug is not None
+    assert rh.load_public_report(slug, password="wrongpw") is None
+
+
+def test_load_public_report_correct_password_returns_html() -> None:
+    """Correct password unlocks the HTML."""
+    meta = save_report("<html>marker-xyz</html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7, password="abc123")
+    assert slug is not None
+    html = rh.load_public_report(slug, password="abc123")
+    assert html is not None
+    assert "marker-xyz" in html
+
+
+def test_load_public_report_unprotected_ignores_password_arg() -> None:
+    """An unprotected report opens for any password (or no password)."""
+    meta = save_report("<html>plain</html>", _FakeReport())
+    assert meta is not None
+    slug = rh.make_public(meta.report_id, expires_in_days=7)
+    assert slug is not None
+    # All four shapes succeed — back-compat for legacy callers.
+    assert rh.load_public_report(slug) is not None
+    assert rh.load_public_report(slug, password=None) is not None
+    assert rh.load_public_report(slug, password="") is not None
+    assert rh.load_public_report(slug, password="anything") is not None
+
+
+def test_verify_public_report_password_happy_paths() -> None:
+    """``verify_public_report_password`` returns True for correct PW or
+    no-PW row, False otherwise."""
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+
+    # Unprotected → trivially True for any candidate.
+    slug = rh.make_public(meta.report_id, expires_in_days=7)
+    assert slug is not None
+    assert rh.verify_public_report_password(slug, "") is True
+    assert rh.verify_public_report_password(slug, "doesnt-matter") is True
+
+    # Re-share with a password.
+    slug2 = rh.make_public(meta.report_id, expires_in_days=7, password="pw!")
+    assert slug2 is not None
+    assert rh.verify_public_report_password(slug2, "pw!") is True
+    assert rh.verify_public_report_password(slug2, "nope") is False
+
+
+def test_verify_public_report_password_sad_paths() -> None:
+    """Unknown / empty / expired slug → False; never raises."""
+    assert rh.verify_public_report_password("", "x") is False
+    assert rh.verify_public_report_password("totally-bogus-slug", "x") is False
+
+
+def test_revoke_public_clears_password_columns() -> None:
+    """``revoke_public`` wipes the password hash + salt alongside the
+    slug + expiry. A subsequent ``make_public`` without a password
+    must NOT leave a stale hash behind."""
+    from state.db import get_connection
+
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    rh.make_public(meta.report_id, expires_in_days=7, password="oldpw")
+    assert rh.revoke_public(meta.report_id) is True
+    row = get_connection().execute(
+        "SELECT public_password_hash, public_password_salt, public_slug "
+        "FROM report_history WHERE report_id = ?",
+        (meta.report_id,),
+    ).fetchone()
+    assert row["public_slug"] == ""
+    assert row["public_password_hash"] is None
+    assert row["public_password_salt"] is None
+
+
+def test_report_meta_carries_public_password_protected_flag() -> None:
+    """The ReportMeta dataclass surfaces a boolean — never the hash —
+    so the UI can render a 'password required' badge."""
+    meta = save_report("<html>", _FakeReport())
+    assert meta is not None
+    rh.make_public(meta.report_id, expires_in_days=7, password="hidden")
+    rows = list_reports()
+    matched = [r for r in rows if r.report_id == meta.report_id]
+    assert len(matched) == 1
+    assert matched[0].public_password_protected is True
+
+    # And False on an unprotected sibling.
+    meta2 = save_report("<html>2</html>", _FakeReport())
+    assert meta2 is not None
+    rh.make_public(meta2.report_id, expires_in_days=7)
+    rows = list_reports()
+    matched = [r for r in rows if r.report_id == meta2.report_id]
+    assert len(matched) == 1
+    assert matched[0].public_password_protected is False
