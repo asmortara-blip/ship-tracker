@@ -897,6 +897,7 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Fundamentals",     "ui.tab_fundamentals"),
         ("Operator",         "ui.tab_operator"),
         ("Operator Overview","ui.tab_operator_overview"),
+        ("Worker Health",    "ui.tab_worker_health"),
     ],
     "intelligence": [
         ("News & Sentiment", "ui.tab_news"),
@@ -1565,9 +1566,10 @@ elif active_section == "supply_chain":
 
 # ── 8. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
-    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         "Risk Matrix", "Risk Lab", "Weather", "Compliance",
         "Market Cycle", "Fundamentals", "Operator", "Operator Overview",
+        "Worker Health",
     ])
     with t0:
         try:
@@ -1624,6 +1626,12 @@ elif active_section == "risk":
             tab_operator_overview.render()
         except Exception as e:
             st.error(f"Operator Overview error: {e}")
+    with t8:
+        try:
+            from ui import tab_worker_health
+            tab_worker_health.render()
+        except Exception as e:
+            st.error(f"Worker Health error: {e}")
 
 # ── 9. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":

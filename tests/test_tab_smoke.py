@@ -96,6 +96,7 @@ _TAB_MODULES = [
     "ui.tab_visibility",
     "ui.tab_voyage_tracker",
     "ui.tab_weather",
+    "ui.tab_worker_health",
 ]
 
 
