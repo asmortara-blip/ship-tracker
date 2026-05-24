@@ -92,6 +92,51 @@ _MAX_AUDIT_LIMIT = 1000
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Rate-limit configuration (env-driven, evaluated lazily per request so a
+#  test can monkey-patch ``os.environ`` without forcing a process restart)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Defaults: capacity 120 / refill 2 per sec. That allows a burst of 120
+# requests followed by a steady 2 req/sec — comfortable headroom for a
+# polling script that fetches /alerts every 0.5s, and tight enough to
+# make a tight-loop hammer trip a 429 within 60s of sustained abuse.
+_DEFAULT_RATE_LIMIT_CAPACITY = 120
+_DEFAULT_RATE_LIMIT_REFILL_PER_SEC = 2.0
+
+
+def _rate_limit_capacity() -> int:
+    """Read ``RATE_LIMIT_CAPACITY`` env var, falling back to the default.
+
+    A malformed value (non-int, ``<= 0``) falls back to the default
+    rather than raising — a typo in the env shouldn't crash the
+    server at request time.
+    """
+    raw = os.environ.get("RATE_LIMIT_CAPACITY", "").strip()
+    if not raw:
+        return _DEFAULT_RATE_LIMIT_CAPACITY
+    try:
+        n = int(raw)
+        return n if n > 0 else _DEFAULT_RATE_LIMIT_CAPACITY
+    except (TypeError, ValueError):
+        return _DEFAULT_RATE_LIMIT_CAPACITY
+
+
+def _rate_limit_refill_per_sec() -> float:
+    """Read ``RATE_LIMIT_REFILL_PER_SEC`` env var, falling back to default.
+
+    Same lenient parsing as ``_rate_limit_capacity``.
+    """
+    raw = os.environ.get("RATE_LIMIT_REFILL_PER_SEC", "").strip()
+    if not raw:
+        return _DEFAULT_RATE_LIMIT_REFILL_PER_SEC
+    try:
+        v = float(raw)
+        return v if v > 0 else _DEFAULT_RATE_LIMIT_REFILL_PER_SEC
+    except (TypeError, ValueError):
+        return _DEFAULT_RATE_LIMIT_REFILL_PER_SEC
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Shared response helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -192,6 +237,69 @@ def _authenticate(handler: BaseHTTPRequestHandler) -> Optional[str]:
 
 def _send_unauthorized(handler: BaseHTTPRequestHandler) -> None:
     _send_json(handler, HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+
+
+def _send_rate_limited(
+    handler: BaseHTTPRequestHandler, retry_after_seconds: float,
+) -> None:
+    """Emit a 429 with both a JSON body and the standard ``Retry-After``
+    header (RFC 7231 §7.1.3). The header is an integer-seconds value
+    rounded UP — ``Retry-After: 0`` would mean "retry immediately"
+    which contradicts the 429, so we floor at 1.
+
+    We deliberately do NOT include the token / user_id in the body —
+    a 429 response that echoes back the bearer credential would leak
+    it into any access log that captures response bodies.
+    """
+    # Round up so the wait is never under-stated. A retry_after of
+    # 0.2s rounds to 1s; 1.4s rounds to 2s.
+    import math
+    retry_int = max(1, int(math.ceil(retry_after_seconds)))
+    body = json.dumps(
+        {"error": "rate_limited", "retry_after_seconds": retry_int},
+    ).encode("utf-8")
+    handler.send_response(HTTPStatus.TOO_MANY_REQUESTS)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    # RFC 7231 §7.1.3 — integer seconds is the simpler of the two
+    # accepted formats (the other being an HTTP-date).
+    handler.send_header("Retry-After", str(retry_int))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _enforce_rate_limit(
+    handler: BaseHTTPRequestHandler, user_id: str,
+) -> bool:
+    """Run the per-user rate-limit check; return True when the request
+    is allowed to proceed. On deny, emits a 429 with the appropriate
+    ``Retry-After`` header and returns False — the caller must early-
+    exit without invoking the endpoint handler.
+
+    We import lazily so a test that monkeypatches ``auth.rate_limit``
+    (e.g. with ``clear_buckets``) sees the patched module.
+    """
+    try:
+        from auth.rate_limit import check_rate_limit
+        allowed, retry_after = check_rate_limit(
+            user_id,
+            capacity=_rate_limit_capacity(),
+            refill_per_sec=_rate_limit_refill_per_sec(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A broken rate-limit module must NOT take down auth'd traffic
+        # — fail open with a warning log so the symptom is visible.
+        logger.warning(f"api: rate-limit check raised, failing open: {exc}")
+        return True
+    if not allowed:
+        # NB: user_id ONLY, no token, in the log line.
+        logger.info(
+            f"api: rate-limited user_id={user_id!r}, "
+            f"retry_after={retry_after:.2f}s"
+        )
+        _send_rate_limited(handler, retry_after)
+        return False
+    return True
 
 
 def _send_not_found(handler: BaseHTTPRequestHandler) -> None:
@@ -414,6 +522,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 _send_unauthorized(self)
                 return
 
+            # Per-user rate limit. Health is already short-circuited
+            # ABOVE the auth gate so the limiter never sees probes.
+            if not _enforce_rate_limit(self, user_id):
+                return
+
             if _RE_ALERTS_LIST.match(path):
                 self._list_alerts(user_id, query)
                 return
@@ -498,6 +611,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 _send_unauthorized(self)
                 return
 
+            # Per-user rate limit. POST endpoints all touch the DB and
+            # the audit log so a hammered POST is more expensive than
+            # a hammered GET — the same bucket gates both verbs.
+            if not _enforce_rate_limit(self, user_id):
+                return
+
             m = _RE_ALERT_ACK.match(path)
             if m:
                 self._ack_alert(user_id, m.group(1))
@@ -541,6 +660,10 @@ class APIHandler(BaseHTTPRequestHandler):
             user_id = _authenticate(self)
             if user_id is None:
                 _send_unauthorized(self)
+                return
+
+            # Per-user rate limit. Same bucket as GET / POST.
+            if not _enforce_rate_limit(self, user_id):
                 return
 
             if _RE_RULES.match(path):
@@ -600,6 +723,10 @@ class APIHandler(BaseHTTPRequestHandler):
             user_id = _authenticate(self)
             if user_id is None:
                 _send_unauthorized(self)
+                return
+
+            # Per-user rate limit. Same bucket as GET / POST / DELETE.
+            if not _enforce_rate_limit(self, user_id):
                 return
 
             m = _RE_SCHEDULE_ONE.match(path)

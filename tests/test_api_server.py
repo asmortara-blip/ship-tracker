@@ -43,6 +43,18 @@ def isolated_state_db(monkeypatch, tmp_path):
     state_db.reset_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_rate_limit():
+    """Per-test rate-limit registry isolation. The module-level
+    ``_BUCKETS`` dict in ``auth.rate_limit`` would otherwise leak
+    state across tests — a test that exhausts a user's bucket would
+    starve the next test that re-uses the same username."""
+    from auth import rate_limit as rl
+    rl.clear_buckets()
+    yield
+    rl.clear_buckets()
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -1993,3 +2005,160 @@ def test_delete_schedules_removes_and_404_on_cross_user(server):
         f"{server}/api/v1/schedules", headers=_bearer(alice_token), timeout=5,
     )
     assert after.json() == []
+
+
+# ─── Rate limiting ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def _tight_rate_limit(monkeypatch):
+    """Crank the rate-limit defaults way down so a test can exhaust
+    the bucket in a handful of requests rather than 120. The env
+    vars are read lazily on every request so monkeypatching here
+    takes effect immediately.
+    """
+    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "3")
+    # 0.001 tokens/sec — effectively no refill within the test window
+    # so the post-cap denial is deterministic.
+    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "0.001")
+    yield
+
+
+def test_rate_limit_allows_up_to_capacity_quick_calls(server, _tight_rate_limit):
+    """With capacity=3, the first 3 quick calls all succeed (200)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    statuses = []
+    for _ in range(3):
+        r = requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
+        statuses.append(r.status_code)
+    assert statuses == [200, 200, 200]
+
+
+def test_rate_limit_returns_429_when_exceeded(server, _tight_rate_limit):
+    """The 4th quick call (capacity=3) trips a 429 with the documented
+    body shape AND a ``Retry-After`` header (RFC 7231 §7.1.3)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    # Drain the bucket.
+    for _ in range(3):
+        r = requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
+        assert r.status_code == 200
+    # Next call must be throttled.
+    r = requests.get(
+        f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 429
+    body = r.json()
+    assert body["error"] == "rate_limited"
+    assert isinstance(body["retry_after_seconds"], int)
+    assert body["retry_after_seconds"] >= 1
+    # The standard header MUST be present so off-the-shelf HTTP
+    # clients can back off automatically.
+    assert "Retry-After" in r.headers
+    assert int(r.headers["Retry-After"]) == body["retry_after_seconds"]
+
+
+def test_rate_limit_isolates_per_token(server, _tight_rate_limit):
+    """Alice exhausting her quota does NOT throttle Bob — the
+    bucket is keyed by user_id resolved from the bearer token."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+    # Drain alice.
+    for _ in range(3):
+        requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(alice_token), timeout=5,
+        )
+    r_alice = requests.get(
+        f"{server}/api/v1/alerts", headers=_bearer(alice_token), timeout=5,
+    )
+    assert r_alice.status_code == 429
+    # Bob's first call goes through.
+    r_bob = requests.get(
+        f"{server}/api/v1/alerts", headers=_bearer(bob_token), timeout=5,
+    )
+    assert r_bob.status_code == 200
+
+
+def test_health_endpoint_is_not_rate_limited(server, _tight_rate_limit):
+    """The /health endpoint is exempt — a load balancer must be able
+    to probe it in a tight loop without ever getting throttled. With
+    capacity=3, hammering it 50 times in a row must yield 50x 200."""
+    statuses = [
+        requests.get(f"{server}/api/v1/health", timeout=5).status_code
+        for _ in range(50)
+    ]
+    assert all(s == 200 for s in statuses), (
+        f"unexpected non-200 in health hammer: "
+        f"{[s for s in statuses if s != 200]}"
+    )
+
+
+def test_rate_limit_retry_after_is_correct_magnitude(server, monkeypatch):
+    """With capacity=2 and refill=2/sec, the bucket regrows one token
+    in 0.5s. A denied request's Retry-After should round up to 1
+    (RFC says integer-seconds; we floor at 1)."""
+    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "2")
+    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "2.0")
+    uid = _make_user()
+    token = _mint_token(uid)
+    for _ in range(2):
+        requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
+    r = requests.get(
+        f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 429
+    # 1 token deficit / 2 tokens-per-sec = 0.5s → ceil → 1s.
+    retry = int(r.headers["Retry-After"])
+    assert retry == 1
+
+
+def test_rate_limit_allows_after_refill_interval(server, monkeypatch):
+    """After waiting long enough for a token to refill, the next
+    call succeeds.
+
+    We deliberately use a SLOW refill (5 tokens/sec) for the drain
+    phase so the inter-request latency from ``requests.get`` doesn't
+    secretly refill enough to dodge the cap. Then we sleep 0.3s
+    which at 5/sec yields 1.5 tokens — enough for one more request
+    to pass.
+    """
+    import time as _time
+
+    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "2")
+    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "5.0")
+    uid = _make_user()
+    token = _mint_token(uid)
+    # Drain — 2 calls succeed, then back-to-back denied calls confirm
+    # the limit holds.
+    for _ in range(2):
+        requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
+    # Try repeatedly until we observe a 429 (network jitter can refill
+    # one token between bursts; the second attempt should drain it).
+    drained = False
+    for _ in range(5):
+        r = requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
+        if r.status_code == 429:
+            drained = True
+            break
+    assert drained, "could not drain bucket — refill is outracing the test"
+
+    # Now wait long enough to refill at least one whole token
+    # (5/s × 0.3s = 1.5 → ceil to at least 1 available).
+    _time.sleep(0.3)
+    r2 = requests.get(
+        f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
