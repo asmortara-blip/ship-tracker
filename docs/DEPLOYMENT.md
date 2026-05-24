@@ -839,6 +839,95 @@ UI surface (Alert Center → Delivery Channels):
 - The Add Channel form has a "Monthly delivery budget" input
   (defaults to 0 — unlimited).
 
+### Alert replay (channel verification with real alerts)
+
+Operators sometimes need to re-deliver a historical alert (last week's
+BDI spike, last month's port shutdown) to a single channel for
+verification — to confirm a new channel config works against REAL
+alerts they remember, not the synthetic `send_test_ping` payload.
+`engine.alert_replay` + the `tools.replay_cli` CLI front this.
+
+How replay differs from a real fire and from `send_test_ping`:
+
+- The dispatched alert's title is prefixed with `[REPLAY] ` so the
+  channel recipient can tell at a glance that this is a re-send, not
+  a live event. The original DB row is NOT mutated — only the
+  dispatched payload.
+- The per-channel monthly delivery budget is NEITHER checked NOR
+  incremented. Replay traffic is operator-driven test traffic and
+  must not exhaust the cap that's there to silence noisy real fires.
+- The dispatch is recorded in the audit log as
+  `action='alert_replay'`, carrying `{alert_id, channel_id, success}`
+  in the detail payload. A security review can distinguish replays
+  from real fires (`action='alert_fire'`) and synthetic test pings
+  (`action='test_ping'`).
+- The wire protocol per channel kind (Slack / Email / SMS / Webhook /
+  Discord / PagerDuty) is the same one used by `deliver_alert` —
+  the replay path goes through `_dispatch_alert`, so what hits the
+  network is exactly what a real fire would have looked like.
+
+Per-user scoping is enforced on BOTH the `alert_id` AND the
+`channel_id`. bob cannot replay alice's alert; alice cannot replay
+her alert to bob's channel. A cross-user attempt returns
+`ReplayResult(success=False, message='alert not found or not owned')`
+— the same observable outcome as querying an unknown id, so an
+attacker cannot enumerate other users' ids by probing.
+
+```bash
+# Replay one alert to one channel.
+python -m tools.replay_cli replay <alert_id> \
+    --channel-id <channel_id> --user-id <user_id>
+
+# Bulk replay every HIGH severity alert from the last 7 days.
+python -m tools.replay_cli bulk \
+    --channel-id <channel_id> --user-id <user_id> \
+    --since 7d --severity HIGH --limit 10
+
+# Bulk replay all BDI_MOVE alerts from the last 30 days, JSON output
+# suitable for piping into jq.
+python -m tools.replay_cli bulk \
+    --channel-id <channel_id> --user-id <user_id> \
+    --since 30d --alert-type BDI_MOVE --json
+```
+
+Recurring use cases:
+
+- **Channel config validation.** Operator just rewired a Slack
+  webhook or swapped a PagerDuty integration key. They replay last
+  week's CRITICAL fires against the rewired channel to confirm the
+  payload formatting + routing still work end-to-end.
+- **Channel migration testing.** Two channels point at the same
+  destination during a migration. Operator replays the prior week's
+  alerts to the NEW channel and visually confirms parity before
+  deleting the old one.
+- **Weekly review.** Replay the week's HIGH+CRITICAL alerts to a
+  review-only channel so the trading desk + ops on-call can
+  re-examine what fired in one place, with the audit log proving
+  these were retrospective (not new events).
+
+CLI exit codes:
+
+- `0` — every replay succeeded (or no work was requested)
+- `1` — handler raised; message went to stderr
+- `2` — argparse rejected the invocation (missing required flag)
+- `3` — handler ran cleanly but at least one individual replay
+  failed (unknown id, cross-user, dispatch failure). Distinct from
+  `1` so automated wrappers can pin the boundary.
+
+Defaults + caps:
+
+- `--limit` defaults to 50. The hard cap is 200 — values exceeding it
+  are silently clamped down. The clamp holds the blast radius if an
+  operator forgets to narrow their filter.
+- `--since` accepts `Nd` / `Nh` / `Nm` (days, hours, minutes). A
+  malformed spec writes a one-line warning to stderr and proceeds
+  WITHOUT the since filter (matches the rest of the CLI family:
+  typos shouldn't abort the whole command).
+- The 30-day lookback inside `replay_alert` matches the implicit
+  retention window of the alerts table (`_MAX_STORED=500`); older
+  rows may have been trimmed and will surface as
+  `'alert not found or not owned'`.
+
 ### Incident correlation
 
 The correlation engine groups alerts that fired together (same window,
@@ -1515,6 +1604,102 @@ cron's email-on-failure behaviour:
 
 Pipe the JSON into your monitoring system (jq + a webhook) if you
 want alerts on a non-zero `failed` count.
+
+### `tools.anonymize_cli` — DB anonymization for safe sharing
+
+Produces an anonymized COPY of the SQLite state DB so an operator can
+share it with a teammate, populate a staging environment from a prod
+snapshot, or hand a QA contractor a realistic dataset — without
+leaking PII, secrets, or operational fingerprints.
+
+The source DB is opened READ-ONLY (`mode=ro`) and copied to the output
+path before any mutation runs, so the source file is guaranteed to be
+untouched even if a downstream pass errors out.
+
+Three profiles:
+
+* **`standard`** (default) — Scrubs PII + secrets but KEEPS alert /
+  report / schedule shape. Replaces user emails with stable
+  `user_<hash>@example.com` aliases (deterministic SHA-256), wipes
+  password hashes + MFA secrets, deletes every `api_tokens` row
+  (forces re-creation), stubs delivery channel targets per kind
+  (slack → fake webhook, pagerduty → fake key, etc.), drops `kv_state`
+  rows matching `vault:*` / `*secret*` / `*token*` / `*key*` /
+  `*password*` / `*credential*` (case-insensitive), redacts
+  annotation bodies to `REDACTED ANNOTATION (N chars)` so thread
+  shape is preserved, zeroes `audit_events.detail_json` for
+  sensitive actions only (`login_*`, `mfa_*`, `token_*`, `channel_*`,
+  `signup_*`, `password_*`, `invitation_*`), stubs every
+  `report_history.file_path` to `cache/reports/REDACTED.html`, wipes
+  `user_settings.settings_json`, drops unconsumed invitations.
+
+* **`aggressive`** — Same as standard PLUS empties annotation bodies
+  to `""`, zeroes EVERY `audit_events.detail_json` (not just
+  sensitive actions), and redacts `alerts.body` to `REDACTED`. Use
+  when the recipient should see structure only, no operational
+  content whatsoever.
+
+* **`redact-only`** — Preserves row counts everywhere (no row drops)
+  but replaces every scrubbed string field with a `REDACTED` marker.
+  Useful when you want to hand someone a shape-faithful skeleton
+  with zero real data — every `api_tokens` row stays, every
+  `mfa_recovery_codes` row stays, every `kv_state` row stays, but
+  the values are wiped.
+
+```bash
+# Share a dev DB with a teammate (default standard profile)
+python -m tools.anonymize_cli \
+    --source cache/ship_tracker.db \
+    --output ~/share/ship_dev.db --verbose
+
+# Populate staging from a prod snapshot
+python -m tools.anonymize_cli \
+    --source /var/lib/ship/prod.db \
+    --output /var/lib/ship/staging.db --profile standard
+
+# Hand a QA contractor a structurally identical shell
+python -m tools.anonymize_cli \
+    --source cache/ship_tracker.db \
+    --output /tmp/qa.db --profile redact-only
+
+# Preview what WOULD change without writing — source opened read-only
+python -m tools.anonymize_cli \
+    --source cache/ship_tracker.db \
+    --dry-run --verbose
+```
+
+`--verbose` prints per-table scrubbed / dropped counts to stderr so
+the operator can confirm at a glance that the expected tables were
+touched.
+
+Exit codes: `0` on success, `1` on handler error (e.g. source file
+missing), `2` on argparse rejection (unknown flag, missing
+`--source`).
+
+Determinism: the email-replacement function uses a stable SHA-256
+hash of the original value, so re-anonymizing the same source DB
+twice produces the same user-mapping byte-for-byte. This makes
+diffs between two anonymized snapshots meaningful.
+
+Use cases:
+
+* **Bug repro from a teammate** — anonymize, ship the .db, they
+  rebuild the issue locally without ever seeing real customer data.
+* **Staging refresh** — overnight cron pulls prod, anonymizes, drops
+  the output into the staging volume.
+* **QA contractor onboarding** — `redact-only` profile gives the
+  contractor row-count-faithful data so query plans + UI layouts
+  behave like prod, but every string is `REDACTED`.
+
+What this tool does NOT do:
+
+* It does NOT touch the `cache/reports/*.html` files on disk. If
+  you're shipping the DB to a teammate and report HTML files exist
+  outside the DB, exclude `cache/reports/` from whatever transport
+  you use (or run `tools.backup_cli create` with `--exclude-reports`
+  if shipping a tar.gz).
+* It does NOT re-encrypt or re-sign any data. Recipients will need
+  to sign up + create their own credentials in the anonymized DB.
 
 ### `tools.changelog_gen` — Changelog regeneration
 
