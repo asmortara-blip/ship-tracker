@@ -815,6 +815,117 @@ SECTION_COLORS = {
     "reports":      "#64748b",
 }
 
+# Inventory of (label, module_name) for every tab in each section.
+# Drives the sidebar "Pinned" cluster (label/module resolution) and the
+# in-section "Manage Pins" panel (the per-section tab list). Adding a
+# new tab is a one-line append to the relevant section entry. The label
+# matches the inner ``st.tabs([...])`` label so the pinned cluster reads
+# the same as the section's inner tab strip.
+SECTION_TABS: dict[str, list[tuple[str, str]]] = {
+    "dashboard": [
+        ("Overview",         "ui.tab_overview"),
+        ("Daily Briefing",   "ui.tab_briefing"),
+        ("Market Commentary","ui.tab_commentary"),
+        ("Scorecard",        "ui.tab_scorecard"),
+        ("Live Feed",        "ui.tab_live_feed"),
+        ("Data Health",      "ui.tab_data_health"),
+    ],
+    "markets": [
+        ("Markets",          "ui.tab_markets"),
+        ("Sector Dashboard", "ui.tab_sector"),
+        ("Alpha Signals",    "ui.tab_alpha"),
+        ("Results",          "ui.tab_results"),
+        ("Indices",          "ui.tab_indices"),
+        ("Derivatives",      "ui.tab_derivatives"),
+        ("Scenarios",        "ui.tab_scenarios"),
+        ("Monte Carlo",      "ui.tab_monte_carlo"),
+        ("Backtesting",      "ui.tab_backtest"),
+        ("Portfolio",        "ui.tab_portfolio"),
+        ("Options & Flow",   "ui.tab_options"),
+        ("Convergence",      "ui.tab_convergence"),
+    ],
+    "disruption_alpha": [
+        ("Voyage Tracker",   "ui.tab_voyage_tracker"),
+        ("Disruption Radar", "ui.tab_disruption_radar"),
+        ("Macro Projection", "ui.tab_macro_projection"),
+        ("Supply Linkage",   "ui.tab_supply_linkage"),
+        ("Equity Signals",   "ui.tab_equity_signals"),
+        ("Idea Engine",      "ui.tab_idea_engine"),
+    ],
+    "ports_routes": [
+        ("Port Demand",      "ui.tab_port_demand"),
+        ("Port Monitor",     "ui.tab_port_monitor"),
+        ("Routes",           "ui.tab_routes"),
+        ("Rate Analytics",   "ui.tab_rate_analytics"),
+        ("ETA Predictor",    "ui.tab_eta"),
+        ("Congestion",       "ui.tab_congestion"),
+        ("Emerging Routes",  "ui.tab_emerging_routes"),
+        ("Vessel Map",       "ui.tab_vessel_map"),
+    ],
+    "carriers": [
+        ("Carriers",         "ui.tab_carriers"),
+        ("Fleet",            "ui.tab_fleet"),
+        ("Equipment",        "ui.tab_equipment"),
+        ("Cargo",            "ui.tab_cargo"),
+        ("Booking",          "ui.tab_booking"),
+        ("Bunker Fuel",      "ui.tab_bunker"),
+    ],
+    "trade_macro": [
+        ("Macro",            "ui.tab_macro"),
+        ("Bellwethers",      "ui.tab_bellwethers"),
+        ("Trade Flows",      "ui.tab_trade_flows"),
+        ("Trade War",        "ui.tab_trade_war"),
+        ("Geopolitical",     "ui.tab_geopolitical"),
+        ("Chokepoints",      "ui.tab_chokepoints"),
+        ("Trade Finance",    "ui.tab_finance"),
+        ("E-Commerce",       "ui.tab_ecommerce"),
+        ("Nowcast",          "ui.tab_nowcast"),
+    ],
+    "supply_chain": [
+        ("Supply Chain",     "ui.tab_supply_chain"),
+        ("Visibility",       "ui.tab_visibility"),
+        ("Intermodal",       "ui.tab_intermodal"),
+        ("Network",          "ui.tab_network"),
+        ("Attribution",      "ui.tab_attribution"),
+    ],
+    "risk": [
+        ("Risk Matrix",      "ui.tab_risk_matrix"),
+        ("Risk Lab",         "ui.tab_risk_lab"),
+        ("Weather",          "ui.tab_weather"),
+        ("Compliance",       "ui.tab_compliance"),
+        ("Market Cycle",     "ui.tab_cycle"),
+        ("Fundamentals",     "ui.tab_fundamentals"),
+        ("Operator",         "ui.tab_operator"),
+        ("Operator Overview","ui.tab_operator_overview"),
+    ],
+    "intelligence": [
+        ("News & Sentiment", "ui.tab_news"),
+        ("Deep Dive",        "ui.tab_deep_dive"),
+        ("AI Assistant",     "ui.tab_assistant"),
+        ("Sustainability",   "ui.tab_sustainability"),
+        ("Alerts",           "ui.tab_alerts"),
+    ],
+    "reports": [
+        ("Investor Report",  "ui.tab_report"),
+    ],
+}
+
+
+def _lookup_pinned_meta(module_name: str) -> tuple[str, str, str] | None:
+    """Map a pinned ``ui.tab_*`` module to ``(section_key, label, icon)``.
+
+    Returns ``None`` if the module no longer belongs to any section (the
+    pin is "dead" — the UI silently filters those out).
+    """
+    for sec_key, tabs in SECTION_TABS.items():
+        for label, mod in tabs:
+            if mod == module_name:
+                icon = next(
+                    (s[1] for s in SECTIONS if s[0] == sec_key), "•"
+                )
+                return sec_key, label, icon
+    return None
+
 if "nav_section" not in st.session_state:
     st.session_state["nav_section"] = "dashboard"
 
@@ -884,6 +995,83 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+    # ── Pinned tabs cluster (per-user favourites) ─────────────────────────
+    # Lazy import so a broken state.tab_favorites NEVER takes down the
+    # sidebar. Clicking a pinned entry routes to the parent section —
+    # Streamlit's inner ``st.tabs()`` selection is client-side only, so
+    # the user lands on the section and selects the inner tab.
+    try:
+        from state.tab_favorites import get_pinned_tabs, unpin_tab
+        _pinned_modules = get_pinned_tabs()
+    except Exception as _pin_exc:
+        logger.debug(f"Pinned-tabs read failed: {_pin_exc}")
+        _pinned_modules = []
+    if _pinned_modules:
+        st.markdown(
+            '<div class="nav-cluster-label">📌 Pinned</div>',
+            unsafe_allow_html=True,
+        )
+        for _pm in _pinned_modules:
+            _meta = _lookup_pinned_meta(_pm)
+            if _meta is None:
+                # Pin is dead (the tab was removed). Render an unpin
+                # row so the user can clean it up rather than silently
+                # hiding it.
+                _pin_cols = st.columns([6, 1])
+                with _pin_cols[0]:
+                    st.markdown(
+                        f'<div style="font-family:Libre Franklin,sans-serif;'
+                        f'font-size:0.74rem;color:#6b6760;padding:6px 8px">'
+                        f'<span style="opacity:0.55">⚠ {_pm}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                with _pin_cols[1]:
+                    if st.button("×", key=f"unpin_dead_{_pm}",
+                                 help="Remove this dead pin"):
+                        try:
+                            unpin_tab(_pm)
+                        except Exception:
+                            pass
+                        st.rerun()
+                continue
+            _sec_key_pin, _label_pin, _icon_pin = _meta
+            _active_pin = st.session_state["nav_section"] == _sec_key_pin
+            _pin_cols = st.columns([6, 1])
+            with _pin_cols[0]:
+                if _active_pin:
+                    _ac = SECTION_COLORS.get(_sec_key_pin, "#3572b0").lstrip("#")
+                    _rgb = (
+                        f"{int(_ac[0:2], 16)},{int(_ac[2:4], 16)},"
+                        f"{int(_ac[4:6], 16)}"
+                    )
+                    st.markdown(
+                        f'<div class="sec-nav-active" '
+                        f'style="--sec-accent:#{_ac};'
+                        f'--sec-bg:rgba({_rgb},0.13);">',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="sec-nav-btn">', unsafe_allow_html=True
+                    )
+                if st.button(
+                    f"{_icon_pin}  {_label_pin}",
+                    key=f"pin_nav_{_pm}",
+                    use_container_width=True,
+                ):
+                    st.session_state["nav_section"] = _sec_key_pin
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            with _pin_cols[1]:
+                if st.button("×", key=f"unpin_{_pm}",
+                             help=f"Unpin {_label_pin}"):
+                    try:
+                        unpin_tab(_pm)
+                    except Exception as _e:
+                        st.warning(f"Could not unpin: {_e}")
+                    else:
+                        st.rerun()
+
     st.markdown('<div class="nav-cluster-label">Core</div>', unsafe_allow_html=True)
     for sec_key, sec_icon, sec_label, sec_desc in SECTIONS:
         if sec_key == _NAV_CLUSTER2:
@@ -926,6 +1114,55 @@ st.markdown(f"""
                 margin-top:3px">{sec_info[3]}</div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ── 📌 Pin manager (collapsed) ────────────────────────────────────────────
+# Per-section pin toggles. Lives ABOVE the inner-tab strip so users can
+# pin/unpin without leaving the section. Wrapped in try/except + a
+# st.warning fallback so a broken state.tab_favorites NEVER breaks the
+# section's render. Hidden for logged-out users (current_user_id is "").
+try:
+    from state.tab_favorites import (
+        get_pinned_tabs as _get_pins,
+        is_pinned as _is_pinned,
+        pin_tab as _pin_tab,
+        unpin_tab as _unpin_tab,
+    )
+    from state.user_scope import current_user_id as _pin_uid
+    if _pin_uid():  # only show the manager for authenticated users
+        _section_tabs = SECTION_TABS.get(active_section, [])
+        if _section_tabs:
+            with st.expander("📌 Manage pinned tabs in this section", expanded=False):
+                st.caption(
+                    "Pinned tabs appear at the top of the sidebar for "
+                    "one-click access from any section."
+                )
+                _pinned_now = set(_get_pins())
+                for _tab_label, _tab_mod in _section_tabs:
+                    _was_pinned = _tab_mod in _pinned_now
+                    _new_pinned = st.checkbox(
+                        f"{_tab_label}",
+                        value=_was_pinned,
+                        key=f"pin_toggle_{active_section}_{_tab_mod}",
+                    )
+                    if _new_pinned and not _was_pinned:
+                        try:
+                            if not _pin_tab(_tab_mod):
+                                st.warning(f"Could not pin {_tab_label}.")
+                            else:
+                                st.rerun()
+                        except Exception as _e:
+                            st.warning(f"Pin error: {_e}")
+                    elif _was_pinned and not _new_pinned:
+                        try:
+                            if not _unpin_tab(_tab_mod):
+                                st.warning(f"Could not unpin {_tab_label}.")
+                            else:
+                                st.rerun()
+                        except Exception as _e:
+                            st.warning(f"Unpin error: {_e}")
+except Exception as _pin_mgr_exc:
+    logger.debug(f"Pin manager unavailable: {_pin_mgr_exc}")
 
 
 # ── Cross-tab filter bar ─────────────────────────────────────────────────
