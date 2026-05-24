@@ -889,3 +889,45 @@ def _migrate_to_v21(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v21 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v21 → v22 ─────────────────────────────────────────────────────
+
+def _migrate_to_v22(conn: sqlite3.Connection) -> None:
+    """Add the ``alert_silences`` table for planned-downtime alert
+    silencing.
+
+    Each row carries:
+
+      * ``silence_id``         — UUID PK.
+      * ``user_id``            — per-user scope (alice cannot mute
+        bob's alerts); the silence check inside ``fire_rule`` filters
+        on this column so cross-user isolation is mechanical.
+      * ``rule_id`` / ``ticker`` / ``severity`` — NULLable match
+        keys. NULL on a column means "matches any value for this
+        column"; non-NULL means "must equal exactly". The broadest
+        silence (all three NULL) shuts up every alert for the user.
+      * ``reason``             — free-form operator note ("Paused
+        for FRED maintenance"). Persisted on the row; the silence
+        gate logs the silence_id + reason at INFO level (NOT error)
+        so the reason can carry operational context without
+        spamming the error-log channel.
+      * ``starts_at`` / ``expires_at`` — ISO-8601 UTC text. The
+        silence is active iff ``starts_at <= now < expires_at``.
+      * ``created_at`` / ``created_by_user_id`` — audit pair so an
+        expired silence can still answer "who issued this and
+        when?" during retention.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    EXISTS — so this statement is also safe to re-run on every open
+    via the schema bootstrap in state.db. Matches the v2 / v3 / v8 /
+    v9 / v10 / v11 / v12 / v15 / v20 / v21 pattern (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V22
+
+        conn.executescript(_SCHEMA_V22)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v22 CREATE TABLE failed: {exc}"
+        )

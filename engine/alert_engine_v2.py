@@ -1909,13 +1909,73 @@ def fire_rule(
                 f"save path: {exc}"
             )
 
+    # ── Silence gate (v22) ──────────────────────────────────────────
+    # Sits AFTER cooldown + flap on purpose: a silenced rule still
+    # records its threshold crossings above for flap-detection
+    # consistency. We only consult ``is_alert_silenced`` once we have
+    # alerts in hand because each alert is checked individually
+    # (a rule may produce one alert that matches a silence and
+    # another that does not — e.g. a multi-ticker rule with a
+    # ticker-specific silence). Silenced alerts are dropped on the
+    # floor; ``fire_rule`` still returns True because silencing is
+    # explicitly NOT a failure mode — the rule was handled, the
+    # operator just asked for the output to be muted.
+    surviving: list[ShippingAlert] = []
+    if alerts:
+        try:
+            from engine import alert_silences as _silences
+
+            for a in alerts:
+                # Stamp rule_id on the alert object so the silence
+                # match can compare against silence.rule_id without
+                # the SQL UPDATE-after-save round-trip. The
+                # downstream save_alerts call carries rule_id via
+                # its kwarg, so this in-memory stamp is purely for
+                # the silence check.
+                try:
+                    setattr(a, "rule_id", rule_id)
+                except Exception:
+                    # _make() builds a frozen-shaped dataclass but
+                    # setattr is allowed; if a caller hands us
+                    # something exotic that rejects setattr, fall
+                    # back to no rule_id stamping (the silence will
+                    # still match on ticker / severity).
+                    pass
+
+                silence = _silences.is_alert_silenced(a, user_id=user_id)
+                if silence is not None:
+                    _silences._bump_silenced_counter()
+                    # INFO level — reason may carry operational
+                    # context ("FRED maintenance window") that we do
+                    # NOT want bubbling up to error log channels.
+                    logger.info(
+                        f"alert silenced by silence_id={silence.silence_id} "
+                        f"(rule_id={rule_id}, ticker={getattr(a, 'ticker', '')!r}, "
+                        f"severity={getattr(a, 'severity', '')!r}, "
+                        f"reason={silence.reason!r})"
+                    )
+                    continue
+                surviving.append(a)
+        except Exception as exc:
+            # Silence layer failures must NEVER block a legitimate
+            # alert. Fall through to saving every alert as-is on any
+            # exception inside the silence gate.
+            logger.warning(
+                f"fire_rule: silence gate raised, falling through and "
+                f"saving all alerts unfiltered: {exc}"
+            )
+            surviving = list(alerts)
+
     # Cooldown gate cleared — persist with the rule_id stamp so the
     # NEXT cooldown check can see this fire as the prior. Empty
     # alerts list is a legitimate fire (the rule ran but produced no
     # rows): we still return True so the caller's audit trail records
-    # an evaluation, but no INSERT happens.
-    if alerts:
-        save_alerts(alerts, user_id=user_id, rule_id=rule_id)
+    # an evaluation, but no INSERT happens. The same is true after
+    # silencing: every alert may have been silenced, leaving an
+    # empty surviving list — return True (the rule was handled,
+    # nothing to save).
+    if surviving:
+        save_alerts(surviving, user_id=user_id, rule_id=rule_id)
     return True
 
 

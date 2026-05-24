@@ -529,6 +529,38 @@ def run_bulk_export_prune_job(keep_n: int = 5) -> int:
         return 0
 
 
+def run_silence_cleanup_job(retention_days: int = 30) -> int:
+    """Sweep expired alert silences from the ``alert_silences`` table.
+
+    Thin wrapper around ``engine.alert_silences.cleanup_expired_silences``
+    that adds logging and shields the caller from any exception. Expired
+    silences are kept around for the retention window so the operator
+    can audit "what was muted yesterday?"; this job sweeps anything
+    older than the cutoff. Designed to run once per day from ``main``.
+
+    Default retention is 30 days — matches the data-source health
+    prune window so a silence created in response to a degraded feed
+    is still queryable for the same duration as the health row that
+    motivated it.
+
+    Returns the number of rows deleted (``0`` on no-op or any error).
+    Never raises — a cleanup failure must never block the briefing
+    job or any sibling prune.
+    """
+    try:
+        from engine.alert_silences import cleanup_expired_silences
+
+        deleted = cleanup_expired_silences(retention_days=retention_days)
+        logger.info(
+            f"run_silence_cleanup_job: deleted={deleted} rows "
+            f"(retention_days={retention_days})"
+        )
+        return int(deleted)
+    except Exception as exc:
+        logger.warning(f"run_silence_cleanup_job: failed: {exc}")
+        return 0
+
+
 def run_audit_prune_job(retention_days: int = 365) -> int:
     """Prune audit_events older than ``retention_days`` from SQLite.
 
@@ -908,6 +940,16 @@ def main(argv: Optional[list] = None) -> int:
         run_alert_prune_job()
     except Exception as exc:
         logger.warning(f"main: alert prune step failed: {exc}")
+
+    # Alert-silence cleanup — sweep expired silences past the audit
+    # retention window. Runs AFTER the alert prune so a silence that
+    # accompanied an alert pruned this tick stays around for the same
+    # retention as any other audit-relevant row. Same belt-and-braces
+    # guard — the helper already swallows errors.
+    try:
+        run_silence_cleanup_job()
+    except Exception as exc:
+        logger.warning(f"main: silence cleanup step failed: {exc}")
 
     # Audit retention — defaults to a full year. Audit is forensic
     # state so we keep it longer than telemetry. Same try/except guard.

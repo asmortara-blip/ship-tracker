@@ -2007,6 +2007,141 @@ def test_delete_schedules_removes_and_404_on_cross_user(server):
     assert after.json() == []
 
 
+# ─── /api/v1/silences (v22) ───────────────────────────────────────────────
+
+def test_get_silences_empty_returns_empty_list(server):
+    """A user with no silences gets an empty JSON list — not a 404."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/silences", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_post_silences_creates_and_get_lists(server):
+    """POST persists a silence; GET returns it with the body fields
+    echoed back + the audit columns populated by the engine."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/silences",
+        json={
+            "duration_minutes": 60,
+            "rule_id": "rule_bdi",
+            "severity": "HIGH",
+            "reason": "FRED maintenance",
+        },
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is True
+    sid = body["silence_id"]
+    assert body["silence"]["rule_id"] == "rule_bdi"
+    assert body["silence"]["severity"] == "HIGH"
+    assert body["silence"]["reason"] == "FRED maintenance"
+    # created_by_user_id stamped from the bearer token, not the body —
+    # there is no admin-create-for-someone-else surface via the API.
+    assert body["silence"]["created_by_user_id"] == uid
+
+    r2 = requests.get(
+        f"{server}/api/v1/silences", headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    listed = r2.json()
+    assert isinstance(listed, list) and len(listed) == 1
+    assert listed[0]["silence_id"] == sid
+
+
+def test_post_silences_missing_duration_returns_400(server):
+    """``duration_minutes`` is the only required body field — its
+    absence yields 400 with a descriptive message."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/silences",
+        json={"rule_id": "rule_X"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    assert "duration_minutes" in r.json()["error"]
+
+
+def test_post_silences_with_all_nulls_creates_broadest_silence(server):
+    """Omitting rule_id / ticker / severity creates the broadest
+    possible silence (matches every alert for the user)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/silences",
+        json={"duration_minutes": 30},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["silence"]["rule_id"] is None
+    assert body["silence"]["ticker"] is None
+    assert body["silence"]["severity"] is None
+
+
+def test_delete_silences_removes_and_404_on_cross_user(server):
+    """Alice can delete her own silence (200); Bob cannot delete
+    Alice's (404 — no-leak contract identical to schedules)."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    create = requests.post(
+        f"{server}/api/v1/silences",
+        json={"duration_minutes": 60, "rule_id": "alice_rule"},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    sid = create.json()["silence_id"]
+
+    # Bob's delete attempt → 404; Alice's row survives.
+    r_bob = requests.delete(
+        f"{server}/api/v1/silences/{sid}",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r_bob.status_code == 404
+    alice_list = requests.get(
+        f"{server}/api/v1/silences", headers=_bearer(alice_token), timeout=5,
+    )
+    assert len(alice_list.json()) == 1
+
+    # Alice's delete → 200; row gone.
+    r_alice = requests.delete(
+        f"{server}/api/v1/silences/{sid}",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r_alice.status_code == 200
+    assert r_alice.json() == {"deleted": True, "silence_id": sid}
+    after = requests.get(
+        f"{server}/api/v1/silences", headers=_bearer(alice_token), timeout=5,
+    )
+    assert after.json() == []
+
+
+def test_silences_endpoints_require_auth(server):
+    """GET, POST, DELETE on /api/v1/silences without a bearer token
+    all return 401 — silence config is per-user state and must not
+    leak to anonymous probes."""
+    # GET
+    r = requests.get(f"{server}/api/v1/silences", timeout=5)
+    assert r.status_code == 401
+    # POST
+    r = requests.post(
+        f"{server}/api/v1/silences", json={"duration_minutes": 5}, timeout=5,
+    )
+    assert r.status_code == 401
+    # DELETE
+    r = requests.delete(f"{server}/api/v1/silences/anything", timeout=5)
+    assert r.status_code == 401
+
+
 # ─── Rate limiting ────────────────────────────────────────────────────────
 
 
@@ -2162,3 +2297,119 @@ def test_rate_limit_allows_after_refill_interval(server, monkeypatch):
         f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
     )
     assert r2.status_code == 200
+
+
+# ─── GET /api/v1/audit/export ─────────────────────────────────────────────
+#
+# JSONL export endpoint for SIEM ingestion. The core properties:
+#
+#   * 401 without auth (privilege escalation guard — same as /audit).
+#   * Default format is jsonl with the application/x-ndjson content-type.
+#   * format=json returns the {items: [...], count: N} envelope with
+#     application/json — same shape as /audit but with the additional
+#     since/until filtering applied.
+#   * Per-user scoping is enforced (Alice cannot read Bob's rows).
+
+
+def test_audit_export_endpoint_returns_401_without_auth(server):
+    """Audit export is privileged — no bearer → 401, not the body."""
+    r = requests.get(f"{server}/api/v1/audit/export", timeout=5)
+    assert r.status_code == 401
+    assert r.json() == {"error": "unauthorized"}
+
+
+def test_audit_export_endpoint_jsonl_body_with_valid_token(server):
+    """A valid token gets JSONL bytes back. Each line is independently
+    json-loads-able and carries the seeded action verb. Confirms the
+    formatter + DB round-trip works through the HTTP wire."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from auth.audit import record_audit
+    record_audit("ut_export_marker", user_id=uid, detail={"who": "alice"})
+    record_audit("ut_export_marker", user_id=uid, detail={"who": "alice2"})
+
+    r = requests.get(
+        f"{server}/api/v1/audit/export",
+        params={"action": "ut_export_marker"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    text = r.text
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    assert len(lines) == 2
+    import json as _json
+    parsed = [_json.loads(ln) for ln in lines]
+    assert all(p["action"] == "ut_export_marker" for p in parsed)
+
+
+def test_audit_export_endpoint_json_envelope_format(server):
+    """``?format=json`` returns the same {items, count} shape as
+    /audit so a caller that wants the envelope (rather than JSONL)
+    can opt in via the query param — useful for legacy tooling that
+    expects an array under "items"."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from auth.audit import record_audit
+    record_audit("ut_json_envelope", user_id=uid)
+
+    r = requests.get(
+        f"{server}/api/v1/audit/export",
+        params={"action": "ut_json_envelope", "format": "json"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "items" in body
+    assert "count" in body
+    assert body["count"] >= 1
+    assert all(it["action"] == "ut_json_envelope" for it in body["items"])
+
+
+def test_audit_export_endpoint_content_type_is_ndjson_for_jsonl(server):
+    """``Content-Type`` MUST be ``application/x-ndjson; charset=utf-8``
+    for the JSONL format. SIEM scrapers route on this header — a
+    misclassified body would land in the wrong index."""
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    from auth.audit import record_audit
+    record_audit("ut_ctype", user_id=uid)
+
+    r = requests.get(
+        f"{server}/api/v1/audit/export",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    ctype = r.headers.get("Content-Type", "")
+    assert "application/x-ndjson" in ctype
+    assert "utf-8" in ctype.lower()
+
+
+def test_audit_export_endpoint_is_user_scoped(server):
+    """Alice's token must NOT export Bob's rows. Same privacy
+    property as /audit — re-asserted here because the export
+    endpoint is a separate code path that could regress
+    independently."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+
+    from auth.audit import record_audit
+    record_audit("ut_scope_check", user_id=alice_uid, detail={"who": "alice"})
+    record_audit("ut_scope_check", user_id=bob_uid, detail={"who": "bob"})
+
+    r = requests.get(
+        f"{server}/api/v1/audit/export",
+        params={"action": "ut_scope_check"},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 200
+    import json as _json
+    lines = [ln for ln in r.text.split("\n") if ln.strip()]
+    parsed = [_json.loads(ln) for ln in lines]
+    # Every returned row belongs to Alice; Bob's row must NOT appear.
+    assert all(p["user_id"] == alice_uid for p in parsed), (
+        "Audit export leaked another user's row"
+    )

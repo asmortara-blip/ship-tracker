@@ -432,6 +432,25 @@ curl "$BASE/api/v1/audit?limit=50&action=login_success" \
 #               "entity_id": "...", "detail_json": {...}}, ...],
 #    "count": 12}
 
+# GET /api/v1/audit/export — JSONL export of audit rows for SIEM
+#   ingestion. Same filter params as /audit (?action, ?limit) plus
+#   ?since=<ISO-8601>, ?until=<ISO-8601>, and ?format=jsonl (default)
+#   or ?format=json (envelope).
+#
+#   The JSONL format returns one JSON object per line, \n-delimited,
+#   ending in a trailing newline. Content-Type is
+#   application/x-ndjson; charset=utf-8 so Splunk / Vector / Loki
+#   scrapers route the body to the right index.
+#
+#   Bodies over 100 KB use chunked Transfer-Encoding so the server
+#   doesn't buffer the whole export in memory.
+curl "$BASE/api/v1/audit/export?since=2026-05-01T00:00:00%2B00:00&limit=10000" \
+     -H "Authorization: Bearer $TOKEN" \
+     -o /var/log/ship-tracker-audit.jsonl
+# → application/x-ndjson body; one event per line, e.g.
+#   {"event_id":"...","created_at":"...","user_id":"...","action":"login_success",...}
+#   {"event_id":"...","created_at":"...","user_id":"...","action":"save_rules",...}
+
 # GET /api/v1/incidents — caller's correlated alert incidents.
 #   Optional ?window=<days> (default 7).
 curl "$BASE/api/v1/incidents?window=7" \
@@ -573,6 +592,7 @@ rejected the invocation.
 | `incidents list / stats`           | Correlated-incident view over the alert table.                     |
 | `settings show / set`              | Per-user preferences (timezone, theme, defaults).                  |
 | `schedules list / create / delete / enable / disable / run-once` | Cron-driven recurring report schedules (per-user). |
+| `audit export`                     | JSONL export of audit_events for SIEM ingestion (Splunk / Vector / Loki). |
 
 ### MFA enrollment from the CLI
 
@@ -714,6 +734,73 @@ python -m tools.ops_cli settings set --user-id <id> \
     --report-window 60 \
     --alert-severity HIGH
 ```
+
+### Alert silences (planned downtime)
+
+Schema v22 adds an `alert_silences` table so an operator can shut up a
+rule (or a ticker, or a severity, or any cross-product of those) for a
+bounded planned-maintenance window — instead of disabling the rule and
+forgetting to re-enable it. The silence auto-expires at `expires_at`;
+the silence gate inside `fire_rule` sits AFTER cooldown + flap so
+silenced rules still record their crossings for flap-detection
+consistency.
+
+Silences are per-user. Alice's silence does NOT mute Bob's alerts, and
+Bob cannot delete Alice's silence. Match keys (`rule_id` / `ticker` /
+`severity`) are NULLable — NULL means "matches any value for this
+column"; the broadest silence (all three NULL) shuts up every alert
+for the user. Expired silences are kept around for an audit retention
+window (default 30 days, swept once per day by the worker's
+`run_silence_cleanup_job`) so "what was muted yesterday?" stays
+answerable.
+
+```bash
+# List a user's active silences.
+python -m tools.ops_cli silences list --user-id <id>
+
+# Include expired silences in the listing (audit-retention tail).
+python -m tools.ops_cli silences list --user-id <id> --include-expired
+
+# Silence one rule for 4 hours during a maintenance window.
+python -m tools.ops_cli silences create --user-id <id> \
+    --duration-minutes 240 \
+    --rule-id rule_bdi \
+    --reason "FRED maintenance"
+
+# Silence every CRITICAL alert for any rule + any ticker for 30 min.
+python -m tools.ops_cli silences create --user-id <id> \
+    --duration-minutes 30 \
+    --severity CRITICAL
+
+# Cancel a silence early.
+python -m tools.ops_cli silences delete <silence_id> --user-id <id>
+```
+
+The API mirrors the CLI 1:1:
+
+```
+GET    /api/v1/silences                         list_silences(user_id=...)
+GET    /api/v1/silences?include_expired=true    list_silences(..., include_expired=True)
+POST   /api/v1/silences   body: {duration_minutes (req),
+                                  rule_id?, ticker?, severity?, reason?}
+DELETE /api/v1/silences/<silence_id>
+```
+
+Cross-user DELETE attempts return 404 (the silence does not exist in
+the caller's scope) — the same no-leak contract used by `/schedules`.
+
+The Streamlit UI surfaces the same controls in a collapsed
+"🔕 Silence alerts for planned downtime" expander under the
+Configuration section of the Alert Center tab. Active silences appear
+in a table at the top with an inline Cancel button; the form below
+mints a new silence via a rule dropdown + ticker / severity / duration
+inputs + an optional reason text field.
+
+Each silenced fire bumps the kv_state counter
+`alerts_suppressed_by_silence` — readable via
+`engine.alert_silences.get_suppressed_by_silence_count()` — so the
+operator overview can surface "N alerts silenced in the last run"
+without a dedicated table.
 
 ### Recurring report schedules
 
@@ -872,6 +959,86 @@ defaulted to N, severity rejected) and are surfaced to the operator
 through stdout (CLI) or `st.warning` (UI). They never carry sensitive
 data — only field names and the canonical replacement value.
 
+### Audit log export — JSONL for SIEM ingestion
+
+Operators running a Splunk / Vector / Loki / Elastic sidecar want the
+`audit_events` table piped in line-delimited JSON so the scraper can
+ingest events without writing custom envelope-unwrapping code. The
+`audit export` subcommand bridges that gap:
+
+```bash
+# Default: stream the entire audit log to stdout as JSONL.
+python -m tools.ops_cli audit export
+
+# Per-user pull (multi-tenant scrapers).
+python -m tools.ops_cli audit export --user-id <id>
+
+# Filter to one action verb.
+python -m tools.ops_cli audit export --action login_success
+
+# Bracket a time window (ISO-8601 UTC). --since is inclusive,
+# --until is exclusive — the standard half-open convention.
+python -m tools.ops_cli audit export \
+    --since 2026-05-01T00:00:00+00:00 \
+    --until 2026-05-23T00:00:00+00:00
+
+# Write to a file (uses the streaming code path — memory-efficient
+# for very large pulls).
+python -m tools.ops_cli audit export --out /var/log/ship-tracker-audit.jsonl
+# stdout: /var/log/ship-tracker-audit.jsonl
+# stderr: exported 1842 rows in 12 ms to /var/log/ship-tracker-audit.jsonl
+```
+
+Output is one JSON object per line, `\n`-delimited, with a trailing
+newline on the last line. Each line carries the full audit-event
+shape:
+
+```json
+{"event_id":"...","created_at":"2026-05-23T12:00:00+00:00","user_id":"u-1","action":"login_success","entity_type":"","entity_id":"","detail_json":{}}
+```
+
+`detail_json` is the parsed dict (not a re-escaped JSON string) so a
+SIEM with native JSON-in-JSON support can index its keys directly.
+Per-recording-site redaction (e.g. Slack webhook URLs in
+`save_channel`) is already applied; the export passes the stored
+value through verbatim — it does NOT decrypt vault-encrypted fields.
+
+**Recommended Vector / Splunk cron entry.** Run the export every
+five minutes with a sliding window matching the previous run's
+checkpoint:
+
+```cron
+# /etc/cron.d/ship-tracker-audit-export
+# Every 5 minutes, append the last 5m of audit rows to the SIEM
+# tail file. The since=now-6min lookback overlaps by 1m to absorb
+# clock skew + the time the cron handler itself takes.
+*/5 * * * *  shiptracker  cd /opt/ship-tracker && python -m tools.ops_cli audit export \
+    --since "$(date -u -d '6 minutes ago' +%Y-%m-%dT%H:%M:%S+00:00)" \
+    >> /var/log/ship-tracker-audit.jsonl 2>>/var/log/ship-tracker-audit.err
+```
+
+Then point your Vector / Splunk / Loki agent at
+`/var/log/ship-tracker-audit.jsonl` as a JSONL source. Example Vector
+source block:
+
+```toml
+[sources.ship_tracker_audit]
+type = "file"
+include = ["/var/log/ship-tracker-audit.jsonl"]
+read_from = "end"
+[transforms.parse_audit_jsonl]
+type = "remap"
+inputs = ["ship_tracker_audit"]
+source = ". = parse_json!(.message)"
+```
+
+The same export is also reachable via `GET /api/v1/audit/export` on
+the API server (port 8503 by default) — useful when the SIEM agent
+runs on a separate host without filesystem access to the Ship Tracker
+data directory. `?format=jsonl` is the default; `?format=json`
+returns the same `{items: [...], count: N}` envelope as `/audit` for
+legacy consumers.
+
 ## Backup / Restore
 
 Two complementary tools cover backups:
@@ -950,6 +1117,128 @@ Take a backup every night at 03:30 server time and keep the newest 30:
 a few MB each, so a 30-day rolling window is cheap. Skip the second
 half of the line — the `ls … xargs rm` — if you'd rather keep every
 archive forever.)
+
+### `tools.db_check_cli` — DB integrity check
+
+Operator CLI for verifying the SQLite state DB has not gotten corrupted
+(after a crash, before a backup, during incident response) and that the
+logical relationships the schema does NOT enforce (FK-less rule
+references, orphaned audit rows, …) still hold.
+
+```bash
+# Quick check — runs PRAGMA quick_check + every logical check
+python -m tools.db_check_cli
+
+# Full check — runs the heavier PRAGMA integrity_check (page-by-page
+# scan). Slow on multi-GB DBs; run at off-peak hours, or take a
+# backup first and run the check against the backup.
+python -m tools.db_check_cli --full
+
+# Auto-fix safe issues — see "Auto-fix" below
+python -m tools.db_check_cli --fix
+
+# Check a specific file (e.g. a backup snapshot) instead of the live DB
+python -m tools.db_check_cli --db /path/to/snapshot.db
+
+# JSON output for scripts / dashboards (jq-friendly)
+python -m tools.db_check_cli --json | jq '.failed'
+```
+
+Checks performed:
+
+* **schema_version** — `kv_state.schema_version` vs the running code's
+  `state.db.SCHEMA_VERSION`. PASS on match, WARN on mismatch (the DB
+  is still usable; open through `state.db.get_connection()` to
+  auto-migrate). The `PRAGMA user_version` slot is also read for
+  completeness (the project does NOT use it as the source of truth).
+* **integrity_check** — `PRAGMA quick_check` by default,
+  `PRAGMA integrity_check` with `--full`. Returns `ok` on a healthy DB
+  or one row per corruption issue.
+* **foreign_key_check** — `PRAGMA foreign_key_check`. Reports any rows
+  that violate FK constraints (the v21 mfa_recovery_codes FK to users,
+  the v22 alert_silences FK to users).
+* **orphan_alerts** — counts `alerts` rows whose `rule_id` is set but
+  not present in `alert_rules` (FK-less relationship).
+* **orphan_audit_events** — counts `audit_events` rows whose `user_id`
+  is set but not present in `users`.
+* **stale_api_tokens** — counts `api_tokens` past their `expires_at`
+  that are still active (informational; the current schema does not
+  carry `expires_at` so this degrades to INFO until a future migration
+  adds the column).
+* **stale_invitations** — counts `user_invitations` past `expires_at`
+  that are not consumed (informational).
+* **stale_silences** — counts `alert_silences` whose `expires_at` is
+  more than 30 days in the past (informational; `--fix` deletes them).
+* **duplicate_rule_ids** — checks `alert_rules` for the same
+  `(user_id, rule_id)` group appearing more than once. FAIL on any
+  duplicate — that is a data-correctness issue.
+* **index_health** — confirms every known CREATE INDEX from
+  `state/db.py` exists in `sqlite_master`. Missing indexes are WARN
+  (the DB still works, queries are just slower).
+* **known_tables** (`--full` only) — confirms every known table
+  exists. A missing table is WARN (a hand-restored partial backup may
+  not have every v20/v21/v22 table).
+
+Output format:
+
+* Text mode (default) — hierarchical PASS / WARN / FAIL / INFO per
+  check, colourised via ANSI when stdout is a real tty (and never
+  when piped / redirected).
+* JSON mode (`--json`) — single JSON document on stdout with
+  `{checks, passed, warned, failed, info, db_path, schema_version,
+  ran_at}` plus an optional `fixes` array when `--fix` was passed.
+
+Exit codes:
+
+* `0` — every check returned PASS / INFO / WARN.
+* `1` — at least one FAIL, or the DB file could not be opened.
+* `2` — argparse rejected the invocation.
+
+Read-only by default. Without `--fix`, the DB is opened with the
+SQLite `mode=ro` URI flag so a misconfigured operator cannot
+accidentally mutate the DB they are diagnosing.
+
+#### Auto-fix (`--fix`)
+
+The `--fix` mode opens the DB read-write and runs the supported
+auto-fixes:
+
+* **Mark expired api_tokens inactive** — `UPDATE api_tokens SET
+  revoked=1 WHERE revoked=0 AND expires_at < now`. Skipped when the
+  `expires_at` column is not present (the current api_tokens schema
+  does not carry one yet).
+* **Mark expired invitations consumed** — `UPDATE user_invitations
+  SET consumed_at=expires_at, consumed_by_user_id='SYSTEM_EXPIRED'
+  WHERE consumed_at IS NULL AND expires_at < now`. The `SYSTEM_EXPIRED`
+  sentinel makes auto-consumed invites distinguishable from real
+  signups in the audit log.
+* **Delete ancient alert_silences** — calls
+  `engine.alert_silences.cleanup_expired_silences()` (which deletes
+  rows expired more than 30 days ago); falls back to a direct DELETE
+  if the helper is unavailable. When `--db` targets a non-live file,
+  the helper is bypassed and a direct DELETE runs against the
+  supplied DB so the wrong DB never gets mutated.
+
+`--fix` does NOT attempt to repair `integrity_check` or
+`foreign_key_check` failures. Those mean the file is corrupted on
+disk and need a DBA + a recent backup — the auto-fixer's "safe"
+charter explicitly excludes them.
+
+#### Recommended cron entry
+
+Run a quick check every morning and a full check on Sundays at
+04:00. Both append to a log file; a non-zero exit is captured by
+cron's email-on-failure behaviour:
+
+```cron
+# Daily quick check at 04:00
+0 4 * * * cd /path/to/ship && /usr/bin/python3 -m tools.db_check_cli --json >> logs/db_check.log 2>&1
+# Weekly full check + cleanup on Sundays at 04:30
+30 4 * * 0 cd /path/to/ship && /usr/bin/python3 -m tools.db_check_cli --full --fix --json >> logs/db_check.log 2>&1
+```
+
+Pipe the JSON into your monitoring system (jq + a webhook) if you
+want alerts on a non-zero `failed` count.
 
 ### `utils.bulk_export` — wider-scope dataset export
 

@@ -1698,6 +1698,191 @@ def _render_rule_template_panel() -> None:
         # operational is preferable to a red banner.
 
 
+def _render_silences_panel() -> None:
+    """Render the alert-silences panel (planned-downtime suppressor).
+
+    Two halves inside a single collapsed expander:
+
+    * Active silences table — each row carries silence_id (short),
+      the three match keys (rule_id / ticker / severity, or "(all)"
+      when NULL), reason, expires-at countdown, and a delete button
+      that cancels the silence early.
+    * New-silence form — duration in minutes (1-1440), optional
+      rule_id / ticker / severity filters, optional reason, Create
+      button. Submitting the form persists via
+      ``engine.alert_silences.create_silence`` and reruns so the
+      table at the top of the panel picks up the new row.
+
+    Wrapped in try/except + logger.exception so a panel failure does
+    not break the rest of the configuration section.
+    """
+    try:
+        from engine.alert_silences import (
+            create_silence,
+            delete_silence,
+            list_silences,
+        )
+
+        # Resolve the current user_id once at panel entry — falls back
+        # to "" when no user is signed in (legacy single-password gate).
+        from state.user_scope import current_user_id
+        uid = current_user_id() or ""
+
+        with st.expander(
+            "🔕 Silence alerts for planned downtime",
+            expanded=False,
+        ):
+            section_header(
+                "Alert Silences",
+                "Suppress alerts for a bounded window (e.g. before "
+                "feed maintenance) without disabling the rule and "
+                "forgetting to re-enable it. Auto-expires on its own.",
+            )
+
+            # ── Active silences table ─────────────────────────────
+            active = list_silences(user_id=uid, include_expired=False)
+            st.caption(f"{len(active)} active silence(s) for this user.")
+
+            if active:
+                for s in active:
+                    cols = st.columns([2, 2, 2, 2, 3, 1], gap="small")
+                    with cols[0]:
+                        st.markdown(
+                            _mono(s.silence_id[:8], color=C_TEXT2, weight=500),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[1]:
+                        st.markdown(
+                            _sans(s.rule_id or "(all rules)",
+                                  color=C_TEXT, weight=500),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[2]:
+                        st.markdown(
+                            _sans(s.ticker or "(all tickers)",
+                                  color=C_TEXT2, weight=500),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[3]:
+                        st.markdown(
+                            _sans(s.severity or "(all severities)",
+                                  color=C_TEXT2, weight=500),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[4]:
+                        reason_text = s.reason or "—"
+                        expires_text = s.expires_at
+                        st.markdown(
+                            _sans(f"{reason_text} · expires {expires_text}",
+                                  color=C_TEXT3, weight=400),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[5]:
+                        if st.button(
+                            "Cancel",
+                            key=f"silence_cancel_{s.silence_id}",
+                            use_container_width=True,
+                        ):
+                            ok = delete_silence(s.silence_id, user_id=uid)
+                            if ok:
+                                st.success("Silence cancelled.")
+                                st.rerun()
+                            else:
+                                st.error("Cancel failed — see logs.")
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{C_TEXT3};'
+                    f'padding:8px 0">No active silences.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            section_divider("New Silence")
+
+            # ── New-silence form ──────────────────────────────────
+            # Pull the user's rules so the rule_id dropdown shows
+            # human-friendly names. Falls back to a single "(all
+            # rules)" option when the load fails.
+            try:
+                from engine.alert_engine_v2 import load_rules
+                rules = load_rules(user_id=uid) or []
+            except Exception:
+                rules = []
+
+            rule_options = ["(all rules)"] + [
+                f"{r.get('rule_id', '')} — {r.get('name', '')}"
+                for r in rules
+                if r.get("rule_id")
+            ]
+
+            with st.form("silences_create_form", clear_on_submit=True):
+                fcols = st.columns([2, 2, 2, 2], gap="small")
+                with fcols[0]:
+                    chosen_rule = st.selectbox(
+                        "Rule",
+                        options=rule_options,
+                        index=0,
+                        help='Pick "(all rules)" to silence every '
+                             'rule for this user.',
+                    )
+                with fcols[1]:
+                    ticker_input = st.text_input(
+                        "Ticker",
+                        value="",
+                        placeholder="ZIM, MATX, ... (blank = all)",
+                        help="Leave blank to silence every ticker.",
+                    )
+                with fcols[2]:
+                    severity_input = st.selectbox(
+                        "Severity",
+                        options=["(all)", "LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                        index=0,
+                    )
+                with fcols[3]:
+                    duration_input = st.number_input(
+                        "Duration (minutes)",
+                        min_value=1, max_value=1440, value=240, step=15,
+                        help="1-1440 (up to 24h).",
+                    )
+
+                reason_input = st.text_input(
+                    "Reason (optional)",
+                    value="",
+                    placeholder='e.g. "FRED maintenance window"',
+                )
+
+                submitted = st.form_submit_button("Create silence")
+                if submitted:
+                    # Parse the rule dropdown — the leading token before
+                    # the em-dash is the rule_id; "(all rules)" maps
+                    # to None.
+                    if chosen_rule == "(all rules)":
+                        rule_id = None
+                    else:
+                        rule_id = chosen_rule.split(" — ", 1)[0].strip() or None
+                    severity = (
+                        severity_input if severity_input != "(all)" else None
+                    )
+                    silence = create_silence(
+                        user_id=uid,
+                        rule_id=rule_id,
+                        ticker=ticker_input.strip() or None,
+                        severity=severity,
+                        reason=reason_input.strip() or None,
+                        duration_minutes=int(duration_input),
+                        created_by_user_id=uid,
+                    )
+                    if silence is not None:
+                        st.success(
+                            f"Silence {silence.silence_id[:8]} created — "
+                            f"expires {silence.expires_at}."
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Create failed — see logs.")
+    except Exception:
+        logger.exception("_render_silences_panel failed")
+
+
 def _render_rules_yaml_panel() -> None:
     """Render the Export / Import (YAML) expander.
 
@@ -3119,6 +3304,7 @@ def render(
             section_divider("Configuration")
             _render_notifications()
             _render_rules_manager()
+            _render_silences_panel()
             _render_route_thresholds()
 
             _render_delivery_channels()

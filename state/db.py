@@ -246,12 +246,28 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       v10 / v11 / v12 / v15 / v20 — fresh DBs pick up the tables via
 #       the executescript path in ``_init_schema``; the explicit
 #       ``_migrate_to_v21`` helper re-runs the same script on upgrade.
+#  22 — adds the ``alert_silences`` table so operators can shut up a
+#       rule (or a ticker, or a severity, or any cross-product of
+#       those — NULL = "matches anything") for a bounded planned-
+#       maintenance window. Each row stores ``silence_id`` (UUID),
+#       ``user_id`` (per-user scope — alice's silence does NOT mute
+#       bob's alerts), the three NULLable match keys (``rule_id``,
+#       ``ticker``, ``severity``), a free-form ``reason``,
+#       ``starts_at`` / ``expires_at`` (ISO-8601 TEXT), and the
+#       ``created_at`` / ``created_by_user_id`` audit pair. The
+#       silence gate sits AFTER cooldown + flap (so a silenced rule
+#       still records its crossings for flap-detection consistency);
+#       an active silence skips the save + dispatch, bumps the
+#       ``alerts_suppressed_by_silence`` kv_state counter, and logs
+#       at INFO level. Expired silences are kept around for an
+#       audit retention window (``retention_days``, default 30) so
+#       "what was muted yesterday?" stays answerable.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 21
+SCHEMA_VERSION: int = 22
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -969,6 +985,52 @@ _SCHEMA_V21_NOTE: str = (
     "_migrate_to_v21)"
 )
 
+# Schema v22 adds the ``alert_silences`` table so an operator can
+# suppress an alert rule (or any cross-product of rule_id / ticker /
+# severity — NULL on a column means "matches anything") for a
+# bounded planned-maintenance window without disabling the rule and
+# forgetting to re-enable it. The silence auto-expires at
+# ``expires_at``; the silence gate inside ``fire_rule`` sits AFTER
+# cooldown + flap so silenced rules still record their crossings for
+# flap-detection consistency.
+#
+# Per-user scoping is enforced on every read + write — alice's
+# silence cannot suppress bob's alerts, and bob cannot delete alice's
+# silence. The supporting ``(user_id, expires_at)`` index keeps the
+# per-evaluation "what's active for this user?" query cheap (typical
+# operators carry zero or one active silence at a time, but the
+# query lands on every alert evaluation so it has to be fast).
+#
+# Same CREATE-TABLE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10 / v11 / v12 / v15 / v20 / v21 — a fresh DB picks up the table
+# via the executescript path in ``_init_schema``; the explicit
+# ``_migrate_to_v22`` helper re-runs the same script on upgrade.
+_SCHEMA_V22 = """
+CREATE TABLE IF NOT EXISTS alert_silences (
+    silence_id          TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL,
+    rule_id             TEXT,
+    ticker              TEXT,
+    severity            TEXT,
+    reason              TEXT,
+    starts_at           TEXT NOT NULL,
+    expires_at          TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    created_by_user_id  TEXT NOT NULL,
+    FOREIGN KEY(created_by_user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_silences_active
+    ON alert_silences(user_id, expires_at);
+"""
+
+_SCHEMA_V22_NOTE: str = (
+    "v22: alert_silences table (silence_id PK, user_id, rule_id, "
+    "ticker, severity, reason, starts_at, expires_at, created_at, "
+    "created_by_user_id) + idx_silences_active (user_id, "
+    "expires_at) (added via CREATE TABLE IF NOT EXISTS in "
+    "_migrate_to_v22)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -1125,6 +1187,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # specific email). Safe to run on every open (fresh DB: creates
     # the tables; existing DB: no-op).
     conn.executescript(_SCHEMA_V21)
+    # v22 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX
+    # IF NOT EXISTS) — same pattern as v2 / v3 / v8 / v9 / v10 / v11 /
+    # v12 / v15 / v20 / v21. Adds the alert_silences table so an
+    # operator can shut up a rule for a bounded planned-maintenance
+    # window without the "disable + forget to re-enable" footgun.
+    # Safe to run on every open (fresh DB: creates the table; existing
+    # DB: no-op).
+    conn.executescript(_SCHEMA_V22)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1393,6 +1463,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v21(conn)
         except Exception as exc:
             logger.warning(f"state.db: v21 migration skipped: {exc}")
+
+    # Migration 21 → 22: add the ``alert_silences`` table so an
+    # operator can suppress a rule (or a ticker, or a severity) for a
+    # bounded planned-maintenance window. Same CREATE-IF-NOT-EXISTS
+    # idempotency as v2 / v3 / v8 / v9 / v10 / v11 / v12 / v15 /
+    # v20 / v21 — the helper is already invoked unconditionally
+    # above; this branch keeps the version-step ladder explicit.
+    if current < 22:
+        try:
+            from state.migrations import _migrate_to_v22
+            _migrate_to_v22(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v22 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

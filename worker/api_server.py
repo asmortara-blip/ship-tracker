@@ -422,6 +422,7 @@ _RE_CHANNEL_ONE = re.compile(r"^/api/v1/channels/([^/]+)/?$")
 # tab_operator_overview render, so external monitoring scripts don't
 # have to scrape the Streamlit UI).
 _RE_AUDIT = re.compile(r"^/api/v1/audit/?$")
+_RE_AUDIT_EXPORT = re.compile(r"^/api/v1/audit/export/?$")
 _RE_INCIDENTS = re.compile(r"^/api/v1/incidents/?$")
 _RE_SOURCE_HEALTH = re.compile(r"^/api/v1/source-health/?$")
 # Report-schedule endpoints (schema v20). The list/create surface is
@@ -429,6 +430,12 @@ _RE_SOURCE_HEALTH = re.compile(r"^/api/v1/source-health/?$")
 # ``schedule_id`` capture group.
 _RE_SCHEDULES = re.compile(r"^/api/v1/schedules/?$")
 _RE_SCHEDULE_ONE = re.compile(r"^/api/v1/schedules/([^/]+)/?$")
+# Alert-silence endpoints (schema v22). The list/create surface is
+# the bare path; the per-id endpoint (DELETE only — there is no edit
+# semantics, a silence is created once and either expires or is
+# cancelled) carries a ``silence_id`` capture group.
+_RE_SILENCES = re.compile(r"^/api/v1/silences/?$")
+_RE_SILENCE_ONE = re.compile(r"^/api/v1/silences/([^/]+)/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -458,8 +465,12 @@ class APIHandler(BaseHTTPRequestHandler):
       GET    /api/v1/telemetry/llm          → _get_llm_telemetry    (auth)
       GET    /api/v1/telemetry/perf         → _get_perf_telemetry   (auth)
       GET    /api/v1/audit                  → _list_audit           (auth)
+      GET    /api/v1/audit/export           → _export_audit         (auth)
       GET    /api/v1/incidents              → _list_incidents       (auth)
       GET    /api/v1/source-health          → _get_source_health    (auth)
+      GET    /api/v1/silences               → _list_silences        (auth)
+      POST   /api/v1/silences               → _create_silence       (auth, write)
+      DELETE /api/v1/silences/<id>          → _delete_silence       (auth, write)
       GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
@@ -498,8 +509,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_TELEMETRY_LLM, _RE_TELEMETRY_PERF,
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
-                _RE_AUDIT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
+                _RE_AUDIT, _RE_AUDIT_EXPORT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
+                _RE_SILENCES, _RE_SILENCE_ONE,
             )
         )
 
@@ -568,6 +580,14 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_CHANNELS.match(path):
                 self._list_channels(user_id)
                 return
+            # NB: check the more-specific /audit/export route BEFORE
+            # the /audit one. The regexes are anchored so they don't
+            # actually overlap, but listing the specific route first
+            # keeps the dispatch order readable and matches the
+            # convention used for /reports/<id>/html vs /reports.
+            if _RE_AUDIT_EXPORT.match(path):
+                self._export_audit(user_id, query)
+                return
             if _RE_AUDIT.match(path):
                 self._list_audit(user_id, query)
                 return
@@ -580,6 +600,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_SCHEDULES.match(path):
                 self._list_schedules(user_id)
                 return
+            if _RE_SILENCES.match(path):
+                self._list_silences(user_id, query)
+                return
 
             # GET on /api/v1/alerts/<id>/ack — this IS a known route
             # but only under POST. 405 it.
@@ -589,7 +612,8 @@ class APIHandler(BaseHTTPRequestHandler):
             # GET on routes that exist only under write verbs → 405.
             if (_RE_CHANNEL_ONE.match(path)
                     or _RE_REPORT_PUBLIC.match(path)
-                    or _RE_SCHEDULE_ONE.match(path)):
+                    or _RE_SCHEDULE_ONE.match(path)
+                    or _RE_SILENCE_ONE.match(path)):
                 _send_method_not_allowed(self)
                 return
 
@@ -633,6 +657,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             if _RE_SCHEDULES.match(path):
                 self._create_schedule(user_id)
+                return
+            if _RE_SILENCES.match(path):
+                self._create_silence(user_id)
                 return
 
             # POST on any other known route → 405. Unknown path → 404.
@@ -680,6 +707,10 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_SCHEDULE_ONE.match(path)
             if m:
                 self._delete_schedule(user_id, m.group(1))
+                return
+            m = _RE_SILENCE_ONE.match(path)
+            if m:
+                self._delete_silence(user_id, m.group(1))
                 return
 
             if self._path_matches_any_route(path):
@@ -1202,6 +1233,143 @@ class APIHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.OK, payload)
         except Exception as exc:
             logger.exception(f"api /audit crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/audit/export ────────────────────────
+
+    def _export_audit(self, user_id: str, query: dict[str, list[str]]) -> None:
+        """SIEM-friendly export of the caller's audit-log rows.
+
+        Same query-param surface as ``/audit`` (``action``, ``limit``)
+        plus ``since`` / ``until`` (ISO-8601 strings) and a ``format``
+        switch:
+
+          * ``format=jsonl`` (default) — line-delimited JSON, one
+            event per line, ``Content-Type: application/x-ndjson;
+            charset=utf-8``. The wire shape Splunk / Vector / Loki
+            scrapers consume natively.
+          * ``format=json`` — the existing ``{items: [...], count: N}``
+            envelope with ``Content-Type: application/json``. Same
+            shape as ``/audit`` but with the additional ``since`` /
+            ``until`` filtering applied.
+
+        Per-user scoping is enforced by passing the bearer-resolved
+        ``user_id`` straight through to ``export_audit_to_jsonl`` /
+        ``query_audit`` — Alice cannot pull Bob's rows by hitting
+        this endpoint.
+
+        Streaming: for very large bodies (over 100 KB) we use chunked
+        Transfer-Encoding via ``http.server`` defaults — the
+        ``Content-Length`` header is omitted and the body is written
+        directly to ``wfile`` in a single ``write`` call. Below the
+        threshold we set ``Content-Length`` so a misbehaving proxy
+        doesn't have to negotiate the chunked encoding for a small
+        payload.
+        """
+        try:
+            # Parse + clamp filters. We deliberately reuse the same
+            # default / max as /audit so the two endpoints stay
+            # consistent under the same query knobs.
+            limit = _parse_int(
+                query.get("limit", [None])[0],
+                default=_DEFAULT_AUDIT_LIMIT,
+            )
+            if limit <= 0:
+                limit = _DEFAULT_AUDIT_LIMIT
+            if limit > _MAX_AUDIT_LIMIT:
+                limit = _MAX_AUDIT_LIMIT
+
+            action_raw = (query.get("action", [""])[0] or "").strip()
+            action_filter: Optional[str] = action_raw or None
+
+            since_raw = (query.get("since", [""])[0] or "").strip()
+            since_filter: Optional[str] = since_raw or None
+
+            until_raw = (query.get("until", [""])[0] or "").strip()
+            until_filter: Optional[str] = until_raw or None
+
+            fmt = (query.get("format", [""])[0] or "jsonl").strip().lower()
+            if fmt not in ("jsonl", "json"):
+                _send_bad_request(
+                    self,
+                    "format must be one of: jsonl, json",
+                )
+                return
+
+            from utils.audit_export import export_audit_to_jsonl
+
+            if fmt == "jsonl":
+                body = export_audit_to_jsonl(
+                    user_id=user_id,
+                    action=action_filter,
+                    since=since_filter,
+                    until=until_filter,
+                    limit=limit,
+                )
+                # 100 KB threshold for chunked vs Content-Length —
+                # below this it's cheap to include Content-Length so
+                # naive clients see the full size up front; above
+                # it we go chunked to avoid buffering the whole body.
+                # The framing is the same to the consumer in both
+                # cases because we always write the body in one
+                # wfile.write call regardless.
+                self.send_response(HTTPStatus.OK)
+                self.send_header(
+                    "Content-Type",
+                    "application/x-ndjson; charset=utf-8",
+                )
+                if len(body) > 100_000:
+                    # Chunked Transfer-Encoding for large bodies.
+                    # We frame the body ourselves (one chunk + the
+                    # terminating zero-length chunk) so the stdlib
+                    # http.server doesn't need an explicit
+                    # Content-Length.
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    if body:
+                        # One chunk for the whole payload — the
+                        # downstream scrapers process the JSONL
+                        # line-by-line regardless of chunk framing.
+                        self.wfile.write(f"{len(body):X}\r\n".encode("ascii"))
+                        self.wfile.write(body)
+                        self.wfile.write(b"\r\n")
+                    self.wfile.write(b"0\r\n\r\n")
+                else:
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                return
+
+            # fmt == "json" → JSON envelope. We re-run the query so
+            # we get AuditEvent objects rather than parsing the JSONL
+            # back (which would lose the dataclass typing).
+            from auth.audit import query_audit
+            events = query_audit(
+                user_id=user_id,
+                action=action_filter,
+                since=since_filter,
+                limit=limit,
+            )
+            if until_filter:
+                events = [e for e in events if e.created_at < until_filter]
+            payload = {
+                "items": [
+                    {
+                        "event_id":    e.event_id,
+                        "created_at":  e.created_at,
+                        "user_id":     e.user_id,
+                        "action":      e.action,
+                        "entity_type": e.entity_type,
+                        "entity_id":   e.entity_id,
+                        "detail_json": e.detail_json,
+                    }
+                    for e in events
+                ],
+                "count": len(events),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api /audit/export crashed: {exc}")
             _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/incidents ───────────────────────────
@@ -1849,6 +2017,139 @@ class APIHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             logger.exception(f"api PATCH /schedules/<id> crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/silences ────────────────────────────
+
+    def _silence_to_dict(self, silence) -> dict:
+        """Project an AlertSilence onto the wire shape. Kept as a
+        helper because both ``_list_silences`` and ``_create_silence``
+        need the same projection."""
+        return {
+            "silence_id":          silence.silence_id,
+            "user_id":             silence.user_id,
+            "rule_id":             silence.rule_id,
+            "ticker":              silence.ticker,
+            "severity":            silence.severity,
+            "reason":              silence.reason,
+            "starts_at":           silence.starts_at,
+            "expires_at":          silence.expires_at,
+            "created_at":          silence.created_at,
+            "created_by_user_id":  silence.created_by_user_id,
+        }
+
+    def _list_silences(self, user_id: str, query: dict[str, list[str]]) -> None:
+        """Return the caller's silences as a JSON list.
+
+        Optional ``include_expired=true`` query parameter surfaces the
+        audit-retention tail (silences whose expires_at has already
+        passed but cleanup_expired_silences has not yet swept them
+        out). Default is active-only.
+        """
+        try:
+            from engine.alert_silences import list_silences
+
+            include_expired_raw = query.get("include_expired", [""])[0].lower()
+            include_expired = include_expired_raw in ("1", "true", "yes", "on")
+
+            silences = list_silences(
+                user_id=user_id, include_expired=include_expired,
+            )
+            payload = [self._silence_to_dict(s) for s in silences]
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api GET /silences crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/silences ───────────────────────────
+
+    def _create_silence(self, user_id: str) -> None:
+        """Create one silence from a posted JSON dict.
+
+        Body fields:
+          * ``duration_minutes`` (int, required) — silence lifetime.
+            Non-positive values are clamped to 1 by the engine layer.
+          * ``rule_id``  (str, optional) — match key (omit = all rules).
+          * ``ticker``   (str, optional) — match key (omit = all).
+          * ``severity`` (str, optional) — match key (omit = all).
+          * ``reason``   (str, optional) — operator note.
+
+        Returns ``{"saved": True, "silence_id": "...", "silence": {...}}``
+        on success. Missing ``duration_minutes`` → 400. Engine failure
+        → 500. The caller's ``user_id`` is stamped as both the
+        silence owner AND ``created_by_user_id`` — there is no admin
+        path to create a silence on someone else's behalf via the API.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            raw_duration = body.get("duration_minutes")
+            if raw_duration is None:
+                _send_bad_request(self, "duration_minutes is required")
+                return
+            try:
+                duration_minutes = int(raw_duration)
+            except (TypeError, ValueError):
+                _send_bad_request(self, "duration_minutes must be an int")
+                return
+
+            rule_id = body.get("rule_id") or None
+            ticker = body.get("ticker") or None
+            severity = body.get("severity") or None
+            reason = body.get("reason") or None
+
+            from engine.alert_silences import create_silence
+            silence = create_silence(
+                user_id=user_id,
+                rule_id=rule_id,
+                ticker=ticker,
+                severity=severity,
+                reason=reason,
+                duration_minutes=duration_minutes,
+                created_by_user_id=user_id,
+            )
+            if silence is None:
+                _send_internal_error(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "saved": True,
+                    "silence_id": silence.silence_id,
+                    "silence": self._silence_to_dict(silence),
+                },
+            )
+        except Exception as exc:
+            logger.exception(f"api POST /silences crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/silences/<id> ────────────────────
+
+    def _delete_silence(self, user_id: str, silence_id: str) -> None:
+        """Cancel a silence early. Per-user scoped — alice cannot
+        delete bob's silence. Cross-user attempts return 404 so a
+        probing caller cannot enumerate other users' silence ids by
+        404 vs 403."""
+        try:
+            from engine.alert_silences import delete_silence
+            ok = delete_silence(silence_id, user_id=user_id)
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(self, HTTPStatus.OK,
+                       {"deleted": True, "silence_id": silence_id})
+        except Exception as exc:
+            logger.exception(f"api DELETE /silences/<id> crashed: {exc}")
             _send_internal_error(self)
 
 

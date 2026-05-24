@@ -26,7 +26,7 @@ process would touch the real ``cache/ship_tracker.db``.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -876,6 +876,149 @@ def test_schedules_delete_removes_row(capsys) -> None:
     assert load_schedules(user_id="alice") == []
 
 
+# ─── silences (v22) ──────────────────────────────────────────────────────
+
+def test_silences_list_empty(capsys) -> None:
+    """Empty silences list prints '(no rows)' not a crash."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    code, out, _ = _run(
+        ["silences", "list", "--user-id", user.user_id], capsys,
+    )
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_silences_create_and_list(capsys) -> None:
+    """Creating a silence shows up in the subsequent list call."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+
+    code, _, _ = _run(
+        [
+            "silences", "create",
+            "--user-id", user.user_id,
+            "--duration-minutes", "60",
+            "--rule-id", "rule_bdi",
+            "--severity", "HIGH",
+            "--reason", "FRED maintenance",
+            "--json",
+        ],
+        capsys,
+    )
+    assert code == 0
+
+    code2, out2, _ = _run(
+        ["silences", "list", "--user-id", user.user_id, "--json"], capsys,
+    )
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert payload[0]["rule_id"] == "rule_bdi"
+    assert payload[0]["severity"] == "HIGH"
+    assert payload[0]["reason"] == "FRED maintenance"
+
+
+def test_silences_create_omits_optional_filters(capsys) -> None:
+    """Omitted --rule-id / --ticker / --severity become NULL on the
+    row → broadest possible silence (all alerts for the user)."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+
+    code, out, _ = _run(
+        [
+            "silences", "create",
+            "--user-id", user.user_id,
+            "--duration-minutes", "30",
+            "--json",
+        ],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["rule_id"] is None
+    assert payload["ticker"] is None
+    assert payload["severity"] is None
+
+
+def test_silences_delete_per_user_scoping(capsys) -> None:
+    """Alice cannot delete Bob's silence — the CLI surfaces this as
+    ``deleted: False`` (exit 0; not a crash)."""
+    from auth.users import signup
+    from engine.alert_silences import create_silence, list_silences
+
+    alice = signup("alice", "correct-password-123")
+    bob = signup("bob", "correct-password-123")
+    assert alice is not None and bob is not None
+
+    s = create_silence(
+        user_id=bob.user_id, duration_minutes=60,
+        created_by_user_id=bob.user_id,
+    )
+    assert s is not None
+
+    # Alice tries to delete bob's silence via the CLI.
+    code, out, _ = _run(
+        ["silences", "delete", s.silence_id,
+         "--user-id", alice.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["deleted"] is False
+    # Bob's silence still exists.
+    assert len(list_silences(user_id=bob.user_id)) == 1
+
+
+def test_silences_list_include_expired(capsys) -> None:
+    """``--include-expired`` surfaces silences whose expires_at has
+    already passed (kept around for audit retention)."""
+    from datetime import datetime, timedelta, timezone
+
+    from auth.users import signup
+    from engine.alert_silences import create_silence
+    from state.db import get_connection
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    s = create_silence(
+        user_id=user.user_id, duration_minutes=60,
+        created_by_user_id=user.user_id,
+    )
+    assert s is not None
+    # Backdate so the silence is expired but still in the table.
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    very_past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            "UPDATE alert_silences SET starts_at = ?, expires_at = ? "
+            "WHERE silence_id = ?",
+            (very_past, past, s.silence_id),
+        )
+
+    # Without --include-expired → empty list.
+    code, out, _ = _run(
+        ["silences", "list", "--user-id", user.user_id, "--json"], capsys,
+    )
+    assert code == 0
+    assert json.loads(out) == []
+
+    # With --include-expired → the row surfaces.
+    code2, out2, _ = _run(
+        ["silences", "list", "--user-id", user.user_id,
+         "--include-expired", "--json"],
+        capsys,
+    )
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list) and len(payload) == 1
+
+
 # ─── mfa recovery-codes / regenerate-codes (v21) ─────────────────────────
 
 def test_mfa_recovery_codes_reports_unused_count(capsys) -> None:
@@ -1147,3 +1290,145 @@ def test_rules_import_malformed_yaml_exits_1(capsys, tmp_path) -> None:
     code, _, err = _run(["rules", "import", "--in", str(in_file)], capsys)
     assert code == 1
     assert "error:" in err.lower()
+
+
+# ─── audit export ─────────────────────────────────────────────────────────
+#
+# The CLI subcommand bridges ``utils.audit_export`` → operator shell.
+# Defining properties under test:
+#   * Default output is JSONL on stdout; row count + elapsed go on
+#     stderr so a calling pipe can capture the JSONL cleanly.
+#   * --out FILE writes the JSONL to disk in the streaming path,
+#     prints the path on stdout, count on stderr.
+#   * --user-id / --action / --since / --until filters propagate
+#     through to query_audit (the audit-export module already has
+#     its own unit tests for the filter semantics; here we just
+#     confirm the CLI doesn't drop the flag on the floor).
+#   * Empty result → empty stdout + exit 0 (NOT 1 — an empty
+#     export is a legitimate state for a SIEM pull).
+#   * Bad ISO-8601 in --since/--until → exit 1 with stderr message
+#     (not a stacktrace).
+
+def _seed_audit_row(action: str, user_id: str = "u-1", detail: dict | None = None) -> None:
+    """Plant one audit row via the real record_audit path so the
+    CLI's read side has something to export."""
+    from auth.audit import record_audit
+    record_audit(action, user_id=user_id, detail=detail or {})
+
+
+def test_audit_export_to_stdout_emits_jsonl(capsys) -> None:
+    """Default invocation (no --out) writes JSONL to stdout and the
+    progress line to stderr. Each line is independently json-loads-able."""
+    _seed_audit_row("login_success", "u-1")
+    _seed_audit_row("save_rules", "u-1")
+    code, out, err = _run(["audit", "export", "--user-id", "u-1"], capsys)
+    assert code == 0
+    # Stdout carries JSONL — split, parse each line, confirm count.
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    assert len(lines) == 2
+    parsed = [json.loads(ln) for ln in lines]
+    assert {p["action"] for p in parsed} == {"login_success", "save_rules"}
+    # Progress on STDERR.
+    assert "exported 2 rows" in err
+
+
+def test_audit_export_to_file_writes_path(capsys, tmp_path) -> None:
+    """--out PATH writes the JSONL to disk, prints the path on stdout,
+    and the row count + path on stderr. The file content is valid
+    JSONL with the expected row count."""
+    for i in range(5):
+        _seed_audit_row("looped", "u-1", detail={"i": i})
+    out_path = tmp_path / "audit.jsonl"
+    code, out, err = _run(
+        ["audit", "export", "--user-id", "u-1", "--out", str(out_path)],
+        capsys,
+    )
+    assert code == 0
+    assert str(out_path) in out
+    assert "exported 5 rows" in err
+    assert out_path.exists()
+    body = out_path.read_text()
+    lines = [ln for ln in body.split("\n") if ln.strip()]
+    assert len(lines) == 5
+    # Each line parses; the action verb survives the round-trip.
+    parsed = [json.loads(ln) for ln in lines]
+    assert all(p["action"] == "looped" for p in parsed)
+
+
+def test_audit_export_user_id_filter(capsys) -> None:
+    """--user-id u-A must drop u-B's rows. Per-user scoping is the
+    core safety property of the export — a multi-tenant Splunk run
+    that mis-routes rows is a privacy incident."""
+    _seed_audit_row("login_success", "u-A")
+    _seed_audit_row("login_success", "u-B")
+    code, out, _ = _run(["audit", "export", "--user-id", "u-A"], capsys)
+    assert code == 0
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    parsed = [json.loads(ln) for ln in lines]
+    assert all(p["user_id"] == "u-A" for p in parsed)
+
+
+def test_audit_export_action_filter(capsys) -> None:
+    """--action filters to one verb only."""
+    _seed_audit_row("login_success", "u-1")
+    _seed_audit_row("save_rules", "u-1")
+    _seed_audit_row("login_success", "u-1")
+    code, out, _ = _run(
+        ["audit", "export", "--user-id", "u-1", "--action", "save_rules"],
+        capsys,
+    )
+    assert code == 0
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    parsed = [json.loads(ln) for ln in lines]
+    assert len(parsed) == 1
+    assert parsed[0]["action"] == "save_rules"
+
+
+def test_audit_export_since_until_window(capsys) -> None:
+    """--since / --until bracket the export window. We use a since=now-1min
+    pair to bracket present-day rows in (--since included) / out
+    (--until excluded)."""
+    _seed_audit_row("ut_cli_window", "u-1")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    code1, out1, _ = _run(
+        ["audit", "export", "--user-id", "u-1", "--since", past],
+        capsys,
+    )
+    assert code1 == 0
+    assert "ut_cli_window" in out1
+    code2, out2, _ = _run(
+        ["audit", "export", "--user-id", "u-1", "--until", past],
+        capsys,
+    )
+    assert code2 == 0
+    assert "ut_cli_window" not in out2
+
+
+def test_audit_export_no_matching_rows_exits_0_with_empty_stdout(capsys) -> None:
+    """An empty result must still exit 0 (a SIEM pull that finds
+    nothing is a legitimate state) and stdout must be empty (NOT
+    a blank line). Stderr still reports the 0-row count so the
+    operator sees the pull happened."""
+    code, out, err = _run(
+        ["audit", "export", "--user-id", "user-with-no-rows"],
+        capsys,
+    )
+    assert code == 0
+    # Stdout EXACTLY empty — no trailing newline, no whitespace.
+    assert out == ""
+    assert "exported 0 rows" in err
+
+
+def test_audit_export_bad_iso_since_exits_1(capsys) -> None:
+    """A malformed ISO-8601 --since must surface as exit 1 with a
+    helpful stderr message — NOT as a traceback from datetime.
+    The CLI contract (every handler failure → single-line stderr +
+    exit 1) is the same one ``mfa enable`` already pins; this just
+    extends it to the audit handler."""
+    code, _, err = _run(
+        ["audit", "export", "--since", "not-an-iso-date"],
+        capsys,
+    )
+    assert code == 1
+    assert "error:" in err.lower()
+    assert "--since" in err.lower()

@@ -565,6 +565,116 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  audit — read-only export of the audit log for SIEM ingestion
+#
+#  The Streamlit UI surfaces audit_events as a parsed table; the API
+#  emits the JSON envelope ``{items: [...], count: N}``. Neither shape
+#  is what Splunk / Vector / Loki want — those tools speak JSONL (one
+#  JSON object per line, \n-delimited). This subcommand bridges that
+#  gap: it pipes audit rows through ``utils.audit_export`` and either
+#  streams them to stdout (default) or writes them to ``--out PATH``.
+#
+#  Output contract:
+#    * Default: full JSONL on stdout, progress line on stderr.
+#    * --out PATH: streams via ``export_audit_to_stream`` (memory-
+#      efficient for very large pulls), progress on stderr, prints
+#      the path on stdout so a calling script can pipe it.
+#
+#  Exit codes:
+#    * 0 on success (including the empty-result case)
+#    * 1 on argument / ISO-parsing errors (handled by main()'s
+#      try / except wrapper)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_audit_export(args: argparse.Namespace) -> None:
+    """Export audit rows to JSONL — stdout or --out FILE.
+
+    Stderr carries a ``exported N rows in M ms`` progress line so a
+    shell pipe consumer can capture the JSONL on stdout untouched
+    while still seeing the row count for monitoring.
+
+    Argument validation:
+      * ``--since`` / ``--until`` MUST parse via ``datetime.fromisoformat``
+        (the canonical ISO-8601 subset Python supports). A malformed
+        value raises ``RuntimeError`` here, which ``main()`` converts
+        to exit 1 with the message on stderr — same contract as every
+        other CLI handler.
+      * ``--limit`` MUST be a positive integer. Argparse already
+        enforces ``type=int``; we additionally floor at 1 so a typo'd
+        ``--limit 0`` doesn't silently produce an empty export.
+    """
+    import time
+
+    from utils.audit_export import (
+        export_audit_to_jsonl,
+        export_audit_to_stream,
+    )
+
+    # Validate ISO-8601 inputs up front so a bad value fails BEFORE
+    # we touch the DB. fromisoformat accepts the same range query_audit
+    # records (UTC ISO strings via datetime.isoformat()).
+    for name, raw in (("since", args.since), ("until", args.until)):
+        if raw is None:
+            continue
+        try:
+            datetime.fromisoformat(raw)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"invalid --{name} value {raw!r}: must be ISO-8601 "
+                f"(e.g. 2026-05-23T00:00:00+00:00) — {exc}"
+            ) from exc
+
+    limit = max(1, int(args.limit))
+    filters = dict(
+        user_id=args.user_id,
+        action=args.action,
+        since=args.since,
+        until=args.until,
+        limit=limit,
+    )
+
+    started_ns = time.perf_counter_ns()
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Streaming path — write directly to the file in batches so a
+        # 100k-row backfill doesn't materialise as one giant string.
+        with out_path.open("wb") as f:
+            row_count = export_audit_to_stream(f, **filters)
+        elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
+        # Progress on STDERR so the stdout channel stays clean for
+        # the path (which a calling shell may want to capture).
+        print(
+            f"exported {row_count} rows in {elapsed_ms:.0f} ms to {out_path}",
+            file=sys.stderr,
+        )
+        # Path on stdout — matches the pattern used by ``rules export
+        # --out`` and ``export --output``.
+        print(str(out_path))
+        return
+
+    # No --out → stream to stdout. We use the in-memory variant here
+    # because stdout is by definition a text stream and we want the
+    # progress line to print AFTER the JSONL body lands so the user
+    # sees the headline at the bottom (matches the convention of
+    # `wc -l file | xargs echo`).
+    body = export_audit_to_jsonl(**filters)
+    # sys.stdout.write avoids the trailing newline print() would add
+    # — rows_to_jsonl already terminates the last line. Decoding to
+    # str is safe: the bytes are UTF-8 by construction.
+    sys.stdout.write(body.decode("utf-8"))
+    # Count rows by counting newlines (every row ends in \n, including
+    # the last). Empty result → 0 rows.
+    row_count = body.count(b"\n") if body else 0
+    elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
+    print(
+        f"exported {row_count} rows in {elapsed_ms:.0f} ms",
+        file=sys.stderr,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  mfa — TOTP second factor (commit 1ac149b)
 #
 #  The interesting handler is ``mfa enable``: it generates a fresh secret
@@ -884,6 +994,102 @@ def _cmd_settings_show(args: argparse.Namespace) -> None:
         "default_alert_severity":     settings.default_alert_severity,
         "extras":                     settings.extras or "(none)",
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  silences — bounded alert silencing for planned downtime (schema v22)
+#
+#  Mirrors the API + UI surface: list / create / delete. Every
+#  subcommand is per-user scoped via the ``--user-id`` flag — alice
+#  cannot list, mutate, or delete bob's silences. The CLI does not
+#  expose a separate ``--created-by`` flag because the operator
+#  running a shell is presumed to be acting on their own behalf;
+#  ``created_by_user_id`` is stamped equal to ``--user-id``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_silences_list(args: argparse.Namespace) -> None:
+    """List a user's silences. Defaults to active-only; pass
+    ``--include-expired`` to surface the audit-retention tail."""
+    from engine.alert_silences import list_silences
+
+    silences = list_silences(
+        user_id=args.user_id,
+        include_expired=bool(getattr(args, "include_expired", False)),
+    )
+    if args.json:
+        _print_json(silences)
+        return
+    rows = [
+        {
+            "silence_id":  s.silence_id[:10],
+            "rule_id":     s.rule_id or "(all)",
+            "ticker":      s.ticker or "(all)",
+            "severity":    s.severity or "(all)",
+            "starts_at":   s.starts_at,
+            "expires_at":  s.expires_at,
+            "reason":      (s.reason[:40] + "…")
+                           if (s.reason and len(s.reason) > 40) else (s.reason or ""),
+        }
+        for s in silences
+    ]
+    _print_table(
+        rows,
+        columns=["silence_id", "rule_id", "ticker", "severity",
+                 "starts_at", "expires_at", "reason"],
+    )
+
+
+def _cmd_silences_create(args: argparse.Namespace) -> None:
+    """Create a silence with the supplied filters + duration. The
+    ``--rule-id`` / ``--ticker`` / ``--severity`` flags are all
+    optional — omitted ones become NULL on the row (matches anything
+    for that column)."""
+    from engine.alert_silences import create_silence
+
+    duration = int(args.duration_minutes)
+    silence = create_silence(
+        user_id=args.user_id,
+        rule_id=args.rule_id,
+        ticker=args.ticker,
+        severity=args.severity,
+        reason=args.reason,
+        duration_minutes=duration,
+        # The CLI has no session — the operator running it is acting
+        # on their own behalf, so created_by_user_id matches the
+        # silence owner.
+        created_by_user_id=args.user_id,
+    )
+    if silence is None:
+        raise RuntimeError(
+            f"create_silence failed for user_id={args.user_id!r} "
+            "— check logs"
+        )
+    if args.json:
+        _print_json(silence)
+    else:
+        _print_kv({
+            "silence_id":  silence.silence_id,
+            "user_id":     silence.user_id,
+            "rule_id":     silence.rule_id or "(all)",
+            "ticker":      silence.ticker or "(all)",
+            "severity":    silence.severity or "(all)",
+            "starts_at":   silence.starts_at,
+            "expires_at":  silence.expires_at,
+            "reason":      silence.reason or "",
+        })
+
+
+def _cmd_silences_delete(args: argparse.Namespace) -> None:
+    """Cancel a silence early. Per-user scoped — alice cannot delete
+    bob's silence."""
+    from engine.alert_silences import delete_silence
+
+    ok = delete_silence(args.silence_id, user_id=args.user_id)
+    payload = {"silence_id": args.silence_id, "deleted": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1421,6 +1627,45 @@ def _build_parser() -> argparse.ArgumentParser:
     se.add_argument("--json", action="store_true")
     se.set_defaults(func=_cmd_export)
 
+    # ── audit ─────────────────────────────────────────────────────────────
+    # ``audit export`` writes audit_events rows as JSONL (one JSON
+    # object per line) for SIEM ingestion. Default is stdout; --out
+    # writes a file via the streaming variant. Filters mirror what
+    # query_audit accepts; --until is applied client-side since the
+    # underlying engine call only natively supports --since.
+    p_au = sub.add_parser("audit", help="Audit-log subcommands")
+    au_sub = p_au.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    au1 = au_sub.add_parser(
+        "export",
+        help="Export audit_events as JSONL (one JSON object per line)",
+    )
+    au1.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="Filter to a single user_id (default: every user)",
+    )
+    au1.add_argument(
+        "--action", default=None,
+        help="Filter to a single action verb (e.g. login_success)",
+    )
+    au1.add_argument(
+        "--since", default=None,
+        help="ISO-8601 lower bound on created_at (inclusive)",
+    )
+    au1.add_argument(
+        "--until", default=None,
+        help="ISO-8601 upper bound on created_at (exclusive)",
+    )
+    au1.add_argument(
+        "--limit", type=int, default=10_000,
+        help="Cap rows returned (default: 10000)",
+    )
+    au1.add_argument(
+        "--out", default=None,
+        help="Write JSONL to this path (default: stdout)",
+    )
+    au1.set_defaults(func=_cmd_audit_export)
+
     # ── mfa ───────────────────────────────────────────────────────────────
     p_mfa = sub.add_parser("mfa", help="TOTP second-factor subcommands")
     sm = p_mfa.add_subparsers(dest="subcommand", required=True, metavar="SUB")
@@ -1565,6 +1810,67 @@ def _build_parser() -> argparse.ArgumentParser:
                      choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
     ss2.add_argument("--json", action="store_true")
     ss2.set_defaults(func=_cmd_settings_set)
+
+    # ── silences ──────────────────────────────────────────────────────────
+    # Bounded alert silencing for planned downtime. Three subcommands —
+    # list / create / delete. The create command's match keys
+    # (--rule-id / --ticker / --severity) are all optional and NULL on
+    # the row means "matches any value for this column"; the broadest
+    # silence (all three omitted) shuts up every alert for the user.
+    p_sil = sub.add_parser("silences", help="Alert-silence subcommands")
+    ssil = p_sil.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    ssil1 = ssil.add_parser("list", help="List a user's silences")
+    ssil1.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot list bob's silences",
+    )
+    ssil1.add_argument(
+        "--include-expired", dest="include_expired", action="store_true",
+        help="Include expired silences (kept around for audit retention)",
+    )
+    ssil1.add_argument("--json", action="store_true")
+    ssil1.set_defaults(func=_cmd_silences_list)
+
+    ssil2 = ssil.add_parser(
+        "create", help="Create a new silence (operator + duration + filters)",
+    )
+    ssil2.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="Owner of the silence — alerts under this user_id are muted",
+    )
+    ssil2.add_argument(
+        "--duration-minutes", dest="duration_minutes", required=True, type=int,
+        help="Silence lifetime in minutes (clamped to >= 1)",
+    )
+    ssil2.add_argument(
+        "--rule-id", dest="rule_id", default=None,
+        help='Restrict to one rule_id (omit = "all rules")',
+    )
+    ssil2.add_argument(
+        "--ticker", default=None,
+        help='Restrict to one ticker (omit = "all tickers")',
+    )
+    ssil2.add_argument(
+        "--severity", default=None,
+        choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        help='Restrict to one severity (omit = "all severities")',
+    )
+    ssil2.add_argument(
+        "--reason", default=None,
+        help='Free-form operator note ("FRED maintenance")',
+    )
+    ssil2.add_argument("--json", action="store_true")
+    ssil2.set_defaults(func=_cmd_silences_create)
+
+    ssil3 = ssil.add_parser("delete", help="Cancel a silence early")
+    ssil3.add_argument("silence_id")
+    ssil3.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot delete bob's silences",
+    )
+    ssil3.add_argument("--json", action="store_true")
+    ssil3.set_defaults(func=_cmd_silences_delete)
 
     # ── schedules ─────────────────────────────────────────────────────────
     p_sch = sub.add_parser("schedules", help="Report-schedule subcommands")
