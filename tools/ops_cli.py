@@ -1135,6 +1135,120 @@ def _cmd_settings_show(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  prefs — per-user notification preferences (auth.notification_prefs)
+#
+#  Per-operator overlay on top of the existing per-rule + per-channel
+#  routing. Three subcommands — show / set / reset. ``--user-id`` is
+#  required on every subcommand (alice cannot edit bob's prefs from
+#  the CLI any more than from the UI).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_prefs_show(args: argparse.Namespace) -> None:
+    from auth.notification_prefs import get_prefs
+
+    prefs = get_prefs(user_id=args.user_id)
+    payload = {
+        "user_id":              prefs.user_id,
+        "enabled":              prefs.enabled,
+        "min_severity":         prefs.min_severity,
+        "alert_type_filter":    prefs.alert_type_filter,
+        "severity_channel_map": prefs.severity_channel_map,
+        "quiet_during_hours":   list(prefs.quiet_during_hours)
+                                if prefs.quiet_during_hours is not None
+                                else None,
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({
+            "user_id":            prefs.user_id,
+            "enabled":            prefs.enabled,
+            "min_severity":       prefs.min_severity,
+            "alert_type_filter":  ",".join(prefs.alert_type_filter) or "(any)",
+            "quiet_during_hours": (
+                f"{prefs.quiet_during_hours[0]:02d}:00 → "
+                f"{prefs.quiet_during_hours[1]:02d}:00 UTC"
+                if prefs.quiet_during_hours is not None
+                else "(none)"
+            ),
+            "severity_channels":  (
+                "; ".join(
+                    f"{sev}:{','.join(chs) if chs else '(none)'}"
+                    for sev, chs in sorted(prefs.severity_channel_map.items())
+                )
+                if prefs.severity_channel_map else "(no per-severity map)"
+            ),
+        })
+
+
+def _cmd_prefs_set(args: argparse.Namespace) -> None:
+    from auth.notification_prefs import update_pref
+
+    updates: dict[str, Any] = {}
+    if args.min_severity is not None:
+        updates["min_severity"] = args.min_severity
+    if args.enabled is not None:
+        # argparse delivers the raw string ("true"/"false"); coerce here
+        # so the prefs module only sees a real bool.
+        enabled_str = str(args.enabled).strip().lower()
+        if enabled_str not in ("true", "false", "1", "0"):
+            raise RuntimeError(
+                "prefs set --enabled must be 'true' or 'false'"
+            )
+        updates["enabled"] = enabled_str in ("true", "1")
+    if args.alert_types is not None:
+        # Comma-separated list — split + strip + drop blanks. An empty
+        # final list ("--alert-types ''") explicitly clears the filter.
+        updates["alert_type_filter"] = [
+            s.strip() for s in args.alert_types.split(",") if s.strip()
+        ]
+    # Quiet hours: both halves must be supplied together. The CLI does
+    # NOT support setting only one half — that would silently leave the
+    # window half-configured.
+    if args.quiet_start is not None or args.quiet_end is not None:
+        if args.quiet_start is None or args.quiet_end is None:
+            raise RuntimeError(
+                "prefs set requires both --quiet-start AND --quiet-end "
+                "(or neither)"
+            )
+        updates["quiet_during_hours"] = (
+            int(args.quiet_start), int(args.quiet_end),
+        )
+    if args.clear_quiet_hours:
+        # Explicit clear. Takes precedence over any --quiet-* values
+        # passed in the same invocation — "clear and set" makes no sense.
+        updates["quiet_during_hours"] = None
+
+    if not updates:
+        raise RuntimeError(
+            "prefs set requires at least one of --enabled / --min-severity "
+            "/ --alert-types / --quiet-start+--quiet-end / --clear-quiet-hours"
+        )
+
+    ok = update_pref(user_id=args.user_id, **updates)
+    payload = {
+        "user_id": args.user_id,
+        "applied": list(updates.keys()),
+        "saved":   bool(ok),
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_prefs_reset(args: argparse.Namespace) -> None:
+    from auth.notification_prefs import reset_prefs
+
+    ok = reset_prefs(user_id=args.user_id)
+    payload = {"user_id": args.user_id, "reset": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  silences — bounded alert silencing for planned downtime (schema v22)
 #
 #  Mirrors the API + UI surface: list / create / delete. Every
@@ -2067,6 +2181,55 @@ def _build_parser() -> argparse.ArgumentParser:
                      choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
     ss2.add_argument("--json", action="store_true")
     ss2.set_defaults(func=_cmd_settings_set)
+
+    # ── prefs ─────────────────────────────────────────────────────────────
+    # Per-user notification preferences (auth.notification_prefs).
+    # Mirrors the API + UI surface — show / set / reset. Every
+    # subcommand is per-user scoped via the required ``--user-id`` flag;
+    # alice can't show, set, or reset bob's prefs from the CLI.
+    p_pr = sub.add_parser("prefs", help="Per-user notification-prefs subcommands")
+    sp = p_pr.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sp1 = sp.add_parser("show", help="Pretty-print one user's prefs (or defaults)")
+    sp1.add_argument("--user-id", dest="user_id", required=True)
+    sp1.add_argument("--json", action="store_true")
+    sp1.set_defaults(func=_cmd_prefs_show)
+
+    sp2 = sp.add_parser("set", help="Update one or more pref fields")
+    sp2.add_argument("--user-id", dest="user_id", required=True)
+    sp2.add_argument(
+        "--enabled", default=None,
+        help="Master switch ('true' or 'false')",
+    )
+    sp2.add_argument(
+        "--min-severity", dest="min_severity", default=None,
+        choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        help="Floor — alerts below this severity are suppressed",
+    )
+    sp2.add_argument(
+        "--alert-types", dest="alert_types", default=None,
+        help=('Comma-separated allow-list (e.g. "BDI_MOVE,MACRO"). '
+              'Empty string clears the filter.'),
+    )
+    sp2.add_argument(
+        "--quiet-start", dest="quiet_start", default=None, type=int,
+        help="Quiet window start hour (UTC, 0–23). Pair with --quiet-end.",
+    )
+    sp2.add_argument(
+        "--quiet-end", dest="quiet_end", default=None, type=int,
+        help="Quiet window end hour (UTC, 0–23). Pair with --quiet-start.",
+    )
+    sp2.add_argument(
+        "--clear-quiet-hours", dest="clear_quiet_hours", action="store_true",
+        help="Disable quiet hours entirely (overrides --quiet-* on same call).",
+    )
+    sp2.add_argument("--json", action="store_true")
+    sp2.set_defaults(func=_cmd_prefs_set)
+
+    sp3 = sp.add_parser("reset", help="Wipe one user's prefs back to defaults")
+    sp3.add_argument("--user-id", dest="user_id", required=True)
+    sp3.add_argument("--json", action="store_true")
+    sp3.set_defaults(func=_cmd_prefs_reset)
 
     # ── silences ──────────────────────────────────────────────────────────
     # Bounded alert silencing for planned downtime. Three subcommands —

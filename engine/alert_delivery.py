@@ -975,6 +975,39 @@ def _deliver_pagerduty(channel: DeliveryChannel, alert: ShippingAlert) -> Delive
     )
 
 
+def _lookup_alert_user_id(alert: ShippingAlert) -> str:
+    """Resolve the owning user_id for a ShippingAlert.
+
+    ShippingAlert itself does not carry ``user_id`` (the v7 column lives
+    on the SQLite row, not the dataclass). The user-level prefs filter
+    needs an owner to scope the lookup, so we read it back from the
+    ``alerts`` table by ``alert_id``. Returns ``""`` (the legacy
+    "no user" bucket) when:
+
+      * The alert_id is missing or unknown in the DB.
+      * The SQLite read fails.
+      * The row is from a pre-v7 schema and the user_id column is NULL.
+
+    NEVER raises. The empty-string return is treated by
+    :func:`auth.notification_prefs.get_prefs` as the legacy / default
+    bucket — i.e. unconfigured users get the default prefs (everything
+    enabled), so a missing user_id never accidentally suppresses
+    deliveries.
+    """
+    try:
+        alert_id = getattr(alert, "alert_id", "") or ""
+        if not alert_id:
+            return ""
+        from engine.alert_engine_v2 import get_alert_with_fire_count
+        row = get_alert_with_fire_count(alert_id)
+        if row is None:
+            return ""
+        uid = row.get("user_id", "")
+        return uid if isinstance(uid, str) else ""
+    except Exception:
+        return ""
+
+
 def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryResult:
     """Push a single alert to ``channel``. Never raises — network errors
     are caught and returned in the ``DeliveryResult``.
@@ -984,6 +1017,18 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
     threshold or disabled → ``success=True`` with status_code=0 and
     error_msg explaining the skip; this matches "delivery succeeded by
     being a no-op" rather than "delivery failed".
+
+    Per-user notification prefs (``auth.notification_prefs``) are
+    enforced as the FINAL gate, AFTER the existing channel-enabled +
+    per-channel severity_threshold + per-channel quiet-hours checks.
+    When the alert's owning user has prefs that drop this channel
+    (severity floor / alert_type filter / quiet hours / per-severity
+    channel allow-list), the delivery is recorded as a no-op success
+    (``status_code=0``, ``error_msg="suppressed by user prefs"``) and
+    the cumulative ``alerts_suppressed_by_prefs`` kv_state counter is
+    bumped. The legacy "no prefs configured for this user" path
+    (empty kv_state row) is byte-identical to today's behaviour — the
+    default ``NotificationPrefs`` returns ``[channel]`` unchanged.
 
     Dispatch on ``channel.kind``:
       - ``"slack"`` → POST to the incoming-webhook URL in ``target``
@@ -1022,6 +1067,33 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
                 status_code=0,
                 error_msg="channel in quiet hours",
             )
+
+    # ── Per-user notification-prefs gate (v25) ────────────────────────
+    # FINAL filter — runs AFTER channel.enabled, AFTER per-channel
+    # severity_threshold, AFTER per-channel quiet-hours. This is the
+    # operator's personal subscription preference layer — see
+    # ``auth.notification_prefs`` for the rules. Resolves the alert's
+    # owning user_id from the alerts table; a missing user_id (or any
+    # internal error) collapses to the default-prefs path, which is
+    # byte-identical to the legacy behaviour.
+    try:
+        from auth.notification_prefs import (
+            filter_channels_by_prefs,
+            _bump_suppressed_counter,
+        )
+        owner_uid = _lookup_alert_user_id(alert)
+        kept = filter_channels_by_prefs([channel], alert, user_id=owner_uid)
+        if not kept:
+            _bump_suppressed_counter(1)
+            return DeliveryResult(
+                success=True,
+                status_code=0,
+                error_msg="suppressed by user prefs",
+            )
+    except Exception:
+        # Defence-in-depth — a prefs-module failure must NEVER block
+        # a delivery. Fall through to the legacy dispatch path.
+        pass
 
     if channel.kind == "email":
         config = _get_smtp_config()

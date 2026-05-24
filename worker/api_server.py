@@ -446,6 +446,12 @@ _RE_ALERT_ANNOTATIONS = re.compile(
     r"^/api/v1/alerts/([^/]+)/annotations/?$"
 )
 _RE_ANNOTATION_ONE = re.compile(r"^/api/v1/annotations/([^/]+)/?$")
+# Per-user notification-prefs endpoints. GET returns the caller's
+# current prefs (defaults if none saved); PATCH applies a partial
+# update. There is no per-id route — the prefs row is implicitly
+# keyed by the caller's authenticated user_id, so a token-holder
+# can only read / mutate their own prefs.
+_RE_NOTIFICATION_PREFS = re.compile(r"^/api/v1/notification-prefs/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -485,6 +491,8 @@ class APIHandler(BaseHTTPRequestHandler):
       POST   /api/v1/alerts/<id>/annotations → _create_annotation   (auth, write)
       PATCH  /api/v1/annotations/<id>       → _edit_annotation      (auth, write)
       DELETE /api/v1/annotations/<id>       → _delete_annotation    (auth, write)
+      GET    /api/v1/notification-prefs     → _get_notification_prefs   (auth)
+      PATCH  /api/v1/notification-prefs     → _patch_notification_prefs (auth, write)
       GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
@@ -527,6 +535,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
                 _RE_SILENCES, _RE_SILENCE_ONE,
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
+                _RE_NOTIFICATION_PREFS,
             )
         )
 
@@ -627,6 +636,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             if _RE_SILENCES.match(path):
                 self._list_silences(user_id, query)
+                return
+            if _RE_NOTIFICATION_PREFS.match(path):
+                self._get_notification_prefs(user_id)
                 return
 
             # GET on /api/v1/alerts/<id>/ack — this IS a known route
@@ -805,6 +817,9 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_ANNOTATION_ONE.match(path)
             if m:
                 self._edit_annotation(user_id, m.group(1))
+                return
+            if _RE_NOTIFICATION_PREFS.match(path):
+                self._patch_notification_prefs(user_id)
                 return
 
             if self._path_matches_any_route(path):
@@ -2374,6 +2389,113 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception(
                 f"api DELETE /annotations/<id> crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoint: GET / PATCH /api/v1/notification-prefs ──────────
+
+    def _get_notification_prefs(self, user_id: str) -> None:
+        """Return the caller's notification prefs as JSON.
+
+        The shape mirrors :class:`auth.notification_prefs.NotificationPrefs`.
+        A user with no saved prefs gets the defaults (every field at
+        its default) — the client cannot tell the difference between
+        "never saved" and "saved-as-defaults", which matches the rest
+        of the kv_state JSON-blob endpoints in this server.
+        """
+        try:
+            from auth.notification_prefs import get_prefs
+            prefs = get_prefs(user_id=user_id)
+            payload = {
+                "user_id":              prefs.user_id,
+                "enabled":              prefs.enabled,
+                "min_severity":         prefs.min_severity,
+                "alert_type_filter":    prefs.alert_type_filter,
+                "severity_channel_map": prefs.severity_channel_map,
+                "quiet_during_hours":   (
+                    list(prefs.quiet_during_hours)
+                    if prefs.quiet_during_hours is not None
+                    else None
+                ),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(
+                f"api GET /notification-prefs crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    def _patch_notification_prefs(self, user_id: str) -> None:
+        """Partial-update the caller's notification prefs.
+
+        Body is a JSON object whose keys are any subset of the
+        :class:`NotificationPrefs` field names. Unknown keys are
+        silently ignored — same forward-compat shape as
+        ``update_pref``. Returns the FULL updated prefs object so the
+        client doesn't have to round-trip to GET to see the post-patch
+        state.
+
+        ``quiet_during_hours`` accepts ``null`` (clears the window) or
+        a two-element list ``[start_hour, end_hour]``. Anything else
+        falls back to ``null`` via the normalize helper inside the
+        prefs module.
+        """
+        try:
+            from auth.notification_prefs import (
+                get_prefs,
+                update_pref,
+            )
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if body is None:
+                # Empty body — treat as no-op partial update (still
+                # returns the current prefs so the client sees state).
+                body = {}
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            # Forward only known keys — anything else gets silently
+            # dropped at the update_pref boundary anyway, but skipping
+            # them here keeps the audit-log detail clean.
+            forwarded: dict[str, object] = {}
+            for k in (
+                "enabled",
+                "min_severity",
+                "alert_type_filter",
+                "severity_channel_map",
+                "quiet_during_hours",
+            ):
+                if k in body:
+                    forwarded[k] = body[k]
+
+            ok = update_pref(user_id=user_id, **forwarded)
+            if not ok:
+                _send_internal_error(self)
+                return
+
+            prefs = get_prefs(user_id=user_id)
+            payload = {
+                "user_id":              prefs.user_id,
+                "enabled":              prefs.enabled,
+                "min_severity":         prefs.min_severity,
+                "alert_type_filter":    prefs.alert_type_filter,
+                "severity_channel_map": prefs.severity_channel_map,
+                "quiet_during_hours":   (
+                    list(prefs.quiet_during_hours)
+                    if prefs.quiet_during_hours is not None
+                    else None
+                ),
+            }
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(
+                f"api PATCH /notification-prefs crashed: {exc}"
             )
             _send_internal_error(self)
 
