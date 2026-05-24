@@ -48,7 +48,8 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
@@ -194,6 +195,224 @@ def _get_secrets() -> list[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  /events — inbound alert ingestion from external monitoring tools
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The /ack* endpoints close the OUTBOUND loop (Ship Tracker fired the
+# alert, PagerDuty resolved it, we ack it back). /events closes the
+# INBOUND loop: an external monitoring tool (Datadog, Sentry, Grafana,
+# a custom shell script) wants to create a fresh ShippingAlert in
+# Ship Tracker so the analyst sees a unified alerts surface.
+#
+# Auth: BOTH X-Hub-Signature-256 (HMAC, same shared secret as the rest
+# of this listener) and Authorization: Bearer (a real auth.tokens row)
+# are accepted. At least one must validate; if BOTH headers are
+# present, BOTH must validate (no fallback). The bearer mode resolves
+# a user_id; the HMAC mode falls back to WEBHOOK_INBOUND_USER_ID or
+# the oldest admin if that env var is unset.
+
+# Allowed severity values, upper-cased and validated against the
+# normalized incoming value. Mirrors engine.alert_engine_v2's vocab.
+_ALLOWED_SEVERITIES: frozenset[str] = frozenset(
+    {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+)
+
+
+# Dedup window for external_id replay. 24h is long enough to absorb a
+# monitoring tool retrying through an outage (Datadog will keep
+# retrying a webhook for hours), short enough that a recurring event
+# fired the next day creates a fresh alert as expected.
+_EXTERNAL_ID_DEDUP_HOURS: int = 24
+
+
+def _external_id_kv_key(external_id: str) -> str:
+    """kv_state row key for the external_id → alert_id mapping."""
+    return f"external_alert_id:{external_id}"
+
+
+def _read_external_id_alert(external_id: str) -> Optional[tuple[str, str]]:
+    """Look up a previously-stored ``(alert_id, created_at_iso)`` pair
+    for ``external_id``. Returns ``None`` when:
+
+    * the kv_state row is missing,
+    * the JSON does not parse,
+    * the stored ``created_at`` is older than the dedup window.
+
+    NEVER raises — a broken kv_state read must NOT block alert
+    creation. On any failure the caller proceeds as if no dedup row
+    existed (worst case: a duplicate alert lands, the second POST
+    looks like a first POST).
+    """
+    if not external_id:
+        return None
+    try:
+        from state.db import get_connection
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_external_id_kv_key(external_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        raw = row["value"] if hasattr(row, "keys") else row[0]
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        alert_id = data.get("alert_id", "")
+        created_at = data.get("created_at", "")
+        if not isinstance(alert_id, str) or not alert_id:
+            return None
+        if not isinstance(created_at, str) or not created_at:
+            return None
+        # Age check — anything past the dedup window counts as "expired"
+        # so a recurring monitor event on day N+1 lands as a fresh
+        # alert. Tolerate timezone-naive timestamps by anchoring to UTC.
+        try:
+            ts = datetime.fromisoformat(created_at)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=_EXTERNAL_ID_DEDUP_HOURS
+        )
+        if ts < cutoff:
+            return None
+        return alert_id, created_at
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"webhook /events: kv_state lookup failed for "
+            f"external_id={external_id!r}: {exc}"
+        )
+        return None
+
+
+def _store_external_id_alert(external_id: str, alert_id: str,
+                             created_at: str) -> None:
+    """Persist the external_id → alert_id mapping in kv_state. NEVER
+    raises — dedup is a nice-to-have, not a hard requirement, and a
+    kv_state write hiccup must not break the create path.
+    """
+    if not external_id or not alert_id:
+        return
+    try:
+        from state.db import get_connection
+        payload = json.dumps(
+            {"alert_id": alert_id, "created_at": created_at}
+        )
+        conn = get_connection()
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                (
+                    _external_id_kv_key(external_id),
+                    payload,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"webhook /events: kv_state write failed for "
+            f"external_id={external_id!r}: {exc}"
+        )
+
+
+def _resolve_hmac_user_id() -> str:
+    """Decide which user_id stamps an HMAC-authenticated /events alert.
+
+    Resolution order:
+      1. ``WEBHOOK_INBOUND_USER_ID`` env var (operator-supplied).
+      2. The OLDEST registered admin (the deterministic "first admin"
+         in created_at-ASC order). ``list_users`` returns newest-first
+         so we reverse and filter to ``role == 'admin'``.
+      3. Empty string — falls into the legacy global bucket. Better
+         than refusing the alert: the alert is real, an analyst will
+         still see it in the UI's global view.
+    """
+    explicit = (
+        os.environ.get("WEBHOOK_INBOUND_USER_ID", "") or ""
+    ).strip()
+    if explicit:
+        return explicit
+    try:
+        from auth.users import list_users
+        users = list_users()
+        # list_users sorts newest-first; reverse to get oldest-first
+        # and pick the first admin so the chosen owner is stable
+        # across deploys.
+        for u in reversed(users):
+            if getattr(u, "role", "") == "admin":
+                return u.user_id
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"webhook /events: list_users failed during HMAC user "
+            f"resolution: {exc}"
+        )
+    return ""
+
+
+# Per-IP token-bucket for HMAC-authenticated /events requests. Bearer
+# requests piggyback on auth.rate_limit (per-user). HMAC requests
+# don't carry a user_id at the HTTP layer, so we bucket per remote
+# address with a more generous capacity — external monitoring tools
+# can burst (a single Datadog alarm can fan out a dozen webhook
+# retries in a flaky-network minute). The shape mirrors
+# auth.rate_limit.TokenBucket but is intentionally local to this
+# module so it doesn't pollute the per-user registry.
+_HMAC_BUCKETS: dict[str, tuple[float, float]] = {}
+_HMAC_BUCKET_CAPACITY: int = 300
+_HMAC_BUCKET_REFILL_PER_SEC: float = 5.0
+
+
+def _hmac_rate_limit(remote_ip: str) -> tuple[bool, float]:
+    """Per-IP token-bucket for HMAC-authenticated /events POSTs.
+
+    Returns ``(allowed, retry_after_seconds)``. Uses a plain dict +
+    no lock — the BaseHTTPRequestHandler server is single-threaded
+    (one request at a time on the same socket) so a non-atomic
+    refill is fine here. We deliberately keep this OUT of
+    ``auth.rate_limit`` so the per-user dict for bearer requests
+    doesn't grow with random remote IPs and so the HMAC tuning can
+    diverge from the bearer defaults without touching the shared
+    module.
+    """
+    if not remote_ip:
+        remote_ip = "unknown"
+    now = time.monotonic()
+    tokens, last = _HMAC_BUCKETS.get(
+        remote_ip, (float(_HMAC_BUCKET_CAPACITY), now),
+    )
+    elapsed = max(0.0, now - last)
+    tokens = min(
+        float(_HMAC_BUCKET_CAPACITY),
+        tokens + elapsed * _HMAC_BUCKET_REFILL_PER_SEC,
+    )
+    if tokens >= 1.0:
+        tokens -= 1.0
+        _HMAC_BUCKETS[remote_ip] = (tokens, now)
+        return True, 0.0
+    # Compute the wait until 1 token is available given the refill
+    # rate; floor at the bucket-window equivalent so a saturated
+    # client always gets a sane Retry-After.
+    deficit = 1.0 - tokens
+    retry_after = deficit / _HMAC_BUCKET_REFILL_PER_SEC
+    _HMAC_BUCKETS[remote_ip] = (tokens, now)
+    return False, retry_after
+
+
+def _clear_hmac_buckets() -> None:
+    """Reset the per-IP HMAC bucket registry. For tests only — see
+    auth.rate_limit.clear_buckets for the rationale."""
+    _HMAC_BUCKETS.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Dispatching handler — single class so HTTPServer can hand every
 #  request to the same callable and we route inside on path.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,6 +460,9 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             if path == "/webhooks/pagerduty":
                 self._handle_pagerduty()
                 return
+            if path == "/events":
+                self._handle_events()
+                return
 
             _send_json(self, HTTPStatus.NOT_FOUND, {"error": "unknown path"})
         except Exception as exc:
@@ -266,6 +488,12 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
             if path == "/health":
                 self._handle_health()
+                return
+            # GET on a POST-only known path → 405, not 404. /events is
+            # the inbound POST surface; surfacing 405 makes the wrong-
+            # method error explicit so a tool author can fix it.
+            if path == "/events":
+                self._method_not_allowed()
                 return
             # Any other GET path — 404, NOT 405. /health is the only
             # GET surface; everything else is just an unknown resource.
@@ -491,6 +719,330 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.OK, {"acknowledged": True, "scope": "all"})
         except Exception as exc:
             logger.exception(f"webhook /ack-all crashed: {exc}")
+            _send_json(self, HTTPStatus.INTERNAL_SERVER_ERROR,
+                       {"error": "internal server error"})
+
+    # ── Endpoint: POST /events ─────────────────────────────────────
+
+    def _handle_events(self) -> None:
+        """Ingest an external alert payload and persist it as a
+        ShippingAlert. Authenticated with HMAC OR bearer token (both
+        accepted, both validated if both present).
+
+        Validation cascade (each step short-circuits with the
+        listed status):
+
+          1. Content-Type must be application/json  → 415
+          2. Body must parse as JSON                → 400
+          3. At least one auth header must validate → 401
+             (and both must validate if both supplied)
+          4. Required fields present + non-empty    → 400
+             (alert_type, severity, title)
+          5. severity normalizes to allowed value   → 400
+
+        On success, builds a ShippingAlert, calls save_alerts with the
+        resolved user_id, writes an audit_events row tagged
+        ``inbound_alert``, and responds 201 with the alert_id.
+
+        Dedup: if the caller supplied ``external_id`` AND we have a
+        kv_state row for that id created within the last 24h, the
+        function returns 200 + the stored alert_id + status="deduped"
+        and does NOT call save_alerts. The dedup mapping is written
+        AFTER save_alerts so a save failure doesn't poison the
+        dedup table with a non-existent alert_id.
+        """
+        try:
+            # ── 1. Content-Type ──────────────────────────────────
+            raw_ctype = (
+                self.headers.get("Content-Type", "") or ""
+            ).strip().lower()
+            if not raw_ctype.startswith("application/json"):
+                _send_json(
+                    self, HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    {"error": "content-type must be application/json"},
+                )
+                return
+
+            body = _read_body(self)
+
+            # ── 2. JSON parse ────────────────────────────────────
+            if not body:
+                # Empty body counts as malformed JSON for this
+                # endpoint — there is no valid empty payload.
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "malformed json"})
+                return
+            try:
+                payload = json.loads(body)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "malformed json"})
+                return
+            if not isinstance(payload, dict):
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "payload must be a JSON object"})
+                return
+
+            # ── 3. Auth — HMAC and/or bearer ────────────────────
+            # Spec: at least one must validate; if BOTH are present
+            # BOTH must validate. Build a tri-state for each
+            # (missing / present-and-valid / present-and-invalid) so
+            # the combination check is unambiguous.
+            sig_header = self.headers.get(
+                "X-Hub-Signature-256", "",
+            ) or ""
+            auth_header = self.headers.get("Authorization", "") or ""
+
+            hmac_present = bool(sig_header)
+            hmac_valid = False
+            if hmac_present:
+                hmac_valid = _verify_hmac(
+                    body, sig_header, _get_secrets(),
+                )
+
+            bearer_present = False
+            bearer_user_id: Optional[str] = None
+            if auth_header:
+                parts = auth_header.split(None, 1)
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    raw_token = parts[1].strip()
+                    if raw_token:
+                        bearer_present = True
+                        try:
+                            from auth.tokens import verify_token
+                            bearer_user_id = verify_token(raw_token)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                f"webhook /events: verify_token "
+                                f"raised: {exc}"
+                            )
+                            bearer_user_id = None
+
+            if not hmac_present and not bearer_present:
+                # No credentials supplied at all.
+                _send_json(self, HTTPStatus.UNAUTHORIZED,
+                           {"error": "missing credentials"})
+                return
+            if hmac_present and not hmac_valid:
+                # HMAC supplied but wrong — even if a valid bearer is
+                # also supplied we reject so a stolen-bearer attacker
+                # can't slip a forged HMAC alongside a real token.
+                _send_json(self, HTTPStatus.UNAUTHORIZED,
+                           {"error": "invalid signature"})
+                return
+            if bearer_present and bearer_user_id is None:
+                # Same logic for the other direction.
+                _send_json(self, HTTPStatus.UNAUTHORIZED,
+                           {"error": "invalid token"})
+                return
+
+            # Resolve owning user_id. Bearer wins when present (it
+            # carries an actual user identity); HMAC falls back to the
+            # env-configured or first-admin user.
+            if bearer_user_id:
+                resolved_user_id = bearer_user_id
+                auth_method = "bearer"
+            else:
+                resolved_user_id = _resolve_hmac_user_id()
+                auth_method = "hmac"
+
+            # ── Rate limit ───────────────────────────────────────
+            # Bearer requests piggyback on the per-user bucket from
+            # auth.rate_limit (same shape the API server uses, so a
+            # script hammering /alerts + /events shares one budget).
+            # HMAC requests use the more generous per-IP bucket so a
+            # bursty monitoring tool can fire 50 events in a minute
+            # without tripping over a per-user limit.
+            if auth_method == "bearer":
+                try:
+                    from auth.rate_limit import check_rate_limit
+                    allowed, retry_after = check_rate_limit(
+                        resolved_user_id,
+                        capacity=120,
+                        refill_per_sec=2.0,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        f"webhook /events: bearer rate-limit raised, "
+                        f"failing open: {exc}"
+                    )
+                    allowed, retry_after = True, 0.0
+            else:
+                allowed, retry_after = _hmac_rate_limit(
+                    self.client_address[0]
+                    if self.client_address else "unknown",
+                )
+            if not allowed:
+                import math
+                retry_int = max(1, int(math.ceil(retry_after)))
+                resp = json.dumps(
+                    {"error": "rate_limited",
+                     "retry_after_seconds": retry_int},
+                ).encode("utf-8")
+                self.send_response(HTTPStatus.TOO_MANY_REQUESTS)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.send_header("Retry-After", str(retry_int))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+
+            # ── 4. Required fields ──────────────────────────────
+            alert_type_raw = payload.get("alert_type", "")
+            severity_raw = payload.get("severity", "")
+            title_raw = payload.get("title", "")
+            if (not isinstance(alert_type_raw, str)
+                    or not alert_type_raw.strip()):
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "alert_type required"})
+                return
+            if (not isinstance(severity_raw, str)
+                    or not severity_raw.strip()):
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "severity required"})
+                return
+            if (not isinstance(title_raw, str)
+                    or not title_raw.strip()):
+                _send_json(self, HTTPStatus.BAD_REQUEST,
+                           {"error": "title required"})
+                return
+
+            # ── 5. severity normalization ───────────────────────
+            severity_norm = severity_raw.strip().upper()
+            if severity_norm not in _ALLOWED_SEVERITIES:
+                _send_json(
+                    self, HTTPStatus.BAD_REQUEST,
+                    {"error": (
+                        "severity must be one of "
+                        "CRITICAL/HIGH/MEDIUM/LOW"
+                    )},
+                )
+                return
+
+            # ── Dedup lookup (external_id) ──────────────────────
+            external_id_raw = payload.get("external_id", "")
+            if (not isinstance(external_id_raw, str)
+                    or not external_id_raw.strip()):
+                external_id = ""
+            else:
+                external_id = external_id_raw.strip()
+
+            if external_id:
+                existing = _read_external_id_alert(external_id)
+                if existing is not None:
+                    existing_alert_id, _existing_ts = existing
+                    logger.info(
+                        f"webhook /events: deduped external_id="
+                        f"{external_id!r} → existing alert_id="
+                        f"{existing_alert_id}"
+                    )
+                    _send_json(
+                        self, HTTPStatus.OK,
+                        {
+                            "alert_id": existing_alert_id,
+                            "status": "deduped",
+                        },
+                    )
+                    return
+
+            # ── Optional field coercion ─────────────────────────
+            def _opt_str(name: str) -> str:
+                v = payload.get(name, "")
+                return v.strip() if isinstance(v, str) else ""
+
+            def _opt_float(name: str) -> float:
+                v = payload.get(name, 0.0)
+                try:
+                    return float(v) if v is not None else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+
+            body_str = _opt_str("body")
+            ticker = _opt_str("ticker")
+            route_id = _opt_str("route_id")
+            port_locode = _opt_str("port_locode")
+            value = _opt_float("value")
+            threshold = _opt_float("threshold")
+            change_pct = _opt_float("change_pct")
+
+            # ── Build + persist ─────────────────────────────────
+            alert_id = str(uuid.uuid4())
+            created_at = datetime.now(timezone.utc).isoformat()
+
+            from engine.alert_engine_v2 import (
+                ShippingAlert,
+                save_alerts,
+            )
+            alert = ShippingAlert(
+                alert_id=alert_id,
+                created_at=created_at,
+                alert_type=alert_type_raw.strip(),
+                severity=severity_norm,
+                title=title_raw.strip(),
+                body=body_str,
+                ticker=ticker,
+                route_id=route_id,
+                port_locode=port_locode,
+                value=value,
+                threshold=threshold,
+                change_pct=change_pct,
+                acknowledged=False,
+            )
+            try:
+                save_alerts([alert], user_id=resolved_user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    f"webhook /events: save_alerts failed: {exc}"
+                )
+                _send_json(
+                    self, HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "failed to persist alert"},
+                )
+                return
+
+            # Dedup mapping AFTER save_alerts so we don't store an
+            # alert_id that doesn't exist in the alerts table.
+            if external_id:
+                _store_external_id_alert(
+                    external_id, alert_id, created_at,
+                )
+
+            # Audit trail. Detail intentionally excludes the raw body
+            # (sanitised — title/body could contain anything an
+            # operator put on the wire) but keeps the structured
+            # provenance.
+            try:
+                from auth.audit import record_audit
+                record_audit(
+                    "inbound_alert",
+                    entity_type="alert",
+                    entity_id=alert_id,
+                    detail={
+                        "alert_type": alert_type_raw.strip(),
+                        "severity": severity_norm,
+                        "auth_method": auth_method,
+                        "external_id": external_id or "",
+                    },
+                    user_id=resolved_user_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    f"webhook /events: audit write failed: {exc}"
+                )
+
+            logger.info(
+                f"webhook /events: created alert_id={alert_id} "
+                f"alert_type={alert_type_raw.strip()!r} "
+                f"severity={severity_norm} "
+                f"auth_method={auth_method} "
+                f"user_id={resolved_user_id!r}"
+            )
+            _send_json(
+                self, HTTPStatus.CREATED,
+                {"alert_id": alert_id, "status": "created"},
+            )
+        except Exception as exc:
+            logger.exception(f"webhook /events crashed: {exc}")
             _send_json(self, HTTPStatus.INTERNAL_SERVER_ERROR,
                        {"error": "internal server error"})
 
