@@ -73,6 +73,23 @@ class AlertRule:
     # already fired; cooldown stops the rule from firing in the
     # first place.
     cooldown_minutes: int = 0
+    # Anti-flap (v19). Opt-in. When ``flap_detection_enabled`` is
+    # False (the default) the engine never calls into
+    # ``engine.flap_detector`` and behaviour is byte-identical to v18.
+    # When True, ``fire_rule`` records every fire as a threshold
+    # crossing and, once the rule has crossed >=
+    # ``flap_threshold_crossings`` times within
+    # ``flap_window_minutes``, folds the cascade into ONE consolidated
+    # ``alert_type='FLAP'`` alert instead of saving the underlying
+    # per-fire alerts. The consolidated alert is itself emitted at
+    # most once per window — subsequent flap-detected fires bump
+    # ``alerts_suppressed_by_flap`` in kv_state and create no row.
+    # Flapping is orthogonal to cooldown: cooldown stops the SAME
+    # rule from re-firing; flap detection catches the oscillation
+    # pattern across many fire/resolve cycles.
+    flap_window_minutes: int = 30
+    flap_threshold_crossings: int = 5
+    flap_detection_enabled: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1539,6 +1556,42 @@ def normalize_rule(rule_dict: dict) -> dict:
     except (TypeError, ValueError):
         cd = 0
     rule_dict["cooldown_minutes"] = max(0, cd)
+
+    # Anti-flap coercion (v19). Same defensive posture as
+    # cooldown_minutes: accept anything int() will swallow, clamp the
+    # numeric fields to sensible minimums (1 minute / 2 crossings —
+    # any lower disables the detector in practice), fall back to the
+    # defaults on garbage input. The boolean flap_detection_enabled
+    # coerces via Python's bool() truthiness so '', 0, None, False
+    # all read as False; any truthy hand-edited value reads as True.
+    raw_win = rule_dict.get("flap_window_minutes", 30)
+    try:
+        win = int(raw_win)
+    except (TypeError, ValueError):
+        win = 30
+    # Clamp to >= 1: a zero/negative window would mean "every crossing
+    # ages out immediately" and the detector would never fire — the
+    # clamp prevents a hand-edited blob from accidentally disabling
+    # detection while leaving flap_detection_enabled=True (a state
+    # the operator surely did not intend).
+    rule_dict["flap_window_minutes"] = max(1, win)
+
+    raw_xings = rule_dict.get("flap_threshold_crossings", 5)
+    try:
+        xings = int(raw_xings)
+    except (TypeError, ValueError):
+        xings = 5
+    # Clamp to >= 2: a threshold of 0 or 1 means "always flapping"
+    # which is never the intent (a single crossing is just a normal
+    # fire). Two is the minimum number of crossings that can
+    # plausibly indicate oscillation.
+    rule_dict["flap_threshold_crossings"] = max(2, xings)
+
+    # flap_detection_enabled: coerce to bool. Missing key → False
+    # (the v19 opt-in contract: legacy rules stay legacy).
+    raw_enabled = rule_dict.get("flap_detection_enabled", False)
+    rule_dict["flap_detection_enabled"] = bool(raw_enabled)
+
     return rule_dict
 
 
@@ -1782,6 +1835,80 @@ def fire_rule(
         _bump_suppressed_counter()
         return False
 
+    # ── Anti-flap gate (v19) ────────────────────────────────────────
+    # Opt-in: only consult the flap detector when the rule has
+    # explicitly enabled it. Behaviour for rules with
+    # flap_detection_enabled=False is byte-identical to the v18 path
+    # (the import below is lazy so the engine still works when the
+    # flap_detector module is absent or unimportable for any reason).
+    flap_enabled = bool(rule.get("flap_detection_enabled", False))
+    if flap_enabled and rule_id:
+        try:
+            from engine import flap_detector as _flap
+
+            window_min = int(rule.get("flap_window_minutes", 30))
+            threshold_xings = int(rule.get("flap_threshold_crossings", 5))
+
+            # Record THIS fire as a threshold crossing first so the
+            # is_flapping check below counts it as part of the window.
+            # Direction label is "fire" — the detector itself only
+            # counts crossings regardless of direction.
+            _flap.record_threshold_crossing(rule_id, "fire", user_id=user_id)
+
+            if _flap.is_flapping(
+                rule_id,
+                window_minutes=window_min,
+                threshold_crossings=threshold_xings,
+                user_id=user_id,
+            ):
+                # Rule is flapping. Decide whether to emit a fresh
+                # consolidated alert or silently swallow this fire.
+                if _flap.should_emit_flap_alert(
+                    rule_id,
+                    window_minutes=window_min,
+                    user_id=user_id,
+                ):
+                    # Emit ONE consolidated FLAP alert and stamp the
+                    # blob so subsequent flap-detected fires inside
+                    # this window are swallowed.
+                    consolidated = _build_flap_alert(
+                        rule=rule,
+                        rule_id=rule_id,
+                        window_minutes=window_min,
+                        user_id=user_id,
+                        _flap_module=_flap,
+                    )
+                    save_alerts([consolidated], user_id=user_id, rule_id=rule_id)
+                    _flap.mark_flap_alert_emitted(rule_id, user_id=user_id)
+                    logger.info(
+                        f"rule {rule_id} flapping — emitted consolidated "
+                        f"FLAP alert ({window_min}m window, "
+                        f">= {threshold_xings} crossings)"
+                    )
+                else:
+                    # Already alerted on this flap episode — swallow
+                    # silently and bump the suppressed counter.
+                    _flap.bump_flap_suppressed_counter()
+                    logger.info(
+                        f"rule {rule_id} flapping — fire suppressed "
+                        f"({window_min}m window already alerted)"
+                    )
+                # Returning True means "the rule evaluation was
+                # handled" — the caller's audit trail records an
+                # evaluation either way. Downstream dispatch should
+                # still run for the consolidated alert; the swallow
+                # branch persisted no row so dispatch finds nothing
+                # new to deliver, which is the desired outcome.
+                return True
+        except Exception as exc:  # noqa: BLE001
+            # Flap detector failures must NEVER block a legitimate
+            # alert. Fall through to the normal save path on any
+            # exception inside the flap gate.
+            logger.warning(
+                f"fire_rule: flap gate raised, falling through to normal "
+                f"save path: {exc}"
+            )
+
     # Cooldown gate cleared — persist with the rule_id stamp so the
     # NEXT cooldown check can see this fire as the prior. Empty
     # alerts list is a legitimate fire (the rule ran but produced no
@@ -1790,3 +1917,77 @@ def fire_rule(
     if alerts:
         save_alerts(alerts, user_id=user_id, rule_id=rule_id)
     return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Flap-consolidated alert builder (v19)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _flap_severity(rule_severity: str) -> str:
+    """Return the severity tier ONE BELOW ``rule_severity``, floored at LOW.
+
+    The consolidated FLAP alert intentionally de-escalates relative to
+    the underlying rule's severity: a flapping rule is less actionable
+    than a clean fire, so emitting it at the rule's full severity
+    would crowd out genuinely escalating conditions. CRITICAL → HIGH,
+    HIGH → MEDIUM, MEDIUM → LOW, LOW → LOW (floored).
+
+    Unknown severities (a hand-edited rule with a garbage value) fall
+    back to MEDIUM — the right ballpark for "something needs attention
+    but it's not on fire".
+    """
+    order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    try:
+        idx = order.index(rule_severity)
+    except ValueError:
+        return "MEDIUM"
+    next_idx = min(idx + 1, len(order) - 1)
+    return order[next_idx]
+
+
+def _build_flap_alert(
+    *,
+    rule: dict,
+    rule_id: str,
+    window_minutes: int,
+    user_id: Optional[str],
+    _flap_module,
+) -> ShippingAlert:
+    """Construct the ONE consolidated FLAP alert for a flapping rule.
+
+    Pulls the current FlapWindow snapshot from the detector to know
+    the exact crossing count + first/last timestamps, then renders a
+    fixed body that explains the suppression.
+    """
+    win = _flap_module.get_flap_window(
+        rule_id,
+        window_minutes=window_minutes,
+        user_id=user_id,
+    )
+    crossings = win.crossings if win else 0
+    first_at = win.first_crossing_at if win else _now_iso()
+    last_at = win.last_crossing_at if win else _now_iso()
+
+    rule_name = str(rule.get("name") or rule_id)
+    rule_severity = str(rule.get("severity") or "MEDIUM").upper()
+    flap_sev = _flap_severity(rule_severity)
+
+    return _make(
+        alert_type="FLAP",
+        severity=flap_sev,
+        title=(
+            f"Rule '{rule_name}' is flapping — "
+            f"{crossings} crossings in {window_minutes} min"
+        ),
+        body=(
+            f"This rule has crossed its threshold {crossings} times in the "
+            f"last {window_minutes} minutes (first crossing at {first_at}, "
+            f"most recent at {last_at}). The underlying alerts have been "
+            f"consolidated into this single notification to prevent "
+            f"feed spam. Subsequent crossings within this window will be "
+            f"silently counted; a fresh consolidated alert will appear "
+            f"once the current window has aged out."
+        ),
+        threshold=float(rule.get("threshold", 0.0) or 0.0),
+        change_pct=0.0,
+    )

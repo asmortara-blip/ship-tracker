@@ -974,6 +974,46 @@ def _render_configuration_form() -> None:
                         help="Send an email when this rule fires.",
                     )
 
+                # ── Anti-flap settings (advanced, v19) ───────────
+                # Opt-in: when off, the rule behaves exactly as a
+                # v18 rule would. When on, the engine consolidates
+                # oscillating fire/resolve cascades into ONE
+                # explanatory alert per window.
+                with st.expander("Anti-flap settings (advanced)", expanded=False):
+                    flap_enabled = st.checkbox(
+                        "Enable flap detection",
+                        value=False,
+                        help=(
+                            "When enabled, if this rule crosses its "
+                            "threshold more than N times within M "
+                            "minutes the engine will fold the cascade "
+                            "into ONE consolidated alert instead of "
+                            "firing on every crossing."
+                        ),
+                    )
+                    flap_window_minutes = st.number_input(
+                        "Flap window (minutes)",
+                        min_value=1,
+                        value=30,
+                        step=1,
+                        help=(
+                            "Sliding window over which crossings are "
+                            "counted. A crossing older than this is "
+                            "automatically dropped."
+                        ),
+                    )
+                    flap_threshold_crossings = st.number_input(
+                        "Threshold crossings",
+                        min_value=2,
+                        value=5,
+                        step=1,
+                        help=(
+                            "Number of threshold crossings within the "
+                            "window before the rule is considered "
+                            "flapping and the consolidated alert fires."
+                        ),
+                    )
+
                 submitted = st.form_submit_button(
                     "Create Alert",
                     use_container_width=True,
@@ -1000,6 +1040,15 @@ def _render_configuration_form() -> None:
                             # the second line of defence against
                             # hand-edited blobs.
                             "cooldown_minutes": int(cooldown_minutes),
+                            # v19 anti-flap settings. Off by default;
+                            # the numeric fields carry sensible
+                            # defaults so even if the operator forgets
+                            # to tune them the detector behaves
+                            # reasonably. normalize_rule is the
+                            # second line of defence.
+                            "flap_detection_enabled": bool(flap_enabled),
+                            "flap_window_minutes": int(flap_window_minutes),
+                            "flap_threshold_crossings": int(flap_threshold_crossings),
                         }
                         st.session_state["user_alerts"].append(new_rule)
                         st.success(f'Rule "{alert_name.strip()}" created successfully.')
