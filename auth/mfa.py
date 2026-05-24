@@ -58,6 +58,8 @@ import sqlite3
 import struct
 import time
 import urllib.parse
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from loguru import logger
@@ -84,6 +86,37 @@ _DEFAULT_PERIOD = 30
 # conservative-but-usable choice. Tests covering both window=0 (strict)
 # and window=1 (default) are in tests/test_mfa.py.
 _DEFAULT_WINDOW = 1
+
+
+# ── Recovery-code constants ───────────────────────────────────────────────
+
+# 10 codes per generation is the conventional batch size (matches what
+# GitHub, Google, Auth0 hand out). One code per real-life loss event
+# (lost phone, lost YubiKey, lost laptop) is the spending pattern; the
+# user can regenerate the whole batch at any time if they feel exposed.
+_RECOVERY_CODE_DEFAULT_COUNT = 10
+
+# 10 chars of base32 (uppercase A-Z + 2-7) per code. The dashed display
+# form is ``XXXXX-XXXXX`` — five chars / dash / five chars. Base32 gives
+# 50 bits of entropy per code, well above what's needed for a code that
+# is one of N≤10 unused codes per account and is rate-limited by the
+# surrounding password gate.
+_RECOVERY_CODE_HALF_LEN = 5
+_RECOVERY_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"  # base32-ish, no 0/1/O/I
+
+# Per-code random salt — 16 bytes (128 bits) is the minimum NIST
+# guidance for PBKDF2 salts and matches the rest of the auth/ layer
+# (auth.gate uses SALT_BYTES=16). NEVER reuse a salt across codes —
+# each call to ``generate_recovery_codes`` produces ``count`` fresh
+# salts via ``secrets.token_bytes(16)``.
+_RECOVERY_SALT_BYTES = 16
+
+# 200_000 PBKDF2 iterations matches the rest of the auth/ layer
+# (auth.gate.PBKDF2_ITERATIONS) so the per-verify cost is uniform across
+# password and recovery-code paths. SHA-256 is the hash — same as the
+# rest of the password layer, and FIPS-approved.
+_RECOVERY_PBKDF2_ITERATIONS = 200_000
+_RECOVERY_HASH_NAME = "sha256"
 
 
 # ── Pure-function TOTP core ───────────────────────────────────────────────
@@ -276,21 +309,42 @@ def provisioning_uri(
 
 # ── DB-bound helpers ──────────────────────────────────────────────────────
 
-def enable_mfa(user_id: str, secret: str) -> bool:
-    """Persist ``secret`` and flip the ``mfa_enabled`` flag for ``user_id``.
+def enable_mfa(
+    user_id: str,
+    secret: str,
+) -> tuple[bool, Optional[list[str]]]:
+    """Persist ``secret``, flip ``mfa_enabled``, and auto-mint recovery codes.
 
-    Returns ``True`` on success, ``False`` on any error (unknown user
-    id, DB error, invalid input). NEVER raises.
+    Returns a ``(ok, recovery_codes)`` tuple:
+
+      * ``(True,  [<code>, ...])`` on success — the second element is
+        the freshly-minted batch of 10 plaintext recovery codes,
+        returned to the caller EXACTLY ONCE so they can be surfaced
+        to the user (UI displays them in a one-shot copyable block,
+        CLI prints them once to stdout). The plaintext is NEVER
+        persisted — only the per-code pbkdf2 hash + salt land in the
+        ``mfa_recovery_codes`` table.
+      * ``(False, None)`` on any error — unknown user id, DB error,
+        invalid input. NEVER raises.
+
+    SIGNATURE CHANGE (v21): the historical signature was
+    ``-> bool``. Every caller MUST be updated to unpack the tuple.
+    The two in-tree call sites today are ``ui.tab_data_health``
+    (``_render_security_panel`` + ``_render_mfa_panel``) and
+    ``tools.ops_cli`` (``_cmd_mfa_enable``). Both surface the codes
+    to the operator on success.
 
     Audit-logged at ``action='enable_mfa'`` so a security review can
     see which accounts gained a second factor and when. The audit
-    write is best-effort and cannot block the enable.
+    write is best-effort and cannot block the enable. Recovery-code
+    generation is also audit-logged separately by
+    ``generate_recovery_codes`` (``action='generate_recovery_codes'``).
     """
     try:
         if not isinstance(user_id, str) or not user_id:
-            return False
+            return False, None
         if not isinstance(secret, str) or not secret:
-            return False
+            return False, None
         # Defensive: a malformed secret would let MFA "enable" but then
         # every subsequent verify would fail silently. Decode-check up
         # front so the operator notices at enroll-time.
@@ -301,7 +355,7 @@ def enable_mfa(user_id: str, secret: str) -> bool:
                 f"auth.mfa.enable_mfa: malformed secret for "
                 f"user_id={user_id!r}"
             )
-            return False
+            return False, None
 
         from state.db import get_connection
         conn = get_connection()
@@ -311,7 +365,7 @@ def enable_mfa(user_id: str, secret: str) -> bool:
             (secret, user_id),
         )
         if cur.rowcount == 0:
-            return False
+            return False, None
 
         try:
             from auth.audit import record_audit
@@ -323,12 +377,33 @@ def enable_mfa(user_id: str, secret: str) -> bool:
             )
         except Exception:  # noqa: BLE001
             pass
-        return True
+
+        # Mint the recovery-code batch. A failure here is logged but
+        # does NOT roll back the enable — the user can re-mint via
+        # ``regenerate_recovery_codes`` if the auto-mint fell over.
+        # In that fallback case we still return ``(True, None)`` so
+        # the UI / CLI can render "MFA enabled — no codes shown,
+        # please regenerate".
+        try:
+            codes = generate_recovery_codes(user_id)
+            if not codes:
+                logger.warning(
+                    f"auth.mfa.enable_mfa: recovery-code generation "
+                    f"returned empty for user_id={user_id!r}"
+                )
+                return True, None
+            return True, codes
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning(
+                f"auth.mfa.enable_mfa: recovery-code generation "
+                f"failed for user_id={user_id!r}: {exc}"
+            )
+            return True, None
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             f"auth.mfa.enable_mfa: failed for user_id={user_id!r}: {exc}"
         )
-        return False
+        return False, None
 
 
 def disable_mfa(user_id: str) -> bool:
@@ -338,6 +413,13 @@ def disable_mfa(user_id: str) -> bool:
 
     Audit-logged at ``action='disable_mfa'``. Once disabled, the
     account falls back to password-only auth on the next login.
+
+    Side effect (v21): also wipes every recovery code for the user.
+    Recovery codes are a backup to the TOTP secret — keeping them
+    after disabling MFA would leave a back door (login with code +
+    password) that is invisible to the "MFA off" state the user
+    sees. The wipe is best-effort; a failure logs but does not block
+    the disable.
     """
     try:
         if not isinstance(user_id, str) or not user_id:
@@ -352,6 +434,23 @@ def disable_mfa(user_id: str) -> bool:
         )
         if cur.rowcount == 0:
             return False
+
+        # Wipe any outstanding recovery codes — see docstring for the
+        # security reasoning. Best-effort; a failure here does NOT
+        # roll back the disable (the user already lost their second
+        # factor by intent; leaving the recovery rows behind would
+        # surface a "you still have codes" caption that contradicts
+        # the disabled state).
+        try:
+            conn.execute(
+                "DELETE FROM mfa_recovery_codes WHERE user_id = ?",
+                (user_id,),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"auth.mfa.disable_mfa: recovery-code wipe failed "
+                f"for user_id={user_id!r}: {exc}"
+            )
 
         try:
             from auth.audit import record_audit
@@ -420,6 +519,377 @@ def get_mfa_secret(user_id: str) -> str:
         return ""
 
 
+# ── Recovery codes (v21) ──────────────────────────────────────────────────
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _generate_one_recovery_code() -> str:
+    """Generate one plaintext recovery code formatted as ``XXXXX-XXXXX``.
+
+    Each half is ``_RECOVERY_CODE_HALF_LEN`` chars drawn from the
+    ``_RECOVERY_CODE_ALPHABET`` (32-char base32-style set with the
+    confusable ``0/1/O/I`` removed). The dash is purely cosmetic —
+    ``verify_and_consume_recovery_code`` strips dashes + whitespace
+    before hashing, so the user can type the code with or without it.
+
+    50 bits of entropy per code (32^10 = ~2^50) is overkill for a code
+    that's (a) one of N≤10 unused codes per account, (b) gated by the
+    surrounding password attempt-limiter in ``auth.gate``, and (c)
+    single-use (consumed on first match).
+    """
+    chars = [
+        _secrets.choice(_RECOVERY_CODE_ALPHABET)
+        for _ in range(2 * _RECOVERY_CODE_HALF_LEN)
+    ]
+    first = "".join(chars[:_RECOVERY_CODE_HALF_LEN])
+    second = "".join(chars[_RECOVERY_CODE_HALF_LEN:])
+    return f"{first}-{second}"
+
+
+def _normalize_recovery_code(code: str) -> str:
+    """Strip dashes + whitespace and upper-case so the verify path is
+    indifferent to how the user typed the code. Returns ``''`` for
+    non-string input — caller treats empty as "no match"."""
+    if not isinstance(code, str):
+        return ""
+    return code.replace("-", "").replace(" ", "").strip().upper()
+
+
+def _hash_recovery_code(code: str, salt: bytes) -> str:
+    """Return the hex-encoded pbkdf2-sha256 hash of ``code`` under ``salt``.
+
+    Iteration count + algorithm match the rest of the auth/ layer so a
+    code verify costs the same as a password verify (the KDF cost is
+    the rate-limiter; iterating PBKDF2 ten times on each verify is by
+    design).
+    """
+    normalized = _normalize_recovery_code(code)
+    if not normalized:
+        return ""
+    digest = hashlib.pbkdf2_hmac(
+        _RECOVERY_HASH_NAME,
+        normalized.encode("utf-8"),
+        salt,
+        _RECOVERY_PBKDF2_ITERATIONS,
+    )
+    return digest.hex()
+
+
+def generate_recovery_codes(
+    user_id: str,
+    *,
+    count: int = _RECOVERY_CODE_DEFAULT_COUNT,
+) -> list[str]:
+    """Mint ``count`` fresh single-use recovery codes for ``user_id``.
+
+    Returns the PLAINTEXT codes as a list, exactly once. The plaintext
+    is NEVER persisted — only a per-code pbkdf2 hash + 16-byte salt
+    land in ``mfa_recovery_codes``. The caller MUST surface the codes
+    to the user immediately and warn them to save the batch; there is
+    no recovery path if they lose the list.
+
+    The function does NOT wipe pre-existing codes — use
+    ``regenerate_recovery_codes`` for the wipe-and-replace flow. This
+    is deliberate: an admin "mint me 5 more" pattern is rare but
+    legitimate, and a wipe-on-mint contract would silently invalidate
+    the user's already-saved codes.
+
+    Returns ``[]`` on any error (unknown user, DB error, invalid
+    inputs). NEVER raises.
+
+    Audit-logged at ``action='generate_recovery_codes'`` with
+    ``detail={'count': N}`` so a security review can spot a user (or
+    attacker with the password) minting new codes.
+    """
+    try:
+        if not isinstance(user_id, str) or not user_id:
+            return []
+        if not isinstance(count, int) or count <= 0 or count > 100:
+            # 100 is an arbitrary safety cap — the canonical batch
+            # size is 10 and a request for thousands of codes is
+            # almost certainly a bug or abuse.
+            return []
+
+        from state.db import get_connection
+        conn = get_connection()
+
+        # Confirm the user exists before writing any rows — a foreign-
+        # key violation would partially-fill the table otherwise. Skip
+        # the FK check if PRAGMA foreign_keys is off (test setup may
+        # disable it), the explicit lookup is the source of truth.
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if exists is None:
+            return []
+
+        plaintext_codes: list[str] = []
+        rows_to_insert: list[tuple] = []
+        created_at = _now_iso()
+        for _ in range(count):
+            code = _generate_one_recovery_code()
+            salt = _secrets.token_bytes(_RECOVERY_SALT_BYTES)
+            code_hash = _hash_recovery_code(code, salt)
+            if not code_hash:
+                # Defensive — _normalize_recovery_code would have
+                # rejected our own output. If somehow empty, skip
+                # this code rather than store a bogus row.
+                continue
+            code_id = str(uuid.uuid4())
+            rows_to_insert.append((
+                code_id,
+                user_id,
+                code_hash,
+                salt.hex(),
+                None,  # used_at NULL until consumed
+                created_at,
+            ))
+            plaintext_codes.append(code)
+
+        if not rows_to_insert:
+            return []
+
+        conn.executemany(
+            """
+            INSERT INTO mfa_recovery_codes
+              (code_id, user_id, code_hash, salt, used_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows_to_insert,
+        )
+
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "generate_recovery_codes",
+                entity_type="user",
+                entity_id=user_id,
+                detail={"count": len(plaintext_codes)},
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return plaintext_codes
+    except Exception as exc:  # noqa: BLE001 — generic catch by contract
+        logger.warning(
+            f"auth.mfa.generate_recovery_codes: failed for "
+            f"user_id={user_id!r}: {exc}"
+        )
+        return []
+
+
+def verify_and_consume_recovery_code(user_id: str, code: str) -> bool:
+    """Try ``code`` against every unused recovery code for ``user_id``.
+
+    On match: stamps ``used_at`` on the matched row (so the code
+    cannot be reused) and returns ``True``. On no match: returns
+    ``False``.
+
+    The verify loop hashes the submitted code under each candidate
+    row's salt and compares with ``hmac.compare_digest`` (constant
+    time per comparison). We exhaust every unused row on a miss so a
+    timing-side-channel attacker cannot use response time to guess
+    "how many codes does this account have left?" — the work is
+    proportional to the number of unused codes, not to whether a
+    match was found early.
+
+    Returns ``False`` on any error (unknown user, DB error, malformed
+    input). NEVER raises.
+
+    Audit-logged at ``action='consume_recovery_code'`` on a successful
+    consumption — failed attempts do NOT audit (same enumeration-
+    resistance pattern as failed MFA login).
+    """
+    try:
+        if not isinstance(user_id, str) or not user_id:
+            return False
+        if not isinstance(code, str) or not code:
+            return False
+
+        normalized = _normalize_recovery_code(code)
+        # 10 chars without the dash (5+5). A different length is
+        # almost certainly a typo — fail fast without spending the
+        # PBKDF2 cost.
+        if len(normalized) != 2 * _RECOVERY_CODE_HALF_LEN:
+            return False
+
+        from state.db import get_connection
+        conn = get_connection()
+        rows = conn.execute(
+            """
+            SELECT code_id, code_hash, salt
+              FROM mfa_recovery_codes
+             WHERE user_id = ?
+               AND used_at IS NULL
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return False
+
+        matched_id: Optional[str] = None
+        for row in rows:
+            try:
+                salt = bytes.fromhex(row["salt"])
+            except (TypeError, ValueError):
+                # Corrupt row — skip rather than crash the verify
+                # loop. A separate maintenance path can clean it up.
+                continue
+            candidate = _hash_recovery_code(code, salt)
+            if not candidate:
+                continue
+            # NOTE: we keep iterating after a match (using ``|=`` /
+            # first-write semantics) so the wall-clock work is
+            # proportional to the number of unused codes, not to
+            # whether a match was found early. matched_id is set on
+            # the FIRST hit and never overwritten.
+            if hmac.compare_digest(candidate, row["code_hash"]):
+                if matched_id is None:
+                    matched_id = row["code_id"]
+
+        if matched_id is None:
+            return False
+
+        used_at = _now_iso()
+        try:
+            conn.execute(
+                "UPDATE mfa_recovery_codes SET used_at = ? "
+                "WHERE code_id = ? AND used_at IS NULL",
+                (used_at, matched_id),
+            )
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning(
+                f"auth.mfa.verify_and_consume_recovery_code: stamp "
+                f"failed for code_id={matched_id!r}: {exc}"
+            )
+            return False
+
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "consume_recovery_code",
+                entity_type="user",
+                entity_id=user_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"auth.mfa.verify_and_consume_recovery_code: failed for "
+            f"user_id={user_id!r}: {exc}"
+        )
+        return False
+
+
+def count_unused_recovery_codes(user_id: str) -> int:
+    """Return the number of UNUSED recovery codes for ``user_id``.
+
+    Used by the UI to render the "N unused codes remaining" caption
+    and to prompt the user to regenerate when N gets low. Returns 0
+    on unknown user or any error. NEVER raises.
+    """
+    try:
+        if not isinstance(user_id, str) or not user_id:
+            return 0
+        from state.db import get_connection
+        conn = get_connection()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+              FROM mfa_recovery_codes
+             WHERE user_id = ?
+               AND used_at IS NULL
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        return int(row["n"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"auth.mfa.count_unused_recovery_codes: failed for "
+            f"user_id={user_id!r}: {exc}"
+        )
+        return 0
+
+
+def regenerate_recovery_codes(
+    user_id: str,
+    *,
+    count: int = _RECOVERY_CODE_DEFAULT_COUNT,
+) -> list[str]:
+    """Wipe every existing recovery code for ``user_id`` and mint a fresh batch.
+
+    The wipe and the insert are SEPARATE statements — sqlite's
+    autocommit isolation_level=None means each is its own transaction.
+    A failure between them leaves the user with 0 unused codes
+    rather than mixing old + new; this is the safe failure mode (the
+    user can call regenerate again).
+
+    Returns the PLAINTEXT codes exactly once. Returns ``[]`` on any
+    error. NEVER raises.
+
+    Audit-logged at ``action='regenerate_recovery_codes'`` via
+    ``generate_recovery_codes`` plus a separate
+    ``action='wipe_recovery_codes'`` so the timeline shows both
+    halves of the operation.
+    """
+    try:
+        if not isinstance(user_id, str) or not user_id:
+            return []
+
+        from state.db import get_connection
+        conn = get_connection()
+
+        # Make sure the user exists before we wipe — otherwise an
+        # accidental empty user_id would no-op the wipe (filtered by
+        # WHERE) but also no-op the mint and return [].
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if exists is None:
+            return []
+
+        try:
+            conn.execute(
+                "DELETE FROM mfa_recovery_codes WHERE user_id = ?",
+                (user_id,),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"auth.mfa.regenerate_recovery_codes: wipe failed "
+                f"for user_id={user_id!r}: {exc}"
+            )
+            return []
+
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "wipe_recovery_codes",
+                entity_type="user",
+                entity_id=user_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return generate_recovery_codes(user_id, count=count)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"auth.mfa.regenerate_recovery_codes: failed for "
+            f"user_id={user_id!r}: {exc}"
+        )
+        return []
+
+
 __all__ = [
     "generate_secret",
     "compute_totp",
@@ -429,4 +899,8 @@ __all__ = [
     "disable_mfa",
     "is_mfa_enabled",
     "get_mfa_secret",
+    "generate_recovery_codes",
+    "verify_and_consume_recovery_code",
+    "count_unused_recovery_codes",
+    "regenerate_recovery_codes",
 ]

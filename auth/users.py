@@ -109,7 +109,12 @@ def _now_iso() -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────
 
-def signup(username: str, password: str) -> Optional[User]:
+def signup(
+    username: str,
+    password: str,
+    *,
+    invite_token: Optional[str] = None,
+) -> Optional[User]:
     """Register a new user.
 
     Returns the new ``User`` on success, ``None`` on any validation or
@@ -118,6 +123,29 @@ def signup(username: str, password: str) -> Optional[User]:
     UI callers render a generic "could not create account" message
     without leaking which check failed (good for username enumeration
     resistance — bad usernames and duplicates both look the same).
+
+    Invitation flow (v21)
+    ---------------------
+    If ``invite_token`` is supplied, it MUST resolve via
+    :func:`auth.invitations.get_invitation_by_token` to an invitation
+    that is:
+
+      * unconsumed (``consumed_at`` is NULL),
+      * unexpired (``expires_at`` is strictly in the future),
+      * matched-by-email if the invite carries a non-NULL ``email``
+        (a present invite email must equal the ``username`` exactly —
+        usernames double as the canonical login identifier).
+
+    On a valid invite, the new user inherits the invite's ``role``
+    (so an explicit admin-invite mints an admin) and the invite is
+    marked consumed atomically with the signup. A bad invite token
+    rejects the signup the same way a duplicate username does
+    (returns ``None``).
+
+    If ``invite_token`` is ``None``, signup behaves exactly as the
+    pre-v21 contract — anyone with a valid username + password can
+    sign up. A future commit can introduce a "signups require an
+    invite" feature flag that flips this default.
     """
     try:
         if not isinstance(username, str) or not _USERNAME_PATTERN.fullmatch(username):
@@ -126,6 +154,41 @@ def signup(username: str, password: str) -> Optional[User]:
             return None
         if len(password) < _MIN_PASSWORD_LEN or len(password) > _MAX_PASSWORD_LEN:
             return None
+
+        # Resolve the invitation BEFORE spending KDF time on a doomed
+        # signup. Validation errors here behave the same as a duplicate
+        # username — return None, no info leak.
+        invitation = None
+        if invite_token is not None:
+            if not isinstance(invite_token, str) or not invite_token:
+                return None
+            try:
+                from auth.invitations import (
+                    get_invitation_by_token,
+                    _is_expired,
+                )
+            except Exception:
+                # Module import failure should fail closed.
+                return None
+            invitation = get_invitation_by_token(invite_token)
+            if invitation is None:
+                return None
+            # Already consumed → not reusable. The consumed flag is
+            # the source of truth; never trust a token whose row is
+            # already burned.
+            if invitation.consumed_at:
+                return None
+            if _is_expired(invitation.expires_at):
+                return None
+            # Pinned-email contract: when the invite carries a non-
+            # NULL email, the signup's username must match it
+            # exactly. Username is the canonical login identifier in
+            # this codebase, so binding by username keeps the
+            # mismatch detectable at signup time (a future commit can
+            # add a separate ``email`` column to ``users`` and pivot
+            # on that).
+            if invitation.email and invitation.email != username:
+                return None
 
         from state.db import get_connection
         conn = get_connection()
@@ -148,6 +211,12 @@ def signup(username: str, password: str) -> Optional[User]:
         user_id = secrets.token_urlsafe(16)
         created_at = _now_iso()
 
+        # An invitation can carry a non-default role. Without an
+        # invite, every signup lands as 'user' (the legacy default).
+        # The invitation module already validated the role against
+        # ``_VALID_ROLES`` at creation time so we trust it here.
+        assigned_role = invitation.role if invitation is not None else "user"
+
         try:
             conn.execute(
                 """
@@ -161,7 +230,7 @@ def signup(username: str, password: str) -> Optional[User]:
                     username,
                     hashed.hex(),
                     salt.hex(),
-                    "user",
+                    assigned_role,
                     created_at,
                     "",
                 ),
@@ -172,10 +241,25 @@ def signup(username: str, password: str) -> Optional[User]:
             # duplicate branch above.
             return None
 
+        # Consume the invite AFTER the user row is committed. A
+        # failure here is logged but does not roll back the signup —
+        # the user exists, the invite is one-shot, and a leftover
+        # unconsumed-but-already-used row would be visible to the
+        # admin in the invitations list (they can revoke it manually).
+        if invitation is not None:
+            try:
+                from auth.invitations import consume_invitation
+                consume_invitation(invite_token, user_id)
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    f"auth.users.signup: consume_invitation failed "
+                    f"for invite_id={invitation.invite_id!r}: {exc}"
+                )
+
         new_user = User(
             user_id=user_id,
             username=username,
-            role="user",
+            role=assigned_role,
             created_at=created_at,
             last_login_at="",
         )

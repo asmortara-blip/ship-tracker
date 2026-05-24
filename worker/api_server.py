@@ -316,6 +316,11 @@ _RE_CHANNEL_ONE = re.compile(r"^/api/v1/channels/([^/]+)/?$")
 _RE_AUDIT = re.compile(r"^/api/v1/audit/?$")
 _RE_INCIDENTS = re.compile(r"^/api/v1/incidents/?$")
 _RE_SOURCE_HEALTH = re.compile(r"^/api/v1/source-health/?$")
+# Report-schedule endpoints (schema v20). The list/create surface is
+# the bare path; the per-id endpoints (PATCH / DELETE) carry a
+# ``schedule_id`` capture group.
+_RE_SCHEDULES = re.compile(r"^/api/v1/schedules/?$")
+_RE_SCHEDULE_ONE = re.compile(r"^/api/v1/schedules/([^/]+)/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +391,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
                 _RE_AUDIT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
+                _RE_SCHEDULES, _RE_SCHEDULE_ONE,
             )
         )
 
@@ -458,6 +464,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_SOURCE_HEALTH.match(path):
                 self._get_source_health(query)
                 return
+            if _RE_SCHEDULES.match(path):
+                self._list_schedules(user_id)
+                return
 
             # GET on /api/v1/alerts/<id>/ack — this IS a known route
             # but only under POST. 405 it.
@@ -465,7 +474,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 _send_method_not_allowed(self)
                 return
             # GET on routes that exist only under write verbs → 405.
-            if _RE_CHANNEL_ONE.match(path) or _RE_REPORT_PUBLIC.match(path):
+            if (_RE_CHANNEL_ONE.match(path)
+                    or _RE_REPORT_PUBLIC.match(path)
+                    or _RE_SCHEDULE_ONE.match(path)):
                 _send_method_not_allowed(self)
                 return
 
@@ -500,6 +511,9 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_REPORT_PUBLIC.match(path)
             if m:
                 self._make_report_public(user_id, m.group(1))
+                return
+            if _RE_SCHEDULES.match(path):
+                self._create_schedule(user_id)
                 return
 
             # POST on any other known route → 405. Unknown path → 404.
@@ -540,6 +554,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if m:
                 self._revoke_report_public(user_id, m.group(1))
                 return
+            m = _RE_SCHEDULE_ONE.match(path)
+            if m:
+                self._delete_schedule(user_id, m.group(1))
+                return
 
             if self._path_matches_any_route(path):
                 _send_method_not_allowed(self)
@@ -573,7 +591,32 @@ class APIHandler(BaseHTTPRequestHandler):
         self._dispatch_unknown_method()
 
     def do_PATCH(self) -> None:  # noqa: N802
-        self._dispatch_unknown_method()
+        """PATCH dispatch — currently only ``/api/v1/schedules/<id>``
+        accepts PATCH. Every other known path → 405; unknown → 404."""
+        try:
+            path, _ = self._path_and_query()
+            logger.info(f"api PATCH {path}")
+
+            user_id = _authenticate(self)
+            if user_id is None:
+                _send_unauthorized(self)
+                return
+
+            m = _RE_SCHEDULE_ONE.match(path)
+            if m:
+                self._patch_schedule(user_id, m.group(1))
+                return
+
+            if self._path_matches_any_route(path):
+                _send_method_not_allowed(self)
+                return
+            _send_not_found(self)
+        except Exception as exc:
+            logger.exception(f"api PATCH handler crashed: {exc}")
+            try:
+                _send_internal_error(self)
+            except Exception:
+                pass
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._dispatch_unknown_method()
@@ -1485,6 +1528,200 @@ class APIHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.OK, {"revoked": True})
         except Exception as exc:
             logger.exception(f"api DELETE /reports/<id>/public crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/schedules ───────────────────────────
+
+    def _schedule_to_dict(self, sched) -> dict:
+        """Project a ReportSchedule onto the wire shape used by every
+        schedules endpoint. Kept as a helper because the list / create
+        / patch endpoints all need the same projection — copying it
+        would invite drift the next time a field is added."""
+        return {
+            "schedule_id":      sched.schedule_id,
+            "user_id":          sched.user_id,
+            "name":             sched.name,
+            "cron_expr":        sched.cron_expr,
+            "enabled":          bool(sched.enabled),
+            "last_run_at":      sched.last_run_at,
+            "last_run_status":  sched.last_run_status,
+            "last_run_message": sched.last_run_message,
+            "next_run_at":      sched.next_run_at,
+            "created_at":       sched.created_at,
+            "updated_at":       sched.updated_at,
+        }
+
+    def _list_schedules(self, user_id: str) -> None:
+        """Return the caller's report schedules as a JSON list."""
+        try:
+            from engine.report_scheduler import load_schedules
+            schedules = load_schedules(user_id=user_id)
+            payload = [self._schedule_to_dict(s) for s in schedules]
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(f"api GET /schedules crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/schedules ──────────────────────────
+
+    def _create_schedule(self, user_id: str) -> None:
+        """Create one schedule from a posted JSON dict.
+
+        Body fields:
+          * ``name``       (str, required) — operator-facing label.
+          * ``cron_expr``  (str, required) — 5-field cron string.
+          * ``enabled``    (bool, optional, defaults to True).
+
+        Returns ``{"saved": True, "schedule_id": "..."}`` on success.
+        Invalid cron expression → 400 with the parser's error string.
+        Missing name / cron_expr → 400.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+            name = (body.get("name") or "").strip()
+            cron_expr = (body.get("cron_expr") or "").strip()
+            if not name:
+                _send_bad_request(self, "name is required")
+                return
+            if not cron_expr:
+                _send_bad_request(self, "cron_expr is required")
+                return
+            enabled = bool(body.get("enabled", True))
+
+            from engine.report_scheduler import (
+                ReportSchedule,
+                get_schedule,
+                new_schedule_id,
+                save_schedule,
+                validate_cron_expr,
+            )
+            ok, err = validate_cron_expr(cron_expr)
+            if not ok:
+                _send_bad_request(self, f"invalid cron_expr: {err}")
+                return
+
+            sched = ReportSchedule(
+                schedule_id=new_schedule_id(),
+                user_id=user_id,
+                name=name,
+                cron_expr=cron_expr,
+                enabled=enabled,
+            )
+            if not save_schedule(sched):
+                _send_internal_error(self)
+                return
+            # Re-load so the returned row carries the computed
+            # next_run_at + created_at that save_schedule populated.
+            persisted = get_schedule(sched.schedule_id, user_id=user_id)
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "saved": True,
+                    "schedule_id": sched.schedule_id,
+                    "schedule": self._schedule_to_dict(persisted) if persisted else None,
+                },
+            )
+        except Exception as exc:
+            logger.exception(f"api POST /schedules crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/schedules/<id> ───────────────────
+
+    def _delete_schedule(self, user_id: str, schedule_id: str) -> None:
+        """Delete one schedule by id, scoped to the caller.
+
+        Cross-user deletes return 404 (the schedule does not exist in
+        the caller's scope). The 200 path returns ``{"deleted": True,
+        "schedule_id": "..."}``.
+        """
+        try:
+            from engine.report_scheduler import delete_schedule
+            ok = delete_schedule(schedule_id, user_id=user_id)
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(self, HTTPStatus.OK,
+                       {"deleted": True, "schedule_id": schedule_id})
+        except Exception as exc:
+            logger.exception(f"api DELETE /schedules/<id> crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: PATCH /api/v1/schedules/<id> ────────────────────
+
+    def _patch_schedule(self, user_id: str, schedule_id: str) -> None:
+        """Update name / cron_expr / enabled on one schedule.
+
+        Body fields are all OPTIONAL — only the supplied ones are
+        updated; the rest are preserved. An empty / null body → 400.
+        Invalid cron_expr → 400. Unknown / cross-user id → 404.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            from engine.report_scheduler import (
+                get_schedule,
+                save_schedule,
+                validate_cron_expr,
+            )
+            existing = get_schedule(schedule_id, user_id=user_id)
+            if existing is None:
+                _send_not_found(self)
+                return
+
+            if "name" in body:
+                name = body.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    _send_bad_request(self, "name must be a non-empty string")
+                    return
+                existing.name = name.strip()
+            if "cron_expr" in body:
+                cron_expr = body.get("cron_expr")
+                if not isinstance(cron_expr, str):
+                    _send_bad_request(self, "cron_expr must be a string")
+                    return
+                cron_expr = cron_expr.strip()
+                ok, err = validate_cron_expr(cron_expr)
+                if not ok:
+                    _send_bad_request(self, f"invalid cron_expr: {err}")
+                    return
+                existing.cron_expr = cron_expr
+            if "enabled" in body:
+                existing.enabled = bool(body.get("enabled"))
+
+            if not save_schedule(existing):
+                _send_internal_error(self)
+                return
+            persisted = get_schedule(schedule_id, user_id=user_id)
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "updated": True,
+                    "schedule_id": schedule_id,
+                    "schedule": self._schedule_to_dict(persisted) if persisted else None,
+                },
+            )
+        except Exception as exc:
+            logger.exception(f"api PATCH /schedules/<id> crashed: {exc}")
             _send_internal_error(self)
 
 

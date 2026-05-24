@@ -354,6 +354,10 @@ Endpoints:
 | `GET    /api/v1/audit`                       | n/a                               | Caller's audit-log rows. Query: `?limit=100` (max 1000), `?action=login_success` filter. |
 | `GET    /api/v1/incidents`                   | n/a                               | Caller's correlated alert incidents. Query: `?window=7` (days).                          |
 | `GET    /api/v1/source-health`               | n/a                               | Global feed-health summary (NOT user-scoped). Query: `?window_hours=24`.                 |
+| `GET    /api/v1/schedules`                   | n/a                               | Caller's report schedules. List of `{schedule_id, name, cron_expr, enabled, …}` rows.    |
+| `POST   /api/v1/schedules`                   | `{name, cron_expr, enabled?}`     | Create a recurring report schedule. 400 on missing name / invalid cron_expr.             |
+| `PATCH  /api/v1/schedules/<id>`              | `{name?, cron_expr?, enabled?}`   | Update one schedule; only the supplied fields move. 404 on cross-user / unknown id.      |
+| `DELETE /api/v1/schedules/<id>`              | empty                             | Delete one schedule. 404 on cross-user / unknown id.                                     |
 
 **Per-user scoping.** Every write threads the `user_id` resolved from
 the bearer token to the underlying engine call. Alice's token cannot
@@ -451,6 +455,35 @@ curl "$BASE/api/v1/source-health?window_hours=24" \
 #               "last_started_at": "...", "is_outage": false}, ...],
 #    "count": 9, "window_hours": 24, "total_pings": 216,
 #    "current_outages": ["worldbank"]}
+
+# GET /api/v1/schedules — caller's recurring report schedules.
+curl "$BASE/api/v1/schedules" -H "Authorization: Bearer $TOKEN"
+# → [{"schedule_id": "...", "name": "Morning Macro",
+#     "cron_expr": "0 9 * * *", "enabled": true,
+#     "last_run_at": null, "last_run_status": null,
+#     "next_run_at": "2026-05-24T09:00:00+00:00", ...}]
+
+# POST /api/v1/schedules — create a recurring schedule.
+#   cron_expr supports *, */N, single ints, comma-lists.
+#   Ranges (1-5) and L/# extensions are NOT supported.
+curl -X POST "$BASE/api/v1/schedules" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"name": "Morning Macro", "cron_expr": "0 9 * * *", "enabled": true}'
+# → {"saved": true, "schedule_id": "...", "schedule": {...}}
+
+# PATCH /api/v1/schedules/<id> — toggle / rename / re-cron.
+#   Only the supplied fields are updated; the rest survive untouched.
+curl -X PATCH "$BASE/api/v1/schedules/<schedule-uuid>" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"enabled": false}'
+# → {"updated": true, "schedule_id": "...", "schedule": {...}}
+
+# DELETE /api/v1/schedules/<id> — remove one schedule. 404 on cross-user.
+curl -X DELETE "$BASE/api/v1/schedules/<schedule-uuid>" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"deleted": true, "schedule_id": "..."}
 ```
 
 `GET /api/v1/health` is intentionally **unauthenticated** so load
@@ -487,9 +520,12 @@ rejected the invocation.
 | `tokens list / create / revoke`    | Per-user API-token admin.                                          |
 | `export`                           | Build a bulk-state tar.gz (see `Backup / Restore` below).          |
 | `mfa enable / disable / status`    | TOTP second-factor enrollment per user.                            |
+| `mfa recovery-codes / regenerate-codes` | Count or regenerate single-use scratch codes for MFA recovery. |
+| `invite create / list / revoke`    | Admin-issued signup invitations (pre-authorize signups by email).  |
 | `filters list / delete`            | Per-user saved filter presets.                                     |
 | `incidents list / stats`           | Correlated-incident view over the alert table.                     |
 | `settings show / set`              | Per-user preferences (timezone, theme, defaults).                  |
+| `schedules list / create / delete / enable / disable / run-once` | Cron-driven recurring report schedules (per-user). |
 
 ### MFA enrollment from the CLI
 
@@ -511,6 +547,82 @@ python -m tools.ops_cli mfa status <user_id>
 # 3. Disable (falls back to password-only on next login).
 python -m tools.ops_cli mfa disable <user_id>
 ```
+
+### MFA recovery codes (v21)
+
+When `mfa enable` succeeds, the platform auto-mints 10 single-use
+recovery codes alongside the TOTP secret. They are surfaced on stdout
+**exactly once** in the format `XXXXX-XXXXX`:
+
+```bash
+python -m tools.ops_cli mfa enable <user_id>
+#   secret: ...
+#   provisioning_uri: ...
+#   user_id : <user_id>
+#   enabled : True
+#   recovery_codes (save these — shown once):
+#     A7K2P-9Q3MN
+#     ...
+```
+
+After the operator dismisses the terminal, the plaintext codes are
+unrecoverable — only the per-code pbkdf2-sha256 hash + salt land in
+the `mfa_recovery_codes` table. If the user loses their authenticator
+they can sign in with any **unused** code from the original batch.
+
+```bash
+# How many codes does this user still have?
+python -m tools.ops_cli mfa recovery-codes <user_id>
+#   user_id      : <user_id>
+#   unused_count : 8
+
+# Wipe the current batch and issue a fresh one.
+python -m tools.ops_cli mfa regenerate-codes <user_id>
+#   user_id : <user_id>
+#   count   : 10
+#   recovery_codes (save these — shown once):
+#     ...
+```
+
+Disabling MFA wipes the recovery codes as a side effect — leaving them
+behind would create an invisible back door past the "MFA off" state
+the user sees.
+
+### User invitations (v21)
+
+An admin can pre-authorize a signup by minting an invitation. The
+recipient signs up via the standard signup form with the token
+supplied as `?invite=<token>` (or by passing `invite_token=` to
+`auth.users.signup`). The token is consumed atomically with the
+new-user insert and cannot be reused.
+
+```bash
+# Mint an invite. The token is shown EXACTLY ONCE — share it
+# out-of-band with the recipient.
+python -m tools.ops_cli invite create \
+    --invited-by <admin_user_id> \
+    --email alice \
+    --role user \
+    --expires-days 7
+#   invite_token: <32-char-url-safe-token>
+#   invite_id  : <uuid>
+#   email      : alice
+#   role       : user
+#   expires_at : 2026-05-30T...
+
+# List pending invites (consumed ones are hidden by default).
+python -m tools.ops_cli invite list
+
+# Revoke an unconsumed invite. Already-consumed invites cannot be
+# revoked — those rows are part of the audit trail.
+python -m tools.ops_cli invite revoke <invite_id>
+```
+
+The `--email` field is optional. When set, the signup's username must
+equal that value exactly — usernames double as the canonical login
+identifier in this codebase. The `--role` field defaults to `user`;
+pass `--role admin` ONLY when you mean it (admin invites can never be
+silently granted by typo).
 
 ### Saved filter presets
 
@@ -555,6 +667,39 @@ python -m tools.ops_cli settings set --user-id <id> \
     --report-window 60 \
     --alert-severity HIGH
 ```
+
+### Recurring report schedules
+
+Schema v20 added a `report_schedules` table so operators can configure
+auto-generated reports on a cron-like schedule instead of clicking
+"generate" by hand. The worker's `run_report_scheduler_job` fires every
+due schedule each tick. The cron parser is stdlib-only (no `croniter`)
+and supports `*`, `*/N`, single ints, and comma-lists; ranges (`1-5`)
+and `L`/`#` extensions are intentionally NOT supported — expand into a
+comma-list.
+
+```bash
+# List a user's schedules.
+python -m tools.ops_cli schedules list --user-id <id>
+
+# Create a daily-9am-UTC schedule (cron string in quotes — the shell
+# would otherwise expand the *).
+python -m tools.ops_cli schedules create --user-id <id> \
+    --name "Morning Macro" --cron "0 9 * * *"
+
+# Toggle a schedule on / off without deleting it.
+python -m tools.ops_cli schedules disable <schedule_id> --user-id <id>
+python -m tools.ops_cli schedules enable  <schedule_id> --user-id <id>
+
+# Trigger an immediate manual run of one schedule (bypasses enabled).
+python -m tools.ops_cli schedules run-once <schedule_id> --user-id <id>
+
+# Delete one schedule.
+python -m tools.ops_cli schedules delete <schedule_id> --user-id <id>
+```
+
+Schedule timestamps are stored as ISO-8601 UTC. The UI displays them
+in the user's local timezone via `utils.tz`.
 
 ## Backup / Restore
 

@@ -296,7 +296,12 @@ def test_enable_mfa_sets_secret_and_flag() -> None:
     assert user is not None
 
     secret = generate_secret()
-    assert enable_mfa(user.user_id, secret) is True
+    # v21 signature change: enable_mfa returns (ok, recovery_codes).
+    ok, codes = enable_mfa(user.user_id, secret)
+    assert ok is True
+    # Auto-mint of recovery codes is expected on a successful enable.
+    assert isinstance(codes, list)
+    assert len(codes) == 10
 
     # Direct DB read to confirm the column flipped.
     conn = get_connection()
@@ -325,7 +330,11 @@ def test_disable_mfa_clears_secret_and_flag() -> None:
 def test_enable_mfa_rejects_unknown_user() -> None:
     from auth.mfa import enable_mfa, generate_secret
 
-    assert enable_mfa("does-not-exist", generate_secret()) is False
+    # v21: failure path returns (False, None) — same shape as success
+    # so callers cannot accidentally treat the codes as truthy.
+    ok, codes = enable_mfa("does-not-exist", generate_secret())
+    assert ok is False
+    assert codes is None
 
 
 def test_enable_mfa_rejects_malformed_secret() -> None:
@@ -337,15 +346,18 @@ def test_enable_mfa_rejects_malformed_secret() -> None:
 
     user = signup("alice", "correct-password-123")
     assert user is not None
-    assert enable_mfa(user.user_id, "!!! not base32 !!!") is False
+    ok, codes = enable_mfa(user.user_id, "!!! not base32 !!!")
+    assert ok is False
+    assert codes is None
 
 
 def test_enable_mfa_rejects_empty_inputs() -> None:
     from auth.mfa import enable_mfa
 
-    assert enable_mfa("", "abcd") is False
-    assert enable_mfa("user-id", "") is False
-    assert enable_mfa(None, "abcd") is False  # type: ignore[arg-type]
+    for inputs in (("", "abcd"), ("user-id", ""), (None, "abcd")):
+        ok, codes = enable_mfa(inputs[0], inputs[1])  # type: ignore[arg-type]
+        assert ok is False
+        assert codes is None
 
 
 def test_is_mfa_enabled_unknown_user_returns_false() -> None:
@@ -544,3 +556,249 @@ def test_non_mfa_login_audit_does_not_carry_mfa_flag() -> None:
     assert len(events) >= 1
     # detail_json is either {} or missing the mfa key.
     assert events[0].detail_json.get("mfa") is not True
+
+
+# ── Recovery codes (v21) ──────────────────────────────────────────────────
+
+def test_enable_mfa_returns_recovery_codes() -> None:
+    """The v21 enable_mfa contract: success returns
+    ``(True, list_of_10_codes)``. Tests pin the shape so callers can
+    safely unpack the tuple."""
+    from auth.mfa import enable_mfa, generate_secret
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    ok, codes = enable_mfa(user.user_id, generate_secret())
+    assert ok is True
+    assert isinstance(codes, list)
+    assert len(codes) == 10
+    # Every code is a string in the canonical XXXXX-XXXXX format
+    # (5 chars + dash + 5 chars = 11 chars total).
+    for c in codes:
+        assert isinstance(c, str)
+        assert len(c) == 11
+        assert c[5] == "-"
+
+
+def test_generate_recovery_codes_are_distinct() -> None:
+    """Two consecutive mints must produce non-overlapping batches —
+    the RNG path must NOT recycle codes. A collision on a 50-bit
+    code space is vanishingly rare so any duplicate here is a bug."""
+    from auth.mfa import generate_recovery_codes
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+
+    batch_a = generate_recovery_codes(user.user_id)
+    batch_b = generate_recovery_codes(user.user_id)
+    assert len(batch_a) == 10
+    assert len(batch_b) == 10
+    # No code overlap between batches.
+    assert set(batch_a).isdisjoint(set(batch_b))
+    # And the combined set has 20 distinct entries.
+    assert len(set(batch_a) | set(batch_b)) == 20
+
+
+def test_recovery_codes_never_stored_in_plaintext() -> None:
+    """The DB column ``code_hash`` must NEVER equal any plaintext
+    code — only the pbkdf2 digest lands on disk. This is the load-
+    bearing security property of the whole recovery-codes feature."""
+    from auth.mfa import generate_recovery_codes
+    from auth.users import signup
+    from state.db import get_connection
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    codes = generate_recovery_codes(user.user_id)
+    assert len(codes) == 10
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT code_hash, salt FROM mfa_recovery_codes "
+        "WHERE user_id = ?",
+        (user.user_id,),
+    ).fetchall()
+    assert len(rows) == 10
+    stored_hashes = {r["code_hash"] for r in rows}
+    # No plaintext code may ever match a stored hash.
+    assert stored_hashes.isdisjoint(set(codes))
+    # No plaintext code may even appear as a substring of a hash
+    # (defense against a buggy storage path that just hex-encoded
+    # the code instead of hashing it).
+    for plaintext in codes:
+        for h in stored_hashes:
+            assert plaintext not in h
+    # Every salt is unique — fresh salt per code.
+    salts = {r["salt"] for r in rows}
+    assert len(salts) == 10
+
+
+def test_verify_and_consume_recovery_code_accepts_valid_code() -> None:
+    """The verify path must accept any unused code from the batch and
+    flip its ``used_at`` so it cannot be reused."""
+    from auth.mfa import (
+        generate_recovery_codes,
+        verify_and_consume_recovery_code,
+    )
+    from auth.users import signup
+    from state.db import get_connection
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    codes = generate_recovery_codes(user.user_id)
+    assert codes
+
+    assert verify_and_consume_recovery_code(user.user_id, codes[0]) is True
+    # Second attempt with the same code must FAIL — it's now consumed.
+    assert verify_and_consume_recovery_code(user.user_id, codes[0]) is False
+
+    # The other 9 codes are still usable.
+    assert verify_and_consume_recovery_code(user.user_id, codes[1]) is True
+
+    # Direct DB confirmation: used_at populated on 2 rows.
+    conn = get_connection()
+    used = conn.execute(
+        "SELECT COUNT(*) AS n FROM mfa_recovery_codes "
+        "WHERE user_id = ? AND used_at IS NOT NULL",
+        (user.user_id,),
+    ).fetchone()
+    assert used["n"] == 2
+
+
+def test_verify_recovery_code_strips_dash_and_whitespace() -> None:
+    """The user might type the dash, omit it, or paste with stray
+    whitespace. Verify must normalize before hashing."""
+    from auth.mfa import (
+        generate_recovery_codes,
+        verify_and_consume_recovery_code,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    codes = generate_recovery_codes(user.user_id)
+    assert codes
+
+    # Without dash.
+    no_dash = codes[0].replace("-", "")
+    assert verify_and_consume_recovery_code(user.user_id, no_dash) is True
+    # With surrounding whitespace.
+    spaced = f"  {codes[1]}  "
+    assert verify_and_consume_recovery_code(user.user_id, spaced) is True
+    # Lower-case input still matches.
+    lowered = codes[2].lower()
+    assert verify_and_consume_recovery_code(user.user_id, lowered) is True
+
+
+def test_verify_recovery_code_rejects_wrong_code() -> None:
+    """A code that does not match any unused row must return False."""
+    from auth.mfa import (
+        generate_recovery_codes,
+        verify_and_consume_recovery_code,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    generate_recovery_codes(user.user_id)
+
+    # 11-char string in the right shape but not a real code.
+    assert verify_and_consume_recovery_code(
+        user.user_id, "ZZZZZ-ZZZZZ"
+    ) is False
+    # Empty string.
+    assert verify_and_consume_recovery_code(user.user_id, "") is False
+    # Wrong length.
+    assert verify_and_consume_recovery_code(user.user_id, "AB") is False
+
+
+def test_count_unused_recovery_codes_reflects_consumption() -> None:
+    """The count helper drives the "N unused codes remaining" UI
+    caption. Must decrement on each successful consume."""
+    from auth.mfa import (
+        count_unused_recovery_codes,
+        generate_recovery_codes,
+        verify_and_consume_recovery_code,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    assert count_unused_recovery_codes(user.user_id) == 0
+
+    codes = generate_recovery_codes(user.user_id)
+    assert count_unused_recovery_codes(user.user_id) == 10
+
+    verify_and_consume_recovery_code(user.user_id, codes[0])
+    assert count_unused_recovery_codes(user.user_id) == 9
+
+    verify_and_consume_recovery_code(user.user_id, codes[1])
+    assert count_unused_recovery_codes(user.user_id) == 8
+
+
+def test_regenerate_recovery_codes_wipes_old_batch() -> None:
+    """regenerate_recovery_codes must wipe the previous batch and
+    return a fresh one. Old codes must no longer verify."""
+    from auth.mfa import (
+        count_unused_recovery_codes,
+        generate_recovery_codes,
+        regenerate_recovery_codes,
+        verify_and_consume_recovery_code,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    old_codes = generate_recovery_codes(user.user_id)
+    assert len(old_codes) == 10
+
+    new_codes = regenerate_recovery_codes(user.user_id)
+    assert len(new_codes) == 10
+    assert set(old_codes).isdisjoint(set(new_codes))
+
+    # Count is exactly 10 (old batch wiped + new batch minted).
+    assert count_unused_recovery_codes(user.user_id) == 10
+
+    # Old codes must no longer verify.
+    for old in old_codes:
+        assert verify_and_consume_recovery_code(user.user_id, old) is False
+    # New codes do verify.
+    assert verify_and_consume_recovery_code(user.user_id, new_codes[0]) is True
+
+
+def test_disable_mfa_wipes_recovery_codes() -> None:
+    """Disabling MFA must wipe the recovery codes — leaving them behind
+    would create an invisible back door past the "MFA off" state the
+    user sees."""
+    from auth.mfa import (
+        count_unused_recovery_codes,
+        disable_mfa,
+        enable_mfa,
+        generate_secret,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    ok, codes = enable_mfa(user.user_id, generate_secret())
+    assert ok and codes
+    assert count_unused_recovery_codes(user.user_id) == 10
+
+    assert disable_mfa(user.user_id) is True
+    assert count_unused_recovery_codes(user.user_id) == 0
+
+
+def test_generate_recovery_codes_rejects_unknown_user() -> None:
+    """An unknown user_id must return [] without inserting any rows —
+    foreign-key integrity demands the user row exist first."""
+    from auth.mfa import generate_recovery_codes
+    from state.db import get_connection
+
+    assert generate_recovery_codes("does-not-exist") == []
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM mfa_recovery_codes"
+    ).fetchone()
+    assert row["n"] == 0

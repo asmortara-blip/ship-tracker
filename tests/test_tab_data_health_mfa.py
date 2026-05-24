@@ -85,7 +85,9 @@ def test_mfa_panel_renders_enabled_branch(mock_streamlit) -> None:
     user = signup("bob", "correct-password-123")
     assert user is not None
     secret = generate_secret()
-    assert enable_mfa(user.user_id, secret) is True
+    # v21 signature change — enable_mfa returns (ok, recovery_codes).
+    ok, _codes = enable_mfa(user.user_id, secret)
+    assert ok is True
     assert is_mfa_enabled(user.user_id) is True
 
     tab = _reload_tab()
@@ -138,7 +140,9 @@ def test_enable_mfa_workflow_persists_after_panel_use(mock_streamlit) -> None:
     assert user is not None
 
     secret = generate_secret()
-    assert enable_mfa(user.user_id, secret) is True
+    # v21 signature change — enable_mfa returns (ok, recovery_codes).
+    ok, _codes = enable_mfa(user.user_id, secret)
+    assert ok is True
 
     # Direct DB read — proves the panel-adjacent enable_mfa call really
     # persists to the users table, not just to in-memory state.
@@ -174,7 +178,9 @@ def test_disable_mfa_workflow_clears_after_panel_use(mock_streamlit) -> None:
 
     user = signup("bob", "correct-password-123")
     assert user is not None
-    assert enable_mfa(user.user_id, generate_secret()) is True
+    # v21 signature change — enable_mfa returns (ok, recovery_codes).
+    ok, _codes = enable_mfa(user.user_id, generate_secret())
+    assert ok is True
     assert is_mfa_enabled(user.user_id) is True
 
     assert disable_mfa(user.user_id) is True
@@ -190,4 +196,71 @@ def test_disable_mfa_workflow_clears_after_panel_use(mock_streamlit) -> None:
 
     # Disabled-branch render must complete now.
     tab = _reload_tab()
+    tab._render_mfa_panel(user.user_id)
+
+
+# ── v21: recovery-code reveal + regenerate UI ────────────────────────────
+
+def test_mfa_panel_surfaces_pending_recovery_codes(mock_streamlit) -> None:
+    """When ``mfa_pending_codes`` is stashed in session_state, the
+    panel must render them ONCE in a copyable st.code block and pop
+    the key so a reload does not re-show them."""
+    from auth.mfa import enable_mfa, generate_secret
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    ok, codes = enable_mfa(user.user_id, generate_secret())
+    assert ok and codes
+
+    # Simulate the post-enable rerun: codes are in session_state.
+    mock_streamlit.session_state["mfa_pending_codes"] = codes
+
+    tab = _reload_tab()
+    tab._render_mfa_panel(user.user_id)
+
+    # After the render, the key MUST be popped so a page refresh does
+    # not silently re-show the codes.
+    assert "mfa_pending_codes" not in mock_streamlit.session_state
+
+
+def test_mfa_panel_renders_unused_count_caption(mock_streamlit) -> None:
+    """The enabled-branch caption surfaces the unused-code count.
+    Smoke that the helper renders without raising — the actual caption
+    text is checked indirectly via count_unused_recovery_codes."""
+    from auth.mfa import (
+        count_unused_recovery_codes,
+        enable_mfa,
+        generate_secret,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    enable_mfa(user.user_id, generate_secret())
+    assert count_unused_recovery_codes(user.user_id) == 10
+
+    tab = _reload_tab()
+    # Must NOT raise.
+    tab._render_mfa_panel(user.user_id)
+
+
+def test_mfa_panel_regenerate_button_flow(mock_streamlit) -> None:
+    """Smoke-test the regenerate-confirm flow: when the regen-confirm
+    flag is set in session_state, the panel renders the confirmation
+    branch without raising. The actual click is not simulated under
+    mock_streamlit (button always returns False), so no regen
+    happens — this is a render-path smoke test."""
+    from auth.mfa import enable_mfa, generate_secret
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    enable_mfa(user.user_id, generate_secret())
+
+    # Force the confirm branch open.
+    mock_streamlit.session_state["mfa_regen_confirm"] = True
+
+    tab = _reload_tab()
+    # Helper must NOT raise even with the confirm branch active.
     tab._render_mfa_panel(user.user_id)

@@ -535,25 +535,46 @@ def _cmd_mfa_enable(args: argparse.Namespace) -> None:
 
     secret = generate_secret()
     uri = provisioning_uri(secret, account=account)
-    ok = enable_mfa(args.user_id, secret)
+    # v21 signature change: enable_mfa returns (ok, recovery_codes).
+    # The recovery codes are surfaced to the operator EXACTLY ONCE
+    # on stdout — never logged, never re-derivable from the DB. The
+    # raw secret is similarly shown once.
+    ok, recovery_codes = enable_mfa(args.user_id, secret)
     if not ok:
         raise RuntimeError(
             f"enable_mfa failed for user_id={args.user_id!r} — "
             "unknown user or DB error"
         )
 
-    payload = {"user_id": args.user_id, "secret": secret, "provisioning_uri": uri, "enabled": True}
+    payload = {
+        "user_id": args.user_id,
+        "secret": secret,
+        "provisioning_uri": uri,
+        "enabled": True,
+        "recovery_codes": recovery_codes or [],
+    }
     if args.json:
         _print_json(payload)
     else:
-        # Print both pieces explicitly so an operator copy-pasting from
+        # Print every piece explicitly so an operator copy-pasting from
         # the terminal can spot each on its own line. The raw secret is
         # what the user types into an authenticator app that can't scan
         # a QR; the URI is the canonical otpauth:// form for QR-capable
-        # apps. Both must appear EXACTLY ONCE on stdout.
+        # apps. Recovery codes (when present — auto-mint may fail
+        # gracefully with None) land in a labelled block at the end so
+        # they don't get visually lost between the secret + URI lines.
         print(f"secret: {secret}")
         print(f"provisioning_uri: {uri}")
         _print_kv({"user_id": args.user_id, "enabled": True})
+        if recovery_codes:
+            print("recovery_codes (save these — shown once):")
+            for code in recovery_codes:
+                print(f"  {code}")
+        else:
+            print(
+                "recovery_codes: (auto-mint failed; run "
+                "'mfa regenerate-codes' to retry)"
+            )
 
 
 def _cmd_mfa_disable(args: argparse.Namespace) -> None:
@@ -577,6 +598,132 @@ def _cmd_mfa_status(args: argparse.Namespace) -> None:
 
     enabled = is_mfa_enabled(args.user_id)
     payload = {"user_id": args.user_id, "enabled": bool(enabled)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_mfa_recovery_codes(args: argparse.Namespace) -> None:
+    """Report how many UNUSED recovery codes the user currently has.
+
+    Does NOT print the codes themselves — they are unrecoverable
+    after the initial mint. Use ``mfa regenerate-codes`` to issue a
+    fresh batch (and surface it once).
+    """
+    from auth.mfa import count_unused_recovery_codes
+
+    n = count_unused_recovery_codes(args.user_id)
+    payload = {"user_id": args.user_id, "unused_count": int(n)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_mfa_regenerate_codes(args: argparse.Namespace) -> None:
+    """Wipe the current recovery-code batch and issue a fresh one.
+
+    Prints the plaintext codes EXACTLY ONCE on stdout. After this
+    handler exits the codes are unrecoverable (the DB only carries
+    the per-code pbkdf2 hash).
+    """
+    from auth.mfa import regenerate_recovery_codes
+
+    codes = regenerate_recovery_codes(args.user_id)
+    if not codes:
+        raise RuntimeError(
+            f"regenerate_recovery_codes failed for "
+            f"user_id={args.user_id!r} — unknown user or DB error"
+        )
+    payload = {"user_id": args.user_id, "recovery_codes": codes}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({"user_id": args.user_id, "count": len(codes)})
+        print("recovery_codes (save these — shown once):")
+        for code in codes:
+            print(f"  {code}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  invite — admin-issued user invitations (v21)
+#
+#  The interesting handler is ``invite create``: it mints a token and
+#  prints it EXACTLY ONCE to stdout (same security contract as
+#  ``mfa enable`` and ``tokens create`` — the operator copy-pastes from
+#  terminal output and the token is never re-derivable from the DB).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_invite_create(args: argparse.Namespace) -> None:
+    from auth.invitations import create_invitation
+
+    invitation = create_invitation(
+        args.invited_by,
+        email=args.email,
+        role=args.role,
+        expires_in_days=int(args.expires_days),
+    )
+    if invitation is None:
+        raise RuntimeError(
+            f"create_invitation failed for invited_by={args.invited_by!r} — "
+            "unknown user, invalid role, or DB error"
+        )
+    if args.json:
+        # The raw token MUST appear exactly once in the output. Tests
+        # pin this — duplicate appearances would let a careless copy-
+        # paste leak the secret twice.
+        _print_json({
+            "invite_id":         invitation.invite_id,
+            "invite_token":      invitation.invite_token,
+            "email":             invitation.email,
+            "role":              invitation.role,
+            "expires_at":        invitation.expires_at,
+            "invited_by_user_id": invitation.invited_by_user_id,
+        })
+    else:
+        # Token on its own line, prefixed for terminal copy-paste.
+        print(f"invite_token: {invitation.invite_token}")
+        _print_kv({
+            "invite_id":  invitation.invite_id,
+            "email":      invitation.email or "(any)",
+            "role":       invitation.role,
+            "expires_at": invitation.expires_at,
+        })
+
+
+def _cmd_invite_list(args: argparse.Namespace) -> None:
+    from auth.invitations import list_invitations
+
+    invitations = list_invitations(
+        invited_by_user_id=getattr(args, "invited_by", None),
+        include_consumed=bool(args.include_consumed),
+    )
+    if args.json:
+        _print_json(invitations)
+        return
+    rows = [
+        {
+            "invite_id":   inv.invite_id[:10],
+            "email":       inv.email or "(any)",
+            "role":        inv.role,
+            "expires_at":  inv.expires_at[:19],
+            "consumed":    "Y" if inv.consumed_at else "N",
+            "invited_by":  inv.invited_by_user_id[:10],
+        }
+        for inv in invitations
+    ]
+    _print_table(
+        rows,
+        columns=["invite_id", "email", "role", "expires_at", "consumed", "invited_by"],
+    )
+
+
+def _cmd_invite_revoke(args: argparse.Namespace) -> None:
+    from auth.invitations import revoke_invitation
+
+    ok = revoke_invitation(args.invite_id)
+    payload = {"invite_id": args.invite_id, "revoked": bool(ok)}
     if args.json:
         _print_json(payload)
     else:
@@ -684,6 +831,199 @@ def _cmd_settings_show(args: argparse.Namespace) -> None:
         "default_alert_severity":     settings.default_alert_severity,
         "extras":                     settings.extras or "(none)",
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  schedules — cron-driven auto-generated reports (commit / schema v20)
+#
+#  Mirrors the API + UI surface: list / create / delete / enable /
+#  disable / run-once. Every subcommand is per-user scoped via the
+#  ``--user-id`` flag — the CLI deliberately requires it explicitly
+#  rather than reading session state because there IS no session state
+#  in a shell process.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_schedules_list(args: argparse.Namespace) -> None:
+    from engine.report_scheduler import load_schedules
+
+    schedules = load_schedules(user_id=args.user_id)
+    if args.json:
+        _print_json(schedules)
+        return
+    rows = [
+        {
+            "schedule_id":      s.schedule_id[:10],
+            "name":             s.name,
+            "cron_expr":        s.cron_expr,
+            "enabled":          "Y" if s.enabled else "N",
+            "next_run_at":      s.next_run_at or "(none)",
+            "last_run_status":  s.last_run_status or "(never)",
+        }
+        for s in schedules
+    ]
+    _print_table(
+        rows,
+        columns=["schedule_id", "name", "cron_expr", "enabled",
+                 "next_run_at", "last_run_status"],
+    )
+
+
+def _cmd_schedules_create(args: argparse.Namespace) -> None:
+    from engine.report_scheduler import (
+        ReportSchedule,
+        new_schedule_id,
+        save_schedule,
+        validate_cron_expr,
+    )
+
+    ok, err = validate_cron_expr(args.cron)
+    if not ok:
+        raise RuntimeError(f"invalid cron expression {args.cron!r}: {err}")
+
+    sched = ReportSchedule(
+        schedule_id=new_schedule_id(),
+        user_id=args.user_id,
+        name=args.name,
+        cron_expr=args.cron,
+        enabled=True,
+    )
+    if not save_schedule(sched):
+        raise RuntimeError(
+            f"save_schedule failed for name={args.name!r} cron={args.cron!r} "
+            "— check logs"
+        )
+    if args.json:
+        _print_json(sched)
+    else:
+        _print_kv({
+            "schedule_id": sched.schedule_id,
+            "name":        sched.name,
+            "cron_expr":   sched.cron_expr,
+            "enabled":     "Y",
+        })
+
+
+def _cmd_schedules_delete(args: argparse.Namespace) -> None:
+    from engine.report_scheduler import delete_schedule
+
+    ok = delete_schedule(args.schedule_id, user_id=args.user_id)
+    payload = {"schedule_id": args.schedule_id, "deleted": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _toggle_schedule(schedule_id: str, user_id: str, enabled: bool) -> bool:
+    """Shared helper for enable/disable — loads the row, flips the bit,
+    saves it back. Returns True on success, False when the schedule
+    doesn't exist in the caller's scope OR the save itself failed.
+
+    Implemented as a separate helper because both ``enable`` and
+    ``disable`` need the same load → mutate → save round-trip with the
+    same per-user scope check; copying the logic into both handlers
+    would invite drift the next time the save path changes.
+    """
+    from engine.report_scheduler import get_schedule, save_schedule
+
+    sched = get_schedule(schedule_id, user_id=user_id)
+    if sched is None:
+        return False
+    sched.enabled = enabled
+    return save_schedule(sched)
+
+
+def _cmd_schedules_enable(args: argparse.Namespace) -> None:
+    ok = _toggle_schedule(args.schedule_id, args.user_id, enabled=True)
+    if not ok:
+        raise RuntimeError(
+            f"enable failed for schedule_id={args.schedule_id!r} — "
+            "unknown id or save failed"
+        )
+    payload = {"schedule_id": args.schedule_id, "enabled": True}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_schedules_disable(args: argparse.Namespace) -> None:
+    ok = _toggle_schedule(args.schedule_id, args.user_id, enabled=False)
+    if not ok:
+        raise RuntimeError(
+            f"disable failed for schedule_id={args.schedule_id!r} — "
+            "unknown id or save failed"
+        )
+    payload = {"schedule_id": args.schedule_id, "enabled": False}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_schedules_run_once(args: argparse.Namespace) -> None:
+    """Trigger an immediate manual run of one schedule.
+
+    The execution path mirrors ``worker.scheduler.run_report_scheduler_job``
+    for a single schedule: build the data bundle, call
+    ``run_daily_briefing_job``, update the schedule's bookkeeping
+    columns. The schedule's enabled state is IGNORED — operators
+    explicitly asking for "run this NOW" should not be blocked by the
+    enabled flag (use ``schedules enable`` separately if you want the
+    cron to keep firing).
+    """
+    from engine.report_scheduler import (
+        compute_next_run_at,
+        get_schedule,
+        update_run_state,
+    )
+
+    sched = get_schedule(args.schedule_id, user_id=args.user_id)
+    if sched is None:
+        raise RuntimeError(
+            f"unknown schedule_id={args.schedule_id!r} for user_id={args.user_id!r}"
+        )
+
+    from worker.scheduler import load_data_bundle, run_daily_briefing_job
+
+    bundle = load_data_bundle()
+    result = run_daily_briefing_job(bundle, push_to_channels=False)
+
+    # Advance next_run_at the same way the worker would, so a
+    # successful run-once doesn't leave the schedule due for an
+    # immediate re-fire on the next worker tick.
+    try:
+        next_iso = compute_next_run_at(sched.cron_expr).isoformat()
+    except Exception:
+        next_iso = None
+
+    if result.success:
+        update_run_state(
+            sched.schedule_id, status="ok", message="", next_run_at=next_iso,
+        )
+        payload = {
+            "schedule_id": sched.schedule_id,
+            "success":     True,
+            "report_id":   result.report_id,
+            "next_run_at": next_iso,
+        }
+    else:
+        update_run_state(
+            sched.schedule_id,
+            status="error",
+            message=(result.error_msg or "unknown error")[:500],
+            next_run_at=next_iso,
+        )
+        payload = {
+            "schedule_id": sched.schedule_id,
+            "success":     False,
+            "error_msg":   result.error_msg,
+            "next_run_at": next_iso,
+        }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
 
 
 def _cmd_settings_set(args: argparse.Namespace) -> None:
@@ -902,6 +1242,81 @@ def _build_parser() -> argparse.ArgumentParser:
     sm3.add_argument("--json", action="store_true")
     sm3.set_defaults(func=_cmd_mfa_status)
 
+    sm4 = sm.add_parser(
+        "recovery-codes",
+        help="Show the count of UNUSED recovery codes (does NOT print the codes)",
+    )
+    sm4.add_argument("user_id")
+    sm4.add_argument("--json", action="store_true")
+    sm4.set_defaults(func=_cmd_mfa_recovery_codes)
+
+    sm5 = sm.add_parser(
+        "regenerate-codes",
+        help="Wipe existing recovery codes and mint a fresh batch (prints codes ONCE)",
+    )
+    sm5.add_argument("user_id")
+    sm5.add_argument("--json", action="store_true")
+    sm5.set_defaults(func=_cmd_mfa_regenerate_codes)
+
+    # ── invite ────────────────────────────────────────────────────────────
+    p_inv = sub.add_parser("invite", help="User-invitation subcommands")
+    siv = p_inv.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    siv1 = siv.add_parser(
+        "create",
+        help="Mint a new invitation (prints the token ONCE)",
+    )
+    siv1.add_argument(
+        "--invited-by",
+        dest="invited_by",
+        required=True,
+        help="user_id of the admin issuing the invite (stamped on the row)",
+    )
+    siv1.add_argument(
+        "--email",
+        default=None,
+        help="Optional — bind the invite to this email (signup username must match)",
+    )
+    siv1.add_argument(
+        "--role",
+        default="user",
+        choices=["user", "admin"],
+        help="Role the invite grants on consumption (default: user)",
+    )
+    siv1.add_argument(
+        "--expires-days",
+        dest="expires_days",
+        default=7,
+        type=int,
+        help="Invite lifetime in days (default: 7)",
+    )
+    siv1.add_argument("--json", action="store_true")
+    siv1.set_defaults(func=_cmd_invite_create)
+
+    siv2 = siv.add_parser("list", help="List invitations (unconsumed by default)")
+    siv2.add_argument(
+        "--invited-by",
+        dest="invited_by",
+        default=None,
+        help="Optional — filter to invitations issued by this user_id",
+    )
+    siv2.add_argument(
+        "--include-consumed",
+        dest="include_consumed",
+        action="store_true",
+        help="Include already-consumed invitations in the listing",
+    )
+    siv2.add_argument("--json", action="store_true")
+    siv2.set_defaults(func=_cmd_invite_list)
+
+    siv3 = siv.add_parser(
+        "revoke",
+        help="Delete an UNCONSUMED invitation (consumed rows are immutable)",
+    )
+    siv3.add_argument("invite_id")
+    siv3.add_argument("--json", action="store_true")
+    siv3.set_defaults(func=_cmd_invite_revoke)
+
     # ── filters ───────────────────────────────────────────────────────────
     p_fl = sub.add_parser("filters", help="Saved filter-preset subcommands")
     sf = p_fl.add_subparsers(dest="subcommand", required=True, metavar="SUB")
@@ -952,6 +1367,46 @@ def _build_parser() -> argparse.ArgumentParser:
                      choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
     ss2.add_argument("--json", action="store_true")
     ss2.set_defaults(func=_cmd_settings_set)
+
+    # ── schedules ─────────────────────────────────────────────────────────
+    p_sch = sub.add_parser("schedules", help="Report-schedule subcommands")
+    sch_sub = p_sch.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sch1 = sch_sub.add_parser("list", help="List a user's report schedules")
+    sch1.add_argument("--user-id", dest="user_id", required=True)
+    sch1.add_argument("--json", action="store_true")
+    sch1.set_defaults(func=_cmd_schedules_list)
+
+    sch2 = sch_sub.add_parser("create", help="Create a new schedule")
+    sch2.add_argument("--user-id", dest="user_id", required=True)
+    sch2.add_argument("--name", required=True, help='Operator-facing label')
+    sch2.add_argument("--cron", required=True, help='5-field cron string e.g. "0 9 * * *"')
+    sch2.add_argument("--json", action="store_true")
+    sch2.set_defaults(func=_cmd_schedules_create)
+
+    sch3 = sch_sub.add_parser("delete", help="Delete one schedule")
+    sch3.add_argument("schedule_id")
+    sch3.add_argument("--user-id", dest="user_id", required=True)
+    sch3.add_argument("--json", action="store_true")
+    sch3.set_defaults(func=_cmd_schedules_delete)
+
+    sch4 = sch_sub.add_parser("enable", help="Enable one schedule")
+    sch4.add_argument("schedule_id")
+    sch4.add_argument("--user-id", dest="user_id", required=True)
+    sch4.add_argument("--json", action="store_true")
+    sch4.set_defaults(func=_cmd_schedules_enable)
+
+    sch5 = sch_sub.add_parser("disable", help="Disable one schedule")
+    sch5.add_argument("schedule_id")
+    sch5.add_argument("--user-id", dest="user_id", required=True)
+    sch5.add_argument("--json", action="store_true")
+    sch5.set_defaults(func=_cmd_schedules_disable)
+
+    sch6 = sch_sub.add_parser("run-once", help="Trigger an immediate manual run")
+    sch6.add_argument("schedule_id")
+    sch6.add_argument("--user-id", dest="user_id", required=True)
+    sch6.add_argument("--json", action="store_true")
+    sch6.set_defaults(func=_cmd_schedules_run_once)
 
     return p
 

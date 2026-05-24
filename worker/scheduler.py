@@ -573,6 +573,130 @@ def run_alert_prune_job(retention_days: int = 180) -> int:
         return 0
 
 
+def run_report_scheduler_job(now: Optional[datetime] = None) -> dict:
+    """Fire every ``report_schedules`` row whose ``next_run_at`` is past.
+
+    Iterates over :func:`engine.report_scheduler.get_due_schedules` and
+    for each due schedule:
+
+      1. Builds a fresh data bundle via :func:`load_data_bundle` (lazy
+         — only paid once per worker tick if anything is due, not per
+         schedule, but the bundle is shared across all due schedules
+         on this tick).
+      2. Calls :func:`run_daily_briefing_job` to build + persist the
+         report. That helper already catches its own exceptions and
+         returns ``ReportJobResult`` with ``success=False`` on a
+         generator crash.
+      3. Updates the schedule's bookkeeping columns via
+         :func:`engine.report_scheduler.update_run_state`:
+           - On success: ``last_run_status='ok'``, an empty
+             ``last_run_message``, and ``next_run_at`` recomputed from
+             the cron expression so the schedule does not re-fire.
+           - On failure: ``last_run_status='error'``,
+             ``last_run_message=error_msg`` (truncated to 500 chars),
+             and ``next_run_at`` STILL recomputed so a broken schedule
+             doesn't get stuck and keep tripping ``get_due_schedules``.
+
+    NEVER raises. Returns a small summary dict ``{'fired': N,
+    'succeeded': N, 'failed': N}`` so the main worker loop can log a
+    one-liner. The empty-due-list case returns
+    ``{'fired': 0, 'succeeded': 0, 'failed': 0}`` without ever loading
+    the data bundle (cheap no-op when nothing is due).
+
+    Lazy imports of the data-bundle loader and report-generator keep
+    this helper light when tests want to exercise only the schedule
+    plumbing.
+    """
+    summary = {"fired": 0, "succeeded": 0, "failed": 0}
+    try:
+        from engine.report_scheduler import (
+            compute_next_run_at,
+            get_due_schedules,
+            update_run_state,
+        )
+
+        due = get_due_schedules(now=now)
+        if not due:
+            return summary
+
+        # Build the data bundle once per tick — it's an expensive call
+        # (fetches FRED + yfinance + freight rates, runs port +
+        # route analysis) and several schedules firing on the same tick
+        # would otherwise pay that cost N times.
+        try:
+            bundle = load_data_bundle()
+        except Exception as exc:
+            logger.warning(f"run_report_scheduler_job: load_data_bundle failed: {exc}")
+            bundle = {}
+
+        for sched in due:
+            summary["fired"] += 1
+            try:
+                result = run_daily_briefing_job(bundle, push_to_channels=False)
+            except Exception as exc:
+                # run_daily_briefing_job already catches its own
+                # exceptions, but the import / call site here gets
+                # belt-and-braces guarded so one bad schedule cannot
+                # take down the rest of the loop.
+                logger.warning(
+                    f"run_report_scheduler_job: briefing job raised for "
+                    f"schedule {sched.schedule_id}: {exc}"
+                )
+                result = ReportJobResult(success=False, error_msg=str(exc))
+
+            # Recompute next_run_at REGARDLESS of success — a broken
+            # schedule with last_run_status='error' must still advance
+            # so it doesn't keep tripping get_due_schedules every tick.
+            try:
+                next_dt = compute_next_run_at(sched.cron_expr)
+                next_iso = next_dt.isoformat()
+            except Exception as exc:
+                # If the cron itself is bad (somehow saved through a
+                # bypass), fall back to "one hour from now" so the
+                # schedule doesn't loop. This is a last-resort guard
+                # — save_schedule already validates the expression.
+                logger.warning(
+                    f"run_report_scheduler_job: compute_next_run_at failed for "
+                    f"schedule {sched.schedule_id} cron={sched.cron_expr!r}: {exc}"
+                )
+                fallback = datetime.now(timezone.utc) + timedelta(hours=1)
+                next_iso = fallback.isoformat()
+
+            if result.success:
+                summary["succeeded"] += 1
+                update_run_state(
+                    sched.schedule_id,
+                    status="ok",
+                    message="",
+                    next_run_at=next_iso,
+                )
+                logger.info(
+                    f"run_report_scheduler_job: schedule={sched.schedule_id} "
+                    f"user={sched.user_id!r} name={sched.name!r} "
+                    f"report_id={result.report_id} next_run_at={next_iso}"
+                )
+            else:
+                summary["failed"] += 1
+                # Truncate the error message so a multi-MB traceback
+                # doesn't bloat the row.
+                msg = (result.error_msg or "unknown error")[:500]
+                update_run_state(
+                    sched.schedule_id,
+                    status="error",
+                    message=msg,
+                    next_run_at=next_iso,
+                )
+                logger.warning(
+                    f"run_report_scheduler_job: schedule={sched.schedule_id} "
+                    f"user={sched.user_id!r} name={sched.name!r} "
+                    f"failed: {msg!r} next_run_at={next_iso}"
+                )
+        return summary
+    except Exception as exc:
+        logger.warning(f"run_report_scheduler_job: failed: {exc}")
+        return summary
+
+
 def run_operator_digest_job() -> list:
     """Dispatch the daily Operator Dashboard digest to every ``ops-*`` channel.
 
@@ -767,6 +891,20 @@ def main(argv: Optional[list] = None) -> int:
         run_operator_digest_job()
     except Exception as exc:
         logger.warning(f"main: operator digest step failed: {exc}")
+
+    # User-configured report schedules. Runs AFTER the operator digest
+    # so a freshly-generated scheduled report can ride the same data
+    # bundle the digest just read. Same belt-and-braces guard — the
+    # helper already swallows per-schedule errors and never raises.
+    try:
+        sched_summary = run_report_scheduler_job()
+        logger.info(
+            f"main: report scheduler fired={sched_summary.get('fired', 0)} "
+            f"succeeded={sched_summary.get('succeeded', 0)} "
+            f"failed={sched_summary.get('failed', 0)}"
+        )
+    except Exception as exc:
+        logger.warning(f"main: report scheduler step failed: {exc}")
 
     exit_code = 0 if result.success else 1
     sys.exit(exit_code)

@@ -810,3 +810,82 @@ def _migrate_to_v19(conn: sqlite3.Connection) -> None:
                 f"state.migrations: _migrate_to_v19 ALTER TABLE "
                 f"(alerts.{col_name}) failed: {exc}"
             )
+
+
+# ─── Schema v19 → v20 ─────────────────────────────────────────────────────
+
+def _migrate_to_v20(conn: sqlite3.Connection) -> None:
+    """Add the ``report_schedules`` table for cron-driven auto-generated
+    reports.
+
+    Each row carries a 5-field cron expression (parsed in-Python by
+    ``engine.report_scheduler.parse_cron_expr`` — stdlib only, no
+    croniter dependency), an enabled flag, and the bookkeeping
+    columns the worker uses to pick "what's due now?" off an index
+    (``(enabled, next_run_at)``).
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    EXISTS — so this statement is also safe to re-run on every open
+    via the schema bootstrap in state.db. Matches the v2 / v3 / v8 /
+    v9 / v10 / v11 / v12 / v15 pattern (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V20
+
+        conn.executescript(_SCHEMA_V20)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v20 CREATE TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v20 → v21 ─────────────────────────────────────────────────────
+
+def _migrate_to_v21(conn: sqlite3.Connection) -> None:
+    """Add the ``mfa_recovery_codes`` and ``user_invitations`` tables
+    for the auth follow-on commit.
+
+    Two add-only tables land in this migration. The v20 slot was held
+    by a sibling agent's report_schedules migration, so this commit
+    claims the next sequential slot per the task spec's coordination
+    note:
+
+      * ``mfa_recovery_codes`` — one row per single-use scratch code
+        issued at MFA enrollment. Each row stores a pbkdf2-sha256 hash
+        (200_000 iterations) of the plaintext code + a per-code random
+        16-byte salt, the issuing ``user_id``, a NULLable ``used_at``
+        ISO timestamp (flipped by
+        ``auth.mfa.verify_and_consume_recovery_code`` on a match), and
+        a ``created_at`` ISO timestamp. The plaintext codes themselves
+        are NEVER persisted — they are returned to the caller of
+        ``auth.mfa.generate_recovery_codes`` exactly once at creation
+        time. The supporting index on ``(user_id, used_at)`` keeps the
+        per-verify "unused codes for this user" query cheap even after
+        many regeneration cycles.
+      * ``user_invitations`` — one row per pre-authorized signup link
+        an admin has created via
+        ``auth.invitations.create_invitation``. Carries a random
+        32-char URL-safe ``invite_token`` (UNIQUE) the recipient
+        supplies to ``auth.users.signup``, an optional ``email`` field
+        that locks the invite to a specific recipient (NULL = any
+        email may consume), a ``role`` to grant on consumption
+        (defaults to ``'user'`` so an invite cannot silently grant
+        admin without being marked as such), the
+        ``invited_by_user_id`` of the admin who issued the invite, an
+        ISO ``expires_at`` timestamp, and a
+        ``consumed_at`` / ``consumed_by_user_id`` pair flipped by
+        ``consume_invitation`` once the signup completes.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    EXISTS — so this statement is also safe to re-run on every open
+    via the schema bootstrap in state.db. Matches the v2 / v3 / v8 /
+    v9 / v10 / v11 / v12 / v15 / v20 pattern (add-only schema).
+    """
+    try:
+        from state.db import _SCHEMA_V21
+
+        conn.executescript(_SCHEMA_V21)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v21 CREATE TABLE failed: {exc}"
+        )

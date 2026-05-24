@@ -201,12 +201,57 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       safe to re-run. Both are NULLable (no ``NOT NULL DEFAULT ''``)
 #       so the SQL layer can distinguish "no note attached" (NULL) from
 #       "empty-string note" (caller passed ``note=''``).
+#  20 — adds the ``report_schedules`` table so operators can configure
+#       auto-generated reports on a cron-like schedule (daily 9am,
+#       every Monday, etc.) instead of clicking "generate" manually.
+#       One row per schedule, keyed by ``schedule_id`` (UUID), carrying
+#       a 5-field cron string, an enabled flag, last_run_at /
+#       last_run_status / last_run_message, and next_run_at. A
+#       (enabled, next_run_at) index keeps the "what's due?" query
+#       cheap. The cron parser in ``engine.report_scheduler`` is
+#       stdlib-only — no croniter / apscheduler dependency — and
+#       supports ``*``, ``*/N``, single integers, and comma-lists.
+#       Ranges (``1-5``) and ``L`` / ``#`` extensions are NOT
+#       supported by design.
+#  21 — adds two new tables for the auth follow-on commit (MFA recovery
+#       codes + admin-issued user invitations). The v20 slot was held
+#       by a sibling agent's report_schedules migration, so this commit
+#       claims the next sequential slot (v21):
+#         * ``mfa_recovery_codes`` — one row per single-use scratch
+#           code issued at MFA enrollment. Each row stores a
+#           pbkdf2-sha256 hash (200_000 iterations) of the plaintext
+#           code plus a per-code random 16-byte salt, the issuing
+#           ``user_id``, a NULLable ``used_at`` ISO timestamp flipped
+#           by ``verify_and_consume_recovery_code`` on a match, and a
+#           ``created_at`` ISO timestamp. The plaintext codes
+#           themselves are NEVER persisted — they are returned to the
+#           caller of ``auth.mfa.generate_recovery_codes`` exactly
+#           once at creation time. The supporting index on
+#           ``(user_id, used_at)`` keeps the "unused codes for this
+#           user" query the verify path runs at O(unused) rather than
+#           O(all codes ever issued).
+#         * ``user_invitations`` — one row per pre-authorized signup
+#           link an admin has created. Carries a random 32-char
+#           URL-safe ``invite_token`` (UNIQUE indexed) which the
+#           recipient supplies to ``auth.users.signup``, an optional
+#           ``email`` field that locks the invite to a specific
+#           recipient (NULL = any email may consume), a ``role`` to
+#           grant on consumption (defaults to ``'user'`` so an invite
+#           cannot silently grant admin without being marked as such),
+#           the ``invited_by_user_id`` of the admin who issued it, an
+#           ISO ``expires_at`` timestamp, and a ``consumed_at`` /
+#           ``consumed_by_user_id`` pair flipped by
+#           ``consume_invitation`` once the signup completes.
+#       Same CREATE-TABLE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+#       v10 / v11 / v12 / v15 / v20 — fresh DBs pick up the tables via
+#       the executescript path in ``_init_schema``; the explicit
+#       ``_migrate_to_v21`` helper re-runs the same script on upgrade.
 #
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 19
+SCHEMA_VERSION: int = 21
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -785,6 +830,145 @@ _SCHEMA_V19_NOTE: str = (
     "(added via ALTER TABLE in _migrate_to_v19)"
 )
 
+# Schema v20 adds the ``report_schedules`` table so the platform can
+# auto-generate reports on a cron-like schedule (daily 9am, every
+# Monday, etc.) instead of forcing the operator to click "generate"
+# manually. Each row carries:
+#
+#   * ``schedule_id``      — UUID PK.
+#   * ``user_id``          — per-user scope (alice can't see bob's
+#     schedules); matches the v7 contract used by every domain table.
+#   * ``name``             — operator-facing label ("Morning macro").
+#   * ``cron_expr``        — 5-field cron string ("0 9 * * *").
+#     Parsed by ``engine.report_scheduler.parse_cron_expr``; the
+#     parser supports ``*``, ``*/N``, single integers, and comma-lists
+#     in each field. NO ranges (``1-5``) and NO ``L`` / ``#``
+#     extensions — keep the parser stdlib-only and small.
+#   * ``enabled``          — 0/1 flag. Disabled schedules are skipped
+#     by ``get_due_schedules`` and ``run_report_scheduler_job``.
+#   * ``last_run_at``      — ISO-8601 UTC timestamp of the most recent
+#     fire; NULL when the schedule has never fired.
+#   * ``last_run_status``  — ``'ok'`` or ``'error'`` (NULL when the
+#     schedule has never fired). On a generator error the run still
+#     bumps ``next_run_at`` so a broken schedule does not get stuck.
+#   * ``last_run_message`` — short human-readable string. Empty on
+#     success; ``str(exc)`` on failure.
+#   * ``next_run_at``      — ISO-8601 UTC. Computed by
+#     ``compute_next_run_at(cron_expr, base=now)`` on save and after
+#     every fire. The ``(enabled, next_run_at)`` index makes the
+#     "what's due?" query cheap even with many rows.
+#   * ``created_at``       — ISO-8601 UTC.
+#   * ``updated_at``       — ISO-8601 UTC.
+#
+# Same idempotent CREATE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10 / v11 / v12 / v15 — a fresh DB picks up the table via the
+# executescript path in ``_init_schema``; the explicit
+# ``_migrate_to_v20`` helper re-runs the same script on upgrade.
+_SCHEMA_V20 = """
+CREATE TABLE IF NOT EXISTS report_schedules (
+    schedule_id        TEXT PRIMARY KEY,
+    user_id            TEXT NOT NULL,
+    name               TEXT NOT NULL,
+    cron_expr          TEXT NOT NULL,
+    enabled            INTEGER NOT NULL DEFAULT 1,
+    last_run_at        TEXT,
+    last_run_status    TEXT,
+    last_run_message   TEXT,
+    next_run_at        TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_report_schedules_next
+    ON report_schedules(enabled, next_run_at);
+"""
+
+_SCHEMA_V20_NOTE: str = (
+    "v20: report_schedules table (schedule_id PK, user_id, name, "
+    "cron_expr, enabled, last_run_at, last_run_status, "
+    "last_run_message, next_run_at, created_at, updated_at) + "
+    "(enabled, next_run_at) index "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v20)"
+)
+
+# Schema v21 adds two new tables for the auth follow-on commit (MFA
+# recovery codes + admin-issued user invitations). The v20 slot was
+# taken by a sibling agent's report_schedules migration, so this
+# commit claims the next sequential slot — per the task spec's
+# coordination note ("if v20 is taken, use v21").
+#
+#   * ``mfa_recovery_codes`` — one row per single-use scratch code
+#     issued when ``auth.mfa.enable_mfa`` (or
+#     ``regenerate_recovery_codes``) is called. Each row stores the
+#     pbkdf2-sha256 hash (200_000 iterations) of the plaintext code +
+#     a per-code random 16-byte salt, the issuing ``user_id``, a
+#     NULLable ``used_at`` ISO timestamp (flipped by
+#     ``verify_and_consume_recovery_code`` on a successful match), and
+#     a ``created_at`` ISO timestamp. The plaintext codes themselves
+#     are NEVER persisted — they are returned to the caller of
+#     ``auth.mfa.generate_recovery_codes`` exactly once at creation
+#     time and the caller is responsible for surfacing them to the
+#     user (the UI displays them in a one-shot copyable block, the
+#     CLI prints them once to stdout). The supporting index on
+#     ``(user_id, used_at)`` keeps the per-verify "unused codes for
+#     this user" query at O(unused) rather than scanning every code
+#     the user has ever been issued.
+#   * ``user_invitations`` — one row per pre-authorized signup link
+#     an admin has created via ``auth.invitations.create_invitation``.
+#     Carries a random 32-char URL-safe ``invite_token`` (UNIQUE) the
+#     recipient supplies to ``auth.users.signup``, an optional
+#     ``email`` field that locks the invite to a specific recipient
+#     (NULL = any email may consume), a ``role`` to grant on
+#     consumption (defaults to ``'user'`` so an invite cannot
+#     silently grant admin without being marked as such at create
+#     time), the ``invited_by_user_id`` of the admin who issued the
+#     invite, an ISO ``expires_at`` timestamp, and a
+#     ``consumed_at`` / ``consumed_by_user_id`` pair flipped by
+#     ``consume_invitation`` once the signup completes. The supporting
+#     index on ``invite_token`` keeps the per-request token lookup at
+#     O(log n).
+#
+# Same CREATE-TABLE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 / v10 /
+# v11 / v12 / v15 / v20 — fresh DBs pick up the tables via the
+# executescript path in ``_init_schema``; the explicit
+# ``_migrate_to_v21`` helper re-runs the same script on upgrade.
+_SCHEMA_V21 = """
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+    code_id      TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL,
+    code_hash    TEXT NOT NULL,
+    salt         TEXT NOT NULL,
+    used_at      TEXT,
+    created_at   TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_user
+    ON mfa_recovery_codes(user_id, used_at);
+
+CREATE TABLE IF NOT EXISTS user_invitations (
+    invite_id            TEXT PRIMARY KEY,
+    invite_token         TEXT NOT NULL UNIQUE,
+    email                TEXT,
+    role                 TEXT NOT NULL DEFAULT 'user',
+    invited_by_user_id   TEXT NOT NULL,
+    expires_at           TEXT NOT NULL,
+    consumed_at          TEXT,
+    consumed_by_user_id  TEXT,
+    created_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invite_token
+    ON user_invitations(invite_token);
+"""
+
+_SCHEMA_V21_NOTE: str = (
+    "v21: mfa_recovery_codes table (code_id PK, user_id, code_hash, "
+    "salt, used_at, created_at) + idx_mfa_recovery_user "
+    "(user_id, used_at) + user_invitations table (invite_id PK, "
+    "invite_token UNIQUE, email, role, invited_by_user_id, "
+    "expires_at, consumed_at, consumed_by_user_id, created_at) + "
+    "idx_invite_token (added via CREATE TABLE IF NOT EXISTS in "
+    "_migrate_to_v21)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -926,6 +1110,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v19(conn)
     except Exception as exc:
         logger.warning(f"state.db: v19 column adds skipped: {exc}")
+    # v20 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX
+    # IF NOT EXISTS) — same pattern as v2 / v3 / v8 / v9 / v10 / v11 /
+    # v12 / v15. Adds the report_schedules table for cron-driven
+    # auto-generated reports. Safe to run on every open (fresh DB:
+    # creates the table; existing DB: no-op).
+    conn.executescript(_SCHEMA_V20)
+    # v21 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX
+    # IF NOT EXISTS) — same pattern as v2 / v3 / v8 / v9 / v10 / v11 /
+    # v12 / v15 / v20. Adds the mfa_recovery_codes + user_invitations
+    # tables for the auth follow-on commit (MFA scratch codes that
+    # let a user log in if they lose their authenticator + admin-
+    # issued signup invite links that pre-authorize a signup for a
+    # specific email). Safe to run on every open (fresh DB: creates
+    # the tables; existing DB: no-op).
+    conn.executescript(_SCHEMA_V21)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1168,6 +1367,32 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v19(conn)
         except Exception as exc:
             logger.warning(f"state.db: v19 migration skipped: {exc}")
+
+    # Migration 19 → 20: add the ``report_schedules`` table so the
+    # platform can auto-generate reports on a cron-like schedule. Same
+    # CREATE-IF-NOT-EXISTS idempotency as v2 / v3 / v8 / v9 / v10 / v11
+    # / v12 / v15 — the helper is already invoked unconditionally
+    # above; this branch keeps the version-step ladder explicit.
+    if current < 20:
+        try:
+            from state.migrations import _migrate_to_v20
+            _migrate_to_v20(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v20 migration skipped: {exc}")
+
+    # Migration 20 → 21: add the ``mfa_recovery_codes`` and
+    # ``user_invitations`` tables for the auth follow-on commit (MFA
+    # scratch codes + admin-issued signup invite links). Same
+    # CREATE-IF-NOT-EXISTS idempotency as v2 / v3 / v8 / v9 / v10 /
+    # v11 / v12 / v15 / v20 — the helper is already invoked
+    # unconditionally above; this branch keeps the version-step
+    # ladder explicit.
+    if current < 21:
+        try:
+            from state.migrations import _migrate_to_v21
+            _migrate_to_v21(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v21 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

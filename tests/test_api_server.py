@@ -1863,3 +1863,133 @@ def test_get_report_markdown_password_via_query_string_unlocks(
     )
     assert r.status_code == 200
     assert "schema v" in r.text
+
+
+# ─── /api/v1/schedules ────────────────────────────────────────────────────
+
+def test_get_schedules_empty_returns_empty_list(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/schedules", headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_post_schedules_creates_and_get_lists(server):
+    """POST persists a schedule; GET returns it with computed
+    next_run_at and the same name/cron from the body."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/schedules",
+        json={"name": "Morning Macro", "cron_expr": "0 9 * * *",
+              "enabled": True},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is True
+    new_id = body["schedule_id"]
+    assert body["schedule"]["next_run_at"] is not None
+
+    r2 = requests.get(
+        f"{server}/api/v1/schedules", headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    listed = r2.json()
+    assert isinstance(listed, list)
+    assert len(listed) == 1
+    assert listed[0]["schedule_id"] == new_id
+    assert listed[0]["name"] == "Morning Macro"
+    assert listed[0]["cron_expr"] == "0 9 * * *"
+    assert listed[0]["enabled"] is True
+
+
+def test_post_schedules_with_invalid_cron_returns_400(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/schedules",
+        json={"name": "bad", "cron_expr": "not a cron"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    assert "invalid cron_expr" in r.json()["error"]
+
+
+def test_post_schedules_missing_name_returns_400(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/schedules",
+        json={"cron_expr": "0 9 * * *"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+
+
+def test_patch_schedules_updates_enabled_and_cron(server):
+    """PATCH lets the caller flip enabled and update cron_expr; only
+    the supplied fields move, the rest stay as they were."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    create = requests.post(
+        f"{server}/api/v1/schedules",
+        json={"name": "x", "cron_expr": "0 9 * * *"},
+        headers=_bearer(token), timeout=5,
+    )
+    sid = create.json()["schedule_id"]
+
+    r = requests.patch(
+        f"{server}/api/v1/schedules/{sid}",
+        json={"enabled": False, "cron_expr": "*/15 * * * *"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["updated"] is True
+    assert body["schedule"]["enabled"] is False
+    assert body["schedule"]["cron_expr"] == "*/15 * * * *"
+    assert body["schedule"]["name"] == "x"  # untouched
+
+
+def test_delete_schedules_removes_and_404_on_cross_user(server):
+    """Alice can delete her own schedule (200), but Bob cannot delete
+    Alice's (404 — preserves the no-leak contract for ids in other
+    users' scopes)."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    create = requests.post(
+        f"{server}/api/v1/schedules",
+        json={"name": "alice-only", "cron_expr": "0 9 * * *"},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    sid = create.json()["schedule_id"]
+
+    # Bob's delete attempt → 404; Alice's row survives.
+    r_bob = requests.delete(
+        f"{server}/api/v1/schedules/{sid}",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r_bob.status_code == 404
+    alice_list = requests.get(
+        f"{server}/api/v1/schedules", headers=_bearer(alice_token), timeout=5,
+    )
+    assert len(alice_list.json()) == 1
+
+    # Alice's delete → 200; row gone.
+    r_alice = requests.delete(
+        f"{server}/api/v1/schedules/{sid}",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r_alice.status_code == 200
+    assert r_alice.json() == {"deleted": True, "schedule_id": sid}
+    after = requests.get(
+        f"{server}/api/v1/schedules", headers=_bearer(alice_token), timeout=5,
+    )
+    assert after.json() == []

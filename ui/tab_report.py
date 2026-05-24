@@ -799,6 +799,199 @@ def _render_data_sources(api_status: dict[str, bool]) -> None:
     st.markdown(source_footer(_report_sources(api_status)), unsafe_allow_html=True)
 
 
+# ── Section 7b: Recurring schedules ───────────────────────────────────────────
+
+def _render_schedules() -> None:
+    """Schedule-recurring-report panel.
+
+    Lets an operator create / enable / disable / delete a cron-driven
+    schedule that auto-generates this report at a configurable cadence.
+    Persistence flows through ``engine.report_scheduler``; the worker
+    fires due schedules via ``run_report_scheduler_job``.
+
+    The expander defaults to collapsed so it doesn't dominate the
+    surrounding history section. Crash-resilient — every render block
+    is wrapped in try/except so a SQLite outage doesn't take down the
+    Reports tab.
+    """
+    try:
+        from engine.report_scheduler import (
+            ReportSchedule,
+            delete_schedule,
+            load_schedules,
+            new_schedule_id,
+            save_schedule,
+            validate_cron_expr,
+        )
+    except Exception as exc:
+        logger.warning(f"_render_schedules: import failed: {exc}")
+        st.markdown(
+            status_badge(
+                "Recurring schedules unavailable - engine module missing.",
+                status="neutral",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    section_header(
+        "Recurring schedules",
+        "Auto-generate this report on a cron-like schedule",
+    )
+
+    # ── Create-new form ──────────────────────────────────────────
+    try:
+        from state.user_scope import current_user_id
+        uid = current_user_id()
+    except Exception:
+        uid = ""
+
+    with st.expander("Schedule recurring report...", expanded=False):
+        name = st.text_input(
+            "Name",
+            key="schedule_new_name",
+            help="A short label for this schedule, e.g. 'Morning Macro'.",
+        )
+        cron_expr = st.text_input(
+            "Cron expression",
+            value="0 9 * * *",
+            key="schedule_new_cron",
+            help='5-field cron: "minute hour day-of-month month day-of-week". '
+                 'Supports *, */N, single ints, comma-lists. Ranges (1-5) not supported.',
+        )
+        enabled = st.checkbox(
+            "Enabled", value=True, key="schedule_new_enabled",
+            help="When checked the worker will fire this schedule on the cadence above.",
+        )
+
+        # Inline cron validation — coloured feedback below the input.
+        ok, err = validate_cron_expr(cron_expr or "")
+        if cron_expr:
+            if ok:
+                st.markdown(
+                    f'<span style="color:{C_HIGH};font-family:var(--mono);">'
+                    f'Valid cron expression.</span>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<span style="color:{C_LOW};font-family:var(--mono);">'
+                    f'Invalid: {err}</span>',
+                    unsafe_allow_html=True,
+                )
+
+        if st.button("Save schedule", key="schedule_save_btn", disabled=not ok):
+            if not (name or "").strip():
+                st.error("Name is required.")
+            elif not ok:
+                st.error(f"Cannot save — invalid cron: {err}")
+            else:
+                sched = ReportSchedule(
+                    schedule_id=new_schedule_id(),
+                    user_id=uid,
+                    name=name.strip(),
+                    cron_expr=cron_expr.strip(),
+                    enabled=bool(enabled),
+                )
+                if save_schedule(sched):
+                    st.success(f"Saved schedule '{sched.name}' (next: {sched.next_run_at or '...'})")
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        pass
+                else:
+                    st.error("Could not save schedule. Check logs.")
+
+    # ── Existing-schedule list ───────────────────────────────────
+    try:
+        schedules = load_schedules(user_id=uid)
+    except Exception as exc:
+        logger.warning(f"_render_schedules: load failed: {exc}")
+        schedules = []
+
+    if not schedules:
+        st.markdown(
+            status_badge("No recurring schedules yet.", status="neutral"),
+            unsafe_allow_html=True,
+        )
+        return
+
+    for sched in schedules:
+        try:
+            cols = st.columns([3, 2, 1, 2, 1, 1, 1])
+            with cols[0]:
+                st.markdown(
+                    _sans(sched.name or "(no name)", color=C_TEXT, weight=600),
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    _mono(sched.cron_expr, color=C_TEXT3),
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                st.markdown(
+                    _sans("Next run:", color=C_TEXT3),
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    _mono(sched.next_run_at or "(none)", color=C_TEXT2),
+                    unsafe_allow_html=True,
+                )
+            with cols[2]:
+                status_color = (
+                    C_HIGH if sched.last_run_status == "ok"
+                    else C_LOW if sched.last_run_status == "error"
+                    else C_TEXT3
+                )
+                st.markdown(
+                    _sans(sched.last_run_status or "never",
+                          color=status_color, weight=600),
+                    unsafe_allow_html=True,
+                )
+            with cols[3]:
+                st.markdown(
+                    _sans("Enabled:", color=C_TEXT3),
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    _sans("Yes" if sched.enabled else "No",
+                          color=C_HIGH if sched.enabled else C_LOW,
+                          weight=600),
+                    unsafe_allow_html=True,
+                )
+            with cols[4]:
+                if sched.enabled:
+                    if st.button("Disable", key=f"sched_disable_{sched.schedule_id}"):
+                        sched.enabled = False
+                        if save_schedule(sched):
+                            st.success("Disabled.")
+                            try:
+                                st.experimental_rerun()
+                            except Exception:
+                                pass
+                else:
+                    if st.button("Enable", key=f"sched_enable_{sched.schedule_id}"):
+                        sched.enabled = True
+                        if save_schedule(sched):
+                            st.success("Enabled.")
+                            try:
+                                st.experimental_rerun()
+                            except Exception:
+                                pass
+            with cols[5]:
+                if st.button("Delete", key=f"sched_delete_{sched.schedule_id}"):
+                    if delete_schedule(sched.schedule_id, user_id=uid):
+                        st.success("Deleted.")
+                        try:
+                            st.experimental_rerun()
+                        except Exception:
+                            pass
+                    else:
+                        st.error("Could not delete schedule.")
+        except Exception as exc:
+            logger.warning(f"_render_schedules: row render failed: {exc}")
+
+
 # ── Section 8: API config ─────────────────────────────────────────────────────
 
 def _render_api_config(api_status: dict[str, bool]) -> None:
@@ -925,6 +1118,13 @@ def render(
         except Exception as exc:
             logger.error(f"History render error: {exc}")
             st.error("Could not render report history.")
+
+        section_divider("Schedules")
+        try:
+            _render_schedules()
+        except Exception as exc:
+            logger.error(f"Schedules render error: {exc}")
+            st.error("Could not render schedules panel.")
 
         section_divider("Data Sources")
         try:

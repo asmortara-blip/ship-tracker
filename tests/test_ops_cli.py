@@ -723,3 +723,240 @@ def test_every_json_subcommand_produces_valid_json(capsys) -> None:
         code, out, err = _run(argv, capsys)
         assert code == 0, f"{argv} → exit {code}; stderr={err!r}"
         json.loads(out)  # raises if not valid JSON
+
+
+# ─── schedules ───────────────────────────────────────────────────────────
+
+def test_schedules_list_empty(capsys) -> None:
+    """Empty schedules list prints '(no rows)' not a crash."""
+    code, out, _ = _run(["schedules", "list", "--user-id", "alice"], capsys)
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_schedules_create_and_list(capsys) -> None:
+    """Creating a schedule shows up in the subsequent list call."""
+    code, _, _ = _run(
+        ["schedules", "create", "--user-id", "alice",
+         "--name", "Morning Macro", "--cron", "0 9 * * *", "--json"],
+        capsys,
+    )
+    assert code == 0
+
+    code2, out2, _ = _run(
+        ["schedules", "list", "--user-id", "alice", "--json"], capsys,
+    )
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert payload[0]["name"] == "Morning Macro"
+    assert payload[0]["cron_expr"] == "0 9 * * *"
+
+
+def test_schedules_create_rejects_invalid_cron(capsys) -> None:
+    """The CLI must exit 1 (not 0, not 2) on a bad cron — the handler
+    raises ``RuntimeError`` from a bad ``validate_cron_expr`` and the
+    top-level main converts to exit 1."""
+    code, _, err = _run(
+        ["schedules", "create", "--user-id", "alice",
+         "--name", "broken", "--cron", "not a cron"],
+        capsys,
+    )
+    assert code == 1
+    assert "invalid cron" in err.lower()
+
+
+def test_schedules_enable_disable_roundtrip(capsys) -> None:
+    """Disable then enable flips the row's enabled flag both ways."""
+    from engine.report_scheduler import load_schedules
+
+    _run(
+        ["schedules", "create", "--user-id", "alice",
+         "--name", "x", "--cron", "0 9 * * *", "--json"],
+        capsys,
+    )
+    schedules = load_schedules(user_id="alice")
+    assert len(schedules) == 1
+    sid = schedules[0].schedule_id
+
+    code, _, _ = _run(["schedules", "disable", sid, "--user-id", "alice"], capsys)
+    assert code == 0
+    assert load_schedules(user_id="alice")[0].enabled is False
+
+    code2, _, _ = _run(["schedules", "enable", sid, "--user-id", "alice"], capsys)
+    assert code2 == 0
+    assert load_schedules(user_id="alice")[0].enabled is True
+
+
+def test_schedules_delete_removes_row(capsys) -> None:
+    """``schedules delete`` removes the row; subsequent list is empty."""
+    from engine.report_scheduler import load_schedules
+
+    _run(
+        ["schedules", "create", "--user-id", "alice",
+         "--name", "x", "--cron", "0 9 * * *"],
+        capsys,
+    )
+    sid = load_schedules(user_id="alice")[0].schedule_id
+
+    code, _, _ = _run(
+        ["schedules", "delete", sid, "--user-id", "alice", "--json"], capsys,
+    )
+    assert code == 0
+    assert load_schedules(user_id="alice") == []
+
+
+# ─── mfa recovery-codes / regenerate-codes (v21) ─────────────────────────
+
+def test_mfa_recovery_codes_reports_unused_count(capsys) -> None:
+    """``mfa recovery-codes <uid>`` reports the unused count and does
+    NOT print the codes themselves (they're unrecoverable after the
+    initial mint)."""
+    uid = _mk_user("alice")
+    # Before enable → 0 unused.
+    code, out, _ = _run(["mfa", "recovery-codes", uid, "--json"], capsys)
+    assert code == 0
+    assert json.loads(out)["unused_count"] == 0
+
+    # After enable → 10 unused (auto-mint).
+    _run(["mfa", "enable", uid], capsys)
+    code2, out2, _ = _run(["mfa", "recovery-codes", uid, "--json"], capsys)
+    assert code2 == 0
+    assert json.loads(out2)["unused_count"] == 10
+
+
+def test_mfa_regenerate_codes_prints_fresh_batch(capsys) -> None:
+    """``mfa regenerate-codes <uid>`` wipes the old batch and prints
+    10 fresh plaintext codes. Each code must appear EXACTLY ONCE in
+    stdout — operator copy-paste safety."""
+    from auth.mfa import count_unused_recovery_codes
+
+    uid = _mk_user("alice")
+    _run(["mfa", "enable", uid], capsys)
+    assert count_unused_recovery_codes(uid) == 10
+
+    code, out, _ = _run(["mfa", "regenerate-codes", uid, "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["user_id"] == uid
+    codes = payload["recovery_codes"]
+    assert isinstance(codes, list) and len(codes) == 10
+    # Each code appears exactly once in the json output (no dup leak).
+    for c in codes:
+        assert out.count(c) == 1
+
+
+def test_mfa_regenerate_codes_unknown_user_exits_1(capsys) -> None:
+    """An unknown user_id → regenerate returns [] → CLI converts to
+    exit 1 with a stderr message (no traceback)."""
+    code, _, err = _run(
+        ["mfa", "regenerate-codes", "user-does-not-exist"], capsys
+    )
+    assert code == 1
+    assert "error:" in err.lower()
+
+
+# ─── invite create / list / revoke (v21) ─────────────────────────────────
+
+def test_invite_create_prints_token_once(capsys) -> None:
+    """The token MUST appear exactly once in stdout — same security
+    contract as ``tokens create``."""
+    admin_uid = _mk_user("alice")
+    code, out, _ = _run(
+        ["invite", "create", "--invited-by", admin_uid, "--role", "user"],
+        capsys,
+    )
+    assert code == 0
+    assert "invite_token:" in out
+    # Extract the printed token and confirm exactly-once occurrence.
+    token_lines = [
+        ln for ln in out.splitlines() if ln.startswith("invite_token:")
+    ]
+    assert len(token_lines) == 1
+    raw_token = token_lines[0].split("invite_token:", 1)[1].strip()
+    assert out.count(raw_token) == 1
+
+
+def test_invite_create_with_email_and_admin_role(capsys) -> None:
+    """JSON output includes the email + role + expires_at fields. An
+    admin-role invite must explicitly mint with role='admin'."""
+    admin_uid = _mk_user("alice")
+    code, out, _ = _run(
+        [
+            "invite", "create",
+            "--invited-by", admin_uid,
+            "--email", "bob",
+            "--role", "admin",
+            "--expires-days", "14",
+            "--json",
+        ],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["email"] == "bob"
+    assert payload["role"] == "admin"
+    assert payload["invited_by_user_id"] == admin_uid
+    # Token is the right shape.
+    assert isinstance(payload["invite_token"], str)
+    assert len(payload["invite_token"]) == 32
+
+
+def test_invite_list_shows_pending_then_empty_after_revoke(capsys) -> None:
+    """List + revoke round-trip: a freshly-created invite shows in the
+    listing, gets removed after revoke."""
+    from auth.invitations import list_invitations
+
+    admin_uid = _mk_user("alice")
+    code, _, _ = _run(
+        ["invite", "create", "--invited-by", admin_uid, "--json"], capsys
+    )
+    assert code == 0
+
+    inv_list = list_invitations(invited_by_user_id=admin_uid)
+    assert len(inv_list) == 1
+    invite_id = inv_list[0].invite_id
+
+    # List via CLI confirms one pending row.
+    code2, out2, _ = _run(["invite", "list", "--json"], capsys)
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list) and len(payload) == 1
+
+    # Revoke → list is empty.
+    code3, _, _ = _run(["invite", "revoke", invite_id, "--json"], capsys)
+    assert code3 == 0
+    code4, out4, _ = _run(["invite", "list", "--json"], capsys)
+    assert code4 == 0
+    assert json.loads(out4) == []
+
+
+def test_invite_create_unknown_inviter_works(capsys) -> None:
+    """The CLI does not validate that the inviter exists — the column
+    is a free-form text field. This test pins the current contract so
+    a future change is intentional."""
+    code, out, _ = _run(
+        ["invite", "create", "--invited-by", "u-anything", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["invited_by_user_id"] == "u-anything"
+
+
+def test_invite_revoke_consumed_returns_false(capsys) -> None:
+    """An invite that has already been consumed cannot be revoked —
+    the row is part of the audit trail."""
+    from auth.invitations import consume_invitation, create_invitation
+
+    admin_uid = _mk_user("alice")
+    invitee_uid = _mk_user("bob")
+    inv = create_invitation(admin_uid)
+    assert inv is not None
+    assert consume_invitation(inv.invite_token, invitee_uid) is True
+
+    code, out, _ = _run(
+        ["invite", "revoke", inv.invite_id, "--json"], capsys
+    )
+    assert code == 0
+    assert json.loads(out)["revoked"] is False

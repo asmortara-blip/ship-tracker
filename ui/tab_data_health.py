@@ -1256,6 +1256,19 @@ def _render_security_panel() -> None:
             "opt-in per account."
         )
 
+        # v21: if a previous enable_mfa flow stashed recovery codes in
+        # session_state, surface them ONCE here. We pop the key after
+        # rendering so a page reload does not silently re-show codes
+        # the user may have already saved.
+        sec_pending_codes = st.session_state.pop("security_mfa_show_codes", None)
+        if sec_pending_codes:
+            st.warning(
+                "Save these recovery codes NOW. Each is single-use; they "
+                "let you sign in if you lose your authenticator. They "
+                "will NEVER be shown again."
+            )
+            st.code("\n".join(sec_pending_codes), language="text")
+
         mfa_on = bool(is_mfa_enabled(user_id))
         if mfa_on:
             st.success("MFA is ON for this account.")
@@ -1324,13 +1337,25 @@ def _render_security_panel() -> None:
                         key="security_mfa_confirm",
                     ):
                         if verify_totp(pending, code or ""):
-                            if enable_mfa(user_id, pending):
+                            # v21: enable_mfa now returns
+                            # ``(ok, recovery_codes)``. Stash the
+                            # codes in session_state so the next
+                            # render can surface them ONCE in a
+                            # copyable st.code block — the plaintext
+                            # is unrecoverable after the user
+                            # navigates away.
+                            ok, codes = enable_mfa(user_id, pending)
+                            if ok:
                                 st.session_state.pop(
                                     "pending_mfa_secret", None
                                 )
                                 st.session_state.pop(
                                     "security_mfa_code", None
                                 )
+                                if codes:
+                                    st.session_state[
+                                        "security_mfa_show_codes"
+                                    ] = codes
                                 st.success("MFA enabled.")
                                 st.rerun()
                             else:
@@ -1444,6 +1469,128 @@ def _render_security_panel() -> None:
                                     "Revoke failed — check the logs."
                                 )
 
+        # ─── Invitations sub-section (v21) ────────────────────────────────
+        st.divider()
+        st.markdown(
+            "<div><strong>Invitations</strong></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Mint a signup link that pre-authorizes a specific email + "
+            "role. The token is shown ONCE — share it out-of-band with "
+            "the recipient. Use the URL template "
+            "`/?invite=<token>` for sharing."
+        )
+
+        try:
+            from auth.invitations import (
+                create_invitation,
+                list_invitations,
+                revoke_invitation,
+            )
+
+            with st.expander("New invitation", expanded=False):
+                inv_email = st.text_input(
+                    "Email (optional — pins the invite to a specific recipient)",
+                    key="security_new_invite_email",
+                    placeholder="alice@example.com",
+                )
+                inv_role = st.selectbox(
+                    "Role",
+                    options=["user", "admin"],
+                    index=0,
+                    key="security_new_invite_role",
+                    help=(
+                        "Role granted on consumption. Pick 'admin' only "
+                        "when you mean it — invites cannot silently grant "
+                        "elevated access."
+                    ),
+                )
+                inv_expires = st.number_input(
+                    "Expires in (days)",
+                    min_value=1,
+                    max_value=90,
+                    value=7,
+                    step=1,
+                    key="security_new_invite_expires",
+                )
+                if st.button("Create invitation", key="security_new_invite_create"):
+                    invitation = create_invitation(
+                        user_id,
+                        email=(inv_email.strip() or None),
+                        role=inv_role,
+                        expires_in_days=int(inv_expires),
+                    )
+                    if invitation is None:
+                        st.error(
+                            "Invitation create failed — check the logs."
+                        )
+                    else:
+                        st.warning(
+                            "Copy this invitation URL NOW. The token "
+                            "will not be shown again."
+                        )
+                        invite_url = f"/?invite={invitation.invite_token}"
+                        st.code(invite_url, language="text")
+                        # Clear the form inputs for the next mint.
+                        st.session_state.pop(
+                            "security_new_invite_email", None
+                        )
+
+            try:
+                invitations = list_invitations(
+                    invited_by_user_id=user_id,
+                    include_consumed=False,
+                )
+            except Exception as exc:
+                logger.exception(
+                    f"Security panel: list_invitations failed: {exc}"
+                )
+                invitations = []
+
+            if not invitations:
+                st.caption("No pending invitations.")
+            else:
+                for inv in invitations:
+                    inv_c1, inv_c2, inv_c3, inv_c4 = st.columns([3, 3, 3, 2])
+                    with inv_c1:
+                        label = inv.email or "(any email)"
+                        st.markdown(
+                            f"<div>{_sans(label, weight=600)}"
+                            f"<br><span style='color:{C_TEXT3};font-size:11px'>"
+                            f"role {inv.role}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    with inv_c2:
+                        st.markdown(
+                            f"<div style='color:{C_TEXT2};font-size:12px'>"
+                            f"expires<br>{inv.expires_at[:19]}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with inv_c3:
+                        st.markdown(
+                            f"<div style='color:{C_TEXT2};font-size:12px'>"
+                            f"created<br>{inv.created_at[:19]}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with inv_c4:
+                        if st.button(
+                            "Revoke",
+                            key=f"security_invite_revoke_{inv.invite_id}",
+                        ):
+                            if revoke_invitation(inv.invite_id):
+                                st.success("Invitation revoked.")
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Revoke failed — check the logs."
+                                )
+        except Exception as exc:
+            logger.exception(
+                f"Security panel: invitations sub-section error: {exc}"
+            )
+            st.caption("Invitations unavailable.")
+
     except Exception as exc:
         logger.exception(f"Security panel render error: {exc}")
         st.error("Security panel unavailable.")
@@ -1478,11 +1625,13 @@ def _render_mfa_panel(user_id: str) -> None:
     """
     try:
         from auth.mfa import (
+            count_unused_recovery_codes,
             disable_mfa,
             enable_mfa,
             generate_secret,
             is_mfa_enabled,
             provisioning_uri,
+            regenerate_recovery_codes,
             verify_totp,
         )
 
@@ -1495,12 +1644,86 @@ def _render_mfa_panel(user_id: str) -> None:
         current_user = st.session_state.get("current_user")
         username = getattr(current_user, "username", "") or user_id
 
+        # v21: if a previous enable_mfa call stashed recovery codes in
+        # session_state (the one-shot reveal pattern), surface them
+        # NOW in a copyable code block with a strong warning. We
+        # ``pop`` the key after the render so a page reload does not
+        # silently re-show codes the user may have already saved.
+        pending_codes = st.session_state.pop("mfa_pending_codes", None)
+        if pending_codes:
+            st.warning(
+                "Save these recovery codes NOW. Each is single-use; "
+                "they let you sign in if you lose your authenticator. "
+                "They will NEVER be shown again."
+            )
+            st.code("\n".join(pending_codes), language="text")
+
         if bool(is_mfa_enabled(user_id)):
             st.success("MFA active — required at next sign-in.")
+            unused = int(count_unused_recovery_codes(user_id))
             st.caption(
-                "Disabling MFA returns the account to password-only "
-                "login. Re-enabling later requires fresh enrollment."
+                f"{unused} unused recovery codes remaining. Disabling "
+                "MFA returns the account to password-only login and "
+                "wipes the recovery codes. Re-enabling later requires "
+                "fresh enrollment."
             )
+
+            # ── Regenerate-codes sub-action (two-click confirm) ────────
+            regen_confirm = bool(
+                st.session_state.get("mfa_regen_confirm", False)
+            )
+            if not regen_confirm:
+                if st.button(
+                    "Regenerate recovery codes",
+                    key="mfa_panel_regen_btn",
+                    help=(
+                        "Wipes the current batch and issues a fresh one. "
+                        "The new codes are shown once."
+                    ),
+                ):
+                    st.session_state["mfa_regen_confirm"] = True
+                    st.rerun()
+            else:
+                st.warning(
+                    "Click again to confirm — this WIPES every existing "
+                    "recovery code and issues a fresh batch. Any saved "
+                    "codes will stop working."
+                )
+                regen_col1, regen_col2 = st.columns([2, 2])
+                with regen_col1:
+                    if st.button(
+                        "Confirm regenerate",
+                        key="mfa_panel_regen_confirm_btn",
+                    ):
+                        try:
+                            new_codes = regenerate_recovery_codes(user_id)
+                            st.session_state.pop("mfa_regen_confirm", None)
+                            if new_codes:
+                                st.session_state["mfa_pending_codes"] = (
+                                    new_codes
+                                )
+                                st.success(
+                                    "Recovery codes regenerated."
+                                )
+                            else:
+                                st.error(
+                                    "Regenerate failed — check the logs."
+                                )
+                            st.rerun()
+                        except Exception as exc:
+                            logger.exception(
+                                f"MFA panel regenerate failed: {exc}"
+                            )
+                            st.error(
+                                "Regenerate failed — check the logs."
+                            )
+                with regen_col2:
+                    if st.button(
+                        "Cancel",
+                        key="mfa_panel_regen_cancel_btn",
+                    ):
+                        st.session_state.pop("mfa_regen_confirm", None)
+                        st.rerun()
             confirm = bool(st.session_state.get("mfa_confirm_disable", False))
             if not confirm:
                 if st.button("Disable MFA", key="mfa_panel_disable_btn"):
@@ -1637,9 +1860,19 @@ def _render_mfa_panel(user_id: str) -> None:
             ):
                 try:
                     if verify_totp(pending, code or ""):
-                        if enable_mfa(user_id, pending):
+                        # v21: enable_mfa returns (ok, recovery_codes).
+                        # Stash the codes in session_state so the next
+                        # render lands in the enabled branch with
+                        # ``mfa_pending_codes`` set, and the dedicated
+                        # one-shot reveal block surfaces them ONCE.
+                        ok, new_codes = enable_mfa(user_id, pending)
+                        if ok:
                             st.session_state.pop("mfa_pending_secret", None)
                             st.session_state.pop("mfa_panel_code_input", None)
+                            if new_codes:
+                                st.session_state["mfa_pending_codes"] = (
+                                    new_codes
+                                )
                             st.success("MFA enabled.")
                             st.rerun()
                         else:
