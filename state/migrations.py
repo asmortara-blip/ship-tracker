@@ -933,6 +933,103 @@ def _migrate_to_v22(conn: sqlite3.Connection) -> None:
         )
 
 
+# ─── Schema v23 → v24 ─────────────────────────────────────────────────────
+
+def _migrate_to_v24(conn: sqlite3.Connection) -> None:
+    """Add the alert escalation chain machinery.
+
+    Two halves on two different tables:
+
+      * Two columns on ``alerts``:
+          - ``last_escalated_at`` — ``TEXT`` (NULLable, no DEFAULT).
+            ISO-8601 UTC timestamp of the most recent escalation step
+            that fired for this alert. NULL on a never-escalated row.
+            The escalation engine reads this column to compute "has
+            step N+1's after_minutes window elapsed since the last
+            step fired?" — when last_escalated_at is NULL the engine
+            falls back to ``created_at`` so the first step measures
+            from when the alert was first persisted.
+          - ``escalation_step`` — ``INTEGER NOT NULL DEFAULT 0``.
+            Tracks WHICH step of the chain has fired so far. 0 means
+            "no step has fired yet; step 1 is next"; N means "step N
+            fired; step N+1 is next (or the chain is exhausted if
+            none exists)". Pre-v24 rows pick up the default 0,
+            matching the implicit pre-feature meaning ("alert has
+            never been escalated").
+
+      * A new ``alert_escalation_chains`` table holding the per-rule
+        chains. One row per step in the chain. Columns:
+          - ``chain_id``     — UUID PK identifying this particular
+            step row. NOT the rule_id; a chain is a SET of rows that
+            share the same rule_id + user_id.
+          - ``rule_id``      — the originating AlertRule. The chain
+            walk groups rows by rule_id, ordered by step_number ASC.
+          - ``user_id``      — per-user scoping. Alice's chain on
+            rule X does NOT escalate bob's alerts on the same rule;
+            the engine filters on this column for every read.
+          - ``step_number``  — 1-indexed integer; 1 fires first, 2
+            second, etc. The (rule_id, user_id, step_number) tuple
+            is UNIQUE so add_escalation_step can REPLACE in place
+            when an operator edits a single step.
+          - ``after_minutes``— escalate when the alert has been
+            unacked > this many minutes since the previous step's
+            fire (or, for step 1, since the alert's created_at).
+          - ``channel_id``   — the delivery channel to dispatch
+            this step to. References ``delivery_channels.channel_id``
+            by convention (no SQL FK so a channel can be soft-
+            deleted without cascading the escalation row).
+          - ``created_at``   — ISO-8601 UTC stamp at row write time.
+
+    Two indexes accompany the table:
+      * ``idx_escalation_rule`` on (rule_id, step_number) — covers
+        the get_escalation_chain walk ("ordered by step_number ASC
+        for this rule").
+      * ``uq_escalation_step`` UNIQUE on (rule_id, user_id,
+        step_number) — enforces "at most one row per step per user
+        per rule" so add_escalation_step can REPLACE the existing
+        row when an operator re-edits a step in place.
+
+    The ALTER TABLE adds use the same idempotent OperationalError-
+    swallowing pattern as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18
+    / v19. The CREATE TABLE side is invoked via executescript and
+    is idempotent on its own via CREATE TABLE IF NOT EXISTS / CREATE
+    INDEX IF NOT EXISTS. Each column is added in its own try/except
+    so partial completion of a prior run is also tolerated.
+    """
+    # First the two ALTER TABLE adds on ``alerts``. The columns are
+    # NULLable / DEFAULT 0 on purpose so pre-v24 rows pick up
+    # sensible "never escalated" semantics without a backfill.
+    for col_name, col_def in (
+        ("last_escalated_at", "TEXT"),
+        ("escalation_step", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE alerts ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v24 ALTER TABLE "
+                f"(alerts.{col_name}) failed: {exc}"
+            )
+
+    # Then the new ``alert_escalation_chains`` table. The CREATE
+    # script is idempotent on its own (CREATE TABLE IF NOT EXISTS +
+    # CREATE INDEX IF NOT EXISTS) so re-running on a fully-migrated
+    # DB is a no-op.
+    try:
+        from state.db import _SCHEMA_V24
+
+        conn.executescript(_SCHEMA_V24)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v24 CREATE TABLE failed: {exc}"
+        )
+
+
 # ─── Schema v22 → v23 ─────────────────────────────────────────────────────
 
 def _migrate_to_v23(conn: sqlite3.Connection) -> None:

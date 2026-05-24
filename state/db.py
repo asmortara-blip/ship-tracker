@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 23
+SCHEMA_VERSION: int = 24
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1119,6 +1119,64 @@ _SCHEMA_V23_NOTE: str = (
     "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v23)"
 )
 
+# Schema v24 adds the alert escalation chain machinery. Two halves on
+# two different tables:
+#
+#   1. Two columns on the ``alerts`` table to carry the alert-side
+#      escalation state machine — ``last_escalated_at`` (ISO-8601 UTC
+#      stamp of the most recent escalation step that fired; NULL on
+#      a never-escalated row), and ``escalation_step`` (INTEGER 0/1/...
+#      tracking which step of the chain has fired so far; 0 = "no
+#      step has fired yet", N = "step N has fired, step N+1 is next").
+#      Both columns added via ALTER TABLE in ``_migrate_to_v24`` with
+#      the same idempotent OperationalError-swallowing pattern as the
+#      v4 / v5 / v6 / v13 / v14 column adds. SQLite does NOT support
+#      ``IF NOT EXISTS`` on ALTER TABLE.
+#
+#   2. A new ``alert_escalation_chains`` table holding the per-rule
+#      escalation chains. One row per step. Keyed by ``chain_id`` (UUID
+#      PK). Each row carries the originating ``rule_id``, the owning
+#      ``user_id`` (per-user scoping — alice's chain cannot escalate
+#      bob's alerts), the ``step_number`` (1-indexed; 1 fires first, 2
+#      second, ...), ``after_minutes`` (escalate when the alert has been
+#      unacked > this many minutes since the previous step's fire), the
+#      target ``channel_id``, and ``created_at``. Two indexes:
+#      ``idx_escalation_rule`` (rule_id, step_number) for the
+#      get_escalation_chain walk, and a UNIQUE index on
+#      (rule_id, user_id, step_number) so add_escalation_step can
+#      INSERT-OR-REPLACE when the operator edits a step in place.
+#
+# Same CREATE-TABLE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 / v10 /
+# v11 / v12 / v15 / v20 / v21 / v22 / v23 — a fresh DB picks up the
+# table via the executescript path in ``_init_schema``; the explicit
+# ``_migrate_to_v24`` helper re-runs the same script on upgrade.
+_SCHEMA_V24 = """
+CREATE TABLE IF NOT EXISTS alert_escalation_chains (
+    chain_id        TEXT PRIMARY KEY,
+    rule_id         TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    step_number     INTEGER NOT NULL,
+    after_minutes   INTEGER NOT NULL,
+    channel_id      TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_escalation_rule
+    ON alert_escalation_chains(rule_id, step_number);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_escalation_step
+    ON alert_escalation_chains(rule_id, user_id, step_number);
+"""
+
+_SCHEMA_V24_NOTE: str = (
+    "v24: alerts.last_escalated_at TEXT + "
+    "alerts.escalation_step INTEGER NOT NULL DEFAULT 0 + "
+    "alert_escalation_chains table (chain_id PK, rule_id, user_id, "
+    "step_number, after_minutes, channel_id, created_at) + "
+    "idx_escalation_rule (rule_id, step_number) + "
+    "uq_escalation_step UNIQUE (rule_id, user_id, step_number) "
+    "(added via ALTER TABLE + CREATE TABLE IF NOT EXISTS in "
+    "_migrate_to_v24)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -1291,6 +1349,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # JIRA-1234"). Safe to run on every open (fresh DB: creates the
     # table; existing DB: no-op).
     conn.executescript(_SCHEMA_V23)
+    # v24 mixed schema — two ALTER TABLE column adds on ``alerts``
+    # PLUS a fresh CREATE TABLE for ``alert_escalation_chains``.
+    # Powers the per-rule escalation chain machinery. The CREATE side
+    # is idempotent on every open via executescript; the ALTER side
+    # lives in ``_migrate_to_v24`` (same OperationalError-swallow
+    # idiom as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18 / v19).
+    conn.executescript(_SCHEMA_V24)
+    try:
+        from state.migrations import _migrate_to_v24
+        _migrate_to_v24(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v24 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1585,6 +1655,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v23(conn)
         except Exception as exc:
             logger.warning(f"state.db: v23 migration skipped: {exc}")
+
+    # Migration 23 → 24: add the alert escalation chain machinery —
+    # two ALTER TABLE column adds (``alerts.last_escalated_at`` +
+    # ``alerts.escalation_step``) plus the new
+    # ``alert_escalation_chains`` table. The helper is already invoked
+    # unconditionally above; this branch keeps the version-step ladder
+    # explicit. Same belt-and-braces guard as every other migration —
+    # a failure here logs and continues so the rest of init isn't
+    # blocked.
+    if current < 24:
+        try:
+            from state.migrations import _migrate_to_v24
+            _migrate_to_v24(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v24 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

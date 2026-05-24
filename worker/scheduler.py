@@ -24,16 +24,95 @@ Streamlit process and therefore has no ``st.*`` available.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from loguru import logger
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Run-tracking decorator
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Every ``run_*_job`` is wrapped with :func:`_track_run` so the platform
+# persists a per-invocation record (start/finish, status, result, error).
+# The dashboard reads those records via ``state.worker_runs`` — operators
+# no longer need to grep ``logs/scheduler.log`` to answer "did the prune
+# fire last night, and what did it return?".
+#
+# The decorator never alters the wrapped job's return value or exception
+# behaviour. It records start, runs the job, records finish in a
+# ``finally`` block, and on exception records ``status='error'`` then
+# re-raises so the existing internal try/except in each job is the
+# canonical error handler. The lazy import of ``state.worker_runs``
+# means a broken state module can never take the worker down.
+
+
+def _track_run(fn: Callable) -> Callable:
+    """Decorator that persists one ``WorkerJobRun`` per invocation.
+
+    Wrap a worker-job function so its execution is recorded to
+    ``state.worker_runs``. The decorator is intentionally minimal:
+
+      * No changes to ``fn``'s signature, return value, or exception
+        behaviour. The wrapped function looks identical to the caller.
+      * Recording failures (DB locked, kv_state row corrupt, etc.) are
+        swallowed — observability MUST NEVER block the worker.
+      * The recorded ``result`` is the function's return value; the
+        record_run helper coerces non-JSON-serializable values so even
+        ``list[HealthPing]`` (from ``run_health_ping_job``) persists as
+        a useful ``_repr`` summary.
+
+    Each ``run_*_job`` already has an internal try/except that swallows
+    exceptions and returns a safe default. This decorator's exception
+    handler is therefore largely belt-and-braces — but it stays in place
+    so that, if a future job is added that DOES raise, the error is still
+    captured in the dashboard.
+    """
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        started_at = datetime.now(timezone.utc).isoformat()
+        result: Any = None
+        error_message: Optional[str] = None
+        status = "ok"
+        try:
+            result = fn(*args, **kwargs)
+            return result
+        except Exception as exc:
+            status = "error"
+            error_message = str(exc)
+            raise
+        finally:
+            finished_at = datetime.now(timezone.utc).isoformat()
+            try:
+                # Lazy import so a broken state module can NEVER take the
+                # worker down. The whole record_run call is wrapped in a
+                # second try just for extra paranoia — record_run already
+                # never raises, but the import itself can fail in weird
+                # environments.
+                from state.worker_runs import record_run
+                record_run(
+                    fn.__name__,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    status=status,
+                    result=result,
+                    error_message=error_message,
+                )
+            except Exception as record_exc:
+                logger.debug(
+                    f"_track_run: record_run failed for {fn.__name__}: "
+                    f"{record_exc}"
+                )
+
+    return _wrapped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +309,7 @@ def load_data_bundle() -> dict:
 #  Main job
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_track_run
 def run_daily_briefing_job(
     data_bundle: dict,
     *,
@@ -347,6 +427,7 @@ def run_daily_briefing_job(
 #  Telemetry retention
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_track_run
 def run_telemetry_prune_job(retention_days: int = 90) -> int:
     """Prune ``llm_calls`` rows older than ``retention_days`` days.
 
@@ -373,6 +454,7 @@ def run_telemetry_prune_job(retention_days: int = 90) -> int:
         return 0
 
 
+@_track_run
 def run_perf_prune_job(retention_days: int = 30) -> int:
     """Prune ``tab_render_events`` rows older than ``retention_days`` days.
 
@@ -405,6 +487,7 @@ def run_perf_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+@_track_run
 def run_health_ping_job() -> list:
     """Run every data-source health probe and record the outcomes.
 
@@ -436,6 +519,7 @@ def run_health_ping_job() -> list:
         return []
 
 
+@_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
 
@@ -465,6 +549,7 @@ def run_health_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+@_track_run
 def run_source_health_alert_job() -> dict:
     """Check the current source-health snapshot and auto-fire alerts for
     degraded feeds.
@@ -498,6 +583,7 @@ def run_source_health_alert_job() -> dict:
         return {"fired": 0, "skipped_cooldown": 0, "errored": 0}
 
 
+@_track_run
 def run_perf_budget_check_job() -> dict:
     """Check every per-tab perf budget and fire alerts for breaches.
 
@@ -532,6 +618,48 @@ def run_perf_budget_check_job() -> dict:
         return {"checked": 0, "breached": 0, "alerted": 0, "skipped_cooldown": 0}
 
 
+@_track_run
+def run_alert_escalation_job(now: Optional[datetime] = None) -> dict:
+    """Walk every unacked alert and escalate any whose next chain step
+    has come due.
+
+    Thin wrapper around ``engine.alert_escalation.run_escalation_pass``
+    that adds logging and shields the caller from any exception.
+    Designed to run frequently (every 5 minutes from the cron loop)
+    so an unacked CRITICAL on rule X with a 15-min step-1 timer
+    actually escalates within minutes of the timer expiring, not at
+    the next daily worker pass.
+
+    The engine orchestrator already swallows per-alert failures
+    internally — this wrapper is belt-and-braces: even if the engine
+    itself raises, the worker continues. Returns the count dict
+    ``{"checked": N, "escalated": N, "failed": N}`` (or all zeros on
+    a top-level exception). Same shape, same posture, as the
+    source-health-alert + perf-budget-check wrappers.
+
+    ``now`` (optional) is forwarded straight through to the engine so
+    tests can pin the clock without monkeypatching datetime.
+
+    Never raises — an escalation failure must NEVER block any sibling
+    job. The engine itself is non-raising by contract; this guard is
+    defence in depth.
+    """
+    try:
+        from engine.alert_escalation import run_escalation_pass
+
+        counts = run_escalation_pass(now=now)
+        logger.info(
+            f"run_alert_escalation_job: checked={counts.get('checked', 0)} "
+            f"escalated={counts.get('escalated', 0)} "
+            f"failed={counts.get('failed', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_alert_escalation_job: failed: {exc}")
+        return {"checked": 0, "escalated": 0, "failed": 0}
+
+
+@_track_run
 def run_bulk_export_prune_job(keep_n: int = 5) -> int:
     """Prune ``cache/exports/*.tar.gz`` down to the newest ``keep_n``.
 
@@ -563,6 +691,7 @@ def run_bulk_export_prune_job(keep_n: int = 5) -> int:
         return 0
 
 
+@_track_run
 def run_silence_cleanup_job(retention_days: int = 30) -> int:
     """Sweep expired alert silences from the ``alert_silences`` table.
 
@@ -595,6 +724,7 @@ def run_silence_cleanup_job(retention_days: int = 30) -> int:
         return 0
 
 
+@_track_run
 def run_audit_prune_job(retention_days: int = 365) -> int:
     """Prune audit_events older than ``retention_days`` from SQLite.
 
@@ -619,6 +749,7 @@ def run_audit_prune_job(retention_days: int = 365) -> int:
         return 0
 
 
+@_track_run
 def run_report_prune_job(keep_n: int = 30) -> int:
     """Prune report_history down to ``keep_n`` newest rows.
 
@@ -643,6 +774,7 @@ def run_report_prune_job(keep_n: int = 30) -> int:
         return 0
 
 
+@_track_run
 def run_alert_prune_job(retention_days: int = 180) -> int:
     """Prune ack'd alerts older than ``retention_days`` from SQLite.
 
@@ -672,6 +804,7 @@ def run_alert_prune_job(retention_days: int = 180) -> int:
         return 0
 
 
+@_track_run
 def run_report_scheduler_job(now: Optional[datetime] = None) -> dict:
     """Fire every ``report_schedules`` row whose ``next_run_at`` is past.
 
@@ -796,6 +929,7 @@ def run_report_scheduler_job(now: Optional[datetime] = None) -> dict:
         return summary
 
 
+@_track_run
 def run_operator_digest_job() -> list:
     """Dispatch the daily Operator Dashboard digest to every ``ops-*`` channel.
 
@@ -852,6 +986,7 @@ def run_operator_digest_job() -> list:
     return results
 
 
+@_track_run
 def run_snapshot_prune_job(keep_n: int = 30) -> int:
     """Prune ``investor_report_snapshots`` down to the newest ``keep_n``.
 
@@ -965,6 +1100,18 @@ def main(argv: Optional[list] = None) -> int:
         run_perf_budget_check_job()
     except Exception as exc:
         logger.warning(f"main: perf budget check step failed: {exc}")
+
+    # Alert escalation pass — walks unacked alerts whose next chain
+    # step has come due and dispatches to the step's channel. Same
+    # 5-minute cadence as the source-health alerter (the operator-
+    # facing latency budget is "an unacked CRITICAL should escalate
+    # within a few minutes of its timer expiring"). The orchestrator
+    # already swallows per-alert errors, the wrapper swallows the
+    # top-level — same belt-and-braces guard.
+    try:
+        run_alert_escalation_job()
+    except Exception as exc:
+        logger.warning(f"main: alert escalation step failed: {exc}")
 
     # Bulk-export archive retention. Runs AFTER the health prune so a
     # bulk-export taken on the same tick (if a future cron triggers one)
