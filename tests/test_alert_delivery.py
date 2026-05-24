@@ -2470,3 +2470,59 @@ def test_send_test_ping_email_no_smtp_config_returns_failure(monkeypatch) -> Non
     ok, msg = send_test_ping(channel)
     assert ok is False
     assert msg == "SMTP not configured"
+
+
+# ─── Schema v25: monthly budget integration with deliver_alert ────────────
+
+
+def test_deliver_alert_increments_budget_counter_on_success(monkeypatch) -> None:
+    """A successful slack delivery on a budgeted channel bumps the
+    per-channel monthly counter by exactly one. Mirrors the legacy
+    success path with the new bookkeeping wrapper."""
+    from engine.alert_delivery import get_channel_usage
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(200),
+    )
+    channel = _make_channel("LOW", channel_id="ch-budget-inc")
+    channel.monthly_budget = 10
+    assert get_channel_usage("ch-budget-inc", user_id="") == 0
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert get_channel_usage("ch-budget-inc", user_id="") == 1
+
+
+def test_deliver_alert_does_not_increment_on_http_failure(monkeypatch) -> None:
+    """A non-2xx response is a failed delivery — the counter must NOT
+    bump because we only burn budget on actually-successful sends. A
+    transient outage / 5xx must not consume the operator's monthly
+    cap."""
+    from engine.alert_delivery import get_channel_usage
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=500, text="server error"),
+    )
+    channel = _make_channel("LOW", channel_id="ch-budget-fail")
+    channel.monthly_budget = 5
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is False
+    # Counter unchanged.
+    assert get_channel_usage("ch-budget-fail", user_id="") == 0
+
+
+def test_send_test_ping_is_exempt_from_budget(monkeypatch) -> None:
+    """``send_test_ping`` MUST NOT bump the per-channel monthly counter
+    — the operator is verifying the wiring, not consuming production
+    budget. Confirms the budget integration lives inside
+    ``deliver_alert`` (which the test-ping path bypasses)."""
+    from engine.alert_delivery import get_channel_usage
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(200),
+    )
+    channel = _make_channel("LOW", channel_id="ch-budget-test-ping")
+    channel.monthly_budget = 2
+    ok, _msg = send_test_ping(channel)
+    assert ok is True
+    # No budget burn from the test ping.
+    assert get_channel_usage("ch-budget-test-ping", user_id="") == 0

@@ -202,6 +202,111 @@ def test_channels_delete_noop_on_unknown(capsys) -> None:
     assert "nonexistent-id" in out
 
 
+# ─── channels usage / reset-usage / set-budget (schema v25) ──────────────
+
+
+def _mk_channel_row(channel_id: str, *, budget: int = 0, user_id: str = "") -> None:
+    """Insert one delivery channel through save_channel so the CLI
+    handler picks it up. Helper mirrors the in-suite convention used
+    by ``_mk_alert_row``."""
+    from engine.alert_delivery import DeliveryChannel, save_channel
+
+    save_channel(
+        DeliveryChannel(
+            channel_id=channel_id,
+            name=f"ch-{channel_id}",
+            kind="slack",
+            target="https://hooks.slack.com/services/T/B/X",
+            severity_threshold="LOW",
+            enabled=True,
+            monthly_budget=budget,
+        ),
+        user_id=user_id,
+    )
+
+
+def test_channels_usage_empty(capsys) -> None:
+    """No channels yet → handler prints "(no channels)" rather than a
+    crash. Mirrors the channels-list empty-DB shape."""
+    code, out, _ = _run(["channels", "usage", "--user-id", "alice"], capsys)
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_channels_usage_json_returns_list(capsys) -> None:
+    """--json output is a list of {channel_id, name, budget, usage, ...}
+    dicts. Each save_channel row contributes exactly one entry."""
+    _mk_channel_row("c-cli-1", budget=100, user_id="alice")
+    code, out, _ = _run(
+        ["channels", "usage", "--user-id", "alice", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert payload[0]["channel_id"] == "c-cli-1"
+    assert payload[0]["budget"] == 100
+
+
+def test_channels_reset_usage_zeroes_counter(capsys) -> None:
+    """`channels reset-usage <id>` zeros the per-channel month counter
+    so a follow-up `channels usage` reports zero."""
+    from engine.alert_delivery import (
+        get_channel_usage,
+        increment_channel_usage,
+    )
+
+    _mk_channel_row("c-cli-reset", budget=50, user_id="alice")
+    for _ in range(7):
+        increment_channel_usage("c-cli-reset", user_id="alice")
+    assert get_channel_usage("c-cli-reset", user_id="alice") == 7
+    code, out, _ = _run(
+        ["channels", "reset-usage", "c-cli-reset", "--user-id", "alice"],
+        capsys,
+    )
+    assert code == 0
+    assert "c-cli-reset" in out
+    assert get_channel_usage("c-cli-reset", user_id="alice") == 0
+
+
+def test_channels_set_budget_updates_row(capsys) -> None:
+    """`channels set-budget <id> --budget N` mutates the persisted
+    monthly_budget; a follow-up `channels list` (or load_channels)
+    sees the new cap."""
+    from engine.alert_delivery import load_channels
+
+    _mk_channel_row("c-cli-set", budget=10, user_id="alice")
+    code, out, _ = _run(
+        [
+            "channels", "set-budget", "c-cli-set",
+            "--budget", "999",
+            "--user-id", "alice",
+        ],
+        capsys,
+    )
+    assert code == 0
+    assert "999" in out
+    channels = load_channels(user_id="alice")
+    by_id = {c.channel_id: c for c in channels}
+    assert by_id["c-cli-set"].monthly_budget == 999
+
+
+def test_channels_set_budget_unknown_channel_returns_nonzero(capsys) -> None:
+    """A missing channel_id surfaces a clear "channel not found" + a
+    non-zero exit code so a wrapping script can detect the failure."""
+    code, out, _ = _run(
+        [
+            "channels", "set-budget", "no-such-id",
+            "--budget", "100",
+            "--user-id", "alice",
+        ],
+        capsys,
+    )
+    # SystemExit(1) becomes exit code 1 inside main().
+    assert code != 0
+    assert "no-such-id" in out
+
+
 # ─── reports ─────────────────────────────────────────────────────────────
 
 def test_reports_list_empty(capsys) -> None:

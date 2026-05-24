@@ -95,6 +95,14 @@ class DeliveryChannel:
     quiet_start: str = ""                 # "HH:MM" UTC, "" = disabled
     quiet_end: str = ""                   # "HH:MM" UTC, "" = disabled
     quiet_override_critical: bool = True  # CRITICAL bypasses the window
+    # Per-channel monthly delivery budget (v25). 0 = unlimited (the
+    # legacy default — pre-v25 channels behave EXACTLY as today). A
+    # positive cap suppresses further deliveries once the channel's
+    # per-calendar-month counter reaches it; the counter resets on the
+    # first of every month or via ``reset_channel_usage``. Counter
+    # state lives in kv_state, not on the channel row, so monthly
+    # rollover is cheap (a new key) and operator reset is one DELETE.
+    monthly_budget: int = 0               # 0 = unlimited
 
 
 @dataclass
@@ -1076,12 +1084,12 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
     # owning user_id from the alerts table; a missing user_id (or any
     # internal error) collapses to the default-prefs path, which is
     # byte-identical to the legacy behaviour.
+    owner_uid = _lookup_alert_user_id(alert)
     try:
         from auth.notification_prefs import (
             filter_channels_by_prefs,
             _bump_suppressed_counter,
         )
-        owner_uid = _lookup_alert_user_id(alert)
         kept = filter_channels_by_prefs([channel], alert, user_id=owner_uid)
         if not kept:
             _bump_suppressed_counter(1)
@@ -1095,6 +1103,57 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
         # a delivery. Fall through to the legacy dispatch path.
         pass
 
+    # ── Per-channel monthly budget gate (v25) ─────────────────────────
+    # Runs AFTER every other suppression so the budget only counts
+    # deliveries the operator actually intended to send. When the
+    # channel has a positive cap AND the per-user month-to-date count
+    # already reached it, skip dispatch + bump the cumulative
+    # ``budget_suppressed_counter`` telemetry row. The result mirrors
+    # the existing "below threshold" / "user prefs" suppress patterns:
+    # success=False so the caller can distinguish from a legitimate
+    # delivery, status_code=429 (the HTTP idiom for "too many
+    # requests" / quota exceeded), error_msg surfaces the cap.
+    try:
+        over_budget, current_usage, budget_cap = check_budget(
+            channel, user_id=owner_uid
+        )
+        if over_budget:
+            _bump_budget_suppressed_counter(1)
+            return DeliveryResult(
+                success=False,
+                status_code=429,
+                error_msg=(
+                    f"budget exceeded ({current_usage}/{budget_cap} this month)"
+                ),
+            )
+    except Exception:
+        # Defence-in-depth — a budget-check failure must NEVER block a
+        # delivery. Fall through to the legacy dispatch path.
+        pass
+
+    result = _dispatch_alert(channel, alert)
+
+    # ── Post-dispatch budget increment ────────────────────────────────
+    # Only count SUCCESSFUL deliveries — a transient transport failure
+    # shouldn't burn the operator's budget. We re-use the same
+    # ``owner_uid`` we computed for the prefs gate so the counter
+    # bucket matches the check above (per-user-per-channel-per-month).
+    if result.success:
+        try:
+            increment_channel_usage(channel.channel_id, user_id=owner_uid)
+        except Exception:
+            # Best-effort telemetry — must never propagate.
+            pass
+
+    return result
+
+
+def _dispatch_alert(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:
+    """Per-kind dispatch helper, split out of ``deliver_alert`` so the
+    pre-dispatch (budget check) and post-dispatch (budget increment)
+    bookkeeping can wrap a single call. Behaviour matches the legacy
+    inline dispatch byte-for-byte.
+    """
     if channel.kind == "email":
         config = _get_smtp_config()
         if config is None:
@@ -1886,6 +1945,17 @@ def save_channel(
     if quiet_end and _parse_hhmm_to_minutes(quiet_end) is None:
         quiet_end = ""
     quiet_override_critical = 1 if channel.quiet_override_critical else 0
+    # Normalize monthly_budget (v25). Negative values are nonsensical
+    # ("budget of -5") — clamp to 0 so a stray operator typo never
+    # accidentally silences a channel. Non-int values (e.g. someone
+    # constructed the dataclass with a string) collapse to 0 for the
+    # same reason.
+    try:
+        monthly_budget = int(channel.monthly_budget)
+    except (TypeError, ValueError):
+        monthly_budget = 0
+    if monthly_budget < 0:
+        monthly_budget = 0
     conn = get_connection()
     try:
         with conn:
@@ -1894,8 +1964,9 @@ def save_channel(
                 INSERT INTO delivery_channels
                   (channel_id, name, kind, target, severity_threshold,
                    enabled, created_at, digest_mode, user_id,
-                   quiet_start, quiet_end, quiet_override_critical)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   quiet_start, quiet_end, quiet_override_critical,
+                   monthly_budget)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                   name = excluded.name,
                   kind = excluded.kind,
@@ -1906,7 +1977,8 @@ def save_channel(
                   user_id = excluded.user_id,
                   quiet_start = excluded.quiet_start,
                   quiet_end = excluded.quiet_end,
-                  quiet_override_critical = excluded.quiet_override_critical
+                  quiet_override_critical = excluded.quiet_override_critical,
+                  monthly_budget = excluded.monthly_budget
                 """,
                 (
                     channel.channel_id,
@@ -1921,6 +1993,7 @@ def save_channel(
                     quiet_start,
                     quiet_end,
                     quiet_override_critical,
+                    monthly_budget,
                 ),
             )
         # Mirror created_at back onto the dataclass so the caller can
@@ -2010,6 +2083,19 @@ def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
         except (TypeError, ValueError):
             return bool(val)
 
+    # Defensive read for the v25 ``monthly_budget`` column. A pre-v25
+    # row (or a Row whose schema cache predates the bump) falls back
+    # to 0 so the "unlimited / legacy behaviour" default is preserved.
+    def _monthly_budget_of(row) -> int:
+        try:
+            val = row["monthly_budget"]
+        except (KeyError, IndexError):
+            return 0
+        try:
+            return max(0, int(val))
+        except (TypeError, ValueError):
+            return 0
+
     # Opt-in field-level decryption — a row whose target was persisted
     # via save_channel(..., encrypt_target=True) is wrapped in a
     # ``vault:v1:`` envelope. We unwrap it here so the rest of the
@@ -2049,6 +2135,7 @@ def load_channels(*, user_id: Optional[str] = None) -> list[DeliveryChannel]:
             quiet_start=_quiet_start_of(r),
             quiet_end=_quiet_end_of(r),
             quiet_override_critical=_quiet_override_of(r),
+            monthly_budget=_monthly_budget_of(r),
         )
         for r in rows
     ]
@@ -2093,6 +2180,322 @@ def delete_channel(channel_id: str, *, user_id: Optional[str] = None) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Per-channel monthly delivery budgets (schema v25)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Operators want to cap noisy channels with a per-channel monthly alert
+# budget: "Slack #trading-desk gets max 200 alerts/month; PagerDuty gets
+# max 50". When the budget is exceeded, further deliveries are suppressed
+# until the next calendar month starts.
+#
+# Storage:
+#   * The cap lives in ``delivery_channels.monthly_budget`` (the v25
+#     column). 0 = unlimited (preserves the legacy behaviour for every
+#     channel that hasn't opted in).
+#   * The counter lives in ``kv_state`` under a per-user-per-channel-per-
+#     month key:
+#       ``channel_usage:<user_id>:<channel_id>:<YYYY-MM>``
+#     Storing the year-month in the key (rather than as a column) gives
+#     us free monthly rollover (each new month writes a fresh row) and
+#     keeps per-month audit-style introspection trivially queryable by
+#     prefix.
+#   * The cumulative "how many deliveries did we suppress?" telemetry is
+#     a single counter at ``budget_suppressed_counter`` (matches the
+#     ``alerts_suppressed_by_prefs`` shape from auth.notification_prefs).
+#
+# The increment ONLY fires on a SUCCESSFUL delivery — transient failures
+# don't burn the budget, which keeps the cap meaningful when an upstream
+# outage triggers retries.
+
+_BUDGET_USAGE_KEY_PREFIX: str = "channel_usage"
+_BUDGET_SUPPRESSED_KEY: str = "budget_suppressed_counter"
+
+
+def _current_year_month() -> str:
+    """Return the current UTC year-month as a ``"YYYY-MM"`` string —
+    the canonical bucket label for the per-channel monthly counter."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _channel_usage_key(channel_id: str, user_id: str, year_month: str) -> str:
+    """Build the kv_state key for a per-channel monthly counter.
+
+    Shape: ``channel_usage:<user_id>:<channel_id>:<YYYY-MM>``.
+
+    ``user_id`` may be the empty string for the legacy / pre-multi-user
+    bucket — see ``state.user_scope`` for the convention. Channel ids
+    are caller-supplied UUIDs and can be arbitrary opaque strings; we
+    do NOT defensively sanitize them here because the kv_state key is
+    bound via parameter substitution everywhere it's read or written.
+    """
+    return f"{_BUDGET_USAGE_KEY_PREFIX}:{user_id}:{channel_id}:{year_month}"
+
+
+def get_channel_usage(
+    channel_id: str,
+    *,
+    user_id: str,
+    year_month: Optional[str] = None,
+) -> int:
+    """Return the per-channel-per-user delivery count for ``year_month``
+    (defaults to the current UTC month). Returns ``0`` for a brand-new
+    channel / month / user combination — the kv_state row just doesn't
+    exist yet — and ALSO returns ``0`` on any internal failure so a
+    backend hiccup never accidentally suppresses deliveries.
+
+    NEVER raises.
+    """
+    ym = year_month or _current_year_month()
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_channel_usage_key(channel_id, user_id, ym),),
+        ).fetchone()
+        if row is None:
+            return 0
+        try:
+            val = int(row["value"])
+        except (TypeError, ValueError):
+            return 0
+        return max(0, val)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.get_channel_usage: kv_state read failed: {exc}"
+        )
+        return 0
+
+
+def check_budget(
+    channel: DeliveryChannel,
+    *,
+    user_id: str,
+) -> tuple[bool, int, int]:
+    """Return ``(over_budget, current_usage, budget)`` for ``channel`` in
+    the current UTC month.
+
+    Semantics:
+      * ``budget == 0`` ⇒ unlimited; ``over_budget`` is ALWAYS ``False``
+        regardless of usage. Preserves the legacy "no cap" behaviour for
+        channels that never opted in.
+      * ``budget > 0``  ⇒ ``over_budget`` is ``True`` iff
+        ``current_usage >= budget``. The check is ``>=`` (not ``>``) so
+        a channel with budget=200 dispatches alerts 1-200 and starts
+        suppressing at 201.
+
+    NEVER raises. On any internal failure the call collapses to
+    ``(False, 0, budget)`` — the delivery is allowed through (failure-
+    open on the cap) rather than silently swallowed.
+    """
+    try:
+        budget = max(0, int(channel.monthly_budget))
+    except (TypeError, ValueError):
+        budget = 0
+    if budget <= 0:
+        # Unlimited path. Avoid the kv_state read entirely so a pre-v25
+        # channel pays zero cost.
+        return False, 0, 0
+    usage = get_channel_usage(channel.channel_id, user_id=user_id)
+    return usage >= budget, usage, budget
+
+
+def increment_channel_usage(channel_id: str, *, user_id: str) -> None:
+    """Bump the per-channel-per-user counter for the CURRENT UTC month
+    by 1.
+
+    Called from ``deliver_alert`` AFTER a successful dispatch only —
+    never on a failure, so a transient outage doesn't burn the budget.
+
+    Best-effort: a kv_state write failure is swallowed (the budget
+    machinery is operator telemetry, not correctness). NEVER raises.
+    """
+    ym = _current_year_month()
+    key = _channel_usage_key(channel_id, user_id, ym)
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?", (key,)
+        ).fetchone()
+        try:
+            current = int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            current = 0
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                (key, str(current + 1), now_iso),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.increment_channel_usage: kv_state write "
+            f"failed: {exc}"
+        )
+
+
+def reset_channel_usage(
+    channel_id: str,
+    *,
+    user_id: str,
+    year_month: Optional[str] = None,
+) -> bool:
+    """Zero the per-channel-per-user counter for ``year_month`` (default
+    current UTC month).
+
+    Operator-triggered manual reset — used after a noisy week ended and
+    the operator wants the channel to start delivering again before the
+    natural month-boundary reset. Implementation is a DELETE on the
+    kv_state row; ``get_channel_usage`` then returns 0 (the "row does
+    not exist" branch).
+
+    Returns ``True`` on success, ``False`` on any internal failure.
+    NEVER raises.
+
+    Also records an audit row (``action='reset_channel_usage'``) so
+    the security review trail captures operator intent.
+    """
+    ym = year_month or _current_year_month()
+    key = _channel_usage_key(channel_id, user_id, ym)
+    ok = False
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        with conn:
+            conn.execute("DELETE FROM kv_state WHERE key = ?", (key,))
+        ok = True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.reset_channel_usage: kv_state delete "
+            f"failed: {exc}"
+        )
+        ok = False
+    # Audit-log the reset regardless of whether a row actually existed.
+    # The audit captures the operator's INTENT to reset, which is the
+    # security-relevant fact (matches the delete_channel pattern).
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "reset_channel_usage",
+            entity_type="channel",
+            entity_id=channel_id,
+            detail={"year_month": ym, "success": ok},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return ok
+
+
+def get_all_channel_usage(*, user_id: str) -> list[dict]:
+    """Return per-channel usage for every channel in ``user_id``'s scope,
+    suitable for a dashboard table.
+
+    Each row is a dict:
+      * ``channel_id`` — UUID identifier
+      * ``name``       — human-readable label
+      * ``kind``       — slack / email / sms / webhook / discord / pagerduty
+      * ``budget``     — the configured cap (0 = unlimited)
+      * ``usage``      — the current month's counter
+      * ``pct``        — ``usage / budget * 100`` rounded to one decimal,
+                        or ``None`` when budget==0 (the "% of unlimited"
+                        is meaningless — render as "—" in the UI).
+      * ``over_budget``— bool, True iff usage >= budget > 0
+
+    NEVER raises. Returns ``[]`` on any internal failure.
+    """
+    try:
+        channels = load_channels(user_id=user_id)
+    except Exception:
+        return []
+    out: list[dict] = []
+    for ch in channels:
+        try:
+            over, usage, budget = check_budget(ch, user_id=user_id)
+        except Exception:
+            # Defence-in-depth — never let a single bad row break the
+            # whole dashboard query.
+            over, usage, budget = False, 0, 0
+        if budget > 0:
+            pct: Optional[float] = round(usage / budget * 100.0, 1)
+        else:
+            pct = None
+        out.append({
+            "channel_id": ch.channel_id,
+            "name": ch.name,
+            "kind": ch.kind,
+            "budget": budget,
+            "usage": usage,
+            "pct": pct,
+            "over_budget": bool(over),
+        })
+    return out
+
+
+def _bump_budget_suppressed_counter(amount: int = 1) -> None:
+    """Increment the cumulative ``budget_suppressed_counter`` kv_state
+    row. Mirrors the shape of
+    ``auth.notification_prefs._bump_suppressed_counter`` — best-effort
+    telemetry; a write failure is swallowed because the counter is
+    operator instrumentation, not correctness. NEVER raises.
+    """
+    if amount <= 0:
+        return
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_BUDGET_SUPPRESSED_KEY,),
+        ).fetchone()
+        try:
+            current = int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            current = 0
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                (_BUDGET_SUPPRESSED_KEY, str(current + amount), now_iso),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery._bump_budget_suppressed_counter: "
+            f"kv_state write failed: {exc}"
+        )
+
+
+def get_budget_suppressed_count() -> int:
+    """Return the cumulative count of deliveries skipped because their
+    channel's monthly budget was exhausted, since the counter started
+    (or since a manual reset of the kv_state row). Returns ``0`` when
+    the row does not yet exist. NEVER raises."""
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_BUDGET_SUPPRESSED_KEY,),
+        ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["value"])
+        except (TypeError, ValueError):
+            return 0
+    except Exception:
+        return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

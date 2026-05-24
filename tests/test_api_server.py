@@ -1142,6 +1142,120 @@ def test_delete_channel_as_different_user_does_not_delete(server):
         "Bob's DELETE must not have removed Alice's channel"
 
 
+# ─── Per-channel monthly budget endpoints (schema v25) ───────────────────
+
+
+def test_post_channel_persists_monthly_budget(server):
+    """POST /api/v1/channels accepts ``monthly_budget`` in the body and
+    the subsequent GET reflects it. Backwards-compat: omitting the
+    field defaults to 0 (unlimited)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel("ch-budget-post")
+    body["monthly_budget"] = 250
+    r = requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    r2 = requests.get(
+        f"{server}/api/v1/channels", headers=_bearer(token), timeout=5,
+    )
+    listed = {c["channel_id"]: c for c in r2.json()}
+    assert listed["ch-budget-post"]["monthly_budget"] == 250
+
+
+def test_get_channel_usage_returns_zero_on_fresh_channel(server):
+    """GET /api/v1/channels/<id>/usage on a freshly-created channel
+    returns budget=N + usage=0 + pct=0.0 (or None for unlimited)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel("ch-budget-usage")
+    body["monthly_budget"] = 50
+    requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    r = requests.get(
+        f"{server}/api/v1/channels/ch-budget-usage/usage",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["channel_id"] == "ch-budget-usage"
+    assert payload["budget"] == 50
+    assert payload["usage"] == 0
+    assert payload["over_budget"] is False
+
+
+def test_get_channel_usage_unknown_channel_returns_404(server):
+    """An id not in the caller's scope returns 404 — mirrors the
+    anti-enumeration shape used by every other per-id GET."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/channels/no-such-id/usage",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_post_channel_reset_usage_zeros_counter(server):
+    """POST /api/v1/channels/<id>/reset-usage zeros the per-month
+    counter. We bump the counter via the engine helper directly to
+    avoid needing a fake transport on this end-to-end test."""
+    from engine.alert_delivery import (
+        get_channel_usage,
+        increment_channel_usage,
+    )
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel("ch-budget-reset")
+    body["monthly_budget"] = 5
+    requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    # Bump the counter to 3.
+    for _ in range(3):
+        increment_channel_usage("ch-budget-reset", user_id=uid)
+    assert get_channel_usage("ch-budget-reset", user_id=uid) == 3
+    r = requests.post(
+        f"{server}/api/v1/channels/ch-budget-reset/reset-usage",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json()["reset"] is True
+    assert get_channel_usage("ch-budget-reset", user_id=uid) == 0
+
+
+def test_patch_channel_updates_monthly_budget(server):
+    """PATCH /api/v1/channels/<id> with {"monthly_budget": N}
+    mutates the persisted cap. Re-loading the channel via
+    ``load_channels`` reflects the new value."""
+    from engine.alert_delivery import load_channels
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel("ch-budget-patch")
+    body["monthly_budget"] = 10
+    requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    r = requests.patch(
+        f"{server}/api/v1/channels/ch-budget-patch",
+        json={"monthly_budget": 1234},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == {"monthly_budget": 1234}
+    persisted = {c.channel_id: c for c in load_channels(user_id=uid)}
+    assert persisted["ch-budget-patch"].monthly_budget == 1234
+
+
 # ─── POST + DELETE /api/v1/reports/<id>/public ────────────────────────────
 
 

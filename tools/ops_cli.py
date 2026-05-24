@@ -248,6 +248,101 @@ def _cmd_channels_delete(args: argparse.Namespace) -> None:
         print(f"deleted: {args.channel_id}")
 
 
+def _cmd_channels_usage(args: argparse.Namespace) -> None:
+    """Print per-channel monthly delivery usage for ``--user-id``.
+
+    Renders one row per channel: budget, usage, pct, over_budget. Helpful
+    for "is my Slack channel running near its cap?" introspection without
+    opening the UI. JSON mode preserves the full dict shape from
+    :func:`engine.alert_delivery.get_all_channel_usage`.
+    """
+    from engine.alert_delivery import get_all_channel_usage
+
+    rows = get_all_channel_usage(user_id=args.user_id or "")
+    if args.json:
+        _print_json(rows)
+        return
+    if not rows:
+        print("(no channels)")
+        return
+    table_rows = []
+    for u in rows:
+        budget = int(u.get("budget", 0) or 0)
+        usage = int(u.get("usage", 0) or 0)
+        pct = u.get("pct")
+        if budget <= 0:
+            budget_label = "unlimited"
+            pct_label = "—"
+        else:
+            budget_label = str(budget)
+            pct_label = f"{pct:.0f}%" if pct is not None else "—"
+        table_rows.append({
+            "channel_id":  (u.get("channel_id") or "")[:8],
+            "name":        u.get("name", ""),
+            "kind":        u.get("kind", ""),
+            "budget":      budget_label,
+            "usage":       str(usage),
+            "pct":         pct_label,
+            "over_budget": "Y" if u.get("over_budget") else "N",
+        })
+    _print_table(
+        table_rows,
+        columns=["channel_id", "name", "kind", "budget", "usage", "pct", "over_budget"],
+    )
+
+
+def _cmd_channels_reset_usage(args: argparse.Namespace) -> None:
+    """Zero the per-channel monthly counter for ``--user-id``. Used after
+    a noisy week ended early — the channel can resume deliveries before
+    the natural month-boundary reset.
+    """
+    from engine.alert_delivery import reset_channel_usage
+
+    ok = reset_channel_usage(args.channel_id, user_id=args.user_id or "")
+    if args.json:
+        _print_json({"channel_id": args.channel_id, "reset": ok})
+    else:
+        if ok:
+            print(f"reset: {args.channel_id}")
+        else:
+            print(f"reset failed: {args.channel_id}")
+
+
+def _cmd_channels_set_budget(args: argparse.Namespace) -> None:
+    """Update the ``monthly_budget`` column for a single channel. Looks
+    up the channel via :func:`load_channels` (per-user scoping applies),
+    mutates the in-memory dataclass, then re-saves through
+    :func:`save_channel`. The save is an UPSERT so the rest of the row
+    is preserved untouched.
+
+    A missing channel id prints a ``channel not found`` line + raises
+    ``SystemExit(1)`` so a wrapping shell script notices via the exit
+    code. Other handlers in this module already use the same pattern
+    (see ``_cmd_users_create``).
+    """
+    from engine.alert_delivery import load_channels, save_channel
+
+    channels = load_channels(user_id=args.user_id or "")
+    match = next((c for c in channels if c.channel_id == args.channel_id), None)
+    if match is None:
+        if args.json:
+            _print_json({"error": "channel not found", "channel_id": args.channel_id})
+        else:
+            print(f"channel not found: {args.channel_id}")
+        # Soft-exit (non-zero) so a wrapping script notices.
+        raise SystemExit(1)
+    try:
+        new_budget = max(0, int(args.budget))
+    except (TypeError, ValueError):
+        new_budget = 0
+    match.monthly_budget = new_budget
+    save_channel(match, user_id=args.user_id or "")
+    if args.json:
+        _print_json({"channel_id": args.channel_id, "monthly_budget": new_budget})
+    else:
+        print(f"updated: {args.channel_id} monthly_budget={new_budget}")
+
+
 def _cmd_reports_list(args: argparse.Namespace) -> None:
     from utils.report_history import list_reports
 
@@ -1984,6 +2079,51 @@ def _build_parser() -> argparse.ArgumentParser:
     sc2.add_argument("--json", action="store_true")
     sc2.set_defaults(func=_cmd_channels_delete)
 
+    # ── channels usage / reset-usage / set-budget (schema v25) ──────────────
+    # Per-channel monthly delivery budgets. ``usage`` reads the rolling
+    # counter, ``reset-usage`` zeros it for a single channel, and
+    # ``set-budget`` updates the cap on a channel without going through
+    # the UI form. All three accept --user-id so an operator running
+    # against another user's scope can manage budgets without logging in.
+    sc3 = sc.add_parser(
+        "usage",
+        help="Show per-channel monthly delivery usage",
+    )
+    sc3.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = legacy bucket)",
+    )
+    sc3.add_argument("--json", action="store_true")
+    sc3.set_defaults(func=_cmd_channels_usage)
+
+    sc4 = sc.add_parser(
+        "reset-usage",
+        help="Zero the monthly counter for one channel",
+    )
+    sc4.add_argument("channel_id")
+    sc4.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = legacy bucket)",
+    )
+    sc4.add_argument("--json", action="store_true")
+    sc4.set_defaults(func=_cmd_channels_reset_usage)
+
+    sc5 = sc.add_parser(
+        "set-budget",
+        help="Set the monthly delivery budget for one channel (0 = unlimited)",
+    )
+    sc5.add_argument("channel_id")
+    sc5.add_argument(
+        "--budget", type=int, required=True,
+        help="New monthly delivery cap (0 = unlimited)",
+    )
+    sc5.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = legacy bucket)",
+    )
+    sc5.add_argument("--json", action="store_true")
+    sc5.set_defaults(func=_cmd_channels_set_budget)
+
     # ── reports ───────────────────────────────────────────────────────────
     p_rp = sub.add_parser("reports", help="Report-history subcommands")
     sr = p_rp.add_subparsers(dest="subcommand", required=True, metavar="SUB")
@@ -2687,6 +2827,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         handler(args)
         return 0
+    except SystemExit as exc:
+        # Handlers (e.g. ``_cmd_users_create``, ``_cmd_channels_set_budget``)
+        # raise ``SystemExit(N)`` to surface a non-zero exit code without
+        # propagating a traceback. Normalise the code so tests can call
+        # ``main()`` directly without the interpreter actually exiting.
+        return exc.code if isinstance(exc.code, int) else 0
     except Exception as exc:  # noqa: BLE001 — top-level guard by contract
         # Single-line stderr message so a calling shell can capture
         # ``2>&1 | tail -1`` without scrolling through a traceback. The

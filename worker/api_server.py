@@ -418,6 +418,13 @@ _RE_HEALTH = re.compile(r"^/api/v1/health/?$")
 _RE_RULES = re.compile(r"^/api/v1/rules/?$")
 _RE_CHANNELS = re.compile(r"^/api/v1/channels/?$")
 _RE_CHANNEL_ONE = re.compile(r"^/api/v1/channels/([^/]+)/?$")
+# Per-channel monthly budget endpoints (schema v25). The /usage GET
+# returns the current month's counter + budget for one channel;
+# /reset-usage POST zeros the counter for the current month. The
+# patch / set-budget surface re-uses the existing PATCH on the
+# /channels/<id> route (handled by ``_patch_channel``).
+_RE_CHANNEL_USAGE = re.compile(r"^/api/v1/channels/([^/]+)/usage/?$")
+_RE_CHANNEL_RESET_USAGE = re.compile(r"^/api/v1/channels/([^/]+)/reset-usage/?$")
 # OBSERVABILITY endpoints (v3 — mirrors what tab_data_health +
 # tab_operator_overview render, so external monitoring scripts don't
 # have to scrape the Streamlit UI).
@@ -488,7 +495,10 @@ class APIHandler(BaseHTTPRequestHandler):
       DELETE /api/v1/rules                  → _reset_rules          (auth, write)
       GET    /api/v1/channels               → _list_channels        (auth)
       POST   /api/v1/channels               → _save_channel         (auth, write)
+      PATCH  /api/v1/channels/<id>          → _patch_channel        (auth, write)
       DELETE /api/v1/channels/<id>          → _delete_channel       (auth, write)
+      GET    /api/v1/channels/<id>/usage    → _get_channel_usage    (auth)
+      POST   /api/v1/channels/<id>/reset-usage → _reset_channel_usage (auth, write)
       GET    /api/v1/telemetry/llm          → _get_llm_telemetry    (auth)
       GET    /api/v1/telemetry/perf         → _get_perf_telemetry   (auth)
       GET    /api/v1/audit                  → _list_audit           (auth)
@@ -546,6 +556,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_TELEMETRY_LLM, _RE_TELEMETRY_PERF,
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
+                _RE_CHANNEL_USAGE, _RE_CHANNEL_RESET_USAGE,
                 _RE_AUDIT, _RE_AUDIT_EXPORT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
                 _RE_SILENCES, _RE_SILENCE_ONE,
@@ -636,6 +647,16 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_RULES.match(path):
                 self._list_rules(user_id)
                 return
+            # /api/v1/channels/<id>/usage is more specific than the
+            # bare /api/v1/channels — check it BEFORE the list route so
+            # a GET on the usage endpoint doesn't accidentally fall
+            # through. The anchored regexes prevent real overlap; the
+            # ordering keeps intent explicit (same convention used for
+            # /alerts/<id>/annotations vs /alerts).
+            m = _RE_CHANNEL_USAGE.match(path)
+            if m:
+                self._get_channel_usage(user_id, m.group(1))
+                return
             if _RE_CHANNELS.match(path):
                 self._list_channels(user_id)
                 return
@@ -673,6 +694,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             # GET on routes that exist only under write verbs → 405.
             if (_RE_CHANNEL_ONE.match(path)
+                    or _RE_CHANNEL_RESET_USAGE.match(path)
                     or _RE_REPORT_PUBLIC.match(path)
                     or _RE_SCHEDULE_ONE.match(path)
                     or _RE_SILENCE_ONE.match(path)
@@ -729,6 +751,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             if _RE_CHANNELS.match(path):
                 self._save_channel(user_id)
+                return
+            # /api/v1/channels/<id>/reset-usage POST — operator-
+            # triggered manual reset of the monthly counter. Check
+            # BEFORE the bare /channels POST (anchored regex; ordering
+            # for clarity).
+            m = _RE_CHANNEL_RESET_USAGE.match(path)
+            if m:
+                self._reset_channel_usage(user_id, m.group(1))
                 return
             m = _RE_REPORT_PUBLIC.match(path)
             if m:
@@ -869,6 +899,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             if _RE_NOTIFICATION_PREFS.match(path):
                 self._patch_notification_prefs(user_id)
+                return
+            # PATCH /api/v1/channels/<id> — partial update on one
+            # channel. Currently surfaces ``monthly_budget`` (v25) but
+            # is structured to accept any subset of the editable
+            # channel columns going forward.
+            m = _RE_CHANNEL_ONE.match(path)
+            if m:
+                self._patch_channel(user_id, m.group(1))
                 return
 
             if self._path_matches_any_route(path):
@@ -1784,6 +1822,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     "quiet_start":             c.quiet_start,
                     "quiet_end":               c.quiet_end,
                     "quiet_override_critical": c.quiet_override_critical,
+                    "monthly_budget":          int(getattr(c, "monthly_budget", 0) or 0),
                 }
                 for c in channels
             ]
@@ -1819,6 +1858,16 @@ class APIHandler(BaseHTTPRequestHandler):
             # didn't supply fall back to the DeliveryChannel defaults
             # (``digest_mode='immediate'``, ``enabled=True``, …) which
             # matches how the UI persists a fresh row.
+            # ``monthly_budget`` (v25) is optional in the POST body —
+            # fall back to 0 (unlimited / legacy) when absent. A non-
+            # int value or negative number collapses to 0 inside
+            # ``save_channel``; we only need to keep the JSON path
+            # tolerant here.
+            try:
+                budget_raw = body.get("monthly_budget", 0)
+                monthly_budget = max(0, int(budget_raw)) if budget_raw is not None else 0
+            except (TypeError, ValueError):
+                monthly_budget = 0
             channel = DeliveryChannel(
                 channel_id=channel_id,
                 name=str(body.get("name") or ""),
@@ -1831,6 +1880,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 quiet_start=str(body.get("quiet_start") or ""),
                 quiet_end=str(body.get("quiet_end") or ""),
                 quiet_override_critical=bool(body.get("quiet_override_critical", True)),
+                monthly_budget=monthly_budget,
             )
             save_channel(channel, user_id=user_id)
             _send_json(self, HTTPStatus.OK,
@@ -1853,6 +1903,142 @@ class APIHandler(BaseHTTPRequestHandler):
                        {"deleted": True, "channel_id": channel_id})
         except Exception as exc:
             logger.exception(f"api DELETE /channels/<id> crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/channels/<id>/usage (schema v25) ────
+
+    def _get_channel_usage(self, user_id: str, channel_id: str) -> None:
+        """Return the current-month delivery counter + budget for
+        ``channel_id``.
+
+        Payload shape:
+          ``{channel_id, name, kind, budget, usage, pct, over_budget}``
+
+        404 when the channel id isn't in the caller's scope (own +
+        legacy). The 404 path mirrors the silent-no-op DELETE
+        semantics so an attacker can't enumerate channel ids in
+        other users' scopes by status code.
+        """
+        try:
+            from engine.alert_delivery import (
+                get_all_channel_usage,
+                load_channels,
+            )
+            # Walk the caller's scope to confirm the channel exists.
+            # ``get_all_channel_usage`` already filters by user_id but
+            # we want the 404 to be unambiguous when the id is wrong.
+            channels = load_channels(user_id=user_id)
+            match = next(
+                (c for c in channels if c.channel_id == channel_id), None,
+            )
+            if match is None:
+                _send_not_found(self)
+                return
+            rows = get_all_channel_usage(user_id=user_id)
+            usage_row = next(
+                (r for r in rows if r.get("channel_id") == channel_id), None,
+            )
+            if usage_row is None:
+                # Defence-in-depth — load_channels found the row but
+                # get_all_channel_usage somehow didn't. Synthesise a
+                # zero-usage payload so the caller still gets a
+                # consistent shape.
+                usage_row = {
+                    "channel_id":  channel_id,
+                    "name":        match.name,
+                    "kind":        match.kind,
+                    "budget":      int(getattr(match, "monthly_budget", 0) or 0),
+                    "usage":       0,
+                    "pct":         None,
+                    "over_budget": False,
+                }
+            _send_json(self, HTTPStatus.OK, usage_row)
+        except Exception as exc:
+            logger.exception(f"api GET /channels/<id>/usage crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/channels/<id>/reset-usage (v25) ────
+
+    def _reset_channel_usage(self, user_id: str, channel_id: str) -> None:
+        """Zero the current-month counter for ``channel_id``. 404 when
+        the channel id isn't in the caller's scope (own + legacy) —
+        same anti-enumeration shape as the GET usage endpoint.
+        """
+        try:
+            from engine.alert_delivery import (
+                load_channels,
+                reset_channel_usage,
+            )
+            channels = load_channels(user_id=user_id)
+            match = next(
+                (c for c in channels if c.channel_id == channel_id), None,
+            )
+            if match is None:
+                _send_not_found(self)
+                return
+            ok = reset_channel_usage(channel_id, user_id=user_id)
+            _send_json(self, HTTPStatus.OK, {
+                "channel_id": channel_id,
+                "reset": bool(ok),
+            })
+        except Exception as exc:
+            logger.exception(
+                f"api POST /channels/<id>/reset-usage crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoint: PATCH /api/v1/channels/<id> (v25) ───────────────
+
+    def _patch_channel(self, user_id: str, channel_id: str) -> None:
+        """Partial update of a channel. The v25 surface accepts
+        ``monthly_budget`` (the only editable field exposed today);
+        anything else in the body is ignored so a future field add
+        is backwards-compatible with older clients.
+
+        404 when the channel id isn't in the caller's scope.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+            from engine.alert_delivery import load_channels, save_channel
+            channels = load_channels(user_id=user_id)
+            match = next(
+                (c for c in channels if c.channel_id == channel_id), None,
+            )
+            if match is None:
+                _send_not_found(self)
+                return
+            patched: dict = {}
+            if "monthly_budget" in body:
+                try:
+                    new_budget = max(0, int(body["monthly_budget"]))
+                except (TypeError, ValueError):
+                    _send_bad_request(
+                        self, "monthly_budget must be a non-negative integer",
+                    )
+                    return
+                match.monthly_budget = new_budget
+                patched["monthly_budget"] = new_budget
+            if not patched:
+                _send_bad_request(
+                    self, "body must contain at least one editable field",
+                )
+                return
+            save_channel(match, user_id=user_id)
+            _send_json(self, HTTPStatus.OK, {
+                "channel_id": channel_id,
+                "updated": patched,
+            })
+        except Exception as exc:
+            logger.exception(f"api PATCH /channels/<id> crashed: {exc}")
             _send_internal_error(self)
 
     # ── Endpoint: POST /api/v1/reports/<id>/public ────────────────

@@ -1030,6 +1030,49 @@ def _migrate_to_v24(conn: sqlite3.Connection) -> None:
         )
 
 
+# ─── Schema v24 → v25 ─────────────────────────────────────────────────────
+
+def _migrate_to_v25(conn: sqlite3.Connection) -> None:
+    """Add the ``monthly_budget`` column to ``delivery_channels``.
+
+    Operators want to cap noisy channels — e.g. "Slack #trading-desk
+    gets max 200 alerts/month; PagerDuty gets max 50". When the per-
+    channel monthly counter hits the budget, further deliveries are
+    suppressed (and counted in the ``budget_suppressed_counter``
+    kv_state row) until the next calendar month rolls in.
+
+    The column is INTEGER NOT NULL DEFAULT 0. ``0`` is sentinel for
+    "no budget — unlimited" so pre-v25 rows pick up the default and
+    behave EXACTLY as today; the budget machinery only kicks in once
+    an operator opts a channel in by setting a positive cap.
+
+    Per-channel usage is NOT a column on this table — it lives in
+    ``kv_state`` under the key
+    ``channel_usage:<user_id>:<channel_id>:<YYYY-MM>`` so the same
+    row can be reset / inspected per calendar month without bloating
+    the channels table.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v6`` / ``_migrate_to_v13``:
+    SQLite does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so we
+    wrap the statement in try/except and treat
+    ``OperationalError: duplicate column name`` as a no-op. This
+    makes the helper safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE delivery_channels ADD COLUMN "
+            "monthly_budget INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v25 ALTER TABLE failed: {exc}"
+        )
+
+
 # ─── Schema v22 → v23 ─────────────────────────────────────────────────────
 
 def _migrate_to_v23(conn: sqlite3.Connection) -> None:

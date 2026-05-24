@@ -3435,11 +3435,14 @@ def _render_delivery_channels() -> None:
             delete_channel,
             deliver_alert,
             deliver_pending,
+            get_all_channel_usage,
             load_channels,
+            reset_channel_usage,
             save_channel,
             send_test_ping,
         )
         from engine.alert_engine_v2 import _make as _make_alert
+        from state.user_scope import current_user_id
 
         # Per-channel rate limit for the "Send test ping" button. Purely
         # session-scoped (no DB row) — 30s between consecutive pings to
@@ -3535,8 +3538,26 @@ def _render_delivery_channels() -> None:
             st.error(f"Could not load delivery channels: {exc}")
             channels = []
 
+        # Pull per-channel monthly usage rows once so the table cell + the
+        # "Reset usage" button can both reference them without two trips
+        # through ``get_channel_usage``. Best-effort: a backend failure
+        # collapses to an empty dict (every channel renders as "—").
+        try:
+            usage_rows = get_all_channel_usage(user_id=current_user_id() or "")
+        except Exception:
+            usage_rows = []
+        usage_by_id: dict = {}
+        for u in usage_rows or []:
+            try:
+                usage_by_id[u["channel_id"]] = u
+            except Exception:
+                continue
+
         if channels:
-            headers = ["Name", "Kind", "Threshold", "Digest", "Quiet", "Enabled", "Created"]
+            headers = [
+                "Name", "Kind", "Threshold", "Digest", "Quiet",
+                "Budget", "Usage", "Enabled", "Created",
+            ]
             rows = []
             for ch in channels:
                 kind_label = _KIND_LABEL.get(ch.kind, ch.kind)
@@ -3552,6 +3573,33 @@ def _render_delivery_channels() -> None:
                     quiet_cell = _sans(quiet_text, color=C_ACCENT, weight=600)
                 else:
                     quiet_cell = _sans("—", color=C_TEXT3, weight=400)
+                # ── Budget + usage cell ────────────────────────────────────
+                # ``budget == 0`` is the legacy "unlimited" sentinel — render
+                # as an em-dash so an unconfigured channel stays visually
+                # quiet. A positive cap is rendered as ``"usage/budget
+                # (pct%)"``; the cell colour flips to C_LOW (red) once the
+                # cap is exhausted so the operator notices at-a-glance.
+                u = usage_by_id.get(ch.channel_id)
+                budget_val = int(getattr(ch, "monthly_budget", 0) or 0)
+                if budget_val <= 0:
+                    budget_cell = _sans("Unlimited", color=C_TEXT3, weight=400)
+                    usage_cell = _sans("—", color=C_TEXT3, weight=400)
+                else:
+                    usage_val = int((u or {}).get("usage", 0) or 0)
+                    pct = (u or {}).get("pct")
+                    over = bool((u or {}).get("over_budget", False))
+                    budget_cell = _sans(f"{budget_val:,}", color=C_TEXT2, weight=600)
+                    # Over-budget → red. 80%+ → amber. Else neutral. Cheap
+                    # visual triage so an operator scanning the table can
+                    # spot a near-full channel before it suppresses.
+                    usage_color = C_LOW if over else (
+                        C_MOD if (pct is not None and pct >= 80) else C_TEXT2
+                    )
+                    pct_text = f"{pct:.0f}%" if pct is not None else "—"
+                    usage_cell = _sans(
+                        f"{usage_val:,}/{budget_val:,} ({pct_text})",
+                        color=usage_color, weight=700 if over else 600,
+                    )
                 rows.append([
                     _sans(ch.name, color=C_TEXT, weight=700),
                     _sans(kind_label, color=C_TEXT2, weight=600),
@@ -3562,21 +3610,52 @@ def _render_delivery_channels() -> None:
                           color=C_ACCENT if digest_label == "daily" else C_TEXT2,
                           weight=600),
                     quiet_cell,
+                    budget_cell,
+                    usage_cell,
                     _sans("On" if ch.enabled else "Off",
                           color=C_HIGH if ch.enabled else C_TEXT3, weight=600),
                     _mono(_fmt_dt(ch.created_at), color=C_TEXT3, weight=400),
                 ])
             wsj_market_table(headers, rows)
 
-            # Per-channel action buttons — Test ping + Delete laid out side
-            # by side. The test-ping button calls send_test_ping (synthetic
-            # "TEST" alert + delivery_log row); the older "Test {name}"
-            # button manufactured a real alert and is replaced here.
+            # Per-channel action buttons — Test ping + Reset usage + Delete
+            # laid out side by side. The test-ping button calls
+            # send_test_ping (synthetic "TEST" alert, exempt from the
+            # monthly budget); Reset usage zeros the per-channel counter
+            # for the current month so a noisy week doesn't burn a future
+            # month's quota.
             for ch in channels:
-                act_cols = st.columns([1, 1, 4], gap="small")
+                act_cols = st.columns([1, 1, 1, 3], gap="small")
                 with act_cols[0]:
                     _render_test_ping_section(ch)
                 with act_cols[1]:
+                    # Only show the reset button when a budget is configured.
+                    # An "unlimited" channel has no counter to reset (the
+                    # kv_state row may never have been created).
+                    budget_val = int(getattr(ch, "monthly_budget", 0) or 0)
+                    if budget_val > 0 and st.button(
+                        f"🔄 Reset usage ({ch.name})",
+                        key=f"reset_usage_{ch.channel_id}",
+                        use_container_width=True,
+                        help=(
+                            "Zero this channel's monthly counter. Useful "
+                            "after a noisy week ended early."
+                        ),
+                    ):
+                        try:
+                            ok = reset_channel_usage(
+                                ch.channel_id, user_id=current_user_id() or "",
+                            )
+                            if ok:
+                                st.success(
+                                    f"Reset monthly usage for '{ch.name}'."
+                                )
+                                st.rerun()
+                            else:
+                                st.error("Reset failed (kv_state write error).")
+                        except Exception as exc:
+                            st.error(f"Reset failed: {exc}")
+                with act_cols[2]:
                     if st.button(
                         f"🗑 Delete {ch.name}",
                         key=f"del_channel_{ch.channel_id}",
@@ -3689,6 +3768,18 @@ def _render_delivery_channels() -> None:
                     "Leave both blank to disable quiet hours. Wraparound is "
                     "supported (e.g. 22:00 → 07:00 spans midnight)."
                 )
+                ch_monthly_budget = st.number_input(
+                    "Monthly delivery budget (0 = unlimited)",
+                    min_value=0,
+                    max_value=1_000_000,
+                    value=0,
+                    step=10,
+                    help=(
+                        "Cap deliveries to this channel at N alerts per "
+                        "calendar month. 0 disables the cap (legacy "
+                        "behaviour). Test pings are exempt."
+                    ),
+                )
                 ch_enabled = st.checkbox("Enabled", value=True)
                 submitted = st.form_submit_button(
                     "Save channel", use_container_width=True, type="primary",
@@ -3775,6 +3866,7 @@ def _render_delivery_channels() -> None:
                             quiet_start=q_start_clean,
                             quiet_end=q_end_clean,
                             quiet_override_critical=bool(ch_quiet_override),
+                            monthly_budget=int(ch_monthly_budget or 0),
                         ))
                         st.success(f"Saved channel '{ch_name.strip()}'.")
                         if not pd_shape_warning:

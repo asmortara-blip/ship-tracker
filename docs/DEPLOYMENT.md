@@ -347,9 +347,12 @@ Endpoints:
 | `GET    /api/v1/rules`                       | n/a                               | Caller's alert-rule list.                                                                |
 | `POST   /api/v1/rules`                       | `[ {rule}, … ]`                   | Replace caller's rule set. 415 on non-JSON Content-Type, 400 on malformed JSON.          |
 | `DELETE /api/v1/rules`                       | empty                             | Wipe caller's rule set (per-user — does NOT touch other users' rules).                   |
-| `GET    /api/v1/channels`                    | n/a                               | Caller's delivery channels (`target` omitted to avoid leaking webhook URLs).             |
-| `POST   /api/v1/channels`                    | `DeliveryChannel` JSON dict       | Insert/upsert a delivery channel. 400 if `channel_id` missing.                           |
+| `GET    /api/v1/channels`                    | n/a                               | Caller's delivery channels (`target` omitted to avoid leaking webhook URLs). Each row carries `monthly_budget` (v25). |
+| `POST   /api/v1/channels`                    | `DeliveryChannel` JSON dict       | Insert/upsert a delivery channel. Accepts optional `monthly_budget` (v25; 0 = unlimited). 400 if `channel_id` missing. |
+| `PATCH  /api/v1/channels/<channel_id>`       | `{"monthly_budget": N}`           | Partial update on one channel (v25). 404 on cross-user / unknown id. Today exposes `monthly_budget` only; structured for additive fields. |
 | `DELETE /api/v1/channels/<channel_id>`       | empty                             | Delete one channel. Cross-user deletes silently no-op (returns 200; row untouched).      |
+| `GET    /api/v1/channels/<channel_id>/usage` | n/a                               | Per-channel monthly delivery counter (v25): `{channel_id, name, kind, budget, usage, pct, over_budget}`. 404 on cross-user / unknown id. |
+| `POST   /api/v1/channels/<channel_id>/reset-usage` | empty                       | Zero the current month's counter (v25). 404 on cross-user / unknown id.                  |
 | `GET    /api/v1/telemetry/llm`               | n/a                               | LLM-call usage summary, scoped to caller.                                                |
 | `GET    /api/v1/telemetry/perf`              | n/a                               | Render-performance summary (process-wide; still gated by auth).                          |
 | `GET    /api/v1/audit`                       | n/a                               | Caller's audit-log rows. Query: `?limit=100` (max 1000), `?action=login_success` filter. |
@@ -410,6 +413,26 @@ curl -X POST "$BASE/api/v1/channels" \
 curl -X DELETE "$BASE/api/v1/channels/ch-trading-desk" \
      -H "Authorization: Bearer $TOKEN"
 # → {"deleted": true, "channel_id": "ch-trading-desk"}
+
+# PATCH /api/v1/channels/<id> — set the per-channel monthly budget.
+# 0 = unlimited (legacy). Positive cap suppresses further deliveries
+# once usage >= budget for the current calendar month.
+curl -X PATCH "$BASE/api/v1/channels/ch-trading-desk" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"monthly_budget": 200}'
+# → {"channel_id": "ch-trading-desk", "updated": {"monthly_budget": 200}}
+
+# GET /api/v1/channels/<id>/usage — peek the per-channel counter.
+curl "$BASE/api/v1/channels/ch-trading-desk/usage" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"channel_id": "ch-trading-desk", "budget": 200, "usage": 137,
+#    "pct": 68.5, "over_budget": false, "name": "...", "kind": "slack"}
+
+# POST /api/v1/channels/<id>/reset-usage — zero this month's counter.
+curl -X POST "$BASE/api/v1/channels/ch-trading-desk/reset-usage" \
+     -H "Authorization: Bearer $TOKEN"
+# → {"channel_id": "ch-trading-desk", "reset": true}
 
 # POST /api/v1/reports/<id>/public — issue a public-share slug.
 curl -X POST "$BASE/api/v1/reports/<report-uuid>/public" \
@@ -577,7 +600,7 @@ rejected the invocation.
 |------------------------------------|--------------------------------------------------------------------|
 | `status`                           | Schema version + counts (users, alerts, channels).                 |
 | `alerts list / ack / ack-all / metrics` | Recent alerts, acknowledge one or all, aggregate ack metrics. |
-| `channels list / delete`           | Delivery-channel admin.                                            |
+| `channels list / delete / usage / reset-usage / set-budget` | Delivery-channel admin including per-channel monthly delivery budgets (v25). |
 | `reports list / delete / stats`    | Saved-report admin.                                                |
 | `telemetry usage / recent / prune` | LLM call telemetry.                                                |
 | `perf summary`                     | Render-performance summary.                                        |
@@ -747,6 +770,74 @@ python -m tools.ops_cli perf-budgets check
 The same panel surfaces in the Data Health tab under "Tab Performance" >
 "Performance Budgets" — operators can edit a budget inline via the
 "Edit budgets…" expander without leaving the UI.
+
+### Per-channel monthly delivery budgets (v25)
+
+A delivery channel can carry an integer monthly cap on outbound
+alerts — useful for "Slack #trading-desk gets max 200 alerts/month;
+PagerDuty gets max 50" policies that protect against runaway noise.
+The schema is a single `delivery_channels.monthly_budget` column
+(v25). `0` is the legacy "unlimited" sentinel and preserves the
+pre-v25 behaviour for every existing channel until an operator
+opts in by setting a positive cap.
+
+How the cap is enforced:
+
+- `deliver_alert` runs the budget check AFTER `channel.enabled`,
+  per-channel severity threshold, per-channel quiet hours, AND the
+  per-user notification-prefs gate. So the counter only reflects
+  deliveries the operator actually intended to send.
+- When the per-user-per-channel-per-month counter is at or above
+  the cap, the dispatch is skipped + a `budget_suppressed_counter`
+  kv_state row is bumped. The `DeliveryResult` carries
+  `success=False` + `status_code=429` so the caller can distinguish
+  "throttled by budget" from "transport failure".
+- The counter ONLY increments on a SUCCESSFUL delivery. A 5xx
+  / timeout / SMTP outage does NOT burn the budget.
+- `send_test_ping` (the operator "verify this channel works"
+  button) is EXEMPT from the budget — verification must not
+  consume production quota.
+
+Counter storage uses a per-month kv_state key
+`channel_usage:<user_id>:<channel_id>:<YYYY-MM>` so the monthly
+rollover is implicit (each new month writes a fresh row) and an
+operator-triggered reset is a single DELETE. Per-user scoping is
+enforced by the `user_id` segment of the key — alice's saturated
+counter does not affect bob's deliveries on the same channel.
+
+```bash
+# Show every channel's current monthly counter + budget + pct.
+python -m tools.ops_cli channels usage --user-id <id>
+
+# Zero one channel's counter for the current month (operator-
+# triggered reset after a noisy week ended early).
+python -m tools.ops_cli channels reset-usage <channel_id> --user-id <id>
+
+# Set / change the monthly cap on one channel. 0 = unlimited.
+python -m tools.ops_cli channels set-budget <channel_id> \
+    --budget 200 --user-id <id>
+```
+
+API surface (mirrors the CLI):
+
+- `GET /api/v1/channels/<id>/usage` — read the current month's
+  counter + budget for one channel.
+- `POST /api/v1/channels/<id>/reset-usage` — zero the counter.
+- `PATCH /api/v1/channels/<id>` with `{"monthly_budget": N}` —
+  update the cap. (`POST /api/v1/channels` also accepts the field
+  on create.)
+- `GET /api/v1/channels` returns each row with its `monthly_budget`
+  alongside the existing fields.
+
+UI surface (Alert Center → Delivery Channels):
+
+- The channels table gains "Budget" + "Usage" columns. Usage cell
+  flips amber at 80% and red once the cap is exhausted so an
+  operator scanning the table can triage at-a-glance.
+- Each channel with a positive budget gets a "Reset usage" button
+  next to its "Send test ping" / "Delete" buttons.
+- The Add Channel form has a "Monthly delivery budget" input
+  (defaults to 0 — unlimited).
 
 ### Incident correlation
 
@@ -1424,6 +1515,99 @@ cron's email-on-failure behaviour:
 
 Pipe the JSON into your monitoring system (jq + a webhook) if you
 want alerts on a non-zero `failed` count.
+
+### `tools.changelog_gen` — Changelog regeneration
+
+`CHANGELOG.md` at the repo root is auto-generated from `git log` and
+should NEVER be hand-edited. The header banner (`DO NOT EDIT MANUALLY`)
+exists for this reason — any local edits will be silently lost on the
+next regeneration. Regenerate after any sizeable batch of commits, or
+let the cron job below handle it.
+
+```bash
+# Default — writes CHANGELOG.md covering the last 90 days, grouped by date
+python -m tools.changelog_cli
+
+# Absolute date cutoff
+python -m tools.changelog_cli --since 2026-01-01
+
+# Relative shorthand — d / w / m / y
+python -m tools.changelog_cli --since 30d
+python -m tools.changelog_cli --since 12w
+
+# Upper-bound cutoff (everything before this date)
+python -m tools.changelog_cli --until 2026-05-01
+
+# Cap on commit count
+python -m tools.changelog_cli --limit 200
+
+# Group by category instead of date (Features → Fixes → UI → …)
+python -m tools.changelog_cli --group-by category
+
+# Flat layout — one bullet per commit, newest-first, no sub-sections
+python -m tools.changelog_cli --group-by flat
+
+# Alternative output destination
+python -m tools.changelog_cli --out docs/CHANGELOG.md
+
+# Print to stdout (no file written) — handy for piping / previewing
+python -m tools.changelog_cli --print | head -40
+```
+
+Subject-prefix → category mapping:
+
+| Prefix              | Category bucket |
+| ------------------- | --------------- |
+| `feat:` / `feature:`| `feature`       |
+| `fix:` / `bug:`     | `fix`           |
+| `ui:` / `ui(scope):`| `ui`            |
+| `engine:`           | `engine`        |
+| `api:` / `ingress:` | `api`           |
+| `ops:` / `auth:` / `worker:` / `scheduler:` | `ops` |
+| `tools:`            | `tools`         |
+| `docs:`             | `docs`          |
+| `test:` / `tests:`  | `test`          |
+| (anything else)     | `other`         |
+
+For combined prefixes (`engine+ui: combined change`) the FIRST token
+wins, so the example above lands in `engine`. Merge commits are
+skipped (`git log --no-merges`), and `Co-Authored-By:` trailers are
+stripped from the per-commit summary line.
+
+Exit codes:
+
+* `0` — the changelog was rendered (file written, or `--print` flushed).
+* `1` — failed to write the output file (printed to stderr).
+* `2` — argparse rejected the invocation.
+
+#### Recommended cron entry
+
+Regenerate every night at 04:15 server time so the next morning's
+review has yesterday's commits included. Skip the regeneration on a
+shallow clone — if the repo only has a partial history, the rendered
+window will be incomplete.
+
+```cron
+# Nightly CHANGELOG regeneration (last 90 days, grouped by date)
+15 4 * * * cd /path/to/ship && /usr/bin/python3 -m tools.changelog_cli --since 90d >> logs/changelog.log 2>&1
+```
+
+The regeneration is fast — well under a second on a repo with a few
+thousand commits — so running it from a post-receive hook on the
+deployment server is also fine. If you'd rather regenerate only on
+pushes to the default branch, use the snippet below in
+`.git/hooks/post-receive`:
+
+```bash
+#!/usr/bin/env bash
+while read _ _ ref; do
+  if [ "$ref" = "refs/heads/main" ]; then
+    cd /path/to/ship && /usr/bin/python3 -m tools.changelog_cli --since 90d
+    git -C /path/to/ship add CHANGELOG.md
+    git -C /path/to/ship commit --no-verify -m "docs: regenerate CHANGELOG.md" || true
+  fi
+done
+```
 
 ### `utils.bulk_export` — wider-scope dataset export
 

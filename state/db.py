@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 24
+SCHEMA_VERSION: int = 25
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1361,6 +1361,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v24(conn)
     except Exception as exc:
         logger.warning(f"state.db: v24 column adds skipped: {exc}")
+    # v25 column add — same idempotent ALTER-TABLE-in-try/except pattern
+    # as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18 / v19. Adds the
+    # monthly_budget column to delivery_channels so operators can cap
+    # noisy channels (e.g. "this Slack channel gets max 200 alerts/
+    # month"). 0 means unlimited, which preserves the legacy behaviour.
+    # Safe to run on every open (fresh DB: adds the column; existing
+    # DB: no-op when the column already exists).
+    try:
+        from state.migrations import _migrate_to_v25
+        _migrate_to_v25(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v25 column add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1670,6 +1682,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v24(conn)
         except Exception as exc:
             logger.warning(f"state.db: v24 migration skipped: {exc}")
+
+    # Migration 24 → 25: add the delivery_channels.monthly_budget column
+    # so operators can cap noisy channels with a per-channel monthly
+    # alert budget. 0 (the default) means unlimited and preserves the
+    # legacy behaviour exactly. Same idempotent ALTER-TABLE-in-try/
+    # except pattern as v4 / v5 / v6 / v13 / v14 / v16 / v17 / v18 /
+    # v19 — the helper is already invoked unconditionally above; this
+    # branch keeps the version-step ladder explicit.
+    if current < 25:
+        try:
+            from state.migrations import _migrate_to_v25
+            _migrate_to_v25(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v25 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
