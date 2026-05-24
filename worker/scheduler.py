@@ -465,6 +465,39 @@ def run_health_prune_job(retention_days: int = 30) -> int:
         return 0
 
 
+def run_source_health_alert_job() -> dict:
+    """Check the current source-health snapshot and auto-fire alerts for
+    degraded feeds.
+
+    Thin wrapper around ``engine.source_health_alerts.check_source_health_and_fire``
+    that adds logging and shields the caller from any exception. Designed
+    to run frequently (every 5 minutes from the cron job loop) so a feed
+    going red is surfaced as an alert within minutes rather than waiting
+    for the daily worker pass.
+
+    The orchestrator already swallows per-source failures internally —
+    this wrapper is belt-and-braces: even if the orchestrator itself
+    raises, the worker continues. Returns the count dict
+    ``{"fired": N, "skipped_cooldown": N, "errored": N}`` (or all zeros
+    on a top-level exception).
+
+    Never raises — a check failure must never block any sibling job.
+    """
+    try:
+        from engine.source_health_alerts import check_source_health_and_fire
+
+        counts = check_source_health_and_fire()
+        logger.info(
+            f"run_source_health_alert_job: fired={counts.get('fired', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)} "
+            f"errored={counts.get('errored', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_source_health_alert_job: failed: {exc}")
+        return {"fired": 0, "skipped_cooldown": 0, "errored": 0}
+
+
 def run_bulk_export_prune_job(keep_n: int = 5) -> int:
     """Prune ``cache/exports/*.tar.gz`` down to the newest ``keep_n``.
 
@@ -848,6 +881,15 @@ def main(argv: Optional[list] = None) -> int:
         run_health_prune_job()
     except Exception as exc:
         logger.warning(f"main: health prune step failed: {exc}")
+
+    # Source-health auto-alerting. Runs AFTER the health ping so the
+    # alerter classifies the freshest snapshot. The orchestrator
+    # already swallows per-source errors, the wrapper swallows the
+    # top-level — same belt-and-braces guard.
+    try:
+        run_source_health_alert_job()
+    except Exception as exc:
+        logger.warning(f"main: source health alert step failed: {exc}")
 
     # Bulk-export archive retention. Runs AFTER the health prune so a
     # bulk-export taken on the same tick (if a future cron triggers one)

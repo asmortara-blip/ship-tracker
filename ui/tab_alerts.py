@@ -1698,6 +1698,147 @@ def _render_rule_template_panel() -> None:
         # operational is preferable to a red banner.
 
 
+def _render_rules_yaml_panel() -> None:
+    """Render the Export / Import (YAML) expander.
+
+    Three controls inside one collapsed expander:
+
+    * Download button — serialise the current rules to YAML and offer
+      the file via ``st.download_button``. No round-trip through the
+      engine; reads from ``st.session_state["user_alerts"]`` which the
+      rule editor already keeps in sync.
+    * Paste-to-import text area + Validate button — runs the YAML
+      through ``yaml_to_rules`` and surfaces the parsed rules + any
+      warnings WITHOUT saving. Lets the operator preview the import
+      result and catch a malformed paste before pulling the trigger.
+    * Import button — saves the parsed rules via ``engine.save_rules``
+      (overwriting the user's set), updates session state, and reruns
+      so the rule editor below picks up the new shape.
+
+    Wrapped in try/except + logger.exception so a panel failure does
+    not break the rest of the rules manager.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from engine.alert_engine_v2 import save_rules as engine_save_rules
+        from tools.rules_yaml import rules_to_yaml, yaml_to_rules
+
+        with st.expander(
+            "📥 Export / Import rules (YAML)",
+            expanded=False,
+        ):
+            rules = st.session_state.get("user_alerts") or []
+            yaml_text = rules_to_yaml(rules)
+
+            # File-name carries a UTC timestamp so two sequential
+            # downloads don't collide in the operator's Downloads
+            # folder. Suffix is ``.yaml`` so editor syntax highlighting
+            # kicks in on most setups.
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            st.download_button(
+                "Download rules.yaml",
+                data=yaml_text,
+                file_name=f"rules-{ts}.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="rules_yaml_download_btn",
+            )
+
+            st.markdown(
+                f'<div style="font-size:0.72rem;color:{C_TEXT3};'
+                f'margin-top:12px;margin-bottom:6px">'
+                f'Paste a rules YAML here to validate + import. Validate '
+                f'previews the parsed rules and warnings without writing; '
+                f'Import overwrites the persisted rule set.</div>',
+                unsafe_allow_html=True,
+            )
+
+            pasted = st.text_area(
+                "Paste YAML to import",
+                value="",
+                height=200,
+                key="rules_yaml_paste_area",
+                placeholder="schema_version: 1\nrules:\n  - rule_id: ...",
+                label_visibility="collapsed",
+            )
+
+            btn_cols = st.columns([1, 1, 4], gap="small")
+            with btn_cols[0]:
+                validate_clicked = st.button(
+                    "Validate",
+                    key="rules_yaml_validate_btn",
+                    use_container_width=True,
+                )
+            with btn_cols[1]:
+                import_clicked = st.button(
+                    "Import",
+                    key="rules_yaml_import_btn",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if validate_clicked or import_clicked:
+                if not pasted.strip():
+                    st.warning("Paste a YAML document before clicking.")
+                    return
+                parsed, warnings = yaml_to_rules(pasted)
+                # Surface warnings first so the operator sees defaults /
+                # dropped fields before the import-success banner.
+                for w in warnings:
+                    st.warning(f"YAML: {w}")
+
+                if not parsed:
+                    st.error(
+                        "No importable rules found. See warnings above for "
+                        "the reason; nothing was saved."
+                    )
+                    return
+
+                if validate_clicked and not import_clicked:
+                    st.success(
+                        f"YAML parses cleanly — {len(parsed)} rule"
+                        f"{'s' if len(parsed) != 1 else ''} ready to import. "
+                        f"Click Import to overwrite the current set."
+                    )
+                    # Show a compact preview so the operator can sanity-
+                    # check what they're about to save.
+                    preview_rows = [
+                        {
+                            "rule_id": r.get("rule_id", "?"),
+                            "name": r.get("name", "?"),
+                            "metric": r.get("metric", "?"),
+                            "severity": r.get("severity", "?"),
+                        }
+                        for r in parsed
+                    ]
+                    st.dataframe(
+                        preview_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    return
+
+                # Import path — save + replace session state + rerun so
+                # the rule editor picks up the new shape.
+                try:
+                    engine_save_rules(parsed)
+                    st.session_state["user_alerts"] = parsed
+                    st.success(
+                        f"Imported {len(parsed)} rule"
+                        f"{'s' if len(parsed) != 1 else ''}. "
+                        f"The rule editor below shows the new set."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Import save failed: {exc}")
+
+    except Exception:
+        logger.exception("rules YAML panel render failed")
+        # Supplementary panel; silent on failure so the rest of the
+        # rules manager stays operational.
+
+
 def _render_rules_manager() -> None:
     """Full rule editor: per-rule expander with editable fields + save / delete
     per rule, plus top-level "Save All to Disk" and "Reset to Defaults" actions.
@@ -1766,6 +1907,14 @@ def _render_rules_manager() -> None:
                 f'<b>Save All to Disk</b>. Per-rule Save buttons persist immediately.</div>',
                 unsafe_allow_html=True,
             )
+
+        # ── Export / Import (config-as-code) ───────────────────────────────
+        # Collapsed expander so it does not crowd the main toolbar, but
+        # reachable in one click. Mirrors the `python -m tools.ops_cli
+        # rules export/import` surface — the operator can download the
+        # rule set, edit it in git, and paste it back here without
+        # having to drop to a shell.
+        _render_rules_yaml_panel()
 
         # ── Summary read-only table ────────────────────────────────────────
         headers = ["Rule Name", "Metric", "Threshold", "Condition", "Severity", "Email"]

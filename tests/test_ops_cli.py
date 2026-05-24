@@ -271,6 +271,75 @@ def test_health_summary_json(capsys) -> None:
     assert "by_source" in payload
 
 
+# ─── health-alerts ───────────────────────────────────────────────────────
+
+def test_health_alerts_status_defaults(capsys) -> None:
+    """`health-alerts status` reports the default config when no row
+    has been saved yet."""
+    code, out, _ = _run(["health-alerts", "status", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["enabled"] is True
+    assert payload["red_threshold_minutes"] == 60
+    assert payload["yellow_threshold_minutes"] == 30
+    assert payload["cooldown_minutes"] == 120
+    assert payload["recent_fires_last_hour"] == 0
+
+
+def test_health_alerts_disable_then_status(capsys) -> None:
+    """`disable` persists enabled=False; `status` reads it back."""
+    code, _, _ = _run(["health-alerts", "disable", "--json"], capsys)
+    assert code == 0
+    code, out, _ = _run(["health-alerts", "status", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["enabled"] is False
+
+
+def test_health_alerts_enable_then_status(capsys) -> None:
+    """`enable` flips it back on after disable."""
+    _run(["health-alerts", "disable"], capsys)
+    code, _, _ = _run(["health-alerts", "enable", "--json"], capsys)
+    assert code == 0
+    code, out, _ = _run(["health-alerts", "status", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["enabled"] is True
+
+
+def test_health_alerts_run_once_returns_count_dict(monkeypatch, capsys) -> None:
+    """`run-once` invokes the orchestrator and prints the count dict."""
+    from engine import source_health
+
+    # Force one degraded source so the orchestrator fires.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    summary = {
+        "window_hours": 24,
+        "total_pings":  1,
+        "by_source": {
+            "fred": {
+                "count":           1,
+                "up_count":        0,
+                "degraded_count":  1,
+                "down_count":      0,
+                "avg_duration_ms": 100.0,
+                "last_status":     "degraded",
+                "last_started_at": now_iso,
+            },
+        },
+        "current_outages": [],
+    }
+    monkeypatch.setattr(
+        source_health, "get_health_summary", lambda window_hours=24: summary
+    )
+
+    code, out, _ = _run(["health-alerts", "run-once", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert set(payload.keys()) == {"fired", "skipped_cooldown", "errored"}
+    assert payload["fired"] == 1
+
+
 # ─── users ───────────────────────────────────────────────────────────────
 
 def test_users_list_empty(capsys) -> None:
@@ -960,3 +1029,121 @@ def test_invite_revoke_consumed_returns_false(capsys) -> None:
     )
     assert code == 0
     assert json.loads(out)["revoked"] is False
+
+
+# ─── rules — config-as-code (feat/rules-as-code) ─────────────────────────
+
+def _mk_rule(rule_id: str = "r1", name: str = "Test Rule") -> dict:
+    """Build a minimal persisted-shape rule dict for the rules-CLI
+    tests. Mirrors what the UI/template_to_alert_rule projection
+    produces, so save_rules accepts it as-is and load_rules round-
+    trips through the rules-YAML emitter."""
+    return {
+        "rule_id": rule_id,
+        "id": rule_id,
+        "name": name,
+        "metric": "bdi",
+        "threshold": 5.0,
+        "condition": "Above",
+        "severity": "HIGH",
+        "email_notify": False,
+        "enabled": True,
+        "target_channels": [],
+        "cooldown_minutes": 0,
+        "flap_detection_enabled": False,
+        "flap_window_minutes": 30,
+        "flap_threshold_crossings": 5,
+    }
+
+
+def test_rules_export_to_stdout(capsys) -> None:
+    """rules export writes the user's rules as YAML to stdout. The
+    output must contain the schema header + a recognisable rule_id."""
+    from engine.alert_engine_v2 import save_rules
+
+    save_rules([_mk_rule("bdi-spike")])
+    code, out, _ = _run(["rules", "export"], capsys)
+    assert code == 0
+    assert "schema_version: 1" in out
+    assert "bdi-spike" in out
+
+
+def test_rules_export_to_file_writes_path(capsys, tmp_path) -> None:
+    """rules export --out FILE writes the YAML to disk and prints the
+    path on stdout — the YAML itself is on disk so a calling shell can
+    pipe / git-add it."""
+    from engine.alert_engine_v2 import save_rules
+
+    save_rules([_mk_rule("bdi-spike", "BDI spike")])
+    out_file = tmp_path / "rules.yaml"
+    code, out, _ = _run(["rules", "export", "--out", str(out_file)], capsys)
+    assert code == 0
+    assert str(out_file) in out
+    assert out_file.exists()
+    text = out_file.read_text()
+    assert "bdi-spike" in text
+
+
+def test_rules_import_persists_rules(capsys, tmp_path) -> None:
+    """rules import --in FILE parses the YAML and saves via save_rules.
+    A round-trip through load_rules must surface the rule_id we wrote."""
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_yaml import rules_to_yaml
+
+    in_file = tmp_path / "import.yaml"
+    in_file.write_text(rules_to_yaml([_mk_rule("imported-rule")]))
+    code, out, _ = _run(["rules", "import", "--in", str(in_file)], capsys)
+    assert code == 0
+    assert "saved 1 rules" in out
+    persisted = load_rules()
+    rule_ids = [r.get("rule_id") or r.get("id") for r in persisted]
+    assert "imported-rule" in rule_ids
+
+
+def test_rules_import_dry_run_does_not_persist(capsys, tmp_path) -> None:
+    """--dry-run must NOT call save_rules — the DB stays empty after a
+    dry-run import. Operator should be able to preview safely."""
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_yaml import rules_to_yaml
+
+    in_file = tmp_path / "preview.yaml"
+    in_file.write_text(rules_to_yaml([_mk_rule("preview-rule")]))
+    code, out, _ = _run(
+        ["rules", "import", "--in", str(in_file), "--dry-run"], capsys
+    )
+    assert code == 0
+    assert "dry-run" in out
+    assert "preview-rule" in out
+    # The DB must still be empty.
+    assert load_rules() == []
+
+
+def test_rules_diff_shows_added_and_removed(capsys, tmp_path) -> None:
+    """diff vs the current set: an import file containing a NEW rule_id
+    that's not in the DB produces an added line; a current rule_id that
+    is NOT in the file produces a removed line."""
+    from engine.alert_engine_v2 import save_rules
+    from tools.rules_yaml import rules_to_yaml
+
+    save_rules([_mk_rule("existing-rule", "Existing")])
+    in_file = tmp_path / "new.yaml"
+    in_file.write_text(rules_to_yaml([_mk_rule("brand-new-rule", "New")]))
+    code, out, _ = _run(
+        ["rules", "diff", "--in", str(in_file)], capsys
+    )
+    assert code == 0
+    # Unified-diff format: removed lines prefixed '-', added '+'.
+    assert "existing-rule" in out
+    assert "brand-new-rule" in out
+
+
+def test_rules_import_malformed_yaml_exits_1(capsys, tmp_path) -> None:
+    """A YAML file with no salvageable content → exit 1 + stderr
+    message. The CLI must not crash with a traceback — its contract
+    promises a one-line stderr error and exit-1 on every handler
+    failure mode."""
+    in_file = tmp_path / "bad.yaml"
+    in_file.write_text("    bad_indent_at_top_level: 1\n")
+    code, _, err = _run(["rules", "import", "--in", str(in_file)], capsys)
+    assert code == 1
+    assert "error:" in err.lower()

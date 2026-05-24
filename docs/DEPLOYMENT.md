@@ -497,6 +497,52 @@ The response shape is identical to `webhook_listener`'s `/health`
 (see [GET /health — liveness + system probe](#get-health--liveness--system-probe)
 above) so a single probe template works for both ports.
 
+### Per-user rate limiting
+
+Every authenticated endpoint is gated by an in-process **token-bucket
+rate limiter** keyed on the `user_id` resolved from the bearer token.
+A misbehaving client (or a leaked token) gets throttled with a `429
+Too Many Requests` response rather than starving the worker of CPU
+or filling SQLite with audit-log churn.
+
+**Defaults:** capacity `120` (burst size) + refill `2.0` tokens/sec
+(steady-state). A fresh user can fire 120 requests back-to-back, then
+sustain 2 req/sec indefinitely.
+
+**Health endpoint is exempt.** `GET /api/v1/health` is short-circuited
+*before* the auth check, so load balancers can probe it in a tight
+loop without ever tripping the limiter.
+
+**Tuning via env vars** (read on every request, so updates take effect
+on process restart):
+
+| Variable                    | Default | Meaning                                |
+|-----------------------------|---------|----------------------------------------|
+| `RATE_LIMIT_CAPACITY`       | `120`   | Maximum burst (tokens in a full bucket).|
+| `RATE_LIMIT_REFILL_PER_SEC` | `2.0`   | Steady-state refill rate (tokens/sec). |
+
+Malformed values (non-int, ≤ 0) silently fall back to the default —
+a typo in your `.env` will not crash the server at request time.
+
+**429 response shape:**
+
+```json
+{"error": "rate_limited", "retry_after_seconds": 1}
+```
+
+The standard **`Retry-After`** header (RFC 7231 §7.1.3, integer
+seconds) is also set so off-the-shelf HTTP clients can back off
+without parsing the body. The value is rounded UP and floored at `1`
+— `Retry-After: 0` would contradict the 429.
+
+**Scope:** in-process only. Each worker container maintains its own
+bucket dict, so horizontally scaling the API behind a round-robin
+load balancer will let a single user effectively get `N × capacity`
+burst headroom across `N` workers. If that becomes a problem, swap
+the in-process limiter for a Redis-backed one — `auth.rate_limit`'s
+public API (`check_rate_limit(user_id, *, capacity, refill_per_sec)`)
+is stable across that swap.
+
 ## Operator CLI (`python -m tools.ops_cli`)
 
 Every common admin action the Streamlit UI exposes is also reachable
@@ -516,6 +562,7 @@ rejected the invocation.
 | `telemetry usage / recent / prune` | LLM call telemetry.                                                |
 | `perf summary`                     | Render-performance summary.                                        |
 | `health summary / ping`            | Data-source health.                                                |
+| `health-alerts status / enable / disable / run-once` | Auto-fire ShippingAlerts when a data source goes red / yellow. |
 | `users list / create`              | User-account admin.                                                |
 | `tokens list / create / revoke`    | Per-user API-token admin.                                          |
 | `export`                           | Build a bulk-state tar.gz (see `Backup / Restore` below).          |
@@ -700,6 +747,130 @@ python -m tools.ops_cli schedules delete <schedule_id> --user-id <id>
 
 Schedule timestamps are stored as ISO-8601 UTC. The UI displays them
 in the user's local timezone via `utils.tz`.
+
+### Source-health auto-alerting
+
+`engine.source_health` collects per-feed liveness pings on every worker
+tick. When a probe comes back `down`, `degraded`, or simply hasn't
+returned at all in N minutes, the operator should know without scanning
+the data-health panel. The `health-alerts` subcommand exposes the
+auto-alerting controls; the worker's
+`run_source_health_alert_job` invokes the same logic on its periodic
+pass (right after `run_health_ping_job` / `run_health_prune_job`, before
+the bulk-export prune), so a degraded feed surfaces as a CRITICAL or
+HIGH ShippingAlert within one scheduler tick.
+
+```bash
+# Show current config + fire counts in the last hour.
+python -m tools.ops_cli health-alerts status
+#   enabled                  : True
+#   red_threshold_minutes    : 60
+#   yellow_threshold_minutes : 30
+#   cooldown_minutes         : 120
+#   recent_fires_last_hour   : 0
+
+# Disable during planned maintenance (operator doesn't want the noise).
+python -m tools.ops_cli health-alerts disable
+
+# Re-enable.
+python -m tools.ops_cli health-alerts enable
+
+# Fire the orchestrator NOW (useful for testing thresholds without
+# waiting for the next worker tick). Prints the count dict
+# {"fired": N, "skipped_cooldown": N, "errored": N}.
+python -m tools.ops_cli health-alerts run-once --json
+```
+
+Severity rules:
+
+* `last_status='down'` → **CRITICAL** (status alone is enough — a
+  freshly-failed feed is still broken).
+* `last_started_at` older than `red_threshold_minutes` → **CRITICAL**
+  (even an `up` source counts as red when its last ping is too stale
+  to be evidence of current health).
+* `last_status='degraded'` → **HIGH**.
+* `last_started_at` older than `yellow_threshold_minutes` (but inside
+  red) → **HIGH**.
+* Otherwise → no alert.
+
+Recovery (a source going red → green) intentionally does NOT fire an
+alert — the operator already sees the green badge in the UI, and an
+"all clear" notification would just fight the cooldown.
+
+Cooldown is per-source-per-user, stored as an ISO timestamp in
+`kv_state`. The cooldown prevents a flapping feed from filling the
+alert table: at most one alert per source per `cooldown_minutes`
+window. Different sources are independent; different users are
+independent (alice's cooldown on `fred` doesn't suppress bob's alert
+on `fred`).
+
+Config + cooldown both ride the existing `kv_state` table — no schema
+bump. The Streamlit data-health tab exposes the same knobs (red /
+yellow / cooldown thresholds, master enable / disable, "fired N alerts
+in the last hour" status line) so a non-shell operator can manage it
+from the UI.
+
+### Alert rules — config-as-code (YAML round-trip)
+
+Operators commonly want to version their alert-rule sets in git and
+ship them to colleagues without copy-pasting from the UI. The `rules`
+subcommand exports the persisted set to YAML, imports a YAML file back
+(replacing the user's set), and shows a unified diff between a YAML
+file and the live rule set.
+
+The wire format is a small YAML subset — `schema_version`, then a list
+of rules with `rule_id`, `name`, `metric`, `threshold_pct`, `severity`
+(CRITICAL/HIGH/MEDIUM/LOW only), `condition`, `enabled`,
+`email_notify`, `target_channels`, `cooldown_minutes`, plus the v19
+`flap_*` fields. PyYAML is an optional dependency; a hand-rolled parser
+ships in `tools/rules_yaml.py` so the round-trip works on every
+deployment regardless of PyYAML presence.
+
+```bash
+# Export the current user's rules to stdout (YAML).
+python -m tools.ops_cli rules export --user-id <id>
+
+# Export to a file (useful for committing into git).
+python -m tools.ops_cli rules export --user-id <id> --out config/rules.yaml
+
+# Diff a YAML file against the live rule set — shows what an import
+# would change without writing anything.
+python -m tools.ops_cli rules diff --user-id <id> --in config/rules.yaml
+
+# Dry-run the import — surfaces parsed rules + any warnings (unknown
+# fields, missing fields defaulted, severities rejected) without
+# touching the DB.
+python -m tools.ops_cli rules import --user-id <id> --in config/rules.yaml --dry-run
+
+# Apply the import — OVERWRITES the user's rule set with the contents
+# of the YAML file. Audit-logged via auth.audit.record_audit so the
+# replace shows up alongside UI saves.
+python -m tools.ops_cli rules import --user-id <id> --in config/rules.yaml
+```
+
+The UI surfaces the same export/import in `Alert Center → Rules
+Management → 📥 Export / Import rules (YAML)` (collapsed expander). The
+Validate button gives the operator a preview + warnings without
+saving; Import overwrites + reruns.
+
+**Recommended git workflow:**
+
+1. Author / edit rules in the UI for the rapid-iteration phase.
+2. Once the rule set stabilises, export to `config/rules.yaml` in your
+   deployment repo: `python -m tools.ops_cli rules export --user-id <id>
+   --out config/rules.yaml`. Commit it.
+3. On a new deployment (or a colleague's machine), restore the set
+   with: `python -m tools.ops_cli rules import --user-id <id> --in
+   config/rules.yaml`.
+4. Before shipping a rule-set change, run `python -m tools.ops_cli
+   rules diff --user-id <id> --in config/rules.yaml` to confirm the
+   live set matches the committed file — drift between the two is a
+   process-failure signal.
+
+Warnings are non-fatal hints (unknown field ignored, missing field
+defaulted to N, severity rejected) and are surfaced to the operator
+through stdout (CLI) or `st.warning` (UI). They never carry sensitive
+data — only field names and the canonical replacement value.
 
 ## Backup / Restore
 

@@ -2001,9 +2001,105 @@ def _render_source_health() -> None:
             unsafe_allow_html=True,
         )
 
+        _render_source_health_alert_config()
+
     except Exception as exc:
         logger.exception(f"Source health panel render error: {exc}")
         st.error("Source health panel unavailable.")
+
+
+def _render_source_health_alert_config() -> None:
+    """Render the auto-alerting sub-expander inside the source-health panel.
+
+    Lets the operator toggle whether auto-alerting is on, tune the
+    red/yellow staleness thresholds + per-source cooldown, and see how
+    many auto-alerts have fired in the last hour. Everything is
+    persisted via ``engine.source_health_alerts.save_config`` so the
+    next scheduler tick picks up the change without a restart.
+    """
+    try:
+        from engine.source_health_alerts import (
+            SourceHealthAlertConfig,
+            get_recent_fire_count,
+            load_config,
+            save_config,
+        )
+
+        cfg = load_config()
+        recent = get_recent_fire_count()
+        status_word = "ENABLED" if cfg.enabled else "DISABLED"
+        status_color = C_HIGH if cfg.enabled else C_TEXT3
+
+        st.markdown(
+            f'<div style="font-size:0.78rem;color:{C_TEXT2};margin:8px 0">'
+            f'Auto-alerting: <b style="color:{status_color}">{status_word}</b>'
+            f' — fired <b style="color:{C_TEXT}">{recent}</b> alert(s) in the last hour.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("Auto-alerting settings", expanded=False):
+            st.caption(
+                "When enabled, the scheduler auto-fires CRITICAL/HIGH "
+                "ShippingAlerts for sources whose latest ping is "
+                "missing, degraded, or stale beyond the thresholds "
+                "below. Per-source cooldown stops a flapping feed "
+                "from filling the alert table."
+            )
+
+            enabled = st.checkbox(
+                "Auto-alerting enabled",
+                value=bool(cfg.enabled),
+                key="src_health_alert_enabled",
+            )
+            c1, c2, c3 = st.columns(3, gap="small")
+            with c1:
+                red = st.number_input(
+                    "Red threshold (minutes)",
+                    min_value=1,
+                    max_value=10080,  # one week
+                    value=int(cfg.red_threshold_minutes),
+                    step=5,
+                    help="Stale beyond this → CRITICAL.",
+                    key="src_health_alert_red",
+                )
+            with c2:
+                yellow = st.number_input(
+                    "Yellow threshold (minutes)",
+                    min_value=0,
+                    max_value=10080,
+                    value=int(cfg.yellow_threshold_minutes),
+                    step=5,
+                    help="Stale beyond this (but under Red) → HIGH.",
+                    key="src_health_alert_yellow",
+                )
+            with c3:
+                cooldown = st.number_input(
+                    "Cooldown (minutes)",
+                    min_value=0,
+                    max_value=10080,
+                    value=int(cfg.cooldown_minutes),
+                    step=5,
+                    help="Minimum gap between two fires for the same source.",
+                    key="src_health_alert_cooldown",
+                )
+
+            if st.button("Save", key="src_health_alert_save"):
+                new_cfg = SourceHealthAlertConfig(
+                    enabled=bool(enabled),
+                    red_threshold_minutes=int(red),
+                    yellow_threshold_minutes=int(yellow),
+                    cooldown_minutes=int(cooldown),
+                )
+                ok = save_config(new_cfg)
+                if ok:
+                    st.success("Settings saved. Scheduler will pick them up on the next tick.")
+                else:
+                    st.error("Couldn't persist settings — check the log.")
+
+    except Exception as exc:
+        logger.exception(f"Source-health alert config render error: {exc}")
+        st.caption("Auto-alerting controls unavailable.")
 
 
 def _render_log_viewer() -> None:

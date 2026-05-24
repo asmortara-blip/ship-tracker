@@ -392,6 +392,59 @@ def _cmd_health_ping(args: argparse.Namespace) -> None:
     _print_table(rows, columns=["source", "status", "duration_ms", "error_msg"])
 
 
+def _cmd_health_alerts_status(args: argparse.Namespace) -> None:
+    from engine.source_health_alerts import get_recent_fire_count, load_config
+
+    cfg = load_config()
+    payload = {
+        "enabled":                   bool(cfg.enabled),
+        "red_threshold_minutes":     int(cfg.red_threshold_minutes),
+        "yellow_threshold_minutes":  int(cfg.yellow_threshold_minutes),
+        "cooldown_minutes":          int(cfg.cooldown_minutes),
+        "recent_fires_last_hour":    int(get_recent_fire_count()),
+    }
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_health_alerts_enable(args: argparse.Namespace) -> None:
+    from engine.source_health_alerts import load_config, save_config
+
+    cfg = load_config()
+    cfg.enabled = True
+    ok = save_config(cfg)
+    payload = {"enabled": True, "saved": bool(ok)}
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_health_alerts_disable(args: argparse.Namespace) -> None:
+    from engine.source_health_alerts import load_config, save_config
+
+    cfg = load_config()
+    cfg.enabled = False
+    ok = save_config(cfg)
+    payload = {"enabled": False, "saved": bool(ok)}
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_health_alerts_run_once(args: argparse.Namespace) -> None:
+    from engine.source_health_alerts import check_source_health_and_fire
+
+    counts = check_source_health_and_fire()
+    if args.json:
+        _print_json(counts)
+        return
+    _print_kv(counts)
+
+
 def _cmd_users_list(args: argparse.Namespace) -> None:
     from auth.users import list_users
 
@@ -1026,6 +1079,128 @@ def _cmd_schedules_run_once(args: argparse.Namespace) -> None:
         _print_kv(payload)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  rules — config-as-code for alert rules (commit / feat/rules-as-code)
+#
+#  Three subcommands: export (rules → YAML on stdout / file), import
+#  (YAML → rules, replacing the user's set), diff (YAML vs current,
+#  unified-diff style). Mirrors the UI's Export/Import expander but
+#  available from a shell so the operator can version the YAML in git
+#  and ship rule sets to colleagues without copy-pasting.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_rules_export(args: argparse.Namespace) -> None:
+    """Render the user's rules as YAML to stdout, or write to --out.
+
+    No --json flag — the OUTPUT is YAML by contract; that's the whole
+    point of the command. The wrapped engine call is read-only; failures
+    bubble to main() and become exit-1.
+    """
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_yaml import rules_to_yaml
+
+    rules = load_rules(user_id=args.user_id)
+    yaml_text = rules_to_yaml(rules)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(yaml_text)
+        # Print the path on stdout so a calling shell script can pipe
+        # the result; the YAML itself is on disk and the caller can
+        # cat / git-add it.
+        print(str(out_path))
+    else:
+        # Don't add a trailing newline beyond what rules_to_yaml emits
+        # — the emitter already terminates with one.
+        sys.stdout.write(yaml_text)
+
+
+def _cmd_rules_import(args: argparse.Namespace) -> None:
+    """Read YAML from --in, validate, and save via save_rules
+    (overwriting the user's rule set). --dry-run prints what WOULD be
+    saved + any warnings without writing.
+
+    Warnings always print to stdout (so a non-interactive caller piping
+    output can capture them); errors print to stderr via main()'s
+    exit-1 catch.
+    """
+    from engine.alert_engine_v2 import save_rules
+    from tools.rules_yaml import yaml_to_rules
+
+    in_path = Path(args.in_path)
+    if not in_path.exists():
+        raise RuntimeError(f"input file not found: {in_path}")
+    yaml_text = in_path.read_text()
+    rules, warnings = yaml_to_rules(yaml_text)
+
+    # If the parser produced no rules AND emitted warnings, treat that
+    # as an error — the file is malformed or has no salvageable
+    # content. Exit 1 with the first warning on stderr.
+    if not rules and warnings:
+        raise RuntimeError(f"no importable rules: {warnings[0]}")
+
+    # Surface warnings to stdout in a stable, parseable form. Operators
+    # want to see what was defaulted / dropped without scrolling
+    # through engine logs.
+    for w in warnings:
+        print(f"warning: {w}")
+
+    if args.dry_run:
+        print(f"would save {len(rules)} rules for user_id={args.user_id!r} (dry-run)")
+        for r in rules:
+            print(f"  - {r.get('rule_id')}: {r.get('name')}")
+        return
+
+    save_rules(rules, user_id=args.user_id)
+    print(f"saved {len(rules)} rules for user_id={args.user_id!r}")
+
+
+def _cmd_rules_diff(args: argparse.Namespace) -> None:
+    """Compare the YAML in --in against the user's currently-persisted
+    rule set. Surface added / removed / changed in a unified-diff style
+    block so the operator can see what an import would do BEFORE
+    pulling the trigger.
+
+    Comparison is by rule_id — a rule with the same id in both files is
+    "changed" if any field differs; ids present only on one side are
+    "added" (in YAML, not in DB) or "removed" (in DB, not in YAML).
+    """
+    import difflib
+
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_yaml import rules_to_yaml, yaml_to_rules
+
+    in_path = Path(args.in_path)
+    if not in_path.exists():
+        raise RuntimeError(f"input file not found: {in_path}")
+    new_yaml = in_path.read_text()
+    new_rules, warnings = yaml_to_rules(new_yaml)
+    for w in warnings:
+        print(f"warning: {w}")
+
+    current_rules = load_rules(user_id=args.user_id)
+    # Render both sides to the canonical YAML so the diff lines up.
+    current_yaml = rules_to_yaml(current_rules)
+    # rules_to_yaml emits its own normalization (sorted by rule_id,
+    # fixed field order), so the diff is deterministic and focuses on
+    # actual content changes — not formatting drift.
+    rendered_new_yaml = rules_to_yaml(new_rules)
+
+    current_lines = current_yaml.splitlines(keepends=True)
+    new_lines = rendered_new_yaml.splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(
+        current_lines,
+        new_lines,
+        fromfile="current",
+        tofile=str(in_path),
+        n=3,
+    ))
+    if not diff_lines:
+        print("(no changes)")
+        return
+    sys.stdout.write("".join(diff_lines))
+
+
 def _cmd_settings_set(args: argparse.Namespace) -> None:
     from auth.settings import update_setting
 
@@ -1181,6 +1356,29 @@ def _build_parser() -> argparse.ArgumentParser:
     sh2 = sh.add_parser("ping", help="Ping every data source NOW")
     sh2.add_argument("--json", action="store_true")
     sh2.set_defaults(func=_cmd_health_ping)
+
+    # ── health-alerts ─────────────────────────────────────────────────────
+    p_ha = sub.add_parser(
+        "health-alerts",
+        help="Auto-alerting for degraded data sources",
+    )
+    sha = p_ha.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sha1 = sha.add_parser("status", help="Show config + recent fire count")
+    sha1.add_argument("--json", action="store_true")
+    sha1.set_defaults(func=_cmd_health_alerts_status)
+
+    sha2 = sha.add_parser("enable", help="Turn auto-alerting ON")
+    sha2.add_argument("--json", action="store_true")
+    sha2.set_defaults(func=_cmd_health_alerts_enable)
+
+    sha3 = sha.add_parser("disable", help="Turn auto-alerting OFF")
+    sha3.add_argument("--json", action="store_true")
+    sha3.set_defaults(func=_cmd_health_alerts_disable)
+
+    sha4 = sha.add_parser("run-once", help="Run the alerter NOW (for testing)")
+    sha4.add_argument("--json", action="store_true")
+    sha4.set_defaults(func=_cmd_health_alerts_run_once)
 
     # ── users ─────────────────────────────────────────────────────────────
     p_us = sub.add_parser("users", help="User-account subcommands")
@@ -1407,6 +1605,59 @@ def _build_parser() -> argparse.ArgumentParser:
     sch6.add_argument("--user-id", dest="user_id", required=True)
     sch6.add_argument("--json", action="store_true")
     sch6.set_defaults(func=_cmd_schedules_run_once)
+
+    # ── rules ─────────────────────────────────────────────────────────────
+    # Config-as-code for alert rules. export / import / diff against the
+    # user's persisted rule set. Output of export is YAML by contract;
+    # input to import / diff is a YAML file.
+    p_ru = sub.add_parser("rules", help="Alert-rule config-as-code subcommands")
+    sr_sub = p_ru.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sru1 = sr_sub.add_parser(
+        "export",
+        help="Render the user's rules as YAML (stdout, or --out FILE)",
+    )
+    sru1.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru1.add_argument(
+        "--out", default=None,
+        help="Write YAML to this path instead of stdout",
+    )
+    sru1.set_defaults(func=_cmd_rules_export)
+
+    sru2 = sr_sub.add_parser(
+        "import",
+        help="Parse YAML file and save_rules (overwrites existing set)",
+    )
+    sru2.add_argument(
+        "--in", dest="in_path", required=True,
+        help="Path to the YAML file to import",
+    )
+    sru2.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru2.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Show what would be saved without writing",
+    )
+    sru2.set_defaults(func=_cmd_rules_import)
+
+    sru3 = sr_sub.add_parser(
+        "diff",
+        help="Show unified diff between YAML file and the user's current rules",
+    )
+    sru3.add_argument(
+        "--in", dest="in_path", required=True,
+        help="Path to the YAML file to compare against",
+    )
+    sru3.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru3.set_defaults(func=_cmd_rules_diff)
 
     return p
 
