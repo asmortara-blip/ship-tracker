@@ -445,6 +445,144 @@ def _cmd_health_alerts_run_once(args: argparse.Namespace) -> None:
     _print_kv(counts)
 
 
+def _cmd_perf_budgets_list(args: argparse.Namespace) -> None:
+    """List every budget + current observed p95 + within-budget status.
+
+    A read-only summary panel — joins the saved budgets against the
+    latest perf summary so the operator can see at a glance which
+    tabs are running hot.
+    """
+    from engine.perf_budgets import load_budgets, check_budgets
+
+    budgets = load_budgets()
+    breaches = {b.tab_module: b for b in check_budgets()}
+
+    # Pull one perf summary per unique window so the observed p95 is
+    # available even for tabs that are NOT in breach.
+    from engine.perf_telemetry import get_perf_summary
+    windows = sorted({int(b.window_hours) for b in budgets})
+    summaries: dict[int, dict] = {}
+    for w in windows:
+        summaries[w] = get_perf_summary(window_hours=w) or {}
+
+    payload = []
+    for b in budgets:
+        summary = summaries.get(int(b.window_hours), {})
+        by_tab = summary.get("by_tab", {}) if isinstance(summary, dict) else {}
+        stats = by_tab.get(b.tab_module) if isinstance(by_tab, dict) else None
+        if isinstance(stats, dict):
+            count = int(stats.get("count", 0) or 0)
+            p95_s = int(stats.get("p95_ms", 0) or 0) / 1000.0
+        else:
+            count = 0
+            p95_s = 0.0
+        breach = breaches.get(b.tab_module)
+        if breach is not None:
+            status = breach.severity
+        elif count == 0:
+            status = "no-data"
+        else:
+            status = "ok"
+        payload.append({
+            "tab_module":   b.tab_module,
+            "budget_p95":   round(float(b.max_p95_seconds), 2),
+            "observed_p95": round(float(p95_s), 2),
+            "samples":      count,
+            "window_h":     int(b.window_hours),
+            "status":       status,
+        })
+
+    if args.json:
+        _print_json(payload)
+        return
+    _print_table(
+        [
+            {
+                "tab_module":   p["tab_module"],
+                "budget_p95":   f"{p['budget_p95']:.2f}s",
+                "observed_p95": f"{p['observed_p95']:.2f}s",
+                "samples":      str(p["samples"]),
+                "window_h":     str(p["window_h"]),
+                "status":       p["status"],
+            }
+            for p in payload
+        ],
+        columns=["tab_module", "budget_p95", "observed_p95", "samples", "window_h", "status"],
+    )
+
+
+def _cmd_perf_budgets_set(args: argparse.Namespace) -> None:
+    """Set / replace the budget for one tab.
+
+    Loads the current list, upserts the matching tab_module (matches
+    on exact string equality), persists. If the tab is not in the
+    current list, a new PerfBudget is appended.
+    """
+    from engine.perf_budgets import load_budgets, save_budgets, PerfBudget
+
+    if args.max_p95 is None or float(args.max_p95) <= 0:
+        raise RuntimeError("--max-p95 must be a positive number of seconds")
+
+    budgets = load_budgets()
+    new_p95 = float(args.max_p95)
+    replaced = False
+    for b in budgets:
+        if b.tab_module == args.tab_module:
+            b.max_p95_seconds = new_p95
+            replaced = True
+            break
+    if not replaced:
+        budgets.append(PerfBudget(
+            tab_module=args.tab_module,
+            max_p95_seconds=new_p95,
+            max_mean_seconds=None,
+            window_hours=24,
+        ))
+
+    ok = save_budgets(budgets)
+    payload = {
+        "tab_module":      args.tab_module,
+        "max_p95_seconds": new_p95,
+        "saved":           bool(ok),
+        "action":          "replaced" if replaced else "created",
+    }
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_perf_budgets_reset(args: argparse.Namespace) -> None:
+    """Wipe custom budgets and revert to the shipped defaults.
+
+    Writes an empty list to the kv_state row; load_budgets treats that
+    as "use defaults" on the next read.
+    """
+    from engine.perf_budgets import save_budgets, get_default_budgets
+
+    ok = save_budgets([])
+    defaults = get_default_budgets()
+    payload = {
+        "reset":         bool(ok),
+        "default_count": len(defaults),
+    }
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_perf_budgets_check(args: argparse.Namespace) -> None:
+    """Run check_and_alert NOW. Returns the count dict."""
+    from engine.perf_budgets import check_and_alert
+
+    counts = check_and_alert()
+    if args.json:
+        _print_json(counts)
+        return
+    _print_kv(counts)
+
+
 def _cmd_users_list(args: argparse.Namespace) -> None:
     from auth.users import list_users
 
@@ -1093,6 +1231,99 @@ def _cmd_silences_delete(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  annotations — per-alert operator commentary threads (schema v23)
+#
+#  Mirrors the API + UI surface: list / add / delete. Every subcommand
+#  is per-user scoped via the ``--user-id`` flag (the alert owner —
+#  alice cannot list, mutate, or delete bob's alert annotations). The
+#  CLI does not expose a separate ``--author`` flag because the
+#  operator running a shell is presumed to be acting on their own
+#  behalf; ``author_user_id`` is stamped equal to ``--user-id``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_annotations_list(args: argparse.Namespace) -> None:
+    """List the annotation thread for one alert in created_at ASC
+    order. Empty thread prints "(no rows)" not a crash."""
+    from engine.alert_annotations import list_annotations
+
+    annotations = list_annotations(args.alert_id, user_id=args.user_id)
+    if args.json:
+        _print_json(annotations)
+        return
+    rows = [
+        {
+            "annotation_id":  a.annotation_id[:10],
+            "author":         (a.author_user_id or "")[:10],
+            "created_at":     a.created_at,
+            "edited_at":      a.edited_at or "",
+            "body":           (a.body[:60] + "…")
+                              if len(a.body) > 60 else a.body,
+        }
+        for a in annotations
+    ]
+    _print_table(
+        rows,
+        columns=["annotation_id", "author", "created_at",
+                 "edited_at", "body"],
+    )
+
+
+def _cmd_annotations_add(args: argparse.Namespace) -> None:
+    """Add one annotation to an alert. The body is silently
+    truncated at 4000 chars by the engine layer — that contract is
+    documented in ``engine.alert_annotations``."""
+    from engine.alert_annotations import add_annotation
+
+    saved = add_annotation(
+        args.alert_id,
+        args.body,
+        user_id=args.user_id,
+        # The CLI has no session — the operator running it is acting
+        # on their own behalf, so author_user_id matches the alert
+        # owner. The multi-user share case is exercised via the API /
+        # UI surfaces.
+        author_user_id=args.user_id,
+    )
+    if saved is None:
+        raise RuntimeError(
+            f"add_annotation failed for alert_id={args.alert_id!r} "
+            "user_id={args.user_id!r} — empty body or DB error; "
+            "see logs"
+        )
+    if args.json:
+        _print_json(saved)
+    else:
+        _print_kv({
+            "annotation_id":   saved.annotation_id,
+            "alert_id":        saved.alert_id,
+            "user_id":         saved.user_id,
+            "author_user_id":  saved.author_user_id,
+            "created_at":      saved.created_at,
+            "body":            saved.body,
+        })
+
+
+def _cmd_annotations_delete(args: argparse.Namespace) -> None:
+    """Delete one annotation. Per-user + per-author scoped — the row
+    must belong to the caller AND the caller must be its author."""
+    from engine.alert_annotations import delete_annotation
+
+    ok = delete_annotation(
+        args.annotation_id,
+        user_id=args.user_id,
+        author_user_id=args.user_id,
+    )
+    payload = {
+        "annotation_id": args.annotation_id,
+        "deleted":       bool(ok),
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  schedules — cron-driven auto-generated reports (commit / schema v20)
 #
 #  Mirrors the API + UI surface: list / create / delete / enable /
@@ -1586,6 +1817,32 @@ def _build_parser() -> argparse.ArgumentParser:
     sha4.add_argument("--json", action="store_true")
     sha4.set_defaults(func=_cmd_health_alerts_run_once)
 
+    # ── perf-budgets ──────────────────────────────────────────────────────
+    p_pb = sub.add_parser(
+        "perf-budgets",
+        help="Per-tab render-latency budget admin",
+    )
+    spb = p_pb.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    spb1 = spb.add_parser("list", help="Show every budget + current p95 + status")
+    spb1.add_argument("--json", action="store_true")
+    spb1.set_defaults(func=_cmd_perf_budgets_list)
+
+    spb2 = spb.add_parser("set", help="Set / replace the budget for one tab")
+    spb2.add_argument("tab_module")
+    spb2.add_argument("--max-p95", dest="max_p95", type=float, required=True,
+                      help="Max acceptable p95 render time in SECONDS")
+    spb2.add_argument("--json", action="store_true")
+    spb2.set_defaults(func=_cmd_perf_budgets_set)
+
+    spb3 = spb.add_parser("reset", help="Wipe customisations, revert to defaults")
+    spb3.add_argument("--json", action="store_true")
+    spb3.set_defaults(func=_cmd_perf_budgets_reset)
+
+    spb4 = spb.add_parser("check", help="Run check_and_alert NOW (prints count dict)")
+    spb4.add_argument("--json", action="store_true")
+    spb4.set_defaults(func=_cmd_perf_budgets_check)
+
     # ── users ─────────────────────────────────────────────────────────────
     p_us = sub.add_parser("users", help="User-account subcommands")
     su = p_us.add_subparsers(dest="subcommand", required=True, metavar="SUB")
@@ -1871,6 +2128,58 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ssil3.add_argument("--json", action="store_true")
     ssil3.set_defaults(func=_cmd_silences_delete)
+
+    # ── annotations ───────────────────────────────────────────────────────
+    # Per-alert operator commentary threads (schema v23). Three
+    # subcommands — list / add / delete. Per-user scoped via
+    # ``--user-id`` (the alert owner); the CLI stamps
+    # author_user_id == --user-id so the running operator is the
+    # author of every note they create.
+    p_ann = sub.add_parser("annotations", help="Alert-annotation subcommands")
+    sann = p_ann.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sann1 = sann.add_parser(
+        "list", help="List the annotation thread for one alert",
+    )
+    sann1.add_argument(
+        "alert_id",
+        help="Alert id whose annotation thread to list",
+    )
+    sann1.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot see bob's alert annotations",
+    )
+    sann1.add_argument("--json", action="store_true")
+    sann1.set_defaults(func=_cmd_annotations_list)
+
+    sann2 = sann.add_parser(
+        "add", help="Add one annotation to an alert",
+    )
+    sann2.add_argument(
+        "alert_id",
+        help="Alert id the annotation attaches to",
+    )
+    sann2.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="Owner of the alert (also stamped as the author)",
+    )
+    sann2.add_argument(
+        "--body", required=True,
+        help='Free-form note ("escalated to ops team")',
+    )
+    sann2.add_argument("--json", action="store_true")
+    sann2.set_defaults(func=_cmd_annotations_add)
+
+    sann3 = sann.add_parser(
+        "delete", help="Delete one annotation (author-only)",
+    )
+    sann3.add_argument("annotation_id")
+    sann3.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — must own the alert AND be the author",
+    )
+    sann3.add_argument("--json", action="store_true")
+    sann3.set_defaults(func=_cmd_annotations_delete)
 
     # ── schedules ─────────────────────────────────────────────────────────
     p_sch = sub.add_parser("schedules", help="Report-schedule subcommands")

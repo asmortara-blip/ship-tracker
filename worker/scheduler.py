@@ -498,6 +498,40 @@ def run_source_health_alert_job() -> dict:
         return {"fired": 0, "skipped_cooldown": 0, "errored": 0}
 
 
+def run_perf_budget_check_job() -> dict:
+    """Check every per-tab perf budget and fire alerts for breaches.
+
+    Thin wrapper around ``engine.perf_budgets.check_and_alert`` that
+    adds logging and shields the caller from any exception. Designed
+    to run once per hour from the cron loop — tab-render telemetry
+    accumulates fast enough that hourly is the right cadence (slower
+    than the 5-min source-health pass, but tighter than the once-a-day
+    prune jobs).
+
+    The orchestrator already swallows per-breach failures internally —
+    this wrapper is belt-and-braces: even if the orchestrator itself
+    raises, the worker continues. Returns the count dict shaped like
+    ``{"checked": N, "breached": N, "alerted": N, "skipped_cooldown": N}``
+    (or all zeros on a top-level exception).
+
+    Never raises — a check failure must never block any sibling job.
+    """
+    try:
+        from engine.perf_budgets import check_and_alert
+
+        counts = check_and_alert()
+        logger.info(
+            f"run_perf_budget_check_job: checked={counts.get('checked', 0)} "
+            f"breached={counts.get('breached', 0)} "
+            f"alerted={counts.get('alerted', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_perf_budget_check_job: failed: {exc}")
+        return {"checked": 0, "breached": 0, "alerted": 0, "skipped_cooldown": 0}
+
+
 def run_bulk_export_prune_job(keep_n: int = 5) -> int:
     """Prune ``cache/exports/*.tar.gz`` down to the newest ``keep_n``.
 
@@ -922,6 +956,15 @@ def main(argv: Optional[list] = None) -> int:
         run_source_health_alert_job()
     except Exception as exc:
         logger.warning(f"main: source health alert step failed: {exc}")
+
+    # Per-tab perf-budget check. Runs AFTER the source-health alerter
+    # so the two alert paths sit next to each other in the job list.
+    # The orchestrator already swallows per-tab errors, the wrapper
+    # swallows the top-level — same belt-and-braces guard.
+    try:
+        run_perf_budget_check_job()
+    except Exception as exc:
+        logger.warning(f"main: perf budget check step failed: {exc}")
 
     # Bulk-export archive retention. Runs AFTER the health prune so a
     # bulk-export taken on the same tick (if a future cron triggers one)

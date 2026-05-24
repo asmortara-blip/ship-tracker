@@ -931,3 +931,53 @@ def _migrate_to_v22(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v22 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v22 → v23 ─────────────────────────────────────────────────────
+
+def _migrate_to_v23(conn: sqlite3.Connection) -> None:
+    """Add the ``alert_annotations`` table for per-alert operator
+    commentary threads.
+
+    Pre-v23 the only writable field on an alert was
+    ``acknowledged_note`` (a single string, set once at ack). v23
+    adds an unbounded per-alert thread that the ops team can edit
+    and delete — limited to the original author so cross-operator
+    audit trails stay intact.
+
+    Each row carries:
+
+      * ``annotation_id``  — UUID PK.
+      * ``alert_id``       — the alert the comment belongs to.
+        Convention-only reference (no FOREIGN KEY) so the delete
+        policy stays loose — matches the audit_events pattern.
+      * ``user_id``        — the OWNER of the alert. Per-user
+        scoping means alice cannot see bob's alert annotations;
+        the column is filtered on every read.
+      * ``author_user_id`` — who actually WROTE this comment.
+        Usually equals ``user_id`` but a multi-user-share workflow
+        may differ (a teammate granted shared visibility leaves a
+        note on someone else's alert). Edit / delete authorisation
+        matches this column.
+      * ``body``           — free-form TEXT. The engine layer
+        silently truncates at 4000 chars on write. Stored
+        VERBATIM — UI is responsible for safe rendering.
+      * ``created_at``     — ISO-8601 UTC stamp at write time.
+      * ``edited_at``      — NULLable ISO-8601 UTC stamp. NULL on
+        never-edited rows; flipped to NOW by edit_annotation on a
+        successful author-match edit.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+    EXISTS — so this statement is also safe to re-run on every open
+    via the schema bootstrap in state.db. Matches the v2 / v3 / v8 /
+    v9 / v10 / v11 / v12 / v15 / v20 / v21 / v22 pattern (add-only
+    schema).
+    """
+    try:
+        from state.db import _SCHEMA_V23
+
+        conn.executescript(_SCHEMA_V23)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v23 CREATE TABLE failed: {exc}"
+        )

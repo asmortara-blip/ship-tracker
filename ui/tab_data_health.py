@@ -633,6 +633,118 @@ def _render_llm_usage() -> None:
         st.error("LLM usage panel unavailable.")
 
 
+def _render_perf_budgets() -> None:
+    """Per-tab performance budgets panel — budget vs observed p95 + status.
+
+    Sits above the per-tab perf table; shows operators which tabs are
+    inside / outside budget at a glance and lets them edit the budgets
+    inline via an expander. Wrapped in a single try/except so a
+    perf_budgets DB outage cannot break the rest of the Tab
+    Performance section.
+    """
+    try:
+        from engine.perf_budgets import (
+            load_budgets,
+            save_budgets,
+            check_budgets,
+            PerfBudget,
+        )
+        from engine.perf_telemetry import get_perf_summary
+
+        st.markdown(
+            f'<div style="font-size:0.72rem;text-transform:uppercase;'
+            f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+            f'margin:14px 0 6px 0">Performance Budgets</div>',
+            unsafe_allow_html=True,
+        )
+
+        budgets = load_budgets()
+        breaches = {b.tab_module: b for b in check_budgets()}
+
+        # Pull one perf summary per window the budgets reference so
+        # the observed p95 is available for OK tabs too.
+        windows = sorted({int(b.window_hours) for b in budgets})
+        summaries: dict[int, dict] = {}
+        for w in windows:
+            summaries[w] = get_perf_summary(window_hours=w) or {}
+
+        headers = ["Tab", "Budget P95", "Observed P95", "Samples", "Status"]
+        rows: list[list[str]] = []
+        for b in budgets:
+            summary = summaries.get(int(b.window_hours), {})
+            by_tab = summary.get("by_tab", {}) if isinstance(summary, dict) else {}
+            stats = by_tab.get(b.tab_module) if isinstance(by_tab, dict) else None
+            if isinstance(stats, dict):
+                cnt = int(stats.get("count", 0) or 0)
+                obs_p95 = int(stats.get("p95_ms", 0) or 0) / 1000.0
+            else:
+                cnt = 0
+                obs_p95 = 0.0
+
+            breach = breaches.get(b.tab_module)
+            if breach is not None:
+                if breach.severity == "critical":
+                    status_str = "critical"
+                    status_col = C_LOW
+                else:
+                    status_str = "warn"
+                    status_col = C_MOD
+            elif cnt == 0:
+                status_str = "no-data"
+                status_col = C_TEXT3
+            else:
+                status_str = "within budget"
+                status_col = C_HIGH
+
+            rows.append([
+                _sans(b.tab_module, weight=600),
+                _mono(f"{b.max_p95_seconds:.2f}s", color=C_TEXT2),
+                _mono(f"{obs_p95:.2f}s", color=C_TEXT),
+                _mono(f"{cnt:,}", color=C_TEXT2),
+                _sans(status_str, weight=700, color=status_col),
+            ])
+        if rows:
+            wsj_market_table(headers, rows)
+        else:
+            st.info("No budgets configured.")
+
+        with st.expander("Edit budgets…", expanded=False):
+            st.caption(
+                "Set the maximum acceptable p95 render time per tab. "
+                "When the observed p95 exceeds the budget over the "
+                "window, a PERF_BUDGET alert fires."
+            )
+            edited: dict[str, float] = {}
+            for b in budgets:
+                edited[b.tab_module] = st.number_input(
+                    label=b.tab_module,
+                    min_value=0.1,
+                    max_value=120.0,
+                    value=float(b.max_p95_seconds),
+                    step=0.5,
+                    format="%.2f",
+                    key=f"perf_budget_input_{b.tab_module}",
+                )
+            if st.button("Save budgets", key="perf_budgets_save"):
+                new_budgets = [
+                    PerfBudget(
+                        tab_module=b.tab_module,
+                        max_p95_seconds=float(edited.get(b.tab_module, b.max_p95_seconds)),
+                        max_mean_seconds=b.max_mean_seconds,
+                        window_hours=b.window_hours,
+                    )
+                    for b in budgets
+                ]
+                ok = save_budgets(new_budgets)
+                if ok:
+                    st.success("Budgets saved.")
+                else:
+                    st.error("Couldn't save budgets — see logs.")
+    except Exception as exc:
+        logger.exception(f"Perf budgets panel render error: {exc}")
+        st.error("Perf budgets panel unavailable.")
+
+
 def _render_tab_perf() -> None:
     """Tab render-performance telemetry — median/p95 durations + error counts.
 
@@ -649,6 +761,13 @@ def _render_tab_perf() -> None:
             "Per-tab render latency (median + p95) and exception counts. "
             "Source: tab_render_events table via engine.perf_telemetry.",
         )
+
+        # ── Performance budgets panel (above the per-tab table) ──────
+        try:
+            _render_perf_budgets()
+        except Exception as exc:
+            logger.exception(f"Perf budgets sub-panel error: {exc}")
+            st.error("Perf budgets panel unavailable.")
 
         window = st.selectbox(
             "Window",

@@ -582,6 +582,7 @@ rejected the invocation.
 | `perf summary`                     | Render-performance summary.                                        |
 | `health summary / ping`            | Data-source health.                                                |
 | `health-alerts status / enable / disable / run-once` | Auto-fire ShippingAlerts when a data source goes red / yellow. |
+| `perf-budgets list / set / reset / check` | Per-tab render-latency budgets; auto-fire PERF_BUDGET alerts when a tab's p95 blows past its budget. |
 | `users list / create`              | User-account admin.                                                |
 | `tokens list / create / revoke`    | Per-user API-token admin.                                          |
 | `export`                           | Build a bulk-state tar.gz (see `Backup / Restore` below).          |
@@ -705,6 +706,47 @@ python -m tools.ops_cli filters delete <name> --scope alerts --user-id <id>
 Saving a new preset is a UI-only operation — encoding the per-scope
 payload vocabulary on the command line isn't worth the surface area.
 
+### Per-tab perf budgets
+
+`engine/perf_telemetry.py` records per-tab render durations; `engine/perf_budgets.py`
+is the read-only consumer that classifies them against operator-chosen
+budgets and fires a `PERF_BUDGET` ShippingAlert when a tab's observed p95
+blows past its ceiling. The worker scheduler invokes
+`run_perf_budget_check_job` once per pass (after the source-health alerter,
+before the bulk-export prune) so a regression is surfaced without manual
+scrolling of the perf panel.
+
+Defaults ship with the module:
+`ui.tab_overview` 1.5s · `ui.tab_alerts` 2.0s · `ui.tab_deep_dive` 4.0s ·
+`ui.tab_operator_overview` 3.0s · anything else 2.5s. Severity classification:
+observed_p95 between 1x and 2x budget → `warn` (MEDIUM alert);
+observed_p95 > 2x budget → `critical` (HIGH alert). A min-sample threshold
+of 5 observations prevents one slow render from firing a spurious breach
+on a low-traffic tab. Per-tab cooldown = the budget's `window_hours` so a
+chronically-slow tab does not carpet-bomb the alert table.
+
+Budgets + cooldowns ride the existing `kv_state` table — no schema bump.
+
+```bash
+# Show every budget, the current p95, the sample count, and status
+# (ok / warn / critical / no-data).
+python -m tools.ops_cli perf-budgets list
+
+# Tighten the budget for one tab.
+python -m tools.ops_cli perf-budgets set ui.tab_overview --max-p95 1.0
+
+# Wipe customisations and revert to the shipped defaults.
+python -m tools.ops_cli perf-budgets reset
+
+# Force the check + alert pass to run NOW (useful when debugging cooldown
+# or verifying a freshly-saved budget). Prints the count dict.
+python -m tools.ops_cli perf-budgets check
+```
+
+The same panel surfaces in the Data Health tab under "Tab Performance" >
+"Performance Budgets" — operators can edit a budget inline via the
+"Edit budgets…" expander without leaving the UI.
+
 ### Incident correlation
 
 The correlation engine groups alerts that fired together (same window,
@@ -801,6 +843,71 @@ Each silenced fire bumps the kv_state counter
 `engine.alert_silences.get_suppressed_by_silence_count()` — so the
 operator overview can surface "N alerts silenced in the last run"
 without a dedicated table.
+
+### Alert annotations (per-alert operator commentary threads)
+
+Schema v23 adds an `alert_annotations` table so an operator can leave
+a running thread of context on an alert as the response evolves:
+"escalated to ops team", "monitoring overnight", "RCA in JIRA-1234".
+Pre-v23 the only writable field on an alert was `acknowledged_note`
+— a single string set once at ack — which forced the team to either
+lose context or rewrite the same note repeatedly.
+
+Annotations are per-user. Alice cannot see annotations on Bob's
+alerts; bob cannot see, edit, or delete annotations on alice's.
+Edit and delete are author-only — only the operator who WROTE the
+annotation can mutate it (the alert owner may differ from the
+annotation author in a multi-user-share workflow). Cross-author
+attempts return False / 404 with no-leak guarantees (a probing
+caller cannot enumerate other authors' annotation ids by error-code
+differential).
+
+Bodies are stored VERBATIM (no HTML stripping, no markdown
+rendering) — the UI is the render-safe boundary (`st.text`, NOT
+`st.markdown`). The engine layer silently truncates bodies longer
+than 4000 characters so a pasted JIRA dump cannot blow up the row
+size. The body is NEVER written to the loguru log so an operator
+can paste sensitive context without leaking it to the audit feed.
+
+```bash
+# List the annotation thread for one alert (created_at ASC).
+python -m tools.ops_cli annotations list <alert_id> --user-id <id>
+
+# Add an annotation (silently truncated at 4000 chars).
+python -m tools.ops_cli annotations add <alert_id> --user-id <id> \
+    --body "escalated to ops team — RCA in JIRA-1234"
+
+# Delete an annotation. Author-only — must match the writer's user_id.
+python -m tools.ops_cli annotations delete <annotation_id> --user-id <id>
+```
+
+The API exposes both `/alerts/<alert_id>/annotations` for the
+per-alert thread and `/annotations/<annotation_id>` for the
+per-row mutations:
+
+```
+GET    /api/v1/alerts/<alert_id>/annotations    list_annotations(user_id=...)
+POST   /api/v1/alerts/<alert_id>/annotations    body: {body (required)}
+PATCH  /api/v1/annotations/<annotation_id>      body: {body (required)}
+DELETE /api/v1/annotations/<annotation_id>
+```
+
+Cross-author PATCH / DELETE attempts return 404 (the annotation does
+not exist in the caller's scope) — the same no-leak contract used
+by `/silences` and `/schedules`. POST with a missing or whitespace-
+only `body` returns 400. The caller's bearer-token user_id is
+stamped as BOTH the alert owner AND the author — there is no admin
+path via the API to annotate on someone else's behalf.
+
+The Streamlit UI surfaces the same controls in a collapsed
+"💬 Alert annotations — leave context as work evolves" expander
+under the Configuration section of the Alert Center tab. Each of
+the most-recent 50 persisted alerts appears as its own expander,
+labelled with a "💬 N" badge (counts loaded in ONE batch query via
+`count_annotations_per_alert`). Opening an expander reveals the
+thread in chronological order plus a `text_area` + "Add comment"
+button at the bottom; Edit / Delete buttons appear next to each
+annotation ONLY when the current user is the author.
 
 ### Recurring report schedules
 

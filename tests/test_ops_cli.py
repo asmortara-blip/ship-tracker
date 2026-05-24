@@ -340,6 +340,71 @@ def test_health_alerts_run_once_returns_count_dict(monkeypatch, capsys) -> None:
     assert payload["fired"] == 1
 
 
+# ─── perf-budgets ────────────────────────────────────────────────────────
+
+def test_perf_budgets_list_returns_defaults(capsys) -> None:
+    """`perf-budgets list --json` returns the default budget set."""
+    code, out, _ = _run(["perf-budgets", "list", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert isinstance(payload, list)
+    assert len(payload) > 0
+    # Every row carries the required keys.
+    for row in payload:
+        assert set(row.keys()) >= {
+            "tab_module", "budget_p95", "observed_p95",
+            "samples", "window_h", "status",
+        }
+
+
+def test_perf_budgets_list_text_table(capsys) -> None:
+    """Plain (non-JSON) output renders an ASCII table with headers."""
+    code, out, _ = _run(["perf-budgets", "list"], capsys)
+    assert code == 0
+    assert "tab_module" in out
+    assert "budget_p95" in out
+    assert "status" in out
+
+
+def test_perf_budgets_set_then_list(capsys) -> None:
+    """`set` upserts a budget; subsequent `list` shows the new value."""
+    code, out, _ = _run(
+        ["perf-budgets", "set", "ui.tab_overview", "--max-p95", "0.5", "--json"],
+        capsys,
+    )
+    assert code == 0
+    set_payload = json.loads(out)
+    assert set_payload["tab_module"] == "ui.tab_overview"
+    assert set_payload["max_p95_seconds"] == 0.5
+    assert set_payload["saved"] is True
+
+    code, out, _ = _run(["perf-budgets", "list", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    overview = next(p for p in payload if p["tab_module"] == "ui.tab_overview")
+    assert overview["budget_p95"] == 0.5
+
+
+def test_perf_budgets_reset_returns_defaults(capsys) -> None:
+    """`reset` wipes customisations and reports the default count."""
+    # First set a non-default value.
+    _run(["perf-budgets", "set", "ui.tab_overview", "--max-p95", "0.5"], capsys)
+    # Then reset.
+    code, out, _ = _run(["perf-budgets", "reset", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["reset"] is True
+    assert payload["default_count"] > 0
+
+
+def test_perf_budgets_check_returns_count_dict(capsys) -> None:
+    """`check` runs check_and_alert and prints the count dict shape."""
+    code, out, _ = _run(["perf-budgets", "check", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert set(payload.keys()) == {"checked", "breached", "alerted", "skipped_cooldown"}
+
+
 # ─── users ───────────────────────────────────────────────────────────────
 
 def test_users_list_empty(capsys) -> None:
@@ -1017,6 +1082,141 @@ def test_silences_list_include_expired(capsys) -> None:
     assert code2 == 0
     payload = json.loads(out2)
     assert isinstance(payload, list) and len(payload) == 1
+
+
+# ─── annotations (v23) ───────────────────────────────────────────────────
+
+def test_annotations_list_empty(capsys) -> None:
+    """Listing the thread for an alert with no annotations prints
+    something — not a crash."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    code, out, _ = _run(
+        ["annotations", "list", "alert-bogus",
+         "--user-id", user.user_id], capsys,
+    )
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_annotations_add_and_list(capsys) -> None:
+    """Adding an annotation surfaces it in the subsequent list call,
+    in created_at ASC order."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+
+    code, _, _ = _run(
+        ["annotations", "add", "alert-1",
+         "--user-id", user.user_id,
+         "--body", "escalated to ops team",
+         "--json"],
+        capsys,
+    )
+    assert code == 0
+
+    code2, out2, _ = _run(
+        ["annotations", "list", "alert-1",
+         "--user-id", user.user_id, "--json"],
+        capsys,
+    )
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list) and len(payload) == 1
+    assert payload[0]["body"] == "escalated to ops team"
+    assert payload[0]["author_user_id"] == user.user_id
+
+
+def test_annotations_add_empty_body_errors(capsys) -> None:
+    """An empty body via the CLI yields exit 1 (handler raises) — the
+    engine layer drops the write and the CLI surfaces that as a
+    non-zero exit so calling scripts can retry / alarm."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    # argparse rejects --body without a value (exit 2). To exercise
+    # the engine-drop path, pass a whitespace-only string.
+    code, _, err = _run(
+        ["annotations", "add", "alert-1",
+         "--user-id", user.user_id, "--body", "   "],
+        capsys,
+    )
+    assert code == 1  # handler-raised
+    assert "add_annotation failed" in err or err  # one-line stderr
+
+
+def test_annotations_delete_per_author_scoping(capsys) -> None:
+    """Bob cannot delete alice's annotation. The CLI surfaces this
+    as ``deleted: False`` (exit 0; not a crash)."""
+    from auth.users import signup
+    from engine.alert_annotations import add_annotation, list_annotations
+
+    alice = signup("alice", "correct-password-123")
+    bob = signup("bob", "correct-password-123")
+    assert alice is not None and bob is not None
+
+    saved = add_annotation(
+        "alert-1", "alice's note", user_id=alice.user_id,
+    )
+    assert saved is not None
+
+    code, out, _ = _run(
+        ["annotations", "delete", saved.annotation_id,
+         "--user-id", bob.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["deleted"] is False
+    # alice's note still there.
+    assert len(list_annotations("alert-1", user_id=alice.user_id)) == 1
+
+
+def test_annotations_delete_by_author_succeeds(capsys) -> None:
+    """The author can delete their own annotation via the CLI."""
+    from auth.users import signup
+    from engine.alert_annotations import add_annotation, list_annotations
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    saved = add_annotation(
+        "alert-1", "to delete", user_id=user.user_id,
+    )
+    assert saved is not None
+
+    code, out, _ = _run(
+        ["annotations", "delete", saved.annotation_id,
+         "--user-id", user.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["deleted"] is True
+    assert list_annotations("alert-1", user_id=user.user_id) == []
+
+
+def test_annotations_list_per_user_scoping(capsys) -> None:
+    """Alice's listing on a shared alert_id does not surface bob's
+    notes — per-user scoping is enforced on the read."""
+    from auth.users import signup
+    from engine.alert_annotations import add_annotation
+
+    alice = signup("alice", "correct-password-123")
+    bob = signup("bob", "correct-password-123")
+    assert alice is not None and bob is not None
+    add_annotation("alert-X", "alice note", user_id=alice.user_id)
+    add_annotation("alert-X", "bob note", user_id=bob.user_id)
+
+    code, out, _ = _run(
+        ["annotations", "list", "alert-X",
+         "--user-id", alice.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert len(payload) == 1
+    assert payload[0]["body"] == "alice note"
 
 
 # ─── mfa recovery-codes / regenerate-codes (v21) ─────────────────────────

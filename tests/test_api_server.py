@@ -2142,6 +2142,202 @@ def test_silences_endpoints_require_auth(server):
     assert r.status_code == 401
 
 
+# ─── /api/v1/alerts/<id>/annotations + /api/v1/annotations/<id> (v23) ───
+
+def test_get_annotations_empty_returns_empty_list(server):
+    """An alert with no annotations returns an empty JSON list — not
+    a 404. The thread is just empty, the endpoint always responds 200."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_post_annotations_creates_and_get_lists(server):
+    """POST persists an annotation; GET on the thread surfaces it
+    with the engine columns (author_user_id stamped from token)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "escalated to ops team"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is True
+    aid = body["annotation_id"]
+    assert body["annotation"]["body"] == "escalated to ops team"
+    # author_user_id stamped from bearer token — there is no
+    # admin-author-as-someone-else surface via the API.
+    assert body["annotation"]["author_user_id"] == uid
+    assert body["annotation"]["user_id"] == uid
+    assert body["annotation"]["edited_at"] is None
+
+    r2 = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    listed = r2.json()
+    assert isinstance(listed, list) and len(listed) == 1
+    assert listed[0]["annotation_id"] == aid
+
+
+def test_post_annotations_missing_body_returns_400(server):
+    """``body`` is the only required field — its absence yields 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"not_body": "wrong key"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    assert "body" in r.json()["error"]
+
+
+def test_post_annotations_empty_body_returns_400(server):
+    """Whitespace-only bodies are rejected at the API boundary —
+    the engine layer drops them too, but the API gives a clearer
+    error code."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "   "},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+
+
+def test_patch_annotations_edits_body_and_stamps_edited_at(server):
+    """PATCH replaces the body and sets edited_at; subsequent GET
+    shows the new body + the edited_at indicator."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    create = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "draft"},
+        headers=_bearer(token), timeout=5,
+    )
+    aid = create.json()["annotation_id"]
+
+    r = requests.patch(
+        f"{server}/api/v1/annotations/{aid}",
+        json={"body": "revised"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"updated": True, "annotation_id": aid}
+
+    # Confirm the update + the edited_at stamp via GET.
+    r2 = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        headers=_bearer(token), timeout=5,
+    )
+    [updated] = r2.json()
+    assert updated["body"] == "revised"
+    assert updated["edited_at"] is not None
+
+
+def test_patch_annotations_non_author_returns_404(server):
+    """Bob cannot edit alice's annotation even if he discovers the
+    annotation_id. Same no-leak contract as silences / schedules."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    create = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "alice's note"},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    aid = create.json()["annotation_id"]
+
+    # Bob tries to edit — 404 (no-leak).
+    r = requests.patch(
+        f"{server}/api/v1/annotations/{aid}",
+        json={"body": "bob's rewrite"},
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_delete_annotations_removes_and_404_on_cross_author(server):
+    """Alice can delete her own (200); bob cannot delete alice's
+    (404 — no-leak contract)."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+
+    create = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "alice's note"},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    aid = create.json()["annotation_id"]
+
+    # Bob's delete attempt → 404; alice's row survives.
+    r_bob = requests.delete(
+        f"{server}/api/v1/annotations/{aid}",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert r_bob.status_code == 404
+    alice_list = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert len(alice_list.json()) == 1
+
+    # Alice's delete → 200; row gone.
+    r_alice = requests.delete(
+        f"{server}/api/v1/annotations/{aid}",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r_alice.status_code == 200
+    assert r_alice.json() == {"deleted": True, "annotation_id": aid}
+    after = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert after.json() == []
+
+
+def test_annotations_endpoints_require_auth(server):
+    """GET, POST, PATCH, DELETE without a bearer token all return
+    401 — annotation content is per-user state and must not leak to
+    anonymous probes."""
+    # GET thread
+    r = requests.get(
+        f"{server}/api/v1/alerts/alert-1/annotations", timeout=5,
+    )
+    assert r.status_code == 401
+    # POST
+    r = requests.post(
+        f"{server}/api/v1/alerts/alert-1/annotations",
+        json={"body": "x"}, timeout=5,
+    )
+    assert r.status_code == 401
+    # PATCH
+    r = requests.patch(
+        f"{server}/api/v1/annotations/anything",
+        json={"body": "x"}, timeout=5,
+    )
+    assert r.status_code == 401
+    # DELETE
+    r = requests.delete(
+        f"{server}/api/v1/annotations/anything", timeout=5,
+    )
+    assert r.status_code == 401
+
+
 # ─── Rate limiting ────────────────────────────────────────────────────────
 
 

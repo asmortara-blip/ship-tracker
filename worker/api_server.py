@@ -436,6 +436,16 @@ _RE_SCHEDULE_ONE = re.compile(r"^/api/v1/schedules/([^/]+)/?$")
 # cancelled) carries a ``silence_id`` capture group.
 _RE_SILENCES = re.compile(r"^/api/v1/silences/?$")
 _RE_SILENCE_ONE = re.compile(r"^/api/v1/silences/([^/]+)/?$")
+# Alert-annotation endpoints (schema v23). The thread for one alert
+# lives under /api/v1/alerts/<alert_id>/annotations — list (GET) +
+# add (POST). Per-annotation mutations live under /api/v1/annotations/<id>
+# — edit (PATCH) + delete (DELETE). Splitting the routes this way
+# keeps the dispatch regex shallow (one capture group per shape) and
+# matches the convention of /api/v1/alerts/<id>/ack.
+_RE_ALERT_ANNOTATIONS = re.compile(
+    r"^/api/v1/alerts/([^/]+)/annotations/?$"
+)
+_RE_ANNOTATION_ONE = re.compile(r"^/api/v1/annotations/([^/]+)/?$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -471,6 +481,10 @@ class APIHandler(BaseHTTPRequestHandler):
       GET    /api/v1/silences               → _list_silences        (auth)
       POST   /api/v1/silences               → _create_silence       (auth, write)
       DELETE /api/v1/silences/<id>          → _delete_silence       (auth, write)
+      GET    /api/v1/alerts/<id>/annotations → _list_annotations    (auth)
+      POST   /api/v1/alerts/<id>/annotations → _create_annotation   (auth, write)
+      PATCH  /api/v1/annotations/<id>       → _edit_annotation      (auth, write)
+      DELETE /api/v1/annotations/<id>       → _delete_annotation    (auth, write)
       GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
@@ -512,6 +526,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_AUDIT, _RE_AUDIT_EXPORT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
                 _RE_SILENCES, _RE_SILENCE_ONE,
+                _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
             )
         )
 
@@ -541,6 +556,16 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if _RE_ALERTS_LIST.match(path):
                 self._list_alerts(user_id, query)
+                return
+            # /alerts/<id>/annotations is more specific than /alerts/<id>;
+            # check the annotations regex BEFORE the single-alert one so
+            # GET on the thread does not get accidentally handled as a
+            # single-alert load. (The regexes are anchored so they do
+            # not actually overlap, but the ordering keeps intent
+            # explicit.)
+            m = _RE_ALERT_ANNOTATIONS.match(path)
+            if m:
+                self._list_annotations(user_id, m.group(1))
                 return
             m = _RE_ALERT_ONE.match(path)
             if m:
@@ -613,7 +638,8 @@ class APIHandler(BaseHTTPRequestHandler):
             if (_RE_CHANNEL_ONE.match(path)
                     or _RE_REPORT_PUBLIC.match(path)
                     or _RE_SCHEDULE_ONE.match(path)
-                    or _RE_SILENCE_ONE.match(path)):
+                    or _RE_SILENCE_ONE.match(path)
+                    or _RE_ANNOTATION_ONE.match(path)):
                 _send_method_not_allowed(self)
                 return
 
@@ -644,6 +670,13 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_ALERT_ACK.match(path)
             if m:
                 self._ack_alert(user_id, m.group(1))
+                return
+            # /alerts/<id>/annotations POST — same ordering note as the
+            # GET dispatch: check the more-specific annotations regex
+            # before any /alerts/<id> sub-routes.
+            m = _RE_ALERT_ANNOTATIONS.match(path)
+            if m:
+                self._create_annotation(user_id, m.group(1))
                 return
             if _RE_RULES.match(path):
                 self._save_rules(user_id)
@@ -712,6 +745,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if m:
                 self._delete_silence(user_id, m.group(1))
                 return
+            m = _RE_ANNOTATION_ONE.match(path)
+            if m:
+                self._delete_annotation(user_id, m.group(1))
+                return
 
             if self._path_matches_any_route(path):
                 _send_method_not_allowed(self)
@@ -745,8 +782,9 @@ class APIHandler(BaseHTTPRequestHandler):
         self._dispatch_unknown_method()
 
     def do_PATCH(self) -> None:  # noqa: N802
-        """PATCH dispatch — currently only ``/api/v1/schedules/<id>``
-        accepts PATCH. Every other known path → 405; unknown → 404."""
+        """PATCH dispatch — ``/api/v1/schedules/<id>`` (cron-schedule
+        edits) and ``/api/v1/annotations/<id>`` (body edits) accept
+        PATCH. Every other known path → 405; unknown → 404."""
         try:
             path, _ = self._path_and_query()
             logger.info(f"api PATCH {path}")
@@ -763,6 +801,10 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_SCHEDULE_ONE.match(path)
             if m:
                 self._patch_schedule(user_id, m.group(1))
+                return
+            m = _RE_ANNOTATION_ONE.match(path)
+            if m:
+                self._edit_annotation(user_id, m.group(1))
                 return
 
             if self._path_matches_any_route(path):
@@ -2150,6 +2192,189 @@ class APIHandler(BaseHTTPRequestHandler):
                        {"deleted": True, "silence_id": silence_id})
         except Exception as exc:
             logger.exception(f"api DELETE /silences/<id> crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/alerts/<id>/annotations ─────────────
+
+    def _annotation_to_dict(self, annotation) -> dict:
+        """Project an AlertAnnotation onto the wire shape. Centralised
+        because list / create / edit all need the same projection."""
+        return {
+            "annotation_id":   annotation.annotation_id,
+            "alert_id":        annotation.alert_id,
+            "user_id":         annotation.user_id,
+            "author_user_id":  annotation.author_user_id,
+            "body":            annotation.body,
+            "created_at":      annotation.created_at,
+            "edited_at":       annotation.edited_at,
+        }
+
+    def _list_annotations(self, user_id: str, alert_id: str) -> None:
+        """Return the annotation thread for one alert in created_at
+        ASC order. Per-user scoped — alice cannot see annotations
+        on bob's alerts even by guessing the alert_id."""
+        try:
+            from engine.alert_annotations import list_annotations
+            annotations = list_annotations(alert_id, user_id=user_id)
+            payload = [self._annotation_to_dict(a) for a in annotations]
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(
+                f"api GET /alerts/<id>/annotations crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoint: POST /api/v1/alerts/<id>/annotations ────────────
+
+    def _create_annotation(self, user_id: str, alert_id: str) -> None:
+        """Add one annotation to an alert. The caller's user_id is
+        stamped as BOTH the alert owner AND the author — there is no
+        admin path via the API to annotate on someone else's
+        behalf.
+
+        Body fields:
+          * ``body`` (str, required) — the annotation text. Silently
+            truncated at 4000 chars by the engine layer.
+
+        Returns ``{"saved": True, "annotation_id": "...",
+        "annotation": {...}}`` on success. Missing ``body`` → 400.
+        Empty / whitespace-only body → 400 (an empty note carries no
+        signal). Engine failure → 500. The body itself is NEVER
+        logged.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            raw_body = body.get("body")
+            if raw_body is None:
+                _send_bad_request(self, "body is required")
+                return
+            if not isinstance(raw_body, str):
+                _send_bad_request(self, "body must be a string")
+                return
+            if not raw_body.strip():
+                _send_bad_request(self, "body must not be empty")
+                return
+
+            from engine.alert_annotations import add_annotation
+            saved = add_annotation(
+                alert_id,
+                raw_body,
+                user_id=user_id,
+                author_user_id=user_id,
+            )
+            if saved is None:
+                _send_internal_error(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "saved": True,
+                    "annotation_id": saved.annotation_id,
+                    "annotation": self._annotation_to_dict(saved),
+                },
+            )
+        except Exception as exc:
+            # Body is NOT included in the log message.
+            logger.exception(
+                f"api POST /alerts/<id>/annotations crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoint: PATCH /api/v1/annotations/<id> ──────────────────
+
+    def _edit_annotation(self, user_id: str, annotation_id: str) -> None:
+        """Replace the body of one annotation. Author-only — the
+        caller must be the original author. Cross-author / cross-user
+        attempts return 404 (no-leak contract identical to silences /
+        schedules).
+
+        Body fields:
+          * ``body`` (str, required) — the new annotation text.
+            Silently truncated at 4000 chars; empty / whitespace
+            rejected as 400 (delete the row instead).
+
+        Returns ``{"updated": True, "annotation_id": "..."}`` on
+        success. The body itself is NEVER logged.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            raw_body = body.get("body")
+            if raw_body is None:
+                _send_bad_request(self, "body is required")
+                return
+            if not isinstance(raw_body, str):
+                _send_bad_request(self, "body must be a string")
+                return
+            if not raw_body.strip():
+                _send_bad_request(self, "body must not be empty")
+                return
+
+            from engine.alert_annotations import edit_annotation
+            ok = edit_annotation(
+                annotation_id,
+                raw_body,
+                user_id=user_id,
+                author_user_id=user_id,
+            )
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {"updated": True, "annotation_id": annotation_id},
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api PATCH /annotations/<id> crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoint: DELETE /api/v1/annotations/<id> ─────────────────
+
+    def _delete_annotation(self, user_id: str, annotation_id: str) -> None:
+        """Delete one annotation. Author-only — same scope contract
+        as edit. Cross-author / cross-user attempts return 404."""
+        try:
+            from engine.alert_annotations import delete_annotation
+            ok = delete_annotation(
+                annotation_id,
+                user_id=user_id,
+                author_user_id=user_id,
+            )
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {"deleted": True, "annotation_id": annotation_id},
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api DELETE /annotations/<id> crashed: {exc}"
+            )
             _send_internal_error(self)
 
 

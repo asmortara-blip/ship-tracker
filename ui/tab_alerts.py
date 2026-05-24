@@ -1698,6 +1698,297 @@ def _render_rule_template_panel() -> None:
         # operational is preferable to a red banner.
 
 
+def _render_alert_annotations_panel() -> None:
+    """Render the per-alert annotation thread panel (schema v23).
+
+    Operators want a running thread of context on each alert —
+    "escalated to ops team", "monitoring overnight", "RCA in
+    JIRA-1234" — instead of the single ``acknowledged_note`` set
+    once at ack. This panel surfaces, for each unacked persisted
+    alert visible to the current user:
+
+      * A "💬 N" badge counting attached annotations (via
+        ``count_annotations_per_alert`` so the per-alert counts are
+        loaded in ONE query, not N).
+      * An expander per alert; opening it reveals the thread
+        rendered in created_at ASC order. Each annotation shows the
+        author (short user_id), the body, the created_at timestamp,
+        and an "(edited)" indicator when ``edited_at`` is set.
+      * Edit + Delete buttons next to each annotation — ONLY shown
+        when the current_user equals the annotation's
+        ``author_user_id``. Non-authors see the body but no
+        controls (the helpers also reject the cross-author write
+        — UI is belt-and-braces).
+      * A text_area + "Add comment" button at the bottom of each
+        expander for new annotations.
+
+    Bodies are rendered via ``st.text`` (NOT ``st.markdown``) so
+    pasted HTML / JS cannot execute — the v23 contract is "stored
+    verbatim, UI renders safely". All button handlers wrap the
+    engine calls in try/except so a single annotation write
+    failure does not break the rest of the panel. The engine
+    import is lazy so an import-time failure also collapses to a
+    silent panel.
+    """
+    try:
+        # Lazy import so an import-time failure in alert_annotations
+        # collapses to a silent skip rather than breaking the parent
+        # render. Matches the pattern in _render_silences_panel.
+        from engine.alert_annotations import (
+            add_annotation,
+            count_annotations_per_alert,
+            delete_annotation,
+            edit_annotation,
+            list_annotations,
+        )
+        from engine.alert_engine_v2 import load_alerts
+        from state.user_scope import current_user_id
+
+        uid = current_user_id() or ""
+
+        with st.expander(
+            "💬 Alert annotations — leave context as work evolves",
+            expanded=False,
+        ):
+            section_header(
+                "Annotation threads",
+                "Leave running commentary on an alert (\"escalated\", "
+                "\"monitoring\", \"RCA in JIRA-1234\"). Edit / delete is "
+                "limited to the original author so the audit trail "
+                "stays intact.",
+            )
+
+            # Pull the engine-persisted alerts (last 30 days) — same
+            # window used by the bulk-ack panel.
+            try:
+                persisted = load_alerts(max_age_days=30, user_id=uid) or []
+            except Exception:
+                logger.exception("annotations panel: load_alerts failed")
+                persisted = []
+
+            if not persisted:
+                st.caption("No persisted alerts in the last 30 days.")
+                return
+
+            # Single batch count query — one round-trip, not N. Cap
+            # at the first 50 alerts so a runaway alert backlog does
+            # not balloon the panel.
+            alert_subset = persisted[:50]
+            alert_ids = [getattr(a, "alert_id", "") for a in alert_subset
+                         if getattr(a, "alert_id", "")]
+            try:
+                counts = count_annotations_per_alert(alert_ids, user_id=uid)
+            except Exception:
+                logger.exception(
+                    "annotations panel: count_annotations_per_alert failed"
+                )
+                counts = {}
+
+            st.caption(
+                f"Showing the most recent {len(alert_subset)} alert(s) — "
+                f"counts shown as 💬 N per row."
+            )
+
+            for alert in alert_subset:
+                alert_id = getattr(alert, "alert_id", "") or ""
+                if not alert_id:
+                    continue
+                title = getattr(alert, "title", "") or "(untitled)"
+                sev = getattr(alert, "severity", "?")
+                count = counts.get(alert_id, 0)
+                badge_str = f"💬 {count}" if count else "💬 0"
+                short_id = alert_id[:8]
+                header_label = (
+                    f"{badge_str}  ·  [{sev}] {title}  (#{short_id})"
+                )
+
+                with st.expander(header_label, expanded=False):
+                    # Lazy reload of THIS thread on every open — the
+                    # batch count above tells us "how many"; this
+                    # call fetches the bodies. Wrapped so a single
+                    # failure does not break sibling expanders.
+                    try:
+                        thread = list_annotations(alert_id, user_id=uid)
+                    except Exception:
+                        logger.exception(
+                            f"annotations panel: list_annotations "
+                            f"failed for {alert_id!r}"
+                        )
+                        thread = []
+
+                    if not thread:
+                        st.caption("No comments yet — be the first.")
+                    else:
+                        for note in thread:
+                            author_short = (note.author_user_id or "")[:8]
+                            edited_marker = (
+                                " (edited)" if note.edited_at else ""
+                            )
+                            st.markdown(
+                                f"**{author_short}** · "
+                                f"_{note.created_at}_{edited_marker}"
+                            )
+                            # st.text — NOT st.markdown — so pasted
+                            # HTML / JS cannot execute. Body is
+                            # stored verbatim; UI is the render-safe
+                            # boundary.
+                            st.text(note.body)
+
+                            # Author-only controls. Non-authors see
+                            # the body but no buttons.
+                            if uid and note.author_user_id == uid:
+                                ec1, ec2, _ = st.columns(
+                                    [1, 1, 6], gap="small",
+                                )
+                                edit_state_key = (
+                                    f"ann_edit_open_{note.annotation_id}"
+                                )
+                                with ec1:
+                                    if st.button(
+                                        "Edit",
+                                        key=f"ann_edit_btn_{note.annotation_id}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state[edit_state_key] = True
+                                with ec2:
+                                    if st.button(
+                                        "Delete",
+                                        key=f"ann_del_btn_{note.annotation_id}",
+                                        use_container_width=True,
+                                    ):
+                                        try:
+                                            ok = delete_annotation(
+                                                note.annotation_id,
+                                                user_id=uid,
+                                                author_user_id=uid,
+                                            )
+                                            if ok:
+                                                st.success(
+                                                    "Annotation deleted."
+                                                )
+                                                st.rerun()
+                                            else:
+                                                st.error(
+                                                    "Delete failed — see logs."
+                                                )
+                                        except Exception:
+                                            logger.exception(
+                                                "delete_annotation failed"
+                                            )
+                                            st.error(
+                                                "Delete failed — see logs."
+                                            )
+
+                                # Inline edit form — surfaces only
+                                # after Edit is clicked (state flag).
+                                if st.session_state.get(edit_state_key):
+                                    new_body = st.text_area(
+                                        "Edit body",
+                                        value=note.body,
+                                        key=(
+                                            f"ann_edit_body_"
+                                            f"{note.annotation_id}"
+                                        ),
+                                    )
+                                    sc1, sc2, _ = st.columns(
+                                        [1, 1, 6], gap="small",
+                                    )
+                                    with sc1:
+                                        if st.button(
+                                            "Save",
+                                            key=(
+                                                f"ann_save_btn_"
+                                                f"{note.annotation_id}"
+                                            ),
+                                            use_container_width=True,
+                                            type="primary",
+                                        ):
+                                            try:
+                                                ok = edit_annotation(
+                                                    note.annotation_id,
+                                                    new_body,
+                                                    user_id=uid,
+                                                    author_user_id=uid,
+                                                )
+                                                if ok:
+                                                    st.session_state.pop(
+                                                        edit_state_key,
+                                                        None,
+                                                    )
+                                                    st.success(
+                                                        "Annotation updated."
+                                                    )
+                                                    st.rerun()
+                                                else:
+                                                    st.error(
+                                                        "Edit failed — see logs."
+                                                    )
+                                            except Exception:
+                                                logger.exception(
+                                                    "edit_annotation failed"
+                                                )
+                                                st.error(
+                                                    "Edit failed — see logs."
+                                                )
+                                    with sc2:
+                                        if st.button(
+                                            "Cancel",
+                                            key=(
+                                                f"ann_cancel_btn_"
+                                                f"{note.annotation_id}"
+                                            ),
+                                            use_container_width=True,
+                                        ):
+                                            st.session_state.pop(
+                                                edit_state_key, None,
+                                            )
+                                            st.rerun()
+                            st.divider()
+
+                    # New-comment composer at the bottom of the
+                    # expander. Independent key per alert_id so two
+                    # open expanders do not stomp each other's draft.
+                    new_body = st.text_area(
+                        "Add a comment",
+                        key=f"ann_new_body_{alert_id}",
+                        placeholder=(
+                            'e.g. "escalated to ops team", '
+                            '"RCA in JIRA-1234"'
+                        ),
+                    )
+                    if st.button(
+                        "Add comment",
+                        key=f"ann_add_btn_{alert_id}",
+                        use_container_width=False,
+                    ):
+                        try:
+                            saved = add_annotation(
+                                alert_id,
+                                new_body,
+                                user_id=uid,
+                                author_user_id=uid,
+                            )
+                            if saved is not None:
+                                # Wipe the draft so the next render
+                                # surfaces an empty text area, not
+                                # the just-committed value.
+                                st.session_state.pop(
+                                    f"ann_new_body_{alert_id}", None,
+                                )
+                                st.success("Comment added.")
+                                st.rerun()
+                            else:
+                                st.warning(
+                                    "Comment was empty or could not be "
+                                    "saved — see logs."
+                                )
+                        except Exception:
+                            logger.exception("add_annotation failed")
+                            st.error("Add failed — see logs.")
+    except Exception:
+        logger.exception("_render_alert_annotations_panel failed")
+
+
 def _render_silences_panel() -> None:
     """Render the alert-silences panel (planned-downtime suppressor).
 
@@ -3304,6 +3595,7 @@ def render(
             section_divider("Configuration")
             _render_notifications()
             _render_rules_manager()
+            _render_alert_annotations_panel()
             _render_silences_panel()
             _render_route_thresholds()
 

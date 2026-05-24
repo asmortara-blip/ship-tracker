@@ -246,6 +246,26 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       v10 / v11 / v12 / v15 / v20 — fresh DBs pick up the tables via
 #       the executescript path in ``_init_schema``; the explicit
 #       ``_migrate_to_v21`` helper re-runs the same script on upgrade.
+#  23 — adds the ``alert_annotations`` table so operators can leave
+#       free-form running commentary on an alert as the response
+#       evolves ("escalated to ops team", "monitoring", "RCA in
+#       JIRA-1234"). Pre-v23 the only writable field on an alert was
+#       ``acknowledged_note`` — a single string set once at ack. The
+#       new table is append-only-by-operator (with edit / delete
+#       limited to the original author): rows carry ``annotation_id``
+#       (UUID PK), ``alert_id`` (FK by convention — not enforced at
+#       the SQL level because alerts is created in v1 without
+#       ``IF NOT EXISTS`` REFERENCES, the same lighter touch used by
+#       audit_events), ``user_id`` (the alert owner — per-user scoping
+#       so alice cannot see bob's alert annotations), ``author_user_id``
+#       (who actually wrote the comment — usually equals user_id but
+#       a multi-user-share workflow may differ), ``body`` (free-form
+#       TEXT, truncated to 4000 chars at write time), ``created_at``
+#       (ISO-8601 UTC), and ``edited_at`` (NULLable — stamped by
+#       edit_annotation on a successful author-match edit so the UI
+#       can render a "(edited)" indicator). The ``(alert_id,
+#       created_at)`` index covers the typical "load the thread for
+#       this alert in chronological order" lookup.
 #  22 — adds the ``alert_silences`` table so operators can shut up a
 #       rule (or a ticker, or a severity, or any cross-product of
 #       those — NULL = "matches anything") for a bounded planned-
@@ -267,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 22
+SCHEMA_VERSION: int = 23
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1031,6 +1051,74 @@ _SCHEMA_V22_NOTE: str = (
     "_migrate_to_v22)"
 )
 
+# Schema v23 adds the ``alert_annotations`` table so an operator can
+# leave a running thread of context on an alert as the response
+# evolves. Pre-v23 the only writable field on an alert was
+# ``acknowledged_note`` (single string, set once at ack); v23 adds
+# unbounded per-alert commentary that the ops team can edit and
+# delete (limited to the original author so cross-operator audit
+# trails stay intact).
+#
+# Each row carries:
+#   * ``annotation_id``  — UUID PK.
+#   * ``alert_id``       — the alert this comment belongs to. Not
+#     declared as a FOREIGN KEY against ``alerts(alert_id)`` because
+#     the rest of the alert table family (audit_events keyed on
+#     entity_id, alert_silences keyed on rule_id) also uses a
+#     convention-only reference — adding a FK here would force a
+#     CASCADE DELETE policy decision that the rest of the schema
+#     does not make.
+#   * ``user_id``        — the OWNER of the alert (per-user scoping).
+#     alice cannot see bob's alert annotations. This column is
+#     filtered on every read.
+#   * ``author_user_id`` — who actually WROTE this comment. Usually
+#     equals ``user_id`` but a multi-user-share workflow may differ
+#     (a teammate granted shared visibility leaves a note on
+#     someone else's alert). Edit / delete authorisation matches
+#     this column, not ``user_id`` — only the author can mutate
+#     their own row.
+#   * ``body``           — free-form TEXT. The engine layer
+#     silently truncates at 4000 chars on write so a pasted JIRA
+#     blob does not blow up the row size. The body is stored
+#     VERBATIM (no HTML stripping, no markdown rendering) — the UI
+#     is responsible for rendering safely (st.text instead of
+#     st.markdown to dodge XSS).
+#   * ``created_at``     — ISO-8601 UTC stamp at write time.
+#   * ``edited_at``      — NULLable ISO-8601 UTC stamp. NULL on a
+#     never-edited row; flipped to NOW by edit_annotation on a
+#     successful author-match edit so the UI can render "(edited)".
+#
+# The ``(alert_id, created_at)`` index covers the dominant query —
+# "load the thread for this alert in created_at ascending order" —
+# without a full-table scan. Per-user filtering happens in-Python
+# after the load (the typical thread is < 20 rows).
+#
+# Same CREATE-TABLE-IF-NOT-EXISTS pattern as v2 / v3 / v8 / v9 /
+# v10 / v11 / v12 / v15 / v20 / v21 / v22 — a fresh DB picks up the
+# table via the executescript path in ``_init_schema``; the
+# explicit ``_migrate_to_v23`` helper re-runs the same script on
+# upgrade.
+_SCHEMA_V23 = """
+CREATE TABLE IF NOT EXISTS alert_annotations (
+    annotation_id    TEXT PRIMARY KEY,
+    alert_id         TEXT NOT NULL,
+    user_id          TEXT NOT NULL,
+    author_user_id   TEXT NOT NULL,
+    body             TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    edited_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alert_annotations_alert
+    ON alert_annotations(alert_id, created_at);
+"""
+
+_SCHEMA_V23_NOTE: str = (
+    "v23: alert_annotations table (annotation_id PK, alert_id, "
+    "user_id, author_user_id, body, created_at, edited_at) + "
+    "idx_alert_annotations_alert (alert_id, created_at) "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v23)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -1195,6 +1283,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # Safe to run on every open (fresh DB: creates the table; existing
     # DB: no-op).
     conn.executescript(_SCHEMA_V22)
+    # v23 add-only schema (CREATE TABLE IF NOT EXISTS + CREATE INDEX
+    # IF NOT EXISTS) — same pattern as v2 / v3 / v8 / v9 / v10 / v11 /
+    # v12 / v15 / v20 / v21 / v22. Adds the alert_annotations table so
+    # an operator can leave a running thread of context on an alert
+    # as the response evolves ("escalated", "monitoring", "RCA in
+    # JIRA-1234"). Safe to run on every open (fresh DB: creates the
+    # table; existing DB: no-op).
+    conn.executescript(_SCHEMA_V23)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1476,6 +1572,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v22(conn)
         except Exception as exc:
             logger.warning(f"state.db: v22 migration skipped: {exc}")
+
+    # Migration 22 → 23: add the ``alert_annotations`` table so an
+    # operator can leave a running thread of context on an alert as
+    # the response evolves. Same CREATE-IF-NOT-EXISTS idempotency as
+    # v2 / v3 / v8 / v9 / v10 / v11 / v12 / v15 / v20 / v21 / v22 —
+    # the helper is already invoked unconditionally above; this
+    # branch keeps the version-step ladder explicit.
+    if current < 23:
+        try:
+            from state.migrations import _migrate_to_v23
+            _migrate_to_v23(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v23 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
