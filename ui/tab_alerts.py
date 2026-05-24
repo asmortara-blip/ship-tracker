@@ -2174,6 +2174,280 @@ def _render_silences_panel() -> None:
         logger.exception("_render_silences_panel failed")
 
 
+def _render_escalation_panel() -> None:
+    """Render the per-rule alert-escalation chain editor (schema v24).
+
+    Sits inside a collapsed expander under the Configuration section.
+    Layout — choose a rule, see the current chain as a table, add a
+    new step via a form, or clear the whole chain (two-click confirm).
+
+    Every action is wrapped in try/except + st.error so a SQLite hiccup
+    or missing channel cannot break the rest of the Alert Center tab.
+    Engine helpers are lazy-imported at panel entry so the import cost
+    only lands when the operator actually opens the expander.
+    """
+    try:
+        from engine.alert_delivery import load_channels
+        from engine.alert_engine_v2 import load_rules
+        from engine.alert_escalation import (
+            add_escalation_step,
+            delete_chain,
+            delete_escalation_step,
+            get_escalation_chain,
+        )
+
+        # Resolve the current user_id once at panel entry — falls back
+        # to "" when no user is signed in (legacy single-password gate).
+        from state.user_scope import current_user_id
+        uid = current_user_id() or ""
+
+        with st.expander(
+            "🪜 Alert escalation chains — climb a ladder of channels",
+            expanded=False,
+        ):
+            section_header(
+                "Escalation Chains",
+                "When an alert goes unacknowledged, escalate it to a "
+                "fallback channel after N minutes, then another after "
+                "N more, etc. Per-rule, per-user.",
+            )
+
+            # ── Rule picker ───────────────────────────────────────
+            # Pull the user's rules so the dropdown shows human-friendly
+            # names. The chain is keyed by rule_id; rules without an
+            # id are silently dropped.
+            try:
+                rules = load_rules(user_id=uid) or []
+            except Exception:
+                logger.exception("escalation panel: load_rules failed")
+                rules = []
+
+            rule_options = [
+                f"{r.get('rule_id', '')} — {r.get('name', '')}"
+                for r in rules
+                if r.get("rule_id")
+            ]
+
+            if not rule_options:
+                st.info(
+                    "No rules configured yet. Create a rule in the "
+                    "Rules Management panel above, then come back to "
+                    "wire its escalation chain."
+                )
+                return
+
+            chosen_rule = st.selectbox(
+                "Rule",
+                options=rule_options,
+                index=0,
+                key="escalation_rule_picker",
+                help="Pick the rule whose escalation chain you want to edit.",
+            )
+            rule_id = chosen_rule.split(" — ", 1)[0].strip()
+
+            # ── Channel set (for the dropdown + the chain-table lookup) ─
+            try:
+                channels = load_channels(user_id=uid) or []
+            except Exception:
+                logger.exception("escalation panel: load_channels failed")
+                channels = []
+            channels_by_id = {c.channel_id: c for c in channels}
+
+            # ── Current chain ─────────────────────────────────────
+            try:
+                chain = get_escalation_chain(rule_id, user_id=uid)
+            except Exception:
+                logger.exception("escalation panel: get_chain failed")
+                chain = []
+            st.caption(
+                f"{len(chain)} step(s) configured for rule {rule_id!r}."
+            )
+
+            if chain:
+                for step in chain:
+                    cols = st.columns([1, 2, 4, 2, 1], gap="small")
+                    with cols[0]:
+                        st.markdown(
+                            _mono(
+                                f"#{step.step_number}",
+                                color=C_TEXT, weight=700,
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[1]:
+                        st.markdown(
+                            _sans(
+                                f"after {step.after_minutes} min",
+                                color=C_TEXT2, weight=500,
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[2]:
+                        ch = channels_by_id.get(step.channel_id)
+                        ch_label = (
+                            f"{ch.name} ({ch.kind})"
+                            if ch is not None else
+                            "(missing channel)"
+                        )
+                        ch_color = C_TEXT if ch is not None else C_TEXT3
+                        st.markdown(
+                            _sans(ch_label, color=ch_color, weight=600),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[3]:
+                        st.markdown(
+                            _mono(
+                                step.chain_id[:8],
+                                color=C_TEXT3, weight=400,
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    with cols[4]:
+                        if st.button(
+                            "Delete",
+                            key=f"esc_del_{step.chain_id}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                ok = delete_escalation_step(
+                                    step.chain_id, user_id=uid,
+                                )
+                                if ok:
+                                    st.success("Step deleted.")
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        "Delete failed — step not "
+                                        "found in your scope."
+                                    )
+                            except Exception as exc:
+                                logger.exception(
+                                    "escalation panel: delete step failed"
+                                )
+                                st.error(f"Delete failed: {exc}")
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{C_TEXT3};'
+                    f'padding:8px 0">No escalation steps for this rule.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # ── Add-step form ─────────────────────────────────────
+            section_divider("Add a step")
+
+            if not channels:
+                st.info(
+                    "No delivery channels configured yet. Add one in "
+                    "the Delivery Channels panel below before wiring "
+                    "an escalation step."
+                )
+            else:
+                # Auto-increment the suggested step number to next-after-last.
+                next_step = (
+                    max((s.step_number for s in chain), default=0) + 1
+                )
+                channel_label_to_id = {
+                    f"{c.name} ({c.kind})": c.channel_id for c in channels
+                }
+                channel_labels = list(channel_label_to_id.keys())
+
+                with st.form(
+                    "escalation_add_form", clear_on_submit=True,
+                ):
+                    fcols = st.columns([1, 2, 3], gap="small")
+                    with fcols[0]:
+                        step_input = st.number_input(
+                            "Step #",
+                            min_value=1, max_value=99,
+                            value=int(next_step), step=1,
+                            help="Re-using an existing step number "
+                                 "REPLACES the row.",
+                        )
+                    with fcols[1]:
+                        after_input = st.number_input(
+                            "After (minutes)",
+                            min_value=1, max_value=1440,
+                            value=15, step=5,
+                            help="Minutes from the previous step's fire "
+                                 "(or from alert creation for step 1).",
+                        )
+                    with fcols[2]:
+                        channel_choice = st.selectbox(
+                            "Channel",
+                            options=channel_labels,
+                            index=0,
+                        )
+
+                    submitted = st.form_submit_button("Add step")
+                    if submitted:
+                        try:
+                            saved = add_escalation_step(
+                                rule_id=rule_id,
+                                user_id=uid,
+                                step_number=int(step_input),
+                                after_minutes=int(after_input),
+                                channel_id=channel_label_to_id[
+                                    channel_choice
+                                ],
+                            )
+                            if saved is not None:
+                                st.success(
+                                    f"Step {saved.step_number} added "
+                                    f"({saved.after_minutes} min → "
+                                    f"{channel_choice})."
+                                )
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Add failed — see logs."
+                                )
+                        except Exception as exc:
+                            logger.exception(
+                                "escalation panel: add step failed"
+                            )
+                            st.error(f"Add failed: {exc}")
+
+            # ── Clear-chain button (two-click confirm) ────────────
+            section_divider("Danger zone")
+            confirm_key = f"esc_clear_confirm::{rule_id}"
+            if chain:
+                clear_clicked = st.button(
+                    "Clear entire chain",
+                    key=f"esc_clear_btn::{rule_id}",
+                    use_container_width=False,
+                )
+                if clear_clicked:
+                    if st.session_state.get(confirm_key, False):
+                        try:
+                            removed = delete_chain(
+                                rule_id, user_id=uid,
+                            )
+                            st.session_state[confirm_key] = False
+                            st.success(
+                                f"Cleared {removed} step(s) from "
+                                f"rule {rule_id!r}."
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            logger.exception(
+                                "escalation panel: clear chain failed"
+                            )
+                            st.error(f"Clear failed: {exc}")
+                    else:
+                        st.session_state[confirm_key] = True
+                        st.warning(
+                            "Click 'Clear entire chain' again to "
+                            "confirm — this deletes every step."
+                        )
+            else:
+                st.caption(
+                    "(No steps to clear — chain is already empty.)"
+                )
+    except Exception:
+        logger.exception("_render_escalation_panel failed")
+        st.error("Escalation panel unavailable.")
+
+
 def _render_rules_yaml_panel() -> None:
     """Render the Export / Import (YAML) expander.
 
@@ -3597,6 +3871,7 @@ def render(
             _render_rules_manager()
             _render_alert_annotations_panel()
             _render_silences_panel()
+            _render_escalation_panel()
             _render_route_thresholds()
 
             _render_delivery_channels()

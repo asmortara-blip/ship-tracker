@@ -681,3 +681,58 @@ def test_walk_the_chain_step_1_then_step_2_then_step_3() -> None:
         counts = run_escalation_pass()
     assert counts == {"checked": 0, "escalated": 0, "failed": 0}
     assert fired == ["ch1", "ch2", "ch3"]
+
+
+# ─── CLI / API surface helpers (v24 operator wiring) ─────────────────────
+#
+# The CLI's ``escalations list`` handler uses ``_format_chain_for_table``
+# to project the chain onto the row-dict shape the table renderer wants.
+# It looks up channel names from a (channel_id → DeliveryChannel) map
+# and falls back to "(missing)" when a chain step points at a deleted
+# channel. These two cases pin both halves of that contract.
+
+
+def test_format_chain_for_table_renders_channel_names() -> None:
+    """The helper substitutes channel names from the lookup map so
+    operators see "Trading desk Slack" instead of an opaque UUID."""
+    from tools.ops_cli import _format_chain_for_table
+
+    _channel(channel_id="ch_one", name="On-call Slack", user_id="alice")
+    step1 = add_escalation_step(
+        rule_id="rule_x", user_id="alice",
+        step_number=1, after_minutes=15, channel_id="ch_one",
+    )
+    assert step1 is not None
+    chain = get_escalation_chain("rule_x", user_id="alice")
+
+    from engine.alert_delivery import load_channels
+    channels = load_channels(user_id="alice")
+    by_id = {c.channel_id: c for c in channels}
+
+    rows = _format_chain_for_table(chain, by_id)
+    assert len(rows) == 1
+    assert rows[0]["step"] == 1
+    assert rows[0]["after_minutes"] == 15
+    assert rows[0]["channel"] == "On-call Slack"
+
+
+def test_format_chain_for_table_handles_missing_channel() -> None:
+    """When a chain step points at a channel that no longer exists in
+    the lookup, the helper substitutes "(missing)" so the operator
+    output is still legible."""
+    from tools.ops_cli import _format_chain_for_table
+
+    _channel(channel_id="ch_one", name="Slack", user_id="alice")
+    step1 = add_escalation_step(
+        rule_id="rule_x", user_id="alice",
+        step_number=1, after_minutes=15, channel_id="ch_one",
+    )
+    assert step1 is not None
+    chain = get_escalation_chain("rule_x", user_id="alice")
+
+    # Empty lookup — simulates the "channel deleted out from under
+    # the chain" case.
+    rows = _format_chain_for_table(chain, {})
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "(missing)"
+    assert rows[0]["channel_id"] == "ch_one"[:10]

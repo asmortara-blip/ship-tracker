@@ -446,6 +446,17 @@ _RE_ALERT_ANNOTATIONS = re.compile(
     r"^/api/v1/alerts/([^/]+)/annotations/?$"
 )
 _RE_ANNOTATION_ONE = re.compile(r"^/api/v1/annotations/([^/]+)/?$")
+# Per-rule escalation-chain endpoints (schema v24). The chain for one
+# rule lives under /api/v1/rules/<rule_id>/escalations — list (GET) +
+# add (POST) + clear-whole-chain (DELETE). Per-step mutations live
+# under /api/v1/escalations/<chain_id> — delete one step. Same routing
+# split as alerts/<id>/annotations + /annotations/<id> so the dispatch
+# regexes stay shallow and operators can model the surface in the
+# same way they already do for annotations.
+_RE_RULE_ESCALATIONS = re.compile(
+    r"^/api/v1/rules/([^/]+)/escalations/?$"
+)
+_RE_ESCALATION_ONE = re.compile(r"^/api/v1/escalations/([^/]+)/?$")
 # Per-user notification-prefs endpoints. GET returns the caller's
 # current prefs (defaults if none saved); PATCH applies a partial
 # update. There is no per-id route — the prefs row is implicitly
@@ -493,6 +504,10 @@ class APIHandler(BaseHTTPRequestHandler):
       DELETE /api/v1/annotations/<id>       → _delete_annotation    (auth, write)
       GET    /api/v1/notification-prefs     → _get_notification_prefs   (auth)
       PATCH  /api/v1/notification-prefs     → _patch_notification_prefs (auth, write)
+      GET    /api/v1/rules/<id>/escalations  → _list_escalations    (auth)
+      POST   /api/v1/rules/<id>/escalations  → _create_escalation_step (auth, write)
+      DELETE /api/v1/rules/<id>/escalations  → _delete_chain        (auth, write)
+      DELETE /api/v1/escalations/<chain_id>  → _delete_escalation_step (auth, write)
       GET    /api/v1/health                 → _health               (public)
 
     Any other path → 404. Any wrong-method on a known path → 405. The
@@ -535,6 +550,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
                 _RE_SILENCES, _RE_SILENCE_ONE,
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
+                _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
             )
         )
@@ -608,6 +624,15 @@ class APIHandler(BaseHTTPRequestHandler):
             if _RE_TELEMETRY_PERF.match(path):
                 self._get_perf_telemetry(query)
                 return
+            # /api/v1/rules/<rule_id>/escalations is more specific than
+            # /api/v1/rules — check the escalations regex first so a
+            # GET on the chain does NOT accidentally route through the
+            # rule-list handler. The anchored regex prevents real
+            # overlap; the ordering keeps intent explicit.
+            m = _RE_RULE_ESCALATIONS.match(path)
+            if m:
+                self._list_escalations(user_id, m.group(1))
+                return
             if _RE_RULES.match(path):
                 self._list_rules(user_id)
                 return
@@ -651,7 +676,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     or _RE_REPORT_PUBLIC.match(path)
                     or _RE_SCHEDULE_ONE.match(path)
                     or _RE_SILENCE_ONE.match(path)
-                    or _RE_ANNOTATION_ONE.match(path)):
+                    or _RE_ANNOTATION_ONE.match(path)
+                    or _RE_ESCALATION_ONE.match(path)):
                 _send_method_not_allowed(self)
                 return
 
@@ -689,6 +715,14 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_ALERT_ANNOTATIONS.match(path)
             if m:
                 self._create_annotation(user_id, m.group(1))
+                return
+            # /api/v1/rules/<rule_id>/escalations POST — check the
+            # more-specific escalations regex BEFORE the bare /rules
+            # POST handler. The regexes are anchored so the actual
+            # overlap is zero; the ordering keeps intent explicit.
+            m = _RE_RULE_ESCALATIONS.match(path)
+            if m:
+                self._create_escalation_step(user_id, m.group(1))
                 return
             if _RE_RULES.match(path):
                 self._save_rules(user_id)
@@ -738,6 +772,17 @@ class APIHandler(BaseHTTPRequestHandler):
             if not _enforce_rate_limit(self, user_id):
                 return
 
+            # /api/v1/rules/<rule_id>/escalations DELETE — bulk-clear a
+            # whole chain. Check BEFORE the bare /api/v1/rules handler
+            # (which DELETEs all of the user's rules) so the more
+            # specific path wins. The regexes are anchored so the
+            # actual overlap is zero, but the ordering keeps intent
+            # explicit and matches the same convention used for
+            # /alerts/<id>/annotations vs /alerts.
+            m = _RE_RULE_ESCALATIONS.match(path)
+            if m:
+                self._delete_chain(user_id, m.group(1))
+                return
             if _RE_RULES.match(path):
                 self._reset_rules(user_id)
                 return
@@ -760,6 +805,10 @@ class APIHandler(BaseHTTPRequestHandler):
             m = _RE_ANNOTATION_ONE.match(path)
             if m:
                 self._delete_annotation(user_id, m.group(1))
+                return
+            m = _RE_ESCALATION_ONE.match(path)
+            if m:
+                self._delete_escalation_step(user_id, m.group(1))
                 return
 
             if self._path_matches_any_route(path):
@@ -2389,6 +2438,186 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception(
                 f"api DELETE /annotations/<id> crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    # ── Endpoints: /api/v1/rules/<id>/escalations + /escalations/<id> ─
+    # Per-rule alert-escalation chains (schema v24). Four endpoints:
+    #
+    #   GET    /api/v1/rules/<rule_id>/escalations  → list the chain
+    #   POST   /api/v1/rules/<rule_id>/escalations  → add/replace step
+    #   DELETE /api/v1/rules/<rule_id>/escalations  → bulk-clear chain
+    #   DELETE /api/v1/escalations/<chain_id>       → delete one step
+    #
+    # Per-user scoped via the bearer token's user_id — alice cannot
+    # read / mutate / delete bob's chain even by guessing the rule_id
+    # or chain_id. The POST handler ALSO validates the supplied
+    # channel_id exists in the caller's delivery-channel set so a
+    # mistyped id (or one pointing at another user's channel) is
+    # rejected at the API boundary instead of failing silently at
+    # dispatch time inside ``escalate_alert``.
+
+    def _step_to_dict(self, step) -> dict:
+        """Project an EscalationStep onto the wire shape. Centralised
+        because list / add both need the same projection."""
+        return {
+            "chain_id":      step.chain_id,
+            "rule_id":       step.rule_id,
+            "user_id":       step.user_id,
+            "step_number":   step.step_number,
+            "after_minutes": step.after_minutes,
+            "channel_id":    step.channel_id,
+            "created_at":    step.created_at,
+        }
+
+    def _list_escalations(self, user_id: str, rule_id: str) -> None:
+        """Return the chain for ``rule_id`` ordered by step_number ASC.
+        Per-user scoped via bearer token — alice's chain on rule X is
+        invisible to bob. An empty / unknown chain returns ``[]``
+        (200), not 404 — the rule simply has no chain configured."""
+        try:
+            from engine.alert_escalation import get_escalation_chain
+            chain = get_escalation_chain(rule_id, user_id=user_id)
+            payload = [self._step_to_dict(s) for s in chain]
+            _send_json(self, HTTPStatus.OK, payload)
+        except Exception as exc:
+            logger.exception(
+                f"api GET /rules/<id>/escalations crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    def _create_escalation_step(self, user_id: str, rule_id: str) -> None:
+        """Persist (or replace) one step in a rule's chain.
+
+        Body fields:
+          * ``step_number``   (int, required) — 1-indexed.
+          * ``after_minutes`` (int, required) — minutes from anchor.
+          * ``channel_id``    (str, required) — delivery channel.
+
+        Returns ``{"saved": True, "chain_id": "...", "step": {...}}``
+        on success. Missing any required field → 400. A channel_id
+        that does not exist in the caller's channel set → 400 (better
+        UX than letting ``escalate_alert`` silently miss at runtime
+        — a stale chain step is worse than a rejected POST). Engine
+        failure → 500.
+        """
+        try:
+            body = _read_json_body(self)
+            if body is _BODY_BAD_CTYPE:
+                _send_unsupported_media(self)
+                return
+            if body is _BODY_BAD_JSON:
+                _send_bad_request(self, "malformed json")
+                return
+            if not isinstance(body, dict):
+                _send_bad_request(self, "body must be a JSON object")
+                return
+
+            raw_step = body.get("step_number")
+            if raw_step is None:
+                _send_bad_request(self, "step_number is required")
+                return
+            try:
+                step_number = int(raw_step)
+            except (TypeError, ValueError):
+                _send_bad_request(self, "step_number must be an int")
+                return
+
+            raw_after = body.get("after_minutes")
+            if raw_after is None:
+                _send_bad_request(self, "after_minutes is required")
+                return
+            try:
+                after_minutes = int(raw_after)
+            except (TypeError, ValueError):
+                _send_bad_request(self, "after_minutes must be an int")
+                return
+
+            channel_id = body.get("channel_id")
+            if not channel_id or not isinstance(channel_id, str):
+                _send_bad_request(self, "channel_id is required")
+                return
+
+            # Validate the channel belongs to this user. The engine
+            # would happily persist the chain row pointing at a
+            # nonexistent channel — escalate_alert later finds the
+            # mismatch and logs "channel not found" without bumping
+            # the state machine. That's correct but the UX is worse
+            # than rejecting the bogus reference at write time.
+            from engine.alert_delivery import load_channels
+            channels = load_channels(user_id=user_id)
+            if not any(c.channel_id == channel_id for c in channels):
+                _send_bad_request(
+                    self,
+                    f"channel_id not found in caller's channel set",
+                )
+                return
+
+            from engine.alert_escalation import add_escalation_step
+            step = add_escalation_step(
+                rule_id=rule_id,
+                user_id=user_id,
+                step_number=step_number,
+                after_minutes=after_minutes,
+                channel_id=channel_id,
+            )
+            if step is None:
+                _send_internal_error(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {
+                    "saved":    True,
+                    "chain_id": step.chain_id,
+                    "step":     self._step_to_dict(step),
+                },
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api POST /rules/<id>/escalations crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    def _delete_escalation_step(
+        self, user_id: str, chain_id: str,
+    ) -> None:
+        """Delete one step from a chain by chain_id. Per-user scoped
+        — cross-user attempts return 404 (no-leak contract identical
+        to silences / annotations)."""
+        try:
+            from engine.alert_escalation import delete_escalation_step
+            ok = delete_escalation_step(chain_id, user_id=user_id)
+            if not ok:
+                _send_not_found(self)
+                return
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {"deleted": True, "chain_id": chain_id},
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api DELETE /escalations/<id> crashed: {exc}"
+            )
+            _send_internal_error(self)
+
+    def _delete_chain(self, user_id: str, rule_id: str) -> None:
+        """Bulk-delete every step in a rule's chain. Per-user scoped.
+        Returns ``{"deleted_steps": N}`` — 0 when the rule had no
+        chain to start with (still 200; no-op DELETEs are idempotent
+        and the caller can confirm by re-GETting the chain)."""
+        try:
+            from engine.alert_escalation import delete_chain
+            removed = delete_chain(rule_id, user_id=user_id)
+            _send_json(
+                self,
+                HTTPStatus.OK,
+                {"deleted_steps": int(removed), "rule_id": rule_id},
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api DELETE /rules/<id>/escalations crashed: {exc}"
             )
             _send_internal_error(self)
 

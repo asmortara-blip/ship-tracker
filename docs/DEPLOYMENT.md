@@ -129,6 +129,7 @@ Endpoints:
 | `POST /ack/{alert_id}`         | empty (or anything — only the path matters)            | `X-Signature-SHA256`         | `acknowledge_alert(alert_id)`. Idempotent — unknown IDs return 200.       |
 | `POST /ack-all`                | empty                                                  | `X-Signature-SHA256`         | `acknowledge_all()` — marks every unacked alert as acknowledged.          |
 | `POST /webhooks/pagerduty`     | PagerDuty Webhooks v3 envelope (JSON)                  | `X-PagerDuty-Signature`      | When `event_type == "incident.resolved"` and `dedup_key` is non-empty, calls `acknowledge_alert(dedup_key)`. Other event types are 200 no-ops. |
+| `POST /events`                 | External alert payload (JSON, see "Inbound /events" below) | `X-Hub-Signature-256` **or** `Authorization: Bearer …` | Creates a fresh `ShippingAlert` in the DB. Either auth header works; if both are present, BOTH must validate. |
 | `GET /health`                  | n/a                                                    | **none — public**            | Liveness + cheap system-health probe. Returns JSON status block (see below). |
 
 Every POST endpoint verifies an HMAC SHA256 signature against the raw
@@ -908,6 +909,83 @@ labelled with a "💬 N" badge (counts loaded in ONE batch query via
 thread in chronological order plus a `text_area` + "Add comment"
 button at the bottom; Edit / Delete buttons appear next to each
 annotation ONLY when the current user is the author.
+
+### Alert escalation chains (per-rule fallback ladders)
+
+Schema v24 adds an `alert_escalation_chains` table so an
+unacknowledged alert can climb a ladder of fallback delivery
+channels instead of going stale on the first channel that missed
+the page. Each chain is per-rule and per-user; every step carries
+its own `after_minutes` timer (measured from the previous step's
+fire, or from `alerts.created_at` for step 1) and a target
+`channel_id`. The worker's `run_escalation_pass` walks every
+unacked alert each tick (default 5 min) and dispatches the next
+due step, then stamps `alerts.last_escalated_at` +
+`alerts.escalation_step` so the next pass picks up step N+1.
+
+Chains are per-user. Alice's chain on rule X does NOT escalate
+Bob's alerts on the same rule (the `get_alerts_due_for_escalation`
+SELECT joins `alerts.user_id` to `alert_escalation_chains.user_id`
+so cross-user isolation is mechanical). The chain step's
+`channel_id` must reference a channel in the chain owner's
+delivery-channel set; cross-tenant references are rejected at
+write time on the CLI + API and silently fail at dispatch on the
+engine. Acknowledging an alert mid-chain stops further escalation —
+the unacked filter excludes ack'd rows from the due query.
+
+```bash
+# List a rule's chain ordered by step number.
+python -m tools.ops_cli escalations list <rule_id> --user-id <id>
+
+# Add (or replace) one step in a chain. Re-using --step REPLACES.
+python -m tools.ops_cli escalations add <rule_id> --user-id <id> \
+    --step 1 \
+    --after-minutes 15 \
+    --channel-id <channel_id>
+
+# Delete one step by chain_id (per-user scoped).
+python -m tools.ops_cli escalations delete <chain_id> --user-id <id>
+
+# Bulk-clear every step in a rule's chain.
+python -m tools.ops_cli escalations clear <rule_id> --user-id <id>
+```
+
+The CLI validates `--channel-id` exists in the user's channel set
+BEFORE the engine write — a typo or cross-tenant reference yields
+exit 1 with a clear error instead of a chain step that fails
+silently at dispatch time.
+
+The API mirrors the CLI 1:1:
+
+```
+GET    /api/v1/rules/<rule_id>/escalations    get_escalation_chain(user_id=...)
+POST   /api/v1/rules/<rule_id>/escalations    body: {step_number (req),
+                                                     after_minutes (req),
+                                                     channel_id (req)}
+DELETE /api/v1/rules/<rule_id>/escalations    delete_chain(rule_id, user_id=...)
+DELETE /api/v1/escalations/<chain_id>         delete_escalation_step(...)
+```
+
+POST validates `channel_id` against the caller's channel set —
+unknown ids return 400 with a descriptive error. Cross-user DELETE
+attempts on `/escalations/<chain_id>` return 404 (no-leak contract
+identical to `/silences` and `/annotations`).
+
+The escalation engine (`run_escalation_pass`, `escalate_alert`) is
+worker-internal — there is NO API surface for triggering an
+escalation on demand; that would let a token-holder spam any
+channel the chain references. The worker tick is the only
+dispatcher.
+
+The Streamlit UI surfaces the same controls in a collapsed
+"🪜 Alert escalation chains — climb a ladder of channels" expander
+under the Configuration section of the Alert Center tab. Pick a
+rule from the dropdown; the current chain renders as a table with
+inline Delete buttons. The Add-step form auto-increments the
+suggested step number to next-after-last and filters the channel
+selectbox to the user's own channels. A two-click "Clear entire
+chain" button bulk-deletes the chain (the first click arms a
+confirm; the second click executes).
 
 ### Recurring report schedules
 

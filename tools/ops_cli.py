@@ -1789,6 +1789,140 @@ def _cmd_settings_set(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  escalations — per-rule alert-escalation chains (schema v24)
+#
+#  Mirrors the API + UI surface: list / add / delete (one step) / clear
+#  (whole chain). Every subcommand is per-user scoped via the
+#  ``--user-id`` flag — the chain owner. ``add`` validates that the
+#  supplied ``--channel-id`` exists in the user's delivery-channel set
+#  before persisting; targeting another user's channel is rejected at
+#  CLI time with a clear error (the engine would silently fail at
+#  dispatch later, which is worse UX).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _format_chain_for_table(
+    chain: list, channels_by_id: dict[str, Any],
+) -> list[dict]:
+    """Project a list of EscalationStep onto the row dicts the CLI
+    table renderer consumes. ``channels_by_id`` lets the helper turn
+    each step's opaque channel_id into a human-readable name when
+    available, falling back to "(missing)" when the channel has been
+    deleted out from under the chain.
+
+    Returned dicts carry the columns ``chain_id`` / ``step`` /
+    ``after_minutes`` / ``channel`` / ``channel_id`` — the same shape
+    used by every other ``ops_cli list`` handler so the operator
+    output stays consistent.
+    """
+    rows: list[dict] = []
+    for step in chain:
+        ch = channels_by_id.get(step.channel_id)
+        ch_name = ch.name if ch is not None else "(missing)"
+        rows.append({
+            "chain_id":       step.chain_id[:10],
+            "step":           step.step_number,
+            "after_minutes":  step.after_minutes,
+            "channel":        ch_name,
+            "channel_id":     (step.channel_id or "")[:10],
+        })
+    return rows
+
+
+def _cmd_escalations_list(args: argparse.Namespace) -> None:
+    """List a rule's escalation chain ordered by step_number ASC."""
+    from engine.alert_delivery import load_channels
+    from engine.alert_escalation import get_escalation_chain
+
+    chain = get_escalation_chain(args.rule_id, user_id=args.user_id)
+    if args.json:
+        _print_json(chain)
+        return
+
+    channels = load_channels(user_id=args.user_id)
+    by_id = {c.channel_id: c for c in channels}
+    rows = _format_chain_for_table(chain, by_id)
+    _print_table(
+        rows,
+        columns=["chain_id", "step", "after_minutes", "channel", "channel_id"],
+    )
+
+
+def _cmd_escalations_add(args: argparse.Namespace) -> None:
+    """Persist (or replace) one step in a rule's escalation chain.
+
+    Validates ``--channel-id`` against the user's own delivery-channel
+    set BEFORE the write so an operator that fat-fingered the id (or
+    pointed it at another user's channel) gets a clean error instead
+    of a chain step that fails silently at dispatch time.
+    """
+    from engine.alert_delivery import load_channels
+    from engine.alert_escalation import add_escalation_step
+
+    channels = load_channels(user_id=args.user_id)
+    by_id = {c.channel_id: c for c in channels}
+    if args.channel_id not in by_id:
+        raise RuntimeError(
+            f"channel_id={args.channel_id!r} not found in user_id="
+            f"{args.user_id!r}'s channel set "
+            f"(known: {sorted(by_id.keys())[:5]})"
+        )
+
+    step = add_escalation_step(
+        rule_id=args.rule_id,
+        user_id=args.user_id,
+        step_number=int(args.step),
+        after_minutes=int(args.after_minutes),
+        channel_id=args.channel_id,
+    )
+    if step is None:
+        raise RuntimeError(
+            f"add_escalation_step failed for rule_id={args.rule_id!r} "
+            f"step={args.step} — see logs"
+        )
+
+    if args.json:
+        _print_json(step)
+        return
+    _print_kv({
+        "chain_id":      step.chain_id,
+        "rule_id":       step.rule_id,
+        "user_id":       step.user_id,
+        "step_number":   step.step_number,
+        "after_minutes": step.after_minutes,
+        "channel_id":    step.channel_id,
+        "created_at":    step.created_at,
+    })
+
+
+def _cmd_escalations_delete(args: argparse.Namespace) -> None:
+    """Delete one step by chain_id. Per-user scoped — cross-user
+    attempts surface as ``deleted: False`` (exit 0), not a crash."""
+    from engine.alert_escalation import delete_escalation_step
+
+    ok = delete_escalation_step(args.chain_id, user_id=args.user_id)
+    payload = {"chain_id": args.chain_id, "deleted": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_escalations_clear(args: argparse.Namespace) -> None:
+    """Bulk-delete every step in a rule's chain. Per-user scoped."""
+    from engine.alert_escalation import delete_chain
+
+    removed = delete_chain(args.rule_id, user_id=args.user_id)
+    payload = {
+        "rule_id":       args.rule_id,
+        "deleted_steps": int(removed),
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2436,6 +2570,85 @@ def _build_parser() -> argparse.ArgumentParser:
         help="User scope (default: legacy global)",
     )
     sru3.set_defaults(func=_cmd_rules_diff)
+
+    # ── escalations ───────────────────────────────────────────────────────
+    # Per-rule alert-escalation chains (schema v24). Four subcommands —
+    # list / add / delete / clear. Every subcommand is per-user scoped
+    # via the ``--user-id`` flag; ``add`` additionally validates the
+    # supplied --channel-id against the user's channel set so a
+    # mistyped id is caught at CLI time rather than at dispatch time.
+    p_esc = sub.add_parser(
+        "escalations", help="Alert-escalation chain subcommands",
+    )
+    s_esc = p_esc.add_subparsers(
+        dest="subcommand", required=True, metavar="SUB",
+    )
+
+    esc1 = s_esc.add_parser(
+        "list", help="List a rule's escalation chain (step ASC)",
+    )
+    esc1.add_argument(
+        "rule_id",
+        help="Rule id whose chain to list",
+    )
+    esc1.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot list bob's chain",
+    )
+    esc1.add_argument("--json", action="store_true")
+    esc1.set_defaults(func=_cmd_escalations_list)
+
+    esc2 = s_esc.add_parser(
+        "add", help="Persist or replace one step in a chain",
+    )
+    esc2.add_argument(
+        "rule_id",
+        help="Rule id the step belongs to",
+    )
+    esc2.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — chain owner (also the channel owner)",
+    )
+    esc2.add_argument(
+        "--step", required=True, type=int,
+        help="1-indexed step number (re-using replaces the existing row)",
+    )
+    esc2.add_argument(
+        "--after-minutes", dest="after_minutes",
+        required=True, type=int,
+        help="Minutes from the previous step (or alert creation for step 1)",
+    )
+    esc2.add_argument(
+        "--channel-id", dest="channel_id", required=True,
+        help="Delivery-channel id (must exist in --user-id's set)",
+    )
+    esc2.add_argument("--json", action="store_true")
+    esc2.set_defaults(func=_cmd_escalations_add)
+
+    esc3 = s_esc.add_parser(
+        "delete", help="Delete one step in a chain by chain_id",
+    )
+    esc3.add_argument("chain_id")
+    esc3.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot delete bob's chain step",
+    )
+    esc3.add_argument("--json", action="store_true")
+    esc3.set_defaults(func=_cmd_escalations_delete)
+
+    esc4 = s_esc.add_parser(
+        "clear", help="Delete every step in a rule's chain",
+    )
+    esc4.add_argument(
+        "rule_id",
+        help="Rule id whose chain to wipe",
+    )
+    esc4.add_argument(
+        "--user-id", dest="user_id", required=True,
+        help="User scope — alice cannot clear bob's chain",
+    )
+    esc4.add_argument("--json", action="store_true")
+    esc4.set_defaults(func=_cmd_escalations_clear)
 
     return p
 

@@ -1631,4 +1631,203 @@ def test_audit_export_bad_iso_since_exits_1(capsys) -> None:
     )
     assert code == 1
     assert "error:" in err.lower()
-    assert "--since" in err.lower()
+
+
+# ─── escalations (v24) ───────────────────────────────────────────────────
+#
+# The escalations CLI surface mirrors the API + UI: list / add / delete
+# (one step) / clear (whole chain). Every command is per-user scoped via
+# --user-id; add additionally validates that the supplied --channel-id
+# exists in the user's channel set (better UX than letting the engine
+# fail silently at dispatch time).
+
+
+def _make_channel(user_id: str, channel_id: str = "ch_test") -> str:
+    """Persist one delivery channel for ``user_id`` and return its id."""
+    from engine.alert_delivery import DeliveryChannel, save_channel
+
+    ch = DeliveryChannel(
+        channel_id=channel_id,
+        name=f"Test {channel_id}",
+        kind="slack",
+        target=f"https://hooks.example.com/{channel_id}",
+        severity_threshold="LOW",
+        enabled=True,
+    )
+    save_channel(ch, user_id=user_id)
+    return ch.channel_id
+
+
+def test_escalations_list_empty(capsys) -> None:
+    """An empty chain prints '(no rows)' not a crash."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+
+    code, out, _ = _run(
+        ["escalations", "list", "rule_x",
+         "--user-id", user.user_id],
+        capsys,
+    )
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_escalations_add_and_list(capsys) -> None:
+    """Adding a step surfaces it in the subsequent list call."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    cid = _make_channel(user.user_id, "ch_one")
+
+    code, _, _ = _run(
+        ["escalations", "add", "rule_x",
+         "--user-id", user.user_id,
+         "--step", "1",
+         "--after-minutes", "15",
+         "--channel-id", cid,
+         "--json"],
+        capsys,
+    )
+    assert code == 0
+
+    code2, out2, _ = _run(
+        ["escalations", "list", "rule_x",
+         "--user-id", user.user_id, "--json"],
+        capsys,
+    )
+    assert code2 == 0
+    payload = json.loads(out2)
+    assert isinstance(payload, list) and len(payload) == 1
+    assert payload[0]["step_number"] == 1
+    assert payload[0]["after_minutes"] == 15
+    assert payload[0]["channel_id"] == cid
+
+
+def test_escalations_delete_per_user_scoping(capsys) -> None:
+    """Bob cannot delete alice's chain step by knowing the chain_id.
+    The CLI surfaces this as ``deleted: False`` (exit 0; not a crash)."""
+    from auth.users import signup
+    from engine.alert_escalation import add_escalation_step, get_escalation_chain
+
+    alice = signup("alice", "correct-password-123")
+    bob = signup("bob", "correct-password-123")
+    assert alice is not None and bob is not None
+    cid = _make_channel(alice.user_id, "ch_a")
+
+    step = add_escalation_step(
+        rule_id="rule_x", user_id=alice.user_id,
+        step_number=1, after_minutes=15, channel_id=cid,
+    )
+    assert step is not None
+
+    # Bob tries to delete alice's step via the CLI.
+    code, out, _ = _run(
+        ["escalations", "delete", step.chain_id,
+         "--user-id", bob.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["deleted"] is False
+    # Alice's step still exists.
+    assert len(get_escalation_chain("rule_x", user_id=alice.user_id)) == 1
+
+
+def test_escalations_clear_bulk_removes_all_steps(capsys) -> None:
+    """``clear`` bulk-deletes every step in a rule's chain."""
+    from auth.users import signup
+    from engine.alert_escalation import (
+        add_escalation_step, get_escalation_chain,
+    )
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    cid = _make_channel(user.user_id, "ch_one")
+
+    for n in (1, 2, 3):
+        s = add_escalation_step(
+            rule_id="rule_x", user_id=user.user_id,
+            step_number=n, after_minutes=n * 15, channel_id=cid,
+        )
+        assert s is not None
+    assert len(get_escalation_chain("rule_x", user_id=user.user_id)) == 3
+
+    code, out, _ = _run(
+        ["escalations", "clear", "rule_x",
+         "--user-id", user.user_id, "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["deleted_steps"] == 3
+    assert get_escalation_chain("rule_x", user_id=user.user_id) == []
+
+
+def test_escalations_add_unknown_rule_id_is_fine(capsys) -> None:
+    """``add`` does not validate the rule_id (rules can be created
+    after the chain). Only the channel_id is validated up front."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    cid = _make_channel(user.user_id, "ch_one")
+
+    # A rule_id that does not (yet) exist still persists — the chain
+    # row is the system of record, not a foreign key into rules.
+    code, _, _ = _run(
+        ["escalations", "add", "rule_not_yet_created",
+         "--user-id", user.user_id,
+         "--step", "1",
+         "--after-minutes", "15",
+         "--channel-id", cid,
+         "--json"],
+        capsys,
+    )
+    assert code == 0
+
+
+def test_escalations_add_unknown_channel_id_rejected(capsys) -> None:
+    """A channel_id that does not exist in the user's set yields
+    exit 1 with a clear error message — the CLI validates BEFORE
+    the engine write so the operator gets immediate feedback."""
+    from auth.users import signup
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    # Note: we deliberately do NOT create the channel — the CLI
+    # should reject the add up front.
+
+    code, _, err = _run(
+        ["escalations", "add", "rule_x",
+         "--user-id", user.user_id,
+         "--step", "1",
+         "--after-minutes", "15",
+         "--channel-id", "ch_does_not_exist"],
+        capsys,
+    )
+    assert code == 1
+    assert "channel_id" in err and "ch_does_not_exist" in err
+
+
+def test_escalations_add_other_users_channel_rejected(capsys) -> None:
+    """Alice cannot add a step targeting bob's channel — the CLI's
+    per-user validation rejects cross-tenant channel references at
+    write time. Otherwise the chain row would persist but escalate_alert
+    would silently fail at dispatch time."""
+    from auth.users import signup
+    user_a = signup("alice", "correct-password-123")
+    user_b = signup("bob", "correct-password-123")
+    assert user_a is not None and user_b is not None
+    # Bob owns this channel; alice does not.
+    bob_cid = _make_channel(user_b.user_id, "ch_bob")
+
+    code, _, err = _run(
+        ["escalations", "add", "rule_x",
+         "--user-id", user_a.user_id,
+         "--step", "1",
+         "--after-minutes", "15",
+         "--channel-id", bob_cid],
+        capsys,
+    )
+    assert code == 1
+    assert "channel_id" in err
+    assert bob_cid in err

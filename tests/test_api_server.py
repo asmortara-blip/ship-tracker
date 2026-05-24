@@ -2609,3 +2609,256 @@ def test_audit_export_endpoint_is_user_scoped(server):
     assert all(p["user_id"] == alice_uid for p in parsed), (
         "Audit export leaked another user's row"
     )
+
+
+# ─── /api/v1/rules/<id>/escalations + /api/v1/escalations/<id> (v24) ────
+#
+# Per-rule escalation-chain endpoints. The four surfaces:
+#   GET    /api/v1/rules/<rule_id>/escalations  → list chain (200 + [])
+#   POST   /api/v1/rules/<rule_id>/escalations  → add/replace step
+#   DELETE /api/v1/rules/<rule_id>/escalations  → bulk-clear chain
+#   DELETE /api/v1/escalations/<chain_id>       → delete one step
+#
+# Per-user scoped via bearer token. POST validates the supplied
+# channel_id exists in the caller's set so a typo is rejected at
+# write time (400) instead of failing silently at dispatch time.
+
+
+def _make_channel_for(user_id: str, channel_id: str = "ch_test") -> str:
+    """Persist a delivery channel under ``user_id`` and return its id."""
+    from engine.alert_delivery import DeliveryChannel, save_channel
+
+    ch = DeliveryChannel(
+        channel_id=channel_id,
+        name=f"Test {channel_id}",
+        kind="slack",
+        target=f"https://hooks.example.com/{channel_id}",
+        severity_threshold="LOW",
+        enabled=True,
+    )
+    save_channel(ch, user_id=user_id)
+    return ch.channel_id
+
+
+def test_get_escalations_empty_returns_empty_list(server):
+    """A rule with no chain returns an empty JSON list — not a 404."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_post_escalations_persists_and_get_reflects(server):
+    """POST persists a step; GET on the chain surfaces it with the
+    engine columns (chain_id stamped, created_at populated)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    cid = _make_channel_for(uid, "ch_a")
+
+    r = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={
+            "step_number": 1,
+            "after_minutes": 15,
+            "channel_id": cid,
+        },
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["saved"] is True
+    chain_id = body["chain_id"]
+    assert body["step"]["step_number"] == 1
+    assert body["step"]["after_minutes"] == 15
+    assert body["step"]["channel_id"] == cid
+    assert body["step"]["user_id"] == uid
+
+    r2 = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 200
+    listed = r2.json()
+    assert isinstance(listed, list) and len(listed) == 1
+    assert listed[0]["chain_id"] == chain_id
+
+
+def test_delete_one_escalation_step_removes_it(server):
+    """DELETE /api/v1/escalations/<chain_id> removes one step;
+    subsequent GET on the chain reflects the deletion."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    cid = _make_channel_for(uid, "ch_a")
+
+    create = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={"step_number": 1, "after_minutes": 15, "channel_id": cid},
+        headers=_bearer(token), timeout=5,
+    )
+    chain_id = create.json()["chain_id"]
+
+    r = requests.delete(
+        f"{server}/api/v1/escalations/{chain_id}",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True, "chain_id": chain_id}
+
+    r2 = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.json() == []
+
+
+def test_delete_chain_bulk_removes_every_step(server):
+    """DELETE /api/v1/rules/<id>/escalations clears every step in
+    the chain for that rule + user. Returns the deleted-row count."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    cid = _make_channel_for(uid, "ch_a")
+
+    for n in (1, 2, 3):
+        r = requests.post(
+            f"{server}/api/v1/rules/rule_x/escalations",
+            json={
+                "step_number": n,
+                "after_minutes": n * 15,
+                "channel_id": cid,
+            },
+            headers=_bearer(token), timeout=5,
+        )
+        assert r.status_code == 200
+
+    # Bulk DELETE clears all three.
+    r = requests.delete(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["deleted_steps"] == 3
+    assert payload["rule_id"] == "rule_x"
+
+    r2 = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.json() == []
+
+
+def test_escalation_endpoints_per_user_scoping(server):
+    """Alice cannot delete bob's chain step even by knowing the
+    chain_id. Same no-leak contract as silences / schedules — the
+    cross-user DELETE returns 404 and the row survives."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_token = _mint_token(bob_uid)
+    bob_cid = _make_channel_for(bob_uid, "ch_bob")
+
+    # Bob creates a step.
+    create = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={
+            "step_number": 1, "after_minutes": 15, "channel_id": bob_cid,
+        },
+        headers=_bearer(bob_token), timeout=5,
+    )
+    chain_id = create.json()["chain_id"]
+
+    # Alice's delete attempt → 404; bob's row survives.
+    r_alice = requests.delete(
+        f"{server}/api/v1/escalations/{chain_id}",
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r_alice.status_code == 404
+    r_bob_get = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        headers=_bearer(bob_token), timeout=5,
+    )
+    assert len(r_bob_get.json()) == 1
+
+
+def test_escalation_endpoints_require_auth(server):
+    """GET / POST / DELETE on the escalation surfaces all return 401
+    without a bearer token — chain config is per-user state and must
+    NOT leak to anonymous probes."""
+    r = requests.get(
+        f"{server}/api/v1/rules/rule_x/escalations", timeout=5,
+    )
+    assert r.status_code == 401
+    r = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={"step_number": 1, "after_minutes": 15, "channel_id": "x"},
+        timeout=5,
+    )
+    assert r.status_code == 401
+    r = requests.delete(
+        f"{server}/api/v1/escalations/anything", timeout=5,
+    )
+    assert r.status_code == 401
+    r = requests.delete(
+        f"{server}/api/v1/rules/rule_x/escalations", timeout=5,
+    )
+    assert r.status_code == 401
+
+
+def test_post_escalations_missing_step_number_returns_400(server):
+    """``step_number`` is required — its absence yields 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    cid = _make_channel_for(uid, "ch_a")
+    r = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={"after_minutes": 15, "channel_id": cid},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    assert "step_number" in r.json()["error"]
+
+
+def test_post_escalations_unknown_channel_id_returns_400(server):
+    """A channel_id that does not exist in the caller's channel set
+    is rejected at the API boundary (400) — the engine would
+    persist it but escalate_alert would silently fail at dispatch."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    # Note: no channel created.
+
+    r = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={
+            "step_number": 1,
+            "after_minutes": 15,
+            "channel_id": "ch_does_not_exist",
+        },
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    assert "channel_id" in r.json()["error"]
+
+
+def test_post_escalations_other_users_channel_rejected(server):
+    """Alice cannot wire her chain to bob's channel — the channel
+    validation is per-user-scoped so a cross-tenant reference is
+    rejected as a bogus channel_id (400)."""
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_cid = _make_channel_for(bob_uid, "ch_bob")
+
+    r = requests.post(
+        f"{server}/api/v1/rules/rule_x/escalations",
+        json={
+            "step_number": 1,
+            "after_minutes": 15,
+            "channel_id": bob_cid,
+        },
+        headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 400
