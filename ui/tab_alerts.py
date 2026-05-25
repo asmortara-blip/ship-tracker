@@ -40,18 +40,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
 from data.quality import DataKind, DataQuality, DataSource
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_HIGH,
     C_LOW,
     C_MOD,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    apply_dark_layout,
     badge,
     live_data_badge,
     metric_card_row,
@@ -3930,6 +3933,120 @@ def _render_acknowledgment_analytics() -> None:
         st.error("Acknowledgment analytics unavailable.")
 
 
+def _build_effectiveness_bubble(by_alert_type: dict) -> go.Figure:
+    """Bubble chart of alert types: x = volume, y = hit rate, size = volume.
+
+    Lets the operator answer the two questions the breakdown tables can't
+    answer together:
+
+      * Which alert types are firing the most (volume)?
+      * Which alert types are most predictive (hit rate)?
+
+    Quadrant interpretation (reference lines at hit_rate = 0.5 and at
+    the median count):
+
+      * top-right: high volume, high accuracy → keep-as-is workhorses
+      * top-left:  low volume,  high accuracy → rare-but-trusted
+      * bottom-right: high volume, low accuracy → noisy; consider tuning
+      * bottom-left:  low volume, low accuracy → vestigial; consider drop
+
+    Pure builder — no ``st.*`` calls — exercised by the lock-in tests.
+    Empty input returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list((by_alert_type or {}).items())
+    if not items:
+        fig.add_annotation(
+            text="No alert-type breakdown yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Volume × Hit Rate", height=280)
+        return fig
+
+    labels: list[str] = []
+    counts: list[int] = []
+    rates:  list[float] = []
+    for atype, stats in items:
+        labels.append(str(atype))
+        counts.append(int((stats or {}).get("count", 0) or 0))
+        rates.append(float((stats or {}).get("hit_rate", 0.0) or 0.0))
+
+    # Marker size: scale volume into a 14–44 px range so the smallest
+    # alert type stays visible and the largest doesn't dominate.
+    max_n = max(counts) if counts else 1
+    sizes = [
+        14 + (30 * (c / max_n if max_n else 0.0))
+        for c in counts
+    ]
+
+    def _rate_color(rate: float) -> str:
+        if rate >= 0.55:
+            return C_HIGH
+        if rate >= 0.45:
+            return C_MOD
+        return C_LOW
+    colors = [_rate_color(r) for r in rates]
+
+    fig.add_trace(go.Scatter(
+        x=counts,
+        y=[r * 100.0 for r in rates],
+        mode="markers+text",
+        marker={
+            "size": sizes,
+            "color": colors,
+            "line": {"color": C_BG, "width": 1.5},
+            "opacity": 0.85,
+        },
+        text=labels,
+        textposition="top center",
+        textfont={"color": C_TEXT3, "size": 10},
+        customdata=counts,
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Fires: %{customdata}<br>"
+            "Hit rate: %{y:.1f}%<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # Reference: 50% hit rate (random), plus median-count vertical for
+    # the volume threshold. With a single point the median collapses to
+    # that point — skip the vertical when n=1 to avoid a redundant line.
+    fig.add_hline(
+        y=50.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+        annotation_text="50%",
+        annotation_position="bottom right",
+        annotation_font={"color": C_TEXT3, "size": 9},
+    )
+    if len(counts) > 1:
+        sorted_counts = sorted(counts)
+        median = sorted_counts[len(sorted_counts) // 2]
+        fig.add_vline(
+            x=median,
+            line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+            annotation_text="median",
+            annotation_position="top right",
+            annotation_font={"color": C_TEXT3, "size": 9},
+        )
+
+    apply_dark_layout(
+        fig,
+        title="Alert Effectiveness — volume × hit rate",
+        height=320,
+    )
+    fig.update_layout(
+        xaxis={"title": "Alert volume (count)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": "Hit rate (%)", "range": [0, 105],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        margin={"l": 70, "r": 24, "t": 44, "b": 50},
+    )
+    return fig
+
+
 def _render_effectiveness_backtest() -> None:
     """Render Alert Effectiveness panel — backtest of persisted alerts vs realized moves.
 
@@ -4015,6 +4132,19 @@ def _render_effectiveness_backtest() -> None:
                 "sublabel": "no realized data",
             },
         ], columns=4)
+
+        # Volume × hit-rate bubble — overview before the breakdown tables.
+        # Lets the operator scan all alert types on one chart and spot the
+        # noisy-but-frequent and the rare-but-trusted ones before drilling in.
+        try:
+            st.plotly_chart(
+                _build_effectiveness_bubble(report.by_alert_type),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="alerts_effectiveness_bubble",
+            )
+        except Exception:
+            logger.exception("Alert effectiveness bubble render failed")
 
         # ── By-type / By-severity breakdown tables ─────────────────────────
         bc1, bc2 = st.columns(2, gap="medium")
