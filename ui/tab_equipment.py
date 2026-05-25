@@ -52,11 +52,13 @@ from ui.styles import (
     badge,
     gradient_card,
     insight_card_html,
+    live_data_badge,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
     source_footer,
+    status_badge,
     wsj_market_table,
 )
 
@@ -444,22 +446,17 @@ def _render_enhanced_equipment_overview() -> None:
     )
     st.plotly_chart(fig_geo, use_container_width=True, key="new_equip_geo_map")
 
-    # Color legend — dot markers with class-based layout, only color is inline
-    legend_items = "".join(
-        f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;">'
-        f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
-        f'background:{col};flex-shrink:0;"></span>'
-        f'<span class="wsj-byline" style="text-transform:none;letter-spacing:0;">{lbl}</span>'
-        f'</span>'
-        for col, lbl in [
-            (C_HIGH, "Large surplus (>+20)"),
-            (_TEAL,  "Slight surplus"),
-            (C_MOD, "Slight deficit"),
-            (C_LOW,   "Large deficit (<-20)"),
-        ]
-    )
+    # Color legend — design-system status chips (one per balance band).
+    # status_badge() ships its own background+border+dot from ui.styles, so
+    # the legend no longer needs hand-rolled inline styles.
+    legend_chips = "  ".join([
+        status_badge("Large surplus (>+20)", status="success"),
+        status_badge("Slight surplus",       status="info"),
+        status_badge("Slight deficit",       status="warning"),
+        status_badge("Large deficit (<-20)", status="danger"),
+    ])
     st.markdown(
-        f'<div class="wsj-body">{legend_items}</div>',
+        f'<div class="wsj-body">{legend_chips}</div>',
         unsafe_allow_html=True,
     )
 
@@ -557,8 +554,7 @@ def _render_enhanced_equipment_overview() -> None:
         st.plotly_chart(fig_tt, use_container_width=True, key="new_equip_turntime_bar")
 
     with col_tt_cards:
-        st.markdown('<div class="sub-section-header">Port Detail</div>',
-                    unsafe_allow_html=True)
+        section_divider("Port Detail")
         port_rows = []
         for p in _TURN_TIME_HIGHLIGHT:
             rc = RISK_COLORS.get(p["risk"], C_TEXT2)
@@ -890,7 +886,11 @@ def _render_shortage_surplus_map() -> None:
         ]), unsafe_allow_html=True)
 
     with col_detail:
-        # Per-region summary cards
+        # Per-region summary cards — drive the headline pill, utilization
+        # chip, and risk chip entirely through ui.styles helpers (badge +
+        # status_badge) so styling lives in the design system, not inline.
+        _risk_status = {"LOW": "success", "MODERATE": "warning",
+                        "HIGH": "danger", "CRITICAL": "danger"}
         for region in REGIONS:
             region_equip = [e for e in REGIONAL_EQUIPMENT_STATUS if e.region == region]
             avg_util = (sum(e.utilization_pct for e in region_equip) / len(region_equip)
@@ -899,15 +899,14 @@ def _render_shortage_surplus_map() -> None:
             worst    = max(region_equip, key=lambda e: e.utilization_pct, default=None)
             color    = _REGION_COLORS.get(region, C_TEXT2)
             worst_risk = worst.shortage_risk if worst else "LOW"
-            risk_tag   = badge(worst_risk, color=RISK_COLORS.get(worst_risk, C_TEXT2))
+            risk_tag   = status_badge(worst_risk, status=_risk_status.get(worst_risk, "info"))
+            util_tag   = badge(f"{avg_util:.0f}% avg util", color=color)
 
+            # Card content uses only design-system CSS classes (port-name,
+            # port-detail) + ui.styles badge chips; no inline style attrs.
             region_content = (
-                f'<span class="port-name" style="font-size:0.82rem;">{region}</span>'
-                f'<span style="float:right;font-family:var(--sans);font-size:0.78rem;'
-                f'font-weight:700;color:{color};">{avg_util:.0f}% avg util</span>'
-                f'<span class="port-detail" style="display:block;margin-top:5px;">'
-                f'<span>{total_k:.0f}K TEU tracked</span>'
-                f'<span style="float:right;">{risk_tag}</span></span>'
+                f'<div class="port-name">{region} {util_tag}</div>'
+                f'<div class="port-detail">{total_k:.0f}K TEU tracked &nbsp; {risk_tag}</div>'
             )
             st.markdown(
                 gradient_card(region_content, border_color=color),
@@ -1212,8 +1211,7 @@ def _render_dwell_times() -> None:
         st.plotly_chart(fig, use_container_width=True, key="equip_dwell_bar")
 
     with col_cards:
-        st.markdown('<div class="sub-section-header">Port Detail</div>',
-                    unsafe_allow_html=True)
+        section_divider("Port Detail")
         _trend_color_map = {"improving": C_HIGH, "stable": C_MOD, "worsening": C_LOW}
         rows: List[List[str]] = []
         for p in filtered_sorted[:10]:  # show top 10
@@ -1420,8 +1418,7 @@ def _render_reefer_section() -> None:
 
     with col_right:
         # Reefer commodity breakdown
-        st.markdown('<div class="sub-section-header">Top Reefer Commodities</div>',
-                    unsafe_allow_html=True)
+        section_divider("Top Reefer Commodities")
         for comm in _REEFER_COMMODITIES:
             score = min(comm["share_pct"] / 25.0, 1.0)
             st.markdown(insight_card_html(
@@ -1433,8 +1430,7 @@ def _render_reefer_section() -> None:
             ), unsafe_allow_html=True)
 
         # Deficit days by region summary
-        st.markdown('<div class="sub-section-header">Reefer Deficit Days by Region</div>',
-                    unsafe_allow_html=True)
+        section_divider("Reefer Deficit Days by Region")
         deficit_rows = []
         for e in reefers:
             d = e.days_surplus_deficit
@@ -1594,8 +1590,7 @@ def _render_age_distribution() -> None:
         )
 
     with col_table:
-        st.markdown('<div class="sub-section-header">Age Bracket Details</div>',
-                    unsafe_allow_html=True)
+        section_divider("Age Bracket Details")
         global_fleet = _GLOBAL_TEU_POOL["total_teu_m"]
         age_metrics = [
             {
@@ -1789,8 +1784,7 @@ def _render_lease_vs_own() -> None:
         ]), unsafe_allow_html=True)
 
     with col_table:
-        st.markdown('<div class="sub-section-header">Lease/Own Detail by Type</div>',
-                    unsafe_allow_html=True)
+        section_divider("Lease/Own Detail by Type")
         for r in _LEASE_VS_OWN:
             prem = r["lease_premium"]
             pref = (
@@ -2147,6 +2141,23 @@ def render(
             badge_text="OPERATIONS",
             badge_color=C_ACCENT,
         )
+
+        # Tab-level provenance pill — every chart in this tab is fed by the
+        # modeled REGIONAL_EQUIPMENT_STATUS / TRADE_IMBALANCE_DATA snapshots
+        # in `processing.equipment_tracker`. Surface that once at the top so
+        # the per-figure source_footer calls don't have to carry the burden.
+        try:
+            st.markdown(
+                live_data_badge(
+                    "processing.equipment_tracker",
+                    quality="modeled",
+                    kind="modeled",
+                    notes="Equipment + trade-imbalance snapshots — Drewry / Alphaliner blend",
+                ),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            logger.exception("tab_equipment: error rendering live_data_badge header")
 
         try:
             _render_enhanced_equipment_overview()
