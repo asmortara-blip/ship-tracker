@@ -1745,6 +1745,51 @@ passes it explicitly. That keeps `engine.audit_search` a pure search
 helper; the per-user scoping policy belongs upstream where the caller
 can decide whether they have admin scope or not.
 
+### Delivery retry queue (schema v26)
+
+When a webhook / Slack / email dispatch fails with a retriable error
+(HTTP 5xx, connection timeout, SMTP temporary failure), the alert was
+previously logged + lost. The retry queue persists it; worker walks
+every 5 minutes with exponential backoff until success OR
+`MAX_RETRIES = 5` attempts exhausted (60s → 120s → 240s → 480s →
+960s wait between attempts).
+
+**Retriable classification** (`engine.alert_delivery._is_retriable`):
+
+| Result | Retried? | Why |
+|---|---|---|
+| HTTP 500 / 502 / 503 / 504 | yes | server-side, will likely self-heal |
+| HTTP 408 (timeout) / 429 (rate limit) | yes | transient |
+| HTTP 400 / 401 / 403 / 404 / 422 | **no** | client misconfig — won't fix itself |
+| Connection / timeout / "temporary" in error | yes | transient |
+| Budget exceeded | **no** | the budget is intentional |
+
+**Operator CLI** (`tools.ops_cli retries …`):
+
+```bash
+python -m tools.ops_cli retries list [--status pending|failed|succeeded] [--user-id ID] [--limit N]
+python -m tools.ops_cli retries cancel <queue_id> --user-id <id>
+python -m tools.ops_cli retries manual <queue_id> --user-id <id>
+python -m tools.ops_cli retries cleanup [--retention-days 14]
+python -m tools.ops_cli retries process     # run retry pass NOW
+```
+
+**API** (`/api/v1/delivery-retries`):
+
+```bash
+curl "$BASE/api/v1/delivery-retries?status=pending&limit=100" \
+     -H "Authorization: Bearer $TOKEN"
+curl -X POST "$BASE/api/v1/delivery-retries/<queue_id>/retry" \
+     -H "Authorization: Bearer $TOKEN"
+curl -X DELETE "$BASE/api/v1/delivery-retries/<queue_id>" \
+     -H "Authorization: Bearer $TOKEN"
+```
+
+**UI**: Data Health → Delivery Retry Queue panel (Movement 1.698).
+Per-row Retry / Cancel buttons on pending entries; Recently failed +
+Recently succeeded expanders for visibility; Maintenance expander
+with the cleanup action.
+
 ## Backup / Restore
 
 Two complementary tools cover backups:

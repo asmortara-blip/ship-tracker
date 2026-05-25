@@ -3097,6 +3097,107 @@ def _build_source_rows() -> list[dict]:
     return rows
 
 
+def _render_delivery_retry_panel() -> None:
+    """Render the delivery retry queue panel — failed dispatches awaiting retry.
+
+    Shows three sections per current user: Pending (with per-row
+    Retry/Cancel buttons), Recently failed (after MAX_RETRIES
+    exhaustion), Recently succeeded. Whole panel try/except + lazy
+    imports so a retry-table outage cannot break Data Health.
+    """
+    try:
+        from engine.delivery_retry import (
+            cancel_retry,
+            cleanup_completed,
+            list_failed,
+            list_pending,
+            list_succeeded_recent,
+            manual_retry,
+        )
+        from state.user_scope import current_user_id
+
+        section_divider("Delivery Retry Queue")
+        uid = current_user_id()
+        if not uid:
+            st.info("Log in to see your retry queue.")
+            return
+
+        pending = list_pending(user_id=uid, limit=50)
+        failed = list_failed(user_id=uid, limit=20)
+        succeeded = list_succeeded_recent(user_id=uid, limit=10)
+
+        st.caption(
+            f"Pending: {len(pending)} · Failed (exhausted): {len(failed)} · "
+            f"Recently succeeded: {len(succeeded)}"
+        )
+
+        # Pending — actionable
+        if pending:
+            st.markdown("**Pending retries**")
+            for entry in pending:
+                cols = st.columns([2, 2, 1, 1, 2, 1, 1])
+                cols[0].write(f"`{entry.alert_id[:8]}`")
+                cols[1].write(f"`{entry.channel_id}`")
+                cols[2].write(f"#{entry.attempt_count}")
+                cols[3].write((entry.last_error or "")[:24])
+                cols[4].write(entry.next_attempt_at[:19])
+                if cols[5].button("Retry", key=f"rqr_{entry.queue_id}"):
+                    try:
+                        manual_retry(entry.queue_id, user_id=uid)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Retry failed: {exc}")
+                if cols[6].button("Cancel", key=f"rqc_{entry.queue_id}"):
+                    try:
+                        cancel_retry(entry.queue_id, user_id=uid)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Cancel failed: {exc}")
+        else:
+            st.caption("No pending retries.")
+
+        # Recently failed — read-only
+        if failed:
+            with st.expander(f"Recently failed ({len(failed)})"):
+                import pandas as pd
+                df = pd.DataFrame([
+                    {
+                        "alert_id": e.alert_id[:8],
+                        "channel_id": e.channel_id,
+                        "attempts": e.attempt_count,
+                        "last_error": (e.last_error or "")[:48],
+                        "final_at": (e.final_at or "")[:19],
+                    } for e in failed
+                ])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # Recently succeeded — read-only
+        if succeeded:
+            with st.expander(f"Recently succeeded ({len(succeeded)})"):
+                import pandas as pd
+                df = pd.DataFrame([
+                    {
+                        "alert_id": e.alert_id[:8],
+                        "channel_id": e.channel_id,
+                        "attempts": e.attempt_count + 1,  # +1 for the success
+                        "final_at": (e.final_at or "")[:19],
+                    } for e in succeeded
+                ])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # Maintenance
+        with st.expander("Maintenance"):
+            if st.button("Cleanup completed > 14d old", key="rq_cleanup"):
+                try:
+                    deleted = cleanup_completed(retention_days=14)
+                    st.success(f"Deleted {deleted} old completed rows.")
+                except Exception as exc:
+                    st.error(f"Cleanup failed: {exc}")
+    except Exception as exc:
+        logger.exception(f"_render_delivery_retry_panel: {exc}")
+        st.warning("Delivery retry panel unavailable.")
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def render(
@@ -3207,6 +3308,13 @@ def render(
             except Exception as exc:
                 logger.error(f"MFA panel render error: {exc}")
                 st.error("MFA panel unavailable.")
+
+            # ── Movement 1.698: delivery retry queue ───────────────────────────
+            try:
+                _render_delivery_retry_panel()
+            except Exception as exc:
+                logger.error(f"Delivery retry panel render error: {exc}")
+                st.error("Delivery retry panel unavailable.")
 
             # ── Movement 1.7: log viewer ───────────────────────────────────────
             section_divider("Logs")
