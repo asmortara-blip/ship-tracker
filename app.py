@@ -905,6 +905,7 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("AI Assistant",     "ui.tab_assistant"),
         ("Sustainability",   "ui.tab_sustainability"),
         ("Alerts",           "ui.tab_alerts"),
+        ("Rule History",     "ui.tab_rule_history"),
     ],
     "reports": [
         ("Investor Report",  "ui.tab_report"),
@@ -1635,10 +1636,10 @@ elif active_section == "risk":
 
 # ── 9. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":
-    t0, t1, t2, t3, t4 = st.tabs([
+    t0, t1, t2, t3, t4, t5 = st.tabs([
         "News & Sentiment", "Deep Dive",
         "AI Assistant", "Sustainability",
-        "Alerts",
+        "Alerts", "Rule History",
     ])
     with t0:
         try:
@@ -1673,6 +1674,12 @@ elif active_section == "intelligence":
             tab_alerts.render(port_results, route_results, insights, freight_data, macro_data, stock_data)
         except Exception as e:
             st.error(f"Tab error: {e}")
+    with t5:
+        try:
+            from ui import tab_rule_history
+            tab_rule_history.render()
+        except Exception as e:
+            st.error(f"Rule History error: {e}")
 
 
 # ── 10. Reports ───────────────────────────────────────────────────────────

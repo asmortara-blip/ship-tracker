@@ -83,6 +83,7 @@ _TAB_MODULES = [
     "ui.tab_risk_lab",
     "ui.tab_risk_matrix",
     "ui.tab_routes",
+    "ui.tab_rule_history",
     "ui.tab_scenarios",
     "ui.tab_scorecard",
     "ui.tab_sector",

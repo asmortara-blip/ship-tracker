@@ -43,6 +43,7 @@ from engine.alert_engine_v2 import (
     check_rate_alerts,
     check_signal_alerts,
     check_stock_alerts,
+    get_alerts_by_rule,
     get_unread_count,
     load_alerts,
     run_all_checks,
@@ -477,3 +478,48 @@ def test_save_alerts_caps_at_max_stored(monkeypatch) -> None:
     save_alerts(alerts)
     loaded = load_alerts(max_age_days=30)
     assert len(loaded) == 3
+
+
+# ─── get_alerts_by_rule ─────────────────────────────────────────────────────
+
+def test_get_alerts_by_rule_filters_by_rule_id() -> None:
+    """Only alerts stamped with the matching rule_id are returned."""
+    a1 = _mk_alert(); a1.ticker = "ZIM"
+    a2 = _mk_alert(); a2.ticker = "MATX"
+    a3 = _mk_alert(); a3.ticker = "SBLK"
+    save_alerts([a1, a2], rule_id="rule_alpha")
+    save_alerts([a3], rule_id="rule_beta")
+    out_alpha = get_alerts_by_rule("rule_alpha")
+    out_beta = get_alerts_by_rule("rule_beta")
+    assert {a.alert_id for a in out_alpha} == {a1.alert_id, a2.alert_id}
+    assert {a.alert_id for a in out_beta} == {a3.alert_id}
+
+
+def test_get_alerts_by_rule_honours_since_lower_bound() -> None:
+    """The ``since`` cutoff is inclusive (>=) and excludes earlier rows."""
+    base = datetime.now(timezone.utc)
+    old = _mk_alert(created_at=(base - timedelta(days=10)).isoformat())
+    old.ticker = "ZIM"
+    new = _mk_alert(created_at=base.isoformat())
+    new.ticker = "MATX"
+    save_alerts([old, new], rule_id="rule_x")
+    cutoff = (base - timedelta(days=5)).isoformat()
+    out = get_alerts_by_rule("rule_x", since=cutoff)
+    ids = {a.alert_id for a in out}
+    assert new.alert_id in ids
+    assert old.alert_id not in ids
+
+
+def test_get_alerts_by_rule_empty_id_and_zero_limit_return_empty() -> None:
+    """Defensive: empty rule_id or non-positive limit short-circuits to []."""
+    a = _mk_alert()
+    save_alerts([a], rule_id="rule_x")
+    # Sanity: the row IS there under rule_x.
+    assert len(get_alerts_by_rule("rule_x")) == 1
+    # Empty rule_id → [].
+    assert get_alerts_by_rule("") == []
+    # Non-positive limit → [].
+    assert get_alerts_by_rule("rule_x", limit=0) == []
+    assert get_alerts_by_rule("rule_x", limit=-5) == []
+    # Unknown rule_id → [].
+    assert get_alerts_by_rule("rule_does_not_exist") == []

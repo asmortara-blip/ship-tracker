@@ -841,6 +841,87 @@ def load_alerts(max_age_days: int = 30, *, user_id: Optional[str] = None) -> lis
     return [_row_to_alert(r) for r in rows]
 
 
+def get_alerts_by_rule(
+    rule_id: str,
+    *,
+    user_id: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 500,
+) -> list[ShippingAlert]:
+    """Return every persisted alert that was stamped with ``rule_id``,
+    newest-first.
+
+    Pushes the rule_id filter into SQLite (vs. loading every alert via
+    ``load_alerts`` and filtering in Python) so the Rule History tab
+    stays cheap even when an account accumulates tens of thousands of
+    alerts across many rules.
+
+    Per-user scoping follows the same dual-set semantics as
+    ``load_alerts``: when ``user_id`` resolves to a non-empty string,
+    rows belonging to that user PLUS legacy ``user_id=''`` rows are
+    returned together. When it resolves to ``""`` (the empty string)
+    every matching row is returned (the legacy pre-multi-user
+    behaviour).
+
+    Parameters
+    ----------
+    rule_id:
+        The originating rule's id. Empty/falsy returns ``[]`` straight
+        away — the rule_id column is keyed under a real UUID and a
+        missing id has no meaningful matches.
+    user_id:
+        See ``load_alerts``. ``None`` resolves to the active Streamlit
+        user; an explicit string overrides that.
+    since:
+        Optional ISO-8601 UTC lower bound on ``created_at``. Only rows
+        created STRICTLY AT OR AFTER this timestamp are returned.
+        ``None`` (default) means "no lower bound" — every persisted
+        alert for this rule is returned (up to ``limit``).
+    limit:
+        Maximum rows to return. The cap is enforced in SQL via
+        ``LIMIT`` so a hostile caller cannot OOM the process by asking
+        for ``limit=10**9``. Values <= 0 return ``[]``. The default
+        (500) matches the ``_MAX_STORED`` ceiling on the alerts
+        table — a single rule cannot in practice produce more rows
+        than that before the trimmer runs.
+
+    Returns
+    -------
+    list[ShippingAlert]
+        Rows in ``created_at DESC`` order. Empty list on any read
+        error (the function NEVER raises) and on a missing rule_id.
+    """
+    if not rule_id:
+        return []
+    if limit <= 0:
+        return []
+    from state.db import get_connection
+    from state.user_scope import scope_filter_sql
+
+    uid = _resolve_user_id(user_id)
+    scope_sql, scope_params = scope_filter_sql(uid)
+    clauses: list[str] = ["rule_id = ?"]
+    params: list = [rule_id]
+    if since:
+        clauses.append("created_at >= ?")
+        params.append(since)
+    where_sql = " AND ".join(clauses)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM alerts WHERE {where_sql} {scope_sql} "
+            f"ORDER BY created_at DESC LIMIT ?",
+            (*params, *scope_params, int(limit)),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            f"get_alerts_by_rule: SQLite read failed for "
+            f"rule_id={rule_id!r}: {exc}"
+        )
+        return []
+    return [_row_to_alert(r) for r in rows]
+
+
 def acknowledge_alert(
     alert_id: str,
     *,
