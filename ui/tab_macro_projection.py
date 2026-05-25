@@ -964,6 +964,129 @@ def _render_scenario_lens(ssi_report, route_results) -> None:
         )
 
 
+# ── Section D2: SSI component-predictiveness backtest ──────────────────────
+
+
+def _build_component_predictiveness_bars(scorecards: list) -> go.Figure:
+    """Horizontal bars of per-SSI-component sign-agreement vs. forward rate.
+
+    Companion visual for the per-component backtest in
+    ``processing.ssi_component_validation``. Each component's
+    sign-agreement rate sits on the x-axis (0–1, 0.5 = random baseline);
+    bars are sorted strongest at the top and coloured green / amber / red
+    by their edge above 0.5.
+
+    Pure builder — no ``st.*`` calls — exercised by the validator's own
+    test suite via the ``_build_*`` import. Empty list returns annotated.
+    """
+    fig = go.Figure()
+    items = list(scorecards or [])
+    if not items:
+        fig.add_annotation(
+            text="No component scorecards",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="SSI Component Predictiveness", height=220)
+        return fig
+
+    # Sort ascending so Plotly's bottom-up axis puts the best at the TOP.
+    ranked = sorted(items, key=lambda sc: float(getattr(sc, "sign_agreement_rate", 0.0)))
+    labels = [_SSI_COMPONENT_DISPLAY.get(sc.component, sc.component.title())
+              for sc in ranked]
+    rates  = [float(sc.sign_agreement_rate) for sc in ranked]
+    weights = [float(getattr(sc, "weight", 0.0)) for sc in ranked]
+
+    def _band(rate: float) -> str:
+        if rate >= 0.60:
+            return C_HIGH
+        if rate >= 0.50:
+            return C_MOD
+        return C_LOW
+    colors = [_band(r) for r in rates]
+
+    fig.add_trace(go.Bar(
+        x=rates,
+        y=labels,
+        orientation="h",
+        marker={"color": colors,
+                "line": {"color": "#0c0e14", "width": 1}},
+        text=[f"{r * 100:.0f}%" for r in rates],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        customdata=[f"w {w * 100:.0f}%" for w in weights],
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Sign-agreement: %{x:.2%}<br>"
+            "Weight in SSI: %{customdata}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+    # Random-baseline reference at 0.5
+    fig.add_vline(
+        x=0.5,
+        line={"color": "rgba(255,255,255,0.18)", "width": 1, "dash": "dot"},
+        annotation_text="random",
+        annotation_position="top",
+        annotation_font={"color": C_TEXT3, "size": 9},
+    )
+
+    apply_dark_layout(
+        fig,
+        title="SSI Component Predictiveness — sign-agreement vs. forward rate",
+        height=max(220, 60 + 30 * len(ranked)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Sign-agreement rate (0–1)", "range": [0, 1.05],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 44, "b": 36},
+        bargap=0.35,
+    )
+    return fig
+
+
+def _render_component_predictiveness() -> None:
+    """Surface the per-SSI-component backtest scorecard.
+
+    Uses ``processing.ssi_component_validation.validate_ssi_components`` —
+    a deterministic, seed-stable backtest that scores how well each SSI
+    component predicts forward rate moves. The panel is lazy-imported so
+    a backtest module failure can't break the rest of the tab.
+    """
+    try:
+        from processing.ssi_component_validation import validate_ssi_components
+    except Exception:
+        logger.exception("Macro Projection — component validator import failed")
+        return
+
+    section_header(
+        "Component Predictiveness",
+        "Which SSI components actually lead the rate move? "
+        "Sign-agreement = % of windows where the component's stress delta "
+        "predicted the direction of the forward rate move.",
+    )
+    try:
+        report = validate_ssi_components()
+    except Exception:
+        logger.exception("Macro Projection — validate_ssi_components failed")
+        _empty_state(
+            "Component validator failed — see logs.",
+            accent=C_MOD,
+        )
+        return
+
+    st.plotly_chart(
+        _build_component_predictiveness_bars(report.scorecards),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_component_predictiveness",
+    )
+    st.caption(report.summary)
+
+
 # ── Section E: leading-indicator context strip ──────────────────────────────
 
 def _render_leading_indicator_strip(macro_data) -> None:
@@ -1224,6 +1347,14 @@ def render(
                 logger.exception("Macro Projection — scenario lens failed")
                 st.error("Scenario projection lens unavailable.")
             section_divider()
+
+        # ── D2. SSI component-predictiveness backtest ───────────────────────────
+        try:
+            _render_component_predictiveness()
+        except Exception:
+            logger.exception("Macro Projection — component predictiveness failed")
+            st.error("Component predictiveness panel unavailable.")
+        section_divider()
 
         # ── E. Leading-indicator context strip ──────────────────────────────────
         try:
