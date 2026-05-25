@@ -2097,3 +2097,96 @@ def test_escalations_add_other_users_channel_rejected(capsys) -> None:
     assert code == 1
     assert "channel_id" in err
     assert bob_cid in err
+
+
+# ─── digest ────────────────────────────────────────────────────────────────
+
+def test_digest_config_defaults_disabled(capsys) -> None:
+    """A brand-new user has no row → config reports disabled defaults."""
+    code, out, _ = _run(
+        ["digest", "config", "--user-id", "u-new", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["enabled"] is False
+    assert payload["day_of_week"] == "monday"
+    assert payload["hour_utc"] == 14
+    assert payload["channel_ids"] == []
+
+
+def test_digest_enable_round_trip(capsys) -> None:
+    """``digest enable`` persists, ``digest config`` reads it back."""
+    code, out, _ = _run(
+        ["digest", "enable",
+         "--user-id", "u1",
+         "--channels", "c1,c2",
+         "--day-of-week", "tuesday",
+         "--hour", "9",
+         "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["enabled"] is True
+    assert payload["day_of_week"] == "tuesday"
+    assert payload["hour_utc"] == 9
+    assert payload["channel_ids"] == ["c1", "c2"]
+
+    code2, out2, _ = _run(
+        ["digest", "config", "--user-id", "u1", "--json"], capsys,
+    )
+    assert code2 == 0
+    cfg = json.loads(out2)
+    assert cfg["enabled"] is True
+    assert cfg["day_of_week"] == "tuesday"
+    assert cfg["hour_utc"] == 9
+    assert cfg["channel_ids"] == ["c1", "c2"]
+
+
+def test_digest_disable_clears_config(capsys) -> None:
+    """``digest disable`` clears a previously-enabled config."""
+    # Enable first
+    _run(
+        ["digest", "enable", "--user-id", "u1",
+         "--channels", "c1", "--json"],
+        capsys,
+    )
+    # Now disable
+    code, out, _ = _run(
+        ["digest", "disable", "--user-id", "u1", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["disabled"] is True
+
+    # Subsequent config call returns disabled defaults
+    code2, out2, _ = _run(
+        ["digest", "config", "--user-id", "u1", "--json"], capsys,
+    )
+    assert code2 == 0
+    cfg = json.loads(out2)
+    assert cfg["enabled"] is False
+    assert cfg["channel_ids"] == []
+
+
+def test_digest_preview_prints_markdown(capsys) -> None:
+    """``digest preview`` prints a non-empty markdown body."""
+    code, out, _ = _run(
+        ["digest", "preview", "--user-id", "u1"], capsys,
+    )
+    assert code == 0
+    # The renderer always emits a header line
+    assert "Weekly Digest" in out
+    assert "Headline" in out
+
+
+def test_digest_send_now_no_channels_succeeds_with_zero_results(capsys) -> None:
+    """Send-now with no enabled channels exits cleanly + reports zero dispatches."""
+    code, out, _ = _run(
+        ["digest", "send-now", "--user-id", "u1", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["dispatched"] == 0
+    assert payload["successes"] == 0
+    assert payload["results"] == []

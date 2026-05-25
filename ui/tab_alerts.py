@@ -3903,6 +3903,177 @@ def _render_delivery_channels() -> None:
         st.error("Delivery channels section unavailable.")
 
 
+def _render_weekly_digest_panel() -> None:
+    """Configure + preview the per-user weekly digest.
+
+    Sits adjacent to the delivery-channels panel because the digest
+    rides those same channels. Five controls:
+      * Enable checkbox + day/hour selectors persist via
+        ``engine.weekly_digest.save_digest_config``.
+      * Multi-select picks which of the user's enabled compatible
+        channels (email / slack / webhook / discord) the digest rides.
+      * "Preview this week's digest" renders the markdown inline (no
+        dispatch).
+      * "Send now" computes + dispatches immediately (bypasses the
+        schedule lock).
+
+    Defensive top-level try/except — a digest config / dispatch error
+    must NEVER break the rest of the Alert Center.
+    """
+    try:
+        from engine.weekly_digest import (
+            compute_digest,
+            dispatch_digest,
+            get_digest_config,
+            render_digest_markdown,
+            save_digest_config,
+        )
+        from engine.alert_delivery import load_channels
+        from state.user_scope import current_user_id
+
+        section_divider("Weekly Digest")
+        st.caption(
+            "Automated weekly summary — alerts, top routes, incident "
+            "counts and budget-suppressed deliveries. Dispatched every "
+            "Monday morning by default through your existing channels."
+        )
+
+        user_id = current_user_id() or ""
+        cfg = get_digest_config(user_id=user_id)
+
+        # Channel multiselect — only enabled channels of compatible
+        # kinds. SMS / pagerduty are filtered out because the digest
+        # payload is too long for SMS and the wrong shape for PagerDuty.
+        compatible_kinds = {"email", "slack", "webhook", "discord"}
+        try:
+            channels = [
+                ch for ch in (load_channels(user_id=user_id) or [])
+                if ch.enabled and ch.kind in compatible_kinds
+            ]
+        except Exception as exc:
+            logger.exception(f"Weekly digest: load_channels failed: {exc}")
+            channels = []
+
+        ch_options = {ch.channel_id: f"{ch.name} ({ch.kind})" for ch in channels}
+
+        enabled = st.checkbox(
+            "Enable weekly digest",
+            value=bool(cfg.get("enabled", False)),
+            key="weekly_digest_enabled",
+            help="Defaults to disabled. Opt in to receive a Monday-morning "
+                 "summary of the prior week's alerts and incidents.",
+        )
+
+        col1, col2 = st.columns([2, 2])
+        with col1:
+            day_options = [
+                "monday", "tuesday", "wednesday", "thursday", "friday",
+                "saturday", "sunday",
+            ]
+            current_day = str(cfg.get("day_of_week", "monday")).lower()
+            day_idx = day_options.index(current_day) if current_day in day_options else 0
+            day_of_week = st.selectbox(
+                "Day of week (UTC)",
+                options=day_options,
+                index=day_idx,
+                key="weekly_digest_day",
+            )
+        with col2:
+            hour_utc = st.number_input(
+                "Hour of day (UTC, 0-23)",
+                min_value=0,
+                max_value=23,
+                value=int(cfg.get("hour_utc", 14)),
+                step=1,
+                key="weekly_digest_hour",
+            )
+
+        current_ids = list(cfg.get("channel_ids") or [])
+        # Preserve only the channel_ids that still resolve — a deleted
+        # channel must not silently linger in the selection.
+        default_selection = [cid for cid in current_ids if cid in ch_options]
+        selected_ids = st.multiselect(
+            "Dispatch channels",
+            options=list(ch_options.keys()),
+            default=default_selection,
+            format_func=lambda cid: ch_options.get(cid, cid),
+            key="weekly_digest_channels",
+            help="Only enabled channels of compatible kinds (email / "
+                 "slack / webhook / discord) appear here.",
+        )
+
+        if st.button("Save digest config", key="weekly_digest_save_btn"):
+            try:
+                ok = save_digest_config(
+                    {
+                        "enabled": enabled,
+                        "day_of_week": day_of_week,
+                        "hour_utc": int(hour_utc),
+                        "channel_ids": list(selected_ids),
+                    },
+                    user_id=user_id,
+                )
+                if ok:
+                    st.success("Weekly digest config saved.")
+                else:
+                    st.error("Save failed — check the logs.")
+            except Exception as exc:
+                logger.exception(f"Weekly digest save failed: {exc}")
+                st.error(f"Save failed: {exc}")
+
+        st.divider()
+        preview_col, send_col = st.columns([2, 2])
+        with preview_col:
+            if st.button(
+                "Preview this week's digest",
+                key="weekly_digest_preview_btn",
+            ):
+                try:
+                    digest = compute_digest(user_id=user_id)
+                    st.markdown(render_digest_markdown(digest))
+                except Exception as exc:
+                    logger.exception(f"Weekly digest preview failed: {exc}")
+                    st.error(f"Preview failed: {exc}")
+        with send_col:
+            if st.button(
+                "Send now",
+                key="weekly_digest_send_now_btn",
+                help="Dispatches the digest immediately — bypasses the "
+                     "schedule.",
+            ):
+                try:
+                    digest = compute_digest(user_id=user_id)
+                    results = dispatch_digest(
+                        digest,
+                        channel_ids=(selected_ids or None),
+                    )
+                    successes = sum(1 for r in results if r.get("success"))
+                    if not results:
+                        st.warning(
+                            "No compatible channels configured — pick at "
+                            "least one channel above."
+                        )
+                    elif successes == len(results):
+                        st.success(
+                            f"Dispatched to {successes} channel"
+                            f"{'s' if successes != 1 else ''}."
+                        )
+                    else:
+                        st.warning(
+                            f"Dispatched to {successes} of {len(results)} "
+                            f"channels — see logs for failures."
+                        )
+                except Exception as exc:
+                    logger.exception(f"Weekly digest send-now failed: {exc}")
+                    st.error(f"Send failed: {exc}")
+    except Exception:
+        logger.exception("Weekly digest panel render failed")
+        try:
+            st.error("Weekly digest section unavailable.")
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -3967,6 +4138,7 @@ def render(
             _render_route_thresholds()
 
             _render_delivery_channels()
+            _render_weekly_digest_panel()
         except Exception:
             logger.exception("tab_alerts top-level render failed")
             st.error("Alert Center tab encountered an error.")

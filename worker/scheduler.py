@@ -987,6 +987,36 @@ def run_operator_digest_job() -> list:
 
 
 @_track_run
+def run_weekly_digest_job_wrapper(now: Optional[datetime] = None) -> dict:
+    """Hourly self-gating weekly-digest dispatcher.
+
+    Thin wrapper around ``engine.weekly_digest.run_weekly_digest_job``
+    that adds logging + the ``_track_run`` bookkeeping. The engine
+    helper itself self-gates on the per-user day-of-week + hour-of-day
+    config AND a kv_state lock so a back-to-back hourly fire never
+    double-sends to the same user. The wrapper invokes it every tick.
+
+    Returns the engine helper's count dict
+    ``{"checked": N, "fired": N, "skipped": N, "failed": N}`` (or all
+    zeros on a top-level exception). Never raises.
+    """
+    try:
+        from engine.weekly_digest import run_weekly_digest_job
+
+        counts = run_weekly_digest_job(now=now)
+        logger.info(
+            f"run_weekly_digest_job_wrapper: checked={counts.get('checked', 0)} "
+            f"fired={counts.get('fired', 0)} "
+            f"skipped={counts.get('skipped', 0)} "
+            f"failed={counts.get('failed', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_weekly_digest_job_wrapper: failed: {exc}")
+        return {"checked": 0, "fired": 0, "skipped": 0, "failed": 0}
+
+
+@_track_run
 def run_snapshot_prune_job(keep_n: int = 30) -> int:
     """Prune ``investor_report_snapshots`` down to the newest ``keep_n``.
 
@@ -1165,6 +1195,18 @@ def main(argv: Optional[list] = None) -> int:
         run_operator_digest_job()
     except Exception as exc:
         logger.warning(f"main: operator digest step failed: {exc}")
+
+    # Weekly digest — runs every worker tick, self-gates on the
+    # per-user day-of-week + hour-of-day config AND a kv_state lock so
+    # a back-to-back hourly fire never double-sends to the same user.
+    # Placed AFTER the operator digest so a freshly-bumped per-channel
+    # budget counter is reflected in the weekly summary. Same belt-and-
+    # braces guard — the helper already swallows per-user errors and
+    # never raises.
+    try:
+        run_weekly_digest_job_wrapper()
+    except Exception as exc:
+        logger.warning(f"main: weekly digest step failed: {exc}")
 
     # User-configured report schedules. Runs AFTER the operator digest
     # so a freshly-generated scheduled report can ride the same data

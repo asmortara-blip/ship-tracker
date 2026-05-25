@@ -2072,6 +2072,126 @@ def _cmd_escalations_clear(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Weekly digest — preview / send-now / enable / disable / config
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_digest_preview(args: argparse.Namespace) -> None:
+    """Render the digest as markdown to stdout WITHOUT dispatching.
+
+    Operators use this to sanity-check the layout / content before
+    enabling the schedule. --json returns the full dataclass + the
+    rendered markdown so an automation can pipe the output.
+    """
+    from engine.weekly_digest import compute_digest, render_digest_markdown
+
+    digest = compute_digest(user_id=args.user_id, week_start=args.week_start)
+    if args.json:
+        from dataclasses import asdict as _asdict
+
+        _print_json({
+            "digest":   _asdict(digest),
+            "markdown": render_digest_markdown(digest),
+        })
+        return
+    print(render_digest_markdown(digest))
+
+
+def _cmd_digest_send_now(args: argparse.Namespace) -> None:
+    """Compute + dispatch the digest immediately (bypasses the
+    schedule). Useful for "preview by email" runs and post-incident
+    summaries that the operator wants out the door before Monday.
+
+    No rate limit, no per-user lock — explicit operator intent always
+    wins over the idempotency guard the worker uses.
+    """
+    from engine.weekly_digest import compute_digest, dispatch_digest
+
+    digest = compute_digest(user_id=args.user_id)
+    results = dispatch_digest(digest)
+    payload = {
+        "user_id":  args.user_id,
+        "dispatched": len(results),
+        "successes":  sum(1 for r in results if r.get("success")),
+        "results":    results,
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({k: v for k, v in payload.items() if k != "results"})
+
+
+def _cmd_digest_enable(args: argparse.Namespace) -> None:
+    """Opt the user into the weekly digest.
+
+    --channels is a comma-separated channel_id list. Validation lives
+    on the engine side (``enable_digest`` calls the normalizer); a bad
+    channel_id quietly drops out at dispatch time.
+    """
+    from engine.weekly_digest import enable_digest
+
+    ids = [c.strip() for c in (args.channels or "").split(",") if c.strip()]
+    ok = enable_digest(
+        user_id=args.user_id,
+        channel_ids=ids,
+        day_of_week=args.day_of_week,
+        hour_utc=args.hour,
+    )
+    if not ok:
+        raise RuntimeError(
+            f"enable_digest persistence failed for user_id={args.user_id!r}"
+        )
+    payload = {
+        "user_id":     args.user_id,
+        "enabled":     True,
+        "day_of_week": args.day_of_week,
+        "hour_utc":    args.hour,
+        "channel_ids": ids,
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({
+            "user_id":     args.user_id,
+            "enabled":     True,
+            "day_of_week": args.day_of_week,
+            "hour_utc":    args.hour,
+            "channels":    ",".join(ids),
+        })
+
+
+def _cmd_digest_disable(args: argparse.Namespace) -> None:
+    """Opt the user out. Wipes both the config row AND the per-user
+    dispatch lock so a re-enable later does not inherit a stale lock.
+    """
+    from engine.weekly_digest import disable_digest
+
+    ok = disable_digest(user_id=args.user_id)
+    payload = {"user_id": args.user_id, "disabled": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_digest_config(args: argparse.Namespace) -> None:
+    """Print the persisted (or default) digest config for one user."""
+    from engine.weekly_digest import get_digest_config
+
+    cfg = get_digest_config(user_id=args.user_id)
+    payload = {"user_id": args.user_id, **cfg}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv({
+            "user_id":     args.user_id,
+            "enabled":     cfg.get("enabled", False),
+            "day_of_week": cfg.get("day_of_week", "monday"),
+            "hour_utc":    cfg.get("hour_utc", 14),
+            "channels":    ",".join(cfg.get("channel_ids", []) or []),
+        })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2859,6 +2979,54 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     esc4.add_argument("--json", action="store_true")
     esc4.set_defaults(func=_cmd_escalations_clear)
+
+    # ── digest (weekly summary) ────────────────────────────────────────
+    # Five subcommands cover the operator surface for the per-user
+    # weekly digest: render a preview without dispatching, send it now
+    # outside the schedule, opt a user in, opt them out, and inspect
+    # the persisted config.
+    p_dg = sub.add_parser("digest", help="Weekly-digest subcommands")
+    sdg = p_dg.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    dg1 = sdg.add_parser("preview", help="Render this week's digest as markdown")
+    dg1.add_argument("--user-id", required=True)
+    dg1.add_argument(
+        "--week-start",
+        default=None,
+        help="ISO date inside the target week (defaults to this week)",
+    )
+    dg1.add_argument("--json", action="store_true")
+    dg1.set_defaults(func=_cmd_digest_preview)
+
+    dg2 = sdg.add_parser(
+        "send-now",
+        help="Dispatch the digest immediately (bypasses the schedule)",
+    )
+    dg2.add_argument("--user-id", required=True)
+    dg2.add_argument("--json", action="store_true")
+    dg2.set_defaults(func=_cmd_digest_send_now)
+
+    dg3 = sdg.add_parser("enable", help="Enable the weekly digest for a user")
+    dg3.add_argument("--user-id", required=True)
+    dg3.add_argument(
+        "--channels",
+        required=True,
+        help="Comma-separated list of channel_ids to dispatch to",
+    )
+    dg3.add_argument("--day-of-week", default="monday")
+    dg3.add_argument("--hour", type=int, default=14)
+    dg3.add_argument("--json", action="store_true")
+    dg3.set_defaults(func=_cmd_digest_enable)
+
+    dg4 = sdg.add_parser("disable", help="Disable the weekly digest for a user")
+    dg4.add_argument("--user-id", required=True)
+    dg4.add_argument("--json", action="store_true")
+    dg4.set_defaults(func=_cmd_digest_disable)
+
+    dg5 = sdg.add_parser("config", help="Show the user's current digest config")
+    dg5.add_argument("--user-id", required=True)
+    dg5.add_argument("--json", action="store_true")
+    dg5.set_defaults(func=_cmd_digest_config)
 
     return p
 

@@ -1290,6 +1290,58 @@ selectbox to the user's own channels. A two-click "Clear entire
 chain" button bulk-deletes the chain (the first click arms a
 confirm; the second click executes).
 
+### Weekly digest (per-user automated summary)
+
+A per-user opt-in weekly summary is dispatched every Monday at 14:00 UTC
+by default (configurable) through whichever existing delivery channels
+the user picks. The summary covers the prior 7 days of alerts grouped by
+severity, the top alert types / routes / tickers, incident counts,
+source-feed health, per-channel budget usage, and ack rate.
+
+The worker's `run_weekly_digest_job_wrapper` runs every tick; the
+underlying engine helper self-gates on each user's
+`day_of_week` + `hour_utc` config AND a per-user `kv_state` idempotency
+lock so a back-to-back hourly fire never double-sends. The digest
+synthesises a `WEEKLY_DIGEST` `ShippingAlert` and dispatches via
+`alert_delivery.deliver_alert` — the existing per-channel severity,
+quiet-hours, per-user notification-prefs, and monthly-budget gates all
+apply. The synthetic alert is NEVER persisted via `save_alerts`, so
+escalation / cooldown / dedup do NOT trigger on the digest itself.
+
+**Recommended channels:** `email` for the full HTML layout (8-KPI tile
+header + tables for severity / types / routes / tickers / outages /
+channel budgets), `slack` / `discord` for a markdown summary in a team
+channel, and `webhook` for a generic receiver (e.g. a
+notifications-aggregator). `sms` and `pagerduty` channels are dropped
+automatically — the digest payload is too long for SMS and the wrong
+shape for PagerDuty's incident model.
+
+```bash
+# Show current config (defaults to disabled).
+python -m tools.ops_cli digest config --user-id <id>
+
+# Opt in. --channels is a comma-separated list of channel_ids.
+python -m tools.ops_cli digest enable --user-id <id> \
+    --channels "ch1,ch2" --day-of-week monday --hour 14
+
+# Disable (wipes the config row + idempotency lock).
+python -m tools.ops_cli digest disable --user-id <id>
+
+# Preview this week's digest as markdown (no dispatch).
+python -m tools.ops_cli digest preview --user-id <id>
+
+# Override the week: any date inside the target week works; the
+# helper snaps to that week's Monday automatically.
+python -m tools.ops_cli digest preview --user-id <id> --week-start 2026-05-20
+
+# Force a one-shot dispatch right now (bypasses the schedule lock).
+python -m tools.ops_cli digest send-now --user-id <id>
+```
+
+The Alert Center tab also surfaces a "Weekly Digest" panel next to the
+delivery-channels card with the same enable / preview / send-now
+controls.
+
 ### Recurring report schedules
 
 Schema v20 added a `report_schedules` table so operators can configure
@@ -1526,6 +1578,89 @@ runs on a separate host without filesystem access to the Ship Tracker
 data directory. `?format=jsonl` is the default; `?format=json`
 returns the same `{items: [...], count: N}` envelope as `/audit` for
 legacy consumers.
+
+### Audit log search panel — operator UI in the Data Health tab
+
+The Data Health tab carries two audit panels: the legacy "Recent audit
+events" list (top-N rows in a fixed time window) and the new "Audit
+Log Search" panel that exposes the richer multi-filter query an
+operator wants while investigating an incident.
+
+The search panel sits next to the legacy panel and offers:
+
+* `user_id` / `action` / `entity_type` / `entity_id` exact-match filters
+* `action_prefix` — `login_` matches `login_success` AND `login_failure`
+* `since` / `until` date pickers (half-open: `since` inclusive,
+  `until` exclusive, both at 00:00:00 UTC)
+* free-text grep over `detail_json` + `action` + `entity_id`
+  (case-insensitive; `%` / `_` / `'` in the query string are
+  LIKE-escaped and bound, not interpolated)
+* configurable result `limit` (default 100, max 10 000) with a
+  "showing N of M" caption so the operator knows when pagination is
+  needed
+* "Download as CSV" and "Download as JSONL" buttons on the result set
+
+**Default scope is the current user.** An operator without admin
+scope sees only their own audit events. The "All users (admin)"
+checkbox widens scope but is opt-in; the active scope is echoed in
+the result caption so the operator cannot accidentally believe they
+are viewing a per-user slice. An explicit `user_id` in the text box
+overrides both defaults.
+
+The query is driven by a "Search" button — the panel does not refetch
+on every keystroke. The last result is kept in `st.session_state` so
+the CSV / JSONL download buttons remain populated across reruns until
+the operator submits a new search.
+
+#### Helper API — `engine.audit_search`
+
+The UI panel is a thin wrapper around `engine.audit_search`, which is
+also callable from tests, ad-hoc Python scripts, and any future API
+endpoint that wants the richer query surface:
+
+```python
+from engine.audit_search import (
+    AuditSearchQuery,
+    search_audit,
+    search_audit_count,
+    get_distinct_actions,
+    get_distinct_entity_types,
+)
+
+query = AuditSearchQuery(
+    user_id="u-alice",                  # exact match; "" matches legacy "no user" rows
+    action="login_success",             # exact verb
+    action_prefix="login_",              # OR'd with `action` if both set
+    entity_type="report",
+    entity_id="report-abc",
+    since="2026-05-22T00:00:00+00:00",
+    until="2026-05-23T00:00:00+00:00",  # half-open
+    text="rotated",                      # case-insensitive grep
+    limit=100,                           # hard-capped at SQL level
+)
+
+result = search_audit(query)
+result.total_matched       # count BEFORE limit was applied
+result.events              # list of dicts (detail_json already parsed)
+result.query               # echo of the input AuditSearchQuery
+
+# Count-only — cheaper than the full search; useful for the "M matches"
+# caption before the operator commits to a larger fetch.
+n = search_audit_count(query)
+
+# Dropdown population for the UI (sorted, deduped, capped).
+get_distinct_actions(limit=100)
+get_distinct_entity_types(limit=50)
+```
+
+Every helper **NEVER raises** — a DB outage or a malformed row returns
+an empty result with the same shape so the calling UI keeps rendering
+the rest of the Data Health tab.
+
+The module does NOT inject `current_user_id()` automatically — the UI
+passes it explicitly. That keeps `engine.audit_search` a pure search
+helper; the per-user scoping policy belongs upstream where the caller
+can decide whether they have admin scope or not.
 
 ## Backup / Restore
 
