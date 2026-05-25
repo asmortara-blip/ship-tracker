@@ -19,7 +19,7 @@ import random
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -1113,6 +1113,327 @@ def _render_audit_log() -> None:
     except Exception as exc:
         logger.exception(f"Audit log panel render error: {exc}")
         st.error("Audit log panel unavailable.")
+
+
+def _render_audit_search_panel() -> None:
+    """Audit log search panel — multi-filter search over ``audit_events``.
+
+    Sits next to the legacy "Recent audit events" panel above and offers
+    operators a richer query surface:
+
+    * user_id / action / action_prefix / entity_type / entity_id exact-match
+    * since / until ISO-bracketed time window
+    * free-text grep over ``detail_json`` + ``action`` + ``entity_id``
+    * limit cap with "N matches (of M total)" caption
+
+    Default scope is the CURRENT user — an operator without admin scope
+    should never see another user's audit events. The "All users (admin)"
+    toggle widens scope but is opt-in (and the operator's user_id is
+    still echoed in the caption so they cannot accidentally believe
+    they are viewing a per-user slice).
+
+    Imports are lazy (matches the surrounding panel pattern) so a
+    missing helper does not break the rest of the Data Health tab. The
+    full body is wrapped in try/except — same defensive contract as
+    every other ``_render_*`` panel in this file.
+    """
+    try:
+        from engine.audit_search import (
+            AuditSearchQuery,
+            get_distinct_actions,
+            get_distinct_entity_types,
+            search_audit,
+        )
+        from state.user_scope import current_user_id
+
+        section_divider("Audit Log Search")
+        section_header(
+            "Audit Log Search",
+            "Multi-filter search over the audit_events table. Default "
+            "scope is your own user; toggle 'All users' for an admin "
+            "view. Source: engine.audit_search.",
+        )
+
+        # ── Action + entity_type dropdowns (DB-populated) ────────────────
+        # "(any)" sentinel is mapped to ``None`` before the query runs
+        # so the user can return to the "no filter" state without
+        # clearing the text inputs.
+        try:
+            actions_db = get_distinct_actions()
+        except Exception:
+            actions_db = []
+        try:
+            entity_types_db = get_distinct_entity_types()
+        except Exception:
+            entity_types_db = []
+        action_options = ["(any)"] + actions_db
+        entity_type_options = ["(any)"] + entity_types_db
+
+        # ── Row 1: user_id | action | action_prefix ──────────────────────
+        # ``user_id_input`` defaults to empty so the "All users" checkbox
+        # below can fill in the current user's id when toggled OFF.
+        r1c1, r1c2, r1c3 = st.columns(3, gap="small")
+        with r1c1:
+            user_id_input = st.text_input(
+                "User ID",
+                value="",
+                key="audit_search_user_id",
+                help="Exact match. Leave blank to filter to your own "
+                     "user (unless 'All users' is enabled).",
+            )
+        with r1c2:
+            action_pick = st.selectbox(
+                "Action",
+                options=action_options,
+                index=0,
+                key="audit_search_action",
+            )
+        with r1c3:
+            action_prefix_input = st.text_input(
+                "Action prefix",
+                value="",
+                key="audit_search_action_prefix",
+                help="e.g. 'login_' matches login_success AND login_failure.",
+            )
+
+        # ── Row 2: entity_type | entity_id ───────────────────────────────
+        r2c1, r2c2 = st.columns(2, gap="small")
+        with r2c1:
+            entity_type_pick = st.selectbox(
+                "Entity type",
+                options=entity_type_options,
+                index=0,
+                key="audit_search_entity_type",
+            )
+        with r2c2:
+            entity_id_input = st.text_input(
+                "Entity ID",
+                value="",
+                key="audit_search_entity_id",
+            )
+
+        # ── Row 3: since / until date pickers ────────────────────────────
+        # The date pickers cover the most common operator query
+        # ("everything yesterday") without forcing them to hand-write an
+        # ISO timestamp. The day boundary is set at 00:00:00 UTC for
+        # both ends; ``until`` is half-open so "today only" is
+        # ``since=today, until=tomorrow``.
+        today = datetime.now(timezone.utc).date()
+        default_since = today - timedelta(days=7)
+        r3c1, r3c2 = st.columns(2, gap="small")
+        with r3c1:
+            since_date = st.date_input(
+                "Since (UTC)",
+                value=default_since,
+                key="audit_search_since",
+            )
+        with r3c2:
+            until_date = st.date_input(
+                "Until (UTC, exclusive)",
+                value=today + timedelta(days=1),
+                key="audit_search_until",
+            )
+
+        # ── Row 4: free-text grep | limit | admin toggle ────────────────
+        r4c1, r4c2, r4c3 = st.columns([2, 1, 1], gap="small")
+        with r4c1:
+            text_input = st.text_input(
+                "Free-text search",
+                value="",
+                key="audit_search_text",
+                help="Case-insensitive substring match over detail_json, "
+                     "action, and entity_id.",
+            )
+        with r4c2:
+            limit_input = st.number_input(
+                "Limit",
+                min_value=1,
+                max_value=10_000,
+                value=100,
+                step=50,
+                key="audit_search_limit",
+            )
+        with r4c3:
+            admin_scope = st.checkbox(
+                "All users (admin)",
+                value=False,
+                key="audit_search_admin_scope",
+                help="Show events across every user. Default is your "
+                     "own user only.",
+            )
+
+        # ── Resolve the per-user scope. The current user's id is always
+        # resolved (even when the operator typed something into the
+        # user_id box) so the "scoped to" caption can tell them what is
+        # actually being applied.
+        self_uid = current_user_id()
+        # If the operator typed a user_id, honour it verbatim. Otherwise
+        # default to their own unless "All users" is checked.
+        if user_id_input.strip():
+            effective_user_id: Optional[str] = user_id_input.strip()
+        elif admin_scope:
+            effective_user_id = None
+        else:
+            # No typed value and not admin → scope to self. An empty
+            # self_uid (no session) falls through to "no scope" which
+            # is intentional — the local CLI / test path should not
+            # be silently filtered to a non-existent user.
+            effective_user_id = self_uid or None
+
+        # ── Search button drives the query so the panel does not refetch
+        # on every keystroke. The result lives in a ``st.session_state``
+        # slot so the download buttons stay populated after a rerun.
+        search_clicked = st.button(
+            "Search",
+            key="audit_search_run",
+            type="primary",
+        )
+
+        result = None
+        if search_clicked:
+            query = AuditSearchQuery(
+                user_id=effective_user_id,
+                action=(action_pick if action_pick != "(any)" else None),
+                action_prefix=action_prefix_input.strip() or None,
+                entity_type=(entity_type_pick
+                             if entity_type_pick != "(any)" else None),
+                entity_id=entity_id_input.strip() or None,
+                # date_input returns a datetime.date — format as ISO at
+                # 00:00:00 UTC so the SQL string compare is unambiguous.
+                since=(datetime.combine(
+                    since_date, datetime.min.time(), tzinfo=timezone.utc,
+                ).isoformat() if since_date else None),
+                until=(datetime.combine(
+                    until_date, datetime.min.time(), tzinfo=timezone.utc,
+                ).isoformat() if until_date else None),
+                text=text_input.strip() or None,
+                limit=int(limit_input),
+            )
+            result = search_audit(query)
+            st.session_state["_audit_search_result"] = result
+        else:
+            # Pull the last result back so the download buttons keep
+            # serving the most recent search across non-search reruns.
+            result = st.session_state.get("_audit_search_result")
+
+        # ── Result rendering ─────────────────────────────────────────────
+        if result is None:
+            st.caption("Set filters and click Search to query the audit log.")
+            return
+
+        scope_label = (
+            "all users" if effective_user_id is None
+            else f"user_id={effective_user_id}"
+        )
+        if result.total_matched == 0:
+            st.info(f"No matches (scoped to {scope_label}).")
+            return
+
+        shown = len(result.events)
+        if result.total_matched > shown:
+            st.caption(
+                f"Showing {shown:,} of {result.total_matched:,} matches "
+                f"(scoped to {scope_label}). Raise the limit to see more."
+            )
+        else:
+            st.caption(
+                f"{result.total_matched:,} match"
+                f"{'es' if result.total_matched != 1 else ''} "
+                f"(scoped to {scope_label})."
+            )
+
+        # ── Render as a DataFrame so the operator can sort / column-pick
+        # in the Streamlit grid widget. ``detail_json`` is reflected as
+        # a compact JSON string for table readability — the full dict
+        # is in the JSONL download for a reviewer who wants the
+        # structured payload.
+        try:
+            display_rows: list[dict] = []
+            for ev in result.events:
+                try:
+                    detail_str = json.dumps(
+                        ev.get("detail_json") or {}, default=str,
+                    )
+                except Exception:
+                    detail_str = ""
+                display_rows.append({
+                    "created_at": ev.get("created_at", ""),
+                    "user_id": ev.get("user_id", ""),
+                    "action": ev.get("action", ""),
+                    "entity_type": ev.get("entity_type", ""),
+                    "entity_id": ev.get("entity_id", ""),
+                    "detail_json": detail_str,
+                    "event_id": ev.get("event_id", ""),
+                })
+            df = pd.DataFrame(display_rows)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        except Exception as exc:
+            logger.warning(f"Audit search dataframe render failed: {exc}")
+            st.error("Result table unavailable.")
+
+        # ── Download buttons (lazy import). Two formats: CSV for Excel,
+        # JSONL for a SIEM sidecar / downstream JSON consumer.
+        dl_c1, dl_c2 = st.columns(2, gap="small")
+        with dl_c1:
+            try:
+                from utils.csv_export import (
+                    rows_to_csv_bytes, safe_filename,
+                )
+                csv_rows = []
+                for ev in result.events:
+                    try:
+                        detail_str = json.dumps(
+                            ev.get("detail_json") or {}, default=str,
+                        )
+                    except Exception:
+                        detail_str = ""
+                    csv_rows.append({
+                        "event_id": ev.get("event_id", ""),
+                        "created_at": ev.get("created_at", ""),
+                        "user_id": ev.get("user_id", ""),
+                        "action": ev.get("action", ""),
+                        "entity_type": ev.get("entity_type", ""),
+                        "entity_id": ev.get("entity_id", ""),
+                        "detail_json": detail_str,
+                    })
+                csv_bytes = rows_to_csv_bytes(csv_rows)
+                st.download_button(
+                    label="Download as CSV",
+                    data=csv_bytes,
+                    file_name=safe_filename("audit_search", ext="csv"),
+                    mime="text/csv",
+                    key="audit_search_dl_csv",
+                )
+            except Exception as exc:
+                logger.warning(f"Audit search CSV download failed: {exc}")
+                st.caption("CSV download unavailable.")
+        with dl_c2:
+            try:
+                from utils.audit_export import rows_to_jsonl
+                from utils.csv_export import safe_filename
+
+                jsonl_bytes = rows_to_jsonl(result.events)
+                st.download_button(
+                    label="Download as JSONL",
+                    data=jsonl_bytes,
+                    file_name=safe_filename("audit_search", ext="jsonl"),
+                    mime="application/x-ndjson",
+                    key="audit_search_dl_jsonl",
+                )
+            except Exception as exc:
+                logger.warning(f"Audit search JSONL download failed: {exc}")
+                st.caption("JSONL download unavailable.")
+
+        st.markdown(
+            live_data_badge(DataSource.live(
+                "audit_events table",
+                notes="engine.audit_search.search_audit",
+            )),
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        logger.exception(f"Audit search panel render error: {exc}")
+        st.error("Audit search panel unavailable.")
 
 
 def _render_vault_panel() -> None:
@@ -2698,6 +3019,13 @@ def render(
             except Exception as exc:
                 logger.error(f"Audit log render error: {exc}")
                 st.error("Audit log panel unavailable.")
+
+            # ── Movement 1.685: audit log search ───────────────────────────────
+            try:
+                _render_audit_search_panel()
+            except Exception as exc:
+                logger.error(f"Audit search panel render error: {exc}")
+                st.error("Audit search panel unavailable.")
 
             # ── Movement 1.69: data source health ──────────────────────────────
             try:
