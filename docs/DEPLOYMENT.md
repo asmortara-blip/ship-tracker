@@ -2475,3 +2475,86 @@ docker logs -f <container_id>
 ```
 
 Streamlit's own server logs are interleaved on the same stream.
+
+## Test flakiness tracker (`python -m tools.test_flakiness_cli`)
+
+The suite is at 5260+ tests and growing — intermittent flakes (a test
+that fails 1-in-20 runs but passes on retry) start to drown out real
+regressions. `tools.test_flakiness` ingests pytest's JUnit XML output
+into the `kv_state` table and surfaces:
+
+  * **Flaky tests** — nodeids whose failure rate across recent runs
+    exceeds a configurable threshold (default 10%).
+  * **Consistently-slow tests** — nodeids whose mean duration across
+    runs exceeds 1.0s (configurable via `SLOW_TEST_THRESHOLD_SECONDS`).
+  * **Trending flakes** — newly flaking in the current window but
+    clean in the prior window.
+  * **Regressions** — passed before, failed in the newest run.
+  * **Per-test streaks** — current pass / fail streak for any nodeid.
+
+Storage: a single rolling list at kv_state key `'test_runs'`, capped
+at 200 runs (oldest dropped on each persist). No schema bump required.
+
+### Subcommands
+
+```bash
+# Parse a JUnit XML and persist as a new run.
+python -m tools.test_flakiness_cli ingest /tmp/junit.xml
+
+# List flaky tests (failure_rate >= threshold, total_runs >= min_runs).
+python -m tools.test_flakiness_cli flaky --min-runs 5 --threshold 0.1
+
+# List consistently-slow tests (mean_duration desc, top N).
+python -m tools.test_flakiness_cli slow --top-n 20
+
+# Big-picture summary across the most-recent N runs.
+python -m tools.test_flakiness_cli summary --runs 10
+
+# Pass/fail streak for one nodeid.
+python -m tools.test_flakiness_cli history tests/test_foo.py::test_bar
+
+# Wipe all stored runs (destructive — requires --confirm).
+python -m tools.test_flakiness_cli clear --confirm
+
+# Convenience: run pytest with --junitxml + ingest + report in one call.
+# Pytest's own exit code is preserved so CI still fails on real failures.
+python -m tools.test_flakiness_cli run --pytest-args "tests/ -q"
+```
+
+Every read-side subcommand accepts `--json` for machine-readable
+output. The CLI never bubbles an exception to the shell — handler
+failures print to stderr and return exit 1.
+
+### Recommended CI workflow
+
+The expected pattern is one ingest per CI run, followed by a flake
+check that operators can inspect in the CI log:
+
+```bash
+# Run the suite, capturing JUnit XML.
+pytest --junitxml=/tmp/junit.xml
+
+# Persist the run's summary into the rolling kv_state list.
+python -m tools.test_flakiness_cli ingest /tmp/junit.xml
+
+# Surface flakes; tee to a log for the operator to inspect.
+python -m tools.test_flakiness_cli flaky | tee logs/flaky.log
+```
+
+The flake list is a leading indicator: tests appearing here are
+candidates for `@pytest.mark.flaky` quarantine, a `@pytest.fixture`
+refactor (e.g. pin a clock), or genuine bug investigation. The tracker
+deliberately does NOT auto-rerun flakes or quarantine them — that's
+an operator decision.
+
+### What this tool does NOT do
+
+* It does not modify `pytest.ini` or auto-emit JUnit XML. The
+  operator/CI invokes pytest with `--junitxml` explicitly.
+* It does not delete the source XML file after ingesting. The operator
+  may want to keep it for offline inspection.
+* It does not surface test source code — only nodeids + messages
+  (which is enough for grep + click-through in any editor).
+* It does not track per-pass nodeids. Only failures + slow tests are
+  persisted to keep the kv_state blob bounded; "total runs since first
+  observed failure" is the denominator for the failure-rate math.
