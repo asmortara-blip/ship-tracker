@@ -450,6 +450,85 @@ def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict)
 # SECTION D — Signal Conviction Matrix
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _build_signal_conviction_heatmap(
+    corridors: list[str],
+    commodities: list[str],
+    score_grid: list[list[float]],
+) -> go.Figure:
+    """Heatmap of corridor × commodity conviction scores (0–1).
+
+    Colour scale runs red → gray → green so the bullish cells light up
+    and the avoid cells fade out. Each cell is annotated with its
+    percentage so the heatmap can stand alone if the table below it is
+    out of view.
+
+    Pure builder — no ``st.*`` calls — exercised directly by the lock-in
+    tests. An empty / mis-shaped grid returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    if (not corridors or not commodities
+            or not score_grid
+            or len(score_grid) != len(corridors)
+            or any(len(row) != len(commodities) for row in score_grid)):
+        fig.add_annotation(
+            text="No signal conviction data",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Signal Conviction", height=240)
+        return fig
+
+    # Colour scale: low (avoid) → mid (neutral) → high (strong).
+    colorscale = [
+        [0.00, "#c0392b"],   # avoid (red)
+        [0.35, "#c9962b"],   # caution (amber)
+        [0.50, "#5a5650"],   # neutral (mid-gray)
+        [0.65, "#2e9e6e"],   # bullish (green)
+        [1.00, "#1f8a5b"],   # strong (deeper green)
+    ]
+    text = [[f"{int(s * 100)}%" for s in row] for row in score_grid]
+
+    fig.add_trace(go.Heatmap(
+        z=score_grid,
+        x=commodities,
+        y=corridors,
+        colorscale=colorscale,
+        zmin=0.0,
+        zmax=1.0,
+        text=text,
+        texttemplate="%{text}",
+        textfont={"color": "#0c0e14", "size": 12},
+        hovertemplate=(
+            "<b>%{y}</b> · %{x}<br>"
+            "Conviction: %{z:.0%}<extra></extra>"
+        ),
+        showscale=True,
+        colorbar={
+            "title": {"text": "Conviction", "side": "right",
+                      "font": {"color": C_TEXT3, "size": 10}},
+            "tickfont": {"color": C_TEXT3, "size": 9},
+            "len": 0.85,
+            "thickness": 12,
+            "outlinewidth": 0,
+        },
+    ))
+
+    apply_dark_layout(
+        fig,
+        title="Signal Conviction — corridor × commodity",
+        height=max(220, 80 + 44 * len(corridors)),
+    )
+    fig.update_layout(
+        xaxis={"title": None, "side": "top",
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 60, "b": 24},
+    )
+    return fig
+
+
 def _render_signal_matrix(route_results: list, insights: list) -> None:
     try:
         CORRIDORS = ["Trans-Pacific", "Asia-Europe", "Trans-Atlantic", "Intra-Asia"]
@@ -484,11 +563,24 @@ def _render_signal_matrix(route_results: list, insights: list) -> None:
             "Composite conviction by trade corridor and commodity class",
         )
 
+        # Compute the grid once — used both by the heatmap and the table.
+        score_grid: list[list[float]] = [
+            [_cell_score(corridor, commodity) for commodity in COMMODITIES]
+            for corridor in CORRIDORS
+        ]
+
+        # Heatmap above the table: pattern first, precision second.
+        st.plotly_chart(
+            _build_signal_conviction_heatmap(CORRIDORS, COMMODITIES, score_grid),
+            use_container_width=True,
+            key="overview_signal_conviction_heatmap",
+        )
+
         rows = []
-        for corridor in CORRIDORS:
+        for i, corridor in enumerate(CORRIDORS):
             row = [_sans(corridor, color=C_TEXT, weight=700)]
-            for commodity in COMMODITIES:
-                score = _cell_score(corridor, commodity)
+            for j, commodity in enumerate(COMMODITIES):
+                score = score_grid[i][j]
                 label = _conviction_label(score)
                 color = _CONVICTION_PALETTE.get(label, C_TEXT2)
                 pct = int(score * 100)
