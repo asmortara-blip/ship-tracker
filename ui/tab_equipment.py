@@ -252,6 +252,159 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     )
 
 
+# ── Pure figure-builders (testable; no Streamlit) ─────────────────────────
+# Keep these free of `st.*` calls so they can be exercised by unit tests
+# that don't need a Streamlit stub. The render-layer functions below wrap
+# them with sourcing footers, captions, and column layouts.
+
+# Regime thresholds for the global utilization index (mirrors the docstring
+# on `processing.equipment_tracker.get_global_equipment_index`):
+#   < 70  → surplus / rate pressure down
+#   70–85 → normal operating range
+#   > 85  → tight market / shortage risk
+_HEALTH_BANDS: Tuple[Tuple[float, float, str, str], ...] = (
+    (0.0,  70.0,  C_HIGH, "Surplus"),
+    (70.0, 85.0,  C_MOD,  "Normal"),
+    (85.0, 100.0, C_LOW,  "Tight"),
+)
+
+
+def _health_regime(index: float) -> Tuple[str, str]:
+    """Return (regime_label, accent_color) for a 0–100 utilization index."""
+    for lo, hi, color, label in _HEALTH_BANDS:
+        if lo <= index < hi or (label == "Tight" and index >= hi):
+            return label, color
+    # Fallback for out-of-range (shouldn't happen but keep safe)
+    return "Unknown", C_TEXT2
+
+
+def _build_health_bullet(index: float) -> go.Figure:
+    """Compact horizontal bullet of the global equipment health index.
+
+    The chart renders three zone bands (surplus/normal/tight) plus a value
+    bar coloured by the active regime. Used as a top-of-tab "at-a-glance"
+    indicator so the reader sees the global posture before scrolling into
+    per-region detail.
+    """
+    index = max(0.0, min(100.0, float(index)))
+    _, accent = _health_regime(index)
+
+    fig = go.Figure(go.Indicator(
+        mode="number+gauge",
+        value=index,
+        number={"font": {"color": accent, "size": 22},
+                "suffix": "%", "valueformat": ".1f"},
+        gauge={
+            "shape": "bullet",
+            "axis": {
+                "range": [0, 100],
+                "tickvals": [0, 70, 85, 100],
+                "ticktext": ["0", "70", "85", "100"],
+                "tickfont": {"color": C_TEXT3, "size": 10},
+            },
+            "bgcolor": C_BG,
+            "borderwidth": 0,
+            "steps": [
+                {"range": [lo, hi], "color": _hex_to_rgba_str(c, 0.18)}
+                for lo, hi, c, _ in _HEALTH_BANDS
+            ],
+            "bar": {"color": accent, "thickness": 0.55},
+            "threshold": {
+                "line": {"color": C_TEXT, "width": 2},
+                "thickness": 0.9,
+                "value": index,
+            },
+        },
+        domain={"x": [0.18, 0.98], "y": [0.15, 0.85]},
+        title={"text": "Equipment Health Index",
+               "font": {"color": C_TEXT2, "size": 11}},
+    ))
+    fig.update_layout(
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        height=110,
+        margin={"l": 14, "r": 14, "t": 8, "b": 6},
+    )
+    return fig
+
+
+def _hex_to_rgba_str(hex_color: str, alpha: float) -> str:
+    """Lightweight hex → rgba() string used by the bullet bands."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha:.2f})"
+
+
+def _build_severity_lollipop(alerts: List[Dict]) -> go.Figure:
+    """Horizontal lollipop of shortage-alert severity scores.
+
+    Alerts are expected to carry the keys ``region``, ``type``, ``risk``,
+    and ``score`` (matches the dicts assembled in ``_render_shortage_alerts``).
+    Returns an annotated-empty figure if ``alerts`` is empty so the caller
+    can render unconditionally.
+    """
+    fig = go.Figure()
+    if not alerts:
+        fig.add_annotation(
+            text="No active alerts",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Alert Severity", height=140)
+        return fig
+
+    # Display top-down by severity (highest at the top of the chart).
+    ranked = sorted(alerts, key=lambda a: a.get("score", 0.0))
+    labels = [f"{a['region']} — {a['type']}" for a in ranked]
+    scores = [float(a.get("score", 0.0)) for a in ranked]
+    risk_color = {
+        "CRITICAL": C_LOW,
+        "HIGH":     C_MOD,
+        "MODERATE": C_ACCENT,
+        "LOW":      C_HIGH,
+    }
+    colors = [risk_color.get(a.get("risk", "LOW"), C_TEXT2) for a in ranked]
+
+    # Stems
+    for lbl, scr, col in zip(labels, scores, colors):
+        fig.add_shape(
+            type="line",
+            x0=0, x1=scr, y0=lbl, y1=lbl,
+            line={"color": col, "width": 1.4},
+            layer="below",
+        )
+    # Markers
+    fig.add_trace(go.Scatter(
+        x=scores,
+        y=labels,
+        mode="markers",
+        marker={
+            "size": 12,
+            "color": colors,
+            "line": {"color": C_BG, "width": 1.5},
+        },
+        hovertemplate="%{y}<br>Severity %{x:.0f}<extra></extra>",
+        showlegend=False,
+    ))
+
+    apply_dark_layout(
+        fig,
+        title=f"Alert Severity — {len(alerts)} active",
+        height=max(160, 38 + 22 * len(alerts)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Severity score (0–100)", "range": [0, 100],
+               "gridcolor": "rgba(255,255,255,0.05)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 20, "t": 40, "b": 40},
+    )
+    return fig
+
+
 def _build_equip_matrix() -> Tuple[List, List, List]:
     z_util: List[List[float]] = []
     z_text: List[List[str]] = []
@@ -347,6 +500,44 @@ _SHORTAGE_ALERT_ROUTES: List[Dict[str, Any]] = [
         "detail": "Port congestion at NY/NJ slowing container release cycle",
     },
 ]
+
+
+def _render_global_health_strip() -> None:
+    """Top-of-tab health strip: bullet gauge + supporting KPIs.
+
+    Renders a compact 2-column strip showing the global equipment health
+    bullet (left) and three supporting metrics (right): regime label, count
+    of regions at CRITICAL/HIGH risk, and reefer utilization. Designed to
+    answer "how tight is the market right now?" without scrolling.
+    """
+    index = get_global_equipment_index()
+    regime, accent = _health_regime(index)
+
+    critical_regions = sum(
+        1 for e in REGIONAL_EQUIPMENT_STATUS if e.shortage_risk == "CRITICAL"
+    )
+    high_regions = sum(
+        1 for e in REGIONAL_EQUIPMENT_STATUS if e.shortage_risk == "HIGH"
+    )
+    reefer = get_reefer_summary()
+    reefer_util = float(reefer.get("avg_utilization_pct", 0.0))
+
+    col_chart, col_kpis = st.columns([2, 3])
+    with col_chart:
+        st.plotly_chart(
+            _build_health_bullet(index),
+            use_container_width=True,
+            key="equip_health_bullet",
+        )
+    with col_kpis:
+        metric_card_row([
+            {"label": "Regime",          "value": regime,
+             "sublabel": f"{index:.1f}% utilization", "accent": accent},
+            {"label": "Critical regions","value": str(critical_regions),
+             "sublabel": "shortage-risk count",      "accent": C_LOW},
+            {"label": "Reefer util.",    "value": f"{reefer_util:.1f}%",
+             "sublabel": "cap-weighted avg",         "accent": C_ACCENT},
+        ], columns=3)
 
 
 def _render_enhanced_equipment_overview() -> None:
@@ -1512,6 +1703,14 @@ def _render_shortage_alerts() -> None:
         unsafe_allow_html=True,
     )
 
+    # Severity overview — one-line scan of every active alert before the
+    # detail cards below. Dot colour = risk class, x-axis = severity score.
+    st.plotly_chart(
+        _build_severity_lollipop(alerts),
+        use_container_width=True,
+        key="equip_alert_lollipop",
+    )
+
     risk_to_action = {"CRITICAL": "Avoid", "HIGH": "Caution", "MODERATE": "Monitor", "LOW": "Watch"}
 
     col_a, col_b = st.columns(2)
@@ -2158,6 +2357,11 @@ def render(
             )
         except Exception:
             logger.exception("tab_equipment: error rendering live_data_badge header")
+
+        try:
+            _render_global_health_strip()
+        except Exception:
+            logger.exception("tab_equipment: error in global health strip")
 
         try:
             _render_enhanced_equipment_overview()

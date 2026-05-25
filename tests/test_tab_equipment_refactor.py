@@ -165,7 +165,114 @@ def test_no_new_inline_div_style_blocks() -> None:
     )
 
 
-# ── 6. The remaining inline spans are exactly the documented helpers ──────
+# ── 6. Figure-builder: global equipment health bullet ─────────────────────
+
+def test_health_bullet_returns_indicator_figure() -> None:
+    """`_build_health_bullet` must return a plotly Figure with one Indicator."""
+    import plotly.graph_objects as go
+    from ui.tab_equipment import _build_health_bullet
+
+    fig = _build_health_bullet(78.4)
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) == 1
+    assert fig.data[0].type == "indicator"
+    # Value must round-trip into the figure
+    assert abs(float(fig.data[0].value) - 78.4) < 1e-6
+
+
+def test_health_bullet_color_reflects_regime() -> None:
+    """Bar colour must follow the regime band the index falls into.
+
+    Regimes (see processing.equipment_tracker.get_global_equipment_index
+    docstring): <70 surplus → C_HIGH, 70–85 normal → C_MOD, >85 tight → C_LOW.
+    """
+    from ui.styles import C_HIGH, C_LOW, C_MOD
+    from ui.tab_equipment import _build_health_bullet, _health_regime
+
+    assert _health_regime(55.0) == ("Surplus", C_HIGH)
+    assert _health_regime(78.0) == ("Normal",  C_MOD)
+    assert _health_regime(91.0) == ("Tight",   C_LOW)
+
+    # Boundary: exactly 85 should land in "Tight" (the docstring says >85
+    # is tight, but the upper-band edge needs to belong to one regime).
+    assert _health_regime(85.0)[0] == "Tight"
+
+    # Bar colour propagates into the figure
+    fig = _build_health_bullet(91.0)
+    assert fig.data[0].gauge.bar.color == C_LOW
+
+
+def test_health_bullet_clamps_out_of_range() -> None:
+    """A bogus index value should clamp into [0, 100] rather than crash."""
+    from ui.tab_equipment import _build_health_bullet
+
+    fig_lo = _build_health_bullet(-15.0)
+    fig_hi = _build_health_bullet(200.0)
+    assert float(fig_lo.data[0].value) == 0.0
+    assert float(fig_hi.data[0].value) == 100.0
+
+
+# ── 7. Figure-builder: alert severity lollipop ───────────────────────────
+
+def test_severity_lollipop_empty_alerts_returns_annotated_figure() -> None:
+    """Empty alert list must yield a non-crashing annotated-empty figure."""
+    import plotly.graph_objects as go
+    from ui.tab_equipment import _build_severity_lollipop
+
+    fig = _build_severity_lollipop([])
+    assert isinstance(fig, go.Figure)
+    # No data traces, but the "No active alerts" annotation is present.
+    assert len(fig.data) == 0
+    assert any("No active alerts" in (a.text or "") for a in fig.layout.annotations)
+
+
+def test_severity_lollipop_orders_highest_severity_at_top() -> None:
+    """The y-axis must read top-down by severity (highest at the top).
+
+    Plotly stacks categorical y-values bottom-up, so the builder sorts
+    *ascending* by score and lets Plotly invert it. This test pins that
+    contract so a future "let's sort descending" refactor cannot silently
+    flip the visual reading order.
+    """
+    from ui.tab_equipment import _build_severity_lollipop
+
+    alerts = [
+        {"region": "Asia Pacific",  "type": "40FT DRY",   "risk": "HIGH",     "score": 62.0},
+        {"region": "North America", "type": "40FT REEFER","risk": "CRITICAL", "score": 88.5},
+        {"region": "Europe",        "type": "20FT DRY",   "risk": "MODERATE", "score": 45.0},
+    ]
+    fig = _build_severity_lollipop(alerts)
+    # Single scatter trace carries the markers
+    scatter = [t for t in fig.data if t.type == "scatter"]
+    assert len(scatter) == 1
+    y_labels = list(scatter[0].y)
+    # Bottom of the y-list is the lowest score; top is the highest.
+    assert "Europe"        in y_labels[0]
+    assert "North America" in y_labels[-1]
+
+
+def test_severity_lollipop_marker_colors_match_risk() -> None:
+    """CRITICAL → C_LOW, HIGH → C_MOD, MODERATE → C_ACCENT, LOW → C_HIGH."""
+    from ui.styles import C_ACCENT, C_HIGH, C_LOW, C_MOD
+    from ui.tab_equipment import _build_severity_lollipop
+
+    alerts = [
+        {"region": "R1", "type": "T", "risk": "CRITICAL", "score": 90.0},
+        {"region": "R2", "type": "T", "risk": "HIGH",     "score": 70.0},
+        {"region": "R3", "type": "T", "risk": "MODERATE", "score": 50.0},
+        {"region": "R4", "type": "T", "risk": "LOW",      "score": 20.0},
+    ]
+    fig = _build_severity_lollipop(alerts)
+    scatter = [t for t in fig.data if t.type == "scatter"][0]
+    # Ascending sort → LOW at bottom (index 0), CRITICAL at top (index -1).
+    colors = list(scatter.marker.color)
+    assert colors[0]  == C_HIGH   # LOW risk
+    assert colors[1]  == C_ACCENT # MODERATE
+    assert colors[2]  == C_MOD    # HIGH
+    assert colors[-1] == C_LOW    # CRITICAL
+
+
+# ── 8. The remaining inline spans are exactly the documented helpers ──────
 
 def test_only_documented_inline_spans_remain() -> None:
     """Audit gate: the only ``<span style=`` instances allowed are the
