@@ -545,6 +545,115 @@ def _render_performance_chart(df: pd.DataFrame) -> None:
         logger.warning(f"performance chart error: {e}")
 
 
+def _build_risk_return_scatter(df: pd.DataFrame) -> go.Figure:
+    """Per-position risk × return scatter — Beta on x, total P&L % on y.
+
+    Marker size scales with portfolio weight; colour follows P&L direction
+    (gain/loss/flat). Reference lines at Beta=1 (market) and P&L=0 split
+    the plane into the canonical four quadrants, so the reader sees at a
+    glance which holdings carry the most cycle exposure and how the bets
+    have actually played.
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. Returns an annotated-empty figure when the snapshot is empty.
+    """
+    fig = go.Figure()
+    if df is None or df.empty:
+        fig.add_annotation(
+            text="No positions to plot",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Risk × Return", height=300)
+        return fig
+
+    betas    = df["Beta"].to_list()
+    pnl_pcts = df["P&L %"].to_list()
+    weights  = df["Weight %"].to_list()
+    tickers  = df["Ticker"].to_list()
+    market_vals = df["Market Value"].to_list()
+
+    # Marker size: scale weight (0-100%) into a 12-44px range so the smallest
+    # position is still visible and the largest doesn't dominate.
+    max_w = max(weights) if weights else 1.0
+    sizes = [
+        12 + (32 * (w / max_w if max_w > 0 else 0.0))
+        for w in weights
+    ]
+    colors = [_color(p) for p in pnl_pcts]
+
+    fig.add_trace(go.Scatter(
+        x=betas,
+        y=pnl_pcts,
+        mode="markers+text",
+        marker={
+            "size": sizes,
+            "color": colors,
+            "line": {"color": "#0c0e14", "width": 1.5},
+            "opacity": 0.88,
+        },
+        text=tickers,
+        textposition="top center",
+        textfont={"color": C_TEXT3, "size": 10},
+        customdata=list(zip(weights, market_vals)),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Beta: %{x:.2f}<br>"
+            "P&L: %{y:+.1f}%<br>"
+            "Weight: %{customdata[0]:.1f}%<br>"
+            "Market value: $%{customdata[1]:,.0f}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # Reference lines: market beta = 1, breakeven P&L = 0
+    fig.add_vline(
+        x=1.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+        annotation_text="Market β",
+        annotation_position="top",
+        annotation_font={"color": C_TEXT3, "size": 9},
+    )
+    fig.add_hline(
+        y=0.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+    )
+
+    apply_dark_layout(
+        fig,
+        title="Risk × Return — per-position decomposition",
+        height=340,
+    )
+    fig.update_layout(
+        xaxis={"title": "Beta (systematic risk vs. SPY)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": "Total P&L (%)",
+               "gridcolor": "rgba(255,255,255,0.04)",
+               "zeroline": False},
+        margin={"l": 70, "r": 30, "t": 48, "b": 50},
+    )
+    return fig
+
+
+def _render_risk_return_scatter(df: pd.DataFrame) -> None:
+    """Render the risk-return scatter with a one-line caption underneath."""
+    if df is None or df.empty:
+        return
+    st.plotly_chart(
+        _build_risk_return_scatter(df),
+        use_container_width=True,
+        key="portfolio_risk_return_scatter",
+    )
+    st.caption(
+        "Marker size = portfolio weight; colour = P&L direction. Reference "
+        "lines split the plane at Beta=1 (market) and P&L=0. Top-right is "
+        "cycle-on winners; top-left is defensive winners; bottom-right is "
+        "cycle-down losers; bottom-left is defensive losers (where something "
+        "is probably wrong with the thesis)."
+    )
+
+
 def _render_risk_metrics(df: pd.DataFrame) -> None:
     """VaR, Sharpe, Max Drawdown, BDI correlation panel."""
     try:
@@ -1250,6 +1359,10 @@ def render(stock_data, macro_data, insights) -> None:
             section_divider("Risk")
 
             _render_risk_metrics(df)
+
+            # Per-position risk-return scatter — complements the aggregate
+            # risk cards with a "where is risk concentrated?" cross-section.
+            _render_risk_return_scatter(df)
 
             section_divider("Optimization Lab")
 
