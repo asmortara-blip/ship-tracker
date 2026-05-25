@@ -710,6 +710,112 @@ def _render_search_hint() -> None:
     )
 
 
+# ── Section E-prefix: voyage explanations (operator-facing English) ─────────
+# Optional explanatory layer that sits above the full-fleet table. Uses
+# ``engine.disruption_explainer`` to translate each top-N most-delayed voyage
+# into a one-paragraph English brief — template-based, deterministic, zero
+# LLM tokens. The fleet table below is a single dataframe (multi-row), so we
+# go with the expander-of-cards pattern (vs per-row inline caption).
+
+_PRIMARY_CAUSE_COLOR: dict[str, str] = {
+    "weather":    C_MACRO,
+    "congestion": C_MOD,
+    "chokepoint": C_LOW,
+    "unknown":    C_TEXT2,
+    "none":       C_HIGH,
+}
+
+
+def _render_voyage_explanations(fleet: list) -> None:
+    """Render the operator-facing voyage explanations panel.
+
+    Slotted ABOVE the full-fleet table inside a *collapsed* expander so it
+    doesn't crowd the more-comprehensive table that follows. Inside: one card
+    per top-N most-delayed voyage (headline, bullet "why", primary-cause
+    badge).
+
+    NEVER raises — the explainer module itself is exception-safe, but this
+    helper still wraps the call + per-card render in try/except.
+    """
+    if not fleet:
+        st.caption(
+            "No voyages in the fleet — nothing to explain."
+        )
+        return
+
+    try:
+        # Lazy import keeps the explainer off the tab-load critical path.
+        from engine.disruption_explainer import explain_delayed_voyages
+
+        try:
+            explanations = explain_delayed_voyages(fleet, top_n=10)
+        except Exception:
+            logger.exception(
+                "Voyage Tracker — explain_delayed_voyages failed"
+            )
+            explanations = []
+
+        # The explainer filters voyages with delay <= 1 day, so a calm fleet
+        # yields []. Surface that explicitly.
+        if not explanations:
+            st.caption(
+                "No materially-delayed voyages right now — fleet is "
+                "running on schedule."
+            )
+            return
+
+        with st.expander(
+            "Why these voyages are delayed", expanded=False
+        ):
+            for exp in explanations:
+                try:
+                    _render_one_voyage_explanation(exp)
+                except Exception:
+                    logger.exception(
+                        "Voyage Tracker — voyage explanation card failed"
+                    )
+                    continue
+    except Exception:
+        logger.exception("Voyage Tracker — explanations panel failed")
+        st.warning("Explanations unavailable")
+
+
+def _render_one_voyage_explanation(exp) -> None:
+    """Render a single VoyageExplanation as a card inside the expander."""
+    with st.container():
+        headline = str(getattr(exp, "headline", "") or "")
+        st.markdown(
+            f'<div style="font-family:var(--serif);font-weight:700;'
+            f'font-size:0.96rem;color:{C_TEXT};margin-bottom:6px;">'
+            f'{headline}</div>',
+            unsafe_allow_html=True,
+        )
+
+        bullets: list = list(getattr(exp, "why", []) or [])
+        if bullets:
+            st.markdown(
+                "  \n".join(f"- {b}" for b in bullets)
+            )
+
+        # Primary-cause badge (color-coded per attribution).
+        primary = str(getattr(exp, "primary_cause", "") or "")
+        if primary and primary != "none":
+            badge_color = _PRIMARY_CAUSE_COLOR.get(primary, C_TEXT2)
+            st.markdown(
+                f'<div style="margin-top:4px;font-size:0.74rem;'
+                f'color:{C_TEXT3};font-family:var(--sans);">'
+                f'Primary cause: {badge(primary.title(), color=badge_color)}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f'<div style="border-bottom:1px solid {C_TEXT3};opacity:0.18;'
+            f'margin:10px 0 12px 0;"></div>',
+            unsafe_allow_html=True,
+        )
+
+
 # ── Section E: full-fleet table ─────────────────────────────────────────────
 
 def _render_fleet_table(fleet: list) -> None:
@@ -854,6 +960,16 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
                 logger.exception("Voyage Tracker — search hint failed")
 
         section_divider("Fleet Roster")
+
+        # ── E-pre. Voyage explanations (operator-facing English) ────────────────
+        # Lives ABOVE the full-fleet table so the operator gets the *why* for
+        # the most-delayed voyages before scanning the comprehensive table.
+        # Whole helper is defensive — its own failure cannot block the table.
+        try:
+            _render_voyage_explanations(fleet)
+        except Exception:
+            logger.exception("Voyage Tracker — voyage explanations failed")
+            st.warning("Explanations unavailable")
 
         # ── E. Full-fleet table ─────────────────────────────────────────────────
         try:

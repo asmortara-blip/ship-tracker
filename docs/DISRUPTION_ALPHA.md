@@ -564,6 +564,34 @@ The CLI surface:
 python -m tools.ops_cli disruption explain-routes --top 5
 ```
 
+### UI surface
+
+The operator-facing payoff lives in two tabs, both wired through lazy imports
+and defensive try/except so a broken explainer can never take the surrounding
+tab down:
+
+* **Disruption Radar.** `_render_route_explanations(stresses)` sits above the
+  per-route stress table inside a *collapsed* `st.expander("Why these routes
+  are stressed")`. It calls `explain_top_disruptions(stresses, top_n=5)` and
+  renders one card per stressed route — bold headline, bullet *why* list,
+  colored `recommended_focus` badge (red for `escalate`, amber for
+  `investigate`, blue for `monitor`), and a chip row of affected chokepoints
+  when present. Empty / all-Calm input degrades to a quiet *"system is
+  operating normally"* caption.
+
+* **Voyage Tracker.** `_render_voyage_explanations(fleet)` sits above the
+  full-fleet table inside the same collapsed-expander pattern. It calls
+  `explain_delayed_voyages(fleet, top_n=10)` and renders one card per
+  most-delayed voyage — headline, bullet *why* list, color-coded
+  `primary_cause` badge (weather / congestion / chokepoint / unknown).
+  An on-schedule fleet degrades to a *"fleet is running on schedule"*
+  caption.
+
+Both helpers wrap the whole panel in try/except plus per-card isolation so
+one malformed row cannot kill the surrounding panel — and the outer tab's
+own try/except guarantees the rest of the page renders even if the
+explanations panel itself raises.
+
 ## Validation
 
 Earlier iterations of the platform shipped a heuristic backtester that only

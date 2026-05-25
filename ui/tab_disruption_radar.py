@@ -331,6 +331,137 @@ def _render_ssi_overview(report) -> None:
     _render_top_disruptions(top)
 
 
+# ── Section C-prefix: route explanations (operator-facing English) ──────────
+# Optional explanatory layer that sits *above* the stress heat bar and the
+# disruption table. Uses ``engine.disruption_explainer`` — template-based,
+# deterministic, zero LLM tokens — to turn each top-N stressed route into a
+# one-paragraph English brief. The explainer module is lazy-imported here so
+# tab-load critical path stays small, and the whole helper is wrapped in
+# defensive try/except + per-card isolation so one malformed RouteStress can
+# never take the panel down.
+
+_FOCUS_BADGE_COLOR: dict[str, str] = {
+    "escalate":    C_LOW,
+    "investigate": C_MOD,
+    "monitor":     C_ACCENT,
+}
+
+
+def _render_route_explanations(stresses: list) -> None:
+    """Render the operator-facing English route explanations panel.
+
+    Slotted ABOVE the per-route stress table inside a *collapsed* expander so
+    it doesn't dominate the page. Inside: one card per top-stressed route
+    (headline, bullet "why" list, focus badge, optional chokepoint chips).
+
+    NEVER raises — the explainer module itself is exception-safe, but this
+    helper still wraps the call + per-card render in try/except so a bad
+    row can never take the surrounding tab down.
+    """
+    # Empty / all-Calm input — render a quiet info message, no expander.
+    if not stresses:
+        st.caption(
+            "No stressed routes right now — system is operating normally."
+        )
+        return
+
+    try:
+        # Lazy import keeps the explainer off the tab-load critical path
+        # (and means a broken engine import only hurts this panel).
+        from engine.disruption_explainer import explain_top_disruptions
+
+        try:
+            explanations = explain_top_disruptions(stresses, top_n=5)
+        except Exception:
+            logger.exception("Disruption Radar — explain_top_disruptions failed")
+            explanations = []
+
+        # All routes Calm → the explainer returns [] (Calm routes are filtered
+        # before explanation). Surface the same "operating normally" caption.
+        if not explanations:
+            st.caption(
+                "No stressed routes right now — system is operating normally."
+            )
+            return
+
+        with st.expander(
+            "Why these routes are stressed", expanded=False
+        ):
+            for exp in explanations:
+                # Per-card try/except so one malformed RouteExplanation cannot
+                # take the whole panel down.
+                try:
+                    _render_one_route_explanation(exp)
+                except Exception:
+                    logger.exception(
+                        "Disruption Radar — route explanation card failed"
+                    )
+                    continue
+    except Exception:
+        logger.exception("Disruption Radar — explanations panel failed")
+        st.warning("Explanations unavailable")
+
+
+def _render_one_route_explanation(exp) -> None:
+    """Render a single RouteExplanation as a card inside the expander."""
+    with st.container():
+        # ─ Bold headline ─
+        headline = str(getattr(exp, "headline", "") or "")
+        st.markdown(
+            f'<div style="font-family:var(--serif);font-weight:700;'
+            f'font-size:0.96rem;color:{C_TEXT};margin-bottom:6px;">'
+            f'{headline}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ─ "Why" bullets ─
+        bullets: list = list(getattr(exp, "why", []) or [])
+        if bullets:
+            st.markdown(
+                "  \n".join(f"- {b}" for b in bullets)
+            )
+
+        # ─ Recommended-focus badge (color-coded; omitted when empty) ─
+        focus = str(getattr(exp, "recommended_focus", "") or "")
+        if focus:
+            badge_color = _FOCUS_BADGE_COLOR.get(focus, C_TEXT2)
+            st.markdown(
+                f'<div style="margin-top:4px;font-size:0.74rem;'
+                f'color:{C_TEXT3};font-family:var(--sans);">'
+                f'Recommended focus: {badge(focus.title(), color=badge_color)}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ─ Affected chokepoints chip row ─
+        chokepoints: list = list(getattr(exp, "affected_chokepoints", []) or [])
+        if chokepoints:
+            chips = "".join(
+                f'<span style="display:inline-block;padding:2px 8px;'
+                f'margin:2px 4px 2px 0;border-radius:10px;'
+                f'background:rgba(204,82,82,0.10);'
+                f'color:{C_LOW};border:1px solid rgba(204,82,82,0.25);'
+                f'font-size:0.72rem;font-family:var(--sans);">'
+                f'{str(cp)[:32]}</span>'
+                for cp in chokepoints
+            )
+            st.markdown(
+                f'<div style="margin-top:6px;">'
+                f'<span style="font-size:0.7rem;color:{C_TEXT3};'
+                f'font-family:var(--sans);text-transform:uppercase;'
+                f'letter-spacing:0.05em;margin-right:6px;">'
+                f'Affected chokepoints</span>{chips}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ─ Light spacer between cards ─
+        st.markdown(
+            f'<div style="border-bottom:1px solid {C_TEXT3};opacity:0.18;'
+            f'margin:10px 0 12px 0;"></div>',
+            unsafe_allow_html=True,
+        )
+
+
 # ── Section C: per-route stress heat bar ────────────────────────────────────
 
 def _render_heat_bar(report) -> None:
@@ -573,6 +704,18 @@ def render(
             st.error("Route stress heat bar unavailable.")
 
         st.divider()
+
+        # ── D-pre. Route explanations (operator-facing English) ─────────────────
+        # Lives ABOVE the per-route disruption table so the operator gets the
+        # *why* before the *what*. Whole helper is defensive — its own failure
+        # cannot block the table that follows.
+        try:
+            _render_route_explanations(
+                getattr(report, "route_stress", []) or []
+            )
+        except Exception:
+            logger.exception("Disruption Radar — route explanations failed")
+            st.warning("Explanations unavailable")
 
         # ── D. Per-route disruption table ───────────────────────────────────────
         try:
