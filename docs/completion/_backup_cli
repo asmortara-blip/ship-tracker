@@ -1,0 +1,47 @@
+#compdef backup_cli
+# Auto-generated zsh completion. Regenerate via:
+#   python -m tools.completion_cli zsh --program backup_cli --out _<program>
+# Install: drop this file into a directory on $fpath as ``_<program>``,
+# then ``autoload -U _<program> && compinit``.
+
+_backup_cli() {
+    local -a _commands
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _commands=(
+                'create:Snapshot the DB + reports into a new tar.gz backup'
+                'list:List backups in a directory (default: ./backups)'
+                'restore:Restore the live DB from a backup tar.gz (REQUIRES --confirm)'
+                'verify:Open a backup and check its manifest + row counts'
+            )
+            _describe -t commands 'backup_cli command' _commands
+            ;;
+        args)
+            case $line[1] in
+                create)
+                    # (no nested subcommands)
+                    ;;
+                list)
+                    # (no nested subcommands)
+                    ;;
+                restore)
+                    # (no nested subcommands)
+                    ;;
+                verify)
+                    # (no nested subcommands)
+                    ;;
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_backup_cli "$@"

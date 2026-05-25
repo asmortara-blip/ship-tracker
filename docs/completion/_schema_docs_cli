@@ -1,0 +1,43 @@
+#compdef schema_docs_cli
+# Auto-generated zsh completion. Regenerate via:
+#   python -m tools.completion_cli zsh --program schema_docs_cli --out _<program>
+# Install: drop this file into a directory on $fpath as ``_<program>``,
+# then ``autoload -U _<program> && compinit``.
+
+_schema_docs_cli() {
+    local -a _commands
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _commands=(
+                'history:Parse state/migrations.py and render the per-version history as Markdown. Default output: docs/SCHEMA_HISTORY.md.'
+                'json:Emit the introspected schema as JSON (machine-readable). Default destination: stdout.'
+                'markdown:Introspect the live DB and write a Markdown schema doc. Default output: docs/SCHEMA.md.'
+            )
+            _describe -t commands 'schema_docs_cli command' _commands
+            ;;
+        args)
+            case $line[1] in
+                history)
+                    # (no nested subcommands)
+                    ;;
+                json)
+                    # (no nested subcommands)
+                    ;;
+                markdown)
+                    # (no nested subcommands)
+                    ;;
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_schema_docs_cli "$@"

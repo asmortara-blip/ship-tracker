@@ -1,0 +1,39 @@
+#compdef replay_cli
+# Auto-generated zsh completion. Regenerate via:
+#   python -m tools.completion_cli zsh --program replay_cli --out _<program>
+# Install: drop this file into a directory on $fpath as ``_<program>``,
+# then ``autoload -U _<program> && compinit``.
+
+_replay_cli() {
+    local -a _commands
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _commands=(
+                'bulk:Replay every alert matching the filter to one channel'
+                'replay:Replay one alert to one channel'
+            )
+            _describe -t commands 'replay_cli command' _commands
+            ;;
+        args)
+            case $line[1] in
+                bulk)
+                    # (no nested subcommands)
+                    ;;
+                replay)
+                    # (no nested subcommands)
+                    ;;
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_replay_cli "$@"

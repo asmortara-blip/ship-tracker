@@ -1919,6 +1919,57 @@ Per-row Retry / Cancel buttons on pending entries; Recently failed +
 Recently succeeded expanders for visibility; Maintenance expander
 with the cleanup action.
 
+### Tab completion (bash + zsh)
+
+The ops CLI carries ~30 top-level subcommands. To avoid memorising the
+list — and to avoid hand-maintaining a brittle completion script —
+completion is **auto-generated** from the argparse tree and committed
+under `docs/completion/`.
+
+Regenerate after adding or renaming a subcommand:
+
+```bash
+python -m tools.completion_cli all --out-dir docs/completion
+# writes ops_cli.bash, _ops_cli, backup_cli.bash, _backup_cli, … per known CLI
+# plus docs/completion/INSTALL.md with the same instructions below.
+```
+
+Or render one CLI to stdout:
+
+```bash
+python -m tools.completion_cli bash --program ops_cli         # bash to stdout
+python -m tools.completion_cli zsh  --program ops_cli --out _ops_cli
+```
+
+**bash install** — source the file per shell, or persist host-wide:
+
+```bash
+# This shell only:
+source docs/completion/ops_cli.bash
+source docs/completion/backup_cli.bash
+
+# Or persist for all users on the host:
+sudo cp docs/completion/ops_cli.bash      /etc/bash_completion.d/
+sudo cp docs/completion/backup_cli.bash   /etc/bash_completion.d/
+```
+
+**zsh install** — add the completion dir to `$fpath` and autoload:
+
+```bash
+fpath=("$PWD/docs/completion" $fpath)
+autoload -U _ops_cli _backup_cli _replay_cli
+compinit
+```
+
+**Scope of completion**
+
+* Only subcommand *names* are completed — option *values* (e.g.
+  `--user-id <id>`) are not, since they need live DB lookups. Operators
+  type the value themselves.
+* The bash `complete -F` hook binds to argv[0]. If you invoke via
+  `python -m tools.ops_cli`, the hook won't fire — wrap the invocation
+  in a shell function or add an `ops_cli` wrapper to `$PATH`.
+
 ## Backup / Restore
 
 Two complementary tools cover backups:

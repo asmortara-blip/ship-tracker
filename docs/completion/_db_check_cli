@@ -1,0 +1,31 @@
+#compdef db_check_cli
+# Auto-generated zsh completion. Regenerate via:
+#   python -m tools.completion_cli zsh --program db_check_cli --out _<program>
+# Install: drop this file into a directory on $fpath as ``_<program>``,
+# then ``autoload -U _<program> && compinit``.
+
+_db_check_cli() {
+    local -a _commands
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _commands=(
+            )
+            _describe -t commands 'db_check_cli command' _commands
+            ;;
+        args)
+            case $line[1] in
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_db_check_cli "$@"
