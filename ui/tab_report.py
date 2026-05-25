@@ -779,6 +779,170 @@ def _render_share_links(reports: list) -> None:
             logger.warning(f"Could not render share row: {exc}")
 
 
+# ── Section 6b: Compare two reports (report-to-report diff) ───────────────────
+
+def _render_diff_panel() -> None:
+    """Render a "Compare to a previous report" selector + diff viewer.
+
+    Operators no longer have to open two browser tabs to spot what
+    changed — they pick a current report and a prior report from
+    selectboxes, click "Compute diff", and the structured diff
+    renders in an expander below with a Markdown-download button.
+
+    Lazy-imports ``utils.report_diff`` so a missing module degrades
+    to a "diff unavailable" notice rather than crashing the tab.
+    """
+    section_header(
+        "Compare to a Previous Report",
+        "Pick two reports and see what changed — signals, routes, sentiment.",
+    )
+
+    if not _HISTORY_OK:
+        st.markdown(
+            status_badge(
+                "Compare unavailable - utils.report_history not loaded.",
+                status="neutral",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        from utils.report_diff import (
+            diff_reports,
+            load_report_payload,
+            render_diff_html,
+            render_diff_markdown,
+        )
+    except Exception as exc:
+        logger.warning(f"report_diff import failed: {exc}")
+        st.markdown(
+            status_badge(
+                "Compare unavailable - utils.report_diff not loaded.",
+                status="neutral",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        reports = _list_reports()
+    except Exception as exc:
+        logger.warning(f"_render_diff_panel: list_reports failed: {exc}")
+        reports = []
+
+    if len(reports) < 2:
+        st.markdown(
+            status_badge(
+                "Need at least two saved reports to compute a diff.",
+                status="neutral",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Cap the dropdowns at the 20 most-recent reports so a long-running
+    # account doesn't push the selectbox into an unscrollable mess.
+    options = reports[:20]
+    labels = {
+        r.report_id: f"{r.report_date} ({r.report_id[:8]}) - {r.sentiment_label}"
+        for r in options
+    }
+
+    col_a, col_b = st.columns(2, gap="medium")
+    with col_a:
+        st.markdown(
+            '<div class="sub-section-header">Report A (older)</div>',
+            unsafe_allow_html=True,
+        )
+        # Default A to the second-most-recent so the natural diff is
+        # "previous vs current". A user can pick anything from the 20
+        # most-recent though.
+        default_a_idx = 1 if len(options) > 1 else 0
+        a_id = st.selectbox(
+            "report_a",
+            options=[r.report_id for r in options],
+            index=default_a_idx,
+            format_func=lambda rid: labels.get(rid, rid[:8]),
+            label_visibility="collapsed",
+            key="rep_diff_a",
+        )
+    with col_b:
+        st.markdown(
+            '<div class="sub-section-header">Report B (newer)</div>',
+            unsafe_allow_html=True,
+        )
+        b_id = st.selectbox(
+            "report_b",
+            options=[r.report_id for r in options],
+            index=0,
+            format_func=lambda rid: labels.get(rid, rid[:8]),
+            label_visibility="collapsed",
+            key="rep_diff_b",
+        )
+
+    if a_id == b_id:
+        st.markdown(
+            status_badge(
+                "Pick two different reports to compute a diff.",
+                status="warning",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    clicked = st.button(
+        "Compute diff",
+        key="btn_compute_diff",
+        type="primary",
+        use_container_width=True,
+    )
+    if not clicked:
+        return
+
+    try:
+        payload_a = load_report_payload(a_id)
+        payload_b = load_report_payload(b_id)
+    except Exception as exc:
+        logger.error(f"load_report_payload failed: {exc}")
+        st.error("Could not load report payloads.")
+        return
+
+    if payload_a is None or payload_b is None:
+        st.error("One or both reports could not be loaded in your scope.")
+        return
+
+    try:
+        diff = diff_reports(
+            payload_a, payload_b,
+            report_a_id=a_id, report_b_id=b_id,
+        )
+    except Exception as exc:
+        logger.error(f"diff_reports failed: {exc}")
+        st.error("Diff computation failed.")
+        return
+
+    with st.expander("Diff results", expanded=True):
+        try:
+            st.markdown(render_diff_html(diff), unsafe_allow_html=True)
+        except Exception as exc:
+            logger.warning(f"render_diff_html failed: {exc}")
+            st.error("Could not render diff HTML.")
+
+        try:
+            md = render_diff_markdown(diff)
+            st.download_button(
+                label="Download as Markdown",
+                data=md.encode("utf-8"),
+                file_name=f"diff_{a_id[:8]}_to_{b_id[:8]}.md",
+                mime="text/markdown",
+                key=f"dl_diff_{a_id}_{b_id}",
+                use_container_width=True,
+            )
+        except Exception as exc:
+            logger.warning(f"diff markdown download failed: {exc}")
+
+
 # ── Section 7: Data source status ─────────────────────────────────────────────
 
 def _render_data_sources(api_status: dict[str, bool]) -> None:
@@ -1118,6 +1282,13 @@ def render(
         except Exception as exc:
             logger.error(f"History render error: {exc}")
             st.error("Could not render report history.")
+
+        section_divider("Compare")
+        try:
+            _render_diff_panel()
+        except Exception as exc:
+            logger.error(f"Diff panel error: {exc}")
+            st.error("Could not render compare panel.")
 
         section_divider("Schedules")
         try:

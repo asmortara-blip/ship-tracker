@@ -385,6 +385,60 @@ def _cmd_reports_stats(args: argparse.Namespace) -> None:
         _print_kv(stats)
 
 
+def _cmd_reports_diff(args: argparse.Namespace) -> None:
+    """Compare two reports by id and print the structured diff.
+
+    ``--format md`` (default) prints the Markdown rendering — most
+    useful when piping into a pager or a chat client. ``--format json``
+    prints the same structured payload the API serves so an automation
+    script can consume it directly. ``--user-id`` honours per-user
+    scoping (a user can only diff reports they own); without it the
+    legacy empty-scope behaviour applies.
+
+    Exit codes:
+      * 0 on success
+      * 1 if either report id is unknown in the caller's scope (no
+        stack trace — just a one-line stderr message)
+    """
+    from utils.report_diff import (
+        diff_reports,
+        diff_to_dict,
+        load_report_payload,
+        render_diff_markdown,
+    )
+
+    user_id = getattr(args, "user_id", None) or None
+    a_id = args.report_id_a
+    b_id = args.report_id_b
+
+    payload_a = load_report_payload(a_id, user_id=user_id)
+    payload_b = load_report_payload(b_id, user_id=user_id)
+    if payload_a is None or payload_b is None:
+        # Same indistinguishable failure as the API — don't tell the
+        # operator WHICH of the two is missing, only that one of them
+        # is. Surfacing "id X is unknown" would leak existence info
+        # across users in a multi-tenant install.
+        print(
+            f"reports diff: one or both report ids unknown in scope "
+            f"(a={a_id!r}, b={b_id!r})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    diff = diff_reports(
+        payload_a, payload_b,
+        report_a_id=a_id, report_b_id=b_id,
+    )
+
+    fmt = getattr(args, "format", "md") or "md"
+    if fmt == "json":
+        _print_json(diff_to_dict(diff))
+    else:
+        # Default + any non-json value falls back to Markdown — the
+        # CLI's "give me something readable" contract.
+        print(render_diff_markdown(diff))
+
+
 def _cmd_telemetry_usage(args: argparse.Namespace) -> None:
     from engine.llm_telemetry import get_usage_summary
 
@@ -2141,6 +2195,22 @@ def _build_parser() -> argparse.ArgumentParser:
     sr3 = sr.add_parser("stats", help="Report-history aggregate stats")
     sr3.add_argument("--json", action="store_true")
     sr3.set_defaults(func=_cmd_reports_stats)
+
+    sr4 = sr.add_parser(
+        "diff",
+        help="Compare two reports and print the structured diff",
+    )
+    sr4.add_argument("report_id_a", help="ID of the older / baseline report")
+    sr4.add_argument("report_id_b", help="ID of the newer / current report")
+    sr4.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="Limit lookup to a specific user's scope (default: empty / legacy)",
+    )
+    sr4.add_argument(
+        "--format", choices=["md", "json"], default="md",
+        help="Output format (default: md)",
+    )
+    sr4.set_defaults(func=_cmd_reports_diff)
 
     # ── telemetry ─────────────────────────────────────────────────────────
     p_tl = sub.add_parser("telemetry", help="LLM-telemetry subcommands")

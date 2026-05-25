@@ -323,6 +323,167 @@ def test_reports_stats_json(capsys) -> None:
     assert "sentiment_distribution" in payload
 
 
+# ─── reports diff (new in this commit) ───────────────────────────────────
+
+def _seed_diffable_report(
+    *,
+    report_id: str,
+    user_id: str,
+    sentiment_score: float,
+    risk_level: str,
+    sentiment_label: str = "MIXED",
+    generated_at: str = "2026-05-22T12:00:00+00:00",
+    monkeypatch=None,
+    tmp_path=None,
+) -> None:
+    """Drop a report_history row + HTML file scoped to user_id, suitable
+    for the diff handler to load. Mirrors the helper in
+    test_utils_report_diff.py — kept local rather than imported across
+    test files so the CLI test stays self-contained."""
+    from pathlib import Path
+
+    from state.db import get_connection
+    from utils import report_history as rh
+
+    if monkeypatch is not None and tmp_path is not None:
+        monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    rh.REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    file_path = Path(rh.REPORT_DIR) / f"r_{report_id[:8]}.html"
+    file_path.write_text(f"<html>{report_id}</html>", encoding="utf-8")
+
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO report_history
+              (report_id, generated_at, report_date, sentiment_label,
+               sentiment_score, risk_level, signal_count, data_quality,
+               file_path, file_size_kb, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id, generated_at, "May 22, 2026", sentiment_label,
+                sentiment_score, risk_level, 0, "FULL",
+                str(file_path.resolve()), 0.5, user_id,
+            ),
+        )
+
+
+def test_reports_diff_unknown_ids_exits_nonzero_with_stderr_message(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    """`reports diff` with an unknown id must exit non-zero AND print
+    a one-line message to STDERR — the CLI's "handler raised → exit 1"
+    contract. The traceback must NOT bubble to the shell."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+
+    code, _out, err = _run(
+        ["reports", "diff", "no-a", "no-b", "--user-id", "alice"],
+        capsys,
+    )
+    assert code != 0
+    # Stderr should carry the one-line failure message (no Python
+    # Traceback header).
+    assert "unknown in scope" in err.lower() or "one or both" in err.lower()
+    assert "Traceback" not in err
+
+
+def test_reports_diff_happy_path_prints_markdown(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    """Default format is Markdown — a populated diff between two
+    reports for the same user must produce a non-empty payload that
+    mentions both ids and at least one delta description."""
+    _seed_diffable_report(
+        report_id="aaa-bbb-ccc", user_id="alice",
+        sentiment_score=0.10, risk_level="LOW",
+        monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    _seed_diffable_report(
+        report_id="ddd-eee-fff", user_id="alice",
+        sentiment_score=0.45, risk_level="HIGH",
+        generated_at="2026-05-23T12:00:00+00:00",
+    )
+    code, out, _ = _run(
+        [
+            "reports", "diff",
+            "aaa-bbb-ccc", "ddd-eee-fff",
+            "--user-id", "alice",
+        ],
+        capsys,
+    )
+    assert code == 0
+    # Both ids must appear in the header line.
+    assert "aaa-bbb-ccc" in out
+    assert "ddd-eee-fff" in out
+    # And the diff must surface the metadata-level changes.
+    assert "Sentiment" in out or "sentiment" in out
+    assert "Risk" in out or "risk" in out
+
+
+def test_reports_diff_json_format_returns_parseable_payload(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    """--format json must produce a payload that round-trips through
+    json.loads with the documented top-level keys."""
+    _seed_diffable_report(
+        report_id="a1", user_id="alice",
+        sentiment_score=0.10, risk_level="LOW",
+        monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    _seed_diffable_report(
+        report_id="b1", user_id="alice",
+        sentiment_score=0.50, risk_level="HIGH",
+        generated_at="2026-05-23T12:00:00+00:00",
+    )
+    code, out, _ = _run(
+        [
+            "reports", "diff", "a1", "b1",
+            "--user-id", "alice", "--format", "json",
+        ],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    # Documented top-level keys.
+    assert set(payload.keys()) >= {
+        "report_a_id", "report_b_id", "summary", "entries",
+    }
+    assert payload["report_a_id"] == "a1"
+    assert payload["report_b_id"] == "b1"
+    assert isinstance(payload["entries"], list)
+    assert {"added", "removed", "changed"} <= set(payload["summary"].keys())
+
+
+def test_reports_diff_per_user_scoping_blocks_cross_user(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    """Alice cannot diff Bob's reports — the loader returns None for
+    Bob's id in Alice's scope, and the CLI exits non-zero with the
+    same "unknown in scope" message used for genuinely-missing ids.
+    Same indistinguishability contract as the API's /reports/<id>/html
+    cross-user path."""
+    _seed_diffable_report(
+        report_id="bob-1", user_id="bob",
+        sentiment_score=0.10, risk_level="LOW",
+        monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    _seed_diffable_report(
+        report_id="bob-2", user_id="bob",
+        sentiment_score=0.50, risk_level="HIGH",
+    )
+    code, _out, err = _run(
+        [
+            "reports", "diff", "bob-1", "bob-2",
+            "--user-id", "alice",
+        ],
+        capsys,
+    )
+    assert code != 0
+    assert "Traceback" not in err
+
+
 # ─── telemetry ───────────────────────────────────────────────────────────
 
 def test_telemetry_usage_empty(capsys) -> None:
