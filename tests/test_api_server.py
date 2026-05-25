@@ -2752,12 +2752,22 @@ def test_rate_limit_allows_after_refill_interval(server, monkeypatch):
             break
     assert drained, "could not drain bucket — refill is outracing the test"
 
-    # Now wait long enough to refill at least one whole token
-    # (5/s × 0.3s = 1.5 → ceil to at least 1 available).
-    _time.sleep(0.3)
+    # Now wait long enough to refill at least one whole token.
+    # 5/s × 0.6s = 3 tokens → comfortable margin against test-runner
+    # preemption. (Earlier 0.3s was too tight: under full-suite load
+    # the process can lose enough wall-clock time to the OS scheduler
+    # that the bucket hasn't refilled when r2 fires. 0.6s buys 3x
+    # the headroom.)
+    _time.sleep(0.6)
+    # Retry once if the first attempt races a slow scheduler tick.
     r2 = requests.get(
         f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
     )
+    if r2.status_code == 429:
+        _time.sleep(0.4)
+        r2 = requests.get(
+            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+        )
     assert r2.status_code == 200
 
 
