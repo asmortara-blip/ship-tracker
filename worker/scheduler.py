@@ -698,6 +698,54 @@ def run_alert_escalation_job(now: Optional[datetime] = None) -> dict:
 
 
 @_track_run
+def run_delivery_retry_job(now: Optional[datetime] = None) -> dict:
+    """Walk every due pending delivery retry and re-dispatch.
+
+    Thin wrapper around ``engine.delivery_retry.run_retry_pass`` that
+    adds logging and shields the caller from any exception. Designed
+    to run frequently (every 5 minutes from the cron loop) so a
+    transient transport failure (HTTP 5xx, network timeout, SMTP
+    blip) is re-attempted within minutes — fast enough that a CRITICAL
+    alert isn't stuck in the queue while operators are on shift.
+
+    The engine orchestrator already swallows per-row failures
+    internally — this wrapper is belt-and-braces: even if the engine
+    itself raises, the worker continues. Returns the count dict
+    ``{"processed": N, "succeeded": N, "failed": N,
+    "max_retries_exhausted": N}`` (or all zeros on a top-level
+    exception). Same shape, same posture, as the alert-escalation +
+    perf-budget-check wrappers.
+
+    ``now`` (optional) is forwarded straight through to the engine so
+    tests can pin the clock without monkeypatching datetime.
+
+    Never raises — a retry-queue failure must NEVER block any sibling
+    job. The engine itself is non-raising by contract; this guard is
+    defence in depth.
+    """
+    try:
+        from engine.delivery_retry import run_retry_pass
+
+        counts = run_retry_pass(now=now)
+        logger.info(
+            f"run_delivery_retry_job: "
+            f"processed={counts.get('processed', 0)} "
+            f"succeeded={counts.get('succeeded', 0)} "
+            f"failed={counts.get('failed', 0)} "
+            f"max_retries_exhausted={counts.get('max_retries_exhausted', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_delivery_retry_job: failed: {exc}")
+        return {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "max_retries_exhausted": 0,
+        }
+
+
+@_track_run
 def run_bulk_export_prune_job(keep_n: int = 5) -> int:
     """Prune ``cache/exports/*.tar.gz`` down to the newest ``keep_n``.
 
@@ -1191,6 +1239,17 @@ def main(argv: Optional[list] = None) -> int:
         run_alert_escalation_job()
     except Exception as exc:
         logger.warning(f"main: alert escalation step failed: {exc}")
+
+    # Delivery retry pass — re-dispatches every due pending row in
+    # ``delivery_retry_queue`` (v26). Designed for the same 5-minute
+    # cadence so a transient transport blip (HTTP 5xx, network
+    # timeout, SMTP failure) is re-attempted within minutes. The
+    # orchestrator already swallows per-row errors, the wrapper
+    # swallows the top-level — same belt-and-braces guard.
+    try:
+        run_delivery_retry_job()
+    except Exception as exc:
+        logger.warning(f"main: delivery retry step failed: {exc}")
 
     # Bulk-export archive retention. Runs AFTER the health prune so a
     # bulk-export taken on the same tick (if a future cron triggers one)

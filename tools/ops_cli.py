@@ -2373,6 +2373,150 @@ def _cmd_digest_config(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Retries (delivery_retry_queue, schema v26)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _retry_to_dict(entry) -> dict:
+    """Project a RetryEntry onto the wire shape — shared by JSON +
+    table rendering. Keeps the channel target OFF the wire (only the
+    channel_id reference is emitted, never the webhook URL)."""
+    return {
+        "queue_id":         entry.queue_id,
+        "alert_id":         entry.alert_id,
+        "channel_id":       entry.channel_id,
+        "user_id":          entry.user_id,
+        "attempt_count":    entry.attempt_count,
+        "last_attempt_at":  entry.last_attempt_at or "",
+        "last_error":       (entry.last_error or "")[:100],
+        "next_attempt_at":  entry.next_attempt_at,
+        "enqueued_at":      entry.enqueued_at,
+        "final_status":     entry.final_status,
+        "final_at":         entry.final_at or "",
+    }
+
+
+def _cmd_retries_list(args: argparse.Namespace) -> None:
+    """List retry-queue rows filtered by --status (default: pending).
+
+    Per-user scoped when --user-id is provided; defaults to "every
+    user" so a global operator can audit the entire queue.
+    """
+    from engine.delivery_retry import (
+        list_failed,
+        list_pending,
+        list_succeeded_recent,
+    )
+
+    status = (getattr(args, "status", None) or "pending").lower()
+    if status not in ("pending", "failed", "succeeded"):
+        print(f"error: --status must be one of pending|failed|succeeded "
+              f"(got {status!r})", file=sys.stderr)
+        raise SystemExit(2)
+    user_id = args.user_id if args.user_id else None
+    limit = max(1, int(getattr(args, "limit", 100) or 100))
+    if status == "pending":
+        entries = list_pending(user_id=user_id, limit=limit)
+    elif status == "failed":
+        entries = list_failed(user_id=user_id, limit=limit)
+    else:
+        entries = list_succeeded_recent(user_id=user_id, limit=limit)
+
+    if args.json:
+        _print_json([_retry_to_dict(e) for e in entries])
+        return
+    rows = []
+    for e in entries:
+        rows.append({
+            "queue_id":      e.queue_id[:8],
+            "alert_id":      (e.alert_id or "")[:8],
+            "channel_id":    (e.channel_id or "")[:8],
+            "user_id":       e.user_id,
+            "attempt_count": str(e.attempt_count),
+            "status":        e.final_status,
+            "next_attempt":  e.next_attempt_at,
+            "last_error":    (e.last_error or "")[:50],
+        })
+    _print_table(
+        rows,
+        columns=[
+            "queue_id", "alert_id", "channel_id", "user_id",
+            "attempt_count", "status", "next_attempt", "last_error",
+        ],
+    )
+
+
+def _cmd_retries_cancel(args: argparse.Namespace) -> None:
+    """Cancel one pending retry — marks it failed with the reason
+    ``"cancelled by operator"``. Per-user scoped — alice cannot cancel
+    bob's retries.
+    """
+    from engine.delivery_retry import cancel_retry
+
+    ok = cancel_retry(args.queue_id, user_id=args.user_id or "")
+    payload = {"queue_id": args.queue_id, "cancelled": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        if ok:
+            print(f"cancelled: {args.queue_id}")
+        else:
+            print(f"cancel failed (not pending or wrong scope): {args.queue_id}")
+    if not ok:
+        raise SystemExit(1)
+
+
+def _cmd_retries_manual(args: argparse.Namespace) -> None:
+    """Force the next worker pass to pick a pending retry up
+    immediately. Per-user scoped — alice cannot retrigger bob's
+    retries.
+    """
+    from engine.delivery_retry import manual_retry
+
+    ok = manual_retry(args.queue_id, user_id=args.user_id or "")
+    payload = {"queue_id": args.queue_id, "manual_retry": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        if ok:
+            print(f"manual retry scheduled: {args.queue_id}")
+        else:
+            print(f"manual retry failed (not pending or wrong scope): "
+                  f"{args.queue_id}")
+    if not ok:
+        raise SystemExit(1)
+
+
+def _cmd_retries_cleanup(args: argparse.Namespace) -> None:
+    """Operator-triggered cleanup of completed retries past the
+    retention window. Pending rows are NEVER swept regardless of age.
+    """
+    from engine.delivery_retry import cleanup_completed
+
+    retention = int(getattr(args, "retention_days", 14) or 14)
+    deleted = cleanup_completed(retention_days=retention)
+    payload = {"deleted": deleted, "retention_days": retention}
+    if args.json:
+        _print_json(payload)
+    else:
+        print(f"deleted {deleted} completed rows (retention_days={retention})")
+
+
+def _cmd_retries_process(args: argparse.Namespace) -> None:
+    """Run one retry pass NOW (synchronous). Useful for an operator
+    who fixed a downstream issue and wants to drain the queue without
+    waiting for the next scheduled tick.
+    """
+    from engine.delivery_retry import run_retry_pass
+
+    counts = run_retry_pass()
+    if args.json:
+        _print_json(counts)
+    else:
+        _print_kv(counts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3251,6 +3395,68 @@ def _build_parser() -> argparse.ArgumentParser:
     dg5.add_argument("--user-id", required=True)
     dg5.add_argument("--json", action="store_true")
     dg5.set_defaults(func=_cmd_digest_config)
+
+    # ── retries (delivery_retry_queue, v26) ────────────────────────────
+    # Five subcommands cover the operator surface for the persistent
+    # retry queue. ``list`` is the read; ``cancel`` + ``manual`` are
+    # per-row mutators; ``cleanup`` triggers the retention prune;
+    # ``process`` runs a synchronous worker pass for ad-hoc draining.
+    p_rt = sub.add_parser("retries", help="Delivery-retry-queue subcommands")
+    srt = p_rt.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    rt1 = srt.add_parser(
+        "list",
+        help="List retry rows by status (default: pending)",
+    )
+    rt1.add_argument(
+        "--status",
+        choices=["pending", "failed", "succeeded"],
+        default="pending",
+    )
+    rt1.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = every user)",
+    )
+    rt1.add_argument("--limit", type=int, default=100)
+    rt1.add_argument("--json", action="store_true")
+    rt1.set_defaults(func=_cmd_retries_list)
+
+    rt2 = srt.add_parser(
+        "cancel",
+        help="Cancel a pending retry (marks it failed with reason)",
+    )
+    rt2.add_argument("queue_id")
+    rt2.add_argument("--user-id", required=True)
+    rt2.add_argument("--json", action="store_true")
+    rt2.set_defaults(func=_cmd_retries_cancel)
+
+    rt3 = srt.add_parser(
+        "manual",
+        help="Set next_attempt_at=NOW so the next worker pass picks it up",
+    )
+    rt3.add_argument("queue_id")
+    rt3.add_argument("--user-id", required=True)
+    rt3.add_argument("--json", action="store_true")
+    rt3.set_defaults(func=_cmd_retries_manual)
+
+    rt4 = srt.add_parser(
+        "cleanup",
+        help="Delete completed rows older than --retention-days",
+    )
+    rt4.add_argument(
+        "--retention-days",
+        type=int, default=14,
+        help="Delete succeeded/failed rows older than N days (default 14)",
+    )
+    rt4.add_argument("--json", action="store_true")
+    rt4.set_defaults(func=_cmd_retries_cleanup)
+
+    rt5 = srt.add_parser(
+        "process",
+        help="Run one retry pass NOW (synchronous)",
+    )
+    rt5.add_argument("--json", action="store_true")
+    rt5.set_defaults(func=_cmd_retries_process)
 
     return p
 

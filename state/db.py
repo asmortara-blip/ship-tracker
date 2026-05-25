@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 25
+SCHEMA_VERSION: int = 26
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1177,6 +1177,50 @@ _SCHEMA_V24_NOTE: str = (
     "_migrate_to_v24)"
 )
 
+# Schema v26 adds the ``delivery_retry_queue`` table for the
+# delivery-retry machinery (transient transport failures shouldn't drop
+# the alert on the floor — persist + retry on the next worker pass with
+# exponential backoff). Each row is one pending / completed retry
+# attempt for an (alert_id, channel_id) pair. The (alert_id, channel_id)
+# pair is INTENTIONALLY non-unique so an alert can fail through the same
+# channel more than once over its lifetime (e.g. once during the initial
+# delivery + once during a later escalation step) without colliding —
+# the application-level idempotency is handled in
+# ``engine.delivery_retry.enqueue_for_retry`` which UPDATEs an existing
+# pending row instead of stacking. Same CREATE-TABLE-IF-NOT-EXISTS
+# pattern as v2 / v3 / v8 / v9 / v10 / v11 / v12 / v15 / v20 / v21 /
+# v22 / v23 — a fresh DB picks up the table via the executescript path
+# in ``_init_schema``; the explicit ``_migrate_to_v26`` helper re-runs
+# the same script on upgrade.
+_SCHEMA_V26 = """
+CREATE TABLE IF NOT EXISTS delivery_retry_queue (
+    queue_id         TEXT PRIMARY KEY,
+    alert_id         TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    user_id          TEXT NOT NULL,
+    attempt_count    INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TEXT,
+    last_error       TEXT,
+    next_attempt_at  TEXT NOT NULL,
+    enqueued_at      TEXT NOT NULL,
+    final_status     TEXT,
+    final_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_retry_due
+    ON delivery_retry_queue(final_status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_retry_alert
+    ON delivery_retry_queue(alert_id, channel_id);
+"""
+
+_SCHEMA_V26_NOTE: str = (
+    "v26: delivery_retry_queue table (queue_id PK, alert_id, channel_id, "
+    "user_id, attempt_count, last_attempt_at, last_error, "
+    "next_attempt_at, enqueued_at, final_status, final_at) + "
+    "idx_retry_due (final_status, next_attempt_at) + "
+    "idx_retry_alert (alert_id, channel_id) "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v26)"
+)
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
@@ -1373,6 +1417,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v25(conn)
     except Exception as exc:
         logger.warning(f"state.db: v25 column add skipped: {exc}")
+
+    # v26 add-only schema (CREATE TABLE IF NOT EXISTS + two indexes) —
+    # same pattern as v2 / v3 / v8 / v9 / v10 / v11 / v12 / v15 / v20 /
+    # v21 / v22 / v23. Adds the delivery_retry_queue table so a
+    # transient transport failure (HTTP 5xx, network timeout, SMTP
+    # blip) doesn't drop the alert on the floor — the row is persisted
+    # and re-tried on the next worker pass with exponential backoff.
+    # Safe to run on every open (fresh DB: creates the table; existing
+    # DB: no-op).
+    conn.executescript(_SCHEMA_V26)
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1696,6 +1750,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v25(conn)
         except Exception as exc:
             logger.warning(f"state.db: v25 migration skipped: {exc}")
+
+    # Migration 25 → 26: add the ``delivery_retry_queue`` table so a
+    # transient transport failure (HTTP 5xx, network timeout, SMTP
+    # blip) is persisted + retried on the next worker pass with
+    # exponential backoff instead of being silently dropped. Same
+    # CREATE-IF-NOT-EXISTS idempotency as v2 / v3 / v8 / v9 / v10 / v11
+    # / v12 / v15 / v20 / v21 / v22 / v23 — the helper is already
+    # invoked unconditionally above; this branch keeps the version-
+    # step ladder explicit.
+    if current < 26:
+        try:
+            from state.migrations import _migrate_to_v26
+            _migrate_to_v26(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v26 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

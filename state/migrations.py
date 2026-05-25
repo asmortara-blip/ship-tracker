@@ -1073,6 +1073,34 @@ def _migrate_to_v25(conn: sqlite3.Connection) -> None:
         )
 
 
+# ─── Schema v25 → v26 ─────────────────────────────────────────────────────
+
+def _migrate_to_v26(conn: sqlite3.Connection) -> None:
+    """Add the ``delivery_retry_queue`` table for the retry-queue machinery.
+
+    When an outbound dispatch fails with a retriable transport error
+    (HTTP 5xx, network timeout, SMTP blip), the alert previously stayed
+    in ``alerts`` but the outgoing delivery was effectively lost — the
+    failure was logged once and never re-attempted. v26 adds a
+    persistent queue so a transient blip is retried on the next worker
+    pass with exponential backoff (60s → 120s → 240s → 480s → 960s)
+    and finally marked permanently-failed after MAX_RETRIES exhaustion.
+
+    The CREATE TABLE script is idempotent on its own (CREATE TABLE IF
+    NOT EXISTS + CREATE INDEX IF NOT EXISTS) so re-running on a fully-
+    migrated DB is a no-op — matches the v2 / v3 / v8 / v9 / v10 / v11
+    / v12 / v15 / v20 / v21 / v22 / v23 add-only pattern.
+    """
+    try:
+        from state.db import _SCHEMA_V26
+
+        conn.executescript(_SCHEMA_V26)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v26 CREATE TABLE failed: {exc}"
+        )
+
+
 # ─── Schema v22 → v23 ─────────────────────────────────────────────────────
 
 def _migrate_to_v23(conn: sqlite3.Connection) -> None:

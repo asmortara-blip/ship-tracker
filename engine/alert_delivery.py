@@ -1145,7 +1145,109 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             # Best-effort telemetry — must never propagate.
             pass
 
+    # ── Failure → delivery-retry queue (v26) ──────────────────────────
+    # Only RETRIABLE transport failures get enqueued. 4xx client errors,
+    # budget-exceeded suppressions, quiet-hours suppressions, and "below
+    # threshold" no-ops are NOT retried — those are intentional or
+    # operator-config issues that won't self-heal. ``_is_retriable``
+    # encapsulates the classification.
+    if not result.success and _is_retriable(result):
+        try:
+            from engine.delivery_retry import enqueue_for_retry
+
+            enqueue_for_retry(
+                getattr(alert, "alert_id", "") or "",
+                channel.channel_id,
+                user_id=owner_uid,
+                error_message=result.error_msg or "",
+            )
+        except Exception as exc:
+            # Best-effort telemetry — a retry-queue failure must NEVER
+            # propagate or mutate the dispatch result.
+            logger.debug(f"deliver_alert: enqueue_for_retry failed: {exc}")
+
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Retry classification (v26)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# HTTP status codes that ARE retriable. 408 Request Timeout and 429 Too
+# Many Requests count because a backoff-then-retry is exactly what they
+# ask for. All 5xx are transient by definition.
+_RETRIABLE_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
+
+
+# Substrings inside ``error_msg`` that signal a network-layer transient
+# failure (status_code is 0 for these because no HTTP exchange happened).
+# Matched case-insensitively. Keep this list small + idiomatic — false
+# positives mean we burn retries on a permanent failure; false negatives
+# mean we drop a transient blip. The current set covers the failure
+# strings emitted by ``_dispatch_alert`` (timeout / connection error /
+# request error) plus a generic "temporary" catch-all.
+_RETRIABLE_ERROR_SUBSTRINGS: tuple[str, ...] = (
+    "timeout",
+    "connection",
+    "temporary",
+)
+
+
+def _is_retriable(result: DeliveryResult) -> bool:
+    """Classify a failed DeliveryResult as retriable (transport blip) or
+    permanent (operator misconfig / intentional suppression).
+
+    True iff:
+      * ``result.status_code`` is in ``_RETRIABLE_STATUS_CODES`` (5xx /
+        408 / 429), OR
+      * ``result.error_msg`` contains one of the network-layer
+        substrings ("timeout", "connection", "temporary").
+
+    Explicitly NOT retriable:
+      * Any 4xx other than 408 / 429 (operator misconfig — won't
+        self-heal).
+      * Budget-exceeded suppressions (the budget is intentionally
+        throttling — retrying defeats the cap). The budget path uses
+        status_code=429 BUT the error_msg starts with "budget exceeded"
+        so we filter that out explicitly.
+      * "channel in quiet hours" (intentional).
+      * "below threshold" / "channel disabled" / "suppressed by user
+        prefs" (intentional or no-op).
+      * "unsupported channel kind" / "SMTP not configured" / "Twilio
+        not configured" (operator config — needs a fix, not a retry).
+
+    Returns False on a successful DeliveryResult — only failures get
+    classified. NEVER raises.
+    """
+    try:
+        if getattr(result, "success", False):
+            return False
+        msg = (getattr(result, "error_msg", "") or "").lower()
+        # Explicit non-retriable exclusions FIRST so a budget-exceeded
+        # 429 doesn't slip through the status-code check below.
+        if msg.startswith("budget exceeded"):
+            return False
+        if "quiet hours" in msg:
+            return False
+        if "below threshold" in msg:
+            return False
+        if "channel disabled" in msg:
+            return False
+        if "suppressed by user prefs" in msg:
+            return False
+        if "unsupported channel kind" in msg:
+            return False
+        if "not configured" in msg:
+            # SMTP / Twilio config gap — operator must add credentials.
+            return False
+        status = int(getattr(result, "status_code", 0) or 0)
+        if status in _RETRIABLE_STATUS_CODES:
+            return True
+        return any(sub in msg for sub in _RETRIABLE_ERROR_SUBSTRINGS)
+    except Exception:
+        # Defence-in-depth — never let the classifier raise. Default
+        # to False so a malformed result doesn't pollute the queue.
+        return False
 
 
 def _dispatch_alert(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:

@@ -476,6 +476,14 @@ _RE_ESCALATION_ONE = re.compile(r"^/api/v1/escalations/([^/]+)/?$")
 # keyed by the caller's authenticated user_id, so a token-holder
 # can only read / mutate their own prefs.
 _RE_NOTIFICATION_PREFS = re.compile(r"^/api/v1/notification-prefs/?$")
+
+# v26 — delivery retry queue. List all retries (GET), trigger a manual
+# retry (POST <id>/retry), cancel a pending retry (DELETE <id>).
+_RE_DELIVERY_RETRIES = re.compile(r"^/api/v1/delivery-retries/?$")
+_RE_DELIVERY_RETRY_ONE = re.compile(r"^/api/v1/delivery-retries/([^/]+)/?$")
+_RE_DELIVERY_RETRY_MANUAL = re.compile(
+    r"^/api/v1/delivery-retries/([^/]+)/retry/?$"
+)
 # OpenAPI spec endpoint — PUBLIC (no auth), like /health. Returns the
 # full OpenAPI 3.0 spec as JSON so external tooling (Swagger UI,
 # Redoc, openapi-generator-cli) can introspect the API surface
