@@ -1874,6 +1874,53 @@ The module is read-only — `engine.alert_engine_v2` retains exclusive
 ownership of the `alerts` table write surface (`save_alerts`,
 `acknowledge_alert`). No schema bump.
 
+### Calendar feed (ICS subscription for incidents)
+
+Operators subscribe to a per-user iCalendar feed that surfaces recent
+shipping incidents inside Google Calendar / Outlook / Apple Calendar
+/ Thunderbird — no dashboard-checking required.
+
+**Token model:** Calendar apps fetch via plain GET with no
+`Authorization` header, so we cannot store the secret hashed. The
+token is stored PLAIN in `UserSettings.extras['calendar_token']` —
+the secret IS the URL. Treat it like a webhook URL: anyone with the
+link can subscribe. Rotate via `token-generate` or `token-revoke`.
+
+**CLI:**
+
+```bash
+python -m tools.ops_cli calendar token-show     --user-id <id>
+python -m tools.ops_cli calendar token-generate --user-id <id>
+python -m tools.ops_cli calendar token-revoke   --user-id <id>
+python -m tools.ops_cli calendar export         --user-id <id> --window 30 --out feed.ics
+```
+
+**API:**
+
+```bash
+curl "$BASE/api/v1/incidents.ics?token=<token>&window=30"
+# → Content-Type: text/calendar; charset=utf-8
+# → Content-Disposition: inline; filename=ship-tracker-incidents.ics
+```
+
+**Subscribing in common calendar apps:**
+
+* **Google Calendar** — Settings → Add calendar → From URL → paste
+  the `https://<host>/api/v1/incidents.ics?token=…` URL. Polls
+  hourly.
+* **Outlook (web)** — Add calendar → Subscribe from web → paste URL.
+* **Apple Calendar (macOS)** — File → New Calendar Subscription →
+  paste URL. Refresh interval configurable.
+* **Thunderbird** — Calendar → New Calendar → On the Network →
+  iCalendar (.ics) → paste URL.
+
+The feed renders the most-recent `window` days of incidents (default
+30) as `VEVENT` blocks with severity prefix on the SUMMARY, alert
+count + summary in the DESCRIPTION, and CATEGORIES set to the
+severity for client-side colouring. RFC 5545 compliant (CRLF line
+endings, ≤75-octet line folding, text escaping). Stdlib only — no
+`icalendar` package dependency.
+
 ### Delivery retry queue (schema v26)
 
 When a webhook / Slack / email dispatch fails with a retriable error

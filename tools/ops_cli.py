@@ -2642,6 +2642,120 @@ def _cmd_retries_process(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Calendar (ICS feed subscription tokens, schema-bumpless)
+#
+#  Four subcommands cover the operator surface for the per-user
+#  ``/api/v1/incidents.ics`` subscription URL: show / generate / revoke
+#  the token, and export the ICS body to a file for an air-gapped
+#  one-shot import. The token IS the secret — there is no bearer
+#  header; the URL itself authenticates the calendar app.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _cmd_calendar_token_show(args: argparse.Namespace) -> None:
+    """Print the current calendar token for a user (no DB mutation).
+
+    Prints ``(none)`` when no token has been generated yet — the
+    operator can follow up with ``calendar token-generate``.
+    """
+    from auth.calendar_tokens import get_calendar_token
+
+    tok = get_calendar_token(user_id=args.user_id)
+    payload = {"user_id": args.user_id, "calendar_token": tok or ""}
+    if args.json:
+        _print_json(payload)
+    else:
+        if tok:
+            _print_kv(payload)
+        else:
+            print(f"user_id   : {args.user_id}")
+            print("calendar_token : (none — run `calendar token-generate`)")
+
+
+def _cmd_calendar_token_generate(args: argparse.Namespace) -> None:
+    """Generate (or rotate) the calendar subscription token for a user.
+
+    REPLACES any existing token — the old subscription URL stops
+    working immediately. Returns the raw token so the operator can
+    paste it into the user's calendar app or hand it over via a
+    secure channel.
+    """
+    from auth.calendar_tokens import generate_calendar_token
+
+    tok = generate_calendar_token(user_id=args.user_id)
+    if tok is None:
+        raise RuntimeError(
+            f"generate_calendar_token failed for user_id={args.user_id!r} "
+            "— see logs"
+        )
+    payload = {"user_id": args.user_id, "calendar_token": tok}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_calendar_token_revoke(args: argparse.Namespace) -> None:
+    """Clear the saved calendar token for a user.
+
+    Calendar apps using the old URL will start failing on their
+    next refresh tick. Returns ``revoked: False`` (exit 0) when
+    no token was set for the user — not an error, just a no-op.
+    """
+    from auth.calendar_tokens import revoke_calendar_token
+
+    ok = revoke_calendar_token(user_id=args.user_id)
+    payload = {"user_id": args.user_id, "revoked": bool(ok)}
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_kv(payload)
+
+
+def _cmd_calendar_export(args: argparse.Namespace) -> None:
+    """Render the user's incident feed to an .ics string (stdout or --out FILE).
+
+    Useful for an offline / air-gapped one-shot import — the
+    operator emails the .ics to a user whose calendar app cannot
+    reach the live subscription URL.
+
+    Does NOT require a calendar token (we already have the
+    --user-id from the CLI, which is authority enough — the
+    operator running ``ops`` has DB access).
+    """
+    from engine.alert_correlator import get_recent_incidents
+    from utils.ics_export import incidents_to_ics
+
+    window = int(getattr(args, "window", 30) or 30)
+    if window < 1 or window > 365:
+        window = 30
+    incidents = get_recent_incidents(window_days=window, user_id=args.user_id)
+    ics_text = incidents_to_ics(incidents)
+    out_path = getattr(args, "out", None)
+    if out_path:
+        # Binary mode — the renderer already terminates lines with
+        # CRLF per RFC 5545, and text-mode writes would re-encode
+        # to platform line endings on Windows.
+        from pathlib import Path
+        Path(out_path).write_bytes(ics_text.encode("utf-8"))
+        payload = {
+            "user_id":   args.user_id,
+            "out":       out_path,
+            "bytes":     len(ics_text.encode("utf-8")),
+            "incidents": len(incidents),
+        }
+        if args.json:
+            _print_json(payload)
+        else:
+            _print_kv(payload)
+    else:
+        # Stdout — let the operator pipe into a file or further
+        # tooling. Use sys.stdout.buffer to preserve the CRLF
+        # line endings (text-mode would normalize on some shells).
+        sys.stdout.write(ics_text)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3632,6 +3746,52 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rt5.add_argument("--json", action="store_true")
     rt5.set_defaults(func=_cmd_retries_process)
+
+    # ── calendar (ICS feed subscription tokens) ──────────────────────────
+    # Four subcommands: token-show / token-generate / token-revoke and
+    # an export helper that writes the ICS body to a file (offline
+    # one-shot import). The subscription URL is the secret; the
+    # token-generate output is the ONLY place the raw value is
+    # surfaced so an operator who loses it has to regenerate.
+    p_cal = sub.add_parser("calendar", help="Calendar (ICS) subcommands")
+    s_cal = p_cal.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    cal1 = s_cal.add_parser(
+        "token-show",
+        help="Show the user's current calendar subscription token",
+    )
+    cal1.add_argument("--user-id", required=True)
+    cal1.add_argument("--json", action="store_true")
+    cal1.set_defaults(func=_cmd_calendar_token_show)
+
+    cal2 = s_cal.add_parser(
+        "token-generate",
+        help="Generate (or rotate) the user's calendar subscription token",
+    )
+    cal2.add_argument("--user-id", required=True)
+    cal2.add_argument("--json", action="store_true")
+    cal2.set_defaults(func=_cmd_calendar_token_generate)
+
+    cal3 = s_cal.add_parser(
+        "token-revoke",
+        help="Clear the saved calendar subscription token for a user",
+    )
+    cal3.add_argument("--user-id", required=True)
+    cal3.add_argument("--json", action="store_true")
+    cal3.set_defaults(func=_cmd_calendar_token_revoke)
+
+    cal4 = s_cal.add_parser(
+        "export",
+        help="Render the user's incident feed to an .ics file or stdout",
+    )
+    cal4.add_argument("--user-id", required=True)
+    cal4.add_argument("--window", type=int, default=30)
+    cal4.add_argument(
+        "--out", default=None,
+        help="Write the .ics body to this file path instead of stdout",
+    )
+    cal4.add_argument("--json", action="store_true")
+    cal4.set_defaults(func=_cmd_calendar_export)
 
     return p
 

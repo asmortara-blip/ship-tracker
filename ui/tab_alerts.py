@@ -1820,6 +1820,201 @@ def _render_history() -> None:
         st.error("Alert history unavailable.")
 
 
+def _render_calendar_subscription() -> None:
+    """Calendar-subscription panel — a per-user ICS feed URL.
+
+    Operators subscribe their calendar app (Google / Outlook / Apple
+    Calendar / Thunderbird) to a single URL and from then on every
+    correlated incident shows up alongside their meetings, with the
+    severity in the event title and the alert detail in the
+    description. This is way better than dashboard refresh or
+    per-alert email.
+
+    Two states:
+
+      * **No token yet** — show a "Generate calendar URL" button.
+        Clicking it mints a fresh subscription token via
+        ``auth.calendar_tokens.generate_calendar_token`` and stores
+        it in the user's settings extras dict.
+      * **Token exists** — show the URL (with a copy hint),
+        plus two destructive actions: Regenerate (two-click
+        confirm — replaces the existing URL) and Revoke (clears
+        the token, breaking the subscription).
+
+    The base URL is read from session_state (set by the deployer);
+    if absent we fall back to a placeholder so the URL is still
+    obviously a template the user can adapt.
+
+    All paths are wrapped in try / except → logger + st.error so
+    a token-table failure cannot crash the whole tab.
+    """
+    try:
+        from auth.calendar_tokens import (
+            generate_calendar_token,
+            get_calendar_token,
+            revoke_calendar_token,
+        )
+        from state.user_scope import current_user_id
+
+        uid = current_user_id() or ""
+
+        with st.expander(
+            "🗓️ Calendar subscription — incidents in your calendar app",
+            expanded=False,
+        ):
+            st.markdown(
+                f'<div style="font-size:0.85rem;color:{C_TEXT2};line-height:1.5;'
+                f'margin-bottom:10px">Subscribe your calendar app to a '
+                f'per-user URL. Shipping incidents appear alongside your '
+                f'meetings — severity in the event title, alert detail in '
+                f'the description. One-time setup, then your calendar app '
+                f'polls on its own refresh cadence.</div>',
+                unsafe_allow_html=True,
+            )
+
+            if not uid:
+                st.warning(
+                    "Calendar subscription is per-user — sign in to "
+                    "generate a subscription URL."
+                )
+                return
+
+            # Resolve the base URL. The deployer can set this in
+            # session_state at boot (or via Streamlit secrets);
+            # otherwise we surface a placeholder the operator can
+            # spot and replace.
+            base_url = (
+                st.session_state.get("api_base_url")
+                or "https://YOUR_HOST"
+            )
+            tok = get_calendar_token(user_id=uid)
+
+            if not tok:
+                st.caption(
+                    "No subscription URL yet. Click below to mint one."
+                )
+                if st.button(
+                    "Generate calendar URL",
+                    key="calendar_token_generate_btn",
+                    type="primary",
+                ):
+                    new_tok = generate_calendar_token(user_id=uid)
+                    if new_tok:
+                        st.success(
+                            "Subscription URL generated. Scroll down to "
+                            "copy and paste into your calendar app."
+                        )
+                        # Trigger a rerun so the new-token branch
+                        # renders without a second click.
+                        try:
+                            st.rerun()
+                        except Exception:
+                            try:
+                                st.experimental_rerun()
+                            except Exception:
+                                pass
+                    else:
+                        st.error(
+                            "Could not generate a calendar token. "
+                            "Check the application logs."
+                        )
+                return
+
+            # Token exists — show the URL + management actions.
+            url = f"{base_url}/api/v1/incidents.ics?token={tok}"
+            st.caption(
+                "Copy this URL into your calendar app's "
+                "\"Subscribe to calendar\" / \"Add by URL\" flow:"
+            )
+            st.code(url, language="text")
+
+            st.markdown(
+                f'<div style="font-size:0.80rem;color:{C_TEXT2};line-height:1.5;'
+                f'margin:8px 0">'
+                f'<strong>How to subscribe:</strong><br>'
+                f'• <strong>Google Calendar:</strong> Settings → '
+                f'Add calendar → From URL → paste<br>'
+                f'• <strong>Apple Calendar:</strong> File → New Calendar '
+                f'Subscription → paste<br>'
+                f'• <strong>Outlook:</strong> Add calendar → Subscribe '
+                f'from web → paste<br>'
+                f'• <strong>Thunderbird:</strong> File → New → Calendar '
+                f'→ On the network → iCalendar (ICS) → paste'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Two-click regenerate. The first click flips a session
+            # flag; the SECOND click in the confirm branch actually
+            # rotates the token. Same pattern used elsewhere in the
+            # tab for destructive actions.
+            confirm_key = "calendar_token_regen_confirm"
+            confirm_active = bool(st.session_state.get(confirm_key, False))
+
+            cc1, cc2 = st.columns(2, gap="small")
+            with cc1:
+                if not confirm_active:
+                    if st.button(
+                        "Regenerate (breaks old URL)",
+                        key="calendar_token_regen_btn",
+                    ):
+                        st.session_state[confirm_key] = True
+                        try:
+                            st.rerun()
+                        except Exception:
+                            try:
+                                st.experimental_rerun()
+                            except Exception:
+                                pass
+                else:
+                    st.warning(
+                        "Click again to confirm — the existing URL "
+                        "will stop working."
+                    )
+                    if st.button(
+                        "Confirm regenerate",
+                        key="calendar_token_regen_confirm_btn",
+                        type="primary",
+                    ):
+                        new_tok = generate_calendar_token(user_id=uid)
+                        st.session_state[confirm_key] = False
+                        if new_tok:
+                            st.success("Subscription URL rotated.")
+                            try:
+                                st.rerun()
+                            except Exception:
+                                try:
+                                    st.experimental_rerun()
+                                except Exception:
+                                    pass
+                        else:
+                            st.error("Rotation failed — see logs.")
+            with cc2:
+                if st.button(
+                    "Revoke (delete URL)",
+                    key="calendar_token_revoke_btn",
+                ):
+                    ok = revoke_calendar_token(user_id=uid)
+                    if ok:
+                        st.success(
+                            "Calendar token revoked. The subscription "
+                            "URL is no longer valid."
+                        )
+                        try:
+                            st.rerun()
+                        except Exception:
+                            try:
+                                st.experimental_rerun()
+                            except Exception:
+                                pass
+                    else:
+                        st.info(
+                            "Nothing to revoke (no token was set)."
+                        )
+    except Exception:
+        logger.exception("calendar subscription panel render failed")
+
+
 def _render_notifications() -> None:
     try:
         with st.expander("Notification Settings", expanded=False):
@@ -4599,6 +4794,7 @@ def render(
             _render_effectiveness_backtest()
 
             section_divider("Configuration")
+            _render_calendar_subscription()
             _render_notifications()
             _render_rules_manager()
             _render_alert_annotations_panel()

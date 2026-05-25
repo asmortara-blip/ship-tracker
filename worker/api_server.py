@@ -190,6 +190,38 @@ def _send_markdown(
     handler.wfile.write(body)
 
 
+def _send_ics(
+    handler: BaseHTTPRequestHandler, status: int, ics_text: str,
+    *, filename: str = "ship-tracker-incidents.ics",
+) -> None:
+    """Write a ``text/calendar`` response.
+
+    The body is UTF-8 encoded iCalendar (RFC 5545). We add a
+    ``Content-Disposition: inline; filename=…`` header so a browser
+    fetched directly displays the .ics inline (and Save-As suggests
+    the right filename) while a calendar app's subscribe flow
+    ignores the header entirely.
+
+    The ``charset=utf-8`` parameter on Content-Type matters — some
+    older Outlook clients default to Latin-1 otherwise and mangle
+    any non-ASCII characters in a port / vessel name.
+    """
+    body = ics_text.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/calendar; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header(
+        "Content-Disposition", f"inline; filename={filename}",
+    )
+    # Calendar apps tolerate cached responses well — most fetch on
+    # their own cadence (15min - 1hr typical) — but a heavily-
+    # polled feed shouldn't serve stale data forever. A short
+    # max-age + must-revalidate strikes the balance.
+    handler.send_header("Cache-Control", "private, max-age=300, must-revalidate")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 def _extract_bearer_token(handler: BaseHTTPRequestHandler) -> Optional[str]:
     """Extract the raw token from the ``Authorization`` header.
 
@@ -437,6 +469,13 @@ _RE_CHANNEL_RESET_USAGE = re.compile(r"^/api/v1/channels/([^/]+)/reset-usage/?$"
 _RE_AUDIT = re.compile(r"^/api/v1/audit/?$")
 _RE_AUDIT_EXPORT = re.compile(r"^/api/v1/audit/export/?$")
 _RE_INCIDENTS = re.compile(r"^/api/v1/incidents/?$")
+# Public per-user ICS calendar feed. NOT bearer-authenticated — the
+# only credential is the ?token=… query parameter, verified against
+# ``auth.calendar_tokens.verify_calendar_token``. Calendar apps
+# (Google / Apple / Outlook) cannot ship a bearer header, so a
+# query-string token is the only viable channel. Subscribed-once,
+# then polled on the calendar app's own refresh cadence.
+_RE_INCIDENTS_ICS = re.compile(r"^/api/v1/incidents\.ics/?$")
 _RE_SOURCE_HEALTH = re.compile(r"^/api/v1/source-health/?$")
 # Report-schedule endpoints (schema v20). The list/create surface is
 # the bare path; the per-id endpoints (PATCH / DELETE) carry a
@@ -559,6 +598,7 @@ class APIHandler(BaseHTTPRequestHandler):
       GET    /api/v1/audit                  → _list_audit           (auth)
       GET    /api/v1/audit/export           → _export_audit         (auth)
       GET    /api/v1/incidents              → _list_incidents       (auth)
+      GET    /api/v1/incidents.ics          → _serve_incidents_ics  (token in URL)
       GET    /api/v1/source-health          → _get_source_health    (auth)
       GET    /api/v1/silences               → _list_silences        (auth)
       POST   /api/v1/silences               → _create_silence       (auth, write)
@@ -612,7 +652,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_HEALTH,
                 _RE_RULES, _RE_CHANNELS, _RE_CHANNEL_ONE,
                 _RE_CHANNEL_USAGE, _RE_CHANNEL_RESET_USAGE,
-                _RE_AUDIT, _RE_AUDIT_EXPORT, _RE_INCIDENTS, _RE_SOURCE_HEALTH,
+                _RE_AUDIT, _RE_AUDIT_EXPORT, _RE_INCIDENTS, _RE_INCIDENTS_ICS, _RE_SOURCE_HEALTH,
                 _RE_SCHEDULES, _RE_SCHEDULE_ONE,
                 _RE_SILENCES, _RE_SILENCE_ONE,
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
@@ -641,6 +681,16 @@ class APIHandler(BaseHTTPRequestHandler):
             # for the same reason (above the auth gate).
             if _RE_OPENAPI.match(path):
                 self._serve_openapi()
+                return
+
+            # ICS calendar feed — public on the bearer-header level
+            # (calendar apps can't send one) but gated by a per-user
+            # ?token=… query parameter verified inside the handler.
+            # Checked BEFORE the bearer auth gate so a missing or
+            # bogus Authorization header doesn't 401 the call before
+            # the in-URL token gets a chance to authenticate.
+            if _RE_INCIDENTS_ICS.match(path):
+                self._serve_incidents_ics(query)
                 return
 
             # Every other GET requires auth.
@@ -1704,6 +1754,93 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception(f"api /incidents crashed: {exc}")
             _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/incidents.ics ───────────────────────
+
+    def _serve_incidents_ics(self, query: dict[str, list[str]]) -> None:
+        """Public per-user ICS calendar feed for shipping incidents.
+
+        Auth contract
+        -------------
+        NOT bearer-authenticated. Calendar apps cannot ship an
+        ``Authorization`` header, so the ONLY credential channel is
+        the ``?token=…`` query parameter. The token is verified
+        against :func:`auth.calendar_tokens.verify_calendar_token`
+        which returns the owning ``user_id`` on a hit or ``None``.
+        On miss → 401 with a clean error body; we deliberately do
+        NOT distinguish "no token" from "wrong token" so a probing
+        caller cannot enumerate valid prefixes.
+
+        Per-user scoping is strict — the resolved ``user_id`` is
+        threaded into ``get_recent_incidents``, so alice's
+        subscription URL cannot return bob's incidents even if the
+        URL leaked into a shared chat log.
+
+        Query parameters
+        ----------------
+        * ``token`` — required. The user's calendar subscription
+          token (see :mod:`auth.calendar_tokens`).
+        * ``window`` — optional. Days of look-back; default 30. We
+          accept up to 365 to match the alert-retention horizon;
+          values outside [1, 365] clamp to 30.
+
+        Failure modes
+        -------------
+        * Missing / invalid token → 401 ``{"error": "unauthorized"}``.
+        * Render failure → an empty-but-valid VCALENDAR (the
+          renderer NEVER raises).
+
+        We intentionally serve the response BEFORE rate-limiting —
+        a calendar app on a 15-minute refresh cycle is not a DoS
+        risk, and bucketing on user_id would need the auth step
+        to resolve the user_id, which already happens here.
+        """
+        try:
+            # Token from query string. ``parse_qs`` returns a list;
+            # we take the first non-empty value.
+            tokens_raw = query.get("token", []) or []
+            token = ""
+            for t in tokens_raw:
+                if isinstance(t, str) and t.strip():
+                    token = t.strip()
+                    break
+
+            if not token:
+                _send_unauthorized(self)
+                return
+
+            from auth.calendar_tokens import verify_calendar_token
+            user_id = verify_calendar_token(token)
+            if user_id is None:
+                _send_unauthorized(self)
+                return
+
+            # Window in days. Default 30; clamp to [1, 365] to keep
+            # the payload bounded. ``_parse_int`` already tolerates
+            # non-int input via the default.
+            window = _parse_int(query.get("window", [None])[0], default=30)
+            if window < 1 or window > 365:
+                window = 30
+
+            from engine.alert_correlator import get_recent_incidents
+            incidents = get_recent_incidents(
+                window_days=window, user_id=user_id,
+            )
+
+            from utils.ics_export import incidents_to_ics
+            ics_text = incidents_to_ics(incidents)
+
+            _send_ics(self, HTTPStatus.OK, ics_text)
+        except Exception as exc:
+            logger.exception(f"api /incidents.ics crashed: {exc}")
+            # Even the catastrophic path emits a valid empty
+            # calendar — calendar apps handle a parseable empty
+            # feed far better than they handle a 500.
+            try:
+                from utils.ics_export import incidents_to_ics
+                _send_ics(self, HTTPStatus.OK, incidents_to_ics([]))
+            except Exception:
+                _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/source-health ───────────────────────
 
