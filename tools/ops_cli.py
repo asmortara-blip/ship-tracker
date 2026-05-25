@@ -308,6 +308,88 @@ def _cmd_channels_reset_usage(args: argparse.Namespace) -> None:
             print(f"reset failed: {args.channel_id}")
 
 
+def _cmd_channels_failures(args: argparse.Namespace) -> None:
+    """Print per-channel consecutive-failure counts for ``--user-id``.
+
+    One row per channel: failure count, whether it's at the auto-disable
+    threshold, and whether the auto-disabled flag is set. Helpful for
+    "is anything about to trip the breaker?" introspection without
+    opening the UI. JSON mode preserves the full dict shape.
+    """
+    from engine.alert_delivery import (
+        AUTO_DISABLE_THRESHOLD,
+        get_consecutive_failures,
+        is_auto_disabled,
+        load_channels,
+    )
+
+    uid = args.user_id or ""
+    try:
+        channels = load_channels(user_id=uid)
+    except Exception:
+        channels = []
+    out_rows = []
+    for ch in channels:
+        try:
+            count = int(get_consecutive_failures(ch.channel_id, user_id=uid))
+        except Exception:
+            count = 0
+        try:
+            auto_off = bool(is_auto_disabled(ch.channel_id, user_id=uid))
+        except Exception:
+            auto_off = False
+        out_rows.append({
+            "channel_id":    ch.channel_id,
+            "name":          ch.name,
+            "kind":          ch.kind,
+            "enabled":       bool(ch.enabled),
+            "failures":      count,
+            "threshold":     int(AUTO_DISABLE_THRESHOLD),
+            "auto_disabled": auto_off,
+        })
+
+    if args.json:
+        _print_json(out_rows)
+        return
+    if not out_rows:
+        print("(no channels)")
+        return
+    table_rows = []
+    for r in out_rows:
+        table_rows.append({
+            "channel_id":    (r["channel_id"] or "")[:8],
+            "name":          r["name"],
+            "kind":          r["kind"],
+            "enabled":       "Y" if r["enabled"] else "N",
+            "failures":      f"{r['failures']}/{r['threshold']}",
+            "auto_disabled": "Y" if r["auto_disabled"] else "N",
+        })
+    _print_table(
+        table_rows,
+        columns=[
+            "channel_id", "name", "kind", "enabled", "failures",
+            "auto_disabled",
+        ],
+    )
+
+
+def _cmd_channels_reset_failures(args: argparse.Namespace) -> None:
+    """Zero the per-channel consecutive-failure counter for
+    ``--user-id``. Mirrors the ``reset-usage`` subcommand. Also clears
+    the auto-disabled flag so the UI stops nagging.
+    """
+    from engine.alert_delivery import reset_consecutive_failures
+
+    ok = reset_consecutive_failures(args.channel_id, user_id=args.user_id or "")
+    if args.json:
+        _print_json({"channel_id": args.channel_id, "reset": ok})
+    else:
+        if ok:
+            print(f"reset failures: {args.channel_id}")
+        else:
+            print(f"reset failed: {args.channel_id}")
+
+
 def _cmd_channels_set_budget(args: argparse.Namespace) -> None:
     """Update the ``monthly_budget`` column for a single channel. Looks
     up the channel via :func:`load_channels` (per-user scoping applies),
@@ -2861,6 +2943,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sc5.add_argument("--json", action="store_true")
     sc5.set_defaults(func=_cmd_channels_set_budget)
+
+    # ── channels failures / reset-failures (auto-disable circuit breaker) ──
+    # Per-channel consecutive-failure tracking. ``failures`` lists every
+    # channel's current count alongside the auto-disable threshold;
+    # ``reset-failures`` zeros one channel's counter (and clears the
+    # auto-disabled flag) so the breaker re-arms from scratch. Both
+    # accept --user-id for cross-user operator access.
+    sc6 = sc.add_parser(
+        "failures",
+        help="Show per-channel consecutive-failure counters",
+    )
+    sc6.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = legacy bucket)",
+    )
+    sc6.add_argument("--json", action="store_true")
+    sc6.set_defaults(func=_cmd_channels_failures)
+
+    sc7 = sc.add_parser(
+        "reset-failures",
+        help="Zero the consecutive-failure counter for one channel",
+    )
+    sc7.add_argument("channel_id")
+    sc7.add_argument(
+        "--user-id", default="",
+        help="Scope to a user_id ('' = legacy bucket)",
+    )
+    sc7.add_argument("--json", action="store_true")
+    sc7.set_defaults(func=_cmd_channels_reset_failures)
 
     # ── reports ───────────────────────────────────────────────────────────
     p_rp = sub.add_parser("reports", help="Report-history subcommands")

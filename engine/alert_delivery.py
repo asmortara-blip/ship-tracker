@@ -1145,6 +1145,33 @@ def deliver_alert(alert: ShippingAlert, channel: DeliveryChannel) -> DeliveryRes
             # Best-effort telemetry — must never propagate.
             pass
 
+    # ── Consecutive-failure tracking + auto-disable (circuit breaker) ─
+    # Track per-channel-per-user consecutive failures. On success: zero
+    # the counter. On failure (retriable OR not — a stale URL returning
+    # 404 should trip the breaker just as readily as a series of 502s):
+    # bump the counter and call ``check_and_auto_disable`` which flips
+    # enabled=False + fires a CHANNEL_AUTO_DISABLED alert when the
+    # threshold is crossed. We deliberately skip the synthetic
+    # CHANNEL_AUTO_DISABLED alert itself so a failed delivery of the
+    # auto-disable notification can't trigger a recursive auto-disable
+    # on a backup channel. All paths are wrapped — auto-disable is
+    # operator hygiene, never correctness.
+    if getattr(alert, "alert_type", "") != "CHANNEL_AUTO_DISABLED":
+        try:
+            if result.success:
+                record_delivery_success(channel.channel_id, user_id=owner_uid)
+            else:
+                record_delivery_failure(channel.channel_id, user_id=owner_uid)
+                check_and_auto_disable(
+                    channel,
+                    user_id=owner_uid,
+                    last_error=result.error_msg or "",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                f"deliver_alert: auto-disable tracking failed: {exc}"
+            )
+
     # ── Failure → delivery-retry queue (v26) ──────────────────────────
     # Only RETRIABLE transport failures get enqueued. 4xx client errors,
     # budget-exceeded suppressions, quiet-hours suppressions, and "below
@@ -2598,6 +2625,397 @@ def get_budget_suppressed_count() -> int:
             return 0
     except Exception:
         return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Channel auto-disable (consecutive-failure circuit breaker)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Goal: a stale webhook URL (or any other "this channel is permanently
+# broken now") should stop wasting deliveries + alert noise. We track
+# consecutive failures per (user, channel) in kv_state; once the count
+# reaches ``AUTO_DISABLE_THRESHOLD`` we flip ``channel.enabled = False``
+# via ``save_channel`` AND fire a CHANNEL_AUTO_DISABLED alert so the
+# operator notices.
+#
+# Storage:
+#   * Per-channel-per-user counter:
+#       ``channel_consecutive_failures:<user_id>:<channel_id>`` → int
+#   * Per-channel-per-user "this channel was auto-disabled" flag:
+#       ``channel_auto_disabled_flag:<user_id>:<channel_id>`` → "1"
+#     The flag lets the UI tell "auto-disabled, investigate then
+#     re-enable" apart from "operator manually flipped enabled=False".
+#     Cleared by ``reset_consecutive_failures`` and by the operator
+#     re-enable path in the UI.
+#
+# Semantics:
+#   * Both retriable AND non-retriable failures count — a stale URL
+#     producing 404s every time should ALSO disable, not just outages.
+#   * On a successful dispatch the counter resets to 0.
+#   * On auto-disable the counter is PRESERVED at threshold so the
+#     operator can see exactly what tripped it. ``reset_consecutive_
+#     failures`` (operator-triggered) clears it.
+#   * The CHANNEL_AUTO_DISABLED alert is persisted via the normal
+#     ``save_alerts`` pipeline so it routes through any OTHER configured
+#     channels — explicitly NOT through the channel that just got
+#     disabled (infinite-loop guard, also enforced by ``channel.enabled
+#     == False`` filtering on the next dispatch).
+#   * All helpers are NEVER-raise — auto-disable is operator hygiene,
+#     not correctness. A backend hiccup must never let a transient
+#     failure cascade into a propagated exception that kills the
+#     delivery pass.
+
+# Number of consecutive failures before a channel is auto-disabled.
+# Defaults to 10 — high enough that a flaky network blip doesn't trip
+# the breaker, low enough that a stale URL doesn't waste an hour of
+# deliveries on a typical 5-min retry cadence.
+AUTO_DISABLE_THRESHOLD: int = 10
+# Reset the counter on success? Always True today; the constant lives
+# here so a future "I want to require N consecutive successes before
+# resetting" tweak has one knob to turn.
+AUTO_DISABLE_RESET_ON_SUCCESS: bool = True
+
+_FAILURE_COUNTER_KEY_PREFIX: str = "channel_consecutive_failures"
+_AUTO_DISABLED_FLAG_KEY_PREFIX: str = "channel_auto_disabled_flag"
+
+
+def _failure_counter_key(channel_id: str, user_id: str) -> str:
+    """Build the kv_state key for the per-channel-per-user consecutive
+    failure counter. Shape:
+    ``channel_consecutive_failures:<user_id>:<channel_id>``.
+    """
+    return f"{_FAILURE_COUNTER_KEY_PREFIX}:{user_id}:{channel_id}"
+
+
+def _auto_disabled_flag_key(channel_id: str, user_id: str) -> str:
+    """Build the kv_state key for the per-channel-per-user "this channel
+    was auto-disabled" flag. Shape:
+    ``channel_auto_disabled_flag:<user_id>:<channel_id>``.
+    """
+    return f"{_AUTO_DISABLED_FLAG_KEY_PREFIX}:{user_id}:{channel_id}"
+
+
+def get_consecutive_failures(channel_id: str, *, user_id: str) -> int:
+    """Return the current consecutive-failure count for ``channel_id``
+    in ``user_id``'s scope. Returns ``0`` for a brand-new channel (no
+    row yet) AND on any internal failure — defensive so a backend
+    hiccup never accidentally trips the breaker via a stale read.
+
+    NEVER raises.
+    """
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_failure_counter_key(channel_id or "", user_id or ""),),
+        ).fetchone()
+        if row is None:
+            return 0
+        try:
+            val = int(row["value"])
+        except (TypeError, ValueError):
+            # Corrupted row (someone wrote a non-int) → behave as zero
+            # so the breaker stays armed but doesn't auto-trip on garbage.
+            return 0
+        return max(0, val)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.get_consecutive_failures: kv_state read "
+            f"failed: {exc}"
+        )
+        return 0
+
+
+def record_delivery_failure(channel_id: str, *, user_id: str) -> int:
+    """Increment the consecutive-failure counter by 1 and return the
+    new count. Returns ``0`` on any internal failure (the counter could
+    not be persisted) — caller decides whether to act on the new value.
+
+    NEVER raises.
+    """
+    key = _failure_counter_key(channel_id or "", user_id or "")
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?", (key,)
+        ).fetchone()
+        try:
+            current = int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            current = 0
+        if current < 0:
+            current = 0
+        new_count = current + 1
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                (key, str(new_count), now_iso),
+            )
+        return new_count
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.record_delivery_failure: kv_state write "
+            f"failed: {exc}"
+        )
+        return 0
+
+
+def record_delivery_success(channel_id: str, *, user_id: str) -> None:
+    """Reset the consecutive-failure counter to 0 after a successful
+    dispatch. Best-effort: a DELETE failure is swallowed (the channel
+    will simply retain its old counter until the next save / reset).
+
+    NEVER raises.
+    """
+    if not AUTO_DISABLE_RESET_ON_SUCCESS:
+        return
+    key = _failure_counter_key(channel_id or "", user_id or "")
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        with conn:
+            conn.execute("DELETE FROM kv_state WHERE key = ?", (key,))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.record_delivery_success: kv_state delete "
+            f"failed: {exc}"
+        )
+
+
+def reset_consecutive_failures(channel_id: str, *, user_id: str) -> bool:
+    """Operator-triggered counter reset — used after manually re-enabling
+    a previously auto-disabled channel. Clears BOTH the counter AND the
+    "this channel was auto-disabled" flag so the UI stops nagging.
+
+    Returns ``True`` on success, ``False`` on any internal failure.
+    NEVER raises. Records an audit event with action
+    ``'reset_consecutive_failures'`` so the security trail captures
+    operator intent.
+    """
+    ok = False
+    counter_key = _failure_counter_key(channel_id or "", user_id or "")
+    flag_key = _auto_disabled_flag_key(channel_id or "", user_id or "")
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        with conn:
+            conn.execute(
+                "DELETE FROM kv_state WHERE key IN (?, ?)",
+                (counter_key, flag_key),
+            )
+        ok = True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            f"alert_delivery.reset_consecutive_failures: kv_state delete "
+            f"failed: {exc}"
+        )
+        ok = False
+    try:
+        from auth.audit import record_audit
+        record_audit(
+            "reset_consecutive_failures",
+            entity_type="channel",
+            entity_id=channel_id or "",
+            detail={"success": ok},
+            user_id=user_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return ok
+
+
+def is_auto_disabled(channel_id: str, *, user_id: str) -> bool:
+    """True iff the per-channel-per-user "this channel was auto-disabled"
+    kv_state flag is set. Used by the UI to distinguish "operator turned
+    this off intentionally" from "the circuit breaker tripped". NEVER
+    raises — returns False on any internal failure.
+    """
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?",
+            (_auto_disabled_flag_key(channel_id or "", user_id or ""),),
+        ).fetchone()
+        return row is not None and str(row["value"]) == "1"
+    except Exception:
+        return False
+
+
+def _build_auto_disabled_alert(
+    channel: "DeliveryChannel",
+    *,
+    threshold: int,
+    last_error: str,
+) -> "ShippingAlert":
+    """Build the CHANNEL_AUTO_DISABLED ShippingAlert payload. Severity
+    is HIGH (not CRITICAL — channel breakage is operator hygiene, not
+    a market event), and the body carries the most recent error so the
+    operator can triage without log-diving."""
+    from engine.alert_engine_v2 import _make as _make_alert
+
+    safe_name = getattr(channel, "name", "") or "(unnamed)"
+    safe_kind = getattr(channel, "kind", "") or "unknown"
+    safe_id = getattr(channel, "channel_id", "") or ""
+    title = (
+        f"Channel {safe_name} auto-disabled after {threshold} consecutive failures"
+    )
+    # Truncate the last_error so a 50KB stack trace doesn't blow up the
+    # SMS / Slack body — 500 chars is plenty for triage.
+    err_excerpt = (last_error or "")[:500]
+    body = (
+        f"Delivery channel '{safe_name}' (kind={safe_kind}, id={safe_id}) was "
+        f"auto-disabled after {threshold} consecutive delivery failures. The "
+        f"most recent error was: {err_excerpt or '(no error message)'}. "
+        f"Investigate the channel config (URL / credentials / quotas) and "
+        f"re-enable manually from the Alert Center → Delivery Channels panel, "
+        f"or via the ops CLI."
+    )
+    return _make_alert(
+        alert_type="CHANNEL_AUTO_DISABLED",
+        severity="HIGH",
+        title=title,
+        body=body,
+        port_locode=safe_id[:32],  # piggy-back as entity key for dedup
+    )
+
+
+def check_and_auto_disable(
+    channel: "DeliveryChannel",
+    *,
+    user_id: str,
+    last_error: str = "",
+) -> bool:
+    """If the per-channel-per-user consecutive-failure counter has
+    reached :data:`AUTO_DISABLE_THRESHOLD`, flip
+    ``channel.enabled = False`` via :func:`save_channel`, set the
+    "auto-disabled" flag in kv_state, fire a CHANNEL_AUTO_DISABLED
+    alert through the standard pipeline (which routes to OTHER
+    configured channels — never through the one just disabled, because
+    the next dispatch will see ``enabled=False`` and skip it), and
+    record an audit row.
+
+    Returns ``True`` iff the channel was auto-disabled by THIS call.
+    Returns ``False`` when:
+      * The counter is below threshold.
+      * The channel was ALREADY disabled (no-op — the flag may not be
+        set, but flipping enabled=False again would be pointless).
+      * Any internal failure (defence-in-depth — the breaker is
+        operator hygiene, NOT a correctness invariant).
+
+    NEVER raises. All side effects (save_channel, save_alerts,
+    record_audit) are wrapped — a failure in one does not block the
+    others, and a top-level failure returns False rather than
+    propagating.
+    """
+    try:
+        # Already disabled? Nothing to do. We deliberately do NOT
+        # auto-flip the flag here — operator manual disable is a
+        # different verb from auto-disable.
+        if not getattr(channel, "enabled", True):
+            return False
+        count = get_consecutive_failures(
+            getattr(channel, "channel_id", "") or "", user_id=user_id or "",
+        )
+        if count < AUTO_DISABLE_THRESHOLD:
+            return False
+
+        # ── 1. Flip enabled=False + persist ──────────────────────────────
+        # Mutate the in-memory dataclass first so the caller observes
+        # the flip (a downstream guard could check `channel.enabled` and
+        # skip its own dispatch). save_channel is an UPSERT so the rest
+        # of the row is preserved untouched.
+        channel.enabled = False
+        try:
+            save_channel(channel, user_id=user_id or "")
+        except Exception as exc:  # noqa: BLE001
+            # save_channel itself is never-raise, but defence-in-depth.
+            logger.debug(
+                f"alert_delivery.check_and_auto_disable: save_channel "
+                f"failed: {exc}"
+            )
+
+        # ── 2. Set the "auto-disabled" kv_state flag ─────────────────────
+        # Lets the UI render "Auto-disabled — investigate then re-enable"
+        # caption + Re-enable button instead of the operator wondering
+        # who turned it off.
+        try:
+            from state.db import get_connection
+
+            conn = get_connection()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+                    "VALUES (?, ?, ?)",
+                    (
+                        _auto_disabled_flag_key(
+                            getattr(channel, "channel_id", "") or "",
+                            user_id or "",
+                        ),
+                        "1",
+                        now_iso,
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                f"alert_delivery.check_and_auto_disable: flag write "
+                f"failed: {exc}"
+            )
+
+        # ── 3. Fire the CHANNEL_AUTO_DISABLED alert ──────────────────────
+        # Persisted through the normal save_alerts pipeline so any other
+        # delivery worker / digest / push channel picks it up. The
+        # disabled channel itself won't re-dispatch — the enabled=False
+        # gate inside ``deliver_alert`` blocks it (infinite-loop guard).
+        try:
+            from engine.alert_engine_v2 import save_alerts
+
+            alert = _build_auto_disabled_alert(
+                channel,
+                threshold=AUTO_DISABLE_THRESHOLD,
+                last_error=last_error or "",
+            )
+            save_alerts([alert], user_id=user_id or "")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                f"alert_delivery.check_and_auto_disable: save_alerts "
+                f"failed: {exc}"
+            )
+
+        # ── 4. Audit-log the auto-disable ────────────────────────────────
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "channel_auto_disabled",
+                entity_type="channel",
+                entity_id=getattr(channel, "channel_id", "") or "",
+                detail={
+                    "name": getattr(channel, "name", ""),
+                    "kind": getattr(channel, "kind", ""),
+                    "threshold": int(AUTO_DISABLE_THRESHOLD),
+                    "last_error": (last_error or "")[:500],
+                },
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return True
+    except Exception as exc:  # noqa: BLE001 — never raise
+        logger.debug(
+            f"alert_delivery.check_and_auto_disable: top-level failure: {exc}"
+        )
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

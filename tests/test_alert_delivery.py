@@ -2526,3 +2526,140 @@ def test_send_test_ping_is_exempt_from_budget(monkeypatch) -> None:
     assert ok is True
     # No budget burn from the test ping.
     assert get_channel_usage("ch-budget-test-ping", user_id="") == 0
+
+
+# ─── Channel auto-disable circuit breaker (deliver_alert integration) ─────
+#
+# These tests pin the integration between deliver_alert and the
+# consecutive-failure circuit breaker. The standalone tests for the
+# helpers themselves live in tests/test_channel_auto_disable.py — these
+# only cover the deliver_alert wiring (success resets, failure
+# increments, 10th failure flips enabled, alert fires through the
+# pipeline, disabled channel short-circuits).
+
+
+def test_deliver_alert_success_resets_failure_counter(monkeypatch) -> None:
+    """A successful dispatch zeros the per-channel consecutive-failure
+    counter (the AUTO_DISABLE_RESET_ON_SUCCESS path)."""
+    from engine.alert_delivery import (
+        get_consecutive_failures,
+        record_delivery_failure,
+        save_channel,
+    )
+
+    channel = _make_channel("LOW", channel_id="ch-reset-success")
+    save_channel(channel, user_id="")
+    # Seed the counter directly
+    record_delivery_failure("ch-reset-success", user_id="")
+    record_delivery_failure("ch-reset-success", user_id="")
+    record_delivery_failure("ch-reset-success", user_id="")
+    assert get_consecutive_failures("ch-reset-success", user_id="") == 3
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=200),
+    )
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    assert result.success is True
+    assert get_consecutive_failures("ch-reset-success", user_id="") == 0
+
+
+def test_deliver_alert_failure_increments_failure_counter(monkeypatch) -> None:
+    """A failed dispatch (HTTP 500) increments the consecutive-failure
+    counter by 1. Both retriable AND non-retriable transport failures
+    count — the breaker fires either way."""
+    from engine.alert_delivery import get_consecutive_failures, save_channel
+
+    channel = _make_channel("LOW", channel_id="ch-fail-inc")
+    save_channel(channel, user_id="")
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=500),
+    )
+    deliver_alert(_make_alert("HIGH"), channel)
+    assert get_consecutive_failures("ch-fail-inc", user_id="") == 1
+    deliver_alert(_make_alert("HIGH", alert_id="a2"), channel)
+    assert get_consecutive_failures("ch-fail-inc", user_id="") == 2
+
+
+def test_deliver_alert_10th_failure_auto_disables_channel(monkeypatch) -> None:
+    """Tenth consecutive failure trips the breaker — channel.enabled
+    flips to False both in-memory AND on disk."""
+    from engine.alert_delivery import (
+        AUTO_DISABLE_THRESHOLD,
+        load_channels,
+        save_channel,
+    )
+
+    channel = _make_channel("LOW", channel_id="ch-10x-fail")
+    save_channel(channel, user_id="")
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=500),
+    )
+    for i in range(AUTO_DISABLE_THRESHOLD):
+        deliver_alert(_make_alert("HIGH", alert_id=f"a-{i}"), channel)
+    assert channel.enabled is False
+    # Persisted to disk
+    reloaded = load_channels(user_id="")
+    matches = [c for c in reloaded if c.channel_id == "ch-10x-fail"]
+    assert matches and matches[0].enabled is False
+
+
+def test_deliver_alert_auto_disable_fires_channel_auto_disabled_alert(
+    monkeypatch,
+) -> None:
+    """The 10th failure also persists a CHANNEL_AUTO_DISABLED
+    ShippingAlert via save_alerts — so other delivery channels /
+    digests pick it up."""
+    from engine.alert_delivery import AUTO_DISABLE_THRESHOLD, save_channel
+    from engine.alert_engine_v2 import load_alerts
+
+    channel = _make_channel(
+        "LOW", channel_id="ch-fires-alert", name="Trading desk hook",
+    )
+    save_channel(channel, user_id="")
+    monkeypatch.setattr(
+        alert_delivery.requests, "post",
+        lambda *a, **kw: _FakeResponse(status_code=500, text="gateway down"),
+    )
+    for i in range(AUTO_DISABLE_THRESHOLD):
+        deliver_alert(_make_alert("HIGH", alert_id=f"a-{i}"), channel)
+    alerts = load_alerts(user_id="")
+    auto = [a for a in alerts if a.alert_type == "CHANNEL_AUTO_DISABLED"]
+    assert len(auto) == 1
+    assert "Trading desk hook" in auto[0].title
+    assert auto[0].severity == "HIGH"
+
+
+def test_disabled_channel_does_not_dispatch(monkeypatch) -> None:
+    """Post-auto-disable, the channel.enabled=False filter inside
+    deliver_alert kicks in — no HTTP call is made and no further
+    failure counter increment happens. This is also the infinite-loop
+    guard: the CHANNEL_AUTO_DISABLED alert cannot be re-dispatched
+    through the channel that just got disabled."""
+    from engine.alert_delivery import (
+        get_consecutive_failures,
+        record_delivery_failure,
+        save_channel,
+    )
+
+    channel = _make_channel("LOW", channel_id="ch-no-dispatch", enabled=False)
+    save_channel(channel, user_id="")
+    # Seed a partial counter so we'd notice if the wiring incremented
+    record_delivery_failure("ch-no-dispatch", user_id="")
+    calls: list[str] = []
+
+    def fake_post(*a, **kw):
+        calls.append("called")
+        return _FakeResponse(500)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    result = deliver_alert(_make_alert("HIGH"), channel)
+    # The disabled-channel short-circuit returns success=True + the
+    # explanatory error_msg.
+    assert result.success is True
+    assert "channel disabled" in result.error_msg
+    # No HTTP call was made
+    assert calls == []
+    # Counter did NOT change (we never reached the post-dispatch hook)
+    assert get_consecutive_failures("ch-no-dispatch", user_id="") == 1

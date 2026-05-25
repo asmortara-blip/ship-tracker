@@ -1966,6 +1966,82 @@ Per-row Retry / Cancel buttons on pending entries; Recently failed +
 Recently succeeded expanders for visibility; Maintenance expander
 with the cleanup action.
 
+### Channel auto-disable (consecutive-failure circuit breaker)
+
+A stale webhook URL (or any "this channel is permanently broken now"
+case) used to keep failing forever — wasting deliveries + alert noise
+on every retry pass. The circuit breaker auto-flips
+`channel.enabled = False` once a per-channel consecutive-failure
+counter reaches `AUTO_DISABLE_THRESHOLD = 10`, AND fires a
+`CHANNEL_AUTO_DISABLED` ShippingAlert (severity HIGH) through the
+standard `save_alerts` pipeline so any OTHER configured channel
+(backup Slack, email, PagerDuty, etc.) picks it up.
+
+How the counter behaves:
+
+- Tracked in `kv_state` under
+  `channel_consecutive_failures:<user_id>:<channel_id>`. Per-user
+  scoping is enforced by the key — alice's failures cannot disable
+  bob's channel of the same `channel_id`.
+- Bumped on EVERY failed dispatch (retriable AND non-retriable). A
+  stale URL returning 404 should trip the breaker just as readily as
+  a series of 502s.
+- Reset to 0 on a successful dispatch. A short flap (3 fails, then
+  success) does NOT accumulate into the next outage.
+- At threshold: `check_and_auto_disable` flips `channel.enabled =
+  False` via `save_channel`, writes the
+  `channel_auto_disabled_flag:<user_id>:<channel_id>` kv_state row
+  (so the UI distinguishes "auto-disabled" from "operator off"),
+  persists the `CHANNEL_AUTO_DISABLED` alert, and writes a
+  `channel_auto_disabled` audit row.
+- The counter is PRESERVED at the threshold value after auto-disable
+  so the operator can see exactly what tripped it. It only zeros on
+  the next successful dispatch OR on
+  `reset_consecutive_failures` (operator-triggered).
+- The `CHANNEL_AUTO_DISABLED` alert is itself NOT routed back through
+  the disabled channel — `deliver_alert`'s `channel.enabled=False`
+  short-circuit blocks it (infinite-loop guard).
+
+**Operator CLI** (`tools.ops_cli channels …`):
+
+```bash
+# Show every channel's current consecutive-failure counter + the
+# auto-disable threshold + whether the auto-disabled flag is set.
+python -m tools.ops_cli channels failures --user-id <id>
+
+# Zero one channel's counter (and clear the auto-disabled flag) so
+# the breaker re-arms from scratch. Use after the underlying URL /
+# credentials / quota issue has been resolved.
+python -m tools.ops_cli channels reset-failures <channel_id> \
+    --user-id <id>
+```
+
+**Re-enabling an auto-disabled channel** (two paths):
+
+1. **UI** (Alert Center → Delivery Channels): an "Auto-off" banner
+   appears above the action row for any auto-disabled channel. Click
+   "Re-enable {name}" — this flips `enabled=True`, calls
+   `reset_consecutive_failures` (clears the counter + the flag), and
+   re-runs.
+2. **CLI**: there is no `channels enable` verb — re-enabling is a
+   conscious operator action, so do it through the UI. (The CLI path
+   is to manually `save_channel` with `enabled=True` after a
+   `channels reset-failures`; the deliberate friction prevents
+   "re-enable, fail again, re-enable, fail again…" loops.)
+
+**UI surface** (Alert Center → Delivery Channels):
+
+- The channels table gains a "Failures" column. Zero failures → em-
+  dash (neutral). At or above half of the threshold → amber. At or
+  above the threshold → red.
+- The "Enabled" column distinguishes "On" (green), "Auto-off" (red,
+  set by the breaker), and "Off" (grey, operator manually disabled).
+- Channels with `failures > 0` get a "Reset failures" button next to
+  the existing "Send test ping" / "Reset usage" / "Delete" buttons.
+- Auto-disabled channels render a "⚠ Channel '…' was auto-disabled
+  after N consecutive failures" caption + a "Re-enable {name}"
+  button.
+
 ### Tab completion (bash + zsh)
 
 The ops CLI carries ~30 top-level subcommands. To avoid memorising the

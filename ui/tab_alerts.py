@@ -4094,13 +4094,17 @@ def _render_delivery_channels() -> None:
         import re
         from uuid import uuid4
         from engine.alert_delivery import (
+            AUTO_DISABLE_THRESHOLD,
             DeliveryChannel,
             delete_channel,
             deliver_alert,
             deliver_pending,
             get_all_channel_usage,
+            get_consecutive_failures,
+            is_auto_disabled,
             load_channels,
             reset_channel_usage,
+            reset_consecutive_failures,
             save_channel,
             send_test_ping,
         )
@@ -4216,10 +4220,30 @@ def _render_delivery_channels() -> None:
             except Exception:
                 continue
 
+        # Pull per-channel consecutive-failure counters + auto-disabled
+        # flag once so the table cell + the action buttons can both use
+        # them without round-tripping through kv_state per row.
+        uid_now = current_user_id() or ""
+        failure_count_by_id: dict = {}
+        auto_disabled_by_id: dict = {}
+        for ch in channels:
+            try:
+                failure_count_by_id[ch.channel_id] = int(
+                    get_consecutive_failures(ch.channel_id, user_id=uid_now)
+                )
+            except Exception:
+                failure_count_by_id[ch.channel_id] = 0
+            try:
+                auto_disabled_by_id[ch.channel_id] = bool(
+                    is_auto_disabled(ch.channel_id, user_id=uid_now)
+                )
+            except Exception:
+                auto_disabled_by_id[ch.channel_id] = False
+
         if channels:
             headers = [
                 "Name", "Kind", "Threshold", "Digest", "Quiet",
-                "Budget", "Usage", "Enabled", "Created",
+                "Budget", "Usage", "Failures", "Enabled", "Created",
             ]
             rows = []
             for ch in channels:
@@ -4263,6 +4287,33 @@ def _render_delivery_channels() -> None:
                         f"{usage_val:,}/{budget_val:,} ({pct_text})",
                         color=usage_color, weight=700 if over else 600,
                     )
+                # ── Failures cell (auto-disable circuit breaker) ──────────
+                # Zero failures → em-dash + grey. Approaching threshold
+                # (>= half) → amber. At/past threshold → red. Threshold
+                # is sourced from ``AUTO_DISABLE_THRESHOLD`` so a future
+                # bump propagates without UI changes.
+                fc = int(failure_count_by_id.get(ch.channel_id, 0) or 0)
+                if fc <= 0:
+                    failures_cell = _sans("—", color=C_TEXT3, weight=400)
+                else:
+                    half = max(1, AUTO_DISABLE_THRESHOLD // 2)
+                    fail_color = (
+                        C_LOW if fc >= AUTO_DISABLE_THRESHOLD
+                        else (C_MOD if fc >= half else C_TEXT2)
+                    )
+                    failures_cell = _sans(
+                        f"{fc}/{AUTO_DISABLE_THRESHOLD}",
+                        color=fail_color,
+                        weight=700 if fc >= half else 600,
+                    )
+                # Enabled cell — distinguish "auto-disabled" from
+                # "operator off" so the row is self-explanatory.
+                if ch.enabled:
+                    enabled_cell = _sans("On", color=C_HIGH, weight=600)
+                elif auto_disabled_by_id.get(ch.channel_id):
+                    enabled_cell = _sans("Auto-off", color=C_LOW, weight=700)
+                else:
+                    enabled_cell = _sans("Off", color=C_TEXT3, weight=600)
                 rows.append([
                     _sans(ch.name, color=C_TEXT, weight=700),
                     _sans(kind_label, color=C_TEXT2, weight=600),
@@ -4275,8 +4326,8 @@ def _render_delivery_channels() -> None:
                     quiet_cell,
                     budget_cell,
                     usage_cell,
-                    _sans("On" if ch.enabled else "Off",
-                          color=C_HIGH if ch.enabled else C_TEXT3, weight=600),
+                    failures_cell,
+                    enabled_cell,
                     _mono(_fmt_dt(ch.created_at), color=C_TEXT3, weight=400),
                 ])
             wsj_market_table(headers, rows)
@@ -4288,7 +4339,49 @@ def _render_delivery_channels() -> None:
             # for the current month so a noisy week doesn't burn a future
             # month's quota.
             for ch in channels:
-                act_cols = st.columns([1, 1, 1, 3], gap="small")
+                # ── Auto-disabled banner + Re-enable button ───────────────
+                # Render BEFORE the per-channel action row so an operator
+                # scanning down the panel sees the broken channels
+                # surfaced first. The banner is a small caption (info
+                # not error — the operator already saw the alert) plus
+                # a one-click Re-enable button. The button also resets
+                # the failure counter so a stale URL fixed by the
+                # operator doesn't immediately re-trip on the next
+                # dispatch.
+                ch_failures = int(failure_count_by_id.get(ch.channel_id, 0) or 0)
+                ch_auto_off = bool(auto_disabled_by_id.get(ch.channel_id))
+                if ch_auto_off and not ch.enabled:
+                    st.caption(
+                        f"⚠ Channel '{ch.name}' was auto-disabled after "
+                        f"{AUTO_DISABLE_THRESHOLD} consecutive failures. "
+                        f"Investigate the URL / credentials, then re-enable."
+                    )
+                    re_cols = st.columns([1, 3], gap="small")
+                    with re_cols[0]:
+                        if st.button(
+                            f"✅ Re-enable {ch.name}",
+                            key=f"reenable_channel_{ch.channel_id}",
+                            use_container_width=True,
+                            help=(
+                                "Flip enabled=True and zero the consecutive-"
+                                "failure counter so the channel starts fresh."
+                            ),
+                        ):
+                            try:
+                                ch.enabled = True
+                                save_channel(ch, user_id=uid_now)
+                                reset_consecutive_failures(
+                                    ch.channel_id, user_id=uid_now,
+                                )
+                                st.success(
+                                    f"Re-enabled '{ch.name}' and reset the "
+                                    f"failure counter."
+                                )
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Re-enable failed: {exc}")
+
+                act_cols = st.columns([1, 1, 1, 1, 2], gap="small")
                 with act_cols[0]:
                     _render_test_ping_section(ch)
                 with act_cols[1]:
@@ -4307,7 +4400,7 @@ def _render_delivery_channels() -> None:
                     ):
                         try:
                             ok = reset_channel_usage(
-                                ch.channel_id, user_id=current_user_id() or "",
+                                ch.channel_id, user_id=uid_now,
                             )
                             if ok:
                                 st.success(
@@ -4319,6 +4412,35 @@ def _render_delivery_channels() -> None:
                         except Exception as exc:
                             st.error(f"Reset failed: {exc}")
                 with act_cols[2]:
+                    # "Reset failure counter" — only visible when the
+                    # channel has a non-zero count. Clears the kv_state
+                    # row + the auto-disabled flag so the breaker re-arms
+                    # from scratch.
+                    if ch_failures > 0 and st.button(
+                        f"🛠 Reset failures ({ch.name})",
+                        key=f"reset_failures_{ch.channel_id}",
+                        use_container_width=True,
+                        help=(
+                            f"Zero the consecutive-failure counter "
+                            f"({ch_failures}/{AUTO_DISABLE_THRESHOLD}) for "
+                            f"this channel. Use after the underlying "
+                            f"issue has been resolved."
+                        ),
+                    ):
+                        try:
+                            ok = reset_consecutive_failures(
+                                ch.channel_id, user_id=uid_now,
+                            )
+                            if ok:
+                                st.success(
+                                    f"Reset failure counter for '{ch.name}'."
+                                )
+                                st.rerun()
+                            else:
+                                st.error("Reset failed (kv_state write error).")
+                        except Exception as exc:
+                            st.error(f"Reset failed: {exc}")
+                with act_cols[3]:
                     if st.button(
                         f"🗑 Delete {ch.name}",
                         key=f"del_channel_{ch.channel_id}",

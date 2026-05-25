@@ -307,6 +307,64 @@ def test_channels_set_budget_unknown_channel_returns_nonzero(capsys) -> None:
     assert "no-such-id" in out
 
 
+# ─── channels failures / reset-failures (auto-disable circuit breaker) ───
+
+
+def test_channels_failures_empty_db(capsys) -> None:
+    """No channels yet → handler prints "(no channels)" rather than a
+    crash. Mirrors the channels-usage empty-DB shape."""
+    code, out, _ = _run(["channels", "failures", "--user-id", "alice"], capsys)
+    assert code == 0
+    assert out.strip() != ""
+
+
+def test_channels_failures_json_reports_counter(capsys) -> None:
+    """--json output is a list of {channel_id, failures, threshold,
+    auto_disabled, ...} dicts. Each save_channel + record_delivery_failure
+    pair contributes one entry with the right counter."""
+    from engine.alert_delivery import record_delivery_failure
+
+    _mk_channel_row("c-cli-fail", user_id="alice")
+    record_delivery_failure("c-cli-fail", user_id="alice")
+    record_delivery_failure("c-cli-fail", user_id="alice")
+    record_delivery_failure("c-cli-fail", user_id="alice")
+    code, out, _ = _run(
+        ["channels", "failures", "--user-id", "alice", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    entry = payload[0]
+    assert entry["channel_id"] == "c-cli-fail"
+    assert entry["failures"] == 3
+    assert entry["threshold"] >= 10
+    assert entry["auto_disabled"] is False
+
+
+def test_channels_reset_failures_zeros_counter(capsys) -> None:
+    """`channels reset-failures <id>` zeros the per-channel
+    consecutive-failure counter so a follow-up `channels failures`
+    reports zero."""
+    from engine.alert_delivery import (
+        get_consecutive_failures,
+        record_delivery_failure,
+    )
+
+    _mk_channel_row("c-cli-reset-fail", user_id="alice")
+    for _ in range(7):
+        record_delivery_failure("c-cli-reset-fail", user_id="alice")
+    assert get_consecutive_failures("c-cli-reset-fail", user_id="alice") == 7
+    code, out, _ = _run(
+        ["channels", "reset-failures", "c-cli-reset-fail",
+         "--user-id", "alice"],
+        capsys,
+    )
+    assert code == 0
+    assert "c-cli-reset-fail" in out
+    assert get_consecutive_failures("c-cli-reset-fail", user_id="alice") == 0
+
+
 # ─── reports ─────────────────────────────────────────────────────────────
 
 def test_reports_list_empty(capsys) -> None:
