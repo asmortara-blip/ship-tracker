@@ -329,6 +329,74 @@ def _render_fleet_utilization(fleet: list, freight_data=None) -> None:
 
 # ── Section B: fleet KPI strip ──────────────────────────────────────────────
 
+def _build_delay_distribution(fleet: list) -> go.Figure:
+    """Fleet delay-day histogram, banded by severity zone.
+
+    Splits the fleet into four bands tied to the same thresholds the
+    voyage status uses (``Voyage.status`` is assigned by
+    ``data.voyage_dataset`` from ``delay_days`` directly):
+
+      * Ahead of schedule  (delay <  0 d)        — C_HIGH
+      * On time            (0 ≤ delay < 2 d)     — C_TEXT2
+      * Minor delay        (2 ≤ delay < 5 d)     — C_MOD
+      * Major delay        (delay ≥ 5 d)         — C_LOW
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. An empty fleet returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    if not fleet:
+        fig.add_annotation(
+            text="No voyages in fleet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Fleet Delay Distribution", height=200)
+        return fig
+
+    bands = [
+        ("Ahead",  -float("inf"),  0.0, C_HIGH),
+        ("On Time", 0.0,           2.0, C_TEXT2),
+        ("Minor",   2.0,           5.0, C_MOD),
+        ("Major",   5.0,  float("inf"), C_LOW),
+    ]
+    counts: list[int] = []
+    labels: list[str] = []
+    colors: list[str] = []
+    for label, lo, hi, color in bands:
+        n = sum(
+            1 for v in fleet
+            if lo <= float(getattr(v, "delay_days", 0.0)) < hi
+        )
+        counts.append(n)
+        labels.append(label)
+        colors.append(color)
+
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=counts,
+        marker={"color": colors, "line": {"color": "#0c0e14", "width": 1}},
+        text=[str(n) for n in counts],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        hovertemplate="<b>%{x}</b><br>%{y} voyage(s)<extra></extra>",
+        showlegend=False,
+    ))
+    apply_dark_layout(
+        fig,
+        title=f"Fleet Delay Distribution — {len(fleet)} voyage(s)",
+        height=220,
+    )
+    fig.update_layout(
+        xaxis={"title": None, "tickfont": {"color": C_TEXT2, "size": 11}},
+        yaxis={"title": "Voyage count", "gridcolor": "rgba(255,255,255,0.04)"},
+        margin={"l": 60, "r": 24, "t": 44, "b": 30},
+        bargap=0.40,
+    )
+    return fig
+
+
 def _render_kpi_strip(fleet: list) -> None:
     from data.voyage_dataset import voyage_fleet_summary
 
@@ -893,7 +961,20 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
             logger.exception("Voyage Tracker — KPI strip failed")
             st.error("Fleet KPI strip unavailable.")
 
-        # ── B'. Fleet utilization composite + backtest panel ───────────────────
+        # ── B'. Fleet delay distribution — answers "is the avg-delay KPI a
+        # few outliers or systematic?" — sits inside the KPI block as the
+        # distribution shape underneath the summary stats.
+        try:
+            st.plotly_chart(
+                _build_delay_distribution(fleet),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="voyage_tracker_delay_distribution",
+            )
+        except Exception:
+            logger.exception("Voyage Tracker — delay distribution failed")
+
+        # ── B''. Fleet utilization composite + backtest panel ──────────────────
         section_divider("Utilization")
         _render_fleet_utilization(fleet, freight_data=freight_data)
 
