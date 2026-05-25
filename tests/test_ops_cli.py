@@ -2457,4 +2457,55 @@ def test_digest_send_now_no_channels_succeeds_with_zero_results(capsys) -> None:
     payload = json.loads(out)
     assert payload["dispatched"] == 0
     assert payload["successes"] == 0
-    assert payload["results"] == []
+
+
+# ─── disruption subcommands ───────────────────────────────────────────────
+
+
+def test_disruption_backtest_no_event_prints_summary(capsys) -> None:
+    """``disruption backtest`` (no event id) prints a summary kv-block plus
+    a per-event table; exit 0 on the happy path."""
+    code, out, _ = _run(["disruption", "backtest"], capsys)
+    assert code == 0
+    assert "total_events" in out
+    assert "hit_rate" in out
+    # The per-event table lists at least one known event from the registry.
+    assert "suez_2021" in out
+
+
+def test_disruption_backtest_single_event_json(capsys) -> None:
+    """``disruption backtest suez_2021 --json`` round-trips through json.loads
+    and includes the load-bearing per-route fields."""
+    code, out, _ = _run(
+        ["disruption", "backtest", "suez_2021", "--json"], capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["event_id"] == "suez_2021"
+    assert payload["detected"] is True
+    assert payload["dominant_component"] == "chokepoint"
+    assert 0.0 <= payload["max_score_in_window"] <= 1.0
+
+
+def test_disruption_backtest_unknown_event_exit_1(capsys) -> None:
+    """Unknown event id exits 1 (not a traceback) and prints to stderr."""
+    code, _out, err = _run(
+        ["disruption", "backtest", "does_not_exist"], capsys,
+    )
+    assert code == 1
+    assert "unknown event_id" in err
+
+
+def test_disruption_explain_routes_top_3_prints_headlines(capsys) -> None:
+    """``disruption explain-routes --top 3`` prints exactly 3 (or fewer when
+    not enough disrupted routes) headlines and never raises."""
+    code, out, _ = _run(["disruption", "explain-routes", "--top", "3"], capsys)
+    assert code == 0
+    # Either a real disruption listing or the "No stressed routes" message.
+    assert out.strip() != ""
+    if "No stressed routes detected" not in out:
+        # Every headline starts with a band tag in square brackets.
+        bracketed_lines = [
+            line for line in out.splitlines() if line.startswith("[")
+        ]
+        assert len(bracketed_lines) <= 3

@@ -2838,6 +2838,129 @@ def _cmd_calendar_export(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Disruption subcommands — backtest the SSI against historical events;
+#  print template-based "why this route is stressed" explanations.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_disruption_backtest(args: argparse.Namespace) -> None:
+    """Run the SSI backtester. With no event_id -> summary across all events.
+
+    The backtest is *event-aware-synthetic*: SSI inputs are built to REFLECT
+    the named historical event (chokepoint disruption, port congestion, rate
+    spike) and the SSI's mathematical response is scored. It is NOT a
+    time-machine replay of historical state — see docs/DISRUPTION_ALPHA.md.
+    """
+    from data.historical_events import EVENTS_BY_ID, get_event
+    from processing.disruption_backtest import (
+        backtest_all_events,
+        backtest_event,
+    )
+
+    event_id = getattr(args, "event_id", None)
+    threshold = getattr(args, "threshold", "Stressed") or "Stressed"
+    window = int(getattr(args, "window", 14) or 14)
+
+    if event_id:
+        event = get_event(event_id)
+        if event is None:
+            available = ", ".join(sorted(EVENTS_BY_ID.keys()))
+            print(
+                f"error: unknown event_id '{event_id}'. Known: {available}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        result = backtest_event(
+            event,
+            evaluation_window_days=window,
+            threshold_band=threshold,
+        )
+        if args.json:
+            _print_json(result)
+        else:
+            _print_kv(
+                {
+                    "event_id":            result.event_id,
+                    "event_name":          result.event_name,
+                    "event_start":         result.event_start,
+                    "detected":            result.detected,
+                    "detection_band":      result.detection_band,
+                    "expected_band":       result.expected_band,
+                    "lead_time_days":      result.lead_time_days,
+                    "max_score_in_window": result.max_score_in_window,
+                    "dominant_component":  result.dominant_component,
+                    "per_route_scores":    result.per_route_scores,
+                }
+            )
+        return
+
+    summary = backtest_all_events(
+        evaluation_window_days=window,
+        threshold_band=threshold,
+    )
+    if args.json:
+        _print_json(summary)
+        return
+
+    _print_kv(
+        {
+            "total_events":          summary.total_events,
+            "detected":              summary.detected,
+            "early":                 summary.early,
+            "hit_rate":              summary.hit_rate,
+            "early_rate":            summary.early_rate,
+            "mean_lead_time_days":   summary.mean_lead_time_days,
+        }
+    )
+    print("")
+    rows = [
+        {
+            "event_id":           r.event_id,
+            "detected":           "Y" if r.detected else "N",
+            "band":               r.detection_band,
+            "expected":           r.expected_band,
+            "max_score":          r.max_score_in_window,
+            "dominant":           r.dominant_component,
+        }
+        for r in summary.results
+    ]
+    _print_table(
+        rows,
+        columns=["event_id", "detected", "band", "expected", "max_score", "dominant"],
+    )
+
+
+def _cmd_disruption_explain_routes(args: argparse.Namespace) -> None:
+    """Compute the SSI and print top-N route explanations.
+
+    Uses an empty market-input bundle so the SSI's standalone components
+    (chokepoint + weather + vulnerability — module-state-driven) speak for
+    themselves. For a richer read use the Streamlit Disruption Radar.
+    """
+    from engine.disruption_explainer import explain_top_disruptions
+    from processing.shipping_stress_index import compute_shipping_stress
+
+    top_n = int(getattr(args, "top", 5) or 5)
+    report = compute_shipping_stress({}, {}, [], [], voyage_fleet=None)
+    explanations = explain_top_disruptions(report.route_stress, top_n=top_n)
+
+    if args.json:
+        _print_json(explanations)
+        return
+
+    if not explanations:
+        print("No stressed routes detected.")
+        return
+
+    for ex in explanations:
+        print(f"[{ex.severity_band}] {ex.headline}")
+        for bullet in ex.why:
+            print(f"  - {bullet}")
+        if ex.recommended_focus:
+            print(f"  focus: {ex.recommended_focus}")
+        print("")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Argparse wiring
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3903,6 +4026,50 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     cal4.add_argument("--json", action="store_true")
     cal4.set_defaults(func=_cmd_calendar_export)
+
+    # ── disruption ──────────────────────────────────────────────────────────
+    # Backtest the SSI against historical events; print template-based "why
+    # this route is stressed" explanations.
+    p_dis = sub.add_parser("disruption", help="Disruption-Alpha subcommands")
+    s_dis = p_dis.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    dis1 = s_dis.add_parser(
+        "backtest",
+        help="Backtest the SSI against historical disruption events",
+    )
+    dis1.add_argument(
+        "event_id",
+        nargs="?",
+        default=None,
+        help="Optional: backtest one event (e.g. suez_2021). Omit to run all.",
+    )
+    dis1.add_argument(
+        "--threshold",
+        default="Stressed",
+        choices=["Calm", "Elevated", "Stressed", "Severe"],
+        help="SSI band at which an event counts as detected (default Stressed)",
+    )
+    dis1.add_argument(
+        "--window",
+        type=int,
+        default=14,
+        help="Evaluation window (days) for the lead-time cap (default 14)",
+    )
+    dis1.add_argument("--json", action="store_true")
+    dis1.set_defaults(func=_cmd_disruption_backtest)
+
+    dis2 = s_dis.add_parser(
+        "explain-routes",
+        help="Print top-N route stress explanations",
+    )
+    dis2.add_argument(
+        "--top",
+        type=int,
+        default=5,
+        help="Number of routes to explain (default 5)",
+    )
+    dis2.add_argument("--json", action="store_true")
+    dis2.set_defaults(func=_cmd_disruption_explain_routes)
 
     return p
 

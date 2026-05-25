@@ -485,6 +485,85 @@ Signals is a transparent, rule-based, fully-traceable system:
 Disruption Alpha is a research and decision-support tool. Nothing it produces
 should be read as a recommendation to buy or sell any security.
 
+## Backtest
+
+`processing/disruption_backtest.py` answers a narrower but more concrete
+question than the Validation section below: *does the Shipping Stress Index
+mathematically respond to event-shaped inputs?* It scores the SSI against the
+named historical events catalogued in `data/historical_events.py` (Suez 2021,
+Panama drought 2023, COVID 2020, Red Sea 2024, …) and prints a per-event
+detection-band table plus a fleet-wide hit-rate / lead-time summary.
+
+**Honesty caveat — and it is the load-bearing one.** This is **not** a
+time-machine replay of historical state. The platform does not retain a
+snapshot of chokepoint state, port congestion, weather alerts and freight
+rates as they stood on every historical day. What `synthesize_event_inputs(...)`
+does is build an SSI-consumable input bundle that *reflects* the event:
+
+* Each named `affected_chokepoint` is temporarily elevated to `CRITICAL` /
+  `ACTIVE_CONFLICT` for the duration of the SSI computation (and its
+  `strategic_alternatives` cleared — during a real major chokepoint event
+  every carrier tries the same Cape route, swamping it).
+* Each `affected_route`'s destination port appears in `port_results` with an
+  elevated `current_congestion` proportional to the event's severity tag.
+* Each `affected_route`'s freight rate spikes 50–90% over its 30-day
+  baseline so the SSI's rate component fires.
+
+`backtest_event(...)` then runs `compute_shipping_stress(...)` over those
+inputs and asks "did at least one affected route cross the chosen threshold
+band?". The default band is `Stressed`; `--threshold Severe` raises the bar.
+A `BacktestResult` reports the detected band, the highest stress score across
+affected routes, the dominant SSI component on the worst-affected route, and
+the per-route scores. `backtest_all_events(...)` rolls every event into a
+`BacktestSummary` with a hit rate and a per-component contribution dict
+(which component most often drove the worst-affected route across events).
+
+`tools/ops_cli.py` exposes the CLI surface:
+
+```
+python -m tools.ops_cli disruption backtest                  # all events
+python -m tools.ops_cli disruption backtest suez_2021 --json
+python -m tools.ops_cli disruption backtest --threshold Severe
+```
+
+The contract the backtest proves is the *direction* of the SSI's response —
+disruption-shaped inputs → high SSI on the right lanes — without overclaiming
+historical replay. If the SSI ever *fails* this test, the formula is broken
+and no real-world data will save it. That is the value here.
+
+## Explainer
+
+`engine/disruption_explainer.py` generates one-paragraph English rationales
+for "why is this route stressed?" / "why is this voyage delayed?" — template-
+based, deterministic, zero LLM tokens. Two pure-function public APIs:
+
+* `explain_route(stress) -> RouteExplanation` takes a `RouteStress` from the
+  SSI and returns a headline + 2-4 bullet points + a `recommended_focus`
+  bucket (`escalate` / `investigate` / `monitor` / "").
+* `explain_voyage(voyage) -> VoyageExplanation` takes a `Voyage` and attributes
+  the delay to one primary cause (`weather` / `congestion` / `chokepoint` /
+  `unknown` / `none`) using a fixed attribution order — `weather_delay_days`
+  beats `congestion_at_dest > 0.7`, which beats any `chokepoints_on_route`.
+
+Two convenience wrappers cap the worst-N for UI rendering:
+`explain_top_disruptions(stresses, top_n=5)` (filters out Calm routes, sorts
+worst-first) and `explain_delayed_voyages(voyages, top_n=10)`.
+
+Every phrase comes from module-level constants — `_ROUTE_HEADLINE_TEMPLATES`,
+`_COMPONENT_PHRASES`, `_VOYAGE_HEADLINE_TEMPLATES`, `_VOYAGE_PHRASES`,
+`_COMPONENT_LABELS`. An operator who wants to re-translate the platform
+edits strings, not logic. The `recommended_focus` thresholds (0.7 / 0.5 /
+0.3) live in `_FOCUS_ESCALATE` / `_FOCUS_INVESTIGATE` / `_FOCUS_MONITOR` so
+the UI can document them in tooltips without re-deriving from the SSI
+weights. Every public function NEVER raises — bad input degrades to a safe
+default rather than propagating an exception into the UI.
+
+The CLI surface:
+
+```
+python -m tools.ops_cli disruption explain-routes --top 5
+```
+
 ## Validation
 
 Earlier iterations of the platform shipped a heuristic backtester that only
