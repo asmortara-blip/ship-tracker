@@ -19,16 +19,19 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import plotly.graph_objects as go
 import streamlit as st
 
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_HIGH,
     C_LOW,
     C_MOD,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    apply_dark_layout,
     badge,
     insight_card_html,
     metric_card_row,
@@ -558,6 +561,108 @@ def _render_downloads(report: Any) -> None:
 
 # ── Section 6: Report history ─────────────────────────────────────────────────
 
+def _rep_field(rep: Any, name: str, default: Any) -> Any:
+    """Read ``name`` from a report record that may be either a dataclass
+    (``ReportMeta``) or a plain dict — the history layer supports both
+    shapes depending on persistence path, and this helper unifies access.
+    """
+    if isinstance(rep, dict):
+        return rep.get(name, default)
+    return getattr(rep, name, default)
+
+
+def _build_sentiment_trend(reports: list) -> go.Figure:
+    """Line chart of recent report sentiment scores over time.
+
+    Each report becomes one marker on a chronological axis (oldest →
+    newest left to right) at its ``sentiment_score`` value in [-1, +1].
+    Markers are coloured by ``sentiment_label`` — green BULLISH, red
+    BEARISH, grey NEUTRAL / MIXED — so the eye can spot regime shifts
+    without reading the labels.
+
+    Pure builder — no ``st.*`` calls — exercised by the lock-in tests.
+    Empty / None returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list(reports or [])
+    if not items:
+        fig.add_annotation(
+            text="No historical reports yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Sentiment trend", height=200)
+        return fig
+
+    # Order oldest→newest using the most reliable timestamp field. The
+    # history layer typically returns newest-first; flip it here so the
+    # chart reads naturally left-to-right.
+    def _ts_key(rep):
+        ts = _rep_field(rep, "generated_at",
+                        _rep_field(rep, "date",
+                                   _rep_field(rep, "created_at", "")))
+        return str(ts or "")
+
+    ordered = sorted(items, key=_ts_key)
+
+    x_vals = [_ts_key(r) or f"#{i+1}" for i, r in enumerate(ordered)]
+    y_vals = [
+        max(-1.0, min(1.0, float(_rep_field(r, "sentiment_score", 0.0) or 0.0)))
+        for r in ordered
+    ]
+    labels = [str(_rep_field(r, "sentiment_label", "—")) for r in ordered]
+
+    def _label_color(label: str) -> str:
+        upper = label.upper()
+        if "BULL" in upper:
+            return C_HIGH
+        if "BEAR" in upper:
+            return C_LOW
+        return C_TEXT2
+    colors = [_label_color(lbl) for lbl in labels]
+
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=y_vals,
+        mode="lines+markers",
+        line={"color": C_TEXT3, "width": 1.4},
+        marker={
+            "size": 11,
+            "color": colors,
+            "line": {"color": C_BG, "width": 1.5},
+        },
+        text=labels,
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Sentiment: %{text}<br>"
+            "Score: %{y:+.2f}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # Neutral reference line at 0; subtle dashed style.
+    fig.add_hline(
+        y=0.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+    )
+
+    apply_dark_layout(
+        fig,
+        title=f"Sentiment trend — last {len(ordered)} report(s)",
+        height=220,
+    )
+    fig.update_layout(
+        xaxis={"title": None, "showgrid": False,
+               "tickfont": {"color": C_TEXT3, "size": 9}},
+        yaxis={"title": "Sentiment (-1 to +1)", "range": [-1.05, 1.05],
+               "gridcolor": "rgba(255,255,255,0.04)",
+               "zeroline": False},
+        margin={"l": 70, "r": 24, "t": 40, "b": 30},
+    )
+    return fig
+
+
 def _render_history() -> None:
     if not _HISTORY_OK:
         section_header("Report History", "Previously generated reports")
@@ -584,6 +689,18 @@ def _render_history() -> None:
     shown = min(len(reports), 10)
     plural = "report" if shown == 1 else "reports"
     section_header("Report History", f"{shown} most recent {plural} - newest first")
+
+    # Sentiment trend at-a-glance — sits above the detail table so the eye
+    # sees the regime shift before scanning per-row sentiment chips.
+    try:
+        st.plotly_chart(
+            _build_sentiment_trend(reports[:10]),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="report_sentiment_trend",
+        )
+    except Exception:
+        logger.exception("Report — sentiment trend chart failed")
 
     # Build a wsj_market_table so the row width tracks the rest of the design system.
     headers = ["Date", "Sentiment", "Quality", "Size"]
