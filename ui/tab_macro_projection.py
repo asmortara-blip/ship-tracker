@@ -38,12 +38,14 @@ F. Source footer
 """
 from __future__ import annotations
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_CONV,
     C_HIGH,
     C_LOW,
@@ -52,6 +54,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    apply_dark_layout,
     badge,
     metric_card_row,
     page_header,
@@ -90,6 +93,18 @@ _DRIVER_TO_SCHI_DIM: dict[str, str] = {
     "Freight-rate dislocation":    "freight_cost_pressure",
     "Structural vulnerability":    "chokepoint_risk",
 }
+
+# SSI component key -> human-readable display name (matches the keys in
+# processing.shipping_stress_index.COMPONENT_WEIGHTS exactly).
+_SSI_COMPONENT_DISPLAY: dict[str, str] = {
+    "chokepoint":    "Chokepoint",
+    "congestion":    "Port Congestion",
+    "weather":       "Weather Risk",
+    "rate":          "Freight-Rate Dislocation",
+    "vulnerability": "Structural Vulnerability",
+    "anomaly":       "Anomaly Drift",
+}
+
 
 # Leading-indicator forecast verdict -> palette colour.
 _FORECAST_COLOR: dict[str, str] = {
@@ -484,6 +499,96 @@ def _render_gauges(ssi_report, schi_report) -> None:
 
 # ── Section C: stress -> health narrative ───────────────────────────────────
 
+def _build_ssi_component_bars(
+    component_scores: dict,
+    weights: dict | None = None,
+) -> go.Figure:
+    """Horizontal bars of the SSI's per-component stress scores.
+
+    Sorted hot-first so the reader sees the dominant disruption driver at
+    the top. Each bar is coloured by ``_ssi_band_color`` (the same banding
+    the headline gauge uses) and is annotated with the component's weight
+    in the overall SSI, so the reader sees both *severity* and *influence*
+    without having to cross-reference the weights table.
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. Missing / empty input returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+
+    items = [
+        (key, float(score))
+        for key, score in (component_scores or {}).items()
+        if score is not None
+    ]
+    if not items:
+        fig.add_annotation(
+            text="No SSI component scores",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="SSI Component Decomposition", height=240)
+        return fig
+
+    # Hot-first; Plotly stacks categorical y-values bottom-up so we sort
+    # *ascending* and let Plotly invert. The highest stress ends up at the top.
+    items.sort(key=lambda kv: kv[1])
+
+    weights = weights or {}
+    labels = [_SSI_COMPONENT_DISPLAY.get(k, k.title()) for k, _ in items]
+    scores = [v * 100.0 for _, v in items]
+    colors = [_ssi_band_color(v) for _, v in items]
+    # Per-bar weight annotation reads as "weight 29%" → "w 29%" for tightness.
+    weight_text = [
+        f"w {weights.get(k, 0.0) * 100:.0f}%" if k in weights else ""
+        for k, _ in items
+    ]
+
+    fig.add_trace(go.Bar(
+        x=scores,
+        y=labels,
+        orientation="h",
+        marker={"color": colors,
+                "line": {"color": C_BG, "width": 1}},
+        text=[f"{s:.0f}%" for s in scores],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        customdata=weight_text,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Stress: %{x:.1f}%<br>"
+            "Weight in SSI: %{customdata}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # Band reference lines mirroring _ssi_band_color thresholds: 25 / 45 / 65
+    for x, label in ((25, "Elevated"), (45, "Pressured"), (65, "Critical")):
+        fig.add_vline(
+            x=x,
+            line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+            annotation_text=label,
+            annotation_position="top",
+            annotation_font={"color": C_TEXT3, "size": 9},
+        )
+
+    apply_dark_layout(
+        fig,
+        title="SSI Component Decomposition — what's pushing the composite",
+        height=max(220, 60 + 32 * len(items)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Component stress (0–100)", "range": [0, 108],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 50, "b": 40},
+        bargap=0.35,
+    )
+    return fig
+
+
 def _render_stress_health_narrative(ssi_report, schi_report) -> None:
     """Explain which SCHI dimensions the current SSI stress is pushing.
 
@@ -587,6 +692,22 @@ def _render_stress_health_narrative(ssi_report, schi_report) -> None:
         lane_sentence = ""
 
     _narrative(relation + push_sentence + lane_sentence, accent=_ssi_band_color(ssi))
+
+    # Component decomposition — visualises what the driver→dimension table is
+    # about to break down. Imported lazily so the lock-in tests can exercise
+    # the pure builder without going through the full COMPONENT_WEIGHTS chain.
+    try:
+        from processing.shipping_stress_index import COMPONENT_WEIGHTS
+        weights_map = COMPONENT_WEIGHTS
+    except Exception:
+        logger.exception("Macro Projection — COMPONENT_WEIGHTS import failed")
+        weights_map = None
+    st.plotly_chart(
+        _build_ssi_component_bars(component_scores, weights_map),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_ssi_components",
+    )
 
     # Compact per-driver -> dimension mapping table.
     if hot_components:
