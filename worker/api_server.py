@@ -408,6 +408,12 @@ _RE_ALERTS_LIST = re.compile(r"^/api/v1/alerts/?$")
 _RE_ALERT_ONE = re.compile(r"^/api/v1/alerts/([^/]+)/?$")
 _RE_ALERT_ACK = re.compile(r"^/api/v1/alerts/([^/]+)/ack/?$")
 _RE_REPORTS_LIST = re.compile(r"^/api/v1/reports/?$")
+# /api/v1/reports/diff — compare two reports by id. Defined ABOVE the
+# more generic /reports/<id>/... patterns so the dispatch logic always
+# tries the literal "diff" route first; the anchored regexes don't
+# actually overlap (this one has no capture group) but the ordering
+# keeps the intent obvious for future readers.
+_RE_REPORTS_DIFF = re.compile(r"^/api/v1/reports/diff/?$")
 _RE_REPORT_HTML = re.compile(r"^/api/v1/reports/([^/]+)/html/?$")
 _RE_REPORT_MARKDOWN = re.compile(r"^/api/v1/reports/([^/]+)/markdown/?$")
 _RE_REPORT_PUBLIC = re.compile(r"^/api/v1/reports/([^/]+)/public/?$")
@@ -470,6 +476,46 @@ _RE_ESCALATION_ONE = re.compile(r"^/api/v1/escalations/([^/]+)/?$")
 # keyed by the caller's authenticated user_id, so a token-holder
 # can only read / mutate their own prefs.
 _RE_NOTIFICATION_PREFS = re.compile(r"^/api/v1/notification-prefs/?$")
+# OpenAPI spec endpoint — PUBLIC (no auth), like /health. Returns the
+# full OpenAPI 3.0 spec as JSON so external tooling (Swagger UI,
+# Redoc, openapi-generator-cli) can introspect the API surface
+# without first needing a token. The spec is built lazily on first
+# request and cached in-process — generating it costs ~2ms but
+# serving it should be a memcpy.
+_RE_OPENAPI = re.compile(r"^/api/v1/openapi\.json/?$")
+
+# Module-level cache for the rendered OpenAPI JSON bytes. The first
+# request builds + serializes the spec; every subsequent request just
+# writes the cached bytes to the wfile. ``None`` means "not yet
+# built"; the helper :func:`_get_openapi_bytes` populates it under a
+# coarse module-level lock to avoid duplicate work when a flood of
+# parallel probes hits a freshly-started server.
+_OPENAPI_BYTES_CACHE: Optional[bytes] = None
+import threading as _threading  # local alias keeps the existing import list clean
+_OPENAPI_CACHE_LOCK = _threading.Lock()
+
+
+def _get_openapi_bytes() -> bytes:
+    """Return the OpenAPI spec rendered as UTF-8 JSON bytes.
+
+    Lazy-built on first call, cached at module scope thereafter. The
+    lazy import of ``tools.openapi_gen`` matters: importing it at
+    module load would pull the spec-builder into every health probe's
+    cold start; deferring to first request keeps the import surface
+    small for the rate-limit / auth hot path.
+    """
+    global _OPENAPI_BYTES_CACHE
+    if _OPENAPI_BYTES_CACHE is not None:
+        return _OPENAPI_BYTES_CACHE
+    with _OPENAPI_CACHE_LOCK:
+        if _OPENAPI_BYTES_CACHE is not None:
+            # A concurrent request beat us into the lock — re-use its
+            # work instead of building twice.
+            return _OPENAPI_BYTES_CACHE
+        from tools.openapi_gen import build_openapi_spec, render_openapi_json
+        spec = build_openapi_spec()
+        _OPENAPI_BYTES_CACHE = render_openapi_json(spec).encode("utf-8")
+    return _OPENAPI_BYTES_CACHE
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,6 +532,7 @@ class APIHandler(BaseHTTPRequestHandler):
       GET    /api/v1/alerts/<id>            → _get_alert            (auth)
       POST   /api/v1/alerts/<id>/ack        → _ack_alert            (auth)
       GET    /api/v1/reports                → _list_reports         (auth)
+      GET    /api/v1/reports/diff           → _diff_reports         (auth)
       GET    /api/v1/reports/<id>/html      → _get_report_html      (auth)
       GET    /api/v1/reports/<id>/markdown  → _get_report_markdown  (auth)
       POST   /api/v1/reports/<id>/public    → _make_report_public   (auth, write)
@@ -563,6 +610,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
                 _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
+                _RE_OPENAPI,
             )
         )
 
@@ -577,6 +625,14 @@ class APIHandler(BaseHTTPRequestHandler):
             # unauthenticated probe gets the real status, not a 401.
             if _RE_HEALTH.match(path):
                 self._health()
+                return
+
+            # OpenAPI spec is ALSO public — external SDK generators
+            # and Swagger UI must be able to fetch the spec without
+            # first having to authenticate. Checked alongside /health
+            # for the same reason (above the auth gate).
+            if _RE_OPENAPI.match(path):
+                self._serve_openapi()
                 return
 
             # Every other GET requires auth.
@@ -618,6 +674,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 else:
                     self._get_alert(user_id, alert_id)
                     return
+            # /api/v1/reports/diff is more specific than the /reports/<id>
+            # patterns AND the bare /reports list — match it BEFORE
+            # those to avoid an accidental fall-through (the regexes are
+            # anchored so no actual overlap, but the explicit ordering
+            # keeps intent obvious).
+            if _RE_REPORTS_DIFF.match(path):
+                self._diff_reports(user_id, query)
+                return
             if _RE_REPORTS_LIST.match(path):
                 self._list_reports(user_id, query)
                 return
@@ -1068,6 +1132,76 @@ class APIHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.OK, payload)
         except Exception as exc:
             logger.exception(f"api /reports crashed: {exc}")
+            _send_internal_error(self)
+
+    # ── Endpoint: GET /api/v1/reports/diff ────────────────────────
+
+    def _diff_reports(self, user_id: str, query: dict[str, list[str]]) -> None:
+        """Compute and return a structured diff between two reports.
+
+        Query parameters:
+          * ``from`` — the older / baseline ``report_id`` (required)
+          * ``to``   — the newer / current ``report_id`` (required)
+
+        Both ids are resolved within the caller's scope via
+        :func:`utils.report_diff.load_report_payload`. When either id
+        is unknown in scope (or refers to another user's report) the
+        response is a 404 — we deliberately don't distinguish
+        "doesn't exist" from "exists but yours" so a probing caller
+        can't enumerate other users' report ids.
+
+        Response shape (200 OK):
+          {
+            "report_a_id": "...",
+            "report_b_id": "...",
+            "summary": {"added": N, "removed": N, "changed": N},
+            "entries": [
+              {"category": "signal" | "route" | ..., "change_type": ...,
+               "key": "...", "before": ..., "after": ...,
+               "description": "..."},
+              ...
+            ]
+          }
+
+        400 when ``from`` or ``to`` is missing; 404 when either id is
+        unknown in scope. Internal errors collapse to 500 with the
+        standard ``{"error": "internal error"}`` body.
+        """
+        try:
+            a_id = (query.get("from", [None])[0] or "").strip()
+            b_id = (query.get("to", [None])[0] or "").strip()
+            if not a_id or not b_id:
+                _send_json(
+                    self, HTTPStatus.BAD_REQUEST,
+                    {"error": "both 'from' and 'to' query parameters are required"},
+                )
+                return
+
+            from utils.report_diff import (
+                diff_reports as _diff,
+                diff_to_dict,
+                load_report_payload,
+            )
+
+            payload_a = load_report_payload(a_id, user_id=user_id)
+            payload_b = load_report_payload(b_id, user_id=user_id)
+            if payload_a is None or payload_b is None:
+                # Indistinguishable from "unknown id" — matches the
+                # contract used by /reports/<id>/html for cross-user
+                # access (same response either way; no info leak).
+                _send_json(
+                    self, HTTPStatus.NOT_FOUND,
+                    {"error": "report not found"},
+                )
+                return
+
+            diff = _diff(
+                payload_a, payload_b,
+                report_a_id=a_id, report_b_id=b_id,
+            )
+            _send_json(self, HTTPStatus.OK, diff_to_dict(diff))
+        except Exception as exc:
+            logger.exception(f"api /reports/diff crashed: {exc}")
             _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/reports/<id>/html ───────────────────
@@ -1730,6 +1864,29 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+
+    # ── Endpoint: GET /api/v1/openapi.json ────────────────────────
+
+    def _serve_openapi(self) -> None:
+        """Return the full OpenAPI 3.0 spec as JSON.
+
+        Public — same no-auth contract as ``/health``. We serve the
+        cached bytes directly via ``send_response`` / ``wfile.write``
+        instead of going through ``_send_json`` because the payload
+        is already a JSON string (re-serializing it with
+        ``json.dumps`` would mangle the sorted-key output that the
+        spec builder went out of its way to produce).
+        """
+        try:
+            body = _get_openapi_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            logger.exception(f"api /openapi.json crashed: {exc}")
+            _send_internal_error(self)
 
     # ── Endpoint: GET /api/v1/rules ───────────────────────────────
 

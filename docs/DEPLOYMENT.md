@@ -341,6 +341,7 @@ Endpoints:
 | `GET    /api/v1/alerts/<id>`                 | n/a                               | One alert, scoped to caller; 404 on cross-user.                                          |
 | `POST   /api/v1/alerts/<id>/ack`             | empty                             | Acknowledge one alert. Idempotent; cross-user no-ops silently.                          |
 | `GET    /api/v1/reports`                     | n/a                               | Caller's saved reports (metadata only).                                                  |
+| `GET    /api/v1/reports/diff`                | n/a                               | Structured diff between two reports. Query: `?from=<id_a>&to=<id_b>`. 400 on missing param, 404 on unknown/cross-user. Response: `{report_a_id, report_b_id, summary, entries}` (see "Report-to-report diff" below). |
 | `GET    /api/v1/reports/<id>/html`           | n/a                               | Raw HTML of one saved report.                                                            |
 | `POST   /api/v1/reports/<id>/public`         | `{"expires_in_days": 30}` (opt)   | Generate a public-share slug; returns `{"slug": "..."}`. 404 on unknown/cross-user.      |
 | `DELETE /api/v1/reports/<id>/public`         | empty                             | Revoke a public slug; returns `{"revoked": true}`. 404 on unknown/cross-user.            |
@@ -362,6 +363,41 @@ Endpoints:
 | `POST   /api/v1/schedules`                   | `{name, cron_expr, enabled?}`     | Create a recurring report schedule. 400 on missing name / invalid cron_expr.             |
 | `PATCH  /api/v1/schedules/<id>`              | `{name?, cron_expr?, enabled?}`   | Update one schedule; only the supplied fields move. 404 on cross-user / unknown id.      |
 | `DELETE /api/v1/schedules/<id>`              | empty                             | Delete one schedule. 404 on cross-user / unknown id.                                     |
+| `GET    /api/v1/openapi.json`                | n/a                               | Public OpenAPI 3.0 spec for the full surface above. No auth — SDK generators must be able to fetch the contract before they have a token. |
+
+### OpenAPI 3.0 specification
+
+The full API surface is documented as an OpenAPI 3.0 spec at
+`docs/openapi.json` (+ a YAML twin at `docs/openapi.yaml`). The same
+spec is served live by the API server at `GET /api/v1/openapi.json`
+(public, no auth — same contract as `/health`).
+
+Regenerate the on-disk artifacts from the in-tree spec builder
+(`tools/openapi_gen.py`):
+
+```bash
+python -m tools.openapi_cli json     # → docs/openapi.json
+python -m tools.openapi_cli yaml     # → docs/openapi.yaml
+python -m tools.openapi_cli validate # structural smoke check; exits non-zero on error
+```
+
+The spec is hand-written (not auto-introspected from the dispatch
+table) so it can carry descriptions / examples / per-response error
+shapes that runtime introspection cannot recover. When you add or
+change an endpoint in `worker/api_server.py`, edit
+`tools/openapi_gen.py` in the same commit and rerun the CLI above.
+
+Use the spec with standard OpenAPI tooling:
+
+- **Swagger UI** — point its `url` config field at
+  `http://<host>:8503/api/v1/openapi.json` to get a browsable docs UI
+  with try-it-out request runner. Docker quick start:
+  `docker run -p 8080:8080 -e SWAGGER_JSON_URL=http://host.docker.internal:8503/api/v1/openapi.json swaggerapi/swagger-ui`.
+- **Redoc** — `redocly preview-docs docs/openapi.yaml` renders the
+  three-pane reference docs layout.
+- **openapi-generator-cli** — generates typed SDKs in ~50 languages
+  from the spec. Example for Python: `openapi-generator-cli generate
+  -i docs/openapi.json -g python -o sdks/python`.
 
 **Per-user scoping.** Every write threads the `user_id` resolved from
 the bearer token to the underlying engine call. Alice's token cannot
@@ -540,6 +576,93 @@ The response shape is identical to `webhook_listener`'s `/health`
 (see [GET /health — liveness + system probe](#get-health--liveness--system-probe)
 above) so a single probe template works for both ports.
 
+### Report-to-report diff (`GET /api/v1/reports/diff`)
+
+Operators frequently want to know "what changed between today's
+briefing and yesterday's" — new alpha signals, signals that flipped
+direction, routes whose rate moved more than 5%, sentiment / risk
+drift. Opening two browser tabs to eyeball the difference is the
+status quo; this endpoint returns the same information as structured
+JSON so the Streamlit tab, the CLI, and any external script consume
+it the same way.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+    "http://localhost:8503/api/v1/reports/diff?from=<id_a>&to=<id_b>"
+```
+
+Response (200 OK):
+
+```json
+{
+  "report_a_id": "uuid-a",
+  "report_b_id": "uuid-b",
+  "summary": {"added": 2, "removed": 1, "changed": 4},
+  "entries": [
+    {
+      "category": "sentiment",
+      "change_type": "changed",
+      "key": "sentiment_score",
+      "before": 0.12,
+      "after": 0.41,
+      "description": "Sentiment score: 0.12 -> 0.41 (+0.29)"
+    },
+    {
+      "category": "signal",
+      "change_type": "added",
+      "key": "ZIM-momentum-up",
+      "before": null,
+      "after": {"direction": "LONG", "confidence": 0.78},
+      "description": "New signal: ZIM-momentum-up (LONG, conf 0.78)"
+    },
+    {
+      "category": "route",
+      "change_type": "changed",
+      "key": "FBX01_CHINA_US_WEST",
+      "before": {"value": 2400.0, "status": "Stable"},
+      "after": {"value": 2580.0, "status": "Accelerating"},
+      "description": "FBX01_CHINA_US_WEST: value 2400.00 -> 2580.00 (+7.5%)"
+    }
+  ]
+}
+```
+
+**Categories:** `signal`, `route`, `sentiment`, `risk`, `metadata`.
+**Change types:** `added`, `removed`, `changed`.
+
+**Thresholds (defaults):**
+
+- Signal confidence shift surfaces when `|conf_b - conf_a| > 0.10`.
+- Route value change surfaces when the percent move exceeds `5%`.
+- Sentiment-score change surfaces when `|delta| > 0.05`.
+- Signal direction flips and risk-level changes always surface.
+
+**Per-user scoping.** Both `from` and `to` are resolved within the
+caller's report scope via `list_reports(user_id=...)`. A user who
+tries to diff another user's report sees the same 404 they would for
+a non-existent id — no enumeration leak. Same indistinguishable-
+failure contract used by `/reports/<id>/html`.
+
+**Schema-version safety.** When the two payloads carry different
+`schema_version` stamps, the diff includes an explicit
+`metadata / schema_version` entry warning that subsequent rows may
+not be directly comparable.
+
+**CLI mirror.** The same diff is available from the operator CLI:
+
+```bash
+python -m tools.ops_cli reports diff <id_a> <id_b> [--user-id <id>] \
+    [--format md|json]
+```
+
+`--format md` (default) prints Markdown; `--format json` prints the
+same JSON shape the API returns. Missing ids exit with code 1 and a
+single-line stderr message.
+
+**UI mirror.** The Streamlit Report tab has a "Compare to a previous
+report" section under "History" that exposes the same diff via two
+selectboxes + a Markdown download button.
+
 ### Per-user rate limiting
 
 Every authenticated endpoint is gated by an in-process **token-bucket
@@ -601,7 +724,7 @@ rejected the invocation.
 | `status`                           | Schema version + counts (users, alerts, channels).                 |
 | `alerts list / ack / ack-all / metrics` | Recent alerts, acknowledge one or all, aggregate ack metrics. |
 | `channels list / delete / usage / reset-usage / set-budget` | Delivery-channel admin including per-channel monthly delivery budgets (v25). |
-| `reports list / delete / stats`    | Saved-report admin.                                                |
+| `reports list / delete / stats / diff` | Saved-report admin, plus `diff <id_a> <id_b> [--format md\|json]` to compare two reports (matches `GET /api/v1/reports/diff`). |
 | `telemetry usage / recent / prune` | LLM call telemetry.                                                |
 | `perf summary`                     | Render-performance summary.                                        |
 | `health summary / ping`            | Data-source health.                                                |

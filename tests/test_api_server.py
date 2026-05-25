@@ -174,6 +174,51 @@ def test_health_does_not_require_authorization_header(server):
     assert r.status_code == 200
 
 
+# ─── OpenAPI spec endpoint: public ────────────────────────────────────────
+
+
+def test_openapi_endpoint_returns_200_without_auth(server):
+    """``GET /api/v1/openapi.json`` is unauthenticated by design — SDK
+    generators and Swagger UI must be able to fetch the spec without
+    needing a token."""
+    # Pre-warm the module cache so the per-test response time doesn't
+    # depend on whether this is the first request after server start.
+    from worker import api_server
+    api_server._OPENAPI_BYTES_CACHE = None  # force lazy rebuild this test
+
+    r = requests.get(f"{server}/api/v1/openapi.json", timeout=5)
+    assert r.status_code == 200
+    assert r.headers["Content-Type"].startswith("application/json")
+
+
+def test_openapi_endpoint_body_is_valid_json_with_openapi_key(server):
+    """The body must parse as JSON and carry the OpenAPI version
+    string under the ``openapi`` key (per OpenAPI 3.0.3 §4)."""
+    r = requests.get(f"{server}/api/v1/openapi.json", timeout=5)
+    assert r.status_code == 200
+    body = r.json()
+    assert "openapi" in body
+    assert body["openapi"].startswith("3.")
+
+
+def test_openapi_endpoint_info_title_matches_default(server):
+    """The default title from ``build_openapi_spec`` is "Ship Tracker
+    API" — sanity check it shows up unchanged through the wire."""
+    r = requests.get(f"{server}/api/v1/openapi.json", timeout=5)
+    body = r.json()
+    assert body["info"]["title"] == "Ship Tracker API"
+    assert body["info"]["version"]  # any non-empty string
+
+
+def test_openapi_endpoint_exposes_at_least_20_paths(server):
+    """The spec must cover the bulk of the API surface — the spec
+    builder declares ~29 paths today; we use 20 as a safety floor so
+    a future trim of one or two endpoints doesn't flake the test."""
+    r = requests.get(f"{server}/api/v1/openapi.json", timeout=5)
+    body = r.json()
+    assert len(body["paths"]) >= 20
+
+
 # ─── Auth: missing / invalid / revoked token → 401 ────────────────────────
 
 
@@ -580,6 +625,113 @@ def test_list_reports_is_user_scoped(server, tmp_path, monkeypatch):
     # Bob's report must not appear in Alice's listing.
     rows = r.json()
     assert all(row.get("report_id") != "b1" for row in rows)
+
+
+# ─── GET /api/v1/reports/diff ────────────────────────────────────────────
+
+
+def test_diff_reports_missing_query_params_returns_400(
+    server, tmp_path, monkeypatch,
+):
+    """Both `from` and `to` are required; missing either → 400 with a
+    descriptive JSON body. Pins the API's input-validation contract
+    so a caller never has to interpret an opaque 500."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    # Neither param.
+    r1 = requests.get(
+        f"{server}/api/v1/reports/diff",
+        headers=_bearer(token), timeout=5,
+    )
+    assert r1.status_code == 400
+    assert "from" in r1.text.lower() or "to" in r1.text.lower()
+
+    # Only `from`.
+    r2 = requests.get(
+        f"{server}/api/v1/reports/diff",
+        params={"from": "abc"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r2.status_code == 400
+
+
+def test_diff_reports_unknown_id_returns_404(server, tmp_path, monkeypatch):
+    """An unknown id in the caller's scope → 404. Defining property:
+    no info leak about whether the id exists at all (vs exists-but-
+    belongs-to-another-user) — same response for both."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+
+    r = requests.get(
+        f"{server}/api/v1/reports/diff",
+        params={"from": "ghost-a", "to": "ghost-b"},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 404
+
+
+def test_diff_reports_happy_path_returns_structured_diff(
+    server, tmp_path, monkeypatch,
+):
+    """Two valid reports in the caller's scope → 200 + the documented
+    JSON shape (`report_a_id`, `report_b_id`, `summary`, `entries`)."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+    uid = _make_user()
+    token = _mint_token(uid)
+    a_id = _seed_report(uid, label="a")
+    b_id = _seed_report(uid, label="b")
+
+    r = requests.get(
+        f"{server}/api/v1/reports/diff",
+        params={"from": a_id, "to": b_id},
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["report_a_id"] == a_id
+    assert body["report_b_id"] == b_id
+    assert set(body.keys()) >= {"report_a_id", "report_b_id", "summary", "entries"}
+    assert {"added", "removed", "changed"} <= set(body["summary"].keys())
+    assert isinstance(body["entries"], list)
+
+
+def test_diff_reports_cross_user_returns_404(server, tmp_path, monkeypatch):
+    """Alice cannot diff Bob's reports — same 404 collapse as the
+    unknown-id case. Per-user scoping contract."""
+    from utils import report_history as rh
+    monkeypatch.setattr(rh, "REPORT_DIR", tmp_path / "reports")
+
+    alice_uid = _make_user("alice", "Hunter2!hunter")
+    bob_uid = _make_user("bob", "Hunter2!hunter")
+    alice_token = _mint_token(alice_uid)
+    bob_a = _seed_report(bob_uid, label="b1")
+    bob_b = _seed_report(bob_uid, label="b2")
+
+    r = requests.get(
+        f"{server}/api/v1/reports/diff",
+        params={"from": bob_a, "to": bob_b},
+        headers=_bearer(alice_token), timeout=5,
+    )
+    # Same as unknown id — no permission-denied leak.
+    assert r.status_code == 404
+
+
+def test_diff_reports_requires_auth_like_other_endpoints(server):
+    """Missing bearer → 401. Pins the gate so an unauthenticated
+    probe can never get a structured diff response (which could carry
+    information about the report population)."""
+    r = requests.get(
+        f"{server}/api/v1/reports/diff",
+        params={"from": "x", "to": "y"},
+        timeout=5,
+    )
+    assert r.status_code == 401
 
 
 # ─── GET /api/v1/reports/<id>/html ────────────────────────────────────────
