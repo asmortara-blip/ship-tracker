@@ -29,6 +29,7 @@ from loguru import logger
 from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -106,6 +107,84 @@ def _build_ideas(
     except Exception as exc:
         logger.exception(f"idea_engine: cascade pipeline failed: {exc}")
         return []
+
+
+# ─── Pure figure-builder ────────────────────────────────────────────────────
+
+def _build_idea_conviction_bars(ideas: list, *, limit: int = 12) -> go.Figure:
+    """Horizontal conviction-score bars for the top N ideas.
+
+    Sorts highest-conviction first (top of chart). Bars are coloured by
+    direction (Bullish → C_HIGH, Bearish → C_LOW, Neutral → C_TEXT2)
+    so the directional mix is scannable without reading the labels.
+    Limits to ``limit`` rows so the chart stays on one screen even when
+    the cascade surfaces a long tail of low-conviction ideas.
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. Empty / None ideas returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list(ideas or [])
+    if not items:
+        fig.add_annotation(
+            text="No ideas to plot",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Top ideas by conviction", height=240)
+        return fig
+
+    # Sort by conviction desc, take top N, then reverse so Plotly's
+    # bottom-up categorical axis puts the strongest at the TOP of the chart.
+    ranked = sorted(
+        items,
+        key=lambda idea: float(getattr(idea, "conviction_score", 0.0) or 0.0),
+        reverse=True,
+    )[:limit]
+    ranked.reverse()
+
+    tickers = [str(getattr(idea, "ticker", "?")) for idea in ranked]
+    scores  = [float(getattr(idea, "conviction_score", 0.0) or 0.0)
+               for idea in ranked]
+    directions = [str(getattr(idea, "direction", "Neutral") or "Neutral")
+                  for idea in ranked]
+    labels = [str(getattr(idea, "conviction_label", "") or "")
+              for idea in ranked]
+    colors = [_direction_color(d) for d in directions]
+
+    fig.add_trace(go.Bar(
+        x=scores,
+        y=tickers,
+        orientation="h",
+        marker={"color": colors,
+                "line": {"color": C_BG, "width": 1}},
+        text=[f"{s:.2f}" for s in scores],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        customdata=list(zip(directions, labels)),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Conviction: %{x:.2f} (%{customdata[1]})<br>"
+            "Direction: %{customdata[0]}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    apply_dark_layout(
+        fig,
+        title=f"Top ideas by conviction — showing {len(ranked)} of {len(items)}",
+        height=max(220, 60 + 28 * len(ranked)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Conviction score (0–1)", "range": [0, 1.08],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 44, "b": 40},
+        bargap=0.35,
+    )
+    return fig
 
 
 # ─── Section 1: Hero — top-conviction idea ───────────────────────────────────
@@ -462,6 +541,17 @@ def render(
             if not ideas:
                 st.info("No equity ideas surfaced from the cascade. Try refreshing data.")
                 return
+
+            # ── Conviction bars (overview before the detail table) ────────────
+            try:
+                st.plotly_chart(
+                    _build_idea_conviction_bars(ideas),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="idea_engine_conviction_bars",
+                )
+            except Exception:
+                logger.exception("Idea Engine — conviction bars failed")
 
             # ── Ranked table ──────────────────────────────────────────────────
             section_divider("Ranked Table")
