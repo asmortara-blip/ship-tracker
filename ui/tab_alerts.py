@@ -1058,6 +1058,354 @@ def _render_configuration_form() -> None:
         logger.exception("Alert configuration render failed")
 
 
+def _render_alert_search_panel() -> None:
+    """Alert search panel — multi-filter search over the ``alerts`` table.
+
+    Sits between the Saved Filters panel and the main Active Alerts
+    table and offers operators a richer query surface than scrolling
+    the table can. The full-text grep across ``title || body`` is the
+    workflow driver — "where did that alert about Suez go?" / "find
+    the one mentioning DB connections" — and the per-column pickers
+    let operators narrow the result set without losing the freshness
+    ordering.
+
+    Default scope is the CURRENT user (the same dual-set semantics as
+    ``load_alerts`` — own rows + legacy ``user_id=''`` rows) so an
+    operator never sees another user's alerts through this panel. The
+    "All users (admin)" toggle widens the scope but is opt-in and the
+    operator's effective scope is echoed in the caption so they cannot
+    accidentally believe they are viewing a per-user slice.
+
+    Imports are lazy (matches the surrounding panel pattern) so a
+    missing helper does not break the rest of the Alert Center tab.
+    The full body is wrapped in try/except — same defensive contract as
+    every other ``_render_*`` panel in this file. The panel is wrapped
+    in a collapsed expander so the regular Active Alerts table remains
+    the default view — operators reach for the panel only when scroll
+    runs out.
+    """
+    try:
+        from engine.alert_search import (
+            AlertSearchQuery,
+            alerts_to_jsonl,
+            get_distinct_alert_types,
+            get_distinct_port_locodes,
+            get_distinct_route_ids,
+            get_distinct_tickers,
+            search_alerts,
+        )
+        from state.user_scope import current_user_id
+
+        section_divider("Alert Search")
+
+        with st.expander("Alert search…", expanded=False):
+            st.caption(
+                "Multi-filter search over the alerts table — title / body "
+                "grep, severity tier, ticker, route, port, time window. "
+                "Default scope is your own user; toggle 'All users' for an "
+                "admin view. Source: engine.alert_search."
+            )
+
+            # ── DB-populated dropdown options. The "(any)" sentinel is
+            # mapped to ``None`` before the query runs so the operator can
+            # return to "no filter" without clearing the text inputs.
+            try:
+                types_db = get_distinct_alert_types()
+            except Exception:
+                types_db = []
+            type_options = ["(any)"] + types_db
+            severity_options = ["(any)", "CRITICAL", "HIGH", "MEDIUM", "LOW"]
+            severity_min_options = ["(none)", "CRITICAL", "HIGH", "MEDIUM", "LOW"]
+            ack_options = ["(any)", "ack'd only", "un-ack'd only"]
+
+            # ── Row 1: severity exact | severity_min | alert_type | ack ──
+            r1c1, r1c2, r1c3, r1c4 = st.columns(4, gap="small")
+            with r1c1:
+                severity_pick = st.selectbox(
+                    "Severity (exact)",
+                    options=severity_options,
+                    index=0,
+                    key="alert_search_severity",
+                )
+            with r1c2:
+                severity_min_pick = st.selectbox(
+                    "Severity min",
+                    options=severity_min_options,
+                    index=0,
+                    key="alert_search_severity_min",
+                    help="HIGH includes CRITICAL; MEDIUM includes HIGH "
+                         "and CRITICAL; etc.",
+                )
+            with r1c3:
+                alert_type_pick = st.selectbox(
+                    "Alert type",
+                    options=type_options,
+                    index=0,
+                    key="alert_search_alert_type",
+                )
+            with r1c4:
+                ack_pick = st.selectbox(
+                    "Acknowledged",
+                    options=ack_options,
+                    index=0,
+                    key="alert_search_acknowledged",
+                )
+
+            # ── Row 2: ticker | port_locode | route_id ───────────────────
+            r2c1, r2c2, r2c3 = st.columns(3, gap="small")
+            with r2c1:
+                ticker_input = st.text_input(
+                    "Ticker",
+                    value="",
+                    key="alert_search_ticker",
+                    help="Exact match (e.g. ZIM, MAERSK).",
+                )
+            with r2c2:
+                port_locode_input = st.text_input(
+                    "Port LOCODE",
+                    value="",
+                    key="alert_search_port_locode",
+                    help="Exact match (UN/LOCODE, e.g. USLAX).",
+                )
+            with r2c3:
+                route_id_input = st.text_input(
+                    "Route ID",
+                    value="",
+                    key="alert_search_route_id",
+                )
+
+            # ── Row 3: since / until date pickers ────────────────────────
+            today = datetime.now(timezone.utc).date()
+            default_since = today - timedelta(days=7)
+            r3c1, r3c2 = st.columns(2, gap="small")
+            with r3c1:
+                since_date = st.date_input(
+                    "Since (UTC)",
+                    value=default_since,
+                    key="alert_search_since",
+                )
+            with r3c2:
+                until_date = st.date_input(
+                    "Until (UTC, exclusive)",
+                    value=today + timedelta(days=1),
+                    key="alert_search_until",
+                )
+
+            # ── Row 4: free-text grep | limit | admin scope ─────────────
+            r4c1, r4c2, r4c3 = st.columns([2, 1, 1], gap="small")
+            with r4c1:
+                text_input = st.text_input(
+                    "Free-text search",
+                    value="",
+                    key="alert_search_text",
+                    help="Case-insensitive substring match over the "
+                         "concatenation title || ' ' || body.",
+                )
+            with r4c2:
+                limit_input = st.number_input(
+                    "Limit",
+                    min_value=1,
+                    max_value=10_000,
+                    value=100,
+                    step=50,
+                    key="alert_search_limit",
+                )
+            with r4c3:
+                admin_scope = st.checkbox(
+                    "All users (admin)",
+                    value=False,
+                    key="alert_search_admin_scope",
+                    help="Show alerts across every user. Default is "
+                         "your own user only.",
+                )
+
+            # ── Resolve the per-user scope. The current user's id is
+            # always resolved (even when "All users" is checked) so the
+            # caption can tell the operator what scope is actually
+            # applied. An empty self_uid (no session) falls through to
+            # "no scope" — the local CLI / test path should not be
+            # silently filtered to a non-existent user.
+            self_uid = current_user_id()
+            if admin_scope:
+                effective_user_id = None
+            else:
+                effective_user_id = self_uid or None
+
+            # ── Search button drives the query so the panel does not
+            # refetch on every keystroke. The result lives in
+            # ``st.session_state`` so the download buttons keep serving
+            # the most recent search across non-search reruns.
+            search_clicked = st.button(
+                "Search",
+                key="alert_search_run",
+                type="primary",
+            )
+
+            # Touch the picker helpers so an unused-import linter does
+            # not strip them — they exist so a future revision can
+            # surface ticker/port/route dropdowns without re-importing.
+            _ = (get_distinct_tickers, get_distinct_route_ids,
+                 get_distinct_port_locodes)
+
+            result = None
+            if search_clicked:
+                # Translate the tri-state ack picker to the
+                # bool|None ``acknowledged`` field. "(any)" → None.
+                if ack_pick == "ack'd only":
+                    ack_value = True
+                elif ack_pick == "un-ack'd only":
+                    ack_value = False
+                else:
+                    ack_value = None
+
+                query = AlertSearchQuery(
+                    user_id=effective_user_id,
+                    severity=(severity_pick if severity_pick != "(any)" else None),
+                    severity_min=(severity_min_pick
+                                  if severity_min_pick != "(none)" else None),
+                    alert_type=(alert_type_pick
+                                if alert_type_pick != "(any)" else None),
+                    ticker=ticker_input.strip() or None,
+                    port_locode=port_locode_input.strip() or None,
+                    route_id=route_id_input.strip() or None,
+                    acknowledged=ack_value,
+                    # date_input returns a datetime.date — format as ISO
+                    # at 00:00:00 UTC so the SQL string compare is
+                    # unambiguous.
+                    since=(datetime.combine(
+                        since_date, datetime.min.time(),
+                        tzinfo=timezone.utc,
+                    ).isoformat() if since_date else None),
+                    until=(datetime.combine(
+                        until_date, datetime.min.time(),
+                        tzinfo=timezone.utc,
+                    ).isoformat() if until_date else None),
+                    text=text_input.strip() or None,
+                    limit=int(limit_input),
+                )
+                result = search_alerts(query)
+                st.session_state["_alert_search_result"] = result
+            else:
+                # Pull the last result back so the download buttons keep
+                # serving the most recent search across non-search reruns.
+                result = st.session_state.get("_alert_search_result")
+
+            # ── Result rendering ─────────────────────────────────────────
+            if result is None:
+                st.caption(
+                    "Set filters and click Search to query the alerts table."
+                )
+                return
+
+            scope_label = (
+                "all users" if effective_user_id is None
+                else f"user_id={effective_user_id}"
+            )
+            if result.total_matched == 0:
+                st.info(f"No matches (scoped to {scope_label}).")
+                return
+
+            shown = len(result.alerts)
+            if result.total_matched > shown:
+                st.caption(
+                    f"Showing {shown:,} of {result.total_matched:,} matches "
+                    f"(scoped to {scope_label}). Raise the limit to see more."
+                )
+            else:
+                st.caption(
+                    f"{result.total_matched:,} match"
+                    f"{'es' if result.total_matched != 1 else ''} "
+                    f"(scoped to {scope_label})."
+                )
+
+            # ── Render the result rows as a DataFrame so the operator
+            # can sort / column-pick in the Streamlit grid widget. We
+            # keep the body column intact (vs. truncating) so the
+            # full-text grep target is visible.
+            try:
+                import pandas as pd
+
+                display_rows: list[dict] = []
+                for a in result.alerts:
+                    display_rows.append({
+                        "created_at":   a.get("created_at", ""),
+                        "severity":     a.get("severity", ""),
+                        "alert_type":   a.get("alert_type", ""),
+                        "title":        a.get("title", ""),
+                        "body":         a.get("body", ""),
+                        "ticker":       a.get("ticker", ""),
+                        "route_id":     a.get("route_id", ""),
+                        "port_locode":  a.get("port_locode", ""),
+                        "value":        a.get("value", 0.0),
+                        "threshold":    a.get("threshold", 0.0),
+                        "change_pct":   a.get("change_pct", 0.0),
+                        "acknowledged": a.get("acknowledged", False),
+                        "user_id":      a.get("user_id", ""),
+                        "alert_id":     a.get("alert_id", ""),
+                    })
+                df = pd.DataFrame(display_rows)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception as exc:
+                logger.warning(
+                    f"Alert search dataframe render failed: {exc}"
+                )
+                st.error("Result table unavailable.")
+
+            # ── Download buttons (lazy import). Two formats: CSV for
+            # Excel, JSONL for a SIEM sidecar / downstream JSON consumer.
+            dl_c1, dl_c2 = st.columns(2, gap="small")
+            with dl_c1:
+                try:
+                    from utils.csv_export import (
+                        rows_to_csv_bytes,
+                        safe_filename,
+                    )
+
+                    csv_bytes = rows_to_csv_bytes(result.alerts)
+                    st.download_button(
+                        label="Download as CSV",
+                        data=csv_bytes,
+                        file_name=safe_filename("alert_search", ext="csv"),
+                        mime="text/csv",
+                        key="alert_search_dl_csv",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Alert search CSV download failed: {exc}"
+                    )
+                    st.caption("CSV download unavailable.")
+            with dl_c2:
+                try:
+                    from utils.csv_export import safe_filename
+
+                    jsonl_bytes = alerts_to_jsonl(result.alerts)
+                    st.download_button(
+                        label="Download as JSONL",
+                        data=jsonl_bytes,
+                        file_name=safe_filename(
+                            "alert_search", ext="jsonl",
+                        ),
+                        mime="application/x-ndjson",
+                        key="alert_search_dl_jsonl",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Alert search JSONL download failed: {exc}"
+                    )
+                    st.caption("JSONL download unavailable.")
+
+            st.markdown(
+                live_data_badge(DataSource.live(
+                    "alerts table",
+                    notes="engine.alert_search.search_alerts",
+                )),
+                unsafe_allow_html=True,
+            )
+    except Exception as exc:
+        logger.exception(f"Alert search panel render error: {exc}")
+        st.error("Alert search panel unavailable.")
+
+
 def _render_active_alerts(visible_alerts: list[dict]) -> None:
     try:
         # Apply the active filter (if any) BEFORE sorting/display so the
@@ -2449,21 +2797,22 @@ def _render_escalation_panel() -> None:
 
 
 def _render_rules_yaml_panel() -> None:
-    """Render the Export / Import (YAML) expander.
+    """Render the Export / Import expander with YAML + CSV sub-tabs.
 
-    Three controls inside one collapsed expander:
+    Two sub-tabs inside a single collapsed expander:
 
-    * Download button — serialise the current rules to YAML and offer
-      the file via ``st.download_button``. No round-trip through the
-      engine; reads from ``st.session_state["user_alerts"]`` which the
-      rule editor already keeps in sync.
-    * Paste-to-import text area + Validate button — runs the YAML
-      through ``yaml_to_rules`` and surfaces the parsed rules + any
-      warnings WITHOUT saving. Lets the operator preview the import
-      result and catch a malformed paste before pulling the trigger.
-    * Import button — saves the parsed rules via ``engine.save_rules``
-      (overwriting the user's set), updates session state, and reruns
-      so the rule editor below picks up the new shape.
+    * **YAML** — the engineer-friendly format (config-as-code in git).
+      Download / paste-to-import / validate-then-import flow against
+      :mod:`tools.rules_yaml`.
+    * **CSV** — the operator-friendly format (opens in Excel for a
+      grid edit). Same shape but against :mod:`tools.rules_csv`. The
+      CSV download is BOM-prefixed so Excel does not mojibake non-
+      ASCII rule names.
+
+    Each tab shares the same "Download / Paste / Validate / Import"
+    pattern — only the wire format changes. Both tabs read from the
+    same ``st.session_state['user_alerts']`` so the download always
+    reflects the rule editor's current state.
 
     Wrapped in try/except + logger.exception so a panel failure does
     not break the rest of the rules manager.
@@ -2473,118 +2822,237 @@ def _render_rules_yaml_panel() -> None:
 
         from engine.alert_engine_v2 import save_rules as engine_save_rules
         from tools.rules_yaml import rules_to_yaml, yaml_to_rules
+        # Lazy-import the CSV module too — same hot-path posture as
+        # rules_yaml. Importing csv + io is cheap, but the convention
+        # is that supplementary panel imports stay inside the try
+        # block so a missing optional dep can never break the
+        # rules-manager rendering.
+        from tools.rules_csv import csv_to_rules, rules_to_csv
 
         with st.expander(
-            "📥 Export / Import rules (YAML)",
+            "📥 Export / Import rules (YAML / CSV)",
             expanded=False,
         ):
             rules = st.session_state.get("user_alerts") or []
-            yaml_text = rules_to_yaml(rules)
+
+            # Two tabs — the engineer-friendly YAML and the operator-
+            # friendly CSV. Streamlit renders them as a horizontal
+            # tab bar inside the expander; each tab is its own
+            # column-aware DOM subtree so the layout reflows cleanly
+            # on a narrow viewport.
+            yaml_tab, csv_tab = st.tabs(["YAML", "CSV"])
 
             # File-name carries a UTC timestamp so two sequential
             # downloads don't collide in the operator's Downloads
-            # folder. Suffix is ``.yaml`` so editor syntax highlighting
-            # kicks in on most setups.
+            # folder. Shared between both tabs so they read the same
+            # session-state snapshot.
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            st.download_button(
-                "Download rules.yaml",
-                data=yaml_text,
-                file_name=f"rules-{ts}.yaml",
-                mime="text/yaml",
-                use_container_width=True,
-                key="rules_yaml_download_btn",
-            )
 
-            st.markdown(
-                f'<div style="font-size:0.72rem;color:{C_TEXT3};'
-                f'margin-top:12px;margin-bottom:6px">'
-                f'Paste a rules YAML here to validate + import. Validate '
-                f'previews the parsed rules and warnings without writing; '
-                f'Import overwrites the persisted rule set.</div>',
-                unsafe_allow_html=True,
-            )
-
-            pasted = st.text_area(
-                "Paste YAML to import",
-                value="",
-                height=200,
-                key="rules_yaml_paste_area",
-                placeholder="schema_version: 1\nrules:\n  - rule_id: ...",
-                label_visibility="collapsed",
-            )
-
-            btn_cols = st.columns([1, 1, 4], gap="small")
-            with btn_cols[0]:
-                validate_clicked = st.button(
-                    "Validate",
-                    key="rules_yaml_validate_btn",
+            # ── YAML tab ──────────────────────────────────────────
+            with yaml_tab:
+                yaml_text = rules_to_yaml(rules)
+                st.download_button(
+                    "Download rules.yaml",
+                    data=yaml_text,
+                    file_name=f"rules-{ts}.yaml",
+                    mime="text/yaml",
                     use_container_width=True,
-                )
-            with btn_cols[1]:
-                import_clicked = st.button(
-                    "Import",
-                    key="rules_yaml_import_btn",
-                    use_container_width=True,
-                    type="primary",
+                    key="rules_yaml_download_btn",
                 )
 
-            if validate_clicked or import_clicked:
-                if not pasted.strip():
-                    st.warning("Paste a YAML document before clicking.")
-                    return
-                parsed, warnings = yaml_to_rules(pasted)
-                # Surface warnings first so the operator sees defaults /
-                # dropped fields before the import-success banner.
-                for w in warnings:
-                    st.warning(f"YAML: {w}")
+                st.markdown(
+                    f'<div style="font-size:0.72rem;color:{C_TEXT3};'
+                    f'margin-top:12px;margin-bottom:6px">'
+                    f'Paste a rules YAML here to validate + import. Validate '
+                    f'previews the parsed rules and warnings without writing; '
+                    f'Import overwrites the persisted rule set.</div>',
+                    unsafe_allow_html=True,
+                )
 
-                if not parsed:
-                    st.error(
-                        "No importable rules found. See warnings above for "
-                        "the reason; nothing was saved."
-                    )
-                    return
+                pasted = st.text_area(
+                    "Paste YAML to import",
+                    value="",
+                    height=200,
+                    key="rules_yaml_paste_area",
+                    placeholder="schema_version: 1\nrules:\n  - rule_id: ...",
+                    label_visibility="collapsed",
+                )
 
-                if validate_clicked and not import_clicked:
-                    st.success(
-                        f"YAML parses cleanly — {len(parsed)} rule"
-                        f"{'s' if len(parsed) != 1 else ''} ready to import. "
-                        f"Click Import to overwrite the current set."
-                    )
-                    # Show a compact preview so the operator can sanity-
-                    # check what they're about to save.
-                    preview_rows = [
-                        {
-                            "rule_id": r.get("rule_id", "?"),
-                            "name": r.get("name", "?"),
-                            "metric": r.get("metric", "?"),
-                            "severity": r.get("severity", "?"),
-                        }
-                        for r in parsed
-                    ]
-                    st.dataframe(
-                        preview_rows,
+                btn_cols = st.columns([1, 1, 4], gap="small")
+                with btn_cols[0]:
+                    validate_clicked = st.button(
+                        "Validate",
+                        key="rules_yaml_validate_btn",
                         use_container_width=True,
-                        hide_index=True,
                     )
-                    return
+                with btn_cols[1]:
+                    import_clicked = st.button(
+                        "Import",
+                        key="rules_yaml_import_btn",
+                        use_container_width=True,
+                        type="primary",
+                    )
 
-                # Import path — save + replace session state + rerun so
-                # the rule editor picks up the new shape.
-                try:
-                    engine_save_rules(parsed)
-                    st.session_state["user_alerts"] = parsed
-                    st.success(
-                        f"Imported {len(parsed)} rule"
-                        f"{'s' if len(parsed) != 1 else ''}. "
-                        f"The rule editor below shows the new set."
+                if validate_clicked or import_clicked:
+                    if not pasted.strip():
+                        st.warning("Paste a YAML document before clicking.")
+                    else:
+                        parsed, warnings = yaml_to_rules(pasted)
+                        # Warnings first so the operator sees defaults
+                        # / dropped fields before the import banner.
+                        for w in warnings:
+                            st.warning(f"YAML: {w}")
+
+                        if not parsed:
+                            st.error(
+                                "No importable rules found. See warnings "
+                                "above for the reason; nothing was saved."
+                            )
+                        elif validate_clicked and not import_clicked:
+                            st.success(
+                                f"YAML parses cleanly — {len(parsed)} rule"
+                                f"{'s' if len(parsed) != 1 else ''} ready "
+                                f"to import. Click Import to overwrite the "
+                                f"current set."
+                            )
+                            preview_rows = [
+                                {
+                                    "rule_id": r.get("rule_id", "?"),
+                                    "name": r.get("name", "?"),
+                                    "metric": r.get("metric", "?"),
+                                    "severity": r.get("severity", "?"),
+                                }
+                                for r in parsed
+                            ]
+                            st.dataframe(
+                                preview_rows,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            # Import path — save + replace session
+                            # state + rerun so the rule editor picks
+                            # up the new shape.
+                            try:
+                                engine_save_rules(parsed)
+                                st.session_state["user_alerts"] = parsed
+                                st.success(
+                                    f"Imported {len(parsed)} rule"
+                                    f"{'s' if len(parsed) != 1 else ''}. "
+                                    f"The rule editor below shows the new set."
+                                )
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Import save failed: {exc}")
+
+            # ── CSV tab ───────────────────────────────────────────
+            #
+            # Same shape as the YAML tab, but the wire format is CSV
+            # (Excel-friendly, UTF-8 BOM, target_channels joined with
+            # '|'). The download button hands back bytes (not a string)
+            # so the BOM survives Streamlit's text handling.
+            with csv_tab:
+                csv_text = rules_to_csv(rules)
+                st.download_button(
+                    "Download rules.csv",
+                    # Pass bytes — UTF-8 with BOM. Excel will detect
+                    # the encoding from the BOM and render non-ASCII
+                    # characters correctly on macOS / Windows.
+                    data=csv_text.encode("utf-8"),
+                    file_name=f"rules-{ts}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="rules_csv_download_btn",
+                )
+
+                st.markdown(
+                    f'<div style="font-size:0.72rem;color:{C_TEXT3};'
+                    f'margin-top:12px;margin-bottom:6px">'
+                    f'Paste a rules CSV here to validate + import. '
+                    f'<code>target_channels</code> uses <code>|</code> as '
+                    f'the list separator (not <code>,</code> — would '
+                    f'collide with the CSV delimiter). Validate previews '
+                    f'the parsed rules; Import overwrites the persisted '
+                    f'set.</div>',
+                    unsafe_allow_html=True,
+                )
+
+                csv_pasted = st.text_area(
+                    "Paste CSV to import",
+                    value="",
+                    height=200,
+                    key="rules_csv_paste_area",
+                    placeholder=(
+                        "rule_id,name,metric,threshold_pct,severity,...\n"
+                        "bdi-spike,BDI spike,bdi,5.0,HIGH,..."
+                    ),
+                    label_visibility="collapsed",
+                )
+
+                csv_btn_cols = st.columns([1, 1, 4], gap="small")
+                with csv_btn_cols[0]:
+                    csv_validate_clicked = st.button(
+                        "Validate",
+                        key="rules_csv_validate_btn",
+                        use_container_width=True,
                     )
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Import save failed: {exc}")
+                with csv_btn_cols[1]:
+                    csv_import_clicked = st.button(
+                        "Import",
+                        key="rules_csv_import_btn",
+                        use_container_width=True,
+                        type="primary",
+                    )
+
+                if csv_validate_clicked or csv_import_clicked:
+                    if not csv_pasted.strip():
+                        st.warning("Paste a CSV document before clicking.")
+                    else:
+                        parsed, warnings = csv_to_rules(csv_pasted)
+                        for w in warnings:
+                            st.warning(f"CSV: {w}")
+
+                        if not parsed:
+                            st.error(
+                                "No importable rules found. See warnings "
+                                "above for the reason; nothing was saved."
+                            )
+                        elif csv_validate_clicked and not csv_import_clicked:
+                            st.success(
+                                f"CSV parses cleanly — {len(parsed)} rule"
+                                f"{'s' if len(parsed) != 1 else ''} ready "
+                                f"to import. Click Import to overwrite the "
+                                f"current set."
+                            )
+                            preview_rows = [
+                                {
+                                    "rule_id": r.get("rule_id", "?"),
+                                    "name": r.get("name", "?"),
+                                    "metric": r.get("metric", "?"),
+                                    "severity": r.get("severity", "?"),
+                                }
+                                for r in parsed
+                            ]
+                            st.dataframe(
+                                preview_rows,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            try:
+                                engine_save_rules(parsed)
+                                st.session_state["user_alerts"] = parsed
+                                st.success(
+                                    f"Imported {len(parsed)} rule"
+                                    f"{'s' if len(parsed) != 1 else ''}. "
+                                    f"The rule editor below shows the new set."
+                                )
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Import save failed: {exc}")
 
     except Exception:
-        logger.exception("rules YAML panel render failed")
+        logger.exception("rules YAML/CSV panel render failed")
         # Supplementary panel; silent on failure so the rest of the
         # rules manager stays operational.
 
@@ -4116,6 +4584,7 @@ def render(
         try:
             _render_hero(visible_alerts)
             _render_saved_filters()
+            _render_alert_search_panel()
             _render_configuration_form()
 
             _render_incidents_panel()

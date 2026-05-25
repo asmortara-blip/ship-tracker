@@ -1520,50 +1520,71 @@ yellow / cooldown thresholds, master enable / disable, "fired N alerts
 in the last hour" status line) so a non-shell operator can manage it
 from the UI.
 
-### Alert rules — config-as-code (YAML round-trip)
+### Alert rules — config-as-code (YAML + CSV round-trip)
 
 Operators commonly want to version their alert-rule sets in git and
 ship them to colleagues without copy-pasting from the UI. The `rules`
-subcommand exports the persisted set to YAML, imports a YAML file back
-(replacing the user's set), and shows a unified diff between a YAML
-file and the live rule set.
+subcommand supports two wire formats:
 
-The wire format is a small YAML subset — `schema_version`, then a list
-of rules with `rule_id`, `name`, `metric`, `threshold_pct`, `severity`
-(CRITICAL/HIGH/MEDIUM/LOW only), `condition`, `enabled`,
-`email_notify`, `target_channels`, `cooldown_minutes`, plus the v19
-`flap_*` fields. PyYAML is an optional dependency; a hand-rolled parser
-ships in `tools/rules_yaml.py` so the round-trip works on every
-deployment regardless of PyYAML presence.
+* **YAML** — engineer-friendly, structured, ideal for a git diff.
+  Hand-rolled parser ships in `tools/rules_yaml.py`; PyYAML is
+  optional. The round-trip works on every deployment regardless of
+  PyYAML presence.
+* **CSV** — operator-friendly, opens in Excel for a grid edit. Built
+  on the stdlib `csv` module (no extra dep), UTF-8 with a BOM so
+  Excel detects the encoding correctly on macOS / Windows. Lives in
+  `tools/rules_csv.py`.
+
+Both formats round-trip the same field set: `rule_id`, `name`,
+`metric`, `threshold_pct`, `severity` (CRITICAL/HIGH/MEDIUM/LOW
+only), `condition`, `enabled`, `email_notify`, `target_channels`,
+`cooldown_minutes`, plus the v19 `flap_*` fields.
+
+**When to use which:**
+
+* Reach for **YAML** when you want to diff in git, write rules by
+  hand in an editor, or pipe through configuration-management. The
+  structured shape makes line-by-line diffs semantic.
+* Reach for **CSV** when you want to open in Excel for bulk edits
+  (sort, filter, copy-paste between rules), email a snapshot to a
+  non-engineer, or feed into a spreadsheet-driven workflow. One row
+  per rule.
 
 ```bash
-# Export the current user's rules to stdout (YAML).
+# YAML — export to stdout / file, diff / dry-run / apply import.
 python -m tools.ops_cli rules export --user-id <id>
-
-# Export to a file (useful for committing into git).
 python -m tools.ops_cli rules export --user-id <id> --out config/rules.yaml
-
-# Diff a YAML file against the live rule set — shows what an import
-# would change without writing anything.
-python -m tools.ops_cli rules diff --user-id <id> --in config/rules.yaml
-
-# Dry-run the import — surfaces parsed rules + any warnings (unknown
-# fields, missing fields defaulted, severities rejected) without
-# touching the DB.
+python -m tools.ops_cli rules diff   --user-id <id> --in config/rules.yaml
 python -m tools.ops_cli rules import --user-id <id> --in config/rules.yaml --dry-run
-
-# Apply the import — OVERWRITES the user's rule set with the contents
-# of the YAML file. Audit-logged via auth.audit.record_audit so the
-# replace shows up alongside UI saves.
 python -m tools.ops_cli rules import --user-id <id> --in config/rules.yaml
+
+# CSV — same trio of operations with the -csv suffix.
+python -m tools.ops_cli rules export-csv --user-id <id>
+python -m tools.ops_cli rules export-csv --user-id <id> --out config/rules.csv
+python -m tools.ops_cli rules diff-csv   --user-id <id> --in config/rules.csv
+python -m tools.ops_cli rules import-csv --user-id <id> --in config/rules.csv --dry-run
+python -m tools.ops_cli rules import-csv --user-id <id> --in config/rules.csv
 ```
 
-The UI surfaces the same export/import in `Alert Center → Rules
-Management → 📥 Export / Import rules (YAML)` (collapsed expander). The
-Validate button gives the operator a preview + warnings without
-saving; Import overwrites + reruns.
+**CSV format notes:**
 
-**Recommended git workflow:**
+* Header row carries the canonical column order; rows are emitted
+  sorted by `rule_id` for a deterministic diff.
+* `target_channels` joins with `|` (pipe), not comma — the comma is
+  the CSV delimiter and would tear the row. Split is symmetric on
+  import; empty tokens are dropped (so `a||b` parses to `['a', 'b']`).
+* Booleans render as lower-case `true` / `false`. The parser also
+  accepts `True` / `False` / `1` / `0` / `yes` / `no`
+  (case-insensitive) so a hand-edited Excel round-trip survives.
+* Apply OVERWRITES the user's rule set, same as the YAML variant.
+  Audit-logged via `auth.audit.record_audit`.
+
+The UI surfaces both formats in `Alert Center → Rules Management →
+📥 Export / Import rules (YAML / CSV)` (collapsed expander, two
+sub-tabs). The Validate button gives the operator a preview +
+warnings without saving; Import overwrites + reruns.
+
+**Recommended git workflow (YAML is the default for git):**
 
 1. Author / edit rules in the UI for the rapid-iteration phase.
 2. Once the rule set stabilises, export to `config/rules.yaml` in your
@@ -1576,6 +1597,12 @@ saving; Import overwrites + reruns.
    rules diff --user-id <id> --in config/rules.yaml` to confirm the
    live set matches the committed file — drift between the two is a
    process-failure signal.
+
+Substitute `export-csv` / `import-csv` / `diff-csv` and
+`config/rules.csv` if you prefer the CSV format for the repo. CSV
+diffs in git are noisier than YAML diffs (every field-shift moves a
+cell across columns rather than across lines), so YAML is the
+recommended default for version control.
 
 Warnings are non-fatal hints (unknown field ignored, missing field
 defaulted to N, severity rejected) and are surfaced to the operator
@@ -1744,6 +1771,108 @@ The module does NOT inject `current_user_id()` automatically — the UI
 passes it explicitly. That keeps `engine.audit_search` a pure search
 helper; the per-user scoping policy belongs upstream where the caller
 can decide whether they have admin scope or not.
+
+### Alert search panel — operator UI in the Alert Center tab
+
+The Alert Center tab carries the regular Active Alerts table (recent
+firings, freshness-ordered) and the new "Alert search…" expander that
+exposes the richer multi-filter query an operator wants when scroll
+runs out — "where did the firing about Suez go?" / "find the one
+mentioning DB connections".
+
+The search panel sits between the Saved Filters panel and the main
+alert table, wrapped in a collapsed expander so the regular table
+stays the default view. The panel offers:
+
+* `severity` exact match (CRITICAL / HIGH / MEDIUM / LOW)
+* `severity_min` tier-or-worse match (HIGH includes CRITICAL; MEDIUM
+  includes HIGH and CRITICAL; LOW matches everything)
+* `alert_type` selectbox (DB-populated from distinct values)
+* `acknowledged` tri-state (ack'd only / un-ack'd only / both)
+* `ticker` / `port_locode` / `route_id` exact-match text inputs
+* `since` / `until` date pickers (half-open: `since` inclusive,
+  `until` exclusive, both at 00:00:00 UTC)
+* free-text grep over `title || ' ' || body` (case-insensitive;
+  `%` / `_` / `'` in the query string are LIKE-escaped and bound,
+  not interpolated)
+* configurable result `limit` (default 100, max 10 000) with a
+  "showing N of M" caption so the operator knows when pagination is
+  needed
+* "Download as CSV" and "Download as JSONL" buttons on the result set
+
+**Default scope is the current user.** An operator without admin scope
+sees only their own alerts (PLUS legacy `user_id=''` rows — the same
+dual-set semantics `load_alerts` uses so the search panel never hides
+a row that the operator can see in the main table). The "All users
+(admin)" checkbox widens scope but is opt-in; the active scope is
+echoed in the result caption so the operator cannot accidentally
+believe they are viewing a per-user slice.
+
+The query is driven by a "Search" button — the panel does not refetch
+on every keystroke. The last result is kept in `st.session_state` so
+the CSV / JSONL download buttons remain populated across reruns until
+the operator submits a new search.
+
+The panel is **additional** surface — it does not replace the regular
+Active Alerts table, the Saved Filters panel, the incident correlation
+panel, or any other Alert Center surface.
+
+#### Helper API — `engine.alert_search`
+
+The UI panel is a thin wrapper around `engine.alert_search`, which is
+also callable from tests, ad-hoc Python scripts, and any future API
+endpoint that wants the richer query surface:
+
+```python
+from engine.alert_search import (
+    AlertSearchQuery,
+    search_alerts,
+    search_alerts_count,
+    get_distinct_alert_types,
+    get_distinct_tickers,
+    get_distinct_route_ids,
+    get_distinct_port_locodes,
+)
+
+query = AlertSearchQuery(
+    user_id="u-alice",                  # dual-set: own rows + legacy ''
+    severity="HIGH",                    # exact match
+    severity_min="HIGH",                # tier-or-worse: HIGH + CRITICAL
+    alert_type="CONGESTION",
+    ticker="ZIM",
+    port_locode="USLAX",
+    route_id="transpac",
+    acknowledged=False,                  # tri-state: True/False/None
+    since="2026-05-22T00:00:00+00:00",
+    until="2026-05-23T00:00:00+00:00",  # half-open
+    text="suez canal",                   # case-insensitive grep on title || body
+    limit=100,                           # hard-capped at SQL level
+)
+
+result = search_alerts(query)
+result.total_matched       # count BEFORE limit was applied
+result.alerts              # list of dicts (canonical column projection)
+result.query               # echo of the input AlertSearchQuery
+
+# Count-only — cheaper than the full search; useful for the "M matches"
+# caption before the operator commits to a larger fetch.
+n = search_alerts_count(query)
+
+# Dropdown population for the UI (sorted, deduped, capped, per-user
+# scoped). Each helper accepts ``user_id=None`` for admin scope.
+get_distinct_alert_types(limit=100)
+get_distinct_tickers(limit=200)
+get_distinct_route_ids(limit=200)
+get_distinct_port_locodes(limit=200)
+```
+
+Every helper **NEVER raises** — a DB outage or a malformed row returns
+an empty result with the same shape so the calling UI keeps rendering
+the rest of the Alert Center tab.
+
+The module is read-only — `engine.alert_engine_v2` retains exclusive
+ownership of the `alerts` table write surface (`save_alerts`,
+`acknowledge_alert`). No schema bump.
 
 ### Delivery retry queue (schema v26)
 

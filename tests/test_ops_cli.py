@@ -1846,6 +1846,128 @@ def test_rules_import_malformed_yaml_exits_1(capsys, tmp_path) -> None:
     assert "error:" in err.lower()
 
 
+# ─── rules export-csv / import-csv / diff-csv ────────────────────────────
+#
+# Mirror of the YAML subcommand tests above but for the CSV wire
+# format. The defining contract is the same: export writes a
+# deterministic CSV, import parses + replaces the user's rule set,
+# diff shows a unified diff vs the live state.
+
+def test_rules_export_csv_to_stdout(capsys) -> None:
+    """rules export-csv writes the user's rules as CSV to stdout.
+    Output must carry the header row (so the parser can map columns
+    by name) and the rule_id we saved."""
+    from engine.alert_engine_v2 import save_rules
+
+    save_rules([_mk_rule("bdi-spike")])
+    code, out, _ = _run(["rules", "export-csv"], capsys)
+    assert code == 0
+    # Header row is present (rule_id is the first column).
+    assert "rule_id" in out
+    # Rule body is present.
+    assert "bdi-spike" in out
+
+
+def test_rules_export_csv_to_file_writes_path(capsys, tmp_path) -> None:
+    """rules export-csv --out FILE writes the CSV to disk and prints
+    the path on stdout. The file on disk carries the BOM so Excel
+    opens it without mojibake."""
+    from engine.alert_engine_v2 import save_rules
+
+    save_rules([_mk_rule("bdi-spike", "BDI spike")])
+    out_file = tmp_path / "rules.csv"
+    code, out, _ = _run(
+        ["rules", "export-csv", "--out", str(out_file)], capsys
+    )
+    assert code == 0
+    assert str(out_file) in out
+    assert out_file.exists()
+    # The file starts with the UTF-8 BOM (\xef\xbb\xbf).
+    raw = out_file.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    text = out_file.read_text(encoding="utf-8")
+    assert "bdi-spike" in text
+
+
+def test_rules_import_csv_persists_rules(capsys, tmp_path) -> None:
+    """rules import-csv --in FILE parses the CSV and saves via
+    save_rules. A round-trip through load_rules must surface the
+    rule_id we wrote."""
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_csv import rules_to_csv
+
+    in_file = tmp_path / "import.csv"
+    in_file.write_text(
+        rules_to_csv([_mk_rule("imported-rule")]),
+        encoding="utf-8",
+    )
+    code, out, _ = _run(["rules", "import-csv", "--in", str(in_file)], capsys)
+    assert code == 0
+    assert "saved 1 rules" in out
+    persisted = load_rules()
+    rule_ids = [r.get("rule_id") or r.get("id") for r in persisted]
+    assert "imported-rule" in rule_ids
+
+
+def test_rules_import_csv_dry_run_does_not_persist(capsys, tmp_path) -> None:
+    """--dry-run must NOT call save_rules — the DB stays empty
+    after a dry-run import. Operator can preview safely."""
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_csv import rules_to_csv
+
+    in_file = tmp_path / "preview.csv"
+    in_file.write_text(
+        rules_to_csv([_mk_rule("preview-rule")]),
+        encoding="utf-8",
+    )
+    code, out, _ = _run(
+        ["rules", "import-csv", "--in", str(in_file), "--dry-run"], capsys,
+    )
+    assert code == 0
+    assert "dry-run" in out
+    assert "preview-rule" in out
+    assert load_rules() == []
+
+
+def test_rules_diff_csv_shows_added_and_removed(capsys, tmp_path) -> None:
+    """diff-csv vs the current set: a CSV file containing a NEW
+    rule_id that's not in the DB produces an added line; a current
+    rule_id NOT in the file produces a removed line."""
+    from engine.alert_engine_v2 import save_rules
+    from tools.rules_csv import rules_to_csv
+
+    save_rules([_mk_rule("existing-rule", "Existing")])
+    in_file = tmp_path / "new.csv"
+    in_file.write_text(
+        rules_to_csv([_mk_rule("brand-new-rule", "New")]),
+        encoding="utf-8",
+    )
+    code, out, _ = _run(
+        ["rules", "diff-csv", "--in", str(in_file)], capsys,
+    )
+    assert code == 0
+    # Unified-diff: both rule_ids appear in the diff body.
+    assert "existing-rule" in out
+    assert "brand-new-rule" in out
+
+
+def test_rules_import_csv_malformed_exits_1(capsys, tmp_path) -> None:
+    """A CSV file with no salvageable content → exit 1 + stderr.
+    Same contract as the YAML variant: one-line stderr error, no
+    traceback."""
+    in_file = tmp_path / "bad.csv"
+    # Header has rule_id but no valid severity in the only data row —
+    # the only row is rejected and the parser returns ([], [warning]).
+    in_file.write_text(
+        "rule_id,name,metric,threshold_pct,severity\n"
+        "r1,bad,bdi,5.0,BOGUS\n",
+        encoding="utf-8",
+    )
+    code, _, err = _run(["rules", "import-csv", "--in", str(in_file)], capsys)
+    assert code == 1
+    assert "error:" in err.lower()
+
+
 # ─── audit export ─────────────────────────────────────────────────────────
 #
 # The CLI subcommand bridges ``utils.audit_export`` → operator shell.

@@ -2082,6 +2082,131 @@ def _cmd_rules_diff(args: argparse.Namespace) -> None:
     sys.stdout.write("".join(diff_lines))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  rules — CSV variant of the config-as-code subcommands.
+#
+#  Same shape as the YAML triplet above (export → stdout/file, import →
+#  parse + save, diff → unified diff vs current). CSV is what most
+#  operators reach for first because it opens in Excel; the YAML
+#  variant stays for the engineer-friendly round-trip.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_rules_export_csv(args: argparse.Namespace) -> None:
+    """Render the user's rules as CSV to stdout, or write to --out.
+
+    Output carries a UTF-8 BOM so Excel opens it without mojibake on
+    macOS / Windows. The wrapped engine call is read-only; failures
+    bubble to main() and become exit-1.
+    """
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_csv import rules_to_csv
+
+    rules = load_rules(user_id=args.user_id)
+    csv_text = rules_to_csv(rules)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write text — Python writes the file as UTF-8 by default on
+        # Python 3.9+; the BOM is already part of csv_text so we don't
+        # need to encode separately.
+        out_path.write_text(csv_text, encoding="utf-8")
+        # Path on stdout — matches the pattern used by ``rules export``.
+        print(str(out_path))
+    else:
+        # The CSV already terminates with newlines; no extra trailing
+        # newline beyond what rules_to_csv emits.
+        sys.stdout.write(csv_text)
+
+
+def _cmd_rules_import_csv(args: argparse.Namespace) -> None:
+    """Read CSV from --in, validate, and save via save_rules
+    (overwriting the user's rule set). --dry-run prints what WOULD be
+    saved + any warnings without writing.
+
+    Warnings print to stdout (so a non-interactive caller piping the
+    output can capture them); errors print to stderr via main()'s
+    exit-1 catch.
+    """
+    from engine.alert_engine_v2 import save_rules
+    from tools.rules_csv import csv_to_rules
+
+    in_path = Path(args.in_path)
+    if not in_path.exists():
+        raise RuntimeError(f"input file not found: {in_path}")
+    # Read as text — Python's open() on Python 3.9 defaults to the
+    # platform encoding, which can mangle the BOM. Force utf-8 (the
+    # parser strips the BOM itself so this is belt-and-braces).
+    csv_text = in_path.read_text(encoding="utf-8")
+    rules, warnings = csv_to_rules(csv_text)
+
+    # No salvageable content + warnings present → treat as error so the
+    # CLI exits 1 with the first warning on stderr. Same posture as
+    # the YAML import.
+    if not rules and warnings:
+        raise RuntimeError(f"no importable rules: {warnings[0]}")
+
+    for w in warnings:
+        print(f"warning: {w}")
+
+    if args.dry_run:
+        print(
+            f"would save {len(rules)} rules for "
+            f"user_id={args.user_id!r} (dry-run)"
+        )
+        for r in rules:
+            print(f"  - {r.get('rule_id')}: {r.get('name')}")
+        return
+
+    save_rules(rules, user_id=args.user_id)
+    print(f"saved {len(rules)} rules for user_id={args.user_id!r}")
+
+
+def _cmd_rules_diff_csv(args: argparse.Namespace) -> None:
+    """Compare the CSV in --in against the user's currently-persisted
+    rule set. Surface added / removed / changed in a unified-diff style
+    block so the operator can see what an import would do BEFORE
+    pulling the trigger.
+
+    The diff renders both sides via ``rules_to_csv`` so the
+    comparison is line-aligned on the canonical column order — a
+    formatting drift between two CSV files can never appear as a
+    spurious diff.
+    """
+    import difflib
+
+    from engine.alert_engine_v2 import load_rules
+    from tools.rules_csv import csv_to_rules, rules_to_csv
+
+    in_path = Path(args.in_path)
+    if not in_path.exists():
+        raise RuntimeError(f"input file not found: {in_path}")
+    new_csv = in_path.read_text(encoding="utf-8")
+    new_rules, warnings = csv_to_rules(new_csv)
+    for w in warnings:
+        print(f"warning: {w}")
+
+    current_rules = load_rules(user_id=args.user_id)
+    # Render both sides via rules_to_csv so the diff aligns on the
+    # canonical column order — formatting drift between two CSVs
+    # cannot surface as a spurious diff.
+    current_csv = rules_to_csv(current_rules)
+    rendered_new_csv = rules_to_csv(new_rules)
+
+    current_lines = current_csv.splitlines(keepends=True)
+    new_lines = rendered_new_csv.splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(
+        current_lines,
+        new_lines,
+        fromfile="current",
+        tofile=str(in_path),
+        n=3,
+    ))
+    if not diff_lines:
+        print("(no changes)")
+        return
+    sys.stdout.write("".join(diff_lines))
+
+
 def _cmd_settings_set(args: argparse.Namespace) -> None:
     from auth.settings import update_setting
 
@@ -3268,6 +3393,56 @@ def _build_parser() -> argparse.ArgumentParser:
         help="User scope (default: legacy global)",
     )
     sru3.set_defaults(func=_cmd_rules_diff)
+
+    # CSV variant — same export / import / diff shape as the YAML
+    # triplet above, but the wire format is CSV (Excel-friendly,
+    # UTF-8 BOM, target_channels joined with '|'). The YAML
+    # subcommands stay; CSV adds three new ones.
+    sru4 = sr_sub.add_parser(
+        "export-csv",
+        help="Render the user's rules as CSV (stdout, or --out FILE)",
+    )
+    sru4.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru4.add_argument(
+        "--out", default=None,
+        help="Write CSV to this path instead of stdout",
+    )
+    sru4.set_defaults(func=_cmd_rules_export_csv)
+
+    sru5 = sr_sub.add_parser(
+        "import-csv",
+        help="Parse CSV file and save_rules (overwrites existing set)",
+    )
+    sru5.add_argument(
+        "--in", dest="in_path", required=True,
+        help="Path to the CSV file to import",
+    )
+    sru5.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru5.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Show what would be saved without writing",
+    )
+    sru5.set_defaults(func=_cmd_rules_import_csv)
+
+    sru6 = sr_sub.add_parser(
+        "diff-csv",
+        help="Show unified diff between CSV file and the user's current rules",
+    )
+    sru6.add_argument(
+        "--in", dest="in_path", required=True,
+        help="Path to the CSV file to compare against",
+    )
+    sru6.add_argument(
+        "--user-id", dest="user_id", default=None,
+        help="User scope (default: legacy global)",
+    )
+    sru6.set_defaults(func=_cmd_rules_diff_csv)
 
     # ── escalations ───────────────────────────────────────────────────────
     # Per-rule alert-escalation chains (schema v24). Four subcommands —
