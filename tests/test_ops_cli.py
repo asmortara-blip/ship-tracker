@@ -671,6 +671,94 @@ def test_perf_budgets_check_returns_count_dict(capsys) -> None:
     assert set(payload.keys()) == {"checked", "breached", "alerted", "skipped_cooldown"}
 
 
+# ─── anomalies ───────────────────────────────────────────────────────────
+
+def test_anomalies_configs_returns_defaults(capsys) -> None:
+    """`anomalies configs --json` returns the default config set."""
+    code, out, _ = _run(["anomalies", "configs", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert isinstance(payload, list)
+    assert len(payload) > 0
+    for row in payload:
+        assert set(row.keys()) >= {
+            "metric_id", "enabled", "method", "lookback_days",
+            "z_threshold", "min_samples",
+        }
+
+
+def test_anomalies_configs_text_table(capsys) -> None:
+    """Plain output renders the ASCII table with headers."""
+    code, out, _ = _run(["anomalies", "configs"], capsys)
+    assert code == 0
+    assert "metric_id" in out
+    assert "method" in out
+
+
+def test_anomalies_check_returns_count_dict(capsys) -> None:
+    """`anomalies check --json` returns a payload with counts + results."""
+    code, out, _ = _run(["anomalies", "check", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert set(payload.keys()) >= {"counts", "results"}
+    assert set(payload["counts"].keys()) == {
+        "checked", "detected", "alerted", "skipped_cooldown",
+    }
+
+
+def test_anomalies_enable_then_disable(capsys) -> None:
+    """`enable` flips on; `disable` flips off."""
+    code, out, _ = _run(["anomalies", "enable", "bdi", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["metric_id"] == "bdi"
+    assert payload["saved"] is True
+    assert payload["action"] == "enable"
+
+    code, out, _ = _run(["anomalies", "disable", "bdi", "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["saved"] is True
+    assert payload["action"] == "disable"
+
+    # Verify the disable persisted.
+    from engine.anomaly_detect import get_anomaly_configs
+    cfgs = {c.metric_id: c for c in get_anomaly_configs()}
+    assert cfgs["bdi"].enabled is False
+
+
+def test_anomalies_set_updates_threshold(capsys) -> None:
+    """`set --z-threshold N --lookback-days N` persists both."""
+    code, out, _ = _run(
+        ["anomalies", "set", "bdi",
+         "--z-threshold", "4.0", "--lookback-days", "45", "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["saved"] is True
+    assert payload["z_threshold"] == 4.0
+    assert payload["lookback_days"] == 45
+
+    from engine.anomaly_detect import get_anomaly_configs
+    cfgs = {c.metric_id: c for c in get_anomaly_configs()}
+    assert cfgs["bdi"].z_threshold == 4.0
+    assert cfgs["bdi"].lookback_days == 45
+
+
+def test_anomalies_set_unknown_metric_reports_error(capsys) -> None:
+    """`set` on a metric_id that has no config reports unknown."""
+    code, out, _ = _run(
+        ["anomalies", "set", "no_such_metric",
+         "--z-threshold", "3.0", "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["saved"] is False
+    assert "unknown" in payload["error"].lower()
+
+
 # ─── users ───────────────────────────────────────────────────────────────
 
 def test_users_list_empty(capsys) -> None:

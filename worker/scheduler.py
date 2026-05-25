@@ -619,6 +619,44 @@ def run_perf_budget_check_job() -> dict:
 
 
 @_track_run
+def run_anomaly_detection_job() -> dict:
+    """Run anomaly detection across every tracked metric + fire alerts.
+
+    Thin wrapper around ``engine.anomaly_detect.check_and_alert_anomalies``
+    that adds logging and shields the caller from any exception. The
+    underlying orchestrator already swallows per-metric failures
+    internally — this wrapper is belt-and-braces: even if the
+    orchestrator itself raises, the worker continues.
+
+    Cadence is "sub-daily but not aggressive" — every 6 hours when the
+    cron loop fires that often. Daily passes miss fast drift; hourly
+    is overkill for a check whose baseline window is 30 days. The
+    underlying ``_COOLDOWN_HOURS`` defaults to 24h so an already-fired
+    metric stays quiet until tomorrow regardless of cadence.
+
+    Returns the count dict shaped like the perf-budget + source-health
+    alerters: ``{"checked": N, "detected": N, "alerted": N,
+    "skipped_cooldown": N}`` (or all zeros on a top-level exception).
+
+    Never raises — a check failure must never block any sibling job.
+    """
+    try:
+        from engine.anomaly_detect import check_and_alert_anomalies
+
+        counts = check_and_alert_anomalies()
+        logger.info(
+            f"run_anomaly_detection_job: checked={counts.get('checked', 0)} "
+            f"detected={counts.get('detected', 0)} "
+            f"alerted={counts.get('alerted', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_anomaly_detection_job: failed: {exc}")
+        return {"checked": 0, "detected": 0, "alerted": 0, "skipped_cooldown": 0}
+
+
+@_track_run
 def run_alert_escalation_job(now: Optional[datetime] = None) -> dict:
     """Walk every unacked alert and escalate any whose next chain step
     has come due.
@@ -1130,6 +1168,17 @@ def main(argv: Optional[list] = None) -> int:
         run_perf_budget_check_job()
     except Exception as exc:
         logger.warning(f"main: perf budget check step failed: {exc}")
+
+    # Time-series anomaly detection across BDI / FBX / SCFI / WTI etc.
+    # Runs AFTER the perf-budget check so the alert-firing paths sit
+    # together in the job list. Detection is sub-daily (the cron fires
+    # every 6h) — the per-metric cooldown of 24h prevents duplicate
+    # fires regardless of cadence. Same belt-and-braces guard as the
+    # sibling alerters.
+    try:
+        run_anomaly_detection_job()
+    except Exception as exc:
+        logger.warning(f"main: anomaly detection step failed: {exc}")
 
     # Alert escalation pass — walks unacked alerts whose next chain
     # step has come due and dispatches to the step's channel. Same

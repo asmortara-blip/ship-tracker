@@ -730,6 +730,7 @@ rejected the invocation.
 | `health summary / ping`            | Data-source health.                                                |
 | `health-alerts status / enable / disable / run-once` | Auto-fire ShippingAlerts when a data source goes red / yellow. |
 | `perf-budgets list / set / reset / check` | Per-tab render-latency budgets; auto-fire PERF_BUDGET alerts when a tab's p95 blows past its budget. |
+| `anomalies check / configs / enable / disable / set` | Time-series anomaly detection across BDI, FBX, SCFI, WTI, bunker, port-wait, transpacific delay; fires ANOMALY alerts on z-score / pct-drift / rolling-mean drift past the per-metric threshold. |
 | `users list / create`              | User-account admin.                                                |
 | `tokens list / create / revoke`    | Per-user API-token admin.                                          |
 | `export`                           | Build a bulk-state tar.gz (see `Backup / Restore` below).          |
@@ -893,6 +894,88 @@ python -m tools.ops_cli perf-budgets check
 The same panel surfaces in the Data Health tab under "Tab Performance" >
 "Performance Budgets" — operators can edit a budget inline via the
 "Edit budgets…" expander without leaving the UI.
+
+### Time-series anomaly detection
+
+`engine/anomaly_detect.py` is the drift detector that catches the
+subtler patterns static rules miss: BDI creeping 2%/day for ten
+sessions, freight gradually diverging from its 30-day baseline, bunker
+quietly walking up by a standard deviation a week. The module is a
+read-only consumer that lazy-loads the source feeds (FRED for BDI /
+WTI / bunker / SCFI proxy; the Freightos scraper for FBX routes; the
+port loader for LA / Long Beach wait days), runs one of three
+statistical checks against per-metric configs, and fires an `ANOMALY`
+ShippingAlert when one trips. The worker scheduler invokes
+`run_anomaly_detection_job` once per pass (after the per-tab perf-budget
+check, before the alert-escalation pass) — sub-daily cadence is right
+for drift that builds over days while staying inside any single-day
+threshold.
+
+The three methods:
+
+* **`zscore`** — mean / std on the lookback window; test statistic is
+  `|x - mu| / sigma` on the most recent value. The classic "is the
+  latest tick a tail event" check.
+* **`pct_drift`** — mean on the lookback window; test statistic is the
+  % deviation of the most recent value vs the mean. The `z_threshold`
+  field is re-interpreted as a percentage. Use for non-stationary
+  series where the z-score is too volatile (oil during a regime shift).
+* **`rolling_mean_deviation`** — compares the last-7 rolling mean
+  against the lookback mean. Catches sustained drift that a
+  single-observation z-score misses: the drift IS the smoothed series
+  walking steadily away from baseline.
+
+Severity bands (closed at the lower end):
+
+* `|z| in [z_threshold, 2x)` → MEDIUM
+* `|z| in [2x, 3x)`          → HIGH
+* `|z| >= 3x`                → CRITICAL
+
+Configs ship with the module for the eight built-in metrics: BDI, WTI,
+bunker, SCFI, FBX trans-Pacific eastbound, FBX global, LA / Long Beach
+port wait, transpacific delay days. Each carries a 30-day default
+lookback and a 2.5σ threshold (rate-style metrics use pct_drift with
+a percentage threshold). Configs + cooldowns ride the existing
+`kv_state` table — no schema bump. The per-metric cooldown defaults to
+24 hours so an already-fired metric stays quiet until tomorrow
+regardless of how often the worker re-checks.
+
+A min-samples threshold (default 14 observations) prevents cold-start
+noise: a metric we just started tracking cannot fire an anomaly until
+its baseline has enough history to mean anything.
+
+```bash
+# Show every config — metric, enabled flag, method, lookback, threshold.
+python -m tools.ops_cli anomalies configs
+
+# Force the detection + alert pass to run NOW (prints counts + every
+# detected hit). Useful when verifying a freshly-saved config or debugging
+# cooldown.
+python -m tools.ops_cli anomalies check
+
+# Toggle a single metric without deleting its config row.
+python -m tools.ops_cli anomalies enable bdi
+python -m tools.ops_cli anomalies disable bdi
+
+# Tighten the threshold + extend the lookback for one metric.
+python -m tools.ops_cli anomalies set bdi --z-threshold 3.0 --lookback-days 45
+
+# Switch detection method (zscore / pct_drift / rolling_mean_deviation).
+python -m tools.ops_cli anomalies set fbx_global --method rolling_mean_deviation
+```
+
+The same panel surfaces in the Data Health tab under "Tab Performance"
+> "Anomaly Detection" — operators see the current hit list (metric,
+observed, baseline, z-score, severity) and can edit any config inline
+via the "Anomaly detection settings" expander. A "Run detection now"
+button forces an immediate pass without waiting for the cron tick.
+
+What this module is NOT: it does NOT bypass alert dedup (every fire
+flows through `save_alerts`); it does NOT fire for metrics under the
+min-sample threshold; it does NOT log raw proprietary metric values
+verbatim — alert bodies carry the summary statistics (z, drift %,
+baseline mean + std) operators need to triage without leaking the
+point value of a commercially-sensitive series.
 
 ### Per-channel monthly delivery budgets (v25)
 

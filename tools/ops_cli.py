@@ -732,6 +732,187 @@ def _cmd_perf_budgets_check(args: argparse.Namespace) -> None:
     _print_kv(counts)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  anomalies: time-series anomaly detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cmd_anomalies_check(args: argparse.Namespace) -> None:
+    """Run check_and_alert_anomalies NOW + print results.
+
+    With --json the full result list is included; without --json a count
+    summary plus a table of detected anomalies is printed.
+    """
+    from engine.anomaly_detect import (
+        check_and_alert_anomalies,
+        detect_all_anomalies,
+    )
+
+    # detect_all_anomalies gives us the full per-metric result rows for
+    # the table render; check_and_alert_anomalies actually fires + stamps
+    # cooldown. We run detect first so the table reflects what we'd
+    # fire even when every metric is calm.
+    user_id = getattr(args, "user_id", None)
+    results = detect_all_anomalies(user_id=user_id)
+    counts = check_and_alert_anomalies(user_id=user_id)
+
+    if args.json:
+        _print_json({
+            "counts": counts,
+            "results": [
+                {
+                    "metric_id":      r.metric_id,
+                    "severity":       r.severity,
+                    "observed_value": r.observed_value,
+                    "baseline_mean":  r.baseline_mean,
+                    "baseline_std":   r.baseline_std,
+                    "z_score":        r.z_score,
+                    "drift_pct":      r.drift_pct,
+                    "message":        r.message,
+                    "checked_at":     r.checked_at,
+                }
+                for r in results
+            ],
+        })
+        return
+
+    _print_kv(counts)
+    if not results:
+        return
+
+    rows = [
+        {
+            "metric_id": r.metric_id,
+            "severity":  r.severity,
+            "z":         f"{r.z_score:+.2f}",
+            "drift_pct": f"{r.drift_pct:+.2f}%",
+            "observed":  f"{r.observed_value:.4g}",
+            "baseline":  f"{r.baseline_mean:.4g}",
+        }
+        for r in results
+    ]
+    _print_table(
+        rows,
+        columns=["metric_id", "severity", "z", "drift_pct", "observed", "baseline"],
+    )
+
+
+def _cmd_anomalies_configs(args: argparse.Namespace) -> None:
+    """Show the per-metric configs for the (current or named) user."""
+    from engine.anomaly_detect import get_anomaly_configs
+
+    configs = get_anomaly_configs(user_id=getattr(args, "user_id", None))
+    payload = [
+        {
+            "metric_id":     c.metric_id,
+            "enabled":       bool(c.enabled),
+            "method":        c.method,
+            "lookback_days": int(c.lookback_days),
+            "z_threshold":   float(c.z_threshold),
+            "min_samples":   int(c.min_samples),
+        }
+        for c in configs
+    ]
+    if args.json:
+        _print_json(payload)
+        return
+    _print_table(
+        [
+            {
+                "metric_id":     p["metric_id"],
+                "enabled":       "yes" if p["enabled"] else "no",
+                "method":        p["method"],
+                "lookback_days": str(p["lookback_days"]),
+                "z_threshold":   f"{p['z_threshold']:.2f}",
+                "min_samples":   str(p["min_samples"]),
+            }
+            for p in payload
+        ],
+        columns=["metric_id", "enabled", "method", "lookback_days",
+                 "z_threshold", "min_samples"],
+    )
+
+
+def _anomalies_upsert_config(metric_id: str, user_id, mutator) -> dict:
+    """Helper: load configs, mutate the matching row, save.
+
+    ``mutator`` is a callable that takes the matching :class:`AnomalyConfig`
+    and mutates it in place. New rows are NOT auto-created — the
+    ``enable``/``disable``/``set`` CLI commands only operate on metrics
+    that already have a config. This keeps the registry tied to the
+    built-in defaults; adding a custom metric requires editing the
+    module.
+    """
+    from engine.anomaly_detect import get_anomaly_configs, save_anomaly_configs
+
+    configs = get_anomaly_configs(user_id=user_id)
+    found = False
+    for c in configs:
+        if c.metric_id == metric_id:
+            mutator(c)
+            found = True
+            break
+    if not found:
+        return {"metric_id": metric_id, "saved": False, "error": "unknown metric_id"}
+    ok = save_anomaly_configs(configs, user_id=user_id)
+    return {"metric_id": metric_id, "saved": bool(ok)}
+
+
+def _cmd_anomalies_enable(args: argparse.Namespace) -> None:
+    """Flip the enabled flag ON for one metric."""
+    payload = _anomalies_upsert_config(
+        args.metric_id, getattr(args, "user_id", None),
+        lambda c: setattr(c, "enabled", True),
+    )
+    payload["action"] = "enable"
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_anomalies_disable(args: argparse.Namespace) -> None:
+    """Flip the enabled flag OFF for one metric."""
+    payload = _anomalies_upsert_config(
+        args.metric_id, getattr(args, "user_id", None),
+        lambda c: setattr(c, "enabled", False),
+    )
+    payload["action"] = "disable"
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
+def _cmd_anomalies_set(args: argparse.Namespace) -> None:
+    """Update z-threshold / lookback / method on one metric."""
+    z = getattr(args, "z_threshold", None)
+    lb = getattr(args, "lookback_days", None)
+    method = getattr(args, "method", None)
+
+    def _apply(c) -> None:
+        if z is not None:
+            c.z_threshold = float(z)
+        if lb is not None:
+            c.lookback_days = int(lb)
+        if method is not None:
+            c.method = str(method)
+
+    payload = _anomalies_upsert_config(
+        args.metric_id, getattr(args, "user_id", None), _apply,
+    )
+    payload["action"] = "set"
+    if z is not None:
+        payload["z_threshold"] = float(z)
+    if lb is not None:
+        payload["lookback_days"] = int(lb)
+    if method is not None:
+        payload["method"] = str(method)
+    if args.json:
+        _print_json(payload)
+        return
+    _print_kv(payload)
+
+
 def _cmd_users_list(args: argparse.Namespace) -> None:
     from auth.users import list_users
 
@@ -2420,6 +2601,49 @@ def _build_parser() -> argparse.ArgumentParser:
     spb4 = spb.add_parser("check", help="Run check_and_alert NOW (prints count dict)")
     spb4.add_argument("--json", action="store_true")
     spb4.set_defaults(func=_cmd_perf_budgets_check)
+
+    # ── anomalies ────────────────────────────────────────────────────────
+    p_an = sub.add_parser(
+        "anomalies",
+        help="Time-series anomaly detection (BDI, FBX, SCFI, WTI, ...)",
+    )
+    sa = p_an.add_subparsers(dest="subcommand", required=True, metavar="SUB")
+
+    sa1 = sa.add_parser("check", help="Run detection NOW + print results")
+    sa1.add_argument("--user-id", dest="user_id", default=None,
+                     help="User to scope cooldown to (default: current session)")
+    sa1.add_argument("--json", action="store_true")
+    sa1.set_defaults(func=_cmd_anomalies_check)
+
+    sa2 = sa.add_parser("configs", help="Show the current per-metric configs")
+    sa2.add_argument("--user-id", dest="user_id", default=None)
+    sa2.add_argument("--json", action="store_true")
+    sa2.set_defaults(func=_cmd_anomalies_configs)
+
+    sa3 = sa.add_parser("enable", help="Enable detection for one metric")
+    sa3.add_argument("metric_id")
+    sa3.add_argument("--user-id", dest="user_id", default=None)
+    sa3.add_argument("--json", action="store_true")
+    sa3.set_defaults(func=_cmd_anomalies_enable)
+
+    sa4 = sa.add_parser("disable", help="Disable detection for one metric")
+    sa4.add_argument("metric_id")
+    sa4.add_argument("--user-id", dest="user_id", default=None)
+    sa4.add_argument("--json", action="store_true")
+    sa4.set_defaults(func=_cmd_anomalies_disable)
+
+    sa5 = sa.add_parser("set", help="Update z-threshold / lookback / method on a metric")
+    sa5.add_argument("metric_id")
+    sa5.add_argument("--z-threshold", dest="z_threshold", type=float, default=None,
+                     help="Replacement z-threshold (or %% for pct_drift method)")
+    sa5.add_argument("--lookback-days", dest="lookback_days", type=int, default=None,
+                     help="Replacement lookback window")
+    sa5.add_argument("--method", dest="method", default=None,
+                     choices=["zscore", "pct_drift", "rolling_mean_deviation"],
+                     help="Replacement detection method")
+    sa5.add_argument("--user-id", dest="user_id", default=None)
+    sa5.add_argument("--json", action="store_true")
+    sa5.set_defaults(func=_cmd_anomalies_set)
 
     # ── users ─────────────────────────────────────────────────────────────
     p_us = sub.add_parser("users", help="User-account subcommands")

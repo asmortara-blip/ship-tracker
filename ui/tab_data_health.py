@@ -633,6 +633,151 @@ def _render_llm_usage() -> None:
         st.error("LLM usage panel unavailable.")
 
 
+def _render_anomaly_panel() -> None:
+    """Time-series anomaly detection panel — current hits + per-metric settings.
+
+    Renders just below the perf-budgets panel inside the Tab Performance
+    section. Shows operators which tracked metrics have drifted out of
+    tolerance and lets them edit each metric's lookback / threshold /
+    method inline via an expander. Wrapped in a single try/except so a
+    detection-engine outage cannot break the rest of the Data Health tab.
+    """
+    try:
+        from engine.anomaly_detect import (
+            AnomalyConfig,
+            check_and_alert_anomalies,
+            detect_all_anomalies,
+            get_anomaly_configs,
+            save_anomaly_configs,
+            _VALID_METHODS,
+        )
+
+        st.markdown(
+            f'<div style="font-size:0.72rem;text-transform:uppercase;'
+            f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
+            f'margin:14px 0 6px 0">Anomaly Detection</div>',
+            unsafe_allow_html=True,
+        )
+
+        configs = get_anomaly_configs()
+        results = detect_all_anomalies(configs=configs)
+
+        if results:
+            sev_col_map = {"CRITICAL": C_LOW, "HIGH": C_LOW, "MEDIUM": C_MOD}
+            headers = ["Metric", "Observed", "Baseline", "Z / Drift", "Severity"]
+            rows: list[list[str]] = []
+            for r in results:
+                sev_col = sev_col_map.get(r.severity, C_TEXT2)
+                rows.append([
+                    _sans(r.metric_id, weight=600),
+                    _mono(f"{r.observed_value:.4g}", color=C_TEXT),
+                    _mono(
+                        f"{r.baseline_mean:.4g} ± {r.baseline_std:.4g}",
+                        color=C_TEXT2,
+                    ),
+                    _mono(
+                        f"z={r.z_score:+.2f} / {r.drift_pct:+.2f}%",
+                        color=C_TEXT2,
+                    ),
+                    _sans(r.severity, weight=700, color=sev_col),
+                ])
+            wsj_market_table(headers, rows)
+        else:
+            st.success("No anomalies detected across tracked metrics.")
+
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("Run detection now", key="anomaly_run_now"):
+                counts = check_and_alert_anomalies()
+                st.info(
+                    f"Checked {counts.get('checked', 0)} · detected "
+                    f"{counts.get('detected', 0)} · alerted "
+                    f"{counts.get('alerted', 0)} · skipped (cooldown) "
+                    f"{counts.get('skipped_cooldown', 0)}"
+                )
+
+        with st.expander("Anomaly detection settings", expanded=False):
+            st.caption(
+                "Per-metric configuration. Each metric has a lookback "
+                "window (the baseline), a z-threshold (the test "
+                "statistic that trips a fire), and a method. "
+                "Disable a row to silence it without deleting the "
+                "config."
+            )
+            edited: dict[str, dict[str, Any]] = {}
+            for cfg in configs:
+                st.markdown(
+                    f"<div style='margin-top:6px;font-weight:600;color:{C_TEXT};'>"
+                    f"{cfg.metric_id}</div>",
+                    unsafe_allow_html=True,
+                )
+                c_enabled, c_lookback, c_thresh, c_method = st.columns(
+                    [1, 1, 1, 2]
+                )
+                with c_enabled:
+                    e = st.checkbox(
+                        "Enabled",
+                        value=bool(cfg.enabled),
+                        key=f"anomaly_enabled_{cfg.metric_id}",
+                    )
+                with c_lookback:
+                    lb = st.number_input(
+                        "Lookback (obs)",
+                        min_value=2,
+                        max_value=365,
+                        value=int(cfg.lookback_days),
+                        step=1,
+                        key=f"anomaly_lookback_{cfg.metric_id}",
+                    )
+                with c_thresh:
+                    zt = st.number_input(
+                        "Threshold",
+                        min_value=0.1,
+                        max_value=100.0,
+                        value=float(cfg.z_threshold),
+                        step=0.1,
+                        format="%.2f",
+                        key=f"anomaly_zthresh_{cfg.metric_id}",
+                    )
+                with c_method:
+                    options = list(_VALID_METHODS)
+                    idx = options.index(cfg.method) if cfg.method in options else 0
+                    m = st.selectbox(
+                        "Method",
+                        options=options,
+                        index=idx,
+                        key=f"anomaly_method_{cfg.metric_id}",
+                    )
+                edited[cfg.metric_id] = {
+                    "enabled": e,
+                    "lookback_days": int(lb),
+                    "z_threshold": float(zt),
+                    "method": str(m),
+                    "min_samples": int(cfg.min_samples),
+                }
+
+            if st.button("Save anomaly configs", key="anomaly_save"):
+                new_configs = [
+                    AnomalyConfig(
+                        metric_id=cfg.metric_id,
+                        lookback_days=edited[cfg.metric_id]["lookback_days"],
+                        z_threshold=edited[cfg.metric_id]["z_threshold"],
+                        method=edited[cfg.metric_id]["method"],
+                        min_samples=edited[cfg.metric_id]["min_samples"],
+                        enabled=edited[cfg.metric_id]["enabled"],
+                    )
+                    for cfg in configs
+                ]
+                ok = save_anomaly_configs(new_configs)
+                if ok:
+                    st.success("Anomaly configs saved.")
+                else:
+                    st.error("Couldn't save anomaly configs — see logs.")
+    except Exception as exc:
+        logger.exception(f"Anomaly detection panel render error: {exc}")
+        st.error("Anomaly detection panel unavailable.")
+
+
 def _render_perf_budgets() -> None:
     """Per-tab performance budgets panel — budget vs observed p95 + status.
 
@@ -768,6 +913,13 @@ def _render_tab_perf() -> None:
         except Exception as exc:
             logger.exception(f"Perf budgets sub-panel error: {exc}")
             st.error("Perf budgets panel unavailable.")
+
+        # ── Anomaly detection panel (sits next to perf budgets) ───────
+        try:
+            _render_anomaly_panel()
+        except Exception as exc:
+            logger.exception(f"Anomaly panel sub-panel error: {exc}")
+            st.error("Anomaly detection panel unavailable.")
 
         window = st.selectbox(
             "Window",
