@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
@@ -31,12 +32,14 @@ from data.quality import DataSource
 from utils.tz import format_user_tz
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_HIGH,
     C_LOW,
     C_MOD,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    apply_dark_layout,
     badge,
     metric_card_row,
     page_header,
@@ -70,6 +73,114 @@ def _ssi_label_color(label: str) -> str:
         "Stressed": C_LOW,
         "Severe":   C_LOW,
     }.get(label, C_TEXT2)
+
+
+# ─── Pure figure-builder (testable; no Streamlit) ──────────────────────────
+
+_TREND_COLOR: dict[str, str] = {
+    "Worsening": C_LOW,
+    "Improving": C_HIGH,
+    "Stable":    C_TEXT2,
+}
+
+
+def _build_forecast_quadrant_scatter(forecasts: list) -> go.Figure:
+    """Today × 30-day-forecast stress scatter for every tracked route.
+
+    x = current_stress · y = stress_30d · colour = trend
+    (Worsening / Stable / Improving) · marker size scales with the absolute
+    rate-forecast move so the routes carrying the loudest rate signal stand
+    out. A y=x reference diagonal makes the visual answer "which routes are
+    forecast to worsen (above the line) vs. ease (below the line)?" without
+    requiring the reader to do mental subtraction.
+
+    Pure builder — no ``st.*`` calls — exercised directly by the lock-in
+    tests. Empty / missing forecasts return an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list(forecasts or [])
+    if not items:
+        fig.add_annotation(
+            text="No route forecasts available",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(
+            fig, title="Stress today vs. 30-day forecast", height=300,
+        )
+        return fig
+
+    # Group by trend so each direction gets its own legend entry. We group
+    # *before* extracting axes so the colour & ordering stay deterministic.
+    buckets: dict[str, list] = {"Worsening": [], "Stable": [], "Improving": []}
+    for f in items:
+        trend = getattr(f, "trend", "Stable") or "Stable"
+        buckets.setdefault(trend, []).append(f)
+
+    for trend in ("Worsening", "Stable", "Improving"):
+        bucket = buckets.get(trend, [])
+        if not bucket:
+            continue
+        color = _TREND_COLOR.get(trend, C_TEXT2)
+        x_vals = [float(getattr(f, "current_stress", 0.0)) for f in bucket]
+        y_vals = [float(getattr(f, "stress_30d", 0.0)) for f in bucket]
+        rates  = [float(getattr(f, "rate_forecast_pct", 0.0)) * 100.0
+                  for f in bucket]
+        names  = [
+            (getattr(f, "route_name", "") or getattr(f, "route_id", "") or "—")
+            for f in bucket
+        ]
+        # Marker size scales with |rate move| — clamped to 10–28 px so a
+        # single loud forecast doesn't dwarf everything else.
+        sizes = [max(10, min(28, 10 + 4 * abs(r))) for r in rates]
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=y_vals,
+            mode="markers",
+            name=trend,
+            marker={
+                "size": sizes,
+                "color": color,
+                "line": {"color": C_BG, "width": 1.5},
+                "opacity": 0.88,
+            },
+            customdata=list(zip(names, rates)),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Today: %{x:.2f}<br>"
+                "30-day: %{y:.2f}<br>"
+                "Rate forecast: %{customdata[1]:+.1f}%<br>"
+                "Trend: " + trend + "<extra></extra>"
+            ),
+        ))
+
+    # y = x diagonal — the "no change" reference. Anything above it is
+    # forecast to worsen; anything below is forecast to ease.
+    fig.add_shape(
+        type="line",
+        x0=0, y0=0, x1=1, y1=1,
+        line={"color": "rgba(255,255,255,0.12)", "width": 1, "dash": "dot"},
+        layer="below",
+    )
+    fig.add_annotation(
+        x=0.95, y=0.97, text="y = x", showarrow=False,
+        font={"color": C_TEXT3, "size": 10},
+        xref="x", yref="y",
+    )
+
+    apply_dark_layout(
+        fig, title="Stress today vs. 30-day forecast", height=320,
+    )
+    fig.update_layout(
+        xaxis={"title": "Current stress (0–1)", "range": [0, 1.05],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": "30-day forecast stress (0–1)", "range": [0, 1.05],
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        legend={"orientation": "h", "y": -0.20,
+                "font": {"color": C_TEXT3, "size": 10}},
+        margin={"l": 70, "r": 24, "t": 44, "b": 50},
+    )
+    return fig
 
 
 # ─── Signal assembly ────────────────────────────────────────────────────────
@@ -354,6 +465,16 @@ def _render_inputs_panel(signals: dict) -> None:
                  "sublabel": "Week-over-week"},
             ],
             columns=4,
+        )
+
+    # Quadrant scatter — overview of where stress is and where it's going,
+    # before the per-route detail table that follows. Routes above the y=x
+    # diagonal are forecast to worsen; below, to ease.
+    if forecasts:
+        st.plotly_chart(
+            _build_forecast_quadrant_scatter(forecasts),
+            use_container_width=True,
+            key="briefing_forecast_quadrant",
         )
 
     # Top route forecasts table
