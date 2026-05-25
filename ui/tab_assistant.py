@@ -10,15 +10,20 @@ from __future__ import annotations
 import datetime
 from typing import Optional
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_HIGH,
+    C_LOW,
     C_MOD,
     C_TEXT,
     C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
     badge,
     metric_card_row,
     page_header,
@@ -43,6 +48,106 @@ QUICK_QUESTIONS = [
     "What's the outlook for container rates in Q2 2026?",
     "Which shipping stocks have LONG signals?",
 ]
+
+# ---------------------------------------------------------------------------
+# Topic classifier — used only by the conversation-insights visual below.
+# Standalone (does not gate _build_response) so we can refactor either side
+# without entanglement. The keyword lists deliberately mirror the branches
+# in _build_response so the visual stays in sync with what's actually
+# answerable.
+# ---------------------------------------------------------------------------
+
+_QUESTION_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
+    ("Freight Rates",      ("freight rate", "rate", "asia-europe", "asia europe",
+                            "container rate", "shipping rate")),
+    ("BDI / Dry Bulk",     ("bdi", "baltic", "dry bulk", "capesize", "panamax")),
+    ("Red Sea",            ("red sea", "houthi", "suez reroute", "cape of good hope")),
+    ("Panama Canal",       ("panama", "canal", "drought", "locks")),
+    ("Equity Signals",     ("long signal", "buy signal", "which stock",
+                            "shipping stock")),
+    ("Outlook",            ("q2 2026", "outlook", "forecast", "q2")),
+    ("Carrier Reliability", ("carrier", "reliability", "schedule", "on-time")),
+]
+
+
+def _classify_question(question: str) -> str:
+    """Map a user question to one of the documented categories or 'General'."""
+    if not question:
+        return "General"
+    q = question.lower()
+    for label, keywords in _QUESTION_CATEGORIES:
+        if any(kw in q for kw in keywords):
+            return label
+    return "General"
+
+
+def _build_topic_distribution_bars(messages: list[dict]) -> go.Figure:
+    """Horizontal bar of categories the user has asked about this session.
+
+    Only the user's own questions count toward the tally — assistant
+    messages are skipped. Empty / no-user-messages returns an annotated
+    placeholder figure (the render-layer only shows the chart once enough
+    history exists, but the builder must be safe in isolation too).
+    """
+    user_questions = [
+        m.get("content", "") for m in (messages or [])
+        if m.get("role") == "user"
+    ]
+
+    fig = go.Figure()
+    if not user_questions:
+        fig.add_annotation(
+            text="No questions in this session yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Session topics", height=180)
+        return fig
+
+    # Tally classifications, but only show categories that actually appear.
+    counts: dict[str, int] = {}
+    for q in user_questions:
+        cat = _classify_question(q)
+        counts[cat] = counts.get(cat, 0) + 1
+
+    # Sort ascending so the most-asked category sits at the top of the chart
+    # (Plotly stacks categorical y-values bottom-up).
+    items = sorted(counts.items(), key=lambda kv: kv[1])
+    labels = [k for k, _ in items]
+    values = [v for _, v in items]
+
+    # Colour: top category = C_ACCENT, others = C_TEXT2 so the active focus
+    # stands out without a rainbow.
+    top_cat = items[-1][0]
+    colors = [C_ACCENT if k == top_cat else C_TEXT2 for k in labels]
+
+    fig.add_trace(go.Bar(
+        x=values,
+        y=labels,
+        orientation="h",
+        marker={"color": colors, "line": {"color": C_BG, "width": 1}},
+        text=[str(v) for v in values],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        hovertemplate="<b>%{y}</b><br>%{x} question(s)<extra></extra>",
+        showlegend=False,
+    ))
+    apply_dark_layout(
+        fig,
+        title=f"Session topics — {len(user_questions)} question(s)",
+        height=max(160, 50 + 28 * len(items)),
+    )
+    fig.update_layout(
+        xaxis={"title": None, "showgrid": False,
+               "tickfont": {"color": C_TEXT3, "size": 10}},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 32, "t": 36, "b": 24},
+        bargap=0.40,
+    )
+    return fig
+
 
 # ---------------------------------------------------------------------------
 # CSS
@@ -730,4 +835,19 @@ def render(
                         "quality": "good",
                     }]),
                     unsafe_allow_html=True,
+                )
+
+            # Session topic distribution — only meaningful once a few
+            # questions are in. Hidden below the threshold so the sidebar
+            # doesn't carry empty chrome before the user has asked anything.
+            user_msgs = [m for m in st.session_state.asst_messages
+                         if m.get("role") == "user"]
+            if len(user_msgs) >= 3:
+                section_header("Session Focus",
+                               "How your questions break down by topic.")
+                st.plotly_chart(
+                    _build_topic_distribution_bars(st.session_state.asst_messages),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="assistant_topic_distribution",
                 )
