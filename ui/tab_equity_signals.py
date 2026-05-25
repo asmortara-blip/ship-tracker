@@ -34,6 +34,7 @@ E. Source footer — DataSource.modeled(...)
 """
 from __future__ import annotations
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
@@ -41,6 +42,7 @@ from loguru import logger
 # Never redeclare color constants in a tab module — always import them.
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_CONV,
     C_HIGH,
     C_LOW,
@@ -51,6 +53,7 @@ from ui.styles import (
     C_TEXT2,
     C_TEXT3,
     alert_banner,
+    apply_dark_layout,
     badge,
     insight_card_html,
     metric_card_row,
@@ -286,6 +289,106 @@ def _rank_chip(rank: int, color: str) -> str:
     )
 
 
+# ── Pure figure-builders (testable; no Streamlit) ──────────────────────────
+# Kept free of `st.*` calls so they can be exercised by unit tests without a
+# Streamlit stub. The render-layer functions below wrap them with section
+# headers, captions, and source footers.
+
+def _build_conviction_scatter(ideas: list) -> go.Figure:
+    """Conviction × 30-day-move scatter of every ranked idea.
+
+    Each idea plots at (conviction, 30d move) with a colour set by direction
+    (Bullish / Bearish / Neutral) and a marker size proportional to its
+    cascade depth. Reference lines at 50% conviction and 0% move split the
+    plane into four quadrants — the visual asks "is the market already
+    pricing in what the cascade sees?" without committing to an answer.
+
+    Ideas with no price history (``idea.price is None / 0``) are skipped:
+    their y-value would be undefined and the cascade table below already
+    surfaces them.
+    """
+    plotted = [
+        idea for idea in (ideas or [])
+        if getattr(idea, "price", None) and getattr(idea, "price", 0)
+    ]
+
+    fig = go.Figure()
+    if not plotted:
+        fig.add_annotation(
+            text="No priced ideas to plot",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Conviction vs. 30-Day Move", height=260)
+        return fig
+
+    # Group by direction so the legend reads Bullish / Neutral / Bearish in a
+    # stable order (matches the platform's directional colour convention).
+    groups: dict[str, list] = {"Bullish": [], "Neutral": [], "Bearish": []}
+    for idea in plotted:
+        groups.setdefault(idea.direction, []).append(idea)
+
+    for direction in ("Bullish", "Neutral", "Bearish"):
+        bucket = groups.get(direction, [])
+        if not bucket:
+            continue
+        color = _direction_color(direction)
+        # Marker size: scale cascade depth to a sane 8–24 px range. Lone
+        # ideas with no cascade still show up as the minimum dot.
+        sizes = []
+        for idea in bucket:
+            hops = len(getattr(idea, "cascade_chain", []) or [])
+            sizes.append(max(8, min(24, 8 + hops)))
+        fig.add_trace(go.Scatter(
+            x=[idea.conviction_score * 100 for idea in bucket],
+            y=[idea.change_30d for idea in bucket],
+            mode="markers+text",
+            name=direction,
+            marker={
+                "size": sizes,
+                "color": color,
+                "line": {"color": C_BG, "width": 1.5},
+                "opacity": 0.85,
+            },
+            text=[idea.ticker for idea in bucket],
+            textposition="top center",
+            textfont={"color": C_TEXT3, "size": 10},
+            customdata=[
+                [idea.ticker, idea.conviction_label,
+                 len(getattr(idea, "cascade_chain", []) or [])]
+                for idea in bucket
+            ],
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Direction: " + direction + "<br>"
+                "Conviction: %{x:.0f}%  (%{customdata[1]})<br>"
+                "30d move: %{y:+.1f}%<br>"
+                "Cascade hops: %{customdata[2]}<extra></extra>"
+            ),
+        ))
+
+    # Quadrant reference lines.
+    fig.add_vline(x=50, line={"color": C_RULE, "width": 1, "dash": "dot"})
+    fig.add_hline(y=0,  line={"color": C_RULE, "width": 1, "dash": "dot"})
+
+    apply_dark_layout(
+        fig,
+        title="Conviction vs. 30-Day Move — is the market already there?",
+        height=320,
+    )
+    fig.update_layout(
+        xaxis={"title": "Conviction score (%)", "range": [0, 102],
+               "gridcolor": "rgba(255,255,255,0.05)"},
+        yaxis={"title": "30-day price move (%)", "zeroline": False,
+               "gridcolor": "rgba(255,255,255,0.05)"},
+        legend={"orientation": "h", "y": -0.22,
+                "font": {"color": C_TEXT3, "size": 10}},
+        margin={"l": 70, "r": 24, "t": 44, "b": 50},
+    )
+    return fig
+
+
 # ── Section B: consensus strip ──────────────────────────────────────────────
 
 def _render_distribution_rail(
@@ -397,6 +500,23 @@ def _render_consensus_strip(ideas: list) -> None:
     )
 
     _render_distribution_rail(bullish, neutral, bearish, total)
+
+    # Conviction × 30-day move scatter — quadrant view of where each idea sits
+    # relative to recent price action. Builder is pure (no st.*) so the lock-in
+    # tests exercise it without a Streamlit stub.
+    st.plotly_chart(
+        _build_conviction_scatter(ideas),
+        use_container_width=True,
+        key="equity_signals_conviction_scatter",
+    )
+    st.caption(
+        "Markers sized by cascade depth. Direction colour = Bullish / Neutral / "
+        "Bearish. Reference lines split the plane at 50% conviction and 0% "
+        "30-day move — top-right and bottom-right quadrants show high-conviction "
+        "ideas that already have momentum behind them; left half is lower "
+        "conviction. Unpriced ideas are omitted (their cascade rationale still "
+        "appears in the ledger below)."
+    )
 
 
 # ── Section D: per-idea cascade detail ──────────────────────────────────────
