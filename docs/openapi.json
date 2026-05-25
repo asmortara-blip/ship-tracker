@@ -2983,6 +2983,176 @@
         ]
       }
     },
+    "/api/v1/reports/diff": {
+      "get": {
+        "description": "Returns the per-entry diff between two report payloads in the caller's scope. Categories: ``signal`` / ``route`` / ``sentiment`` / ``risk`` / ``metadata``. Change types: ``added`` / ``removed`` / ``changed``. Signal direction flips and risk-level changes always surface; signal confidence deltas surface above 0.10; route value deltas surface above 5%; sentiment-score deltas surface above 0.05. 400 when ``from`` or ``to`` is missing; 404 when either id is unknown in the caller's scope (no info leak vs another user's id).",
+        "operationId": "diffReports",
+        "parameters": [
+          {
+            "description": "report_id of the older / baseline report.",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "report_id of the newer / current report.",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "entries": {
+                      "items": {
+                        "properties": {
+                          "after": {},
+                          "before": {},
+                          "category": {
+                            "enum": [
+                              "signal",
+                              "route",
+                              "sentiment",
+                              "risk",
+                              "metadata"
+                            ],
+                            "type": "string"
+                          },
+                          "change_type": {
+                            "enum": [
+                              "added",
+                              "removed",
+                              "changed"
+                            ],
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "category",
+                          "change_type",
+                          "key",
+                          "description"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "report_a_id": {
+                      "type": "string"
+                    },
+                    "report_b_id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "properties": {
+                        "added": {
+                          "type": "integer"
+                        },
+                        "changed": {
+                          "type": "integer"
+                        },
+                        "removed": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "report_a_id",
+                    "report_b_id",
+                    "summary",
+                    "entries"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Structured diff payload."
+          },
+          "400": {
+            "description": "Missing ``from`` or ``to`` query parameter."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "description": "One or both report_ids unknown in the caller's scope."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Compare two reports and return a structured diff.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
     "/api/v1/reports/{report_id}/html": {
       "get": {
         "description": "Returns ``text/html``. When the report is password-protected (``public_password_hash`` is set), the caller must additionally supply the password via ``X-Report-Password`` header or ``?password=`` query string — missing → 401, wrong → 401.",

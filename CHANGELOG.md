@@ -1,27 +1,66 @@
 # Changelog
 
-_Generated 2026-05-24 from the git log — covers 308 commits. Conventional-commit prefixes (`feat:`, `fix:`, `ui:`, `engine:`, …) bucket entries into categories._
+_Generated 2026-05-25 from the git log — covers 323 commits. Conventional-commit prefixes (`feat:`, `fix:`, `ui:`, `engine:`, …) bucket entries into categories._
 
 **DO NOT EDIT MANUALLY** — regenerate with `python -m tools.changelog_cli`.
 
-> Looking for the curated Phase 1 milestone notes? They moved to
-> [`docs/CHANGELOG_PHASES.md`](docs/CHANGELOG_PHASES.md) when this file
-> became git-log-derived.
+## 2026-05-25
+
+### 🎨 UI
+
+- **ui+tools** full-text alert search panel + rules CSV import/export (`a2f1c70`)
+  - Two operator surfaces landing together (both touch ui/tab_alerts + docs/DEPLOYMENT.md). Different file zones everywhere else.
+- **ui+docs** retry queue panel in Data Health + DEPLOYMENT section (`e5137ef`)
+  - Finishes commit ba6777c's deferred UI + docs work. Engine + schema + worker + CLI + API shipped in that commit; this one wires the panel into Data Health and documents the surface area.
+
+### ⚙️ Engine
+
+- **engine+api** schema v26 delivery retry queue — persist failed dispatches with exponential backoff (`ba6777c`)
+  - When a webhook/slack/email dispatch fails with a retriable error (HTTP 5xx, connection timeout, SMTP temporary failure), the alert was previously logged and lost. Now it persists in a retry queue; worker walks every 5min with exponential...
+
+### 🔌 API
+
+- **ingress+ui** ICS calendar feed for incidents — subscribe in Google Calendar / Outlook / etc. (`7c049c8`)
+  - Operators today have to dashboard-check incidents. Now they subscribe to a per-user iCalendar URL once + their calendar app shows shipping incidents alongside their meetings. RFC 5545 compliant; stdlib only.
+
+### 🛠 Tools
+
+- **tools** bash + zsh tab-completion auto-generator for all CLI tools (`4c06b9f`)
+  - CLI surface has accumulated 30+ subcommands across ops_cli + 7 other tool CLIs. Auto-generated tab-completion makes them discoverable. Pure-stdlib introspection of the live argparse tree — no hand- maintained scripts to drift.
+
+### ✅ Tests
+
+- **test** harden rate-limit refill timing test against scheduler preemption (`4e90ec6`)
+  - test_rate_limit_allows_after_refill_interval was flaking on full- suite runs (passed in isolation, occasionally failed under load). Root cause: 0.3s sleep at 5 tokens/sec yielded 1.5 tokens — under suite load the test runner can lose eno...
 
 ## 2026-05-24
 
 ### 🎨 UI
 
+- **ui+engine** Rule History tab — fire timeline + ack-rate + audit trail per rule (`69abd41`)
+  - Operators today can't easily answer 'is rule X firing too often?' or 'how often does the trading desk ack alerts from rule Y?' — they have to grep the alerts table by hand. New tab pivots the alert view around a selected rule.
+- **ui+tools** report-to-report diff — structured comparison + Markdown/HTML/JSON rendering (`23b091f`)
+  - Operators today have no way to compare reports beyond opening two browser tabs. New utils/report_diff produces a structured diff (signals added/removed, route value changes, sentiment/risk shifts) with three render targets.
 - **ui+worker** Worker Health dashboard + decorator-tracked job runs (`b1e0caa`)
   - Operators today can't see worker state without grepping logs. New state/worker_runs persistence + ui/tab_worker_health dashboard show every background job's status, last run, duration, and result.
 
 ### ⚙️ Engine
 
+- **engine** time-series anomaly detection — flag drift below static thresholds (`94c326a`)
+  - Rules today fire only on absolute thresholds. Anomaly detector catches subtler patterns: BDI drifting 2%/day for 10 days, freight cost slowly diverging from its 30d baseline. Three statistical methods + per-metric cooldown.
+- **engine+ops** weekly digest — Monday summary auto-dispatched to channels (`0247742`)
+  - Every Monday 14:00 UTC (configurable), compose a summary of the week's alerts / incidents / source health / channel budget usage and dispatch through the user's enabled channels. Opt-in per user.
+- **engine+ui** audit log search panel — filter + grep + CSV/JSONL export (`04c334d`)
+  - Today auth.audit.query_audit only takes user_id + action; the UI panel in tab_data_health is a flat 'recent N events' table. Operators want to: search by user, action prefix, entity_type/id, date range, and free-text grep on detail_json.
+- **engine+api** schema v25 per-channel monthly delivery budgets (`aa64e15`)
+  - Operators want to cap noisy channels: 'Slack #trading-desk gets max 200 alerts/month; PagerDuty gets max 50'. When budget exceeded, deliveries suppress until the next month starts. Calendar-month rolling — no sliding window.
 - **engine** schema v24 alert escalation chains — fire to fallback channel after N min unacked (`1dcb3b6`)
   - When an alert stays unacknowledged for N minutes, escalate to a fallback channel — and another N minutes later → another channel. Per-rule chains, opt-in.
 
 ### 🔌 API
 
+- **api+tools** OpenAPI 3.0 spec generator + public GET /openapi.json + docs (`010d627`)
+  - 25+ endpoints today have prose-only documentation in DEPLOYMENT.md. Now we have a machine-readable OpenAPI 3.0 spec — clients can auto-generate SDKs, and /api/v1/openapi.json serves the spec live (public; no auth) for tooling like Swagge...
 - **ingress** POST /events on webhook listener — accept external alerts (HMAC or bearer) (`e7afe20`)
   - External monitoring tools (Datadog, Sentry, Grafana, custom scripts) can now POST alerts directly into the Ship Tracker pipeline. Two auth modes — HMAC for headless integrations, bearer for scripts with API tokens. At least one must vali...
 
@@ -34,6 +73,10 @@ _Generated 2026-05-24 from the git log — covers 308 commits. Conventional-comm
 
 ### 🛠 Tools
 
+- **tools** alert replay + DB anonymizer — two operator tools (`6d1109e`)
+  - Both agents finished in parallel and share docs/DEPLOYMENT.md, so landing together. Different files everywhere else.
+- **tools** auto-generated CHANGELOG.md from git log — Conventional Commits parser (`26f6ee2`)
+  - Hand-curated changelog wasn't scaling — at 300+ commits the manual maintenance burden was real. Tool parses git log + Conventional- Commits prefixes (feat:/fix:/ui:/engine:/api:/ops:/tools:/docs:/test:) into a date-grouped Markdown. Re-r...
 - **tools** schema_docs — auto-gen SQLite schema + migration history as Markdown (`0695621`)
   - Until now schema docs were scattered across commit messages and migration code. New tool introspects the live DB + parses migrations.py to produce a stable Markdown reference.
 

@@ -1,9 +1,9 @@
 # Ship Tracker - Database Schema
 
-**Schema version:** 24  
-**Generated:** 2026-05-24T21:31:00.715304+00:00  
-**Total tables:** 19  
-**Total rows (this snapshot):** 15653  
+**Schema version:** 26  
+**Generated:** 2026-05-25T17:49:42.993612+00:00  
+**Total tables:** 20  
+**Total rows (this snapshot):** 18121  
 **DB path:** `/Users/aaronmortara/MC/Models/Ship/cache/ship_tracker.db`
 
 ## Table of contents
@@ -17,6 +17,7 @@
 - [audit_events](#audit_events)
 - [data_source_health](#data_source_health)
 - [delivery_channels](#delivery_channels)
+- [delivery_retry_queue](#delivery_retry_queue)
 - [investor_report_snapshots](#investor_report_snapshots)
 - [kv_state](#kv_state)
 - [llm_calls](#llm_calls)
@@ -212,10 +213,34 @@ Empty (0 rows).
 | `quiet_start` | TEXT | no | `''` | - | HH:MM UTC start of the quiet window (empty = no window). |
 | `quiet_end` | TEXT | no | `''` | - | HH:MM UTC end of the quiet window. |
 | `quiet_override_critical` | INTEGER | no | `1` | - | 0/1 — when 1, CRITICAL alerts always deliver during quiet hours. |
+| `monthly_budget` | INTEGER | no | `0` | - |  |
+
+## delivery_retry_queue
+
+Empty (0 rows).
+
+| Column | Type | Nullable | Default | PK | Description |
+|---|---|---|---|---|---|
+| `queue_id` | TEXT | yes | - | yes |  |
+| `alert_id` | TEXT | no | - | - |  |
+| `channel_id` | TEXT | no | - | - |  |
+| `user_id` | TEXT | no | - | - |  |
+| `attempt_count` | INTEGER | no | `0` | - |  |
+| `last_attempt_at` | TEXT | yes | - | - |  |
+| `last_error` | TEXT | yes | - | - |  |
+| `next_attempt_at` | TEXT | no | - | - |  |
+| `enqueued_at` | TEXT | no | - | - |  |
+| `final_status` | TEXT | yes | - | - |  |
+| `final_at` | TEXT | yes | - | - |  |
+
+**Indexes:**
+
+- `idx_retry_alert` (alert_id, channel_id)
+- `idx_retry_due` (final_status, next_attempt_at)
 
 ## investor_report_snapshots
 
-214 rows.
+246 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -241,7 +266,7 @@ Empty (0 rows).
 
 ## llm_calls
 
-256 rows.
+290 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -332,7 +357,7 @@ Empty (0 rows).
 
 ## tab_render_events
 
-15182 rows.
+17584 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|

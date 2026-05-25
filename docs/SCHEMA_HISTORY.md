@@ -1,7 +1,7 @@
 # Ship Tracker - Migration History
 
-**Total migrations:** 23  
-**Generated:** 2026-05-24T21:31:12.321816+00:00  
+**Total migrations:** 25  
+**Generated:** 2026-05-25T17:49:43.054649+00:00  
 
 Source-of-truth: `state/migrations.py`. Each entry is the docstring + any inline SQL extracted via the stdlib `ast` module. Schemas declared via `_SCHEMA_VN` constants in `state/db.py` are documented by their summary; see that module for the literal SQL.
 
@@ -162,4 +162,18 @@ Add the alert escalation chain machinery.
 ```sql
 ALTER TABLE alerts ADD COLUMN
 ```
+
+## v25 - `_migrate_to_v25`
+
+Add the ``monthly_budget`` column to ``delivery_channels``.
+
+**SQL excerpts:**
+
+```sql
+ALTER TABLE delivery_channels ADD COLUMN monthly_budget INTEGER NOT NULL DEFAULT 0
+```
+
+## v26 - `_migrate_to_v26`
+
+Add the ``delivery_retry_queue`` table for the retry-queue machinery.
 

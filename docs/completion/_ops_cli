@@ -20,6 +20,7 @@ _ops_cli() {
                 'annotations:Alert-annotation subcommands'
                 'anomalies:Time-series anomaly detection (BDI, FBX, SCFI, WTI, ...)'
                 'audit:Audit-log subcommands'
+                'calendar:Calendar (ICS) subcommands'
                 'channels:Delivery-channel subcommands'
                 'digest:Weekly-digest subcommands'
                 'escalations:Alert-escalation chain subcommands'
@@ -84,6 +85,16 @@ _ops_cli() {
                         'export:Export audit_events as JSONL (one JSON object per line)'
                     )
                     _describe -t commands 'audit subcommand' _subs
+                    ;;
+                calendar)
+                    local -a _subs
+                    _subs=(
+                        'export:Render the user'\''s incident feed to an .ics file or stdout'
+                        'token-generate:Generate (or rotate) the user'\''s calendar subscription token'
+                        'token-revoke:Clear the saved calendar subscription token for a user'
+                        'token-show:Show the user'\''s current calendar subscription token'
+                    )
+                    _describe -t commands 'calendar subcommand' _subs
                     ;;
                 channels)
                     local -a _subs

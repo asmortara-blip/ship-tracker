@@ -30,7 +30,7 @@ _ops_cli_complete() {
     local suggestions=""
     case "$trail" in
         "")
-            suggestions="alerts annotations anomalies audit channels digest escalations export filters health health-alerts incidents invite mfa perf perf-budgets prefs reports retries rules schedules settings silences status telemetry tokens users"
+            suggestions="alerts annotations anomalies audit calendar channels digest escalations export filters health health-alerts incidents invite mfa perf perf-budgets prefs reports retries rules schedules settings silences status telemetry tokens users"
             ;;
         "alerts")
             suggestions="ack ack-all list metrics"
@@ -81,6 +81,21 @@ _ops_cli_complete() {
             suggestions="export"
             ;;
         "audit export")
+            suggestions=""
+            ;;
+        "calendar")
+            suggestions="export token-generate token-revoke token-show"
+            ;;
+        "calendar export")
+            suggestions=""
+            ;;
+        "calendar token-generate")
+            suggestions=""
+            ;;
+        "calendar token-revoke")
+            suggestions=""
+            ;;
+        "calendar token-show")
             suggestions=""
             ;;
         "channels")
