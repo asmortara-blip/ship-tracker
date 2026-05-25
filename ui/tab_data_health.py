@@ -29,6 +29,7 @@ from loguru import logger
 
 from ui.styles import (
     C_ACCENT,
+    C_BG,
     C_BORDER,
     C_CARD,
     C_HIGH,
@@ -890,6 +891,108 @@ def _render_perf_budgets() -> None:
         st.error("Perf budgets panel unavailable.")
 
 
+def _build_tab_perf_scatter(by_tab: dict) -> go.Figure:
+    """Per-tab latency scatter: x = median ms, y = p95 ms.
+
+    Captures the two dimensions the existing "slowest tabs" table can't
+    show together: how slow a tab typically renders (median) AND how
+    inconsistent that latency is (p95 vs. median). Marker size scales
+    with render count; colour bands by success rate (>=99% green,
+    95–99% amber, <95% red). A y=x reference diagonal marks the ideal
+    flat-distribution case — points well above it have a heavy tail.
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. Empty / None input returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list((by_tab or {}).items())
+    if not items:
+        fig.add_annotation(
+            text="No render telemetry yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Per-tab latency", height=280)
+        return fig
+
+    names:   list[str]   = []
+    medians: list[float] = []
+    p95s:    list[float] = []
+    counts:  list[int]   = []
+    success: list[float] = []
+    for name, stats in items:
+        s = stats or {}
+        names.append(str(name))
+        medians.append(float(s.get("median_ms", 0) or 0))
+        p95s.append(float(s.get("p95_ms", 0) or 0))
+        counts.append(int(s.get("count", 0) or 0))
+        # success_rate may be missing on stats; fall back to 1.0.
+        success.append(float(s.get("success_rate", 1.0) or 0.0))
+
+    # Marker size: scale render count into a 10–32 px range so the
+    # least-used tab still shows up and the most-used doesn't dominate.
+    max_n = max(counts) if counts else 1
+    sizes = [10 + 22 * (c / max_n if max_n else 0.0) for c in counts]
+
+    def _success_color(rate: float) -> str:
+        if rate >= 0.99:
+            return C_HIGH
+        if rate >= 0.95:
+            return C_MOD
+        return C_LOW
+    colors = [_success_color(r) for r in success]
+
+    fig.add_trace(go.Scatter(
+        x=medians,
+        y=p95s,
+        mode="markers+text",
+        marker={
+            "size": sizes,
+            "color": colors,
+            "line": {"color": C_BG, "width": 1.5},
+            "opacity": 0.85,
+        },
+        text=names,
+        textposition="top center",
+        textfont={"color": C_TEXT3, "size": 10},
+        customdata=list(zip(counts, [r * 100 for r in success])),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Median: %{x:.0f} ms<br>"
+            "P95: %{y:.0f} ms<br>"
+            "Renders: %{customdata[0]}<br>"
+            "Success: %{customdata[1]:.2f}%<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # y = x diagonal. Anything above means p95 > median → heavy-tail
+    # latency on that tab.
+    if medians and p95s:
+        axis_max = max(max(medians), max(p95s)) * 1.10
+        fig.add_shape(
+            type="line",
+            x0=0, y0=0, x1=axis_max, y1=axis_max,
+            line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+            layer="below",
+        )
+
+    apply_dark_layout(
+        fig,
+        title="Per-tab latency — median × p95 (size = render count)",
+        height=320,
+    )
+    fig.update_layout(
+        xaxis={"title": "Median latency (ms)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": "P95 latency (ms)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        margin={"l": 70, "r": 24, "t": 44, "b": 50},
+    )
+    return fig
+
+
 def _render_tab_perf() -> None:
     """Tab render-performance telemetry — median/p95 durations + error counts.
 
@@ -985,6 +1088,19 @@ def _render_tab_perf() -> None:
             ],
             columns=4,
         )
+
+        # Median × p95 scatter — captures latency AND variance per tab.
+        # Sits above the slow-tabs table so the operator scans the visual
+        # cross-section first, then drills into the sorted list.
+        try:
+            st.plotly_chart(
+                _build_tab_perf_scatter(by_tab),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="data_health_tab_perf_scatter",
+            )
+        except Exception:
+            logger.exception("Tab perf scatter render failed")
 
         # ── Side-by-side tables ───────────────────────────────────────
         def _fmt_ms(ms: int) -> str:
