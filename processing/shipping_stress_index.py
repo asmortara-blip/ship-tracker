@@ -51,11 +51,12 @@ from routes.route_registry import ROUTES, ROUTES_BY_ID
 # ---------------------------------------------------------------------------
 
 COMPONENT_WEIGHTS: dict[str, float] = {
-    "chokepoint":    0.32,
-    "congestion":    0.22,
-    "weather":       0.18,
-    "rate":          0.18,
-    "vulnerability": 0.10,
+    "chokepoint":    0.29,
+    "congestion":    0.20,
+    "weather":       0.16,
+    "rate":          0.16,
+    "vulnerability": 0.09,
+    "anomaly":       0.10,
 }
 if abs(sum(COMPONENT_WEIGHTS.values()) - 1.0) >= 1e-9:
     # ValueError instead of assert so the invariant still fires under ``python -O``.
@@ -76,6 +77,7 @@ _DRIVER_LABELS: dict[str, str] = {
     "weather":       "Weather risk",
     "rate":          "Freight-rate dislocation",
     "vulnerability": "Structural vulnerability",
+    "anomaly":       "Anomalous drift",
 }
 
 # SSI band thresholds — (upper-bound-exclusive, label, hex colour).
@@ -110,6 +112,7 @@ class RouteStress:
     dominant_driver: str                       # human-readable top component
     affected_chokepoints: list[str] = field(default_factory=list)
     delayed_voyage_count: int = 0              # delayed voyages on this lane
+    anomaly_stress: float = 0.0                # [0, 1] component — drift detector
 
 
 @dataclass
@@ -216,6 +219,67 @@ def _route_weather_stress(route_id: str) -> float:
         logger.exception("compute_route_weather_risk failed for {}", route_id)
         return 0.0
     return round(_clamp(getattr(index, "current_risk_score", 0.0)), 4)
+
+
+def _compute_anomaly_component(
+    route_id: str, freight_data: dict | None
+) -> float:
+    """Anomaly drift stress for *route_id* in [0, 1].
+
+    Catches *drift* — a route slowly degrading without any single chokepoint /
+    congestion / weather / rate component crossing its own threshold. We hand
+    the route's rate series to :func:`engine.anomaly_detect.detect_anomaly`
+    with default config and map the result onto the SSI's [0, 1] axis:
+
+      * not detected (or too few samples)  -> 0.0
+      * detected at MEDIUM severity        -> 0.40
+      * detected at HIGH severity          -> 0.70
+      * detected at CRITICAL severity      -> 1.00
+
+    NEVER raises. Any failure inside the detector — bad config, empty series,
+    pandas dependency missing — short-circuits to 0.0 so the SSI still
+    composes cleanly. Lazy import of :mod:`engine.anomaly_detect` avoids the
+    circular-import risk at module-import time.
+    """
+    if not freight_data:
+        return 0.0
+    try:
+        entry = freight_data.get(route_id)
+        if entry is None:
+            return 0.0
+        rates = _extract_rate_series(entry)
+        if rates is None or len(rates) < 14:
+            return 0.0
+
+        # Lazy import — keeps shipping_stress_index importable without
+        # engine.anomaly_detect being available.
+        import pandas as pd
+        from engine.anomaly_detect import AnomalyConfig, detect_anomaly
+
+        series = pd.Series(rates)
+        result = detect_anomaly(
+            series,
+            AnomalyConfig(
+                metric_id=f"route_rate_{route_id}",
+                lookback_days=30,
+                z_threshold=2.5,
+                method="zscore",
+                min_samples=14,
+            ),
+        )
+        if not getattr(result, "detected", False):
+            return 0.0
+        severity = (getattr(result, "severity", "") or "").upper()
+        if severity == "CRITICAL":
+            return 1.0
+        if severity == "HIGH":
+            return 0.70
+        if severity == "MEDIUM":
+            return 0.40
+        return 0.0
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("_compute_anomaly_component failed for {}", route_id)
+        return 0.0
 
 
 def _route_rate_stress(route_id: str, freight_data: dict | None) -> float:
@@ -536,12 +600,15 @@ def compute_shipping_stress(
             logger.exception("score_vulnerability failed for {}", route_id)
             vulnerability = 0.0
 
+        anomaly_stress = _compute_anomaly_component(route_id, freight_data)
+
         components = {
             "chokepoint":    chokepoint_stress,
             "congestion":    congestion_stress,
             "weather":       weather_stress,
             "rate":          rate_stress,
             "vulnerability": vulnerability,
+            "anomaly":       anomaly_stress,
         }
 
         # Weighted blend -> per-route composite stress score.
@@ -572,6 +639,7 @@ def compute_shipping_stress(
                 dominant_driver=dominant_driver,
                 affected_chokepoints=affected_chokepoints,
                 delayed_voyage_count=delayed_by_route.get(route_id, 0),
+                anomaly_stress=round(anomaly_stress, 4),
             )
         )
 

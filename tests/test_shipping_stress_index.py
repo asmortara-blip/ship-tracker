@@ -43,6 +43,7 @@ def test_component_weights_all_non_negative() -> None:
 def test_component_weights_expected_keys() -> None:
     assert set(COMPONENT_WEIGHTS) == {
         "chokepoint", "congestion", "weather", "rate", "vulnerability",
+        "anomaly",   # added when the SSI gained a drift-detector component
     }
 
 
