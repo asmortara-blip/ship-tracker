@@ -1,0 +1,1255 @@
+{
+  "clis": [
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path to the source SQLite DB (opened READ-ONLY).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--source",
+          "required": true
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path where the anonymized copy is written. Required unless --dry-run is set.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--output",
+          "required": false
+        },
+        {
+          "choices": [
+            "standard",
+            "aggressive",
+            "redact-only"
+          ],
+          "default": "standard",
+          "help": "Anonymization profile. 'standard' scrubs PII + secrets but keeps alert/report shape. 'aggressive' also empties annotation bodies + audit detail_json. 'redact-only' replaces strings but preserves row counts. Default: standard.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--profile",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Show what would change without writing the output file. Source DB is opened READ-ONLY; no mutation happens.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--dry-run",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Print per-table scrubbed/dropped counts to stderr.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--verbose",
+          "required": false
+        }
+      ],
+      "description": "Anonymize a copy of the SQLite state DB so it's safe to share with a teammate, populate staging, or hand to QA.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.anonymize_cli`` \u2014 operator-facing CLI for the DB\nanonymizer.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/anonymize_cli.py",
+      "module": "tools.anonymize_cli",
+      "parse_error": "",
+      "prog": "python -m tools.anonymize_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [
+            "text",
+            "json",
+            "markdown"
+          ],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Exit 1 if any validator reports healthy=False. Useful as a CI gate.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--strict",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Include per-class scorecard rows under each validator in the text output (no effect on json/markdown formats). Useful for triage when a validator goes red.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--verbose",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Run the validators and write a JSON snapshot to PATH. The snapshot captures every validator's healthy flag + headline + raw_fields and is the reference for --compare-baseline. Does not print the normal report.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--save-baseline",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Run the validators and report drift vs the JSON snapshot at PATH (previously written by --save-baseline). Exits 1 on any healthy-flag flip or raw-field drift beyond the per-metric tolerance.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--compare-baseline",
+          "required": false
+        }
+      ],
+      "description": "tools/backtests.py \u2014 run every platform backtest in one command.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/backtests.py \u2014 run every platform backtest in one command.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/backtests.py",
+      "module": "tools.backtests",
+      "parse_error": "",
+      "prog": "python -m tools.backtests"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: create",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<create>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: list",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<list>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: restore",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<restore>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: verify",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<verify>",
+          "required": false
+        }
+      ],
+      "description": "Backup + restore CLI for the Ship Tracker SQLite state DB and the generated-reports tree.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.backup_cli`` \u2014 backup + restore CLI for the SQLite\nstate DB and the generated-reports tree.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/backup_cli.py",
+      "module": "tools.backup_cli",
+      "parse_error": "",
+      "prog": "python -m tools.backup_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": "90d",
+          "help": "Lower-bound cutoff. Accepts an absolute date (`2026-01-01`), a git relative string (`2 weeks ago`), or the shorthand `30d` / `12w` / `6m` / `1y` (default: 90d).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--since",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Upper-bound cutoff. Same shape as --since (default: none).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--until",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Max number of commits to include (default: no cap).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--limit",
+          "required": false
+        },
+        {
+          "choices": [
+            "date",
+            "category",
+            "flat"
+          ],
+          "default": "date",
+          "help": "How to group commits in the rendered Markdown (default: date).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--group-by",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": "Changelog",
+          "help": "Top-level title (default: Changelog).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--title",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Output file path (default: /Users/aaronmortara/MC/Models/Ship/CHANGELOG.md).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Print to stdout instead of writing a file.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--print",
+          "required": false
+        }
+      ],
+      "description": "Regenerate CHANGELOG.md from the git log. Default window: the last 90 days, grouped by date.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.changelog_cli`` \u2014 regenerate ``CHANGELOG.md``.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/changelog_cli.py",
+      "module": "tools.changelog_cli",
+      "parse_error": "",
+      "prog": "python -m tools.changelog_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": "docs/CLI_INDEX.md",
+          "help": "Markdown output path (default: docs/CLI_INDEX.md).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out-md",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": "docs/cli_registry.json",
+          "help": "JSON registry output path (default: docs/cli_registry.json).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out-json",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Suppress stdout summary (useful for cron / CI).",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--quiet",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Verify-only mode \u2014 no writes. Exits 1 if the on-disk files differ from what the discoverer would produce. The CI gate.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--verify",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Log discovery failures to stderr (each CLI that falls through to a placeholder entry).",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--verbose",
+          "required": false
+        }
+      ],
+      "description": "Walk tools/ + cli/ and emit a CLI index markdown + JSON registry. Use --verify in CI to gate doc drift.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``tools.cli_index`` \u2014 auto-generate a CLI registry + markdown index.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/cli_index.py",
+      "module": "tools.cli_index",
+      "parse_error": "",
+      "prog": "python -m tools.cli_index"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: all",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<all>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: bash",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<bash>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: zsh",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<zsh>",
+          "required": false
+        }
+      ],
+      "description": "Generate bash / zsh tab-completion scripts for the project's argparse-based CLIs.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.completion_cli`` \u2014 generate bash / zsh tab-completion\nscripts for the project's argparse CLIs.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/completion_cli.py",
+      "module": "tools.completion_cli",
+      "parse_error": "",
+      "prog": "python -m tools.completion_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": false,
+          "help": "Run the deeper PRAGMA integrity_check (page-by-page scan) instead of the cheaper quick_check. Slow on multi-GB DBs.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--full",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Auto-fix safe issues: mark expired api_tokens inactive, mark expired invitations consumed, delete alert_silences expired >30 days. Does NOT touch integrity_check or foreign_key_check failures.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--fix",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path to a specific .db file. Default: live cache/ship_tracker.db as resolved through state.db.DB_PATH.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--db",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Emit machine-readable JSON instead of the text report.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--json",
+          "required": false
+        }
+      ],
+      "description": "DB integrity check + auto-fix CLI for the Ship Tracker SQLite state database.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.db_check_cli`` \u2014 DB integrity check CLI for the\nShip Tracker SQLite state database.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/db_check_cli.py",
+      "module": "tools.db_check_cli",
+      "parse_error": "",
+      "prog": "python -m tools.db_check_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Comma-separated list of container types to snapshot (e.g. '40FT_DRY,40FT_REEFER'). Defaults to {','.join(DEFAULT_CONTAINER_TYPES)}.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--container-types",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Override the snapshot tree root. Defaults to processing.port_supply_history.SNAPSHOT_ROOT.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--root",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Snapshot date in YYYY-MM-DD format. Defaults to UTC today.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--today",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "help": "Per-port deficit delta threshold for the diff comparator (default: 1.0).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--min-diff-delta-days",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        }
+      ],
+      "description": "Run the daily port-supply snapshot job for every container type in one pass. Per-container failures don't poison the rest of the fan-out.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/multi_container_snapshot_cli.py \u2014 fan-out daily snapshot runner.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/multi_container_snapshot_cli.py",
+      "module": "tools.multi_container_snapshot_cli",
+      "parse_error": "",
+      "prog": "python -m tools.multi_container_snapshot_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Output path (default: docs/openapi.json).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Output path (default: docs/openapi.yaml).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Write the spec as JSON (default: docs/openapi.json).",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<json>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Smoke-validate the spec (exits non-zero on error).",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<validate>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Write the spec as YAML (default: docs/openapi.yaml).",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<yaml>",
+          "required": false
+        }
+      ],
+      "description": "Generate / validate the Ship Tracker OpenAPI 3.0 spec.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/openapi_cli.py \u2014 write / validate the OpenAPI spec from the CLI.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/openapi_cli.py",
+      "module": "tools.openapi_cli",
+      "parse_error": "",
+      "prog": "python -m tools.openapi_cli"
+    },
+    {
+      "args": [],
+      "description": "Entry point so ``python -m tools.ops`` works the same as\n``python -m tools.ops_cli``.",
+      "directory": "tools",
+      "discovered_via": "placeholder",
+      "docstring": "Entry point so ``python -m tools.ops`` works the same as\n``python -m tools.ops_cli``.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/ops.py",
+      "module": "tools.ops",
+      "parse_error": "",
+      "prog": "python -m tools.ops"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: alerts",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<alerts>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: annotations",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<annotations>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: anomalies",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<anomalies>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: audit",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<audit>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: calendar",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<calendar>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: channels",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<channels>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: digest",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<digest>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: disruption",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<disruption>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: escalations",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<escalations>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: export",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<export>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: filters",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<filters>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: health",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<health>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: health-alerts",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<health-alerts>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: incidents",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<incidents>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: invite",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<invite>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: mfa",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<mfa>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: perf",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<perf>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: perf-budgets",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<perf-budgets>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: prefs",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<prefs>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: reports",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<reports>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: retries",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<retries>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: rules",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<rules>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: schedules",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<schedules>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: settings",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<settings>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: silences",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<silences>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: status",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<status>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: telemetry",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<telemetry>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: tokens",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<tokens>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: users",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<users>",
+          "required": false
+        }
+      ],
+      "description": "Operator CLI for Ship Tracker admin tasks.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.ops`` \u2014 operator CLI for common admin tasks.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/ops_cli.py",
+      "module": "tools.ops_cli",
+      "parse_error": "",
+      "prog": "python -m tools.ops"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": 7,
+          "help": "Number of day-to-day pairs to walk (default 7).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--window-days",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": "40FT_DRY",
+          "help": "Container type to walk (default 40FT_DRY).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--container-type",
+          "required": false
+        },
+        {
+          "choices": [
+            "text",
+            "json",
+            "markdown"
+          ],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Write the report to this path instead of stdout.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Snapshot root override (defaults to the SNAPSHOT_ROOT in processing.port_supply_history). Useful for tests + ad-hoc replay of an archived snapshot tree.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--root",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "help": "Per-pair minimum |deficit_days| to count as a material move (default 1.0). Mirrors the --min-delta knob on the per-day diff CLI.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--min-delta",
+          "required": false
+        }
+      ],
+      "description": "Aggregate Port Supply Lines snapshot diffs over a window (e.g. last week) and rank ports by volatility.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/port_supply_bulk_diff.py \u2014 aggregate snapshot deltas over a window.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_bulk_diff.py",
+      "module": "tools.port_supply_bulk_diff",
+      "parse_error": "",
+      "prog": "python -m tools.port_supply_bulk_diff"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path to the earlier summary CSV (e.g. yesterday's export).",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "before",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path to the later summary CSV (e.g. today's export).",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "after",
+          "required": false
+        },
+        {
+          "choices": [
+            "text",
+            "json",
+            "markdown"
+          ],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "help": "Minimum |deficit_days| change to count as a 'material' move (default 1.0). Severity-band shifts + watchlist transitions are reported regardless.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--min-delta",
+          "required": false
+        }
+      ],
+      "description": "Diff two Port Supply Lines summary snapshots.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/port_supply_diff.py \u2014 diff two Port Supply Lines snapshots.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_diff.py",
+      "module": "tools.port_supply_diff",
+      "parse_error": "",
+      "prog": "python -m tools.port_supply_diff"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": "all",
+          "help": "Comma-separated view names to export, or 'all' (default). Valid: {', '.join(ALL_VIEWS)}.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--views",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": ".",
+          "help": "Directory to write the CSVs into (default: current dir).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out-dir",
+          "required": false
+        },
+        {
+          "choices": [
+            "40FT_DRY",
+            "20FT_DRY",
+            "40FT_HC",
+            "40FT_REEFER",
+            "20FT_TANK"
+          ],
+          "default": "40FT_DRY",
+          "help": "Container-type slice of regional supply state (default: 40FT_DRY).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--container-type",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Deficit-watchlist firing threshold in days (negative = deficit; default -3.0).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--threshold-days",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Suppress stdout (useful for cron). Exit code still signals success.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--quiet",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Emit a JSON manifest instead of the human-readable text report. Pairs well with --quiet=false for scripting.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--json",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Also write a single .xlsx workbook (all 5 sheets bundled) alongside the CSV files. Useful for analysts who prefer a single file with sheets they can pivot across.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--xlsx",
+          "required": false
+        }
+      ],
+      "description": "tools/port_supply_export.py \u2014 CLI bulk-export for Port Supply Lines CSVs.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/port_supply_export.py \u2014 CLI bulk-export for Port Supply Lines CSVs.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_export.py",
+      "module": "tools.port_supply_export",
+      "parse_error": "",
+      "prog": "python -m tools.port_supply_export"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: bulk",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<bulk>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: replay",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<replay>",
+          "required": false
+        }
+      ],
+      "description": "Replay historical alerts to a delivery channel without consuming budget.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.replay_cli`` \u2014 replay historical alerts to a channel.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/replay_cli.py",
+      "module": "tools.replay_cli",
+      "parse_error": "",
+      "prog": "python -m tools.replay_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: history",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<history>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: json",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<json>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: markdown",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<markdown>",
+          "required": false
+        }
+      ],
+      "description": "Generate Markdown / JSON documentation of the SQLite schema from a live DB + migration history.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.schema_docs_cli`` - generate DB schema documentation.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/schema_docs_cli.py",
+      "module": "tools.schema_docs_cli",
+      "parse_error": "",
+      "prog": "python -m tools.schema_docs_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Project root (defaults to parent of tools/)",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--root",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "CSV output path (default: docs/audit-baseline.csv)",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Also print the top-20 to stdout",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--print",
+          "required": false
+        }
+      ],
+      "description": "Design-system audit tool.",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "Design-system audit tool.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/styles_audit.py",
+      "module": "tools.styles_audit",
+      "parse_error": "",
+      "prog": "python -m tools.styles_audit"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "Run a single named scenario (case-insensitive). Repeat the flag to run a list.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--scenario",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Run every BUILTIN_SCENARIOS in turn.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--all",
+          "required": false
+        },
+        {
+          "choices": [
+            "40FT_DRY",
+            "20FT_DRY",
+            "40FT_HC",
+            "40FT_REEFER",
+            "20FT_TANK"
+          ],
+          "default": "40FT_DRY",
+          "help": "Container-type slice of regional supply state (default: 40FT_DRY).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--container-type",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": 10,
+          "help": "Per-scenario, cap on the most-impacted-companies listing (default 10).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--top-n",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Optional file path to write the report to (in addition to stdout).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--out",
+          "required": false
+        }
+      ],
+      "description": "Quantify the company-level impact of pre-canned supply-line shocks (Suez closure, Shanghai 50%, Panama drought, etc.).",
+      "directory": "tools",
+      "discovered_via": "ast",
+      "docstring": "tools/supply_shock_cli.py \u2014 CLI runner for supply-shock scenarios.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/supply_shock_cli.py",
+      "module": "tools.supply_shock_cli",
+      "parse_error": "",
+      "prog": "python -m tools.supply_shock_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: clear",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<clear>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: flaky",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<flaky>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: history",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<history>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: ingest",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<ingest>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: run",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<run>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: slow",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<slow>",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "subcommand: summary",
+          "is_flag": false,
+          "is_positional": true,
+          "name": "<summary>",
+          "required": false
+        }
+      ],
+      "description": "Track + surface flaky tests from pytest JUnit XML.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "``python -m tools.test_flakiness_cli`` \u2014 flaky-test tracker CLI.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/test_flakiness_cli.py",
+      "module": "tools.test_flakiness_cli",
+      "parse_error": "",
+      "prog": "python -m tools.test_flakiness_cli"
+    }
+  ],
+  "total": 19,
+  "version": 1
+}
