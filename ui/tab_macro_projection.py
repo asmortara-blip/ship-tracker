@@ -993,7 +993,13 @@ def _build_component_predictiveness_bars(scorecards: list) -> go.Figure:
 
     # Sort ascending so Plotly's bottom-up axis puts the best at the TOP.
     ranked = sorted(items, key=lambda sc: float(getattr(sc, "sign_agreement_rate", 0.0)))
-    labels = [_SSI_COMPONENT_DISPLAY.get(sc.component, sc.component.title())
+    labels = [_SSI_COMPONENT_DISPLAY.get(
+              sc.component,
+              _SCHI_DIM_DISPLAY.get(
+                  sc.component,
+                  sc.component.replace("_", " ").title(),
+              ),
+          )
               for sc in ranked]
     rates  = [float(sc.sign_agreement_rate) for sc in ranked]
     weights = [float(getattr(sc, "weight", 0.0)) for sc in ranked]
@@ -1072,7 +1078,10 @@ def _build_horizon_decay_heatmap(report) -> go.Figure:
         return fig
 
     grid = report.rates_grid()
-    components = [_SSI_COMPONENT_DISPLAY.get(c, c.title())
+    components = [_SSI_COMPONENT_DISPLAY.get(
+                      c,
+                      _SCHI_DIM_DISPLAY.get(c, c.replace("_", " ").title()),
+                  )
                   for c in report.components]
     horizons   = [f"{h}d" for h in report.horizons]
     text       = [[f"{v * 100:.0f}%" for v in row] for row in grid]
@@ -1145,7 +1154,10 @@ def _build_collinearity_heatmap(report) -> go.Figure:
         return fig
 
     matrix     = report.corr_matrix()
-    components = [_SSI_COMPONENT_DISPLAY.get(c, c.title())
+    components = [_SSI_COMPONENT_DISPLAY.get(
+                      c,
+                      _SCHI_DIM_DISPLAY.get(c, c.replace("_", " ").title()),
+                  )
                   for c in report.components]
     text = [[f"{v:+.2f}" for v in row] for row in matrix]
 
@@ -1194,6 +1206,76 @@ def _build_collinearity_heatmap(report) -> go.Figure:
         margin={"l": 8, "r": 60, "t": 60, "b": 24},
     )
     return fig
+
+
+def _render_schi_dimension_predictiveness() -> None:
+    """Surface the per-SCHI-dimension backtest scorecard.
+
+    Symmetric companion to ``_render_component_predictiveness`` (the SSI
+    version). Uses ``engine.schi_component_validation`` — same three-axis
+    answer (predictiveness, horizon decay, collinearity) but for SCHI's
+    6 dimensions (port capacity, freight cost pressure, macro environment,
+    chokepoint risk, inventory cycle, seasonal factors).
+
+    Lazy-imported so a backtest-module failure can't break the tab.
+    """
+    try:
+        from engine.schi_component_validation import (
+            SCHI_DIMENSIONS,
+            compute_schi_collinearity,
+            validate_schi_components,
+            validate_schi_horizons,
+        )
+    except Exception:
+        logger.exception("Macro Projection — SCHI validator import failed")
+        return
+
+    section_header(
+        "SCHI Dimension Predictiveness",
+        "Same three-axis backtest as the SSI panel above, applied to the "
+        "Supply Chain Health Index's six dimensions. Sign-agreement = % of "
+        "windows where the dimension's stress delta predicted the direction "
+        "of the forward market move.",
+    )
+    try:
+        report = validate_schi_components()
+        decay  = validate_schi_horizons(horizons=(1, 7, 14, 30, 60))
+        collin = compute_schi_collinearity()
+    except Exception:
+        logger.exception("Macro Projection — SCHI validator failed")
+        _empty_state(
+            "SCHI validator failed — see logs.",
+            accent=C_MOD,
+        )
+        return
+
+    # Per-dimension predictiveness bars (re-uses the SSI builder since the
+    # ComponentScorecard shape is identical across the two validators).
+    st.plotly_chart(
+        _build_component_predictiveness_bars(report.scorecards),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_schi_dimension_predictiveness",
+    )
+    st.caption(report.summary)
+
+    # Horizon-decay heatmap
+    st.plotly_chart(
+        _build_horizon_decay_heatmap(decay),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_schi_horizon_decay",
+    )
+    st.caption(decay.summary)
+
+    # Collinearity heatmap
+    st.plotly_chart(
+        _build_collinearity_heatmap(collin),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_schi_dimension_collinearity",
+    )
+    st.caption(collin.summary)
 
 
 def _render_component_predictiveness() -> None:
@@ -1535,6 +1617,14 @@ def render(
         except Exception:
             logger.exception("Macro Projection — component predictiveness failed")
             st.error("Component predictiveness panel unavailable.")
+        section_divider()
+
+        # ── D3. SCHI dimension-predictiveness backtest (symmetric to SSI) ──────
+        try:
+            _render_schi_dimension_predictiveness()
+        except Exception:
+            logger.exception("Macro Projection — SCHI predictiveness failed")
+            st.error("SCHI dimension predictiveness panel unavailable.")
         section_divider()
 
         # ── E. Leading-indicator context strip ──────────────────────────────────
