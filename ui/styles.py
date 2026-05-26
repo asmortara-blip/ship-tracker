@@ -1349,11 +1349,20 @@ def kpi_card(
 
 
 def badge(text: str, color: str = C_ACCENT) -> str:
-    """Return HTML for a colored status badge."""
+    """Return HTML for a colored status badge.
+
+    Includes ``role="status"`` + ``aria-label`` so screen readers announce
+    the badge content as a status, not just inline text. Every badge in
+    the platform inherits this — there is no other public entry point.
+    """
     bg    = _hex_to_rgba(color, 0.1)
     bord  = _hex_to_rgba(color, 0.25)
+    # Strip HTML tags from the aria-label so a badge containing a nested
+    # <span> doesn't bleed markup into the accessibility tree.
+    import re as _re
+    aria = _re.sub(r"<[^>]+>", "", str(text)).strip()
     return (
-        f'<span class="badge" '
+        f'<span class="badge" role="status" aria-label="{aria}" '
         f'style="background:{bg}; color:{color}; border:1px solid {bord};">'
         f'{text}</span>'
     )

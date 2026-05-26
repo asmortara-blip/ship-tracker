@@ -158,7 +158,7 @@ def _booking_market_dashboard(freight_data) -> None:
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking dashboard error: {exc}")
-        st.info("Booking dashboard data unavailable.")
+        st.warning("Booking dashboard data unavailable.")
 
 
 # ── Section 2: Rate Comparison Tool ───────────────────────────────────────────
@@ -223,7 +223,7 @@ def _rate_comparison_tool() -> None:
         )
     except Exception as exc:
         logger.warning(f"Rate comparison error: {exc}")
-        st.info("Rate comparison unavailable.")
+        st.warning("Rate comparison unavailable.")
 
 
 # ── Section 3: Optimal Booking Window ─────────────────────────────────────────
@@ -301,7 +301,7 @@ def _optimal_booking_window() -> None:
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking window error: {exc}")
-        st.info("Booking window analysis unavailable.")
+        st.warning("Booking window analysis unavailable.")
 
 
 # ── Section 4: Contract vs Spot Analysis ──────────────────────────────────────
@@ -354,7 +354,7 @@ def _contract_vs_spot_analysis() -> None:
         )
     except Exception as exc:
         logger.warning(f"Contract vs spot error: {exc}")
-        st.info("Contract vs spot analysis unavailable.")
+        st.warning("Contract vs spot analysis unavailable.")
 
 
 # ── Section 5: Booking Calendar ───────────────────────────────────────────────
@@ -405,7 +405,7 @@ def _booking_calendar() -> None:
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Booking calendar error: {exc}")
-        st.info("Booking calendar unavailable.")
+        st.warning("Booking calendar unavailable.")
 
 
 # ── Section 6: Spot Rate Alert ─────────────────────────────────────────────────
@@ -478,7 +478,7 @@ def _spot_rate_alert() -> None:
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Spot rate alert error: {exc}")
-        st.info("Spot rate alert unavailable.")
+        st.warning("Spot rate alert unavailable.")
 
 
 # ── Section 7: Space Availability by Carrier ──────────────────────────────────
@@ -538,7 +538,7 @@ def _space_availability_by_carrier() -> None:
         )
     except Exception as exc:
         logger.warning(f"Space availability error: {exc}")
-        st.info("Space availability data unavailable.")
+        st.warning("Space availability data unavailable.")
 
 
 # ── Main render ────────────────────────────────────────────────────────────────
