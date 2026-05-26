@@ -150,3 +150,216 @@ def test_main_function_calls_snapshot_job_under_try_except() -> None:
     # ...and is wrapped in a try block (logger.warning pairs with the
     # try/except idiom used by every sibling job).
     assert "port supply snapshot step failed" in src
+
+
+# ── 5. Digest persistence — quiet day vs material day ────────────────────
+
+
+def test_digest_paths_key_always_in_returned_dict(
+    isolate_snapshot_root,
+) -> None:
+    """``digest_paths`` is part of the documented wrapper return shape
+    every invocation regardless of whether anything was written.
+    Callers can rely on ``out['digest_paths']`` always being a dict."""
+    out = sched.run_port_supply_snapshot_job()
+    assert "digest_paths" in out
+    assert isinstance(out["digest_paths"], dict)
+
+
+def test_quiet_day_writes_no_digest_files(isolate_snapshot_root) -> None:
+    """First-ever run (no prior to diff) is a quiet day — no digest
+    artifacts may land on disk."""
+    out = sched.run_port_supply_snapshot_job()
+    # First-ever run has no prior snapshot -> diff is None -> quiet day.
+    assert out["diff_present"] is False
+    assert out["digest_paths"] == {}
+    # Belt-and-braces: walk every subdirectory under the isolated root
+    # and confirm zero digest_*.{html,txt} files were created.
+    digest_files = list(isolate_snapshot_root.rglob("digest_*"))
+    assert digest_files == []
+
+
+def test_material_day_writes_all_three_digest_artifacts(
+    isolate_snapshot_root, monkeypatch,
+) -> None:
+    """When the diff has material content, all three digest artifacts
+    (html, txt, subject.txt) must land under the snapshot date dir."""
+    import processing.port_supply_history as psh
+    from tools.port_supply_diff import DiffReport, PortDelta
+
+    # Build a synthetic SnapshotJobResult with a populated diff so we
+    # can deterministically exercise the digest-persistence branch.
+    today_iso = "2026-05-26"
+    snapshot_dir = isolate_snapshot_root / today_iso
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "port_supply_summary_40ft_dry.csv"
+    snapshot_path.write_text("# stub\nlocode\nUSLAX\n", encoding="utf-8")
+
+    diff = DiffReport(n_ports_before=2, n_ports_after=2)
+    diff.severity_shifts.append(PortDelta(
+        locode="USLAX", name="Los Angeles", region="North America",
+        severity_before="WATCH", severity_after="STRESSED",
+        severity_shifted=True,
+        deficit_before=1.0, deficit_after=-3.0, deficit_delta=-4.0,
+        entered_deficit=False, exited_deficit=False,
+        tickers_before=[], tickers_after=[],
+        tickers_added=[], tickers_removed=[],
+    ))
+
+    def _stub_job(**_kwargs):
+        return psh.SnapshotJobResult(
+            ok=True, today=today_iso, container_type="40FT_DRY",
+            snapshot_path=str(snapshot_path), bytes_written=100,
+            regional_snapshot_path="", regional_bytes_written=0,
+            prior_snapshot_date="2026-05-25", diff=diff, error_msg="",
+        )
+
+    monkeypatch.setattr(psh, "run_daily_snapshot_job", _stub_job)
+
+    out = sched.run_port_supply_snapshot_job()
+    assert out["ok"] is True
+    paths = out["digest_paths"]
+    assert set(paths.keys()) == {"html", "text", "subject"}
+    # Every artifact lives under the snapshot's date dir.
+    for kind, p in paths.items():
+        assert Path(p).exists(), f"{kind} digest missing: {p}"
+        assert Path(p).parent == snapshot_dir, (
+            f"{kind} digest landed in wrong dir: {p}"
+        )
+    # File-name convention: digest_<container>.{html,txt,subject.txt}
+    assert Path(paths["html"]).name == "digest_40ft_dry.html"
+    assert Path(paths["text"]).name == "digest_40ft_dry.txt"
+    assert Path(paths["subject"]).name == "digest_40ft_dry.subject.txt"
+
+
+def test_digest_subject_artifact_contains_summary(
+    isolate_snapshot_root, monkeypatch,
+) -> None:
+    """The persisted .subject.txt artifact must contain the human-
+    readable subject line so downstream channels can pick it up
+    verbatim without re-rendering."""
+    import processing.port_supply_history as psh
+    from tools.port_supply_diff import DiffReport, PortDelta
+
+    snapshot_dir = isolate_snapshot_root / "2026-05-26"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "port_supply_summary_40ft_dry.csv"
+    snapshot_path.write_text("# stub\nlocode\nUSLAX\n", encoding="utf-8")
+
+    diff = DiffReport(n_ports_before=1, n_ports_after=1)
+    diff.severity_shifts.append(PortDelta(
+        locode="USLAX", name="Los Angeles", region="North America",
+        severity_before="WATCH", severity_after="STRESSED",
+        severity_shifted=True,
+        deficit_before=1.0, deficit_after=-3.0, deficit_delta=-4.0,
+        entered_deficit=False, exited_deficit=False,
+        tickers_before=[], tickers_after=[],
+        tickers_added=[], tickers_removed=[],
+    ))
+
+    def _stub_job(**_kwargs):
+        return psh.SnapshotJobResult(
+            ok=True, today="2026-05-26", container_type="40FT_DRY",
+            snapshot_path=str(snapshot_path), bytes_written=100,
+            regional_snapshot_path="", regional_bytes_written=0,
+            prior_snapshot_date="2026-05-25", diff=diff, error_msg="",
+        )
+
+    monkeypatch.setattr(psh, "run_daily_snapshot_job", _stub_job)
+
+    out = sched.run_port_supply_snapshot_job()
+    subj_path = Path(out["digest_paths"]["subject"])
+    subj = subj_path.read_text(encoding="utf-8")
+    assert "Port-Supply" in subj
+    assert "1 severity shift" in subj
+    assert "(2026-05-26)" in subj
+
+
+def test_digest_generation_failure_does_not_kill_snapshot(
+    isolate_snapshot_root, monkeypatch,
+) -> None:
+    """If digest rendering blows up, the snapshot itself must still be
+    reported as ok=True with its diff counts intact. The digest is
+    purely downstream — render failure is a delivery-side concern,
+    not a snapshot failure."""
+    import processing.port_supply_history as psh
+    from tools.port_supply_diff import DiffReport, PortDelta
+
+    snapshot_dir = isolate_snapshot_root / "2026-05-26"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "port_supply_summary_40ft_dry.csv"
+    snapshot_path.write_text("# stub\nlocode\nUSLAX\n", encoding="utf-8")
+
+    diff = DiffReport(n_ports_before=1, n_ports_after=1)
+    diff.severity_shifts.append(PortDelta(
+        locode="USLAX", name="Los Angeles", region="North America",
+        severity_before="WATCH", severity_after="STRESSED",
+        severity_shifted=True,
+        deficit_before=1.0, deficit_after=-3.0, deficit_delta=-4.0,
+        entered_deficit=False, exited_deficit=False,
+        tickers_before=[], tickers_after=[],
+        tickers_added=[], tickers_removed=[],
+    ))
+
+    def _stub_job(**_kwargs):
+        return psh.SnapshotJobResult(
+            ok=True, today="2026-05-26", container_type="40FT_DRY",
+            snapshot_path=str(snapshot_path), bytes_written=100,
+            regional_snapshot_path="", regional_bytes_written=0,
+            prior_snapshot_date="2026-05-25", diff=diff, error_msg="",
+        )
+
+    monkeypatch.setattr(psh, "run_daily_snapshot_job", _stub_job)
+
+    # Sabotage the digest renderer so any call raises.
+    import delivery.port_supply_shock_digest as digest_mod
+
+    def _broken_render(*_a, **_kw):
+        raise RuntimeError("simulated digest failure")
+
+    monkeypatch.setattr(digest_mod, "render_html", _broken_render)
+
+    out = sched.run_port_supply_snapshot_job()
+    # Snapshot still succeeded; diff counts still surface.
+    assert out["ok"] is True
+    assert out["diff_present"] is True
+    assert out["severity_shifts"] == 1
+    # No digest paths landed because render failed.
+    assert out["digest_paths"] == {}
+    # No partial files on disk either.
+    digest_files = list(snapshot_dir.glob("digest_*"))
+    assert digest_files == []
+
+
+def test_quiet_day_with_empty_diff_writes_no_digest(
+    isolate_snapshot_root, monkeypatch,
+) -> None:
+    """A diff that exists but has all empty buckets (e.g. yesterday and
+    today look identical) is a quiet day — no digest gets persisted
+    even though ``diff is not None``."""
+    import processing.port_supply_history as psh
+    from tools.port_supply_diff import DiffReport
+
+    snapshot_dir = isolate_snapshot_root / "2026-05-26"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / "port_supply_summary_40ft_dry.csv"
+    snapshot_path.write_text("# stub\n", encoding="utf-8")
+
+    # Empty diff — every bucket is an empty list by dataclass default.
+    empty_diff = DiffReport(n_ports_before=1, n_ports_after=1)
+
+    def _stub_job(**_kwargs):
+        return psh.SnapshotJobResult(
+            ok=True, today="2026-05-26", container_type="40FT_DRY",
+            snapshot_path=str(snapshot_path), bytes_written=100,
+            regional_snapshot_path="", regional_bytes_written=0,
+            prior_snapshot_date="2026-05-25", diff=empty_diff, error_msg="",
+        )
+
+    monkeypatch.setattr(psh, "run_daily_snapshot_job", _stub_job)
+
+    out = sched.run_port_supply_snapshot_job()
+    assert out["ok"] is True
+    assert out["diff_present"] is True   # diff IS present...
+    assert out["digest_paths"] == {}     # ...but every bucket is empty
+    assert list(snapshot_dir.glob("digest_*")) == []

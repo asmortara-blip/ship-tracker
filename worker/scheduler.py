@@ -723,7 +723,13 @@ def run_port_supply_snapshot_job(
     Returns a count dict so the caller can fold it into telemetry:
       ``{"ok": bool, "saved_bytes": int, "diff_present": bool,
          "severity_shifts": int, "entered_deficit": int,
-         "exited_deficit": int, "deficit_moves": int}``
+         "exited_deficit": int, "deficit_moves": int,
+         "digest_paths": dict}``
+
+    ``digest_paths`` is populated only when the diff is material enough
+    to ship (``delivery.port_supply_shock_digest.should_send`` returns
+    True). On quiet days it stays empty so downstream channels know
+    there's nothing new to dispatch.
 
     Never raises — failures land in ``ok=False`` + a logger.warning.
     Designed for the same daily cadence as the briefing job.
@@ -741,6 +747,7 @@ def run_port_supply_snapshot_job(
             "ok": False, "saved_bytes": 0, "diff_present": False,
             "severity_shifts": 0, "entered_deficit": 0,
             "exited_deficit": 0, "deficit_moves": 0,
+            "digest_paths": {},
         }
 
     counts = {
@@ -751,6 +758,7 @@ def run_port_supply_snapshot_job(
         "entered_deficit": 0,
         "exited_deficit":  0,
         "deficit_moves":   0,
+        "digest_paths":    {},   # populated below if the digest gets persisted
     }
     if result.diff is not None:
         counts["severity_shifts"] = len(result.diff.severity_shifts)
@@ -787,6 +795,68 @@ def run_port_supply_snapshot_job(
             logger.warning(
                 f"run_port_supply_snapshot_job: diff warning — {result.error_msg}"
             )
+
+    # ── Persist HTML / text / subject digest artifacts ─────────────────────
+    # Defensive: the digest is downstream of the save; a render failure
+    # must NEVER fail the snapshot or its diff. Quiet days (should_send
+    # returns False — empty diff or None) skip persistence entirely so
+    # downstream channels know there's nothing new to dispatch and the
+    # snapshot dir stays tidy.
+    try:
+        from delivery.port_supply_shock_digest import (
+            build_subject_line,
+            render_html,
+            render_plain_text,
+            should_send,
+        )
+
+        if should_send(result.diff):
+            snapshot_path = Path(result.snapshot_path)
+            snapshot_dir = snapshot_path.parent
+            container_slug = container_type.lower()
+            html_path = snapshot_dir / f"digest_{container_slug}.html"
+            text_path = snapshot_dir / f"digest_{container_slug}.txt"
+            subj_path = snapshot_dir / f"digest_{container_slug}.subject.txt"
+
+            html_body = render_html(
+                result.diff,
+                container_type=container_type,
+                snapshot_date_iso=result.today,
+                prior_date_iso=result.prior_snapshot_date,
+            )
+            text_body = render_plain_text(
+                result.diff,
+                container_type=container_type,
+                snapshot_date_iso=result.today,
+                prior_date_iso=result.prior_snapshot_date,
+            )
+            subject = build_subject_line(
+                result.diff,
+                container_type=container_type,
+                snapshot_date_iso=result.today,
+            )
+
+            html_path.write_text(html_body, encoding="utf-8")
+            text_path.write_text(text_body, encoding="utf-8")
+            subj_path.write_text(subject + "\n", encoding="utf-8")
+
+            counts["digest_paths"] = {
+                "html":    str(html_path),
+                "text":    str(text_path),
+                "subject": str(subj_path),
+            }
+            logger.info(
+                f"run_port_supply_snapshot_job: digest persisted to "
+                f"{snapshot_dir} ({subject!r})"
+            )
+    except Exception as exc:   # pragma: no cover - defensive
+        # Snapshot itself already landed — a digest failure is purely
+        # a delivery-side concern. Log + carry on so the diff still
+        # surfaces in the counts dict + the upstream cron tick.
+        logger.warning(
+            f"run_port_supply_snapshot_job: digest persistence failed: {exc}"
+        )
+
     return counts
 
 
