@@ -3288,6 +3288,140 @@
         ]
       }
     },
+    "/api/v1/ports/supply-lines.xlsx": {
+      "get": {
+        "description": "Same data the JSON endpoint serves, bundled as a single ``.xlsx`` workbook with six sheets: ``overview`` (snapshot metadata + per-sheet row counts) plus five data sheets that mirror the five CSV views (``summary``, ``exposure``, ``footprint``, ``regional``, ``watchlist``). Headers bold + frozen, numeric cells coerced from strings so ``SUM`` / sort / pivot work without conversion. Authenticated (per-user bearer).",
+        "operationId": "getPortSupplyLinesXlsx",
+        "parameters": [
+          {
+            "description": "Container-type slice. One of 40FT_DRY (default) | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deficit-watchlist firing threshold (numeric string; default -3.0). Only affects the watchlist sheet.",
+            "in": "query",
+            "name": "threshold_days",
+            "required": false,
+            "schema": {
+              "default": "-3.0",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The .xlsx workbook bytes.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "``attachment; filename=...`` with the canonical CLI stamp pattern: ``port_supply_lines_workbook_<container>_<YYYYMMDD>.xlsx``",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Underlying port_supply_lines or openpyxl build raised — extremely defensive, the joiner tolerates empty inputs internally."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Port supply state + exposures as an Excel workbook.",
+        "tags": [
+          "Ports"
+        ]
+      }
+    },
     "/api/v1/reports": {
       "get": {
         "description": "Sorted newest-first. ``limit`` truncates after sorting.",

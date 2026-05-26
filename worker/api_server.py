@@ -547,6 +547,14 @@ _RE_BACKTESTS_HEALTH = re.compile(r"^/api/v1/backtests/health/?$")
 #   ?top_n=8                  (cap on companies + commodities per port)
 _RE_PORT_SUPPLY_LINES = re.compile(r"^/api/v1/ports/supply-lines/?$")
 
+# Excel workbook export — same data the JSON endpoint serves, but
+# bundled as a single .xlsx file (6 sheets: overview + 5 CSV views).
+# Distinct path on a different content-type so the JSON endpoint
+# doesn't need a query-string format switch.
+_RE_PORT_SUPPLY_LINES_XLSX = re.compile(
+    r"^/api/v1/ports/supply-lines\.xlsx/?$"
+)
+
 # Module-level cache for the rendered OpenAPI JSON bytes. The first
 # request builds + serializes the spec; every subsequent request just
 # writes the cached bytes to the wfile. ``None`` means "not yet
@@ -675,7 +683,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
                 _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
-                _RE_PORT_SUPPLY_LINES,
+                _RE_PORT_SUPPLY_LINES, _RE_PORT_SUPPLY_LINES_XLSX,
             )
         )
 
@@ -727,6 +735,15 @@ class APIHandler(BaseHTTPRequestHandler):
             # Per-user rate limit. Health is already short-circuited
             # ABOVE the auth gate so the limiter never sees probes.
             if not _enforce_rate_limit(self, user_id):
+                return
+
+            # XLSX variant — match BEFORE the plain endpoint since the
+            # plain regex would also accept "/api/v1/ports/supply-lines"
+            # without the .xlsx suffix; ordering by specificity here is
+            # explicit (the regexes don't overlap, but the check order
+            # keeps intent visible).
+            if _RE_PORT_SUPPLY_LINES_XLSX.match(path):
+                self._serve_port_supply_lines_xlsx(query)
                 return
 
             if _RE_PORT_SUPPLY_LINES.match(path):
@@ -2208,6 +2225,110 @@ class APIHandler(BaseHTTPRequestHandler):
             ],
         }
         _send_json(self, HTTPStatus.OK, body)
+
+
+    # ── Endpoint: GET /api/v1/ports/supply-lines.xlsx ───────────────
+
+    def _serve_port_supply_lines_xlsx(self, query: dict) -> None:
+        """Serve the same data the JSON endpoint serves, but as a
+        single .xlsx workbook (6 sheets: overview + 5 CSV views).
+
+        Same auth gate as the JSON endpoint (per-user bearer token).
+        Same query-param contract — ``container_type`` plus a new
+        ``threshold_days`` override for the deficit watchlist sheet.
+
+        Binary response served via the raw ``send_response`` /
+        ``wfile.write`` path (not ``_send_json``) so the openpyxl
+        bytes go out unmolested. Content-Disposition triggers the
+        canonical 'save as' filename in the browser.
+        """
+        try:
+            from processing.port_supply_lines import (
+                build_company_port_footprints,
+                build_port_supply_chains,
+            )
+            from utils.port_supply_xlsx import build_workbook
+        except Exception as exc:
+            logger.exception(
+                f"api /ports/supply-lines.xlsx import failed: {exc}"
+            )
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down",
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        # Query parsing — mirrors the JSON endpoint's contract exactly
+        # so callers can swap the suffix without re-learning params.
+        allowed_ctypes = {
+            "40FT_DRY", "20FT_DRY", "40FT_HC",
+            "40FT_REEFER", "20FT_TANK",
+        }
+        container_type = (query.get("container_type", ["40FT_DRY"])
+                          or ["40FT_DRY"])[0]
+        if container_type not in allowed_ctypes:
+            _send_bad_request(
+                self,
+                f"bad container_type: {container_type} (allowed: "
+                f"{sorted(allowed_ctypes)})",
+            )
+            return
+        raw_threshold = (query.get("threshold_days", ["-3.0"])
+                         or ["-3.0"])[0]
+        try:
+            threshold_days = float(raw_threshold)
+        except (TypeError, ValueError):
+            _send_bad_request(
+                self,
+                f"threshold_days must be numeric; got {raw_threshold!r}",
+            )
+            return
+
+        try:
+            chains = build_port_supply_chains(container_type=container_type)
+            footprints = build_company_port_footprints(
+                container_type=container_type,
+            )
+            data = build_workbook(
+                chains, footprints,
+                container_type=container_type,
+                threshold_days=threshold_days,
+            )
+        except Exception as exc:
+            logger.exception(
+                f"api /ports/supply-lines.xlsx build failed: {exc}"
+            )
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down",
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        # Filename mirrors the CLI exporter's stamp convention so an
+        # operator pulling daily snapshots through any of the three
+        # paths gets identically-named files.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        filename = (
+            f"port_supply_lines_workbook"
+            f"_{container_type.lower()}_{stamp}.xlsx"
+        )
+        self.send_response(HTTPStatus.OK)
+        self.send_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+        )
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{filename}"',
+        )
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
 
     # ── Endpoint: GET /api/v1/openapi.json ────────────────────────

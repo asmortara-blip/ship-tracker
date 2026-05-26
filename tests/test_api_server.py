@@ -293,6 +293,105 @@ def test_port_supply_lines_rejects_bad_top_n(server):
         )
 
 
+# ── /api/v1/ports/supply-lines.xlsx — single workbook ─────────────────
+
+def test_supply_lines_xlsx_requires_auth(server):
+    """No token → 401, same gate as the JSON endpoint."""
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx", timeout=10,
+    )
+    assert r.status_code == 401
+
+
+def test_supply_lines_xlsx_returns_workbook_bytes(server):
+    """With a valid token, returns an actual .xlsx workbook that
+    openpyxl can load back."""
+    import io
+    import openpyxl
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx",
+        headers=_bearer(token), timeout=15,
+    )
+    assert r.status_code == 200
+    # Content-Type is the canonical openxml spreadsheetml.sheet.
+    assert r.headers["Content-Type"].startswith(
+        "application/vnd.openxmlformats-officedocument."
+        "spreadsheetml.sheet"
+    )
+    # Response is the workbook bytes — openpyxl must accept them.
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    # Six canonical sheets in order.
+    assert wb.sheetnames == [
+        "overview", "summary", "exposure", "footprint",
+        "regional", "watchlist",
+    ]
+
+
+def test_supply_lines_xlsx_content_disposition_carries_filename(server):
+    """The download filename matches the CLI exporter's convention so
+    operator-side identification is consistent across paths."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx",
+        headers=_bearer(token), timeout=15,
+    )
+    assert r.status_code == 200
+    disposition = r.headers.get("Content-Disposition", "")
+    assert "attachment" in disposition
+    assert "port_supply_lines_workbook" in disposition
+    assert ".xlsx" in disposition
+
+
+def test_supply_lines_xlsx_respects_container_type(server):
+    """Container-type param flows through to the workbook + the
+    overview sheet reports the requested type."""
+    import io
+    import openpyxl
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx",
+        params={"container_type": "40FT_REEFER"},
+        headers=_bearer(token), timeout=15,
+    )
+    assert r.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    overview_cells = [
+        str(c.value) for row in wb["overview"].iter_rows()
+        for c in row if c.value is not None
+    ]
+    assert "40FT_REEFER" in overview_cells
+
+
+def test_supply_lines_xlsx_rejects_bad_container_type(server):
+    """Bad container_type → 400, same contract as the JSON endpoint."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx",
+        params={"container_type": "BANANA"},
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_supply_lines_xlsx_rejects_bad_threshold(server):
+    """threshold_days must be numeric — bad value → 400, not silent."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines.xlsx",
+        params={"threshold_days": "nope"},
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
 def test_health_does_not_require_authorization_header(server):
     """Sanity check: a deliberately broken bearer header still gets a
     200 from /health — auth bypass is the whole point."""

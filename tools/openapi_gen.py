@@ -850,6 +850,77 @@ def _paths() -> dict:
         },
     }
 
+    # ── /api/v1/ports/supply-lines.xlsx (authenticated) ────────────────
+    paths["/api/v1/ports/supply-lines.xlsx"] = {
+        "get": {
+            "operationId": "getPortSupplyLinesXlsx",
+            "summary": "Port supply state + exposures as an Excel workbook.",
+            "description": (
+                "Same data the JSON endpoint serves, bundled as a single "
+                "``.xlsx`` workbook with six sheets: ``overview`` "
+                "(snapshot metadata + per-sheet row counts) plus five "
+                "data sheets that mirror the five CSV views (``summary``, "
+                "``exposure``, ``footprint``, ``regional``, "
+                "``watchlist``). Headers bold + frozen, numeric cells "
+                "coerced from strings so ``SUM`` / sort / pivot work "
+                "without conversion. Authenticated (per-user bearer)."
+            ),
+            "tags": ["Ports"],
+            "security": _bearer_security(),
+            "parameters": [
+                _query_string(
+                    "container_type",
+                    "Container-type slice. One of 40FT_DRY (default) | "
+                    "20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK.",
+                    default="40FT_DRY",
+                ),
+                _query_string(
+                    "threshold_days",
+                    "Deficit-watchlist firing threshold (numeric string; "
+                    "default -3.0). Only affects the watchlist sheet.",
+                    default="-3.0",
+                ),
+            ],
+            "responses": {
+                "200": {
+                    "description": "The .xlsx workbook bytes.",
+                    "content": {
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet": {
+                            "schema": {"type": "string", "format": "binary"},
+                        },
+                    },
+                    "headers": {
+                        "Content-Disposition": {
+                            "description": (
+                                "``attachment; filename=...`` with the "
+                                "canonical CLI stamp pattern: "
+                                "``port_supply_lines_workbook"
+                                "_<container>_<YYYYMMDD>.xlsx``"
+                            ),
+                            "schema": {"type": "string"},
+                        },
+                    },
+                },
+                **_standard_auth_responses(include_400=True),
+                "503": {
+                    "description": (
+                        "Underlying port_supply_lines or openpyxl build "
+                        "raised — extremely defensive, the joiner "
+                        "tolerates empty inputs internally."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "schema": {"type": "object"},
+                            "example": {"status": "down",
+                                        "error": "ImportError: ..."},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
     # ── /api/v1/alerts ─────────────────────────────────────────────────
     paths["/api/v1/alerts"] = {
         "get": {
