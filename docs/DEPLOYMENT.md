@@ -1318,6 +1318,11 @@ delivery-channel set; cross-tenant references are rejected at
 write time on the CLI + API and silently fail at dispatch on the
 engine. Acknowledging an alert mid-chain stops further escalation —
 the unacked filter excludes ack'd rows from the due query.
+When the chain has no step `N+1` and the alert is still unacked, the
+worker simply has nothing to dispatch: the alert sits at its current
+`escalation_step` indefinitely and the only path forward is operator
+acknowledgement. There is no "ran out of escalations" failure mode —
+the chain is just exhausted.
 
 ```bash
 # List a rule's chain ordered by step number.
@@ -1424,6 +1429,56 @@ python -m tools.ops_cli digest send-now --user-id <id>
 The Alert Center tab also surfaces a "Weekly Digest" panel next to the
 delivery-channels card with the same enable / preview / send-now
 controls.
+
+### Operator digest (daily ops summary)
+
+Separate from the per-user weekly digest above, an **operator-tier daily
+digest** auto-dispatches a system-health summary to CFO/CTO-class
+channels. The summary covers four telemetry layers: LLM costs, alert
+acknowledgement metrics, tab-render performance, and source-feed
+health. Status is rolled up to a single colour:
+
+- **red**   — unacked CRITICAL > 0
+- **orange** — `render_success_rate < 0.95` OR any source outage
+- **green** — healthy
+
+Opt-in is by naming convention: any delivery channel whose `name`
+starts with the prefix `ops-` is auto-discovered as an operator
+channel. There is **no separate config table** — `engine.operator_digest`
+runs through every matched channel and renders per channel kind (full
+HTML for `email`, plain text + JSON for `slack` / `discord` /
+`webhook`). The worker fires `worker.scheduler.run_operator_digest_job()`
+on the daily cron.
+
+```bash
+# List the discovered operator channels (by `ops-` name prefix).
+python -m tools.ops_cli channels list | grep '^ops-'
+
+# Preview today's operator digest as text (no dispatch).
+python -m tools.ops_cli digest operator-preview
+
+# Force a one-shot dispatch to every operator channel now.
+python -m tools.ops_cli digest operator-send-now
+```
+
+The dispatch is independent of the per-user weekly digest above and
+shares no config rows. Channels named `ops-finance`, `ops-eng`, etc.
+each receive their own copy.
+
+### Anti-flap detector (consolidate oscillating rules)
+
+`engine.flap_detector` consolidates a chattering rule (state flipping
+on/off N times in M minutes) into a single `FLAP` alert instead of
+firing every crossing. The trigger lives inside `fire_rule` — flap
+state is tracked in the rule's `flap_*` columns (schema v19) and the
+gate sits BEFORE the silence + delivery layers, so a flapping rule
+that's also silenced still records its crossings for the next pass.
+
+Defaults: 5 flips in 10 min triggers consolidation; configurable per
+rule via `flap_max_flips` / `flap_window_minutes`. The consolidated
+`FLAP` alert carries `severity=WARNING` regardless of the underlying
+rule's severity — it's a meta-alert about rule health, not the
+condition the rule monitors.
 
 ### Recurring report schedules
 
