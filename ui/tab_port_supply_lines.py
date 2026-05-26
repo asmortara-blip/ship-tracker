@@ -537,15 +537,17 @@ def _render_supply_chain_drilldown(chains: list) -> None:
 
 
 def _render_csv_exports(chains: list, container_type: str) -> None:
-    """Three CSV download buttons: per-port summary, flat port × company
-    exposure, ticker × port reverse footprint.
+    """Five CSV download buttons — three views of the raw join, plus
+    a regional rollup and an action-oriented deficit watchlist.
 
-    The exports use the same data the tab is already showing — no
-    re-fetch — so an operator can pull the CSV that matches the view
-    they're looking at without round-tripping through the API."""
+    Every export carries a UTF-8 BOM + a metadata comment header so the
+    on-disk file is auditable hours later without round-tripping
+    through the UI, and Excel renders it cleanly in UTF-8."""
     try:
         from utils.port_supply_csv import (
+            chains_to_deficit_watchlist_csv,
             chains_to_exposure_csv,
+            chains_to_regional_rollup_csv,
             chains_to_summary_csv,
             footprints_to_csv,
         )
@@ -556,53 +558,57 @@ def _render_csv_exports(chains: list, container_type: str) -> None:
 
     section_header(
         "Download CSV",
-        "Three views of the same data — pick the one that fits your spreadsheet "
-        "analysis. All exports honour the container-type selector above.",
+        "Five views of the same data. Every export carries a metadata "
+        "header (timestamp, container type, schema version) + UTF-8 BOM "
+        "so Excel opens cleanly. Filenames stamped with container type + "
+        "today's UTC date so daily pulls keep history."
     )
 
-    # Stable date stamp in the filename so an operator pulling daily
-    # exports keeps history without overwriting.
     from datetime import datetime, timezone
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     suffix = f"_{container_type.lower()}_{stamp}.csv"
 
+    # ── Row 1: raw join views ──────────────────────────────────────────
     col_a, col_b, col_c = st.columns(3, gap="medium")
     with col_a:
         try:
-            csv_summary = chains_to_summary_csv(chains)
+            csv_summary = chains_to_summary_csv(
+                chains, container_type=container_type,
+            )
         except Exception:
             logger.exception("port_supply_lines: summary csv failed")
             csv_summary = ""
         st.download_button(
-            label="Per-port summary (one row per port)",
+            label="Per-port summary + analytics",
             data=csv_summary,
             file_name=f"port_supply_summary{suffix}",
             mime="text/csv",
             use_container_width=True,
             key="port_supply_lines_csv_summary",
             help=(
-                "High-level ranking: each port's locode, severity, supply "
-                "deficit days, route count, exposed-company count, and the "
-                "top-5 exposed tickers inline."
+                "Each port + deficit rank + regional context (mean + delta) "
+                "+ exposure concentration HHI + top-5 exposed tickers."
             ),
         )
     with col_b:
         try:
-            csv_exposure = chains_to_exposure_csv(chains)
+            csv_exposure = chains_to_exposure_csv(
+                chains, container_type=container_type,
+            )
         except Exception:
             logger.exception("port_supply_lines: exposure csv failed")
             csv_exposure = ""
         st.download_button(
-            label="Port × company exposure (flattened)",
+            label="Port × company (flat + shares)",
             data=csv_exposure,
             file_name=f"port_company_exposure{suffix}",
             mime="text/csv",
             use_container_width=True,
             key="port_supply_lines_csv_exposure",
             help=(
-                "One row per (port, exposed company) pair — every row "
-                "carries the port's supply state so spreadsheet pivots can "
-                "group by ticker and sum across deficit-stressed ports."
+                "One row per (port, exposed company) pair. Includes "
+                "share_within_port (sums to 1.0 per port) and "
+                "rank_within_port (1..N heaviest first)."
             ),
         )
     with col_c:
@@ -610,29 +616,70 @@ def _render_csv_exports(chains: list, container_type: str) -> None:
             footprints = build_company_port_footprints(
                 container_type=container_type,
             )
-            csv_footprints = footprints_to_csv(footprints)
+            csv_footprints = footprints_to_csv(
+                footprints, container_type=container_type,
+            )
         except Exception:
             logger.exception("port_supply_lines: footprints csv failed")
             csv_footprints = ""
         st.download_button(
-            label="Ticker × port footprint (reverse axis)",
+            label="Ticker × port (reverse + concentration)",
             data=csv_footprints,
             file_name=f"company_port_footprint{suffix}",
             mime="text/csv",
             use_container_width=True,
             key="port_supply_lines_csv_footprints",
             help=(
-                "One row per (ticker, port) pair. Footprint-level "
-                "aggregates (total exposure, deficit-weighted score, "
-                "port count) repeat on every row so a ticker filter "
-                "still shows the aggregate context."
+                "Reverse axis. Adds deficit_share (% of ticker's exposure "
+                "in deficit ports), concentration HHI, top region, and "
+                "per-ticker port rank."
             ),
         )
 
-    st.caption(
-        "Filenames are stamped with the container type + today's UTC date "
-        "(YYYYMMDD) so daily exports don't overwrite each other."
-    )
+    # ── Row 2: aggregated + ops-triage views ───────────────────────────
+    col_d, col_e, _ = st.columns(3, gap="medium")
+    with col_d:
+        try:
+            csv_rollup = chains_to_regional_rollup_csv(
+                chains, container_type=container_type,
+            )
+        except Exception:
+            logger.exception("port_supply_lines: rollup csv failed")
+            csv_rollup = ""
+        st.download_button(
+            label="Regional rollup",
+            data=csv_rollup,
+            file_name=f"port_supply_regional_rollup{suffix}",
+            mime="text/csv",
+            use_container_width=True,
+            key="port_supply_lines_csv_rollup",
+            help=(
+                "One row per region: port count, mean/min/max deficit, "
+                "severity-bucket tallies, top-5 exposed tickers across "
+                "the region."
+            ),
+        )
+    with col_e:
+        try:
+            csv_watchlist = chains_to_deficit_watchlist_csv(
+                chains, container_type=container_type, threshold_days=-3.0,
+            )
+        except Exception:
+            logger.exception("port_supply_lines: watchlist csv failed")
+            csv_watchlist = ""
+        st.download_button(
+            label="Deficit watchlist (action-oriented)",
+            data=csv_watchlist,
+            file_name=f"port_deficit_watchlist{suffix}",
+            mime="text/csv",
+            use_container_width=True,
+            key="port_supply_lines_csv_watchlist",
+            help=(
+                "Only ports <= -3d. Adds action column (Escalate at "
+                "<= -10d, Monitor otherwise) and why explanation — "
+                "ready to drop into a ticket / standup deck."
+            ),
+        )
 
 
 def _render_company_footprint_drilldown(container_type: str) -> None:
