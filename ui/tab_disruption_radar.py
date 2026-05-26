@@ -593,6 +593,97 @@ def _render_forecast_callout(forecasts: list) -> None:
     )
 
 
+def _render_forecast_accuracy_panel() -> None:
+    """Surface the disruption-forecast accuracy backtest below the forecast.
+
+    Tells the operator how accurate past forecasts have been so the table
+    above carries credibility: 4 aggregate KPIs (mean 7d MAE, mean 30d MAE,
+    7d sign-agreement, 30d sign-agreement) plus a per-route scorecard table.
+
+    Lazy-imported so a backtest-module failure can't break the rest of the
+    tab. Empty / failed backtest is a soft warning, not an error.
+    """
+    try:
+        from processing.disruption_forecast_backtest import (
+            backtest_disruption_forecast,
+        )
+    except Exception:
+        logger.exception("Disruption Radar — backtest module import failed")
+        return
+
+    section_header(
+        "Forecast Accuracy",
+        "How accurate have past forecasts been? "
+        "MAE = mean absolute error against realized stress; "
+        "sign-agreement = % of windows the direction was right.",
+    )
+    try:
+        report = backtest_disruption_forecast()
+    except Exception:
+        logger.exception("Disruption Radar — forecast backtest failed")
+        alert_banner(
+            "Forecast accuracy backtest unavailable — see logs.",
+            level="warning",
+        )
+        return
+
+    if not report.scorecards:
+        alert_banner("No forecast accuracy data available yet.", level="info")
+        return
+
+    # Aggregate KPI row
+    def _mae_color(mae: float) -> str:
+        if mae <= 0.06:
+            return C_HIGH
+        if mae <= 0.12:
+            return C_MOD
+        return C_LOW
+
+    def _sa_color(sa: float) -> str:
+        if sa >= 0.60:
+            return C_HIGH
+        if sa >= 0.50:
+            return C_MOD
+        return C_LOW
+
+    metric_card_row([
+        {"label": "Mean 7d MAE",
+         "value": f"{report.mean_mae_7d:.3f}",
+         "accent": _mae_color(report.mean_mae_7d),
+         "sublabel": "lower = closer to realized"},
+        {"label": "Mean 30d MAE",
+         "value": f"{report.mean_mae_30d:.3f}",
+         "accent": _mae_color(report.mean_mae_30d),
+         "sublabel": "wider window, looser fit"},
+        {"label": "7d Sign Agreement",
+         "value": f"{report.mean_sign_agreement_7d * 100:.1f}%",
+         "accent": _sa_color(report.mean_sign_agreement_7d),
+         "sublabel": "directional hit rate"},
+        {"label": "30d Sign Agreement",
+         "value": f"{report.mean_sign_agreement_30d * 100:.1f}%",
+         "accent": _sa_color(report.mean_sign_agreement_30d),
+         "sublabel": "directional hit rate"},
+    ], columns=4)
+
+    # Per-route scorecard table
+    headers = ["Route", "Obs", "7d MAE", "30d MAE", "7d Sign", "30d Sign"]
+    rows = []
+    for sc in sorted(report.scorecards,
+                     key=lambda s: (s.mae_7d + s.mae_30d)):
+        rows.append([
+            badge(sc.route_id, color=C_ACCENT),
+            badge(str(sc.n_observations), color=C_TEXT2),
+            badge(f"{sc.mae_7d:.3f}", color=_mae_color(sc.mae_7d)),
+            badge(f"{sc.mae_30d:.3f}", color=_mae_color(sc.mae_30d)),
+            badge(f"{sc.sign_agreement_7d * 100:.0f}%",
+                  color=_sa_color(sc.sign_agreement_7d)),
+            badge(f"{sc.sign_agreement_30d * 100:.0f}%",
+                  color=_sa_color(sc.sign_agreement_30d)),
+        ])
+    wsj_market_table(headers, rows)
+    st.caption(report.summary)
+
+
 def _render_forecast_table(forecasts: list) -> None:
     """Render the 7/30-day stress forecast table."""
     if not forecasts:
@@ -735,6 +826,13 @@ def render(
         except Exception:
             logger.exception("Disruption Radar — stress forecast failed")
             st.error("Stress forecast unavailable.")
+
+        # ── Section E2: forecast-accuracy backtest ──────────────────────────────
+        try:
+            _render_forecast_accuracy_panel()
+        except Exception:
+            logger.exception("Disruption Radar — forecast accuracy panel failed")
+            st.error("Forecast accuracy backtest unavailable.")
 
         # ── Provenance footer ───────────────────────────────────────────────────
         try:
