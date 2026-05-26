@@ -536,6 +536,105 @@ def _render_supply_chain_drilldown(chains: list) -> None:
                 st.write(f"- {r}")
 
 
+def _render_csv_exports(chains: list, container_type: str) -> None:
+    """Three CSV download buttons: per-port summary, flat port × company
+    exposure, ticker × port reverse footprint.
+
+    The exports use the same data the tab is already showing — no
+    re-fetch — so an operator can pull the CSV that matches the view
+    they're looking at without round-tripping through the API."""
+    try:
+        from utils.port_supply_csv import (
+            chains_to_exposure_csv,
+            chains_to_summary_csv,
+            footprints_to_csv,
+        )
+        from processing.port_supply_lines import build_company_port_footprints
+    except Exception:
+        logger.exception("port_supply_lines: csv exporter import failed")
+        return
+
+    section_header(
+        "Download CSV",
+        "Three views of the same data — pick the one that fits your spreadsheet "
+        "analysis. All exports honour the container-type selector above.",
+    )
+
+    # Stable date stamp in the filename so an operator pulling daily
+    # exports keeps history without overwriting.
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    suffix = f"_{container_type.lower()}_{stamp}.csv"
+
+    col_a, col_b, col_c = st.columns(3, gap="medium")
+    with col_a:
+        try:
+            csv_summary = chains_to_summary_csv(chains)
+        except Exception:
+            logger.exception("port_supply_lines: summary csv failed")
+            csv_summary = ""
+        st.download_button(
+            label="Per-port summary (one row per port)",
+            data=csv_summary,
+            file_name=f"port_supply_summary{suffix}",
+            mime="text/csv",
+            use_container_width=True,
+            key="port_supply_lines_csv_summary",
+            help=(
+                "High-level ranking: each port's locode, severity, supply "
+                "deficit days, route count, exposed-company count, and the "
+                "top-5 exposed tickers inline."
+            ),
+        )
+    with col_b:
+        try:
+            csv_exposure = chains_to_exposure_csv(chains)
+        except Exception:
+            logger.exception("port_supply_lines: exposure csv failed")
+            csv_exposure = ""
+        st.download_button(
+            label="Port × company exposure (flattened)",
+            data=csv_exposure,
+            file_name=f"port_company_exposure{suffix}",
+            mime="text/csv",
+            use_container_width=True,
+            key="port_supply_lines_csv_exposure",
+            help=(
+                "One row per (port, exposed company) pair — every row "
+                "carries the port's supply state so spreadsheet pivots can "
+                "group by ticker and sum across deficit-stressed ports."
+            ),
+        )
+    with col_c:
+        try:
+            footprints = build_company_port_footprints(
+                container_type=container_type,
+            )
+            csv_footprints = footprints_to_csv(footprints)
+        except Exception:
+            logger.exception("port_supply_lines: footprints csv failed")
+            csv_footprints = ""
+        st.download_button(
+            label="Ticker × port footprint (reverse axis)",
+            data=csv_footprints,
+            file_name=f"company_port_footprint{suffix}",
+            mime="text/csv",
+            use_container_width=True,
+            key="port_supply_lines_csv_footprints",
+            help=(
+                "One row per (ticker, port) pair. Footprint-level "
+                "aggregates (total exposure, deficit-weighted score, "
+                "port count) repeat on every row so a ticker filter "
+                "still shows the aggregate context."
+            ),
+        )
+
+    st.caption(
+        "Filenames are stamped with the container type + today's UTC date "
+        "(YYYYMMDD) so daily exports don't overwrite each other."
+    )
+
+
 def _render_company_footprint_drilldown(container_type: str) -> None:
     """Inverted view: pick a ticker → see its top exposed ports.
 
@@ -753,7 +852,15 @@ def render(**_kwargs) -> None:
             logger.exception("port_supply_lines: company footprint failed")
             st.error("Company footprint drilldown unavailable.")
 
-        # ── E. Source footer ───────────────────────────────────────────
+        section_divider("Export")
+
+        # ── E. CSV exports ─────────────────────────────────────────────
+        try:
+            _render_csv_exports(chains, container_type)
+        except Exception:
+            logger.exception("port_supply_lines: csv export failed")
+
+        # ── F. Source footer ───────────────────────────────────────────
         try:
             st.markdown(
                 source_footer([PORT_SUPPLY_LINES_SOURCE]),
