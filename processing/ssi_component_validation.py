@@ -41,8 +41,11 @@ from processing.shipping_stress_index import COMPONENT_WEIGHTS
 __all__ = [
     "ComponentScorecard",
     "ComponentValidationReport",
+    "HorizonScorecard",
+    "HorizonDecayReport",
     "synthesize_component_history",
     "validate_ssi_components",
+    "validate_ssi_horizons",
     "SSI_COMPONENT_VALIDATION_SOURCE",
 ]
 
@@ -81,6 +84,43 @@ class ComponentValidationReport:
     worst_component: str = ""       # lowest sign-agreement rate
     source: DataSource | None = None
     summary: str = ""               # one-line plain-language headline
+
+
+@dataclass
+class HorizonScorecard:
+    """One component's sign-agreement rate at one forecast horizon."""
+
+    component: str               # canonical key, e.g. "chokepoint"
+    horizon_days: int            # forecast horizon this cell represents
+    sign_agreement_rate: float   # in [0, 1]; 0.5 = random
+    edge: float                  # sign_agreement_rate - 0.5
+    n_observations: int          # usable (stress_delta, move) pairs
+
+
+@dataclass
+class HorizonDecayReport:
+    """A horizon-decay scorecard across components × horizons.
+
+    Use ``rates_grid()`` to materialise a row-per-component / col-per-horizon
+    grid suitable for plotting as a heatmap.
+    """
+
+    cells: list[HorizonScorecard] = field(default_factory=list)
+    components: list[str] = field(default_factory=list)
+    horizons: list[int] = field(default_factory=list)
+    n_observations: int = 0
+    best_horizon_overall: int = 0
+    source: DataSource | None = None
+    summary: str = ""
+
+    def rates_grid(self) -> list[list[float]]:
+        """Return the sign-agreement rates as ``[components × horizons]``."""
+        by_key = {(c.component, c.horizon_days): c.sign_agreement_rate
+                  for c in self.cells}
+        return [
+            [by_key.get((comp, h), 0.5) for h in self.horizons]
+            for comp in self.components
+        ]
 
 
 SSI_COMPONENT_VALIDATION_SOURCE = DataSource.modeled(
@@ -132,22 +172,37 @@ def _pearson_r(xs: list[float], ys: list[float]) -> float:
     return _clamp_corr(num / denom)
 
 
-def _sign_agreement(stress: list[float], moves: list[float]) -> float:
-    """Fraction of pairs where the SIGN of the stress delta matches the move.
+def _sign_agreement(
+    stress: list[float],
+    moves: list[float],
+    *,
+    lookahead: int = 1,
+) -> float:
+    """Fraction of pairs where the SIGN of the stress delta matches the
+    SIGN of the realized move ``lookahead`` rows later.
 
     Implementation: walk the stress series; at each step compute the delta
     against the previous reading; tally agreements where sign(delta) ==
-    sign(forward_move). Zero deltas and zero moves are counted as neutral
-    and skipped (so a flat series doesn't inflate the rate).
+    sign(move[i + lookahead - 1]). With ``lookahead=1`` (the default) this
+    is a one-step-ahead sign-agreement check. Larger lookaheads slide the
+    realized-move pointer further into the future.
+
+    Zero deltas and zero moves are counted as neutral and skipped (so a
+    flat series doesn't inflate the rate).
     """
-    n = min(len(stress), len(moves))
-    if n < 2:
+    n_stress = len(stress)
+    n_moves  = len(moves)
+    shift = max(1, int(lookahead))
+    # First usable index for the delta is 1; the move it must align with
+    # is at index (i + shift - 1) in the moves series.
+    last_i = min(n_stress, n_moves - (shift - 1))
+    if last_i < 2:
         return 0.5  # not enough data → no edge
     agree = 0
     total = 0
-    for i in range(1, n):
+    for i in range(1, last_i):
         delta = stress[i] - stress[i - 1]
-        move  = moves[i]
+        move  = moves[i + shift - 1]
         if delta == 0.0 or move == 0.0:
             continue
         total += 1
@@ -233,7 +288,7 @@ def synthesize_component_history(
 def validate_ssi_components(
     history: Iterable[dict] | None = None,
     *,
-    lookahead_days: int = 30,
+    lookahead_days: int = 1,
     seed: int = 20260525,
 ) -> ComponentValidationReport:
     """Run the per-component predictiveness scorecard.
@@ -245,8 +300,13 @@ def validate_ssi_components(
         dicts in chronological order. If ``None`` or empty, the synthetic
         history generator is used so the validator always produces a result.
     lookahead_days:
-        Display-only — the synthetic generator uses this to label the
-        report and the scorecards' notes. Pure cosmetic on real history.
+        How many rows ahead the realized-move alignment looks. ``1`` (the
+        default) compares stress[t] against move[t]; larger values slide
+        the realized-move pointer further into the future. Note the
+        bundled :func:`synthesize_component_history` generates *contemporaneous*
+        moves (move[t] is driven by delta[t]) — to get meaningful decay
+        across horizons on real history, callers should pass an actual
+        forward-looking moves series.
     seed:
         Forwarded to the synthetic generator when ``history`` is empty.
 
@@ -291,7 +351,7 @@ def validate_ssi_components(
         mean_stress = sum(stress) / len(stress)
         mean_move   = sum(moves) / len(moves) if moves else 0.0
         corr        = _pearson_r(stress, moves)
-        sa_rate     = _sign_agreement(stress, moves)
+        sa_rate     = _sign_agreement(stress, moves, lookahead=int(lookahead_days))
         scorecards.append(ComponentScorecard(
             component=component,
             weight=COMPONENT_WEIGHTS.get(component, 0.0),
@@ -328,3 +388,97 @@ def validate_ssi_components(
 
 def _fmt_pct(value: float) -> str:
     return f"{value * 100:.1f}%"
+
+
+def validate_ssi_horizons(
+    history: Iterable[dict] | None = None,
+    *,
+    horizons: Iterable[int] = (1, 7, 14, 30, 60),
+    seed: int = 20260525,
+) -> HorizonDecayReport:
+    """Horizon-decay backtest — sign-agreement per (component, horizon).
+
+    Runs the same per-component sign-agreement check used by
+    ``validate_ssi_components`` across multiple forecast horizons and
+    packages the results as a 2D grid (components × horizons) so the UI
+    can render a heatmap.
+
+    Answers: *at what horizon does each SSI component carry its
+    predictive edge — and how fast does the edge decay?*
+
+    Parameters
+    ----------
+    history:
+        Same shape as ``validate_ssi_components``. Falls back to the
+        synthetic generator when empty.
+    horizons:
+        Forecast horizons (in days) to evaluate. Each must be >= 1.
+    seed:
+        Forwarded to the synthetic generator.
+
+    Returns
+    -------
+    HorizonDecayReport
+        ``cells`` carries one HorizonScorecard per (component, horizon)
+        pair; ``rates_grid()`` materialises a heatmap-ready 2D list.
+    """
+    horizons_list = sorted({max(1, int(h)) for h in horizons})
+    if not horizons_list:
+        horizons_list = [30]
+
+    rows = list(history or [])
+    if not rows:
+        rows = synthesize_component_history(seed=seed)
+
+    components = list(COMPONENT_WEIGHTS.keys())
+    per_component: dict[str, list[float]] = {c: [] for c in components}
+    moves: list[float] = []
+    for row in rows:
+        scores = (row or {}).get("component_scores") or {}
+        for c in components:
+            per_component[c].append(float(scores.get(c, 0.0) or 0.0))
+        moves.append(float((row or {}).get("realized_move_pct", 0.0) or 0.0))
+
+    cells: list[HorizonScorecard] = []
+    for h in horizons_list:
+        # Number of usable observations at this horizon = stress range -
+        # the lookahead shift.
+        n_pairs = max(0, len(moves) - (h - 1) - 1)
+        for component in components:
+            stress = per_component[component]
+            sa_rate = (
+                _sign_agreement(stress, moves, lookahead=h)
+                if stress else 0.5
+            )
+            cells.append(HorizonScorecard(
+                component=component,
+                horizon_days=h,
+                sign_agreement_rate=sa_rate,
+                edge=sa_rate - 0.5,
+                n_observations=n_pairs,
+            ))
+
+    # Rank horizons by mean sign-agreement across components → best horizon.
+    by_horizon_mean: dict[int, float] = {}
+    for h in horizons_list:
+        cells_h = [c.sign_agreement_rate for c in cells if c.horizon_days == h]
+        by_horizon_mean[h] = (sum(cells_h) / len(cells_h)) if cells_h else 0.5
+    best_h = max(by_horizon_mean.items(), key=lambda kv: kv[1])[0] \
+        if by_horizon_mean else 0
+
+    summary = (
+        f"Best mean sign-agreement at {best_h}d horizon "
+        f"({_fmt_pct(by_horizon_mean.get(best_h, 0.5))} across "
+        f"{len(components)} components)."
+        if cells else "No SSI history available."
+    )
+
+    return HorizonDecayReport(
+        cells=cells,
+        components=components,
+        horizons=horizons_list,
+        n_observations=len(rows),
+        best_horizon_overall=best_h,
+        source=SSI_COMPONENT_VALIDATION_SOURCE,
+        summary=summary,
+    )

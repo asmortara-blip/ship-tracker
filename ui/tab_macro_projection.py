@@ -1048,16 +1048,98 @@ def _build_component_predictiveness_bars(scorecards: list) -> go.Figure:
     return fig
 
 
+def _build_horizon_decay_heatmap(report) -> go.Figure:
+    """Heatmap of sign-agreement rates across (component × horizon).
+
+    Companion to ``_build_component_predictiveness_bars``. Each row is
+    one SSI component; each column is one forecast horizon (in days).
+    Cell colour: red below 0.45, gray near 0.50, green above 0.55.
+    Sign-agreement is intentionally pinned to the [0.30, 0.70] visible
+    range so the operator sees subtle predictiveness shifts that would
+    otherwise wash out on a full [0, 1] scale.
+
+    Pure builder — no ``st.*`` calls. ``report.cells`` empty → annotated.
+    """
+    fig = go.Figure()
+    if not report or not getattr(report, "cells", None):
+        fig.add_annotation(
+            text="No horizon decay data",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Horizon decay", height=240)
+        return fig
+
+    grid = report.rates_grid()
+    components = [_SSI_COMPONENT_DISPLAY.get(c, c.title())
+                  for c in report.components]
+    horizons   = [f"{h}d" for h in report.horizons]
+    text       = [[f"{v * 100:.0f}%" for v in row] for row in grid]
+
+    colorscale = [
+        [0.00, "#c0392b"],
+        [0.40, "#c9962b"],
+        [0.50, "#5a5650"],
+        [0.60, "#2e9e6e"],
+        [1.00, "#1f8a5b"],
+    ]
+    fig.add_trace(go.Heatmap(
+        z=grid,
+        x=horizons,
+        y=components,
+        colorscale=colorscale,
+        zmin=0.30,
+        zmax=0.70,
+        text=text,
+        texttemplate="%{text}",
+        textfont={"color": "#0c0e14", "size": 11},
+        hovertemplate=(
+            "<b>%{y}</b> · %{x}<br>"
+            "Sign-agreement: %{z:.1%}<extra></extra>"
+        ),
+        showscale=True,
+        colorbar={
+            "title": {"text": "Sign-agreement", "side": "right",
+                      "font": {"color": C_TEXT3, "size": 10}},
+            "tickfont": {"color": C_TEXT3, "size": 9},
+            "len": 0.85,
+            "thickness": 12,
+            "outlinewidth": 0,
+        },
+    ))
+    apply_dark_layout(
+        fig,
+        title="SSI Horizon Decay — sign-agreement across forecast horizons",
+        height=max(240, 80 + 44 * len(components)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Forecast horizon (days)", "side": "top",
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 60, "b": 24},
+    )
+    return fig
+
+
 def _render_component_predictiveness() -> None:
     """Surface the per-SSI-component backtest scorecard.
 
     Uses ``processing.ssi_component_validation.validate_ssi_components`` —
     a deterministic, seed-stable backtest that scores how well each SSI
-    component predicts forward rate moves. The panel is lazy-imported so
-    a backtest module failure can't break the rest of the tab.
+    component predicts forward rate moves. Pairs the existing
+    sign-agreement bars with a horizon-decay heatmap from
+    ``validate_ssi_horizons`` so the operator sees BOTH which components
+    are predictive AND at what horizon their edge sits.
+
+    Lazy-imported so a backtest module failure can't break the tab.
     """
     try:
-        from processing.ssi_component_validation import validate_ssi_components
+        from processing.ssi_component_validation import (
+            validate_ssi_components,
+            validate_ssi_horizons,
+        )
     except Exception:
         logger.exception("Macro Projection — component validator import failed")
         return
@@ -1070,6 +1152,7 @@ def _render_component_predictiveness() -> None:
     )
     try:
         report = validate_ssi_components()
+        decay  = validate_ssi_horizons(horizons=(1, 7, 14, 30, 60))
     except Exception:
         logger.exception("Macro Projection — validate_ssi_components failed")
         _empty_state(
@@ -1085,6 +1168,16 @@ def _render_component_predictiveness() -> None:
         key="macro_projection_component_predictiveness",
     )
     st.caption(report.summary)
+
+    # Horizon-decay heatmap — same backtest, sliced across forecast
+    # horizons so the operator sees where each component carries its edge.
+    st.plotly_chart(
+        _build_horizon_decay_heatmap(decay),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_horizon_decay",
+    )
+    st.caption(decay.summary)
 
 
 # ── Section E: leading-indicator context strip ──────────────────────────────

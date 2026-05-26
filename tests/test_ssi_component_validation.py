@@ -14,8 +14,11 @@ from processing.shipping_stress_index import COMPONENT_WEIGHTS
 from processing.ssi_component_validation import (
     ComponentScorecard,
     ComponentValidationReport,
+    HorizonDecayReport,
+    HorizonScorecard,
     synthesize_component_history,
     validate_ssi_components,
+    validate_ssi_horizons,
 )
 
 
@@ -164,3 +167,80 @@ def test_validator_honours_caller_supplied_history() -> None:
     # and every move is positive in rows 2, 3, 4; rows 1's first delta
     # is positive and move is positive → all hits).
     assert sa["chokepoint"] == 1.0
+
+
+# ── 7. Horizon-decay scan ─────────────────────────────────────────────────
+
+def test_validate_horizons_returns_cell_per_component_per_horizon() -> None:
+    """``validate_ssi_horizons`` must produce one HorizonScorecard cell
+    for every (component, horizon) pair."""
+    report = validate_ssi_horizons(horizons=(1, 7, 30))
+    assert isinstance(report, HorizonDecayReport)
+    assert len(report.cells) == len(COMPONENT_WEIGHTS) * 3
+    pairs = {(c.component, c.horizon_days) for c in report.cells}
+    expected = {(comp, h)
+                for comp in COMPONENT_WEIGHTS
+                for h in (1, 7, 30)}
+    assert pairs == expected
+
+
+def test_validate_horizons_dedupes_and_sorts_horizons() -> None:
+    """Duplicate / out-of-order horizons must be de-duped and sorted."""
+    report = validate_ssi_horizons(horizons=[30, 1, 7, 30, 1])
+    assert report.horizons == [1, 7, 30]
+
+
+def test_validate_horizons_clamps_horizons_at_minimum_one() -> None:
+    """Zero / negative horizons must be clamped up to 1."""
+    report = validate_ssi_horizons(horizons=[0, -3, 5])
+    assert report.horizons == [1, 5]
+
+
+def test_validate_horizons_rates_grid_shape_matches() -> None:
+    """``rates_grid()`` materialises a components × horizons 2D list with
+    every value in [0, 1]."""
+    report = validate_ssi_horizons(horizons=(1, 14, 60))
+    grid = report.rates_grid()
+    assert len(grid) == len(report.components)
+    for row in grid:
+        assert len(row) == len(report.horizons)
+        for v in row:
+            assert 0.0 <= v <= 1.0
+
+
+def test_validate_horizons_best_horizon_pointer_is_valid() -> None:
+    """The best-horizon pointer must be one of the requested horizons,
+    and the mean sign-agreement at that horizon must be at least as high
+    as the mean at any other horizon."""
+    report = validate_ssi_horizons(horizons=(1, 7, 14, 30))
+    assert report.best_horizon_overall in report.horizons
+    # Compute mean per horizon and verify best is the argmax.
+    by_h: dict[int, list[float]] = {h: [] for h in report.horizons}
+    for cell in report.cells:
+        by_h[cell.horizon_days].append(cell.sign_agreement_rate)
+    means = {h: sum(v) / len(v) for h, v in by_h.items()}
+    best_mean = means[report.best_horizon_overall]
+    assert best_mean == max(means.values())
+
+
+def test_validate_horizons_observations_decrease_with_horizon() -> None:
+    """For a fixed-length history, n_observations per cell must be
+    non-increasing as the horizon grows (longer lookahead = fewer
+    usable pairs)."""
+    report = validate_ssi_horizons(horizons=(1, 30, 60))
+    by_h_n: dict[int, int] = {}
+    for cell in report.cells:
+        # All cells at the same horizon share the same n_observations
+        by_h_n[cell.horizon_days] = cell.n_observations
+    assert by_h_n[1] >= by_h_n[30] >= by_h_n[60]
+
+
+def test_validate_horizons_is_deterministic() -> None:
+    """Same seed → same scorecard cells across runs."""
+    a = validate_ssi_horizons(horizons=(1, 7, 30), seed=7)
+    b = validate_ssi_horizons(horizons=(1, 7, 30), seed=7)
+    a_keys = {(c.component, c.horizon_days, round(c.sign_agreement_rate, 6))
+              for c in a.cells}
+    b_keys = {(c.component, c.horizon_days, round(c.sign_agreement_rate, 6))
+              for c in b.cells}
+    assert a_keys == b_keys
