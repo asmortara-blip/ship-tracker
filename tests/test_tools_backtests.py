@@ -144,3 +144,130 @@ def test_cli_strict_returns_one_when_an_adapter_is_unhealthy(monkeypatch, capsys
     monkeypatch.setattr(tb, "run_all_backtests", _stub)
     code = tb.main(["--strict"])
     assert code == 1
+
+
+# ── 6. Baseline save + compare modes ──────────────────────────────────────
+
+def test_save_baseline_writes_valid_json_with_validator_block(tmp_path) -> None:
+    """`save_baseline` must write a JSON file the compare reader can load."""
+    import json
+    from tools.backtests import save_baseline
+
+    results = run_all_backtests()
+    out = tmp_path / "baseline.json"
+    save_baseline(results, str(out))
+    payload = json.loads(out.read_text())
+    assert "validators" in payload
+    assert payload["total"] == len(results)
+    for v in payload["validators"]:
+        assert {"name", "healthy", "headline_label", "headline_value",
+                "summary", "raw"} <= set(v.keys())
+
+
+def test_compare_to_baseline_returns_empty_on_identical_snapshot(tmp_path) -> None:
+    """Saving + immediately comparing must report zero drift."""
+    from tools.backtests import compare_to_baseline, save_baseline
+
+    results = run_all_backtests()
+    out = tmp_path / "baseline.json"
+    save_baseline(results, str(out))
+    drifts = compare_to_baseline(results, str(out))
+    assert drifts == []
+
+
+def test_compare_to_baseline_flags_healthy_flip(tmp_path) -> None:
+    """A healthy-flag flip in either direction must register as drift."""
+    import json
+    from tools.backtests import compare_to_baseline, save_baseline
+
+    results = run_all_backtests()
+    out = tmp_path / "baseline.json"
+    save_baseline(results, str(out))
+    # Mutate the saved baseline to flip the first validator's healthy flag
+    payload = json.loads(out.read_text())
+    payload["validators"][0]["healthy"] = not payload["validators"][0]["healthy"]
+    out.write_text(json.dumps(payload))
+    drifts = compare_to_baseline(results, str(out))
+    healthy_drifts = [d for d in drifts if d.field_name == "healthy"]
+    assert len(healthy_drifts) == 1
+    assert healthy_drifts[0].validator == results[0].name
+
+
+def test_compare_to_baseline_flags_numeric_drift_beyond_tolerance(tmp_path) -> None:
+    """A raw_field shift larger than the per-metric tolerance triggers drift."""
+    import json
+    from tools.backtests import compare_to_baseline, save_baseline
+
+    results = run_all_backtests()
+    out = tmp_path / "baseline.json"
+    save_baseline(results, str(out))
+    payload = json.loads(out.read_text())
+    # Pick a validator that carries 'best_rate' (SSI / SCHI) and shift far enough
+    target = None
+    for v in payload["validators"]:
+        if "best_rate" in (v.get("raw") or {}):
+            v["raw"]["best_rate"] = 0.10   # large drift from ~0.80
+            target = v["name"]
+            break
+    assert target is not None, "no validator with 'best_rate' raw_field"
+    out.write_text(json.dumps(payload))
+    drifts = compare_to_baseline(results, str(out))
+    rate_drifts = [d for d in drifts
+                   if d.field_name == "best_rate" and d.validator == target]
+    assert len(rate_drifts) == 1
+    assert rate_drifts[0].delta is not None and rate_drifts[0].delta > 0.05
+
+
+def test_compare_to_baseline_ignores_tiny_numeric_jitter(tmp_path) -> None:
+    """Sub-tolerance drift (e.g. 0.001 on best_rate where tolerance is 0.05)
+    must NOT count as drift."""
+    import json
+    from tools.backtests import compare_to_baseline, save_baseline
+
+    results = run_all_backtests()
+    out = tmp_path / "baseline.json"
+    save_baseline(results, str(out))
+    payload = json.loads(out.read_text())
+    for v in payload["validators"]:
+        if "best_rate" in (v.get("raw") or {}):
+            v["raw"]["best_rate"] = float(v["raw"]["best_rate"]) + 0.001
+    out.write_text(json.dumps(payload))
+    drifts = compare_to_baseline(results, str(out))
+    assert all(d.field_name != "best_rate" for d in drifts)
+
+
+def test_cli_save_baseline_writes_file_and_returns_zero(tmp_path, capsys) -> None:
+    out = tmp_path / "baseline.json"
+    code = main(["--save-baseline", str(out)])
+    assert code == 0
+    assert out.exists()
+
+
+def test_cli_compare_baseline_returns_zero_on_no_drift(tmp_path, capsys) -> None:
+    out = tmp_path / "baseline.json"
+    main(["--save-baseline", str(out)])
+    capsys.readouterr()  # drain the save-baseline output
+    code = main(["--compare-baseline", str(out)])
+    assert code == 0
+
+
+def test_cli_compare_baseline_returns_one_on_drift(tmp_path, capsys) -> None:
+    import json
+
+    out = tmp_path / "baseline.json"
+    main(["--save-baseline", str(out)])
+    capsys.readouterr()
+    # Force one large numeric drift in the saved baseline
+    payload = json.loads(out.read_text())
+    for v in payload["validators"]:
+        if "best_rate" in (v.get("raw") or {}):
+            v["raw"]["best_rate"] = 0.10
+            break
+    out.write_text(json.dumps(payload))
+    code = main(["--compare-baseline", str(out)])
+    assert code == 1
+
+
+def test_cli_rejects_save_and_compare_together(capsys) -> None:
+    code = main(["--save-baseline", "/tmp/x.json", "--compare-baseline", "/tmp/y.json"])
+    assert code == 2

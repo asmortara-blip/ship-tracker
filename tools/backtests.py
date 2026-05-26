@@ -347,6 +347,202 @@ def format_markdown(results: list[BacktestResult]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Baseline save / compare — drift detection beyond --strict
+# ---------------------------------------------------------------------------
+#
+# `--strict` exits 1 only when a healthy flag is False. That's a one-sided
+# gate: a refactor can move chokepoint sign-agreement from 80.5% → 65%
+# (still above the 0.55 healthy threshold) and --strict accepts it. The
+# baseline workflow catches that drift.
+#
+# Workflow:
+#   1. Operator runs `python -m tools.backtests --save-baseline ref.json`
+#      once when the platform is in a known-good state.
+#   2. CI / on-demand: `python -m tools.backtests --compare-baseline ref.json`
+#      runs the validators again and exits 1 if any healthy flag flipped
+#      OR any numeric raw_field drifted beyond its per-metric tolerance.
+
+# Per-metric drift tolerances. Anything not in this map gets the default.
+# Keys are raw_field names; values are absolute-drift thresholds.
+_DRIFT_TOLERANCE: dict[str, float] = {
+    # Rate-like fields (sign-agreement, hit-rate, spreads as fractions):
+    # 5 percentage points of drift is "real" — smaller is noise.
+    "best_rate":                  0.05,
+    "worst_rate":                 0.05,
+    "mean_sa_7d":                 0.05,
+    "mean_sa_30d":                0.05,
+    "delay_sign_agreement":       0.05,
+    "spread_strong_vs_weak":      0.05,
+    "spread_bullish_vs_bearish":  0.05,
+    "spread_critical_vs_low":     0.05,
+    # MAE-like fields (delay days): 1.0 day is meaningful.
+    "mean_mae_7d":                1.0,
+    "mean_mae_30d":               1.0,
+    "delay_mae":                  1.0,
+    # Spread in days (ETA): 1.0 day.
+    "spread_severe_vs_low":       1.0,
+}
+_DEFAULT_DRIFT_TOLERANCE: float = 0.05
+
+
+@dataclass
+class FieldDrift:
+    validator: str
+    field_name: str
+    baseline: Any
+    current:  Any
+    delta:    float | None      # None when the comparison is non-numeric
+    tolerance: float | None     # None when not a numeric drift check
+
+
+def save_baseline(results: list[BacktestResult], path: str) -> None:
+    """Write the validators' state to a JSON snapshot at ``path``.
+
+    The snapshot captures every result's name, healthy flag, headline
+    fields, and raw_fields — the same shape `compare_to_baseline` reads
+    back on the other side.
+    """
+    payload = {
+        "validators": [
+            {
+                "name":            r.name,
+                "headline_label":  r.headline_label,
+                "headline_value":  r.headline_value,
+                "healthy":         r.healthy,
+                "summary":         r.summary,
+                "raw":             r.raw_fields,
+            }
+            for r in results
+        ],
+        "total": len(results),
+    }
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, indent=2, sort_keys=True)
+
+
+def compare_to_baseline(
+    results: list[BacktestResult],
+    baseline_path: str,
+) -> list[FieldDrift]:
+    """Compare current validator results against a saved baseline.
+
+    Returns a list of ``FieldDrift`` entries — one per detected drift.
+    Empty list means no drift. The comparator checks:
+
+      * **healthy flag flips** (any direction)
+      * **headline_value** equality (string compare)
+      * **raw_fields** numeric drift beyond per-field tolerance
+        (``_DRIFT_TOLERANCE``, default ``0.05``)
+
+    Validators present in the baseline but missing from current (or vice
+    versa) are reported as drifts too.
+    """
+    with open(baseline_path, "r", encoding="utf-8") as fp:
+        baseline = json.load(fp)
+    baseline_by_name = {v["name"]: v for v in baseline.get("validators", [])}
+    current_by_name = {r.name: r for r in results}
+
+    drifts: list[FieldDrift] = []
+
+    # 1. Names missing in either direction
+    for name in baseline_by_name.keys() - current_by_name.keys():
+        drifts.append(FieldDrift(
+            validator=name, field_name="<missing>",
+            baseline="present", current="absent",
+            delta=None, tolerance=None,
+        ))
+    for name in current_by_name.keys() - baseline_by_name.keys():
+        drifts.append(FieldDrift(
+            validator=name, field_name="<new>",
+            baseline="absent", current="present",
+            delta=None, tolerance=None,
+        ))
+
+    # 2. Per-validator field drift
+    for name in baseline_by_name.keys() & current_by_name.keys():
+        baseline_v = baseline_by_name[name]
+        current_v = current_by_name[name]
+
+        # healthy flag flip
+        if bool(baseline_v.get("healthy")) != bool(current_v.healthy):
+            drifts.append(FieldDrift(
+                validator=name, field_name="healthy",
+                baseline=bool(baseline_v.get("healthy")),
+                current=bool(current_v.healthy),
+                delta=None, tolerance=None,
+            ))
+
+        # headline_value mismatch
+        if str(baseline_v.get("headline_value")) != str(current_v.headline_value):
+            drifts.append(FieldDrift(
+                validator=name, field_name="headline_value",
+                baseline=baseline_v.get("headline_value"),
+                current=current_v.headline_value,
+                delta=None, tolerance=None,
+            ))
+
+        # raw_fields drift
+        baseline_raw = baseline_v.get("raw") or {}
+        current_raw = current_v.raw_fields or {}
+        all_keys = set(baseline_raw.keys()) | set(current_raw.keys())
+        for key in all_keys:
+            b_val = baseline_raw.get(key)
+            c_val = current_raw.get(key)
+            if isinstance(b_val, (int, float)) and isinstance(c_val, (int, float)):
+                tol = _DRIFT_TOLERANCE.get(key, _DEFAULT_DRIFT_TOLERANCE)
+                delta = abs(float(c_val) - float(b_val))
+                if delta > tol:
+                    drifts.append(FieldDrift(
+                        validator=name, field_name=key,
+                        baseline=b_val, current=c_val,
+                        delta=delta, tolerance=tol,
+                    ))
+            elif b_val != c_val:
+                # Non-numeric mismatch (string, bool)
+                drifts.append(FieldDrift(
+                    validator=name, field_name=key,
+                    baseline=b_val, current=c_val,
+                    delta=None, tolerance=None,
+                ))
+
+    return drifts
+
+
+def format_drift_report(
+    drifts: list[FieldDrift],
+    results: list[BacktestResult],
+) -> str:
+    """Human-readable text summary of a drift comparison."""
+    if not drifts:
+        return (
+            f"Compared {len(results)} validator(s) against baseline — "
+            f"no drift detected."
+        )
+    lines = [
+        f"Compared {len(results)} validator(s) against baseline — "
+        f"{len(drifts)} drift(s) detected:",
+        "",
+    ]
+    by_validator: dict[str, list[FieldDrift]] = {}
+    for d in drifts:
+        by_validator.setdefault(d.validator, []).append(d)
+    for validator, vd in sorted(by_validator.items()):
+        lines.append(f"  {validator}")
+        for d in vd:
+            if d.delta is not None and d.tolerance is not None:
+                lines.append(
+                    f"    - {d.field_name}: {d.baseline} → {d.current} "
+                    f"(|delta|={d.delta:.4f} > tolerance={d.tolerance:.2f})"
+                )
+            else:
+                lines.append(
+                    f"    - {d.field_name}: {d.baseline} → {d.current}"
+                )
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -370,9 +566,47 @@ def main(argv: list[str] | None = None) -> int:
             "Useful as a CI gate."
         ),
     )
+    parser.add_argument(
+        "--save-baseline",
+        metavar="PATH",
+        help=(
+            "Run the validators and write a JSON snapshot to PATH. "
+            "The snapshot captures every validator's healthy flag + "
+            "headline + raw_fields and is the reference for "
+            "--compare-baseline. Does not print the normal report."
+        ),
+    )
+    parser.add_argument(
+        "--compare-baseline",
+        metavar="PATH",
+        help=(
+            "Run the validators and report drift vs the JSON snapshot "
+            "at PATH (previously written by --save-baseline). "
+            "Exits 1 on any healthy-flag flip or raw-field drift beyond "
+            "the per-metric tolerance."
+        ),
+    )
     args = parser.parse_args(argv)
 
+    # Mutually exclusive: --save-baseline takes precedence over --compare.
+    if args.save_baseline and args.compare_baseline:
+        print("error: --save-baseline and --compare-baseline are mutually exclusive",
+              file=sys.stderr)
+        return 2
+
     results = run_all_backtests()
+
+    if args.save_baseline:
+        save_baseline(results, args.save_baseline)
+        print(f"Wrote baseline snapshot for {len(results)} validators to "
+              f"{args.save_baseline}")
+        return 0
+
+    if args.compare_baseline:
+        drifts = compare_to_baseline(results, args.compare_baseline)
+        print(format_drift_report(drifts, results))
+        return 1 if drifts else 0
+
     formatter = {
         "text":     format_text,
         "json":     format_json,
