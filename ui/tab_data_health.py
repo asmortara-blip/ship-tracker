@@ -3590,10 +3590,36 @@ def _render_backtest_coverage() -> None:
             "sublabel": "validator unavailable",
         })
 
-    # 8 cards → flow in two rows of 4 so each card has enough width for its
+    # ETA predictor backtest
+    try:
+        from processing.eta_predictor_backtest import backtest_eta_predictor
+        eta_report = backtest_eta_predictor()
+        eta_healthy = (
+            eta_report.monotonic_by_label and eta_report.delay_mae < 3.0
+        )
+        cards.append({
+            "label":   "ETA Predictor",
+            "value":   f"MAE {eta_report.delay_mae:.2f}d",
+            "accent":  C_HIGH if eta_healthy else C_LOW,
+            "sublabel": (
+                f"+{eta_report.spread_severe_vs_low:.1f}d SEVERE vs LOW · "
+                f"monotonic: {'yes' if eta_report.monotonic_by_label else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — ETA backtest unavailable")
+        cards.append({
+            "label":   "ETA Predictor",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # 9 cards → flow in three rows of 3 so each card has enough width for its
     # sublabel without truncation.
-    metric_card_row(cards[:4], columns=4)
-    metric_card_row(cards[4:], columns=4)
+    metric_card_row(cards[:3], columns=3)
+    metric_card_row(cards[3:6], columns=3)
+    metric_card_row(cards[6:], columns=3)
     st.caption(
         "All four validators are deterministic and seed-stable; numbers "
         "above are computed against the bundled synthetic-history "

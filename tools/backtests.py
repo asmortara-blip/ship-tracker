@@ -219,6 +219,33 @@ def _run_vulnerability_scorer() -> BacktestResult:
     )
 
 
+def _run_eta_predictor() -> BacktestResult:
+    from processing.eta_predictor_backtest import backtest_eta_predictor
+    r = backtest_eta_predictor()
+    # Healthy when the monotonicity ladder holds + the MAE is plausible
+    # (under 3 days — well above quality=1.0's collapse, well under
+    # quality=0.0's noise floor)
+    healthy = bool(r.monotonic_by_label) and r.delay_mae < 3.0
+    return BacktestResult(
+        name="ETA Predictor Accuracy",
+        headline_label="Monotonic + low MAE",
+        headline_value=(
+            f"yes (MAE {r.delay_mae:.2f}d, +{r.spread_severe_vs_low:.1f}d spread)"
+            if r.monotonic_by_label
+            else f"no (MAE {r.delay_mae:.2f}d)"
+        ),
+        healthy=healthy,
+        summary=r.summary,
+        raw_fields={
+            "n_observations":           r.n_observations,
+            "delay_mae":                round(r.delay_mae, 4),
+            "delay_sign_agreement":     round(r.delay_sign_agreement, 4),
+            "monotonic_by_label":       bool(r.monotonic_by_label),
+            "spread_severe_vs_low":     round(r.spread_severe_vs_low, 4),
+        },
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -229,6 +256,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_leading_indicators,
     _run_news_sentiment,
     _run_vulnerability_scorer,
+    _run_eta_predictor,
 ]
 
 
