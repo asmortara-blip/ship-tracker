@@ -65,9 +65,10 @@ a physical, vessel-level anchor before any of it is aggregated.
 
 Stage 2. Detect and forecast what is disrupted across the fleet. The headline
 is the fleet-wide Shipping Stress Index — a 0–1 composite with a status banner
-and gauge — followed by the five-component breakdown (chokepoint, congestion,
-weather, rate, vulnerability), a per-route stress heat bar, a per-route
-disruption table sorted worst-first, and a 7/30-day stress forecast.
+and gauge — followed by the six-component breakdown (chokepoint, congestion,
+weather, rate, vulnerability, anomaly), a per-route stress heat bar, a per-route
+disruption table sorted worst-first, a 7/30-day stress forecast, and a
+**Forecast Accuracy** panel that scores past forecasts against realized stress.
 **What it's for:** turning a fleet of voyages into a single, decomposable read
 on *how stressed the system is and which lanes are driving it*.
 
@@ -163,21 +164,24 @@ voyage_fleet_summary(fleet: list[Voyage]) -> dict
 
 **Role.** Fuse the platform's siloed disruption datasets into a single
 per-route `stress_score` and a fleet-wide `overall_ssi`. For every canonical
-route the SSI blends five components — **chokepoint** (0.32), **congestion**
-(0.22), **weather** (0.18), **rate** (0.18), **vulnerability** (0.10); the
-weights live in `COMPONENT_WEIGHTS` and are asserted to sum to 1.0. The rate
-component registers a *spike or a crash* as stress (both are disruption). The
-overall SSI is a prominence-weighted average that double-weights the two
+route the SSI blends six components — **chokepoint** (0.29), **congestion**
+(0.20), **weather** (0.16), **rate** (0.16), **anomaly** (0.10),
+**vulnerability** (0.09); the weights live in `COMPONENT_WEIGHTS` and the
+invariant is enforced as a `ValueError` at import time so it still fires
+under `python -O`. The rate component registers a *spike or a crash* as
+stress (both are disruption). The anomaly component (shipped commit `61d4d81`)
+fires when a feed's time-series drifts below static thresholds. The overall
+SSI is a prominence-weighted average that double-weights the two
 highest-volume global lanes (`transpacific_eb`, `asia_europe`). Scores are
 banded **Calm / Elevated / Stressed / Severe**.
 
 **Key dataclasses.**
 
 - `RouteStress` — one route's stress breakdown: `route_id`, `route_name`,
-  `stress_score`, the five component sub-scores (`chokepoint_stress`,
-  `congestion_stress`, `weather_stress`, `rate_stress`, `vulnerability`),
-  `dominant_driver` (human-readable top component), `affected_chokepoints`,
-  `delayed_voyage_count`.
+  `stress_score`, the six component sub-scores (`chokepoint_stress`,
+  `congestion_stress`, `weather_stress`, `rate_stress`, `vulnerability`,
+  `anomaly_stress`), `dominant_driver` (human-readable top component),
+  `affected_chokepoints`, `delayed_voyage_count`.
 - `ShippingStressReport` — the fleet-wide report: `overall_ssi`, `ssi_label`,
   `ssi_color`, `route_stress` (list of `RouteStress`, sorted worst-first),
   `component_scores`, `top_disruptions`, `wow_change`, `data_timestamp`.
@@ -620,3 +624,71 @@ backtest), with a per-tier hit-rate chart and a per-signal detail table. The
 provenance pill is stamped `MODELED` / `DEMO`: the result is arithmetic on
 synthetic forward returns, never investment advice. See `docs/MODELS.md` for
 the full validator methodology.
+
+### Component-level backtest layer
+
+Beyond the cascade-output validator above, the platform ships **eight
+per-module backtests** that score the *components* of the analytical
+pipeline against synthetic forward outcomes. Each follows the same shape —
+deterministic synthetic-history generator + pure scoring function +
+defining-property tests + a card in the unified *Backtest Coverage* panel
+in Data Health:
+
+| Module | What it validates |
+| --- | --- |
+| `processing/ssi_component_validation.py` | Per-component sign-agreement + horizon decay + collinearity across the SSI's 6 components |
+| `engine/schi_component_validation.py` | Symmetric 3-axis validator for the SCHI's 6 health dimensions |
+| `processing/disruption_forecast_backtest.py` | Per-route MAE + sign-agreement for the 7d/30d stress forecast |
+| `engine/momentum_ranker_backtest.py` | Per-signal-class scorecard for the STRONG_SELL → STRONG_BUY ladder; monotonicity check |
+| `processing/freight_volatility_backtest.py` | Regime + mean-reversion classifier predictiveness |
+| `processing/leading_indicators_backtest.py` | Per-signal-class lead-time accuracy |
+| `processing/news_sentiment_backtest.py` | Per-sentiment-label forward freight-move predictiveness |
+| `processing/vulnerability_scorer_backtest.py` | Per-label realized-disruption-rate monotonicity |
+
+Each module ships a `synthesize_*_history(seed, quality, ...)` deterministic
+generator. The quality knob drives both ends of the property tests — at
+quality=1.0 the module's calibration / monotonicity / spread flags must
+flip True; at quality=0.0 the per-class means must collapse into the
+noise band. This is the load-bearing test that proves the validator
+itself isn't trivially passing.
+
+UI surface:
+* **Macro Projection** — SSI bars + horizon-decay heatmap + collinearity
+  heatmap, then the symmetric SCHI triad below
+* **Disruption Radar** — Forecast Accuracy panel under the 7/30-day
+  forecast table
+* **Data Health** — *Backtest Coverage* card row at the top of the
+  validation group (one card per backtest module, drilling to the
+  module's full panel where one exists), plus the *Signal Validation*
+  section with the momentum-ladder per-class table
+
+## Per-tab visual lock-in suite
+
+Every tab in the Disruption Alpha pipeline (and 8 other tabs across
+the platform) carries a structural lock-in test suite in `tests/`
+named `test_tab_<name>_refactor.py`. Each suite pins:
+
+* **Clean import** — module imports without side effects
+* **Render-with-empty** — `render(*, all kwargs None)` flows through every
+  guard cleanly (catches any regression that breaks the no-data path)
+* **Required `ui.styles` helpers** — the parenthesized import block must
+  carry the load-bearing helpers (`section_divider`, `metric_card_row`,
+  `apply_dark_layout`, `wsj_market_table`, etc.) — names checked by regex
+* **Inline-style budget caps** — number of `<div style=...>` and
+  `<span style=...>` blocks is capped at today's intentional total.
+  Future edits cannot silently push more ad-hoc inline styling in;
+  they must either route through `ui.styles` or explicitly raise the cap
+  (which forces a docs / review step)
+* **Pure-figure-builder property tests** — for tabs with `_build_*(...)`
+  figure builders (e.g. `_build_delay_distribution` in voyage_tracker,
+  `_build_ssi_component_bars` in macro_projection, `_build_conviction_scatter`
+  in equity_signals), pin shape contracts: empty-input annotated fallback,
+  ordering (highest-conviction-at-top, hot-first banding), per-class
+  colour mapping, axis ranges pinned where the colour scale depends on it
+
+The suites use a request-adaptive Streamlit stub fixture so any tab
+that unpacks `col_a, col_b = st.columns([3, 1])` works without the
+fixture knowing the column count ahead of time. `audit-baseline.csv`
+in `docs/` tracks `inline_divs` per tab as the regression metric —
+the budget caps in the lock-in suites keep that column from drifting
+upward even as tabs grow new functionality.
