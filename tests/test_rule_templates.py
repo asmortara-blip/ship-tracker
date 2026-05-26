@@ -126,6 +126,29 @@ def test_template_is_frozen_dataclass() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Port deficit template (wires into engine.alert_engine_v2.check_port_deficit_alerts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_port_deficit_template_present() -> None:
+    """The Port Deficit Watch template must be in the catalogue so
+    operators can spin up PORT_DEFICIT alerts from the UI picker
+    instead of writing the rule by hand."""
+    tpl = get_template("port-container-deficit-3d")
+    assert tpl is not None
+    assert tpl.name == "Port container deficit >3 days"
+    assert tpl.category == "port"
+    assert tpl.metric == "port_supply_deficit_days"
+    assert tpl.severity == "HIGH"
+    assert tpl.threshold_pct == 3.0
+    # Description must mention BOTH the supply-line provenance and the
+    # critical-ladder breakpoint so the operator picking it from the UI
+    # understands what it does without reading the code.
+    desc_l = tpl.description.lower()
+    assert "supply" in desc_l
+    assert "-10" in tpl.description  # CRITICAL escalation threshold
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  get_template — happy + miss paths
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -216,6 +216,23 @@ TEMPLATES: list[RuleTemplate] = [
         severity="MEDIUM",
         cooldown_minutes=1440,
     ),
+    RuleTemplate(
+        slug="port-container-deficit-3d",
+        name="Port container deficit >3 days",
+        description=(
+            "Any tracked port crossing the -3-day container-supply threshold "
+            "on the dominant container type. Reads from "
+            "processing.port_supply_lines + emits a PORT_DEFICIT alert with "
+            "the top exposed tickers inline — operator sees WHO is at risk "
+            "without re-running the supply-lines analysis. CRITICAL ladder "
+            "at -10 days."
+        ),
+        category="port",
+        metric="port_supply_deficit_days",
+        threshold_pct=3.0,
+        severity="HIGH",
+        cooldown_minutes=720,
+    ),
 
     # ── event ──────────────────────────────────────────────────────────────
     RuleTemplate(
