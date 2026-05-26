@@ -425,3 +425,122 @@ def test_use_cache_false_bypasses_cache(monkeypatch, isolate_cache_and_key: Path
     n = generate_daily_narration(ctx, use_cache=False)
     assert n.headline == "Fresh result"
     assert n.source == "claude"
+
+
+# ─── port-deficit context wiring ───────────────────────────────────────────
+
+class _FakePort:
+    """Lightweight stand-in for PortSupplyState — same duck-typed shape
+    the narrator's _summarize_port_deficit reads."""
+    def __init__(self, *, locode, name, region, supply_deficit_days,
+                 severity_label, container_type="40FT_DRY"):
+        self.locode = locode
+        self.name = name
+        self.region = region
+        self.supply_deficit_days = supply_deficit_days
+        self.severity_label = severity_label
+        self.container_type = container_type
+
+
+class _FakeExposure:
+    def __init__(self, ticker, weight=0.5):
+        self.ticker = ticker
+        self.exposure_weight = weight
+
+
+class _FakeChain:
+    def __init__(self, port, exposed_companies):
+        self.port = port
+        self.exposed_companies = exposed_companies
+
+
+def _make_chain(locode, name, region, deficit, severity, tickers):
+    return _FakeChain(
+        port=_FakePort(
+            locode=locode, name=name, region=region,
+            supply_deficit_days=deficit, severity_label=severity,
+        ),
+        exposed_companies=[_FakeExposure(t) for t in tickers],
+    )
+
+
+def test_narration_context_carries_top_port_deficits_field() -> None:
+    """The NarrationContext dataclass must accept the new
+    top_port_deficits kwarg without breaking older call sites that
+    leave it unset (default empty list)."""
+    ctx_empty = NarrationContext(target_date=date(2026, 5, 20))
+    assert ctx_empty.top_port_deficits == []
+
+    chains = [_make_chain("CNSHA", "Shanghai", "Asia East", -5.0,
+                          "Deficit", ["ZIM", "MATX"])]
+    ctx_full = NarrationContext(target_date=date(2026, 5, 20),
+                                top_port_deficits=chains)
+    assert ctx_full.top_port_deficits == chains
+
+
+def test_template_skips_paragraph_when_no_port_in_deficit() -> None:
+    """A green day (all chains have non-negative deficit) must NOT
+    surface a port-deficit paragraph — otherwise the briefing reads
+    alarmist on calm conditions."""
+    chains = [_make_chain("CNSHA", "Shanghai", "Asia East", +5.0,
+                          "Surplus", ["ZIM"])]
+    ctx = NarrationContext(target_date=date(2026, 5, 20),
+                           top_port_deficits=chains)
+    n = _template_daily_narration(ctx)
+    assert "Port container supply" not in n.body
+
+
+def test_template_renders_port_deficit_paragraph_with_tickers() -> None:
+    """When a port IS in deficit, the paragraph must surface:
+      * port name + locode
+      * deficit days with sign
+      * exposed tickers inline"""
+    chains = [
+        _make_chain("CNSHA", "Shanghai", "Asia East", -8.0,
+                    "Deficit", ["ZIM", "MATX", "DAC"]),
+        _make_chain("AEJEA", "Jebel Ali", "Middle East", -12.0,
+                    "Critical Deficit", ["DSX"]),
+    ]
+    ctx = NarrationContext(target_date=date(2026, 5, 20),
+                           top_port_deficits=chains)
+    n = _template_daily_narration(ctx)
+    assert "Port container supply" in n.body
+    # Both port names + their tickers must appear inline.
+    assert "Shanghai" in n.body and "CNSHA" in n.body
+    assert "Jebel Ali" in n.body and "AEJEA" in n.body
+    assert "ZIM" in n.body
+    assert "DSX" in n.body
+
+
+def test_template_caps_port_deficit_paragraph_at_three_ports() -> None:
+    """Only the top-3 most-stressed ports render in the paragraph so the
+    body stays scannable."""
+    chains = [
+        _make_chain(f"P{i:02d}", f"Port{i}", "Region", -(i + 1) * 2.0,
+                    "Deficit", [f"T{i}"])
+        for i in range(7)
+    ]
+    ctx = NarrationContext(target_date=date(2026, 5, 20),
+                           top_port_deficits=chains)
+    n = _template_daily_narration(ctx)
+    body = n.body
+    # First three should appear in the briefing
+    assert "Port0" in body
+    assert "Port2" in body
+    # Beyond the cap shouldn't
+    assert "Port5" not in body
+    assert "Port6" not in body
+
+
+def test_user_prompt_payload_includes_top_port_deficits() -> None:
+    """The LLM prompt's JSON payload must carry the port-deficit context
+    alongside the other structured signals."""
+    chains = [_make_chain("CNSHA", "Shanghai", "Asia East", -5.0,
+                          "Deficit", ["ZIM", "MATX"])]
+    ctx = NarrationContext(target_date=date(2026, 5, 20),
+                           top_port_deficits=chains)
+    from engine.narration_engine import _build_daily_user_prompt
+    prompt = _build_daily_user_prompt(ctx)
+    assert "top_port_deficits" in prompt
+    assert "Shanghai" in prompt
+    assert "CNSHA" in prompt

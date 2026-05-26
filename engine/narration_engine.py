@@ -1250,6 +1250,10 @@ class NarrationContext:
     top_ideas: list[_Any] = _field(default_factory=list)         # list[EquityIdea]
     top_forecasts: list[_Any] = _field(default_factory=list)     # list[StressForecast]
     notable_indicators: dict[str, float] = _field(default_factory=dict)
+    # Top-N most-stressed ports from processing.port_supply_lines.
+    # Each item: PortExposureChain (port + exposed_companies + supply_deficit_days).
+    # Empty list → narrator omits the port-deficit paragraph entirely.
+    top_port_deficits: list[_Any] = _field(default_factory=list)
 
 
 # ── Cache helpers ────────────────────────────────────────────────────────────
@@ -1350,6 +1354,31 @@ def _summarize_forecast(fc: _Any) -> dict:
     }
 
 
+def _summarize_port_deficit(chain: _Any) -> dict:
+    """Compact dict-shape for one PortExposureChain — fed to the
+    narration prompt and used by the template fallback's port-deficit
+    paragraph. Top-3 exposed tickers carry through so the briefing
+    can name them inline."""
+    port = getattr(chain, "port", None)
+    if port is None:
+        return {}
+    exposed = list(getattr(chain, "exposed_companies", []) or [])[:3]
+    return {
+        "locode":              str(getattr(port, "locode", "")),
+        "name":                str(getattr(port, "name", "")),
+        "region":              str(getattr(port, "region", "")),
+        "supply_deficit_days": round(
+            float(getattr(port, "supply_deficit_days", 0.0)), 2,
+        ),
+        "severity_label":      str(getattr(port, "severity_label", "")),
+        "container_type":      str(getattr(port, "container_type", "")),
+        "exposed_tickers": [
+            str(getattr(ce, "ticker", "")) for ce in exposed
+            if getattr(ce, "ticker", "")
+        ],
+    }
+
+
 def _build_daily_user_prompt(context: NarrationContext) -> str:
     """Render the context as a compact JSON block for Claude to ingest."""
     payload: dict = {
@@ -1358,6 +1387,9 @@ def _build_daily_user_prompt(context: NarrationContext) -> str:
         "top_disruption_ideas": [_summarize_idea(i) for i in context.top_ideas[:5]],
         "top_route_forecasts": [_summarize_forecast(f) for f in context.top_forecasts[:5]],
         "indicators": {k: round(float(v), 3) for k, v in context.notable_indicators.items()},
+        "top_port_deficits": [
+            _summarize_port_deficit(c) for c in context.top_port_deficits[:5]
+        ],
     }
     return (
         "Today's structured shipping signals (JSON):\n\n"
@@ -1419,6 +1451,32 @@ def _template_daily_narration(context: NarrationContext) -> DailyNarration:
             body_paragraphs.append(
                 "Route forecasts: " + "; ".join(forecast_lines) + "."
             )
+    # Port-deficit context — only render the paragraph when at least one
+    # port is in actual deficit (negative supply_deficit_days), otherwise
+    # the daily briefing reads alarmist on a green day.
+    deficit_chains = [
+        c for c in context.top_port_deficits
+        if float(getattr(getattr(c, "port", None), "supply_deficit_days", 0.0)) < 0.0
+    ]
+    if deficit_chains:
+        port_lines: list[str] = []
+        for chain in deficit_chains[:3]:
+            port = chain.port
+            exposed = [
+                ce.ticker for ce in (chain.exposed_companies or [])[:3]
+                if getattr(ce, "ticker", "")
+            ]
+            ticker_clause = (
+                f" → exposing {', '.join(exposed)}" if exposed else ""
+            )
+            port_lines.append(
+                f"{port.name} ({port.locode}, {port.region}) "
+                f"{port.supply_deficit_days:+.1f}d {port.severity_label.lower()}"
+                f"{ticker_clause}"
+            )
+        body_paragraphs.append(
+            "Port container supply: " + "; ".join(port_lines) + "."
+        )
     if not body_paragraphs:
         body_paragraphs.append(
             "No structured shipping signals supplied for today's briefing. "

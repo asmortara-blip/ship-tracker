@@ -229,15 +229,32 @@ def _assemble_context(port_results, route_results, freight_data, macro_data):
     except Exception:
         pass
 
+    # Port-deficit context — top-N most-stressed ports (negative deficit
+    # days first). The narrator's template fallback only renders a
+    # paragraph when at least one is in real deficit, so passing the
+    # full sorted list here is safe even on a calm day.
+    top_port_deficits: list = []
+    try:
+        from processing.port_supply_lines import build_port_supply_chains
+        chains = build_port_supply_chains()
+        top_port_deficits = [
+            c for c in chains
+            if c.port.supply_deficit_days < 0
+        ][:5]
+    except Exception:
+        logger.exception("Briefing — port supply chains failed")
+
     ctx = NarrationContext(
         stress_report=stress_report,
         top_forecasts=forecasts,
         notable_indicators=notable,
+        top_port_deficits=top_port_deficits,
     )
     return ctx, {
         "stress_report": stress_report,
         "forecasts": forecasts,
         "indicators": notable,
+        "top_port_deficits": top_port_deficits,
     }
 
 
