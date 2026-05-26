@@ -1,117 +1,155 @@
 # Authentication
 
-The Ship Tracker ships with a **single-password authentication gate** for the
-Streamlit app. It's intentionally simple: one shared password protects the
-whole app. There are no per-user accounts, no per-user data, and no user
-table in the DB.
+Ship Tracker has **two coexisting authentication modes**, picked at request
+time by `auth.gate.require_auth_with_users()`:
 
-> **This is not a multi-user system.** See [Why single-password?](#why-single-password)
-> below for the scope decision.
+| Mode | Triggered when | What it does |
+| --- | --- | --- |
+| **Multi-user** | At least one row exists in the `users` table | Renders the login + signup tabs; on success, the authenticated `User` is stored on `st.session_state.current_user`. MFA is enforced per-user when enabled. |
+| **Single-password (legacy)** | `users` table is empty **and** `APP_PASSWORD_HASH` + `APP_PASSWORD_SALT` are both set | Delegates to the legacy `require_auth()` — one shared password, no accounts. |
+| **Open mode (dev)** | Neither of the above | No login form, full access, one `WARNING` logged at startup. |
 
----
+The mode is decided dynamically — the first signup auto-promotes the
+deployment from single-password to multi-user. You can also run
+multi-user from day one by signing up the first admin via the in-app
+form; once `count_users() > 0` the single-password path is bypassed.
 
-## How it works
-
-When the Streamlit app starts, `auth.gate.require_auth()` runs at the very top
-of `app.py` (right after `st.set_page_config`). Its behavior:
-
-| App start-up condition | What `require_auth()` does |
-| --- | --- |
-| `APP_PASSWORD_HASH` **and** `APP_PASSWORD_SALT` are both set | Renders a login form, halts the page via `st.stop()` until the correct password is entered. |
-| Either env var is missing or malformed | **Open mode** — no auth required. Logs a `WARNING` once at startup. Intentional for local dev. |
-| The `auth` module itself errors | Logs a warning and lets the app through (so a bug in auth can never lock you out of the app entirely). |
-
-The hash and salt are read from environment variables, falling back to
-`st.secrets.get(...)` — the same pattern as `engine/narration_engine.py::_get_anthropic_key`.
-Passwords are **never** stored in the SQLite DB.
+> **Wiring point**: `app.py` calls `require_auth_with_users()` right
+> after `st.set_page_config`. Replacing that call with `require_auth()`
+> hard-pins the deployment to single-password mode.
 
 ---
 
-## Setup
+## Multi-user mode
 
-### 1. Generate a hash for your chosen password
+### Sign up the first user
 
-Run this **once**, from the repo root, with the password you want to use:
+When the `users` table is empty, the login form exposes a **Sign Up**
+tab. Filling it out and submitting creates the first user with role
+`admin` (subsequent signups default to `user`).
+
+The same flow works for additional users — but in a production
+deployment you usually want signups gated. See [Invitations](#invitations)
+below.
+
+### Login
+
+The login form takes `username` + `password`. On success the
+authenticated `User` is stored on `st.session_state.current_user` and
+every downstream loader receives the `user_id` for per-user data
+scoping.
+
+### Per-user MFA (optional)
+
+Each user can enable **TOTP MFA** from the in-app *My Security* panel:
+
+1. Generate a secret + scan the QR code into an authenticator app
+   (1Password, Authy, Google Authenticator — anything that speaks
+   RFC 6238).
+2. Verify a six-digit code to confirm the secret is provisioned.
+3. After enable, the login flow requires the TOTP code on every login.
+
+Recovery codes are issued at enrolment (schema v21) — single-use 8-digit
+backup codes for the case where the operator loses their TOTP device.
+
+Implementation: `auth/mfa.py`, stdlib-only (`hmac` + `hashlib`), no
+`pyotp` dependency.
+
+### API tokens (programmatic access)
+
+Each user can mint API tokens from *My Security* (schema v11+). Tokens
+authenticate against the `worker.api_server` HTTP API on port 8503;
+they don't grant Streamlit-app access — that still needs a logged-in
+session.
+
+Token rows live in `api_tokens`; tokens can be revoked and have an
+optional expiry. The default is no expiry.
+
+### Invitations
+
+To add a teammate without exposing signup publicly, an admin can mint
+an **invitation token** (schema v20+):
+
+```bash
+python3 -m tools.ops invitations create --email teammate@example.com --role user
+```
+
+The invitation contains a one-time signup token. Sending the email +
+token out-of-band is the operator's job; the token is consumed by a
+single signup.
+
+### Per-user settings
+
+`auth/settings.py` persists per-user preferences (schema v15+):
+
+- `timezone` — used by `utils.tz.format_user_tz` for briefing render
+- `theme` — UI theme override
+- `defaults` — per-user defaults for tabs that ship filters / pickers
+
+### Per-user data scoping
+
+Every data loader in the engine takes an optional `user_id`. When
+present, persisted state (alerts, scenarios, watchlists, saved filters,
+report snapshots, notification preferences, etc.) is scoped to that
+user. When absent (legacy single-password mode), data is global. See
+`feat(auth): per-user data scoping` for the full list of loaders.
+
+---
+
+## Single-password mode (legacy)
+
+When no users exist and `APP_PASSWORD_HASH` + `APP_PASSWORD_SALT` are
+configured, the legacy gate runs. It's intentionally simple — one
+shared password protects the whole app, no per-user accounts, no user
+table active.
+
+### Generating a hash
 
 ```bash
 python3 -c "from auth.gate import generate_password_hash; print(generate_password_hash('mypassword'))"
 ```
 
-That prints a `(hash_hex, salt_hex)` tuple, e.g.:
+Prints a `(hash_hex, salt_hex)` tuple. A fresh random salt is generated
+on every call, so the output changes each invocation even for the same
+password.
 
-```
-('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', '6e72d4f1a5e9b8c3a2f4d7e6b1c0a3d5')
-```
+### Saving the pair
 
-> A fresh random salt is used every time you run this, so the output
-> changes each call even for the same password.
-
-### 2. Save the pair to your secrets
-
-**For local dev** — add to `.streamlit/secrets.toml`:
+**Local dev** — `.streamlit/secrets.toml`:
 
 ```toml
 APP_PASSWORD_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 APP_PASSWORD_SALT = "6e72d4f1a5e9b8c3a2f4d7e6b1c0a3d5"
 ```
 
-**For Streamlit Cloud** — paste the same two lines into
-*App Settings → Secrets*.
+**Docker / Streamlit Cloud** — set them as environment variables; the
+gate reads either `os.environ` or `st.secrets` (in that order).
 
-**For Docker / a `.env` file** — set them as environment variables:
+`.streamlit/secrets.toml` is in `.gitignore` — never commit the pair.
 
-```bash
-export APP_PASSWORD_HASH="e3b0c44298..."
-export APP_PASSWORD_SALT="6e72d4f1..."
-```
+### Lockout policy
 
-The `.streamlit/secrets.toml` file is already in `.gitignore` — make sure
-**you never commit the hash + salt to the repo**, even though they are not
-the plaintext password.
-
-### 3. Restart the Streamlit app
-
-```bash
-streamlit run app.py
-```
-
-You should now see the login form before any tab content renders.
-
----
-
-## Open mode (no password configured)
-
-When neither env var is set, the app runs in **open mode**:
-
-- No login form is rendered.
-- A `WARNING` is logged exactly once per process: `auth.gate:
-  APP_PASSWORD_HASH/APP_PASSWORD_SALT not configured — app is running in
-  OPEN MODE`.
-- Every visitor has full access to the app.
-
-This is intentional for local development. If you do not want open mode in a
-particular environment, configure the hash + salt there — the gate flips on
-automatically.
-
----
-
-## Lockout policy
-
-After **5 consecutive failed login attempts**, the current session is locked
-for **5 minutes**. While locked the form is replaced with an error that
-counts down the remaining seconds.
-
-The lockout is **session-scoped** — it lives in `st.session_state`, so
-closing and re-opening the browser tab will reset the counter. That is
-acceptable for a single-password gate. If you need durable, IP-scoped
-rate limiting you have outgrown this module.
+After **5 consecutive failed attempts**, the session is locked for
+**5 minutes**. The lockout is session-scoped (lives in
+`st.session_state`); closing the tab resets it. For durable IP-scoped
+rate limiting use the multi-user mode plus `auth/rate_limit.py`.
 
 Constants live in `auth/gate.py`:
 
 ```python
 MAX_ATTEMPTS = 5
-LOCKOUT_DURATION_SECONDS = 300  # 5 minutes
+LOCKOUT_DURATION_SECONDS = 300
 ```
+
+---
+
+## Open mode (no auth)
+
+When `users` table is empty AND no `APP_PASSWORD_HASH` is configured,
+the app runs in **open mode**: no login form, full access, one
+`WARNING` logged at startup. Intentional for local dev — flip the gate
+on by either configuring `APP_PASSWORD_HASH` or signing up the first
+user from the in-app form.
 
 ---
 
@@ -119,65 +157,64 @@ LOCKOUT_DURATION_SECONDS = 300  # 5 minutes
 
 ### KDF: scrypt with PBKDF2 fallback
 
-The hash is produced by `hashlib.scrypt` (RFC 7914, `n=2**14, r=8, p=1,
-dklen=32`) when the platform's OpenSSL exposes it. When it doesn't — notably
-**macOS system Python**, which is linked against a LibreSSL that omits scrypt
-— the module transparently falls back to `hashlib.pbkdf2_hmac("sha256", ...,
-600_000)`. Both are stdlib-only; no `bcrypt`, no `argon2-cffi`, no new
-package in `requirements.txt`.
+The legacy single-password hash uses `hashlib.scrypt` (RFC 7914, `n=2**14, r=8,
+p=1, dklen=32`) when the platform's OpenSSL exposes it. When it doesn't —
+notably macOS system Python (LibreSSL omits scrypt) — the module
+transparently falls back to `hashlib.pbkdf2_hmac("sha256", ..., 600_000)`.
+Both are stdlib-only; no `bcrypt`, no `argon2-cffi`, no new package
+in `requirements.txt`.
 
-A hash + salt produced on one platform must verify on the same platform.
-If you generate the hash on a macOS box that uses PBKDF2 and then deploy to
-Linux where scrypt is available, the stored bytes won't verify. Generate the
-hash on the same platform where the app will run. (The platform is fixed for
-any given deployment, so this is a one-time consideration.)
+A hash + salt produced on one platform must verify on the same
+platform. Generate the hash on the same OS where the app will run.
+
+### Multi-user password storage
+
+Multi-user passwords are stored in the `users` table using the same
+KDF (scrypt with PBKDF2 fallback). Each user gets its own salt. Stored
+columns: `id`, `username`, `password_hash`, `password_salt`, `role`,
+`created_at`, `last_login_at`.
 
 ### Constant-time comparison
 
-`_verify_password` uses `hmac.compare_digest` for the equality check, not
-`==`. This avoids leaking password length or prefix-match information
-through timing side channels.
+Both modes use `hmac.compare_digest` for password verification — never
+`==`. Avoids leaking length / prefix-match information through timing
+side channels.
 
 ### Engine layer is Streamlit-free
 
-The pure functions in `auth/gate.py` (`_hash_password`, `_verify_password`,
-`_get_password_config`, `generate_password_hash`) do **not** import
-Streamlit. Only `require_auth()` and `logout()`, plus the small session-state
-helper, import it (lazily). This keeps the engine fully unit-testable in
-isolation and means `auth/gate.py` can be imported safely from CLI tools
-or scripts.
+The pure functions in `auth/gate.py`, `auth/users.py`, `auth/mfa.py`
+(hashing, verification, env-var handling, TOTP arithmetic) do **not**
+import Streamlit. Only the `require_auth*` and `logout` helpers
+import it lazily. This keeps the engine fully unit-testable in
+isolation and means the auth modules can be imported safely from CLI
+tools (e.g., `tools.ops invitations`).
 
----
+### Vault encryption for sensitive fields
 
-## Why single-password?
-
-This is a deliberate scope decision, not an oversight. A real multi-user
-system would mean:
-
-- A `users` table in `state/db.py` with hashed passwords and metadata.
-- A `user_id` foreign key on every persistence table — scenarios,
-  watchlists, portfolios, alerts, screener saves, etc. (≈ a dozen tables).
-- Per-user data scoping on every read/write across the codebase.
-- Session management, password resets, email verification, role-based
-  access — and the policy decisions that go with them.
-- A migration from the current schema (`v3`) plus a backfill of existing
-  rows under a default user.
-
-That's a large architectural change. It's not the right tool for the actual
-need here, which is "keep casual visitors out of my deployed Streamlit app."
-A single shared password does exactly that, with one file, no new
-dependencies, no schema changes, and ~250 lines of code.
-
-If multi-user becomes the real requirement, that's a future project — start
-fresh with a proper user identity model rather than retrofitting users onto
-this gate.
+`state/vault.py` provides stdlib-only field-level encryption for
+sensitive channel targets (webhook URLs, SMS phone numbers,
+PagerDuty integration keys). The vault key is read from env;
+bulk encrypt/decrypt + 2-secret rotation window are exposed via
+the in-app *Vault* panel and `tools.ops vault` CLI.
 
 ---
 
 ## Files
 
-- `auth/__init__.py` — package marker; re-exports the public API.
-- `auth/gate.py` — engine functions + Streamlit-facing `require_auth`/`logout`.
-- `tests/test_auth_gate.py` — 24 unit tests covering hashing, verification,
-  env-var handling, lockout, and the engine/Streamlit boundary.
-- `app.py` — wires `require_auth()` in immediately after `set_page_config`.
+- `auth/__init__.py` — package marker; re-exports public API.
+- `auth/gate.py` — engine + Streamlit gates (`require_auth`, `require_auth_with_users`).
+- `auth/users.py` — `users` table CRUD: `signup`, `login`, `get_user`, etc.
+- `auth/mfa.py` — TOTP enrolment, verification, recovery codes (stdlib RFC 6238).
+- `auth/tokens.py` — per-user API tokens for `worker.api_server`.
+- `auth/invitations.py` — single-use signup tokens for invited users.
+- `auth/settings.py` — per-user preferences (timezone, theme, defaults).
+- `auth/notification_prefs.py` — per-user notification severity / type / quiet-hours filters.
+- `auth/calendar_tokens.py` — per-user tokens for the ICS calendar feed.
+- `auth/rate_limit.py` — per-user token-bucket rate limiting (for the HTTP API).
+- `auth/audit.py` — per-user audit-log entries.
+- `app.py` — wires `require_auth_with_users()` in immediately after `set_page_config`.
+
+Tests live alongside in `tests/test_auth_*.py` — unit coverage for hashing,
+verification, env-var handling, lockout, signup/login, MFA enrolment +
+verification, recovery code single-use semantics, token issuance + revocation,
+and the engine/Streamlit boundary.
