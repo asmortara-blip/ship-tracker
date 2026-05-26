@@ -569,6 +569,13 @@ _RE_PORT_SUPPLY_SNAPSHOT_ONE = re.compile(
     r"^/api/v1/ports/supply-lines/snapshots/(?P<date>\d{4}-\d{2}-\d{2})/?$"
 )
 
+# Spillover graph — lead-lag contagion edges derived from snapshot
+# history. Answers "who follows port A?" Query params control the
+# lookahead window + filter thresholds.
+_RE_PORT_SPILLOVER_GRAPH = re.compile(
+    r"^/api/v1/ports/spillover-graph/?$"
+)
+
 # Module-level cache for the rendered OpenAPI JSON bytes. The first
 # request builds + serializes the spec; every subsequent request just
 # writes the cached bytes to the wfile. ``None`` means "not yet
@@ -699,6 +706,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
                 _RE_PORT_SUPPLY_LINES, _RE_PORT_SUPPLY_LINES_XLSX,
                 _RE_PORT_SUPPLY_SNAPSHOTS_LIST, _RE_PORT_SUPPLY_SNAPSHOT_ONE,
+                _RE_PORT_SPILLOVER_GRAPH,
             )
         )
 
@@ -775,6 +783,10 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if _RE_PORT_SUPPLY_SNAPSHOTS_LIST.match(path):
                 self._list_port_supply_snapshots(query)
+                return
+
+            if _RE_PORT_SPILLOVER_GRAPH.match(path):
+                self._serve_port_spillover_graph(query)
                 return
 
             if _RE_ALERTS_LIST.match(path):
@@ -2515,6 +2527,160 @@ class APIHandler(BaseHTTPRequestHandler):
                 "per_port":          [_to_dict(r) for r in per_port_rows],
                 "regional_rollup":   [_to_dict(r) for r in regional_rows],
                 "now_utc":           datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+
+    # ── Endpoint: GET /api/v1/ports/spillover-graph ─────────────────
+
+    def _serve_port_spillover_graph(self, query: dict) -> None:
+        """Return the lead-lag contagion graph as JSON.
+
+        Walks the persisted snapshot history (up to the requested
+        ``window_days``) and runs ``processing.port_spillover_graph.
+        build_spillover_graph`` over it. Each edge in the response
+        carries support + lift so a UI can rank "who follows port A"
+        without re-running the analysis.
+
+        Query params:
+          ``container_type``  — default 40FT_DRY
+          ``window_days``     — how far back into snapshot history
+                                to walk; default 60, max 365
+          ``lag_within_days`` — lookahead window for contagion;
+                                default 3, max 14
+          ``min_co``          — minimum co-occurrence count to keep
+                                an edge; default 2, min 1
+          ``min_lift``        — minimum lift to keep an edge;
+                                default 1.0, min 0.0
+
+        Errors:
+          * 400 on bad container_type or out-of-range numeric params
+          * 503 if the snapshot-history walk fails (no fallback —
+            this endpoint exists to surface what's been persisted)
+        """
+        from datetime import date as _date, timedelta as _td
+
+        try:
+            from processing.port_spillover_graph import build_spillover_graph
+            from processing.port_supply_history import (
+                list_snapshot_dates, load_snapshot,
+            )
+        except Exception as exc:
+            logger.exception(f"api /spillover-graph import failed: {exc}")
+            _send_json(
+                self, HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        # Container type validation — same allowlist as the other endpoints.
+        allowed_ctypes = {
+            "40FT_DRY", "20FT_DRY", "40FT_HC",
+            "40FT_REEFER", "20FT_TANK",
+        }
+        container_type = (query.get("container_type", ["40FT_DRY"])
+                          or ["40FT_DRY"])[0]
+        if container_type not in allowed_ctypes:
+            _send_bad_request(
+                self,
+                f"bad container_type: {container_type} (allowed: "
+                f"{sorted(allowed_ctypes)})",
+            )
+            return
+
+        # Numeric params with bounds.
+        def _int_param(name: str, default: int, lo: int, hi: int) -> int | None:
+            raw = (query.get(name, [str(default)]) or [str(default)])[0]
+            try:
+                v = int(raw)
+            except (TypeError, ValueError):
+                _send_bad_request(
+                    self, f"{name} must be an integer; got {raw!r}",
+                )
+                return None
+            if not lo <= v <= hi:
+                _send_bad_request(
+                    self, f"{name} out of range [{lo}, {hi}]: {v}",
+                )
+                return None
+            return v
+
+        window_days = _int_param("window_days", 60, 2, 365)
+        if window_days is None:
+            return
+        lag_within_days = _int_param("lag_within_days", 3, 1, 14)
+        if lag_within_days is None:
+            return
+        min_co = _int_param("min_co", 2, 1, 100)
+        if min_co is None:
+            return
+
+        raw_lift = (query.get("min_lift", ["1.0"]) or ["1.0"])[0]
+        try:
+            min_lift = float(raw_lift)
+        except (TypeError, ValueError):
+            _send_bad_request(self, f"min_lift must be a number; got {raw_lift!r}")
+            return
+        if min_lift < 0.0:
+            _send_bad_request(self, f"min_lift must be >= 0; got {min_lift}")
+            return
+
+        # Walk the snapshot history. Quietly skip dates that don't have
+        # the requested container's snapshot — caller doesn't need to
+        # know about reefer-only days when querying for 40FT_DRY.
+        try:
+            today = _date.today()
+            since = today - _td(days=window_days)
+            all_dates = list_snapshot_dates()
+            in_window = [d for d in all_dates if d >= since]
+            history: list[list] = []
+            for d in in_window:
+                try:
+                    rows = load_snapshot(d, container_type=container_type)
+                    history.append(rows)
+                except FileNotFoundError:
+                    continue
+        except Exception as exc:
+            logger.exception(f"api /spillover-graph walk failed: {exc}")
+            _send_json(
+                self, HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        graph = build_spillover_graph(
+            history,
+            lag_within_days=lag_within_days,
+            min_co_occurrences=min_co,
+            min_lift=min_lift,
+        )
+
+        _send_json(
+            self, HTTPStatus.OK,
+            {
+                "container_type":   container_type,
+                "window_days":      window_days,
+                "lag_within_days":  graph.lag_within_days,
+                "min_co":           min_co,
+                "min_lift":         min_lift,
+                "n_days_examined":  graph.n_days_examined,
+                "n_unique_sources": graph.n_unique_sources,
+                "n_unique_targets": graph.n_unique_targets,
+                "total_edges":      len(graph.edges),
+                "edges": [
+                    {
+                        "source_locode":       e.source_locode,
+                        "target_locode":       e.target_locode,
+                        "co_occurrence_count": e.co_occurrence_count,
+                        "source_event_count":  e.source_event_count,
+                        "support":             round(e.support, 4),
+                        "target_base_rate":    round(e.target_base_rate, 4),
+                        "lift":                round(e.lift, 4),
+                        "lag_within_days":     e.lag_within_days,
+                    }
+                    for e in graph.edges
+                ],
+                "now_utc": datetime.now(timezone.utc).isoformat(),
             },
         )
 

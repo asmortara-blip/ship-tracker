@@ -385,6 +385,88 @@ def check_port_deficit_alerts(
     return alerts
 
 
+def check_company_concentration_alerts(
+    *,
+    container_type: str = "40FT_DRY",
+    fire_threshold_hhi: float = 0.45,
+    critical_threshold_hhi: float = 0.85,
+    top_ports_in_body: int = 3,
+) -> list[ShippingAlert]:
+    """Fire when a ticker's port-footprint HHI signals single-port risk.
+
+    Wraps ``processing.company_concentration_alerts.compute_concentration_alerts``
+    over the live footprints from
+    ``processing.port_supply_lines.build_company_port_footprints``.
+
+    HHI bands (default thresholds):
+      * ``hhi >= 0.85``  → CRITICAL ("Single-Port Risk")
+      * ``hhi >= 0.45``  → HIGH ("Concentrated")
+      * below            → no alert
+
+    Each alert's body carries the top-3 ports + their shares so
+    operators can see WHICH port the ticker is concentrated through
+    without re-running the footprint analysis. Standard dedupe via
+    (alert_type, severity, ticker) means a ticker that stays
+    concentrated across multiple ticks fires once, not repeatedly.
+    """
+    try:
+        from processing.company_concentration_alerts import (
+            compute_concentration_alerts,
+        )
+        from processing.port_supply_lines import build_company_port_footprints
+    except Exception as exc:
+        logger.debug(f"check_company_concentration_alerts: import failed: {exc}")
+        return []
+
+    try:
+        footprints = build_company_port_footprints(container_type=container_type)
+    except Exception as exc:
+        logger.warning(f"check_company_concentration_alerts: build failed: {exc}")
+        return []
+
+    try:
+        concentration_alerts = compute_concentration_alerts(
+            footprints,
+            fire_threshold_hhi=fire_threshold_hhi,
+            critical_threshold_hhi=critical_threshold_hhi,
+            top_ports_in_body=top_ports_in_body,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"check_company_concentration_alerts: compute failed: {exc}"
+        )
+        return []
+
+    alerts: list[ShippingAlert] = []
+    for ca in concentration_alerts:
+        top_ports_clause = (
+            "Top ports: " + ", ".join(
+                f"{locode} ({share * 100:.0f}%)" for locode, share in ca.top_ports
+            )
+            if ca.top_ports else "No port-share data available."
+        )
+        alerts.append(_make(
+            alert_type="COMPANY_CONCENTRATION",
+            severity=ca.severity,
+            title=(
+                f"{ca.ticker} Port Concentration: "
+                f"HHI {ca.hhi:.2f} ({ca.concentration_band})"
+            ),
+            body=(
+                f"{ca.ticker} carries port-footprint HHI={ca.hhi:.2f} "
+                f"across {ca.port_count} port(s) — "
+                f"{ca.concentration_band}. {top_ports_clause} A disruption "
+                f"at the dominant port would impact most of this ticker's "
+                f"container flow."
+            ),
+            ticker=ca.ticker,
+            value=ca.hhi,
+            threshold=fire_threshold_hhi,
+            change_pct=ca.hhi - fire_threshold_hhi,
+        ))
+    return alerts
+
+
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
     """Fire if any port congestion score exceeds threshold."""
     alerts: list[ShippingAlert] = []
@@ -597,6 +679,15 @@ def run_all_checks(
         all_alerts.extend(check_port_deficit_alerts())
     except Exception as exc:
         logger.warning(f"Port deficit alert check failed: {exc}")
+
+    # Company concentration alerts — single-port-failure-risk detector
+    # over the same port-supply joiner output. Independent of port-
+    # deficit alerts: a ticker can be safely concentrated (no deficit
+    # on its dominant port) and still benefit from the warning.
+    try:
+        all_alerts.extend(check_company_concentration_alerts())
+    except Exception as exc:
+        logger.warning(f"Company concentration alert check failed: {exc}")
 
     all_alerts.sort(key=lambda a: (
         _SEVERITY_ORDER.get(a.severity, 99),

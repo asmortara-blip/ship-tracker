@@ -1,5 +1,5 @@
 {
-  "total": 14,
+  "total": 17,
   "validators": [
     {
       "headline_label": "Best component",
@@ -200,6 +200,48 @@
         "shock_multiplier": 12.0
       },
       "summary": "Anomaly recovery across 8 run(s) of 25 quiet + 3 shock days at baseline=5.0, multiplier=12.0x, noise=\u00b12.0: mean recovery=69.6% (worst 56.5%), shock recall=100.0%, quiet precision=65.0%; passed (recall>=90% AND recovery>=65%): True"
+    },
+    {
+      "headline_label": "JSD checks pass rate",
+      "headline_value": "100.0% (5/5)",
+      "healthy": true,
+      "name": "Cargo-Flow JSD Stability",
+      "raw": {
+        "n_runs": 5,
+        "pass_rate": 1.0,
+        "pass_threshold": 0.95,
+        "passed": true,
+        "passes": 5
+      },
+      "summary": "Cargo-flow JSD stability: 5/5 runs passed (identity + swap + disjoint checks); pass rate 100% (threshold 95%)"
+    },
+    {
+      "headline_label": "Persistence checks pass rate",
+      "headline_value": "100.0% (5/5)",
+      "healthy": true,
+      "name": "Capacity-Demand Persistence",
+      "raw": {
+        "n_runs": 5,
+        "pass_rate": 1.0,
+        "pass_threshold": 0.95,
+        "passed": true,
+        "passes": 5
+      },
+      "summary": "Capacity-demand persistence: 5/5 runs correctly classified surplus + balanced histories; pass rate 100% (threshold 95%)"
+    },
+    {
+      "headline_label": "Edge recovery pass rate",
+      "headline_value": "100.0% (5/5)",
+      "healthy": true,
+      "name": "Spillover Graph Recall",
+      "raw": {
+        "n_runs": 5,
+        "pass_rate": 1.0,
+        "pass_threshold": 0.95,
+        "passed": true,
+        "passes": 5
+      },
+      "summary": "Spillover graph recall: 5/5 runs correctly recovered planted A\u2192B edge with support=1.0 + lift>1.0; pass rate 100% (threshold 95%)"
     }
   ]
 }

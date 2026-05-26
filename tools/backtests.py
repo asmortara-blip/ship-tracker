@@ -349,6 +349,102 @@ def _run_port_supply_lines() -> BacktestResult:
     )
 
 
+def _run_cargo_flow_jsd_stability() -> BacktestResult:
+    from processing.analytics_backtests import validate_cargo_flow_jsd_stability
+    r = validate_cargo_flow_jsd_stability()
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": "identity / swap / disjoint",
+         "value": (
+             f"{'OK' if pr['identity_ok'] else 'X'} / "
+             f"{'OK' if pr['swap_ok'] else 'X'} / "
+             f"{'OK' if pr['disjoint_ok'] else 'X'}"
+         )}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="Cargo-Flow JSD Stability",
+        headline_label="JSD checks pass rate",
+        headline_value=(
+            f"{r['pass_rate'] * 100:.1f}% ({r['passes']}/{r['n_runs']})"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":         r["n_runs"],
+            "passes":         r["passes"],
+            "pass_rate":      r["pass_rate"],
+            "pass_threshold": r["pass_threshold"],
+            "passed":         bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
+def _run_capacity_demand_persistence() -> BacktestResult:
+    from processing.analytics_backtests import (
+        validate_capacity_demand_persistence,
+    )
+    r = validate_capacity_demand_persistence()
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": "surplus / balanced classification",
+         "value": (
+             f"{pr['surplus_direction']} {'OK' if pr['surplus_alert'] else 'X'} / "
+             f"{pr['balanced_direction']} {'OK' if not pr['balanced_alert'] else 'X'}"
+         )}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="Capacity-Demand Persistence",
+        headline_label="Persistence checks pass rate",
+        headline_value=(
+            f"{r['pass_rate'] * 100:.1f}% ({r['passes']}/{r['n_runs']})"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":         r["n_runs"],
+            "passes":         r["passes"],
+            "pass_rate":      r["pass_rate"],
+            "pass_threshold": r["pass_threshold"],
+            "passed":         bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
+def _run_spillover_graph_recall() -> BacktestResult:
+    from processing.analytics_backtests import validate_spillover_graph_recall
+    r = validate_spillover_graph_recall()
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": "edge recovered (support, lift)",
+         "value": (
+             f"{'OK' if pr['passed'] else 'X'} "
+             f"(lift={pr['lift']})"
+         )}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="Spillover Graph Recall",
+        headline_label="Edge recovery pass rate",
+        headline_value=(
+            f"{r['pass_rate'] * 100:.1f}% ({r['passes']}/{r['n_runs']})"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":         r["n_runs"],
+            "passes":         r["passes"],
+            "pass_rate":      r["pass_rate"],
+            "pass_threshold": r["pass_threshold"],
+            "passed":         bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 def _run_snapshot_diff_anomaly() -> BacktestResult:
     from processing.snapshot_diff_anomaly_backtest import (
         validate_anomaly_recovery,
@@ -515,6 +611,9 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_port_correlation,
     _run_historical_event_replay,
     _run_snapshot_diff_anomaly,
+    _run_cargo_flow_jsd_stability,
+    _run_capacity_demand_persistence,
+    _run_spillover_graph_recall,
 ]
 
 

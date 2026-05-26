@@ -184,13 +184,13 @@ def test_backtests_health_returns_200_with_all_validators(server):
 
 
 def test_backtests_health_returns_200_when_all_healthy(server):
-    """On the bundled synth all 14 validators read healthy → 200."""
+    """On the bundled synth all 17 validators read healthy → 200."""
     r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["healthy_count"] == body["total"]
-    assert body["total"] == 14
+    assert body["total"] == 17
 
 
 def test_backtests_health_does_not_require_authorization_header(server):
@@ -3540,3 +3540,78 @@ def test_snapshot_fetch_rejects_bad_container_type(
         headers=_bearer(token), timeout=10,
     )
     assert r.status_code == 400
+
+
+# ── Spillover graph endpoint (GET /api/v1/ports/spillover-graph) ────────
+
+
+def test_spillover_graph_requires_auth(server):
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph", timeout=10,
+    )
+    assert r.status_code == 401
+
+
+def test_spillover_graph_returns_empty_graph_when_no_history(
+    server, isolated_snapshot_root,
+):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_edges"] == 0
+    assert body["edges"] == []
+    assert body["container_type"] == "40FT_DRY"
+
+
+def test_spillover_graph_rejects_bad_container_type(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph?container_type=BADTYPE",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_spillover_graph_rejects_out_of_range_window_days(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph?window_days=9999",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_spillover_graph_rejects_negative_min_lift(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph?min_lift=-0.5",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_spillover_graph_response_envelope(
+    server, isolated_snapshot_root,
+):
+    """Even if no snapshot history is present, the response carries the
+    canonical envelope (container_type, lag_within_days, edges=[], etc.)."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/spillover-graph?lag_within_days=5&min_co=3",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["lag_within_days"] == 5
+    assert body["min_co"] == 3
+    assert "edges" in body
+    assert isinstance(body["edges"], list)

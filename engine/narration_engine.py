@@ -1423,12 +1423,42 @@ def _template_daily_narration(context: NarrationContext) -> DailyNarration:
             f"up {wow*100:+.1f}pp week-over-week" if abs(wow) >= 0.005
             else "roughly flat week-over-week"
         )
+        # Per-component attribution — answers "what's driving today's
+        # score" using the live ShippingStressReport's component_scores +
+        # route_stress. Defensive: a stress_report missing either field
+        # falls back to top_disruptions, the legacy list of strings.
+        attribution_sentence = ""
+        if context.stress_report is not None:
+            try:
+                from processing.ssi_attribution import attribute_ssi
+                attribution = attribute_ssi(context.stress_report)
+                if attribution.top_component and attribution.ssi_total > 0:
+                    top_comp = attribution.component_contributions[0]
+                    pieces = [
+                        f"Top driver: {top_comp.component} "
+                        f"({top_comp.pct_share * 100:.0f}% of weighted score)"
+                    ]
+                    if attribution.route_contributions:
+                        worst = attribution.route_contributions[0]
+                        pieces.append(
+                            f"worst route: {worst.route_name}"
+                            + (
+                                f" ({worst.dominant_driver})"
+                                if worst.dominant_driver else ""
+                            )
+                        )
+                    attribution_sentence = "; ".join(pieces) + "."
+            except Exception:
+                # Attribution must NEVER break the briefing — fall back
+                # to the legacy top_disruptions string.
+                attribution_sentence = ""
+        legacy_drivers = (
+            "Drivers: " + "; ".join(ssi.get("top_disruptions", [])[:3]) + "."
+            if ssi.get("top_disruptions") else ""
+        )
         body_paragraphs.append(
             f"Fleet-wide stress is at {ssi_val:.2f} ({ssi_lbl}), {wow_phrase}. "
-            + (
-                "Drivers: " + "; ".join(ssi.get("top_disruptions", [])[:3]) + "."
-                if ssi.get("top_disruptions") else ""
-            )
+            + (attribution_sentence or legacy_drivers)
         )
     if context.top_ideas:
         idea_lines = [

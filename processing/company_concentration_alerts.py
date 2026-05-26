@@ -168,28 +168,54 @@ def compute_concentration_alerts(
         ticker = str(getattr(fp, "ticker", "") or "")
         if not ticker:
             continue
-        port_count = int(getattr(fp, "port_count", 0) or 0)
-        if port_count <= 0:
+
+        # Two footprint shapes are accepted:
+        #   * Live ``processing.port_supply_lines.CompanyPortFootprint`` —
+        #     exposes ``port_exposures`` (each with ``port_locode`` +
+        #     ``exposure_weight``). Weights must be renormalized to
+        #     shares (they're absolute, not fractional).
+        #   * Test fixture stub — exposes ``ports`` (each with ``locode`` +
+        #     ``share_within_company`` already normalized).
+        # Try live shape first, fall back to stub. Each per-port entry
+        # is collected into (locode, raw_weight) then normalized.
+        raw_pairs: list[tuple[str, float]] = []
+        live_entries = list(getattr(fp, "port_exposures", []) or [])
+        if live_entries:
+            for p in live_entries:
+                w = getattr(p, "exposure_weight", None)
+                if w is None:
+                    continue
+                raw_pairs.append((
+                    str(getattr(p, "port_locode", "") or ""),
+                    float(w),
+                ))
+        else:
+            stub_entries = list(getattr(fp, "ports", []) or [])
+            for p in stub_entries:
+                s = getattr(p, "share_within_company", None)
+                if s is None:
+                    s = getattr(p, "share", None)
+                if s is None:
+                    continue
+                raw_pairs.append((
+                    str(getattr(p, "locode", "") or ""),
+                    float(s),
+                ))
+
+        if not raw_pairs:
             continue
 
-        # ``ports`` is the per-port breakdown — each entry exposes
-        # ``locode`` and ``share_within_company`` (or ``share`` for
-        # legacy fixtures). Be tolerant of both names.
-        ports = list(getattr(fp, "ports", []) or [])
-        shares: list[float] = []
-        port_share_pairs: list[tuple[str, float]] = []
-        for p in ports:
-            s = getattr(p, "share_within_company", None)
-            if s is None:
-                s = getattr(p, "share", None)
-            if s is None:
-                continue
-            shares.append(float(s))
-            port_share_pairs.append(
-                (str(getattr(p, "locode", "") or ""), float(s)),
-            )
-        if not shares:
+        # Renormalize to shares so the HHI math holds regardless of
+        # whether the input weights summed to 1.0 already (stub fixtures)
+        # or to an arbitrary total (live exposure_weight values).
+        total = sum(w for _loc, w in raw_pairs if w > 0)
+        if total <= 0:
             continue
+        port_share_pairs = [(loc, w / total) for loc, w in raw_pairs if w > 0]
+        if not port_share_pairs:
+            continue
+        shares = [s for _loc, s in port_share_pairs]
+        port_count = len(port_share_pairs)
 
         hhi = _hhi_from_shares(shares)
         if hhi < fire_threshold_hhi:

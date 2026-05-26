@@ -233,6 +233,25 @@ TEMPLATES: list[RuleTemplate] = [
         severity="HIGH",
         cooldown_minutes=720,
     ),
+    RuleTemplate(
+        slug="company-port-concentration-45hhi",
+        name="Company port-footprint HHI >=0.45",
+        description=(
+            "Any tracked ticker whose port-footprint HHI crosses 0.45 — the "
+            "boundary of the 'Concentrated' band. A disruption at the "
+            "dominant port would impact most of that ticker's container "
+            "flow. CRITICAL ladder at HHI >= 0.85 (Single-Port Risk). "
+            "Reads from processing.port_supply_lines + computes via "
+            "processing.company_concentration_alerts; emits a "
+            "COMPANY_CONCENTRATION alert with the top-3 ports + their shares "
+            "baked into the body."
+        ),
+        category="company",
+        metric="port_footprint_hhi",
+        threshold_pct=45.0,
+        severity="HIGH",
+        cooldown_minutes=720,
+    ),
 
     # ── event ──────────────────────────────────────────────────────────────
     RuleTemplate(
