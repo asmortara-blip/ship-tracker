@@ -3517,7 +3517,35 @@ def _render_backtest_coverage() -> None:
             "sublabel": "validator unavailable",
         })
 
-    metric_card_row(cards, columns=5)
+    # Leading indicators backtest
+    try:
+        from processing.leading_indicators_backtest import (
+            backtest_leading_indicators,
+        )
+        li_report = backtest_leading_indicators()
+        spread_pp = li_report.spread_bullish_vs_bearish * 100
+        cards.append({
+            "label":   "Leading Indicators",
+            "value":   f"{spread_pp:+.2f}pp",
+            "accent":  C_HIGH if li_report.signals_calibrated else C_LOW,
+            "sublabel": (
+                f"BULLISH vs BEARISH · calibrated: "
+                f"{'yes' if li_report.signals_calibrated else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — leading indicators backtest unavailable")
+        cards.append({
+            "label":   "Leading Indicators",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # 6 cards → flow in two rows of 3 so each card has enough width for its
+    # sublabel without truncation.
+    metric_card_row(cards[:3], columns=3)
+    metric_card_row(cards[3:], columns=3)
     st.caption(
         "All four validators are deterministic and seed-stable; numbers "
         "above are computed against the bundled synthetic-history "
