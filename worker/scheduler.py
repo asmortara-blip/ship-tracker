@@ -895,6 +895,120 @@ def run_port_supply_snapshot_job(
 
 
 @_track_run
+def run_cargo_mix_snapshot_job(
+    *,
+    window_days: int = 14,
+    jsd_anomaly_threshold: float = 0.15,
+) -> dict:
+    """Persist today's per-route cargo mix + identify anomalous routes.
+
+    Wraps ``processing.cargo_mix_history.run_daily_cargo_mix_snapshot_job``
+    with the canonical contract — never raises, returns count dict,
+    logs the anomaly count inline. Once the trailing window populates
+    (>= 1 prior day), CARGO_FLOW_ANOMALY alerts will fire from
+    ``engine.alert_engine_v2.check_cargo_flow_anomaly_alerts`` on the
+    same daily tick.
+
+    Returns ``{"ok": bool, "n_routes_saved": int, "bytes_written": int,
+    "n_anomaly_routes": int, "anomaly_routes": list[str]}``.
+    """
+    try:
+        from processing.cargo_mix_history import (
+            run_daily_cargo_mix_snapshot_job as _impl,
+        )
+        result = _impl(
+            window_days=window_days,
+            jsd_anomaly_threshold=jsd_anomaly_threshold,
+        )
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_cargo_mix_snapshot_job: top-level failure: {exc}")
+        return {
+            "ok": False, "n_routes_saved": 0, "bytes_written": 0,
+            "n_anomaly_routes": 0, "anomaly_routes": [],
+        }
+
+    counts = {
+        "ok":               bool(result.ok),
+        "n_routes_saved":   int(result.n_routes_saved),
+        "bytes_written":    int(result.bytes_written),
+        "n_anomaly_routes": int(result.n_anomaly_routes),
+        "anomaly_routes":   list(result.anomaly_routes),
+    }
+    if result.ok:
+        anomaly_clause = (
+            f"; anomalous: {', '.join(result.anomaly_routes)}"
+            if result.anomaly_routes else ""
+        )
+        logger.info(
+            f"run_cargo_mix_snapshot_job: saved "
+            f"{result.bytes_written:,}B for {result.n_routes_saved} route(s)"
+            f"{anomaly_clause}"
+        )
+    else:
+        logger.warning(
+            f"run_cargo_mix_snapshot_job: save failed — {result.error_msg}"
+        )
+    return counts
+
+
+@_track_run
+def run_company_risk_snapshot_job(
+    *,
+    container_type: str = "40FT_DRY",
+    max_lookback_days: int = 14,
+) -> dict:
+    """Persist today's per-ticker risk scores + detect band transitions.
+
+    Wraps ``processing.company_risk_history.run_daily_company_risk_snapshot_job``
+    with the canonical contract. Logs band transitions inline so
+    operators see "ZIM Elevated → High" the same tick it appears.
+
+    Returns ``{"ok": bool, "n_tickers_saved": int, "bytes_written": int,
+    "n_band_transitions": int, "band_transitions": list[dict]}``.
+    """
+    try:
+        from processing.company_risk_history import (
+            run_daily_company_risk_snapshot_job as _impl,
+        )
+        result = _impl(
+            container_type=container_type,
+            max_lookback_days=max_lookback_days,
+        )
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_company_risk_snapshot_job: top-level failure: {exc}")
+        return {
+            "ok": False, "n_tickers_saved": 0, "bytes_written": 0,
+            "n_band_transitions": 0, "band_transitions": [],
+        }
+
+    counts = {
+        "ok":                   bool(result.ok),
+        "n_tickers_saved":      int(result.n_tickers_saved),
+        "bytes_written":        int(result.bytes_written),
+        "n_band_transitions":   len(result.band_transitions),
+        "band_transitions":     list(result.band_transitions),
+    }
+    if result.ok:
+        transition_clause = ""
+        if result.band_transitions:
+            sample = "; ".join(
+                f"{t['ticker']} {t['prior_band']}→{t['current_band']}"
+                for t in result.band_transitions[:3]
+            )
+            transition_clause = f"; band changes: {sample}"
+        logger.info(
+            f"run_company_risk_snapshot_job: saved "
+            f"{result.bytes_written:,}B for {result.n_tickers_saved} ticker(s)"
+            f"{transition_clause}"
+        )
+    else:
+        logger.warning(
+            f"run_company_risk_snapshot_job: save failed — {result.error_msg}"
+        )
+    return counts
+
+
+@_track_run
 def run_snapshot_integrity_check_job(
     *,
     container_type: str = "40FT_DRY",
@@ -1692,6 +1806,23 @@ def main(argv: Optional[list] = None) -> int:
         run_multi_container_snapshot_job()
     except Exception as exc:
         logger.warning(f"main: multi container snapshot step failed: {exc}")
+
+    # Per-route cargo mix snapshot — feeds CARGO_FLOW_ANOMALY alerts
+    # on the next tick once the trailing window populates. Runs in
+    # the snapshot block so it shares the same retention + integrity
+    # cadence. Never raises.
+    try:
+        run_cargo_mix_snapshot_job()
+    except Exception as exc:
+        logger.warning(f"main: cargo mix snapshot step failed: {exc}")
+
+    # Per-ticker risk score snapshot — feeds the company-risk trend
+    # UI + band-transition narrations. Runs alongside the cargo mix
+    # snapshot so both daily history streams stay in sync. Never raises.
+    try:
+        run_company_risk_snapshot_job()
+    except Exception as exc:
+        logger.warning(f"main: company risk snapshot step failed: {exc}")
 
     # Sweep recent snapshot dirs for missing or corrupted files. Runs
     # AFTER all snapshot writes so anything wrong is caught the same

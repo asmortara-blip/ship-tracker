@@ -907,6 +907,149 @@ def _render_historical_trends(chains: list, container_type: str) -> None:
                 )
 
 
+def _render_spillover_graph(container_type: str) -> None:
+    """Contagion-network view: lead-lag edges between ports.
+
+    Walks the persisted snapshot history via
+    ``processing.port_spillover_graph.build_spillover_graph`` and
+    renders a sortable leaderboard of the strongest edges. Each row
+    is "source → target (support, lift, count)" so the operator can
+    read it as "when port X enters deficit, port Y follows N times
+    with M lift over chance".
+
+    Hidden silently when there's not enough history (< 2 days of
+    snapshots) — operators see this section appear after the second
+    day's snapshot is persisted.
+    """
+    try:
+        from processing.port_spillover_graph import build_spillover_graph
+        from processing.port_supply_history import (
+            list_snapshot_dates, load_snapshot,
+        )
+    except Exception:
+        logger.exception("spillover graph imports failed")
+        return
+
+    section_header(
+        "Contagion network — who follows whom",
+        "Lead-lag edges derived from snapshot history. "
+        "support = P(target | source). lift > 1 = follows more than chance.",
+    )
+
+    # Sidebar-style controls: lookback window + lookahead lag. Kept
+    # narrow so the section doesn't dominate the tab visually.
+    col_w, col_l, col_t = st.columns(3)
+    with col_w:
+        window_days = st.number_input(
+            "History window (days)",
+            min_value=2, max_value=180, value=60, step=1,
+            key="spillover_window_days",
+            help="How many days of snapshot history to walk.",
+        )
+    with col_l:
+        lag = st.number_input(
+            "Lookahead lag (days)",
+            min_value=1, max_value=14, value=3, step=1,
+            key="spillover_lag",
+            help="Within how many days a follow-on entry counts.",
+        )
+    with col_t:
+        top_n = st.number_input(
+            "Top N edges",
+            min_value=5, max_value=100, value=20, step=5,
+            key="spillover_top_n",
+            help="Cap on rows shown in the leaderboard.",
+        )
+
+    # Walk the persisted snapshot history. Pulling load_snapshot per
+    # date keeps memory bounded — each list is freed before the next.
+    try:
+        from datetime import date as _date, timedelta as _td
+        today_dt = _date.today()
+        since = today_dt - _td(days=int(window_days))
+        all_dates = list_snapshot_dates()
+        in_window = [d for d in all_dates if d >= since]
+        history: list = []
+        for d in in_window:
+            try:
+                rows = load_snapshot(d, container_type=container_type)
+                history.append(rows)
+            except FileNotFoundError:
+                continue
+    except Exception:
+        logger.exception("spillover graph: history walk failed")
+        alert_banner(
+            "Could not read snapshot history for the contagion graph.",
+            level="warning",
+        )
+        return
+
+    if len(history) < 2:
+        alert_banner(
+            f"Need at least 2 snapshots to build the contagion graph "
+            f"(found {len(history)}). Once the daily worker accumulates "
+            "more history, the network will populate here.",
+            level="info",
+        )
+        return
+
+    try:
+        graph = build_spillover_graph(
+            history,
+            lag_within_days=int(lag),
+            min_co_occurrences=2,
+            min_lift=1.0,
+        )
+    except Exception:
+        logger.exception("spillover graph: build_spillover_graph failed")
+        alert_banner(
+            "Failed to build the contagion graph.", level="warning",
+        )
+        return
+
+    if not graph.edges:
+        alert_banner(
+            f"No contagion edges detected in the last {graph.n_days_examined} "
+            f"day(s) at lag={graph.lag_within_days}d. Either supply has "
+            "stayed stable or the lookahead window is too tight.",
+            level="info",
+        )
+        return
+
+    # Headline metrics row.
+    metric_card_row([
+        {"label": "Days examined",  "value": str(graph.n_days_examined),
+         "delta": "", "color": C_TEXT2},
+        {"label": "Edges found",    "value": f"{len(graph.edges):,}",
+         "delta": "", "color": C_TEXT2},
+        {"label": "Unique sources", "value": str(graph.n_unique_sources),
+         "delta": "", "color": C_TEXT2},
+        {"label": "Unique targets", "value": str(graph.n_unique_targets),
+         "delta": "", "color": C_TEXT2},
+    ])
+
+    # Leaderboard table — top-N by lift.
+    top_edges = graph.edges[: int(top_n)]
+    table_rows: list[dict] = []
+    for e in top_edges:
+        table_rows.append({
+            "Source":     e.source_locode,
+            "Target":     e.target_locode,
+            "Co-occur":   f"{e.co_occurrence_count}",
+            "Source events": f"{e.source_event_count}",
+            "Support":    f"{e.support * 100:.0f}%",
+            "Base rate":  f"{e.target_base_rate * 100:.0f}%",
+            "Lift":       f"{e.lift:.2f}x",
+        })
+    wsj_market_table(
+        title=(
+            f"Top {len(table_rows)} contagion edges "
+            f"(lag ≤ {graph.lag_within_days}d, min co-occur=2, min lift=1.0)"
+        ),
+        rows=table_rows,
+    )
+
+
 def _render_company_footprint_drilldown(container_type: str) -> None:
     """Inverted view: pick a ticker → see its top exposed ports.
 
@@ -1124,9 +1267,18 @@ def render(**_kwargs) -> None:
             logger.exception("port_supply_lines: historical trends failed")
             st.error("Historical trends unavailable.")
 
+        section_divider("Contagion network")
+
+        # ── E. Spillover / contagion graph (snapshot-history derived) ──
+        try:
+            _render_spillover_graph(container_type)
+        except Exception:
+            logger.exception("port_supply_lines: spillover graph failed")
+            st.error("Contagion graph unavailable.")
+
         section_divider("Company footprint")
 
-        # ── E. Company → port reverse drilldown ────────────────────────
+        # ── F. Company → port reverse drilldown ────────────────────────
         try:
             _render_company_footprint_drilldown(container_type)
         except Exception:

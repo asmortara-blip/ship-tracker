@@ -467,6 +467,110 @@ def check_company_concentration_alerts(
     return alerts
 
 
+def check_cargo_flow_anomaly_alerts(
+    *,
+    window_days: int = 14,
+    jsd_alert_threshold: float = 0.15,
+    jsd_critical_threshold: float = 0.30,
+    jump_threshold_pp: float = 10.0,
+) -> list[ShippingAlert]:
+    """Fire when a route's cargo mix flips outside its trailing pattern.
+
+    Reads the persisted cargo-mix history from
+    ``processing.cargo_mix_history`` (populated by the daily scheduler
+    job). For each route in ``routes.route_registry.ROUTES``, compares
+    today's mix to the trailing-N-day median via Jensen-Shannon
+    divergence + per-category jump detection. Routes whose JSD lands at
+    or above ``jsd_alert_threshold`` emit a CARGO_FLOW_ANOMALY alert.
+
+    Severity ladder:
+      * ``jsd >= jsd_critical_threshold``  → CRITICAL (band: "shock")
+      * ``jsd >= jsd_alert_threshold``     → HIGH    (band: "anomalous")
+      * otherwise                          → no alert
+
+    Body carries the top-3 surges + top-3 collapses so operators see
+    WHICH categories drove the shift without re-running the analysis.
+    Dedupe via the standard (alert_type, severity, route_id) key.
+    """
+    try:
+        from processing.cargo_analyzer import get_route_cargo_mix
+        from processing.cargo_flow_anomaly import compute_cargo_flow_anomaly
+        from processing.cargo_mix_history import load_cargo_mix_for_route
+        from routes.route_registry import ROUTES
+    except Exception as exc:
+        logger.debug(f"check_cargo_flow_anomaly_alerts: import failed: {exc}")
+        return []
+
+    alerts: list[ShippingAlert] = []
+    for r in ROUTES:
+        route_id = getattr(r, "id", None)
+        if not route_id:
+            continue
+        try:
+            today_mix = get_route_cargo_mix(route_id, {})
+            history = load_cargo_mix_for_route(
+                route_id, window_days=window_days,
+            )
+            if not history:
+                # No trailing window yet — skip silently. Once the
+                # scheduler accumulates N days, this route picks up.
+                continue
+            report = compute_cargo_flow_anomaly(
+                route_id=route_id,
+                today_mix=today_mix,
+                history=history,
+                jump_threshold_pp=jump_threshold_pp,
+                jsd_elevated_threshold=jsd_alert_threshold,
+                trailing_window=window_days,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"check_cargo_flow_anomaly_alerts({route_id}): "
+                f"compute failed: {exc}"
+            )
+            continue
+
+        if report.jsd < jsd_alert_threshold:
+            continue
+
+        severity = (
+            "CRITICAL" if report.jsd >= jsd_critical_threshold else "HIGH"
+        )
+        surge_clause = (
+            "Top surges: " + ", ".join(
+                f"{j.category} {j.delta_pp:+.1f}pp" for j in report.surges[:3]
+            ) + "."
+            if report.surges else ""
+        )
+        collapse_clause = (
+            "Top collapses: " + ", ".join(
+                f"{j.category} {j.delta_pp:+.1f}pp" for j in report.collapses[:3]
+            ) + "."
+            if report.collapses else ""
+        )
+        route_name = getattr(r, "name", route_id)
+        alerts.append(_make(
+            alert_type="CARGO_FLOW_ANOMALY",
+            severity=severity,
+            title=(
+                f"Cargo Flow Anomaly: {route_name} — "
+                f"{report.drift_band} (JSD {report.jsd:.2f})"
+            ),
+            body=(
+                f"{route_name} ({route_id}) cargo mix has shifted from its "
+                f"trailing-{window_days}d baseline (JSD {report.jsd:.3f}, "
+                f"band: {report.drift_band}). {surge_clause} {collapse_clause} "
+                "Possible drivers: producer diversion, single bulk charter "
+                "in the trade-data sample, or a port-side disruption."
+            ).strip(),
+            route_id=route_id,
+            value=report.jsd,
+            threshold=jsd_alert_threshold,
+            change_pct=(report.jsd - jsd_alert_threshold) * 100.0,
+        ))
+    return alerts
+
+
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
     """Fire if any port congestion score exceeds threshold."""
     alerts: list[ShippingAlert] = []
@@ -688,6 +792,14 @@ def run_all_checks(
         all_alerts.extend(check_company_concentration_alerts())
     except Exception as exc:
         logger.warning(f"Company concentration alert check failed: {exc}")
+
+    # Cargo flow anomaly alerts — per-route mix shift vs trailing window.
+    # Requires the cargo_mix_history scheduler job to have accumulated
+    # at least one prior day's snapshot. Silent on fresh installs.
+    try:
+        all_alerts.extend(check_cargo_flow_anomaly_alerts())
+    except Exception as exc:
+        logger.warning(f"Cargo flow anomaly alert check failed: {exc}")
 
     all_alerts.sort(key=lambda a: (
         _SEVERITY_ORDER.get(a.severity, 99),

@@ -252,6 +252,25 @@ TEMPLATES: list[RuleTemplate] = [
         severity="HIGH",
         cooldown_minutes=720,
     ),
+    RuleTemplate(
+        slug="route-cargo-flow-anomaly-jsd15",
+        name="Route cargo flow anomaly (JSD >= 0.15)",
+        description=(
+            "Any route whose cargo mix shifts beyond a Jensen-Shannon "
+            "divergence of 0.15 from its trailing-14d median — the "
+            "'anomalous' band boundary. CRITICAL ladder at JSD >= 0.30 "
+            "(the 'shock' band). Reads from processing.cargo_mix_history "
+            "(populated daily by the worker) + scores via "
+            "processing.cargo_flow_anomaly; emits a CARGO_FLOW_ANOMALY "
+            "alert with the top-3 surges + collapses baked into the body. "
+            "Silent on fresh installs until the trailing window populates."
+        ),
+        category="route",
+        metric="cargo_flow_jsd",
+        threshold_pct=15.0,
+        severity="HIGH",
+        cooldown_minutes=720,
+    ),
 
     # ── event ──────────────────────────────────────────────────────────────
     RuleTemplate(
