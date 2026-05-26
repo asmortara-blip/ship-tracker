@@ -349,6 +349,45 @@ def _run_port_supply_lines() -> BacktestResult:
     )
 
 
+def _run_snapshot_diff_anomaly() -> BacktestResult:
+    from processing.snapshot_diff_anomaly_backtest import (
+        validate_anomaly_recovery,
+    )
+    r = validate_anomaly_recovery()
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": "recovery / shock-recall / quiet-precision",
+         "value": (
+             f"{pr['recovery_rate'] * 100:.0f}% / "
+             f"{pr['shock_recall'] * 100:.0f}% / "
+             f"{pr['quiet_precision'] * 100:.0f}%"
+         )}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="Snapshot Diff Anomaly Recovery",
+        headline_label="Mean recovery rate",
+        headline_value=(
+            f"{r['mean_recovery_rate'] * 100:.1f}% "
+            f"(worst run {r['min_recovery_rate'] * 100:.1f}%)"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":               r["n_runs"],
+            "noise":                r["noise"],
+            "shock_multiplier":     r["shock_multiplier"],
+            "pass_threshold":       r["pass_threshold"],
+            "mean_recovery_rate":   r["mean_recovery_rate"],
+            "min_recovery_rate":    r["min_recovery_rate"],
+            "mean_shock_recall":    r["mean_shock_recall"],
+            "mean_quiet_precision": r["mean_quiet_precision"],
+            "passed":               bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 def _run_historical_event_replay() -> BacktestResult:
     from processing.historical_event_replay import (
         replay_all_events, summarize_replay,
@@ -475,6 +514,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_company_supply_risk,
     _run_ssi_port_correlation,
     _run_historical_event_replay,
+    _run_snapshot_diff_anomaly,
 ]
 
 

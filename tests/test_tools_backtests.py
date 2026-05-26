@@ -31,7 +31,7 @@ def test_every_adapter_returns_a_backtestresult() -> None:
     a BacktestResult with the required string fields populated."""
     results = run_all_backtests()
     assert len(results) == len(ADAPTERS)
-    assert len(results) == 13
+    assert len(results) == 14
     for r in results:
         assert isinstance(r, BacktestResult)
         assert isinstance(r.name, str) and r.name
@@ -116,7 +116,7 @@ def test_cli_format_json_emits_valid_json(capsys) -> None:
     assert code == 0
     captured = capsys.readouterr().out
     payload = json.loads(captured)
-    assert payload["total"] == 13
+    assert payload["total"] == 14
 
 
 def test_cli_format_markdown_emits_table_header(capsys) -> None:

@@ -184,13 +184,13 @@ def test_backtests_health_returns_200_with_all_validators(server):
 
 
 def test_backtests_health_returns_200_when_all_healthy(server):
-    """On the bundled synth all 13 validators read healthy → 200."""
+    """On the bundled synth all 14 validators read healthy → 200."""
     r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["healthy_count"] == body["total"]
-    assert body["total"] == 13
+    assert body["total"] == 14
 
 
 def test_backtests_health_does_not_require_authorization_header(server):
@@ -3365,5 +3365,178 @@ def test_post_escalations_other_users_channel_rejected(server):
             "channel_id": bob_cid,
         },
         headers=_bearer(alice_token), timeout=5,
+    )
+    assert r.status_code == 400
+
+
+# ── Snapshot history endpoints (GET /snapshots + /snapshots/<date>) ──────
+
+
+@pytest.fixture
+def isolated_snapshot_root(monkeypatch, tmp_path):
+    """Per-test isolation for the snapshot persistence root."""
+    import processing.port_supply_history as psh
+    monkeypatch.setattr(psh, "SNAPSHOT_ROOT", tmp_path)
+    yield tmp_path
+
+
+def test_snapshots_list_requires_auth(server):
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots", timeout=10,
+    )
+    assert r.status_code == 401
+
+
+def test_snapshots_list_empty_when_no_snapshots(server, isolated_snapshot_root):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["dates"] == []
+    assert body["total"] == 0
+
+
+def test_snapshots_list_returns_persisted_dates(server, isolated_snapshot_root):
+    from datetime import date as _date
+    from processing.port_supply_history import save_snapshot
+    save_snapshot(snapshot_date=_date(2026, 5, 25), root=isolated_snapshot_root)
+    save_snapshot(snapshot_date=_date(2026, 5, 26), root=isolated_snapshot_root)
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "2026-05-25" in body["dates"]
+    assert "2026-05-26" in body["dates"]
+    assert body["total"] == 2
+
+
+def test_snapshots_list_container_type_filter(server, isolated_snapshot_root):
+    """container_type query filters to dates with that container's CSV."""
+    from datetime import date as _date
+    from processing.port_supply_history import save_snapshot
+    save_snapshot(
+        snapshot_date=_date(2026, 5, 26),
+        container_type="40FT_DRY", root=isolated_snapshot_root,
+    )
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots?container_type=40FT_REEFER",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # No reefer snapshot was planted → empty
+    assert body["dates"] == []
+    assert body["container_type"] == "40FT_REEFER"
+
+
+def test_snapshots_list_rejects_bad_container_type(server):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots?container_type=BADTYPE",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_snapshot_fetch_requires_auth(server):
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-05-26",
+        timeout=10,
+    )
+    assert r.status_code == 401
+
+
+def test_snapshot_fetch_rejects_bad_date_format(server):
+    """A path that matches the regex shape but fails fromisoformat. The
+    regex requires \\d{4}-\\d{2}-\\d{2}, so an invalid date like
+    2026-13-99 still has the right shape but fails parse."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-13-99",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_snapshot_fetch_returns_404_for_missing_date(
+    server, isolated_snapshot_root,
+):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-05-26",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 404
+
+
+def test_snapshot_fetch_returns_per_port_rows(server, isolated_snapshot_root):
+    from datetime import date as _date
+    from processing.port_supply_history import (
+        save_regional_snapshot, save_snapshot,
+    )
+    save_snapshot(snapshot_date=_date(2026, 5, 26), root=isolated_snapshot_root)
+    save_regional_snapshot(snapshot_date=_date(2026, 5, 26), root=isolated_snapshot_root)
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-05-26",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["date"] == "2026-05-26"
+    assert body["container_type"] == "40FT_DRY"
+    assert body["total_per_port"] >= 1
+    assert body["total_regional"] >= 1
+    assert isinstance(body["per_port"], list)
+    assert isinstance(body["regional_rollup"], list)
+    # Per-port row carries the canonical fields the diff CLI parses.
+    first = body["per_port"][0]
+    assert "locode" in first
+    assert "supply_deficit_days" in first
+
+
+def test_snapshot_fetch_omits_regional_when_absent(
+    server, isolated_snapshot_root,
+):
+    """When only the per-port snapshot exists (no regional), the
+    response still returns 200 with regional_rollup=[]."""
+    from datetime import date as _date
+    from processing.port_supply_history import save_snapshot
+    save_snapshot(snapshot_date=_date(2026, 5, 26), root=isolated_snapshot_root)
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-05-26",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_regional"] == 0
+    assert body["regional_rollup"] == []
+
+
+def test_snapshot_fetch_rejects_bad_container_type(
+    server, isolated_snapshot_root,
+):
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines/snapshots/2026-05-26?container_type=BADTYPE",
+        headers=_bearer(token), timeout=10,
     )
     assert r.status_code == 400

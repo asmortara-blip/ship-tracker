@@ -398,6 +398,66 @@
         {
           "choices": [],
           "default": null,
+          "help": "Filter to a single lane id (e.g. 'transpacific_eb', 'fleet'). Default: aggregate every lane in the store.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--lane",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": 60,
+          "help": "Only score forecasts whose target date is within this many days of --today (default 60). Set very large to score the entire history.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--window-days",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Anchor 'today' as an ISO YYYY-MM-DD date (default: actual UTC today). Useful for tests + historical replays.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--today",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Forecast log root override (default: project's cache/).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--root",
+          "required": false
+        },
+        {
+          "choices": [
+            "text",
+            "json"
+          ],
+          "default": "text",
+          "help": "Output format (default: text).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        }
+      ],
+      "description": "Query the forecast accuracy log: pair logged forecasts to actuals by horizon + summarise MAE / sign-agreement.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "tools/forecast_accuracy_cli.py \u2014 query the forecast accuracy log.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/forecast_accuracy_cli.py",
+      "module": "tools.forecast_accuracy_cli",
+      "parse_error": "",
+      "prog": "tools.forecast_accuracy_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
+          "default": null,
           "help": "Comma-separated list of container types to snapshot (e.g. '40FT_DRY,40FT_REEFER'). Defaults to {','.join(DEFAULT_CONTAINER_TYPES)}.",
           "is_flag": false,
           "is_positional": false,
@@ -1328,6 +1388,6 @@
       "prog": "python -m tools.test_flakiness_cli"
     }
   ],
-  "total": 20,
+  "total": 21,
   "version": 1
 }

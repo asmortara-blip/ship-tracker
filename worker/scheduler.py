@@ -895,6 +895,67 @@ def run_port_supply_snapshot_job(
 
 
 @_track_run
+def run_snapshot_integrity_check_job(
+    *,
+    container_type: str = "40FT_DRY",
+    since_days: int = 14,
+) -> dict:
+    """Verify recent snapshot files are present + parseable.
+
+    Wraps ``processing.snapshot_integrity.check_all_snapshots`` with the
+    standard contract — never raises, returns count dict, logs the
+    summary. Defaults to the last 14 days of snapshots (matches the
+    diff lookback window so corruption can't go unnoticed beyond what
+    the diff helper would tolerate).
+
+    Returns ``{"ok": bool, "n_checked": int, "n_unhealthy": int,
+    "n_missing": int, "n_corrupted": int,
+    "oldest_problem_date": str}``. ``ok`` is True iff every checked
+    snapshot is healthy.
+    """
+    try:
+        from datetime import date as _date, timedelta as _td
+        from processing.snapshot_integrity import (
+            check_all_snapshots, summarize_integrity_run,
+        )
+
+        today = _date.today()
+        since = today - _td(days=max(1, int(since_days)))
+        reports = check_all_snapshots(
+            container_type=container_type, since=since,
+        )
+        s = summarize_integrity_run(reports)
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_snapshot_integrity_check_job: top-level failure: {exc}")
+        return {
+            "ok": False, "n_checked": 0, "n_unhealthy": 0,
+            "n_missing": 0, "n_corrupted": 0, "oldest_problem_date": "",
+        }
+
+    counts = {
+        "ok":                   (s["n_dates_checked"] == s["n_ok"]),
+        "n_checked":            int(s["n_dates_checked"]),
+        "n_unhealthy":          int(s["n_dates_checked"] - s["n_ok"]),
+        "n_missing":            int(s["n_missing"]),
+        "n_corrupted":          int(s["n_corrupted"]),
+        "oldest_problem_date":  s["oldest_problem_date"] or "",
+    }
+    if counts["ok"]:
+        logger.info(
+            f"run_snapshot_integrity_check_job: "
+            f"{counts['n_checked']}/{counts['n_checked']} healthy"
+        )
+    else:
+        logger.warning(
+            f"run_snapshot_integrity_check_job: "
+            f"{counts['n_unhealthy']}/{counts['n_checked']} unhealthy "
+            f"(missing={counts['n_missing']} corrupted={counts['n_corrupted']} "
+            f"oldest={counts['oldest_problem_date']})"
+        )
+    return counts
+
+
+@_track_run
 def run_port_supply_snapshot_gc_job(
     *,
     keep_days: int = 90,
@@ -1631,6 +1692,15 @@ def main(argv: Optional[list] = None) -> int:
         run_multi_container_snapshot_job()
     except Exception as exc:
         logger.warning(f"main: multi container snapshot step failed: {exc}")
+
+    # Sweep recent snapshot dirs for missing or corrupted files. Runs
+    # AFTER all snapshot writes so anything wrong is caught the same
+    # tick that produced it; the helper logs the count to the worker
+    # output so operators see "X of Y healthy" inline.
+    try:
+        run_snapshot_integrity_check_job()
+    except Exception as exc:
+        logger.warning(f"main: snapshot integrity check step failed: {exc}")
 
     # Prune old port-supply snapshot dirs per the retention policy.
     # Runs LAST among the snapshot steps so today's writes are never

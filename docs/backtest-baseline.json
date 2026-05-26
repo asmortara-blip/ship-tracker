@@ -1,5 +1,5 @@
 {
-  "total": 13,
+  "total": 14,
   "validators": [
     {
       "headline_label": "Best component",
@@ -182,6 +182,24 @@
         "total": 8
       },
       "summary": "Replayed 8 registered event(s). miss_rate=0% false_positive_rate=88%"
+    },
+    {
+      "headline_label": "Mean recovery rate",
+      "headline_value": "69.6% (worst run 56.5%)",
+      "healthy": true,
+      "name": "Snapshot Diff Anomaly Recovery",
+      "raw": {
+        "mean_quiet_precision": 0.65,
+        "mean_recovery_rate": 0.6957,
+        "mean_shock_recall": 1.0,
+        "min_recovery_rate": 0.5652,
+        "n_runs": 8,
+        "noise": 2.0,
+        "pass_threshold": 0.65,
+        "passed": true,
+        "shock_multiplier": 12.0
+      },
+      "summary": "Anomaly recovery across 8 run(s) of 25 quiet + 3 shock days at baseline=5.0, multiplier=12.0x, noise=\u00b12.0: mean recovery=69.6% (worst 56.5%), shock recall=100.0%, quiet precision=65.0%; passed (recall>=90% AND recovery>=65%): True"
     }
   ]
 }

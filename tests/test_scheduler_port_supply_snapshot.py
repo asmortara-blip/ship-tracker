@@ -421,3 +421,48 @@ def test_main_function_calls_gc_and_multi_under_try_except() -> None:
     assert "run_multi_container_snapshot_job()" in src
     assert "port supply snapshot gc step failed" in src
     assert "multi container snapshot step failed" in src
+
+
+# ── 7. Snapshot integrity check wrapper ──────────────────────────────────
+
+
+def test_integrity_wrapper_returns_required_keys(isolate_snapshot_root) -> None:
+    out = sched.run_snapshot_integrity_check_job()
+    assert set(out.keys()) >= {
+        "ok", "n_checked", "n_unhealthy",
+        "n_missing", "n_corrupted", "oldest_problem_date",
+    }
+
+
+def test_integrity_wrapper_returns_ok_false_when_underlying_raises(
+    monkeypatch,
+) -> None:
+    def _boom(**_kw):
+        raise RuntimeError("simulated")
+    import processing.snapshot_integrity as si
+    monkeypatch.setattr(si, "check_all_snapshots", _boom)
+    out = sched.run_snapshot_integrity_check_job()
+    assert out["ok"] is False
+
+
+def test_integrity_wrapper_flags_unhealthy_dir(
+    isolate_snapshot_root, monkeypatch,
+) -> None:
+    """Snapshot dir missing the regional file → ok=False, n_unhealthy>=1."""
+    from processing.port_supply_history import save_snapshot
+    from datetime import date as _date
+
+    # Plant a per-port snapshot today but skip regional → integrity flag.
+    today = _date.today()
+    save_snapshot(snapshot_date=today, root=isolate_snapshot_root)
+    out = sched.run_snapshot_integrity_check_job(since_days=14)
+    assert out["ok"] is False
+    assert out["n_unhealthy"] >= 1
+    assert out["n_missing"] >= 1
+
+
+def test_main_function_calls_integrity_under_try_except() -> None:
+    import inspect
+    src = inspect.getsource(sched.main)
+    assert "run_snapshot_integrity_check_job()" in src
+    assert "snapshot integrity check step failed" in src

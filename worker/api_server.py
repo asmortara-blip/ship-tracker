@@ -555,6 +555,20 @@ _RE_PORT_SUPPLY_LINES_XLSX = re.compile(
     r"^/api/v1/ports/supply-lines\.xlsx/?$"
 )
 
+# Snapshot history — list every snapshot date the daily worker has
+# persisted. Operators query this to find the dates they can pull
+# from /api/v1/ports/supply-lines/snapshots/<date>.
+_RE_PORT_SUPPLY_SNAPSHOTS_LIST = re.compile(
+    r"^/api/v1/ports/supply-lines/snapshots/?$"
+)
+
+# Per-date snapshot fetch — returns the per-port summary rows for
+# the requested ISO date, plus the regional rollup if present.
+# Path-templated; the date is parsed in the handler.
+_RE_PORT_SUPPLY_SNAPSHOT_ONE = re.compile(
+    r"^/api/v1/ports/supply-lines/snapshots/(?P<date>\d{4}-\d{2}-\d{2})/?$"
+)
+
 # Module-level cache for the rendered OpenAPI JSON bytes. The first
 # request builds + serializes the spec; every subsequent request just
 # writes the cached bytes to the wfile. ``None`` means "not yet
@@ -684,6 +698,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_NOTIFICATION_PREFS,
                 _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
                 _RE_PORT_SUPPLY_LINES, _RE_PORT_SUPPLY_LINES_XLSX,
+                _RE_PORT_SUPPLY_SNAPSHOTS_LIST, _RE_PORT_SUPPLY_SNAPSHOT_ONE,
             )
         )
 
@@ -748,6 +763,18 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if _RE_PORT_SUPPLY_LINES.match(path):
                 self._list_port_supply_lines(query)
+                return
+
+            # Snapshot history endpoints — list dates + per-date fetch.
+            # Match the per-date regex BEFORE the list regex so the
+            # bare /snapshots/ doesn't shadow /snapshots/<date>.
+            m = _RE_PORT_SUPPLY_SNAPSHOT_ONE.match(path)
+            if m:
+                self._fetch_port_supply_snapshot(m.group("date"), query)
+                return
+
+            if _RE_PORT_SUPPLY_SNAPSHOTS_LIST.match(path):
+                self._list_port_supply_snapshots(query)
                 return
 
             if _RE_ALERTS_LIST.match(path):
@@ -2329,6 +2356,167 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+
+    # ── Endpoint: GET /api/v1/ports/supply-lines/snapshots ──────────
+
+    def _list_port_supply_snapshots(self, query: dict) -> None:
+        """List every ISO date the snapshot pipeline has persisted.
+
+        Operators discover what dates they can fetch via
+        ``/snapshots/<date>``. Optional ``container_type`` filters to
+        dates that have a snapshot for that container — useful when a
+        newer container was added partway through the snapshot history.
+
+        Response:
+          ``{"container_type": str | null, "total": int,
+             "dates": ["YYYY-MM-DD", ...],
+             "now_utc": ISO8601}``
+        """
+        try:
+            from processing.port_supply_history import (
+                _snapshot_filename, list_snapshot_dates, snapshot_dir_for,
+            )
+        except Exception as exc:
+            logger.exception(f"api /snapshots import failed: {exc}")
+            _send_json(
+                self, HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        raw_ctype = (query.get("container_type", [None]) or [None])[0]
+        container_type = str(raw_ctype) if raw_ctype else None
+
+        dates = list_snapshot_dates()
+        if container_type:
+            # Filter to dates whose dir has the per-port summary for the
+            # requested container type. Skip silently for dates that
+            # don't — the operator might be checking which dates have
+            # 40FT_REEFER coverage vs 40FT_DRY.
+            allowed_ctypes = {
+                "40FT_DRY", "20FT_DRY", "40FT_HC",
+                "40FT_REEFER", "20FT_TANK",
+            }
+            if container_type not in allowed_ctypes:
+                _send_bad_request(
+                    self,
+                    f"bad container_type: {container_type} (allowed: "
+                    f"{sorted(allowed_ctypes)})",
+                )
+                return
+            filtered: list = []
+            for d in dates:
+                target = (
+                    snapshot_dir_for(d) / _snapshot_filename(container_type)
+                )
+                if target.exists():
+                    filtered.append(d)
+            dates = filtered
+
+        _send_json(
+            self, HTTPStatus.OK,
+            {
+                "container_type": container_type,
+                "total":          len(dates),
+                "dates":          [d.isoformat() for d in dates],
+                "now_utc":        datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+
+    # ── Endpoint: GET /api/v1/ports/supply-lines/snapshots/<date> ───
+
+    def _fetch_port_supply_snapshot(self, date_iso: str, query: dict) -> None:
+        """Fetch the per-port summary rows for a given snapshot date.
+
+        Returns the parsed rows from the per-port summary CSV plus, when
+        present, the regional rollup as a second list. The raw on-disk
+        CSV is also discoverable via the snapshot dir path in case the
+        caller wants the byte-for-byte file.
+
+        Errors:
+          * 400 on bad container_type
+          * 404 when the snapshot dir doesn't exist for the requested date
+        """
+        from datetime import date as _date
+
+        try:
+            from processing.port_supply_history import (
+                load_regional_snapshot, load_snapshot, snapshot_dir_for,
+            )
+        except Exception as exc:
+            logger.exception(f"api /snapshots/<date> import failed: {exc}")
+            _send_json(
+                self, HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        try:
+            snapshot_date = _date.fromisoformat(date_iso)
+        except ValueError:
+            _send_bad_request(
+                self, f"bad date: {date_iso!r} (expected YYYY-MM-DD)",
+            )
+            return
+
+        allowed_ctypes = {
+            "40FT_DRY", "20FT_DRY", "40FT_HC",
+            "40FT_REEFER", "20FT_TANK",
+        }
+        container_type = (query.get("container_type", ["40FT_DRY"])
+                          or ["40FT_DRY"])[0]
+        if container_type not in allowed_ctypes:
+            _send_bad_request(
+                self,
+                f"bad container_type: {container_type} (allowed: "
+                f"{sorted(allowed_ctypes)})",
+            )
+            return
+
+        try:
+            per_port_rows = load_snapshot(
+                snapshot_date, container_type=container_type,
+            )
+        except FileNotFoundError:
+            _send_json(
+                self, HTTPStatus.NOT_FOUND,
+                {"status": "not_found",
+                 "error": f"no snapshot for {date_iso} ({container_type})"},
+            )
+            return
+
+        # Regional rollup is optional — older snapshots predate it.
+        regional_rows: list = []
+        try:
+            regional_rows = load_regional_snapshot(
+                snapshot_date, container_type=container_type,
+            )
+        except FileNotFoundError:
+            pass
+
+        # Convert PortRow dataclasses to flat dicts for JSON.
+        from dataclasses import asdict, is_dataclass
+        def _to_dict(row):
+            if is_dataclass(row):
+                return asdict(row)
+            return dict(row) if hasattr(row, "_asdict") else row
+
+        snapshot_dir = snapshot_dir_for(snapshot_date)
+        _send_json(
+            self, HTTPStatus.OK,
+            {
+                "date":              date_iso,
+                "container_type":    container_type,
+                "snapshot_dir":      str(snapshot_dir),
+                "total_per_port":    len(per_port_rows),
+                "total_regional":    len(regional_rows),
+                "per_port":          [_to_dict(r) for r in per_port_rows],
+                "regional_rollup":   [_to_dict(r) for r in regional_rows],
+                "now_utc":           datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
 
     # ── Endpoint: GET /api/v1/openapi.json ────────────────────────
