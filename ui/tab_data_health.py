@@ -3378,6 +3378,125 @@ def _render_delivery_retry_panel() -> None:
         st.warning("Delivery retry panel unavailable.")
 
 
+def _render_backtest_coverage() -> None:
+    """Operator-facing summary of every backtest module the platform ships.
+
+    Pulls the headline KPI from each validator in one read so an operator
+    can answer "is the platform's analytical layer working?" without
+    touching four different tabs. Each card links semantically to its
+    deeper panel via a sublabel pointing to the tab/section.
+
+    Lazy-imported per validator — one failure can't take down the row.
+    """
+    section_header(
+        "Backtest Coverage",
+        "Headline KPI from each backtest module the platform ships. "
+        "Deeper drilldowns live in the panels noted on each card.",
+    )
+
+    cards: list[dict] = []
+
+    # SSI component validator
+    try:
+        from processing.ssi_component_validation import validate_ssi_components
+        ssi_report = validate_ssi_components()
+        best = next(
+            (sc for sc in ssi_report.scorecards
+             if sc.component == ssi_report.best_component),
+            None,
+        )
+        ssi_pct = (best.sign_agreement_rate * 100) if best else 50.0
+        cards.append({
+            "label":   "SSI Component",
+            "value":   f"{ssi_pct:.1f}%",
+            "accent":  C_HIGH if ssi_pct >= 60 else (C_MOD if ssi_pct >= 50 else C_LOW),
+            "sublabel": f"best: {ssi_report.best_component or '—'} (Macro Projection)",
+        })
+    except Exception:
+        logger.exception("Backtest coverage — SSI validator unavailable")
+        cards.append({
+            "label":   "SSI Component",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # SCHI dimension validator
+    try:
+        from engine.schi_component_validation import validate_schi_components
+        schi_report = validate_schi_components()
+        best_schi = next(
+            (sc for sc in schi_report.scorecards
+             if sc.component == schi_report.best_component),
+            None,
+        )
+        schi_pct = (best_schi.sign_agreement_rate * 100) if best_schi else 50.0
+        cards.append({
+            "label":   "SCHI Dimension",
+            "value":   f"{schi_pct:.1f}%",
+            "accent":  C_HIGH if schi_pct >= 60 else (C_MOD if schi_pct >= 50 else C_LOW),
+            "sublabel": f"best: {schi_report.best_component or '—'} (Macro Projection)",
+        })
+    except Exception:
+        logger.exception("Backtest coverage — SCHI validator unavailable")
+        cards.append({
+            "label":   "SCHI Dimension",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # Disruption-forecast accuracy backtest
+    try:
+        from processing.disruption_forecast_backtest import (
+            backtest_disruption_forecast,
+        )
+        df_report = backtest_disruption_forecast()
+        sa30 = df_report.mean_sign_agreement_30d * 100
+        cards.append({
+            "label":   "Forecast Accuracy",
+            "value":   f"{sa30:.1f}%",
+            "accent":  C_HIGH if sa30 >= 60 else (C_MOD if sa30 >= 50 else C_LOW),
+            "sublabel": f"30d sign-agreement (Disruption Radar)",
+        })
+    except Exception:
+        logger.exception("Backtest coverage — forecast backtest unavailable")
+        cards.append({
+            "label":   "Forecast Accuracy",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # Momentum ranker backtest
+    try:
+        from engine.momentum_ranker_backtest import backtest_momentum_signals
+        mom_report = backtest_momentum_signals()
+        spread_pp = mom_report.spread_strong_vs_weak * 100
+        cards.append({
+            "label":   "Momentum Ladder",
+            "value":   f"{spread_pp:+.2f}pp",
+            "accent":  C_HIGH if mom_report.monotonic_by_signal else C_LOW,
+            "sublabel": (f"STRONG_BUY vs STRONG_SELL · monotonic: "
+                         f"{'yes' if mom_report.monotonic_by_signal else 'no'} (this tab)"),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — momentum backtest unavailable")
+        cards.append({
+            "label":   "Momentum Ladder",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    metric_card_row(cards, columns=4)
+    st.caption(
+        "All four validators are deterministic and seed-stable; numbers "
+        "above are computed against the bundled synthetic-history "
+        "generators. Wire real history in by passing the `history=` arg."
+    )
+
+
 def _render_signal_validation() -> None:
     """Surface the momentum-ranker backtest scorecard.
 
@@ -3542,6 +3661,14 @@ def render(
             except Exception as exc:
                 logger.error(f"Tab perf render error: {exc}")
                 st.error("Tab performance panel unavailable.")
+
+            # ── Movement 1.66: unified backtest coverage summary ───────────────
+            section_divider("Backtest Coverage")
+            try:
+                _render_backtest_coverage()
+            except Exception as exc:
+                logger.error(f"Backtest coverage render error: {exc}")
+                st.error("Backtest coverage panel unavailable.")
 
             # ── Movement 1.67: signal validation backtest ──────────────────────
             section_divider("Signal Validation")
