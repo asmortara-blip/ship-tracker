@@ -3314,6 +3314,103 @@ def _render_delivery_retry_panel() -> None:
         st.warning("Delivery retry panel unavailable.")
 
 
+def _render_signal_validation() -> None:
+    """Surface the momentum-ranker backtest scorecard.
+
+    Operator-facing answer to "are the platform's signal-class ladders
+    actually predictive?" — runs the deterministic backtest from
+    ``engine.momentum_ranker_backtest`` and lays out:
+
+      * monotonicity flag (does mean return rise from STRONG_SELL →
+        STRONG_BUY as it should?)
+      * STRONG_BUY vs STRONG_SELL spread (positive = signal carries
+        directional alpha)
+      * per-class table with mean forward return + directional hit rate
+
+    Lazy-imported so a backtest-module failure can't break the rest of
+    the Data Health tab.
+    """
+    try:
+        from engine.momentum_ranker_backtest import (
+            SIGNAL_CLASSES,
+            backtest_momentum_signals,
+        )
+    except Exception:
+        logger.exception("Data Health — momentum backtest import failed")
+        return
+
+    section_header(
+        "Signal Validation",
+        "Per-signal-class scorecard for engine.momentum_ranker — "
+        "does the STRONG_SELL → STRONG_BUY ladder actually predict "
+        "forward returns?",
+    )
+    try:
+        report = backtest_momentum_signals()
+    except Exception:
+        logger.exception("Data Health — momentum backtest failed")
+        st.warning("Signal validation panel unavailable.")
+        return
+
+    if not report.scorecards:
+        st.info("No backtest data available.")
+        return
+
+    # Headline KPI row
+    mono_color   = C_HIGH if report.monotonic_by_signal else C_LOW
+    spread_color = (
+        C_HIGH if report.spread_strong_vs_weak >= 0.05
+        else (C_MOD if report.spread_strong_vs_weak >= 0.0 else C_LOW)
+    )
+    metric_card_row([
+        {"label": "Total Observations",
+         "value": f"{report.n_observations:,}",
+         "accent": C_ACCENT,
+         "sublabel": "across all signal classes"},
+        {"label": "Monotonic Ladder",
+         "value": "Yes" if report.monotonic_by_signal else "No",
+         "accent": mono_color,
+         "sublabel": "STRONG_SELL → STRONG_BUY mean rises"},
+        {"label": "STRONG_BUY vs STRONG_SELL",
+         "value": f"{report.spread_strong_vs_weak * 100:+.2f}pp",
+         "accent": spread_color,
+         "sublabel": "spread in mean forward return"},
+        {"label": "Source",
+         "value": "Synthetic",
+         "accent": C_TEXT3,
+         "sublabel": "deterministic; pre-real-history"},
+    ], columns=4)
+
+    # Per-class scorecard table
+    by_sig = {sc.signal: sc for sc in report.scorecards}
+
+    def _hit_color(rate: float) -> str:
+        if rate >= 0.60:
+            return C_HIGH
+        if rate >= 0.50:
+            return C_MOD
+        return C_LOW
+
+    headers = ["Signal", "Obs", "Mean Fwd Return", "Hit Rate", "Edge vs 0.5"]
+    rows = []
+    for sig in SIGNAL_CLASSES:
+        sc = by_sig.get(sig)
+        if sc is None:
+            continue
+        rows.append([
+            badge(sig, color=C_ACCENT),
+            badge(str(sc.n_observations), color=C_TEXT2),
+            badge(f"{sc.mean_forward_return * 100:+.2f}%",
+                  color=(C_HIGH if sc.mean_forward_return >= 0 else C_LOW)),
+            badge(f"{sc.directional_hit_rate * 100:.0f}%",
+                  color=_hit_color(sc.directional_hit_rate)),
+            badge(f"{sc.edge_vs_baseline * 100:+.1f}pp",
+                  color=_hit_color(sc.directional_hit_rate)),
+        ])
+    wsj_market_table(headers, rows)
+    st.caption(report.summary)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def render(
@@ -3381,6 +3478,14 @@ def render(
             except Exception as exc:
                 logger.error(f"Tab perf render error: {exc}")
                 st.error("Tab performance panel unavailable.")
+
+            # ── Movement 1.67: signal validation backtest ──────────────────────
+            section_divider("Signal Validation")
+            try:
+                _render_signal_validation()
+            except Exception as exc:
+                logger.error(f"Signal validation render error: {exc}")
+                st.error("Signal validation panel unavailable.")
 
             # ── Movement 1.68: audit log ───────────────────────────────────────
             try:
