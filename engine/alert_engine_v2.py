@@ -297,6 +297,94 @@ def check_signal_alerts(signals: list) -> list[ShippingAlert]:
     return alerts
 
 
+def check_port_deficit_alerts(
+    *,
+    container_type: str = "40FT_DRY",
+    critical_threshold_days: float = -10.0,
+    high_threshold_days: float = -3.0,
+    top_n_exposed_in_body: int = 5,
+) -> list[ShippingAlert]:
+    """Fire when any port's container supply crosses into deficit.
+
+    Wraps ``processing.port_supply_lines.build_port_supply_chains`` —
+    every port whose ``supply_deficit_days`` is below
+    ``high_threshold_days`` produces a ``PORT_DEFICIT`` alert with
+    rich context (severity, supporting routes, top exposed tickers).
+
+    Severity ladder:
+      * ``deficit_days <= critical_threshold_days``  → CRITICAL
+      * ``deficit_days <= high_threshold_days``      → HIGH
+      * otherwise                                     → no alert
+
+    The alert body carries the top-N exposed companies (sorted by
+    exposure weight desc) so operators can see WHICH tickers are at
+    risk without re-running the supply-lines analysis. Dedupe via the
+    standard (alert_type, severity, port_locode) key means a port
+    that stays in deficit across multiple ticks fires once, not
+    repeatedly — same contract as the other check_*_alerts functions.
+    """
+    try:
+        from processing.port_supply_lines import build_port_supply_chains
+    except Exception as exc:
+        logger.debug(f"check_port_deficit_alerts: import failed: {exc}")
+        return []
+
+    try:
+        chains = build_port_supply_chains(container_type=container_type)
+    except Exception as exc:
+        logger.warning(f"check_port_deficit_alerts: build failed: {exc}")
+        return []
+
+    alerts: list[ShippingAlert] = []
+    for chain in chains:
+        deficit = float(chain.port.supply_deficit_days)
+        if deficit > high_threshold_days:
+            # Above the HIGH threshold means within the balanced /
+            # surplus band — nothing to alarm on.
+            continue
+        severity = (
+            "CRITICAL" if deficit <= critical_threshold_days else "HIGH"
+        )
+
+        top_tickers = [
+            ce.ticker
+            for ce in chain.exposed_companies[:max(1, top_n_exposed_in_body)]
+        ]
+        exposed_clause = (
+            f"Top exposed tickers: {', '.join(top_tickers)}."
+            if top_tickers else "No publicly-traded exposure mapped."
+        )
+        n_routes = len(chain.routes_touching)
+        routes_clause = (
+            f"{n_routes} route(s) touch this port; expect ripple effects "
+            "across origin/destination pairs."
+            if n_routes else
+            "No registered routes touch this port — exposure is indirect only."
+        )
+        alerts.append(_make(
+            alert_type="PORT_DEFICIT",
+            severity=severity,
+            title=(
+                f"Container Deficit: {chain.port.name} "
+                f"({chain.port.locode}) — {chain.port.severity_label}"
+            ),
+            body=(
+                f"{chain.port.name} ({chain.port.locode}, {chain.port.region}) "
+                f"is reading {deficit:+.1f} days on {container_type} "
+                f"({chain.port.severity_label}). Utilization ~"
+                f"{chain.port.utilization_pct:.0f}%. {routes_clause} "
+                f"{exposed_clause}"
+            ),
+            port_locode=chain.port.locode,
+            value=deficit,
+            threshold=high_threshold_days,
+            # Magnitude of breach in days; useful for the alert table's
+            # change_pct column even though the units are days not pp.
+            change_pct=high_threshold_days - deficit,
+        ))
+    return alerts
+
+
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
     """Fire if any port congestion score exceeds threshold."""
     alerts: list[ShippingAlert] = []
@@ -501,6 +589,14 @@ def run_all_checks(
         all_alerts.extend(check_stock_alerts(stock_data or {}, stock_threshold))
     except Exception as exc:
         logger.warning(f"Stock alert check failed: {exc}")
+
+    # Port-deficit alerts read from processing.port_supply_lines —
+    # there's no per-call data arg because the joiner pulls from
+    # ports.port_registry + processing.equipment_tracker directly.
+    try:
+        all_alerts.extend(check_port_deficit_alerts())
+    except Exception as exc:
+        logger.warning(f"Port deficit alert check failed: {exc}")
 
     all_alerts.sort(key=lambda a: (
         _SEVERITY_ORDER.get(a.severity, 99),
