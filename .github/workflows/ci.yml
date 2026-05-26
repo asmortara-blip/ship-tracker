@@ -1,8 +1,9 @@
-# CI — runs the full pytest suite on every push and PR.
+# CI — runs the full pytest suite + consolidated backtest health gate on
+# every push and PR.
 #
-# Purpose: lock in the ~3124-test safety net so a regression never
-# reaches main unseen. Runs in ~30s; the 5-minute job timeout is a
-# safety net for runaway hangs, not an expected upper bound.
+# Purpose: lock in the ~5,650-test safety net so a regression never
+# reaches main unseen, and gate the analytical layer's roll-up flags
+# via tools.backtests --strict (8 validators must all read healthy).
 #
 # Defaults from pytest.ini are honored (-x --timeout=30 --strict-markers -q),
 # so this workflow does not pass --override-ini. If a test fails, the
@@ -41,6 +42,14 @@ jobs:
 
       - name: Run pytest
         run: pytest --cov=. --cov-report=xml --cov-report=term
+
+      - name: Run consolidated backtest health gate
+        # All 8 validators must report healthy on the bundled synth;
+        # --strict exits 1 on any unhealthy flag. The synth-driven
+        # property tests already cover the same surface inside pytest
+        # above, so this gate is mostly belt-and-suspenders + a
+        # human-readable snapshot in the CI log for triage.
+        run: python -m tools.backtests --format text --strict
 
       - name: Upload coverage report
         if: always()
