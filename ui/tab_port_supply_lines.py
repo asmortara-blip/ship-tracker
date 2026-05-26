@@ -720,6 +720,193 @@ def _render_csv_exports(chains: list, container_type: str) -> None:
             )
 
 
+def _render_historical_trends(chains: list, container_type: str) -> None:
+    """Per-port + regional deficit trend over time.
+
+    Reads accumulating daily snapshots from
+    ``cache/port_supply_snapshots/`` via
+    ``processing.port_supply_trend`` and renders:
+      * one per-port line chart (default = worst-deficit port today)
+        with current/7d-delta/30d-delta stat block
+      * a 2x2 grid of regional rollup charts so the operator sees
+        whether a port's slide is idiosyncratic or regional
+
+    Defensive — if zero snapshots exist (fresh deploy), shows an info
+    note instead of an empty chart.
+    """
+    try:
+        from processing.port_supply_trend import (
+            build_port_trend_series,
+            build_regional_trend_series,
+        )
+        from processing.port_supply_history import list_snapshot_dates
+        from ui.plots.port_supply_trends import (
+            build_port_trend_figure,
+            build_regional_trend_figure,
+        )
+    except Exception:
+        logger.exception("port_supply_lines: trend imports failed")
+        return
+
+    section_header(
+        "Historical trends",
+        "Per-port deficit-day trajectory pulled from the daily snapshot "
+        "tree, with a 2x2 regional rollup underneath. Severity bands "
+        "shaded so 'is this port trending into trouble' reads at a glance.",
+    )
+
+    # Bail-out: nothing on disk yet (fresh deploy).
+    try:
+        all_dates = list_snapshot_dates()
+    except Exception:
+        logger.exception("port_supply_lines: list_snapshot_dates failed")
+        all_dates = []
+    if not all_dates:
+        st.info(
+            "No snapshot history on disk yet. The daily snapshot job "
+            "writes one CSV per port per day; once a few days accumulate, "
+            "this section will plot the trend."
+        )
+        return
+
+    # Default selection = the worst-deficit port in today's chains
+    # (chains arrive sorted most-stressed first, so chains[0] is the
+    # current most-deficit port unless the operator already chose).
+    label_map = {
+        f"{c.port.locode} · {c.port.name} ({c.port.region}) — "
+        f"{c.port.severity_label} {c.port.supply_deficit_days:+.1f}d": c
+        for c in chains
+    }
+    options = list(label_map.keys())
+    default_index = 0
+    pick = st.selectbox(
+        "Port",
+        options=options,
+        index=default_index,
+        key="port_supply_lines_trend_picker",
+        help=(
+            "Pick a port to see its deficit-day trajectory. Defaults to "
+            "the worst-deficit port in today's snapshot so the most "
+            "operationally relevant trend leads."
+        ),
+    )
+    selected = label_map.get(pick) if pick else None
+    if selected is None:
+        return
+
+    try:
+        points = build_port_trend_series(
+            selected.port.locode,
+            container_type=container_type,
+            max_days=90,
+        )
+    except Exception:
+        logger.exception("port_supply_lines: port trend build failed")
+        points = []
+
+    # Stat block: current + 7d delta + 30d delta. NaN-safe.
+    import math as _math
+    real_points = [p for p in points if not _math.isnan(p.deficit_days)]
+    current_val = real_points[-1].deficit_days if real_points else float("nan")
+    current_label = (
+        f"{current_val:+.1f}d" if not _math.isnan(current_val) else "—"
+    )
+    current_accent = (
+        _SEVERITY_ACCENT.get(real_points[-1].severity_label, C_TEXT2)
+        if real_points else C_TEXT2
+    )
+
+    def _delta_n_days(n: int) -> str:
+        if len(real_points) < n + 1:
+            return "—"
+        delta = real_points[-1].deficit_days - real_points[-1 - n].deficit_days
+        return f"{delta:+.1f}d"
+
+    delta_7d = _delta_n_days(7)
+    delta_30d = _delta_n_days(30)
+
+    metric_card_row([
+        {"label":  "Current deficit",
+         "value":  current_label,
+         "accent": current_accent,
+         "sublabel": (
+             real_points[-1].date if real_points else "no snapshots yet"
+         )},
+        {"label":  "7-day delta",
+         "value":  delta_7d,
+         "accent": C_ACCENT,
+         "sublabel": "vs 7 snapshots ago"},
+        {"label":  "30-day delta",
+         "value":  delta_30d,
+         "accent": C_ACCENT,
+         "sublabel": "vs 30 snapshots ago"},
+        {"label":  "Snapshots",
+         "value":  str(len(points)),
+         "accent": C_ACCENT,
+         "sublabel": f"last {len(points)} day(s)"},
+    ], columns=4)
+
+    try:
+        st.plotly_chart(
+            build_port_trend_figure(
+                points, selected.port.locode, selected.port.name,
+            ),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="port_supply_lines_trend_port",
+        )
+    except Exception:
+        logger.exception("port_supply_lines: port trend chart failed")
+
+    # ── 2x2 regional rollup grid ──────────────────────────────────────
+    # Pick the four most-populated regions so the grid is informative.
+    # The task spec says "Asia, Europe, North America, South America" —
+    # we map those generic labels to the closest concrete regions in
+    # the port registry (Asia East, Europe, North America West,
+    # North America East) so the grid actually has data.
+    regional_grid = [
+        "Asia East",
+        "Europe",
+        "North America West",
+        "North America East",
+    ]
+
+    st.caption(
+        "Regional rollups average deficit days across every port in the "
+        "region per day — see whether a port's slide is idiosyncratic "
+        "or part of a regional shift."
+    )
+
+    row_a, row_b = st.columns(2, gap="medium"), st.columns(2, gap="medium")
+    grid_cells = [row_a[0], row_a[1], row_b[0], row_b[1]]
+    for cell, region in zip(grid_cells, regional_grid):
+        with cell:
+            try:
+                series = build_regional_trend_series(
+                    region,
+                    container_type=container_type,
+                    max_days=90,
+                )
+            except Exception:
+                logger.exception(
+                    "port_supply_lines: regional trend build failed (%s)",
+                    region,
+                )
+                series = []
+            try:
+                st.plotly_chart(
+                    build_regional_trend_figure(series, region),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key=f"port_supply_lines_trend_region_{region}",
+                )
+            except Exception:
+                logger.exception(
+                    "port_supply_lines: regional trend chart failed (%s)",
+                    region,
+                )
+
+
 def _render_company_footprint_drilldown(container_type: str) -> None:
     """Inverted view: pick a ticker → see its top exposed ports.
 
@@ -928,9 +1115,18 @@ def render(**_kwargs) -> None:
             logger.exception("port_supply_lines: drilldown failed")
             st.error("Per-port drilldown unavailable.")
 
+        section_divider("Historical trends")
+
+        # ── D. Historical deficit trends (per-port + regional grid) ────
+        try:
+            _render_historical_trends(chains, container_type)
+        except Exception:
+            logger.exception("port_supply_lines: historical trends failed")
+            st.error("Historical trends unavailable.")
+
         section_divider("Company footprint")
 
-        # ── D. Company → port reverse drilldown ────────────────────────
+        # ── E. Company → port reverse drilldown ────────────────────────
         try:
             _render_company_footprint_drilldown(container_type)
         except Exception:
@@ -939,13 +1135,13 @@ def render(**_kwargs) -> None:
 
         section_divider("Export")
 
-        # ── E. CSV exports ─────────────────────────────────────────────
+        # ── F. CSV exports ─────────────────────────────────────────────
         try:
             _render_csv_exports(chains, container_type)
         except Exception:
             logger.exception("port_supply_lines: csv export failed")
 
-        # ── F. Source footer ───────────────────────────────────────────
+        # ── G. Source footer ───────────────────────────────────────────
         try:
             st.markdown(
                 source_footer([PORT_SUPPLY_LINES_SOURCE]),
