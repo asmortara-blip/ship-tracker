@@ -27,11 +27,11 @@ from tools.backtests import (
 # ── 1. Adapter contract: every adapter returns a well-formed result ────────
 
 def test_every_adapter_returns_a_backtestresult() -> None:
-    """All 8 canonical adapters must be wired in and each must return
+    """All canonical adapters must be wired in and each must return
     a BacktestResult with the required string fields populated."""
     results = run_all_backtests()
     assert len(results) == len(ADAPTERS)
-    assert len(results) == 10
+    assert len(results) == 11
     for r in results:
         assert isinstance(r, BacktestResult)
         assert isinstance(r.name, str) and r.name
@@ -116,7 +116,7 @@ def test_cli_format_json_emits_valid_json(capsys) -> None:
     assert code == 0
     captured = capsys.readouterr().out
     payload = json.loads(captured)
-    assert payload["total"] == 10
+    assert payload["total"] == 11
 
 
 def test_cli_format_markdown_emits_table_header(capsys) -> None:
@@ -316,3 +316,31 @@ def test_cli_verbose_flag_renders_per_class_rows(capsys) -> None:
     assert code == 0
     out = capsys.readouterr().out
     assert "        - chokepoint" in out
+
+
+# ── 8. Company Supply Risk validator — specific contract ──────────────────
+
+
+def test_company_supply_risk_validator_is_registered() -> None:
+    """The per-ticker supply-risk validator must show up in the canonical
+    list with the expected name + raw_fields shape."""
+    results = run_all_backtests()
+    by_name = {r.name: r for r in results}
+    assert "Company Supply Risk Stability" in by_name
+    r = by_name["Company Supply Risk Stability"]
+    assert {"n_runs", "noise", "top_n",
+            "overall_mean_stability", "overall_min_stability",
+            "stable"} <= set(r.raw_fields.keys())
+    assert isinstance(r.healthy, bool)
+    assert r.scorecard_rows  # one row per perturbation run
+
+
+def test_company_supply_risk_verbose_renders_per_run_rows(capsys) -> None:
+    """Verbose mode surfaces the per-run Jaccard scorecards for the new
+    validator."""
+    code = main(["--verbose"])
+    assert code == 0
+    out = capsys.readouterr().out
+    # Run labels are run0, run1, ... — pin at least one shows up.
+    assert "        - run0" in out
+    assert "top-N jaccard = " in out

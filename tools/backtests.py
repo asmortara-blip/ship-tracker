@@ -349,6 +349,38 @@ def _run_port_supply_lines() -> BacktestResult:
     )
 
 
+def _run_company_supply_risk() -> BacktestResult:
+    from processing.company_supply_risk_backtest import validate_risk_score_stability
+    r = validate_risk_score_stability()
+    # One row per perturbation run; label by run index so --verbose
+    # surfaces per-run Jaccard.
+    scorecard_rows = [
+        {"label": f"run{sc.run_index}",
+         "metric_name": "top-N jaccard",
+         "value": f"{sc.jaccard_vs_baseline * 100:.1f}%"}
+        for sc in r.scorecards
+    ]
+    return BacktestResult(
+        name="Company Supply Risk Stability",
+        headline_label="Mean top-N stability",
+        headline_value=(
+            f"{r.overall_mean_stability * 100:.1f}% "
+            f"(worst run {r.overall_min_stability * 100:.1f}%)"
+        ),
+        healthy=bool(r.stable),
+        summary=r.summary,
+        raw_fields={
+            "n_runs":                  r.n_runs,
+            "noise":                   r.noise,
+            "top_n":                   r.top_n,
+            "overall_mean_stability":  round(r.overall_mean_stability, 4),
+            "overall_min_stability":   round(r.overall_min_stability, 4),
+            "stable":                  bool(r.stable),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -361,6 +393,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_vulnerability_scorer,
     _run_eta_predictor,
     _run_port_supply_lines,
+    _run_company_supply_risk,
 ]
 
 

@@ -1,5 +1,5 @@
 {
-  "total": 10,
+  "total": 11,
   "validators": [
     {
       "headline_label": "Best component",
@@ -133,6 +133,21 @@
         "top_k": 5
       },
       "summary": "Rank-stability across 25 ports \u00d7 8 run(s) at \u00b115% cargo-mix noise: overall mean = 99.8%, worst per-port = 80.0%; stable (\u2265 65%): True."
+    },
+    {
+      "headline_label": "Mean top-N stability",
+      "headline_value": "100.0% (worst run 100.0%)",
+      "healthy": true,
+      "name": "Company Supply Risk Stability",
+      "raw": {
+        "n_runs": 8,
+        "noise": 0.15,
+        "overall_mean_stability": 1.0,
+        "overall_min_stability": 1.0,
+        "stable": true,
+        "top_n": 5
+      },
+      "summary": "Top-5 ticker rank-stability across 8 run(s) at \u00b115% cargo-mix noise: mean = 100.0%, worst run = 100.0%; stable (\u2265 65%): True."
     }
   ]
 }
