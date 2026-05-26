@@ -860,6 +860,105 @@ def run_port_supply_snapshot_job(
     return counts
 
 
+@_track_run
+def run_port_supply_snapshot_gc_job(
+    *,
+    keep_days: int = 90,
+    keep_first_of_month: bool = True,
+    keep_first_of_year: bool = True,
+) -> dict:
+    """Prune old port-supply snapshot dirs per the retention policy.
+
+    Thin wrapper around ``processing.port_supply_history.gc_old_snapshots``
+    that adds logging + the no-raise contract. Runs AFTER the daily
+    snapshot save so today's write is never accidentally garbage-
+    collected by the same tick.
+
+    Returns ``{"ok": bool, "n_dirs_scanned": int, "n_dirs_deleted": int,
+    "n_bytes_freed": int, "preserved_anchors": int}``. Never raises.
+    """
+    try:
+        from processing.port_supply_history import (
+            RetentionPolicy, gc_old_snapshots,
+        )
+
+        policy = RetentionPolicy(
+            keep_days=keep_days,
+            keep_first_of_month=keep_first_of_month,
+            keep_first_of_year=keep_first_of_year,
+        )
+        out = gc_old_snapshots(policy=policy)
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_port_supply_snapshot_gc_job: top-level failure: {exc}")
+        return {
+            "ok": False, "n_dirs_scanned": 0, "n_dirs_deleted": 0,
+            "n_bytes_freed": 0, "preserved_anchors": 0,
+        }
+
+    counts = {
+        "ok":                 True,
+        "n_dirs_scanned":     int(out.get("n_dirs_scanned", 0)),
+        "n_dirs_deleted":     int(out.get("n_dirs_deleted", 0)),
+        "n_bytes_freed":      int(out.get("n_bytes_freed", 0)),
+        "preserved_anchors":  len(out.get("preserved_anchors", []) or []),
+    }
+    logger.info(
+        f"run_port_supply_snapshot_gc_job: scanned={counts['n_dirs_scanned']} "
+        f"deleted={counts['n_dirs_deleted']} "
+        f"bytes_freed={counts['n_bytes_freed']:,} "
+        f"preserved={counts['preserved_anchors']}"
+    )
+    return counts
+
+
+@_track_run
+def run_multi_container_snapshot_job(
+    *,
+    container_types: Optional[list] = None,
+    min_diff_delta_days: float = 1.0,
+) -> dict:
+    """Fan the daily port-supply snapshot out across container types.
+
+    Thin wrapper around
+    ``processing.multi_container_snapshot.run_multi_container_snapshot_job``.
+    Per-container failures are isolated — one container failing doesn't
+    kill the others. Returns count dict ``{"ok": bool,
+    "total_bytes_written": int, "n_containers": int, "n_failed": int}``.
+    Never raises.
+    """
+    try:
+        from processing.multi_container_snapshot import (
+            run_multi_container_snapshot_job as _impl,
+        )
+
+        result = _impl(
+            container_types=container_types,
+            min_diff_delta_days=min_diff_delta_days,
+        )
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_multi_container_snapshot_job: top-level failure: {exc}")
+        return {
+            "ok": False, "total_bytes_written": 0,
+            "n_containers": 0, "n_failed": 0,
+        }
+
+    counts = {
+        "ok":                  not bool(getattr(result, "any_failed", False)),
+        "total_bytes_written": int(getattr(result, "total_bytes_written", 0)),
+        "n_containers":        len(getattr(result, "per_container_results", {}) or {}),
+        "n_failed":            sum(
+            1 for r in (result.per_container_results or {}).values()
+            if not getattr(r, "ok", False)
+        ),
+    }
+    logger.info(
+        f"run_multi_container_snapshot_job: containers={counts['n_containers']} "
+        f"failed={counts['n_failed']} "
+        f"total_bytes={counts['total_bytes_written']:,}"
+    )
+    return counts
+
+
 def run_delivery_retry_job(now: Optional[datetime] = None) -> dict:
     """Walk every due pending delivery retry and re-dispatch.
 
@@ -1489,6 +1588,23 @@ def main(argv: Optional[list] = None) -> int:
         run_port_supply_snapshot_job()
     except Exception as exc:
         logger.warning(f"main: port supply snapshot step failed: {exc}")
+
+    # Fan the daily snapshot out across container types — same belt-
+    # and-braces guard; per-container failures isolated inside the
+    # helper. Runs AFTER the 40FT_DRY single-container save so the
+    # default container's diff is always the authoritative signal.
+    try:
+        run_multi_container_snapshot_job()
+    except Exception as exc:
+        logger.warning(f"main: multi container snapshot step failed: {exc}")
+
+    # Prune old port-supply snapshot dirs per the retention policy.
+    # Runs LAST among the snapshot steps so today's writes are never
+    # GC'd by the same tick that produced them. Helper never raises.
+    try:
+        run_port_supply_snapshot_gc_job()
+    except Exception as exc:
+        logger.warning(f"main: port supply snapshot gc step failed: {exc}")
 
     # User-configured report schedules. Runs AFTER the operator digest
     # so a freshly-generated scheduled report can ride the same data

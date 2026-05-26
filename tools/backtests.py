@@ -349,6 +349,42 @@ def _run_port_supply_lines() -> BacktestResult:
     )
 
 
+def _run_ssi_port_correlation() -> BacktestResult:
+    from processing.ssi_port_correlation_backtest import (
+        validate_leading_indicator_recovery,
+    )
+    r = validate_leading_indicator_recovery()
+    # One row per synthetic run; --verbose surfaces detected_lag + r.
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": f"detected_lag (truth {pr['true_lag']}d)",
+         "value": f"{pr['detected_lag']}d (r={pr['best_r']})"}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="SSI Lag-Correlation Recovery",
+        headline_label="Lag recovery rate",
+        headline_value=(
+            f"{r['recovery_rate'] * 100:.1f}% "
+            f"(mean |Δlag| {r['mean_abs_lag_error']:.1f}d)"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":              r["n_runs"],
+            "noise":               r["noise"],
+            "true_lag_days":       r["true_lag_days"],
+            "tolerance_days":      r["tolerance_days"],
+            "recoveries":          r["recoveries"],
+            "recovery_rate":       round(r["recovery_rate"], 4),
+            "mean_abs_lag_error":  round(r["mean_abs_lag_error"], 4),
+            "mean_best_r":         round(r["mean_best_r"], 4),
+            "passed":              bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 def _run_company_supply_risk() -> BacktestResult:
     from processing.company_supply_risk_backtest import validate_risk_score_stability
     r = validate_risk_score_stability()
@@ -394,6 +430,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_eta_predictor,
     _run_port_supply_lines,
     _run_company_supply_risk,
+    _run_ssi_port_correlation,
 ]
 
 

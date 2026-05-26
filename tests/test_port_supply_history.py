@@ -282,3 +282,153 @@ def test_job_container_type_propagates_into_filename(tmp_path) -> None:
     )
     assert r.ok is True
     assert "40ft_reefer" in r.snapshot_path
+
+
+# ── 7. Regional snapshot save/load ────────────────────────────────────────
+
+
+def test_save_regional_snapshot_writes_csv_with_canonical_filename(
+    tmp_path,
+) -> None:
+    from processing.port_supply_history import save_regional_snapshot
+    path, n = save_regional_snapshot(
+        snapshot_date=date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=tmp_path,
+    )
+    assert path.exists()
+    assert n > 0
+    assert path.parent.name == "2026-05-26"
+    assert path.name == "port_supply_regional_rollup_40ft_dry.csv"
+
+
+def test_save_regional_snapshot_creates_missing_parent_dirs(tmp_path) -> None:
+    from processing.port_supply_history import save_regional_snapshot
+    nested = tmp_path / "deep" / "nested"
+    save_regional_snapshot(
+        snapshot_date=date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=nested,
+    )
+    assert nested.exists()
+
+
+def test_load_regional_snapshot_round_trips_through_save(tmp_path) -> None:
+    from processing.port_supply_history import (
+        load_regional_snapshot, save_regional_snapshot,
+    )
+    save_regional_snapshot(
+        snapshot_date=date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=tmp_path,
+    )
+    rows = load_regional_snapshot(
+        date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=tmp_path,
+    )
+    assert len(rows) >= 1   # at least one region present
+
+
+def test_load_regional_snapshot_raises_on_missing_file(tmp_path) -> None:
+    from processing.port_supply_history import load_regional_snapshot
+    with pytest.raises(FileNotFoundError):
+        load_regional_snapshot(
+            date(2026, 5, 26), container_type="40FT_DRY", root=tmp_path,
+        )
+
+
+def test_regional_and_per_port_snapshots_coexist(tmp_path) -> None:
+    """Both files land in the same date dir, side by side."""
+    from processing.port_supply_history import save_regional_snapshot
+    per_port_path, _ = save_snapshot(
+        snapshot_date=date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=tmp_path,
+    )
+    regional_path, _ = save_regional_snapshot(
+        snapshot_date=date(2026, 5, 26),
+        container_type="40FT_DRY",
+        root=tmp_path,
+    )
+    assert per_port_path.parent == regional_path.parent
+    assert per_port_path != regional_path
+
+
+# ── 8. Retention policy + GC ──────────────────────────────────────────────
+
+
+def _plant_snapshot_dir(root: Path, d: date, n_bytes: int = 100) -> None:
+    """Plant a stub snapshot dir with one CSV inside."""
+    dd = root / d.isoformat()
+    dd.mkdir(parents=True, exist_ok=True)
+    (dd / "port_supply_summary_40ft_dry.csv").write_text(
+        "# stub\n" + ("x" * max(0, n_bytes - 7)), encoding="utf-8",
+    )
+
+
+def test_retention_policy_defaults_keep_90_days() -> None:
+    from processing.port_supply_history import RetentionPolicy
+    p = RetentionPolicy()
+    assert p.keep_days == 90
+    assert p.keep_first_of_month is True
+    assert p.keep_first_of_year is True
+
+
+def test_gc_deletes_dirs_older_than_keep_days(tmp_path) -> None:
+    from processing.port_supply_history import (
+        RetentionPolicy, gc_old_snapshots,
+    )
+    today = date(2026, 5, 26)
+    _plant_snapshot_dir(tmp_path, today)                    # keep
+    _plant_snapshot_dir(tmp_path, today - timedelta(days=10))  # keep
+    _plant_snapshot_dir(tmp_path, today - timedelta(days=200)) # delete (mid-month)
+    out = gc_old_snapshots(
+        policy=RetentionPolicy(
+            keep_days=90, keep_first_of_month=False, keep_first_of_year=False,
+        ),
+        root=tmp_path, today=today,
+    )
+    assert out["n_dirs_deleted"] == 1
+    assert out["n_bytes_freed"] > 0
+
+
+def test_gc_preserves_first_of_month_anchor(tmp_path) -> None:
+    """First-of-month snapshots survive beyond keep_days when anchor flag on."""
+    from processing.port_supply_history import (
+        RetentionPolicy, gc_old_snapshots,
+    )
+    today = date(2026, 5, 26)
+    _plant_snapshot_dir(tmp_path, date(2026, 1, 1))     # first-of-month + first-of-year
+    _plant_snapshot_dir(tmp_path, date(2026, 1, 15))    # mid-month, should be deleted
+    out = gc_old_snapshots(
+        policy=RetentionPolicy(
+            keep_days=30, keep_first_of_month=True, keep_first_of_year=True,
+        ),
+        root=tmp_path, today=today,
+    )
+    assert (tmp_path / "2026-01-01").exists()
+    assert not (tmp_path / "2026-01-15").exists()
+
+
+def test_gc_on_empty_root_returns_zero_counts(tmp_path) -> None:
+    from processing.port_supply_history import gc_old_snapshots
+    empty_root = tmp_path / "does-not-exist"
+    out = gc_old_snapshots(root=empty_root)
+    assert out["n_dirs_deleted"] == 0
+    assert out["n_bytes_freed"] == 0
+
+
+def test_gc_ignores_non_date_child_dirs(tmp_path) -> None:
+    """Manual artefact dirs with non-ISO names must be left alone."""
+    from processing.port_supply_history import (
+        RetentionPolicy, gc_old_snapshots,
+    )
+    (tmp_path / "manual-notes").mkdir()
+    _plant_snapshot_dir(tmp_path, date(2020, 1, 15))   # very old
+    out = gc_old_snapshots(
+        policy=RetentionPolicy(keep_days=30, keep_first_of_month=False, keep_first_of_year=False),
+        root=tmp_path, today=date(2026, 5, 26),
+    )
+    assert (tmp_path / "manual-notes").exists()
+    assert not (tmp_path / "2020-01-15").exists()

@@ -1,5 +1,5 @@
 {
-  "total": 11,
+  "total": 12,
   "validators": [
     {
       "headline_label": "Best component",
@@ -148,6 +148,24 @@
         "top_n": 5
       },
       "summary": "Top-5 ticker rank-stability across 8 run(s) at \u00b115% cargo-mix noise: mean = 100.0%, worst run = 100.0%; stable (\u2265 65%): True."
+    },
+    {
+      "headline_label": "Lag recovery rate",
+      "headline_value": "100.0% (mean |\u0394lag| 0.0d)",
+      "healthy": true,
+      "name": "SSI Lag-Correlation Recovery",
+      "raw": {
+        "mean_abs_lag_error": 0.0,
+        "mean_best_r": 1.0,
+        "n_runs": 10,
+        "noise": 0.0,
+        "passed": true,
+        "recoveries": 10,
+        "recovery_rate": 1.0,
+        "tolerance_days": 2,
+        "true_lag_days": 3
+      },
+      "summary": "Lag-recovery across 10 run(s) at noise=0.00, true_lag=3d, tolerance=\u00b12d: recovery_rate=100.0%, mean |error|=0.00d, mean best |r|=1.00; passed (>=70%): True."
     }
   ]
 }

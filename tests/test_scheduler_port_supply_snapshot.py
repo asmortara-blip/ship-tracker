@@ -363,3 +363,61 @@ def test_quiet_day_with_empty_diff_writes_no_digest(
     assert out["diff_present"] is True   # diff IS present...
     assert out["digest_paths"] == {}     # ...but every bucket is empty
     assert list(snapshot_dir.glob("digest_*")) == []
+
+# ── 6. Snapshot GC + multi-container fan-out wrappers ────────────────────
+
+
+def test_gc_wrapper_returns_required_keys(isolate_snapshot_root) -> None:
+    out = sched.run_port_supply_snapshot_gc_job()
+    assert set(out.keys()) >= {
+        "ok", "n_dirs_scanned", "n_dirs_deleted",
+        "n_bytes_freed", "preserved_anchors",
+    }
+    assert out["ok"] is True
+
+
+def test_gc_wrapper_returns_ok_false_when_underlying_raises(
+    monkeypatch,
+) -> None:
+    """Top-level exception in gc_old_snapshots → ok=False, never raises."""
+    def _boom(**_kw):
+        raise RuntimeError("simulated")
+    import processing.port_supply_history as psh
+    monkeypatch.setattr(psh, "gc_old_snapshots", _boom)
+    out = sched.run_port_supply_snapshot_gc_job()
+    assert out["ok"] is False
+    assert out["n_dirs_scanned"] == 0
+
+
+def test_multi_container_wrapper_returns_required_keys(
+    isolate_snapshot_root,
+) -> None:
+    out = sched.run_multi_container_snapshot_job()
+    assert set(out.keys()) >= {
+        "ok", "total_bytes_written", "n_containers", "n_failed",
+    }
+    assert out["ok"] is True
+    assert out["n_containers"] >= 1
+
+
+def test_multi_container_wrapper_returns_ok_false_when_underlying_raises(
+    monkeypatch,
+) -> None:
+    def _boom(**_kw):
+        raise RuntimeError("simulated")
+    import processing.multi_container_snapshot as mcs
+    monkeypatch.setattr(mcs, "run_multi_container_snapshot_job", _boom)
+    out = sched.run_multi_container_snapshot_job()
+    assert out["ok"] is False
+    assert out["n_containers"] == 0
+
+
+def test_main_function_calls_gc_and_multi_under_try_except() -> None:
+    """Both new wrappers must be invoked from main() under try/except,
+    same as every other sibling step."""
+    import inspect
+    src = inspect.getsource(sched.main)
+    assert "run_port_supply_snapshot_gc_job()" in src
+    assert "run_multi_container_snapshot_job()" in src
+    assert "port supply snapshot gc step failed" in src
+    assert "multi container snapshot step failed" in src
