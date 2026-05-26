@@ -224,3 +224,47 @@ def test_view_registry_filename_stems_are_unique() -> None:
     don't collide when written into the same directory."""
     stems = [stem for stem, _ in VIEW_REGISTRY.values()]
     assert len(stems) == len(set(stems))
+
+
+# ── 9. --xlsx flag writes the workbook alongside the CSVs ────────────────
+
+def test_cli_xlsx_flag_writes_workbook(tmp_path, capsys) -> None:
+    code = main([
+        "--out-dir", str(tmp_path),
+        "--xlsx", "--quiet",
+    ])
+    assert code == 0
+    csvs = list(tmp_path.glob("*.csv"))
+    xlsxs = list(tmp_path.glob("*.xlsx"))
+    assert len(csvs) == len(ALL_VIEWS)
+    assert len(xlsxs) == 1
+    assert "workbook" in xlsxs[0].name.lower()
+
+
+def test_cli_xlsx_flag_with_json_includes_workbook_result(tmp_path, capsys) -> None:
+    """JSON manifest counts the xlsx bundle as an additional entry."""
+    import json
+    code = main([
+        "--out-dir", str(tmp_path),
+        "--xlsx", "--json",
+    ])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    views = {entry["view"] for entry in payload["results"]}
+    assert "xlsx_workbook" in views
+    assert payload["total"] == len(ALL_VIEWS) + 1
+    workbook_entry = next(
+        e for e in payload["results"] if e["view"] == "xlsx_workbook"
+    )
+    assert workbook_entry["ok"] is True
+    assert workbook_entry["bytes_written"] > 5_000
+
+
+def test_cli_without_xlsx_flag_omits_workbook(tmp_path, capsys) -> None:
+    code = main([
+        "--out-dir", str(tmp_path),
+        "--quiet",
+    ])
+    assert code == 0
+    xlsxs = list(tmp_path.glob("*.xlsx"))
+    assert xlsxs == []   # no workbook when flag omitted

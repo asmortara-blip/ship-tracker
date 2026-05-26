@@ -189,6 +189,54 @@ def export_views(
     return results
 
 
+def _export_xlsx(
+    *,
+    out_dir: str | Path,
+    container_type: str,
+    threshold_days: float,
+    stamp: str | None = None,
+) -> ExportResult:
+    """Build the single-workbook .xlsx bundle + write it under
+    ``out_dir`` with the canonical filename stamp."""
+    if stamp is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = (
+        f"port_supply_lines_workbook"
+        f"_{container_type.lower()}_{stamp}.xlsx"
+    )
+    target = out_dir / filename
+    try:
+        from processing.port_supply_lines import (
+            build_company_port_footprints,
+            build_port_supply_chains,
+        )
+        from utils.port_supply_xlsx import build_workbook
+        chains = build_port_supply_chains(container_type=container_type)
+        footprints = build_company_port_footprints(
+            container_type=container_type,
+        )
+        data = build_workbook(
+            chains, footprints,
+            container_type=container_type,
+            threshold_days=threshold_days,
+        )
+        target.write_bytes(data)
+        return ExportResult(
+            view="xlsx_workbook",
+            path=str(target.resolve()),
+            bytes_written=len(data),
+            ok=True,
+        )
+    except Exception as exc:
+        return ExportResult(
+            view="xlsx_workbook", path="", bytes_written=0,
+            ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -290,6 +338,15 @@ def main(argv: list[str] | None = None) -> int:
             "Pairs well with --quiet=false for scripting."
         ),
     )
+    parser.add_argument(
+        "--xlsx",
+        action="store_true",
+        help=(
+            "Also write a single .xlsx workbook (all 5 sheets bundled) "
+            "alongside the CSV files. Useful for analysts who prefer a "
+            "single file with sheets they can pivot across."
+        ),
+    )
     args = parser.parse_args(argv)
 
     views = _parse_views(args.views)
@@ -308,6 +365,13 @@ def main(argv: list[str] | None = None) -> int:
         container_type=args.container_type,
         threshold_days=args.threshold_days,
     )
+
+    if args.xlsx:
+        results.append(_export_xlsx(
+            out_dir=args.out_dir,
+            container_type=args.container_type,
+            threshold_days=args.threshold_days,
+        ))
 
     if not args.quiet:
         if args.json:

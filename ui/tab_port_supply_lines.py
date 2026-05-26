@@ -681,6 +681,44 @@ def _render_csv_exports(chains: list, container_type: str) -> None:
             ),
         )
 
+    # ── Excel workbook — all five sheets bundled together ─────────────
+    try:
+        from utils.port_supply_xlsx import build_workbook
+        footprints_for_xlsx = build_company_port_footprints(
+            container_type=container_type,
+        )
+        xlsx_bytes = build_workbook(
+            chains,
+            footprints_for_xlsx,
+            container_type=container_type,
+            threshold_days=-3.0,
+        )
+    except Exception:
+        logger.exception("port_supply_lines: xlsx workbook failed")
+        xlsx_bytes = b""
+    if xlsx_bytes:
+        col_x, _ = st.columns([1, 2])
+        with col_x:
+            st.download_button(
+                label="📓 Excel workbook (all 5 sheets)",
+                data=xlsx_bytes,
+                file_name=f"port_supply_lines_workbook"
+                          f"_{container_type.lower()}"
+                          f"_{stamp}.xlsx",
+                mime=("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+                use_container_width=True,
+                key="port_supply_lines_xlsx_workbook",
+                help=(
+                    "Single .xlsx workbook bundling all five CSV views "
+                    "as sheets, plus an overview sheet with the snapshot "
+                    "timestamp, container type, threshold, and per-sheet "
+                    "row counts. Bold + frozen headers, autosized "
+                    "columns, numeric coercion so SUM / sort / pivot "
+                    "work without type conversions."
+                ),
+            )
+
 
 def _render_company_footprint_drilldown(container_type: str) -> None:
     """Inverted view: pick a ticker → see its top exposed ports.
