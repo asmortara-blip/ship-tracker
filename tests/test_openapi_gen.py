@@ -148,7 +148,11 @@ def test_auth_required_operations_reference_bearer_auth():
     the global). Today every auth'd operation re-states it explicitly,
     so the assertion is concrete: each one has the marker."""
     spec = build_openapi_spec()
-    public_paths = {"/api/v1/health", "/api/v1/openapi.json"}
+    public_paths = {
+        "/api/v1/health",
+        "/api/v1/openapi.json",
+        "/api/v1/backtests/health",
+    }
     for path, methods in spec["paths"].items():
         for verb, op in methods.items():
             if path in public_paths:

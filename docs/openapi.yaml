@@ -200,6 +200,59 @@ components:
         - user_id
         - action
       type: object
+    BacktestValidator:
+      description: "One backtest validator's snapshot, normalised across all 9 modules."
+      properties:
+        headline_label:
+          type: string
+        headline_value:
+          type: string
+        healthy:
+          type: boolean
+        name:
+          type: string
+        raw:
+          additionalProperties: true
+          description: "Validator-specific structured fields (e.g. best_component, n_observations, MAE, spread_*) — shape varies per validator."
+          type: object
+        summary:
+          type: string
+      required:
+        - name
+        - healthy
+        - headline_label
+        - headline_value
+        - summary
+        - raw
+      type: object
+    BacktestsHealthResponse:
+      description: "Public consolidated backtest-layer health report from ``tools.backtests``."
+      properties:
+        healthy_count:
+          type: integer
+        now_utc:
+          format: date-time
+          type: string
+        status:
+          description: "Top-level rollup: ok=all healthy, degraded=any unhealthy, down=run failed."
+          enum:
+            - ok
+            - degraded
+            - down
+          type: string
+        total:
+          type: integer
+        validators:
+          items:
+            $ref: "#/components/schemas/BacktestValidator"
+          type: array
+      required:
+        - status
+        - validators
+        - healthy_count
+        - total
+        - now_utc
+      type: object
     DeliveryChannel:
       description: "One delivery channel. Mirrors ``engine.alert_delivery.DeliveryChannel`` minus the ``target`` field — the API deliberately withholds ``target`` from list responses to avoid leaking the secret webhook URL / email."
       properties:
@@ -1183,6 +1236,33 @@ paths:
       summary: "SIEM-friendly export of the caller's audit-log rows."
       tags:
         - Audit
+  /api/v1/backtests/health:
+    get:
+      description: "Unauthenticated. Runs every validator in ``tools.backtests`` and returns the consolidated JSON report. Status code follows the rollup: ``200`` when all 9 validators report healthy, ``503`` when any reports unhealthy. External monitoring (Datadog HTTP check, k8s liveness probe, Pingdom, status page) can alarm on the status code alone without parsing the body."
+      operationId: getBacktestsHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestsHealthResponse"
+          description: All 9 validators healthy. status=ok.
+        "503":
+          content:
+            application/json:
+              example:
+                healthy_count: 7
+                now_utc: "2026-05-25T22:00:00+00:00"
+                status: degraded
+                total: 9
+                validators: []
+              schema:
+                $ref: "#/components/schemas/BacktestsHealthResponse"
+          description: "Either at least one validator reports unhealthy (status=degraded), or the underlying tools.backtests run itself failed (status=down + error field)."
+      security: []
+      summary: Public consolidated backtest-layer health probe.
+      tags:
+        - Health
   /api/v1/channels:
     get:
       description: "``target`` field is NEVER returned (it's the secret webhook URL / email)."

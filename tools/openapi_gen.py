@@ -273,6 +273,46 @@ def _components_schemas() -> dict:
                 },
             },
         },
+        # Backtests health probe ------------------------------------------
+        "BacktestValidator": {
+            "type": "object",
+            "description": "One backtest validator's snapshot, normalised across all 9 modules.",
+            "required": ["name", "healthy", "headline_label",
+                         "headline_value", "summary", "raw"],
+            "properties": {
+                "name":            {"type": "string"},
+                "healthy":         {"type": "boolean"},
+                "headline_label":  {"type": "string"},
+                "headline_value":  {"type": "string"},
+                "summary":         {"type": "string"},
+                "raw": {
+                    "type": "object",
+                    "description": "Validator-specific structured fields (e.g. best_component, n_observations, MAE, spread_*) — shape varies per validator.",
+                    "additionalProperties": True,
+                },
+            },
+        },
+        "BacktestsHealthResponse": {
+            "type": "object",
+            "description": "Public consolidated backtest-layer health report from ``tools.backtests``.",
+            "required": [
+                "status", "validators", "healthy_count", "total", "now_utc",
+            ],
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["ok", "degraded", "down"],
+                    "description": "Top-level rollup: ok=all healthy, degraded=any unhealthy, down=run failed.",
+                },
+                "now_utc":        {"type": "string", "format": "date-time"},
+                "healthy_count":  {"type": "integer"},
+                "total":          {"type": "integer"},
+                "validators": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/BacktestValidator"},
+                },
+            },
+        },
         # ShippingAlert (engine.alert_engine_v2) --------------------------
         "Alert": {
             "type": "object",
@@ -619,6 +659,54 @@ def _paths() -> dict:
                         "application/json": {
                             "schema": {"$ref": "#/components/schemas/HealthResponse"},
                             "example": {"status": "down", "error": "OperationalError: ..."},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    # ── /api/v1/backtests/health (public) ──────────────────────────────
+    paths["/api/v1/backtests/health"] = {
+        "get": {
+            "operationId": "getBacktestsHealth",
+            "summary": "Public consolidated backtest-layer health probe.",
+            "description": (
+                "Unauthenticated. Runs every validator in "
+                "``tools.backtests`` and returns the consolidated JSON "
+                "report. Status code follows the rollup: ``200`` when "
+                "all 9 validators report healthy, ``503`` when any "
+                "reports unhealthy. External monitoring (Datadog HTTP "
+                "check, k8s liveness probe, Pingdom, status page) can "
+                "alarm on the status code alone without parsing the body."
+            ),
+            "tags": ["Health"],
+            "security": [],
+            "responses": {
+                "200": {
+                    "description": "All 9 validators healthy. status=ok.",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/BacktestsHealthResponse"},
+                        },
+                    },
+                },
+                "503": {
+                    "description": (
+                        "Either at least one validator reports unhealthy "
+                        "(status=degraded), or the underlying tools.backtests "
+                        "run itself failed (status=down + error field)."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/BacktestsHealthResponse"},
+                            "example": {
+                                "status": "degraded",
+                                "healthy_count": 7,
+                                "total": 9,
+                                "now_utc": "2026-05-25T22:00:00+00:00",
+                                "validators": [],
+                            },
                         },
                     },
                 },
