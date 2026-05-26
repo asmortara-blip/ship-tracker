@@ -271,3 +271,48 @@ def test_cli_compare_baseline_returns_one_on_drift(tmp_path, capsys) -> None:
 def test_cli_rejects_save_and_compare_together(capsys) -> None:
     code = main(["--save-baseline", "/tmp/x.json", "--compare-baseline", "/tmp/y.json"])
     assert code == 2
+
+
+# ── 7. Verbose mode renders per-class scorecard rows ──────────────────────
+
+def test_every_validator_carries_scorecard_rows() -> None:
+    """Every adapter populates scorecard_rows so --verbose has content
+    to render for every validator."""
+    results = run_all_backtests()
+    for r in results:
+        assert isinstance(r.scorecard_rows, list)
+        assert len(r.scorecard_rows) > 0, f"{r.name} has no scorecard rows"
+        for row in r.scorecard_rows:
+            assert {"label", "metric_name", "value"} <= set(row.keys())
+
+
+def test_format_text_verbose_renders_scorecard_rows() -> None:
+    """Verbose text includes per-class rows below each validator block."""
+    results = run_all_backtests()
+    out = format_text(results, verbose=True)
+    # Pick a known label that should appear in the SSI scorecard rows.
+    assert "chokepoint" in out
+    # And a known momentum signal class.
+    assert "STRONG_BUY" in out
+    # And the metric-name template.
+    assert "sign-agreement = " in out
+
+
+def test_format_text_non_verbose_omits_scorecard_rows() -> None:
+    """Default (non-verbose) text must NOT include the per-class rows —
+    it's a one-line-per-validator overview. We specifically check that
+    the row template (8-space prefix + dash + label + double-space +
+    metric = value) is absent, not the loose phrase 'sign-agreement'
+    (which still appears in each validator's summary text)."""
+    results = run_all_backtests()
+    out = format_text(results, verbose=False)
+    # The per-row template uses "        - " prefix; should be absent.
+    assert "        - " not in out
+
+
+def test_cli_verbose_flag_renders_per_class_rows(capsys) -> None:
+    """`--verbose` flag wires through to the text formatter."""
+    code = main(["--verbose"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "        - chokepoint" in out

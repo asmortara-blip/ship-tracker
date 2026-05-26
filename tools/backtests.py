@@ -52,6 +52,9 @@ class BacktestResult:
                            # primary calibration / monotonicity check passed
     summary: str           # the validator's one-line plain-language summary
     raw_fields: dict[str, Any] = field(default_factory=dict)
+    # Optional per-class scorecard rows surfaced by --verbose.
+    # Each row: ``{"label": str, "metric_name": str, "value": str}``.
+    scorecard_rows: list[dict[str, str]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +69,13 @@ def _run_ssi_components() -> BacktestResult:
     worst = next(sc for sc in r.scorecards if sc.component == r.worst_component)
     # Healthy when the best component is meaningfully above random.
     healthy = best.sign_agreement_rate >= 0.55
+    scorecard_rows = [
+        {"label": sc.component,
+         "metric_name": "sign-agreement",
+         "value": f"{sc.sign_agreement_rate * 100:.1f}%"}
+        for sc in sorted(r.scorecards,
+                         key=lambda s: -s.sign_agreement_rate)
+    ]
     return BacktestResult(
         name="SSI Component Predictiveness",
         headline_label="Best component",
@@ -79,6 +89,7 @@ def _run_ssi_components() -> BacktestResult:
             "best_rate":        round(best.sign_agreement_rate, 4),
             "worst_rate":       round(worst.sign_agreement_rate, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
@@ -88,6 +99,13 @@ def _run_schi_components() -> BacktestResult:
     best = next(sc for sc in r.scorecards if sc.component == r.best_component)
     worst = next(sc for sc in r.scorecards if sc.component == r.worst_component)
     healthy = best.sign_agreement_rate >= 0.55
+    scorecard_rows = [
+        {"label": sc.component,
+         "metric_name": "sign-agreement",
+         "value": f"{sc.sign_agreement_rate * 100:.1f}%"}
+        for sc in sorted(r.scorecards,
+                         key=lambda s: -s.sign_agreement_rate)
+    ]
     return BacktestResult(
         name="SCHI Dimension Predictiveness",
         headline_label="Best dimension",
@@ -101,6 +119,7 @@ def _run_schi_components() -> BacktestResult:
             "best_rate":        round(best.sign_agreement_rate, 4),
             "worst_rate":       round(worst.sign_agreement_rate, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
@@ -109,6 +128,12 @@ def _run_disruption_forecast() -> BacktestResult:
     r = backtest_disruption_forecast()
     # Healthy when 30d sign-agreement is materially above random.
     healthy = r.mean_sign_agreement_30d >= 0.55
+    scorecard_rows = [
+        {"label": sc.route_id,
+         "metric_name": "30d MAE",
+         "value": f"{sc.mae_30d:.3f}"}
+        for sc in sorted(r.scorecards, key=lambda s: s.mae_30d)
+    ]
     return BacktestResult(
         name="Disruption Forecast Accuracy",
         headline_label="30d sign-agreement",
@@ -124,12 +149,19 @@ def _run_disruption_forecast() -> BacktestResult:
             "best_route":          r.best_route,
             "worst_route":         r.worst_route,
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
 def _run_momentum_ranker() -> BacktestResult:
     from engine.momentum_ranker_backtest import backtest_momentum_signals
     r = backtest_momentum_signals()
+    scorecard_rows = [
+        {"label": sc.signal,
+         "metric_name": "mean fwd return",
+         "value": f"{sc.mean_forward_return * 100:+.2f}%"}
+        for sc in r.scorecards
+    ]
     return BacktestResult(
         name="Momentum Ranker Ladder",
         headline_label="Monotonic ladder",
@@ -141,6 +173,7 @@ def _run_momentum_ranker() -> BacktestResult:
             "monotonic_by_signal":     bool(r.monotonic_by_signal),
             "spread_strong_vs_weak":   round(r.spread_strong_vs_weak, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
@@ -154,6 +187,17 @@ def _run_freight_volatility() -> BacktestResult:
         headline = "mixed"
     else:
         headline = "neither"
+    scorecard_rows = [
+        {"label": sc.regime,
+         "metric_name": "mean fwd return",
+         "value": f"{sc.mean_forward_return * 100:+.2f}%"}
+        for sc in r.regimes
+    ] + [
+        {"label": sc.signal,
+         "metric_name": "mean fwd return",
+         "value": f"{sc.mean_forward_return * 100:+.2f}%"}
+        for sc in r.mean_reversion
+    ]
     return BacktestResult(
         name="Freight Volatility Classifier",
         headline_label="Momentum + reversion",
@@ -165,12 +209,19 @@ def _run_freight_volatility() -> BacktestResult:
             "momentum_works":         bool(r.momentum_works),
             "mean_reversion_works":   bool(r.mean_reversion_works),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
 def _run_leading_indicators() -> BacktestResult:
     from processing.leading_indicators_backtest import backtest_leading_indicators
     r = backtest_leading_indicators()
+    scorecard_rows = [
+        {"label": sc.signal,
+         "metric_name": "mean fwd demand",
+         "value": f"{sc.mean_forward_demand_pct * 100:+.2f}%"}
+        for sc in r.scorecards
+    ]
     return BacktestResult(
         name="Leading Indicators Calibration",
         headline_label="Calibrated",
@@ -182,12 +233,19 @@ def _run_leading_indicators() -> BacktestResult:
             "signals_calibrated":          bool(r.signals_calibrated),
             "spread_bullish_vs_bearish":   round(r.spread_bullish_vs_bearish, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
 def _run_news_sentiment() -> BacktestResult:
     from processing.news_sentiment_backtest import backtest_news_sentiment
     r = backtest_news_sentiment()
+    scorecard_rows = [
+        {"label": sc.sentiment,
+         "metric_name": "mean fwd rate move",
+         "value": f"{sc.mean_forward_rate_move_pct * 100:+.2f}%"}
+        for sc in r.scorecards
+    ]
     return BacktestResult(
         name="News Sentiment Calibration",
         headline_label="Calibrated",
@@ -199,12 +257,19 @@ def _run_news_sentiment() -> BacktestResult:
             "sentiment_calibrated":        bool(r.sentiment_calibrated),
             "spread_bullish_vs_bearish":   round(r.spread_bullish_vs_bearish, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
 def _run_vulnerability_scorer() -> BacktestResult:
     from processing.vulnerability_scorer_backtest import backtest_vulnerability_scorer
     r = backtest_vulnerability_scorer()
+    scorecard_rows = [
+        {"label": sc.label,
+         "metric_name": "disrupt rate",
+         "value": f"{sc.realized_disruption_rate * 100:.1f}%"}
+        for sc in r.scorecards
+    ]
     return BacktestResult(
         name="Vulnerability Scorer Monotonicity",
         headline_label="Monotonic ladder",
@@ -216,6 +281,7 @@ def _run_vulnerability_scorer() -> BacktestResult:
             "monotonic_by_label":        bool(r.monotonic_by_label),
             "spread_critical_vs_low":    round(r.spread_critical_vs_low, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
@@ -226,6 +292,12 @@ def _run_eta_predictor() -> BacktestResult:
     # (under 3 days — well above quality=1.0's collapse, well under
     # quality=0.0's noise floor)
     healthy = bool(r.monotonic_by_label) and r.delay_mae < 3.0
+    scorecard_rows = [
+        {"label": sc.label,
+         "metric_name": "mean realized delay",
+         "value": f"{sc.mean_realized_delay_days:.1f}d"}
+        for sc in r.label_scorecards
+    ]
     return BacktestResult(
         name="ETA Predictor Accuracy",
         headline_label="Monotonic + low MAE",
@@ -243,6 +315,7 @@ def _run_eta_predictor() -> BacktestResult:
             "monotonic_by_label":       bool(r.monotonic_by_label),
             "spread_severe_vs_low":     round(r.spread_severe_vs_low, 4),
         },
+        scorecard_rows=scorecard_rows,
     )
 
 
@@ -289,8 +362,18 @@ def run_all_backtests() -> list[BacktestResult]:
 # ---------------------------------------------------------------------------
 
 
-def format_text(results: list[BacktestResult]) -> str:
-    """Human-readable plain-text report — what the CLI prints by default."""
+def format_text(
+    results: list[BacktestResult],
+    *,
+    verbose: bool = False,
+) -> str:
+    """Human-readable plain-text report — what the CLI prints by default.
+
+    ``verbose=True`` adds the per-class scorecard rows under each
+    validator. Each row is rendered as ``    - <label>: <metric_name> = <value>``.
+    Width of the label column is dynamically right-padded so the equals
+    signs align.
+    """
     width_name = max((len(r.name) for r in results), default=10) + 2
     lines = [
         "=" * 72,
@@ -302,6 +385,14 @@ def format_text(results: list[BacktestResult]) -> str:
         flag = "OK " if r.healthy else "WARN"
         lines.append(f"[{flag}] {r.name.ljust(width_name)} {r.headline_label}: {r.headline_value}")
         lines.append(f"        {r.summary}")
+        if verbose and r.scorecard_rows:
+            # Right-pad labels so equals signs line up across the validator's rows.
+            label_width = max(len(row["label"]) for row in r.scorecard_rows)
+            for row in r.scorecard_rows:
+                lines.append(
+                    f"        - {row['label'].ljust(label_width)}  "
+                    f"{row['metric_name']} = {row['value']}"
+                )
         lines.append("")
     healthy_count = sum(1 for r in results if r.healthy)
     lines.append("-" * 72)
@@ -567,6 +658,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help=(
+            "Include per-class scorecard rows under each validator in "
+            "the text output (no effect on json/markdown formats). "
+            "Useful for triage when a validator goes red."
+        ),
+    )
+    parser.add_argument(
         "--save-baseline",
         metavar="PATH",
         help=(
@@ -607,12 +707,12 @@ def main(argv: list[str] | None = None) -> int:
         print(format_drift_report(drifts, results))
         return 1 if drifts else 0
 
-    formatter = {
-        "text":     format_text,
-        "json":     format_json,
-        "markdown": format_markdown,
-    }[args.format]
-    print(formatter(results))
+    if args.format == "text":
+        print(format_text(results, verbose=args.verbose))
+    elif args.format == "json":
+        print(format_json(results))
+    else:  # markdown
+        print(format_markdown(results))
 
     if args.strict and any(not r.healthy for r in results):
         return 1
