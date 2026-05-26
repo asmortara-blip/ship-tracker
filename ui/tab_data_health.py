@@ -3542,10 +3542,58 @@ def _render_backtest_coverage() -> None:
             "sublabel": "validator unavailable",
         })
 
-    # 6 cards → flow in two rows of 3 so each card has enough width for its
+    # News sentiment backtest
+    try:
+        from processing.news_sentiment_backtest import backtest_news_sentiment
+        ns_report = backtest_news_sentiment()
+        ns_spread_pp = ns_report.spread_bullish_vs_bearish * 100
+        cards.append({
+            "label":   "News Sentiment",
+            "value":   f"{ns_spread_pp:+.2f}pp",
+            "accent":  C_HIGH if ns_report.sentiment_calibrated else C_LOW,
+            "sublabel": (
+                f"BULLISH vs BEARISH · calibrated: "
+                f"{'yes' if ns_report.sentiment_calibrated else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — news sentiment backtest unavailable")
+        cards.append({
+            "label":   "News Sentiment",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # Vulnerability scorer backtest
+    try:
+        from processing.vulnerability_scorer_backtest import (
+            backtest_vulnerability_scorer,
+        )
+        vs_report = backtest_vulnerability_scorer()
+        vs_spread_pp = vs_report.spread_critical_vs_low * 100
+        cards.append({
+            "label":   "Vulnerability",
+            "value":   f"{vs_spread_pp:+.1f}pp",
+            "accent":  C_HIGH if vs_report.monotonic_by_label else C_LOW,
+            "sublabel": (
+                f"CRITICAL vs LOW · monotonic: "
+                f"{'yes' if vs_report.monotonic_by_label else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — vulnerability backtest unavailable")
+        cards.append({
+            "label":   "Vulnerability",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # 8 cards → flow in two rows of 4 so each card has enough width for its
     # sublabel without truncation.
-    metric_card_row(cards[:3], columns=3)
-    metric_card_row(cards[3:], columns=3)
+    metric_card_row(cards[:4], columns=4)
+    metric_card_row(cards[4:], columns=4)
     st.caption(
         "All four validators are deterministic and seed-stable; numbers "
         "above are computed against the bundled synthetic-history "
