@@ -3489,7 +3489,35 @@ def _render_backtest_coverage() -> None:
             "sublabel": "validator unavailable",
         })
 
-    metric_card_row(cards, columns=4)
+    # Freight volatility backtest
+    try:
+        from processing.freight_volatility_backtest import (
+            backtest_freight_volatility,
+        )
+        fv_report = backtest_freight_volatility()
+        both_work = fv_report.momentum_works and fv_report.mean_reversion_works
+        either_works = fv_report.momentum_works or fv_report.mean_reversion_works
+        cards.append({
+            "label":   "Freight Volatility",
+            "value":   ("Both" if both_work
+                        else "Mixed" if either_works else "Neither"),
+            "accent":  (C_HIGH if both_work
+                        else C_MOD if either_works else C_LOW),
+            "sublabel": (
+                f"momentum: {'yes' if fv_report.momentum_works else 'no'} · "
+                f"reversion: {'yes' if fv_report.mean_reversion_works else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — freight volatility backtest unavailable")
+        cards.append({
+            "label":   "Freight Volatility",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    metric_card_row(cards, columns=5)
     st.caption(
         "All four validators are deterministic and seed-stable; numbers "
         "above are computed against the bundled synthetic-history "
