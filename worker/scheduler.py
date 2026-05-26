@@ -698,6 +698,98 @@ def run_alert_escalation_job(now: Optional[datetime] = None) -> dict:
 
 
 @_track_run
+def run_port_supply_snapshot_job(
+    *,
+    container_type: str = "40FT_DRY",
+    min_diff_delta_days: float = 1.0,
+) -> dict:
+    """Persist today's port-supply snapshot + log the diff vs prior.
+
+    Thin wrapper around
+    ``processing.port_supply_history.run_daily_snapshot_job`` that adds
+    logging + shields the caller from any exception (matches the
+    contract of the other run_*_job helpers in this module).
+
+    The underlying job:
+      1. Builds today's port supply chains
+      2. Writes ``port_supply_summary_<container>.csv`` under
+         ``cache/port_supply_snapshots/<today>/``
+      3. Finds the most recent prior snapshot for the same container
+         type (default 14-day lookback so weekend gaps are tolerated)
+      4. If found, diffs against it and returns the structured
+         ``DiffReport`` so the count of severity shifts / entered-
+         deficit transitions can be logged inline
+
+    Returns a count dict so the caller can fold it into telemetry:
+      ``{"ok": bool, "saved_bytes": int, "diff_present": bool,
+         "severity_shifts": int, "entered_deficit": int,
+         "exited_deficit": int, "deficit_moves": int}``
+
+    Never raises — failures land in ``ok=False`` + a logger.warning.
+    Designed for the same daily cadence as the briefing job.
+    """
+    try:
+        from processing.port_supply_history import run_daily_snapshot_job
+
+        result = run_daily_snapshot_job(
+            container_type=container_type,
+            min_diff_delta_days=min_diff_delta_days,
+        )
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_port_supply_snapshot_job: top-level failure: {exc}")
+        return {
+            "ok": False, "saved_bytes": 0, "diff_present": False,
+            "severity_shifts": 0, "entered_deficit": 0,
+            "exited_deficit": 0, "deficit_moves": 0,
+        }
+
+    counts = {
+        "ok":              bool(result.ok),
+        "saved_bytes":     int(result.bytes_written),
+        "diff_present":    result.diff is not None,
+        "severity_shifts": 0,
+        "entered_deficit": 0,
+        "exited_deficit":  0,
+        "deficit_moves":   0,
+    }
+    if result.diff is not None:
+        counts["severity_shifts"] = len(result.diff.severity_shifts)
+        counts["entered_deficit"] = len(result.diff.entered_deficit)
+        counts["exited_deficit"]  = len(result.diff.exited_deficit)
+        counts["deficit_moves"]   = len(result.diff.deficit_moves)
+
+    if not result.ok:
+        logger.warning(
+            f"run_port_supply_snapshot_job: save failed — {result.error_msg}"
+        )
+        return counts
+
+    if result.diff is None:
+        logger.info(
+            f"run_port_supply_snapshot_job: saved "
+            f"{result.bytes_written:,}B → {result.snapshot_path} "
+            f"(no prior snapshot to diff against)"
+        )
+    else:
+        logger.info(
+            f"run_port_supply_snapshot_job: saved "
+            f"{result.bytes_written:,}B → {result.snapshot_path}; "
+            f"diff vs {result.prior_snapshot_date}: "
+            f"severity_shifts={counts['severity_shifts']} "
+            f"entered_deficit={counts['entered_deficit']} "
+            f"exited_deficit={counts['exited_deficit']} "
+            f"deficit_moves={counts['deficit_moves']}"
+        )
+        if result.error_msg:
+            # The save succeeded but the diff phase had a non-fatal issue
+            # (rare — most often a corrupted prior CSV). Log it as a
+            # warning so the worker output makes the partial state visible.
+            logger.warning(
+                f"run_port_supply_snapshot_job: diff warning — {result.error_msg}"
+            )
+    return counts
+
+
 def run_delivery_retry_job(now: Optional[datetime] = None) -> dict:
     """Walk every due pending delivery retry and re-dispatch.
 
@@ -1315,6 +1407,18 @@ def main(argv: Optional[list] = None) -> int:
         run_weekly_digest_job_wrapper()
     except Exception as exc:
         logger.warning(f"main: weekly digest step failed: {exc}")
+
+    # Port-supply daily snapshot — writes today's per-port summary CSV
+    # under cache/port_supply_snapshots/<date>/ + diffs vs the prior
+    # snapshot if one exists. The diff goes into the log so operators
+    # tailing the worker output see overnight changes inline.
+    # Runs AFTER the digests so a freshly-saved snapshot doesn't sit
+    # while delivery work is happening. Same belt-and-braces guard
+    # as the rest of main() — the helper itself never raises.
+    try:
+        run_port_supply_snapshot_job()
+    except Exception as exc:
+        logger.warning(f"main: port supply snapshot step failed: {exc}")
 
     # User-configured report schedules. Runs AFTER the operator digest
     # so a freshly-generated scheduled report can ride the same data
