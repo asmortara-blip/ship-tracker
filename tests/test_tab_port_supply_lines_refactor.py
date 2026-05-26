@@ -222,3 +222,76 @@ def test_sankey_renders_for_chain_with_both_commodities_and_companies() -> None:
     # Must have at least the port→commodity links, AND ideally
     # commodity→company links too.
     assert n_links >= len(rich_chain.top_commodities)
+
+
+# ── World map with voyage arcs overlay ────────────────────────────────────
+
+def test_world_map_renders_arc_traces_when_arcs_passed() -> None:
+    """Passing `arcs=[...]` adds line traces underneath the port markers."""
+    from processing.port_supply_lines import (
+        active_voyage_arcs, build_port_supply_chains,
+    )
+    from ui.tab_port_supply_lines import _build_world_supply_map
+
+    chains = build_port_supply_chains()
+    arcs = active_voyage_arcs(limit=10)
+    fig_no_arcs = _build_world_supply_map(chains, arcs=[])
+    fig_arcs = _build_world_supply_map(chains, arcs=arcs)
+    # Arc-overlay variant must have strictly more traces (one per arc).
+    assert len(fig_arcs.data) == len(fig_no_arcs.data) + len(arcs)
+
+
+def test_world_map_arc_traces_use_line_mode() -> None:
+    """Arcs render as lines (mode='lines'), not markers."""
+    from processing.port_supply_lines import (
+        active_voyage_arcs, build_port_supply_chains,
+    )
+    from ui.tab_port_supply_lines import _build_world_supply_map
+
+    chains = build_port_supply_chains()
+    arcs = active_voyage_arcs(limit=5)
+    fig = _build_world_supply_map(chains, arcs=arcs)
+    line_traces = [t for t in fig.data if getattr(t, "mode", "") == "lines"]
+    assert len(line_traces) >= 1
+
+
+# ── Company → port footprint bars builder ────────────────────────────────
+
+def test_company_footprint_bars_empty_annotated() -> None:
+    from ui.tab_port_supply_lines import _build_company_port_footprint_bars
+    fig = _build_company_port_footprint_bars(None)
+    assert any("No port exposures" in (a.text or "")
+               for a in fig.layout.annotations)
+
+
+def test_company_footprint_bars_heaviest_port_at_top() -> None:
+    """Plotly stacks categorical y-values bottom-up — heaviest exposure
+    at the TOP of the chart means the builder must sort ascending."""
+    from processing.port_supply_lines import (
+        CompanyPortFootprint, PortExposureForCompany,
+    )
+    from ui.tab_port_supply_lines import _build_company_port_footprint_bars
+
+    fp = CompanyPortFootprint(
+        ticker="ZIM",
+        port_exposures=[
+            PortExposureForCompany(
+                port_locode="A", port_name="LightPort",
+                region="R", supply_deficit_days=0.0,
+                severity_label="Balanced",
+                lat=0.0, lon=0.0,
+                exposure_weight=0.10,
+            ),
+            PortExposureForCompany(
+                port_locode="B", port_name="HeavyPort",
+                region="R", supply_deficit_days=-8.0,
+                severity_label="Deficit",
+                lat=0.0, lon=0.0,
+                exposure_weight=0.50,
+            ),
+        ],
+    )
+    fig = _build_company_port_footprint_bars(fp)
+    y_vals = list(fig.data[0].y)
+    assert y_vals[0]  == "LightPort"   # bottom of chart
+    assert y_vals[-1] == "HeavyPort"   # top of chart

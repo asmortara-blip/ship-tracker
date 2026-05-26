@@ -81,8 +81,17 @@ _SEVERITY_ACCENT: dict[str, str] = {
 # ── Pure figure-builders ───────────────────────────────────────────────────
 
 
-def _build_world_supply_map(chains: list) -> go.Figure:
+def _build_world_supply_map(
+    chains: list,
+    *,
+    arcs: list | None = None,
+) -> go.Figure:
     """Scattergeo of every port, coloured by severity band + sized by routes.
+
+    When ``arcs`` is non-empty, each ``RouteArc`` is drawn as a faint
+    great-circle line from origin to destination port, so the operator
+    sees the literal *supply lines* flowing through the port network
+    on top of the per-port supply-state markers.
 
     Pure builder — no ``st.*`` calls. Empty input returns an annotated
     empty figure so the caller can render unconditionally.
@@ -96,6 +105,27 @@ def _build_world_supply_map(chains: list) -> go.Figure:
         )
         apply_dark_layout(fig, title="Port Supply Lines", height=440)
         return fig
+
+    # ── Arcs first so they render UNDERNEATH the port markers ─────────
+    if arcs:
+        for arc in arcs:
+            # Status colour: delayed = red-ish, on-schedule = neutral.
+            status = (arc.status or "").lower()
+            if "major" in status:
+                line_color = "rgba(192,57,43,0.32)"
+            elif "minor" in status:
+                line_color = "rgba(201,150,43,0.28)"
+            else:
+                line_color = "rgba(120,170,210,0.20)"
+            fig.add_trace(go.Scattergeo(
+                lat=[arc.origin_lat, arc.dest_lat],
+                lon=[arc.origin_lon, arc.dest_lon],
+                mode="lines",
+                line={"width": 1.0, "color": line_color},
+                hoverinfo="skip",
+                showlegend=False,
+                opacity=0.85,
+            ))
 
     # Group by severity so the legend reads consistently.
     severities = ("Critical Deficit", "Deficit", "Balanced",
@@ -206,6 +236,67 @@ def _build_company_exposure_bars(chain) -> go.Figure:
         fig,
         title=f"Top exposed companies — {chain.port.name}",
         height=max(220, 50 + 28 * len(tickers)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Exposure weight (route × cargo × company)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 44, "b": 40},
+        bargap=0.35,
+    )
+    return fig
+
+
+def _build_company_port_footprint_bars(footprint) -> go.Figure:
+    """Horizontal bars of the top ports one ticker is exposed to.
+
+    Companion to ``_build_company_exposure_bars`` but with the axes
+    flipped: y = port name, x = exposure weight. Bars are coloured by
+    each port's severity band so deficit-stressed ports pop visually
+    in the ticker's footprint.
+    """
+    fig = go.Figure()
+    if footprint is None or not footprint.port_exposures:
+        fig.add_annotation(
+            text="No port exposures", xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Top port exposures", height=220)
+        return fig
+
+    # Ascending sort so Plotly's bottom-up axis puts the heaviest at top
+    sorted_exposures = sorted(
+        footprint.port_exposures, key=lambda pe: pe.exposure_weight,
+    )
+    labels   = [pe.port_name for pe in sorted_exposures]
+    weights  = [pe.exposure_weight for pe in sorted_exposures]
+    severity = [pe.severity_label for pe in sorted_exposures]
+    deficits = [pe.supply_deficit_days for pe in sorted_exposures]
+    regions  = [pe.region for pe in sorted_exposures]
+    colors   = [_SEVERITY_COLOR.get(sev, C_ACCENT) for sev in severity]
+
+    fig.add_trace(go.Bar(
+        x=weights, y=labels, orientation="h",
+        marker={"color": colors, "line": {"color": C_BG, "width": 1}},
+        text=[f"{w:.3f}" for w in weights],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        customdata=list(zip(severity, deficits, regions)),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Exposure: %{x:.4f}<br>"
+            "Severity: %{customdata[0]}<br>"
+            "Supply: %{customdata[1]:+.1f}d<br>"
+            "Region: %{customdata[2]}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+    apply_dark_layout(
+        fig,
+        title=f"Top port exposures — {footprint.ticker}",
+        height=max(220, 50 + 28 * len(labels)),
     )
     fig.update_layout(
         xaxis={"title": "Exposure weight (route × cargo × company)",
@@ -445,6 +536,107 @@ def _render_supply_chain_drilldown(chains: list) -> None:
                 st.write(f"- {r}")
 
 
+def _render_company_footprint_drilldown(container_type: str) -> None:
+    """Inverted view: pick a ticker → see its top exposed ports.
+
+    Symmetric to ``_render_supply_chain_drilldown``. Same data joins,
+    inverted axis: each ticker's footprint across every port it touches.
+    Sorted by deficit-weighted score so the ticker most exposed to
+    currently-stressed ports surfaces first.
+    """
+    try:
+        from processing.port_supply_lines import build_company_port_footprints
+    except Exception:
+        logger.exception("port_supply_lines: company footprint import failed")
+        return
+
+    section_header(
+        "Company → port footprint",
+        "Pick a ticker to invert the chain — see which ports it depends "
+        "on most heavily. Bar colours flag deficit-stressed ports.",
+    )
+
+    try:
+        footprints = build_company_port_footprints(container_type=container_type)
+    except Exception:
+        logger.exception("port_supply_lines: footprint build failed")
+        st.error("Company footprint build failed.")
+        return
+    if not footprints:
+        st.info("No ticker exposures available.")
+        return
+
+    label_map = {
+        f"{f.ticker} — deficit score {f.deficit_weighted_score:.3f} "
+        f"({f.n_deficit_ports} of {len(f.port_exposures)} ports in deficit)": f
+        for f in footprints
+    }
+    pick = st.selectbox(
+        "Ticker",
+        options=list(label_map.keys()),
+        key="port_supply_lines_ticker_picker",
+    )
+    selected = label_map.get(pick)
+    if selected is None:
+        return
+
+    top_port = (selected.port_exposures[0]
+                if selected.port_exposures else None)
+    top_severity_accent = (
+        _SEVERITY_ACCENT.get(top_port.severity_label, C_TEXT2)
+        if top_port else C_TEXT2
+    )
+    metric_card_row([
+        {"label":  "Total exposure",
+         "value":  f"{selected.total_exposure:.3f}",
+         "accent": C_ACCENT,
+         "sublabel": f"across {len(selected.port_exposures)} port(s)"},
+        {"label":  "Deficit-weighted score",
+         "value":  f"{selected.deficit_weighted_score:.3f}",
+         "accent": (C_LOW if selected.deficit_weighted_score > 0.5
+                    else (C_MOD if selected.deficit_weighted_score > 0.1
+                          else C_HIGH)),
+         "sublabel": "Σ exposure × (-deficit days)"},
+        {"label":  "Ports in deficit",
+         "value":  str(selected.n_deficit_ports),
+         "accent": C_LOW if selected.n_deficit_ports > 0 else C_HIGH,
+         "sublabel": f"of {len(selected.port_exposures)} touched"},
+        {"label":  "Top port",
+         "value":  top_port.port_name if top_port else "—",
+         "accent": top_severity_accent,
+         "sublabel": (f"{top_port.region}" if top_port else "")},
+    ], columns=4)
+
+    st.plotly_chart(
+        _build_company_port_footprint_bars(selected),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="port_supply_lines_footprint_bars",
+    )
+
+    if selected.port_exposures:
+        with st.expander(
+            f"Per-port detail for {selected.ticker} "
+            f"({len(selected.port_exposures)})",
+            expanded=False,
+        ):
+            rows = []
+            for pe in selected.port_exposures:
+                rows.append([
+                    badge(pe.port_locode, color=C_ACCENT),
+                    badge(pe.port_name,   color=C_TEXT2),
+                    badge(pe.region,      color=C_TEXT3),
+                    badge(f"{pe.supply_deficit_days:+.1f}d",
+                          color=_SEVERITY_ACCENT.get(
+                              pe.severity_label, C_TEXT2)),
+                    badge(f"{pe.exposure_weight:.4f}", color=C_ACCENT),
+                ])
+            wsj_market_table(
+                ["LOCODE", "Port", "Region", "Supply", "Exposure"],
+                rows,
+            )
+
+
 def render(**_kwargs) -> None:
     """Render the Port Supply Lines tab."""
     from engine.perf_telemetry import track_render
@@ -463,6 +655,7 @@ def render(**_kwargs) -> None:
 
         try:
             from processing.port_supply_lines import (
+                active_voyage_arcs,
                 build_port_supply_chains,
                 PORT_SUPPLY_LINES_SOURCE,
             )
@@ -471,9 +664,8 @@ def render(**_kwargs) -> None:
             st.error("Port supply lines module unavailable.")
             return
 
-        # Container-type selector — the equipment_tracker carries
-        # per-type slices and the join is parameterised on it.
-        col_select, _ = st.columns([1, 3])
+        # Container-type selector + voyage-arc toggle.
+        col_select, col_arcs, _ = st.columns([1, 1, 2])
         with col_select:
             container_type = st.selectbox(
                 "Container type",
@@ -482,6 +674,18 @@ def render(**_kwargs) -> None:
                 index=0,
                 key="port_supply_lines_ctype",
                 help="Which container-type slice of regional supply state to use.",
+            )
+        with col_arcs:
+            show_arcs = st.checkbox(
+                "Show active voyage arcs",
+                value=True,
+                key="port_supply_lines_show_arcs",
+                help=(
+                    "Overlay great-circle origin→destination lines for in-"
+                    "transit voyages on top of the port-state markers. "
+                    "Line colour: red=major delay, amber=minor delay, "
+                    "neutral=on schedule."
+                ),
             )
 
         try:
@@ -492,13 +696,26 @@ def render(**_kwargs) -> None:
             return
 
         # ── A. World map ──────────────────────────────────────────────
+        arcs = []
+        if show_arcs:
+            try:
+                arcs = active_voyage_arcs(limit=60)
+            except Exception:
+                logger.exception("port_supply_lines: arc fetch failed")
+                arcs = []
         try:
             st.plotly_chart(
-                _build_world_supply_map(chains),
+                _build_world_supply_map(chains, arcs=arcs),
                 use_container_width=True,
                 config={"displayModeBar": False},
                 key="port_supply_lines_map",
             )
+            if show_arcs and arcs:
+                st.caption(
+                    f"{len(arcs)} active voyage arcs overlaid. "
+                    "Red = major delay · amber = minor delay · "
+                    "neutral = on schedule. Toggle off to declutter the map."
+                )
         except Exception:
             logger.exception("port_supply_lines: map render failed")
             st.error("World map unavailable.")
@@ -527,7 +744,16 @@ def render(**_kwargs) -> None:
             logger.exception("port_supply_lines: drilldown failed")
             st.error("Per-port drilldown unavailable.")
 
-        # ── D. Source footer ───────────────────────────────────────────
+        section_divider("Company footprint")
+
+        # ── D. Company → port reverse drilldown ────────────────────────
+        try:
+            _render_company_footprint_drilldown(container_type)
+        except Exception:
+            logger.exception("port_supply_lines: company footprint failed")
+            st.error("Company footprint drilldown unavailable.")
+
+        # ── E. Source footer ───────────────────────────────────────────
         try:
             st.markdown(
                 source_footer([PORT_SUPPLY_LINES_SOURCE]),

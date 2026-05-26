@@ -36,8 +36,13 @@ __all__ = [
     "PortSupplyState",
     "CompanyExposure",
     "PortExposureChain",
+    "PortExposureForCompany",
+    "CompanyPortFootprint",
+    "RouteArc",
     "SEVERITY_LABELS",
     "build_port_supply_chains",
+    "build_company_port_footprints",
+    "active_voyage_arcs",
     "PORT_SUPPLY_LINES_SOURCE",
 ]
 
@@ -108,6 +113,61 @@ class PortExposureChain:
     top_commodities:   list[tuple[str, float]] = field(default_factory=list)
                                                                  # (hs_category, total_weight)
     summary: str = ""
+
+
+@dataclass
+class PortExposureForCompany:
+    """How heavily one ticker is exposed to one port via the supply chain."""
+
+    port_locode: str
+    port_name: str
+    region: str
+    supply_deficit_days: float
+    severity_label: str
+    lat: float
+    lon: float
+    exposure_weight: float        # same units as CompanyExposure.exposure_weight
+
+
+@dataclass
+class CompanyPortFootprint:
+    """Inverted view of the port supply chain — one company's footprint
+    across every port it touches.
+
+    The list is ordered by ``exposure_weight`` desc, so the ports the
+    ticker is most dependent on come first. ``deficit_weighted_score``
+    captures the company's blended exposure to *stressed* ports: each
+    port contributes ``exposure × max(0, -supply_deficit_days)`` — a
+    big number means the company has heavy exposure to ports that are
+    currently short on containers.
+    """
+
+    ticker: str
+    port_exposures: list[PortExposureForCompany] = field(default_factory=list)
+    total_exposure: float = 0.0
+    deficit_weighted_score: float = 0.0
+    n_deficit_ports: int = 0
+    summary: str = ""
+
+
+@dataclass
+class RouteArc:
+    """One in-transit voyage rendered as a great-circle arc on the map.
+
+    ``progress`` is in ``[0, 1]`` — the UI uses it to dim arcs that are
+    near completion vs. fresh departures.
+    """
+
+    voyage_id: str
+    route_id: str
+    origin_locode: str
+    origin_lat: float
+    origin_lon: float
+    dest_locode: str
+    dest_lat: float
+    dest_lon: float
+    status: str
+    progress: float
 
 
 PORT_SUPPLY_LINES_SOURCE = DataSource.modeled(
@@ -304,3 +364,136 @@ def build_port_supply_chains(
     # Order most-stressed (most-negative deficit) first.
     chains.sort(key=lambda c: c.port.supply_deficit_days)
     return chains
+
+
+def build_company_port_footprints(
+    *,
+    container_type: str = "40FT_DRY",
+    top_n_ports: int = 8,
+) -> list[CompanyPortFootprint]:
+    """Inverted view of the supply chain — per ticker, the ports it
+    touches most heavily.
+
+    Reuses ``build_port_supply_chains`` so the per-port exposure weights
+    are computed exactly the same way as the forward view. For every
+    ticker that appears in at least one port's exposure list, this
+    function collects every port × exposure pair, sorts ports by
+    exposure desc (top ``top_n_ports``), and computes a
+    ``deficit_weighted_score`` that captures the company's blended
+    exposure to *stressed* ports.
+
+    The list is ordered by ``deficit_weighted_score`` desc — so the
+    ticker most exposed to currently-stressed ports surfaces first.
+    """
+    chains = build_port_supply_chains(
+        container_type=container_type,
+        top_n_companies=999,   # we want every company per port for the invert
+        top_n_commodities=999,
+    )
+
+    # Group exposures by ticker.
+    by_ticker: dict[str, list[PortExposureForCompany]] = {}
+    for chain in chains:
+        for ce in chain.exposed_companies:
+            entry = PortExposureForCompany(
+                port_locode=chain.port.locode,
+                port_name=chain.port.name,
+                region=chain.port.region,
+                supply_deficit_days=chain.port.supply_deficit_days,
+                severity_label=chain.port.severity_label,
+                lat=chain.port.lat,
+                lon=chain.port.lon,
+                exposure_weight=ce.exposure_weight,
+            )
+            by_ticker.setdefault(ce.ticker, []).append(entry)
+
+    footprints: list[CompanyPortFootprint] = []
+    for ticker, exposures in by_ticker.items():
+        exposures.sort(key=lambda e: e.exposure_weight, reverse=True)
+        capped = exposures[:max(1, int(top_n_ports))]
+        total = sum(e.exposure_weight for e in exposures)
+        deficit_score = sum(
+            e.exposure_weight * max(0.0, -e.supply_deficit_days)
+            for e in exposures
+        )
+        n_deficit = sum(1 for e in exposures if e.supply_deficit_days < 0)
+        top_port_names = ", ".join(e.port_name for e in capped[:3])
+        summary = (
+            f"{ticker}: top exposure to {top_port_names} "
+            f"({len(exposures)} ports total, {n_deficit} in deficit; "
+            f"deficit-weighted score {deficit_score:.3f})."
+        )
+        footprints.append(CompanyPortFootprint(
+            ticker=ticker,
+            port_exposures=capped,
+            total_exposure=round(total, 6),
+            deficit_weighted_score=round(deficit_score, 6),
+            n_deficit_ports=n_deficit,
+            summary=summary,
+        ))
+
+    footprints.sort(key=lambda f: f.deficit_weighted_score, reverse=True)
+    return footprints
+
+
+def active_voyage_arcs(
+    *,
+    fleet: Iterable | None = None,
+    limit: int = 60,
+) -> list[RouteArc]:
+    """Return one RouteArc per in-transit voyage in the modeled fleet.
+
+    Used by the world map to overlay great-circle origin→destination
+    lines so the operator sees the literal supply lines flowing
+    through the port network, not just per-port status markers.
+
+    ``fleet`` defaults to the deterministic synthetic fleet built by
+    ``data.voyage_dataset.build_voyage_fleet``. ``limit`` caps the
+    number of arcs rendered so the map doesn't drown in lines when
+    the fleet is dense (oldest-first; capped to the ``limit``
+    voyages with the highest progress so the most-near-arrival arcs
+    are preserved). Voyages with unknown origin / destination
+    coordinates are skipped silently.
+    """
+    voyages = list(fleet or [])
+    if not voyages:
+        try:
+            from data.voyage_dataset import build_voyage_fleet
+            voyages = list(build_voyage_fleet())
+        except Exception:
+            return []
+
+    # Index ports by locode for O(1) coordinate lookup.
+    try:
+        from ports.port_registry import PORTS
+    except Exception:
+        return []
+    by_locode: dict[str, object] = {p.locode: p for p in PORTS}
+
+    in_transit = [v for v in voyages
+                  if str(getattr(v, "status", "")) != "Arrived"]
+    in_transit.sort(
+        key=lambda v: float(getattr(v, "progress_pct", 0.0) or 0.0),
+        reverse=True,
+    )
+    in_transit = in_transit[:max(1, int(limit))]
+
+    arcs: list[RouteArc] = []
+    for v in in_transit:
+        origin = by_locode.get(getattr(v, "origin_locode", ""))
+        dest   = by_locode.get(getattr(v, "dest_locode", ""))
+        if origin is None or dest is None:
+            continue
+        arcs.append(RouteArc(
+            voyage_id=str(getattr(v, "voyage_id", "")),
+            route_id=str(getattr(v, "route_id", "")),
+            origin_locode=origin.locode,
+            origin_lat=float(origin.lat),
+            origin_lon=float(origin.lon),
+            dest_locode=dest.locode,
+            dest_lat=float(dest.lat),
+            dest_lon=float(dest.lon),
+            status=str(getattr(v, "status", "")),
+            progress=float(getattr(v, "progress_pct", 0.0) or 0.0),
+        ))
+    return arcs
