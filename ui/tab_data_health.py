@@ -518,6 +518,80 @@ def _render_sla_dashboard(source_rows: list[dict]) -> None:
         )
 
 
+def _build_llm_cost_by_source_bars(by_source: dict) -> go.Figure:
+    """Horizontal bars of LLM cost-by-source over the rolling 7-day window.
+
+    Sorted highest-cost at the top; colour banded by cost relative to
+    the largest source (relative scale so a $0.10 spend doesn't look
+    catastrophic and a $100 spend doesn't blow out the gradient).
+
+    Pure builder — no ``st.*`` calls — exercised by the lock-in tests.
+    Empty / None input returns an annotated-empty figure.
+    """
+    fig = go.Figure()
+    items = list((by_source or {}).items())
+    if not items:
+        fig.add_annotation(
+            text="No source breakdown available",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="LLM cost by source (7d)", height=220)
+        return fig
+
+    # Sort ascending so Plotly's bottom-up axis puts the biggest at the top
+    ranked = sorted(
+        items,
+        key=lambda kv: float((kv[1] or {}).get("cost", 0.0) or 0.0),
+    )
+    sources = [str(k) for k, _ in ranked]
+    costs   = [float((v or {}).get("cost", 0.0) or 0.0) for _, v in ranked]
+    calls   = [int((v or {}).get("calls", 0) or 0) for _, v in ranked]
+
+    max_cost = max(costs) if costs else 1.0
+    def _band(c: float) -> str:
+        ratio = (c / max_cost) if max_cost > 0 else 0.0
+        if ratio >= 0.66:
+            return C_LOW       # top spender
+        if ratio >= 0.33:
+            return C_MOD       # mid
+        return C_HIGH          # low spender
+    colors = [_band(c) for c in costs]
+
+    fig.add_trace(go.Bar(
+        x=costs,
+        y=sources,
+        orientation="h",
+        marker={"color": colors,
+                "line": {"color": "#0c0e14", "width": 1}},
+        text=[f"${c:,.2f}" for c in costs],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        customdata=calls,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Cost: $%{x:,.2f}<br>"
+            "Calls: %{customdata}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+    apply_dark_layout(
+        fig,
+        title=f"LLM cost by source — last 7d (${sum(costs):,.2f} total)",
+        height=max(180, 50 + 28 * len(sources)),
+    )
+    fig.update_layout(
+        xaxis={"title": "Cost (USD)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 40, "b": 32},
+        bargap=0.35,
+    )
+    return fig
+
+
 def _render_llm_usage() -> None:
     """LLM cost-telemetry panel — last 7 days of Anthropic API spend.
 
@@ -577,25 +651,15 @@ def _render_llm_usage() -> None:
 
         col_l, col_r = st.columns(2, gap="small")
         with col_l:
-            st.markdown(
-                f'<div style="font-size:0.72rem;text-transform:uppercase;'
-                f'letter-spacing:0.10em;color:{C_TEXT3};font-weight:700;'
-                f'margin:6px 0 6px 0">By Source</div>',
-                unsafe_allow_html=True,
+            # Bar chart (replaces what was a table) — operator scans cost-by-
+            # source at a glance, with biggest spender at the top and bands
+            # green/amber/red relative to the largest bar.
+            st.plotly_chart(
+                _build_llm_cost_by_source_bars(by_source),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="data_health_llm_cost_bars",
             )
-            if by_source:
-                headers = ["Source", "Calls", "Cost"]
-                rows: list[list[str]] = []
-                for src in sorted(by_source.keys()):
-                    info = by_source[src]
-                    rows.append([
-                        _sans(src, weight=600),
-                        _mono(f"{int(info.get('calls', 0)):,}", color=C_TEXT2),
-                        _mono(format_usd(float(info.get("cost", 0.0)), compact=False), color=C_TEXT),
-                    ])
-                wsj_market_table(headers, rows)
-            else:
-                st.info("No source breakdown available.")
 
         with col_r:
             st.markdown(
