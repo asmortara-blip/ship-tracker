@@ -313,6 +313,83 @@ def _components_schemas() -> dict:
                 },
             },
         },
+        # Port supply lines payload --------------------------------------
+        "PortSupplyState": {
+            "type": "object",
+            "required": ["locode", "name", "region", "country_iso3",
+                         "lat", "lon", "supply_deficit_days",
+                         "utilization_pct", "severity_label", "container_type"],
+            "properties": {
+                "locode":              {"type": "string"},
+                "name":                {"type": "string"},
+                "region":              {"type": "string"},
+                "country_iso3":        {"type": "string"},
+                "lat":                 {"type": "number"},
+                "lon":                 {"type": "number"},
+                "supply_deficit_days": {"type": "number"},
+                "utilization_pct":     {"type": "number"},
+                "severity_label": {
+                    "type": "string",
+                    "enum": ["Critical Deficit", "Deficit", "Balanced",
+                             "Surplus", "Heavy Surplus"],
+                },
+                "container_type":      {"type": "string"},
+            },
+        },
+        "PortCompanyExposure": {
+            "type": "object",
+            "required": ["ticker", "exposure_weight",
+                         "via_commodities", "via_routes"],
+            "properties": {
+                "ticker":          {"type": "string"},
+                "exposure_weight": {"type": "number"},
+                "via_commodities": {"type": "array",
+                                    "items": {"type": "string"}},
+                "via_routes":      {"type": "array",
+                                    "items": {"type": "string"}},
+            },
+        },
+        "PortSupplyChain": {
+            "type": "object",
+            "required": ["port", "exposed_companies", "routes_touching",
+                         "top_commodities", "summary"],
+            "properties": {
+                "port": {"$ref": "#/components/schemas/PortSupplyState"},
+                "exposed_companies": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/PortCompanyExposure"},
+                },
+                "routes_touching": {"type": "array",
+                                    "items": {"type": "string"}},
+                "top_commodities": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["hs_category", "weight"],
+                        "properties": {
+                            "hs_category": {"type": "string"},
+                            "weight":      {"type": "number"},
+                        },
+                    },
+                },
+                "summary": {"type": "string"},
+            },
+        },
+        "PortSupplyLinesResponse": {
+            "type": "object",
+            "description": "Per-port container-supply state + exposed-company chains. "
+                           "Mirrors the data the Port Supply Lines tab consumes.",
+            "required": ["container_type", "total", "now_utc", "chains"],
+            "properties": {
+                "container_type": {"type": "string"},
+                "total":          {"type": "integer"},
+                "now_utc":        {"type": "string", "format": "date-time"},
+                "chains": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/PortSupplyChain"},
+                },
+            },
+        },
         # ShippingAlert (engine.alert_engine_v2) --------------------------
         "Alert": {
             "type": "object",
@@ -707,6 +784,65 @@ def _paths() -> dict:
                                 "now_utc": "2026-05-25T22:00:00+00:00",
                                 "validators": [],
                             },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    # ── /api/v1/ports/supply-lines (authenticated) ─────────────────────
+    paths["/api/v1/ports/supply-lines"] = {
+        "get": {
+            "operationId": "getPortSupplyLines",
+            "summary": "Per-port supply state + exposed-company chains.",
+            "description": (
+                "Returns the same per-port chain data the **Port Supply "
+                "Lines** tab consumes. Each chain ties a port's "
+                "container-supply state to the publicly-traded shipping "
+                "companies exposed to the supply lines flowing through "
+                "it (port → routes → cargo mix → company commodity "
+                "weights). Sorted most-stressed (largest deficit) first. "
+                "Authenticated (per-user bearer token)."
+            ),
+            "tags": ["Ports"],
+            "security": _bearer_security(),
+            "parameters": [
+                _query_string(
+                    "container_type",
+                    "Container-type slice of regional supply data. One of "
+                    "40FT_DRY | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK. "
+                    "Default 40FT_DRY.",
+                    default="40FT_DRY",
+                ),
+                _query_int(
+                    "top_n",
+                    "Cap on exposed_companies + top_commodities per port. "
+                    "Range [1, 50]. Default 8.",
+                    default=8,
+                ),
+            ],
+            "responses": {
+                "200": {
+                    "description": "Per-port supply + exposure chains envelope.",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/PortSupplyLinesResponse"},
+                        },
+                    },
+                },
+                **_standard_auth_responses(include_400=True),
+                "503": {
+                    "description": (
+                        "Underlying port_supply_lines build raised an "
+                        "unexpected error (extremely defensive — the "
+                        "joiner tolerates empty inputs internally)."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "schema": {"type": "object"},
+                            "example": {"status": "down",
+                                        "error": "ImportError: ..."},
                         },
                     },
                 },

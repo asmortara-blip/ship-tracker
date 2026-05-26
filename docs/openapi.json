@@ -591,6 +591,165 @@
         ],
         "type": "object"
       },
+      "PortCompanyExposure": {
+        "properties": {
+          "exposure_weight": {
+            "type": "number"
+          },
+          "ticker": {
+            "type": "string"
+          },
+          "via_commodities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "via_routes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ticker",
+          "exposure_weight",
+          "via_commodities",
+          "via_routes"
+        ],
+        "type": "object"
+      },
+      "PortSupplyChain": {
+        "properties": {
+          "exposed_companies": {
+            "items": {
+              "$ref": "#/components/schemas/PortCompanyExposure"
+            },
+            "type": "array"
+          },
+          "port": {
+            "$ref": "#/components/schemas/PortSupplyState"
+          },
+          "routes_touching": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "top_commodities": {
+            "items": {
+              "properties": {
+                "hs_category": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "hs_category",
+                "weight"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "port",
+          "exposed_companies",
+          "routes_touching",
+          "top_commodities",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "PortSupplyLinesResponse": {
+        "description": "Per-port container-supply state + exposed-company chains. Mirrors the data the Port Supply Lines tab consumes.",
+        "properties": {
+          "chains": {
+            "items": {
+              "$ref": "#/components/schemas/PortSupplyChain"
+            },
+            "type": "array"
+          },
+          "container_type": {
+            "type": "string"
+          },
+          "now_utc": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "container_type",
+          "total",
+          "now_utc",
+          "chains"
+        ],
+        "type": "object"
+      },
+      "PortSupplyState": {
+        "properties": {
+          "container_type": {
+            "type": "string"
+          },
+          "country_iso3": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "locode": {
+            "type": "string"
+          },
+          "lon": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "severity_label": {
+            "enum": [
+              "Critical Deficit",
+              "Deficit",
+              "Balanced",
+              "Surplus",
+              "Heavy Surplus"
+            ],
+            "type": "string"
+          },
+          "supply_deficit_days": {
+            "type": "number"
+          },
+          "utilization_pct": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "locode",
+          "name",
+          "region",
+          "country_iso3",
+          "lat",
+          "lon",
+          "supply_deficit_days",
+          "utilization_pct",
+          "severity_label",
+          "container_type"
+        ],
+        "type": "object"
+      },
       "RateLimitedResponse": {
         "description": "429 body envelope. Same shape as ``ErrorResponse`` plus the wait-time hint.",
         "properties": {
@@ -3001,6 +3160,131 @@
         "summary": "Return this OpenAPI specification.",
         "tags": [
           "Meta"
+        ]
+      }
+    },
+    "/api/v1/ports/supply-lines": {
+      "get": {
+        "description": "Returns the same per-port chain data the **Port Supply Lines** tab consumes. Each chain ties a port's container-supply state to the publicly-traded shipping companies exposed to the supply lines flowing through it (port → routes → cargo mix → company commodity weights). Sorted most-stressed (largest deficit) first. Authenticated (per-user bearer token).",
+        "operationId": "getPortSupplyLines",
+        "parameters": [
+          {
+            "description": "Container-type slice of regional supply data. One of 40FT_DRY | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK. Default 40FT_DRY.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Cap on exposed_companies + top_commodities per port. Range [1, 50]. Default 8.",
+            "in": "query",
+            "name": "top_n",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortSupplyLinesResponse"
+                }
+              }
+            },
+            "description": "Per-port supply + exposure chains envelope."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Underlying port_supply_lines build raised an unexpected error (extremely defensive — the joiner tolerates empty inputs internally)."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Per-port supply state + exposed-company chains.",
+        "tags": [
+          "Ports"
         ]
       }
     },

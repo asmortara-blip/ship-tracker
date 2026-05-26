@@ -203,6 +203,96 @@ def test_backtests_health_does_not_require_authorization_header(server):
     assert r.status_code in (200, 503)
 
 
+# ── /api/v1/ports/supply-lines — authenticated port supply data ────────
+
+def test_port_supply_lines_requires_auth(server):
+    """No token → 401. Unlike /health, this is per-user-gated."""
+    r = requests.get(f"{server}/api/v1/ports/supply-lines", timeout=10)
+    assert r.status_code == 401
+
+
+def test_port_supply_lines_returns_chain_payload(server):
+    """With a valid token, returns the full per-port chain envelope."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines",
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["container_type"] == "40FT_DRY"
+    assert body["total"] >= 1
+    assert "now_utc" in body
+    assert isinstance(body["chains"], list)
+    assert len(body["chains"]) == body["total"]
+    first = body["chains"][0]
+    assert {"port", "exposed_companies", "routes_touching",
+            "top_commodities", "summary"} <= set(first.keys())
+    assert {"locode", "name", "region", "lat", "lon",
+            "supply_deficit_days", "utilization_pct",
+            "severity_label", "container_type"} <= set(first["port"].keys())
+
+
+def test_port_supply_lines_respects_container_type_param(server):
+    """`container_type=40FT_REEFER` re-runs with the reefer slice."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines",
+        params={"container_type": "40FT_REEFER"},
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["container_type"] == "40FT_REEFER"
+    for c in body["chains"]:
+        assert c["port"]["container_type"] == "40FT_REEFER"
+
+
+def test_port_supply_lines_rejects_bad_container_type(server):
+    """Unknown container_type → 400, not a silent fallback."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines",
+        params={"container_type": "BANANA"},
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 400
+
+
+def test_port_supply_lines_respects_top_n_param(server):
+    """top_n caps the per-port exposed_companies + top_commodities lists."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    r = requests.get(
+        f"{server}/api/v1/ports/supply-lines",
+        params={"top_n": "2"},
+        headers=_bearer(token), timeout=10,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    for c in body["chains"]:
+        assert len(c["exposed_companies"]) <= 2
+        assert len(c["top_commodities"]) <= 2
+
+
+def test_port_supply_lines_rejects_bad_top_n(server):
+    """Non-integer or out-of-range top_n → 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    for bad in ("zero", "0", "100"):
+        r = requests.get(
+            f"{server}/api/v1/ports/supply-lines",
+            params={"top_n": bad},
+            headers=_bearer(token), timeout=10,
+        )
+        assert r.status_code == 400, (
+            f"expected 400 for top_n={bad}, got {r.status_code}"
+        )
+
+
 def test_health_does_not_require_authorization_header(server):
     """Sanity check: a deliberately broken bearer header still gets a
     200 from /health — auth bypass is the whole point."""

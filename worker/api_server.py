@@ -538,6 +538,15 @@ _RE_OPENAPI = re.compile(r"^/api/v1/openapi\.json/?$")
 # etc.) can gate on it via status code without parsing the body.
 _RE_BACKTESTS_HEALTH = re.compile(r"^/api/v1/backtests/health/?$")
 
+# Port supply lines — authenticated endpoint that returns the per-port
+# supply state + exposed-company chain that the new Port Supply Lines
+# tab is built on. Lets external tools (portfolio monitors, alert
+# dashboards, scripts) pull the same data without scraping the UI.
+# Query params:
+#   ?container_type=40FT_DRY  (default; same set the tab's selectbox uses)
+#   ?top_n=8                  (cap on companies + commodities per port)
+_RE_PORT_SUPPLY_LINES = re.compile(r"^/api/v1/ports/supply-lines/?$")
+
 # Module-level cache for the rendered OpenAPI JSON bytes. The first
 # request builds + serializes the spec; every subsequent request just
 # writes the cached bytes to the wfile. ``None`` means "not yet
@@ -666,6 +675,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
                 _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
+                _RE_PORT_SUPPLY_LINES,
             )
         )
 
@@ -717,6 +727,10 @@ class APIHandler(BaseHTTPRequestHandler):
             # Per-user rate limit. Health is already short-circuited
             # ABOVE the auth gate so the limiter never sees probes.
             if not _enforce_rate_limit(self, user_id):
+                return
+
+            if _RE_PORT_SUPPLY_LINES.match(path):
+                self._list_port_supply_lines(query)
                 return
 
             if _RE_ALERTS_LIST.match(path):
@@ -2073,6 +2087,127 @@ class APIHandler(BaseHTTPRequestHandler):
         body["now_utc"] = datetime.now(timezone.utc).isoformat()
         status_code = HTTPStatus.OK if all_healthy else HTTPStatus.SERVICE_UNAVAILABLE
         _send_json(self, status_code, body)
+
+
+    # ── Endpoint: GET /api/v1/ports/supply-lines ───────────────────
+
+    def _list_port_supply_lines(self, query: dict) -> None:
+        """Return per-port supply state + exposed-company chains as JSON.
+
+        Mirrors the data the Port Supply Lines tab consumes —
+        external tools (portfolio monitors, alert dashboards, scripts)
+        can pull the same view without scraping the UI.
+
+        Query params:
+          ``container_type`` — one of ``40FT_DRY`` / ``20FT_DRY`` /
+                              ``40FT_HC`` / ``40FT_REEFER`` /
+                              ``20FT_TANK``. Default ``40FT_DRY``.
+          ``top_n``          — cap on companies + commodities per port.
+                              Default 8, max 50.
+
+        Response shape:
+          ``{"container_type": str, "total": int,
+             "chains": [{"port": {locode, name, region, lat, lon,
+                                  supply_deficit_days, utilization_pct,
+                                  severity_label, container_type},
+                          "exposed_companies": [{ticker, exposure_weight,
+                                                via_commodities, via_routes}],
+                          "routes_touching": [str], ...}, ...],
+             "now_utc": ISO8601}``
+
+        Errors:
+          * 400 on a bad container_type or out-of-range top_n
+          * 503 if the build itself raises (extremely defensive — the
+            joiner tolerates empty inputs internally)
+        """
+        try:
+            from processing.port_supply_lines import build_port_supply_chains
+        except Exception as exc:
+            logger.exception(f"api /ports/supply-lines import failed: {exc}")
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        # Query parsing — case-sensitive container_type; numeric top_n.
+        allowed_ctypes = {
+            "40FT_DRY", "20FT_DRY", "40FT_HC",
+            "40FT_REEFER", "20FT_TANK",
+        }
+        container_type = (query.get("container_type", ["40FT_DRY"])
+                          or ["40FT_DRY"])[0]
+        if container_type not in allowed_ctypes:
+            _send_bad_request(
+                self,
+                f"bad container_type: {container_type} (allowed: "
+                f"{sorted(allowed_ctypes)})",
+            )
+            return
+        raw_top_n = (query.get("top_n", ["8"]) or ["8"])[0]
+        try:
+            top_n = int(raw_top_n)
+        except (TypeError, ValueError):
+            _send_bad_request(self, f"top_n must be an integer; got {raw_top_n!r}")
+            return
+        if not 1 <= top_n <= 50:
+            _send_bad_request(self, f"top_n out of range [1, 50]: {top_n}")
+            return
+
+        try:
+            chains = build_port_supply_chains(
+                container_type=container_type,
+                top_n_companies=top_n,
+                top_n_commodities=top_n,
+            )
+        except Exception as exc:
+            logger.exception(f"api /ports/supply-lines build failed: {exc}")
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        body = {
+            "container_type": container_type,
+            "total":          len(chains),
+            "now_utc":        datetime.now(timezone.utc).isoformat(),
+            "chains": [
+                {
+                    "port": {
+                        "locode":              c.port.locode,
+                        "name":                c.port.name,
+                        "region":              c.port.region,
+                        "country_iso3":        c.port.country_iso3,
+                        "lat":                 c.port.lat,
+                        "lon":                 c.port.lon,
+                        "supply_deficit_days": c.port.supply_deficit_days,
+                        "utilization_pct":     c.port.utilization_pct,
+                        "severity_label":      c.port.severity_label,
+                        "container_type":      c.port.container_type,
+                    },
+                    "exposed_companies": [
+                        {
+                            "ticker":          ce.ticker,
+                            "exposure_weight": ce.exposure_weight,
+                            "via_commodities": list(ce.via_commodities),
+                            "via_routes":      list(ce.via_routes),
+                        }
+                        for ce in c.exposed_companies
+                    ],
+                    "routes_touching":  list(c.routes_touching),
+                    "top_commodities":  [
+                        {"hs_category": hs, "weight": w}
+                        for hs, w in c.top_commodities
+                    ],
+                    "summary": c.summary,
+                }
+                for c in chains
+            ],
+        }
+        _send_json(self, HTTPStatus.OK, body)
 
 
     # ── Endpoint: GET /api/v1/openapi.json ────────────────────────
