@@ -122,23 +122,40 @@ def build_subject_line(
     diff: "DiffReport | None",
     container_type: str = "40FT_DRY",
     snapshot_date_iso: str = "",
+    anomaly_band: str = "",
 ) -> str:
     """Short subject line summarising the diff.
 
     Examples:
       * "Port-Supply: no material changes (2026-05-26)"
       * "Port-Supply: 3 severity shifts, 2 entered deficit (2026-05-26)"
-      * "Port-Supply: 1 entered deficit (2026-05-26)"
+      * "Port-Supply [SHOCK]: 5 severity shifts, 3 entered deficit (2026-05-26)"
+      * "Port-Supply [elevated]: 1 entered deficit (2026-05-26)"
 
     The pieces are joined as ", " with no Oxford comma — keeps the
     subject scannable in a crowded inbox. Date is omitted from the
     parenthetical when ``snapshot_date_iso`` is empty.
+
+    ``anomaly_band`` (optional, one of "normal" | "elevated" | "shock")
+    is rendered as a bracketed prefix BEFORE the colon when non-normal.
+    Operators scan the inbox for ``[SHOCK]`` to jump straight to days
+    that broke from the trailing-30d baseline.
     """
     date_tail = f" ({snapshot_date_iso})" if snapshot_date_iso else ""
     counts = _bucket_counts(diff)
 
+    # Anomaly prefix — only render when non-default. "shock" uppercase
+    # because that's the prefix operators are scanning for.
+    anomaly_prefix = ""
+    if anomaly_band:
+        b = anomaly_band.strip().lower()
+        if b == "shock":
+            anomaly_prefix = " [SHOCK]"
+        elif b == "elevated":
+            anomaly_prefix = " [elevated]"
+
     if not any(v > 0 for v in counts.values()):
-        return f"Port-Supply: no material changes{date_tail}"
+        return f"Port-Supply{anomaly_prefix}: no material changes{date_tail}"
 
     # Build short pieces in the same order as the body for readability.
     pieces: list[str] = []
@@ -160,7 +177,7 @@ def build_subject_line(
         n = counts["ticker_shuffles"]
         pieces.append(f"{n} ticker reshuffle" + ("s" if n != 1 else ""))
 
-    return f"Port-Supply: {', '.join(pieces)}{date_tail}"
+    return f"Port-Supply{anomaly_prefix}: {', '.join(pieces)}{date_tail}"
 
 
 # ─── HTML rendering ────────────────────────────────────────────────────────
@@ -361,11 +378,46 @@ def _ticker_shuffles_section_html(deltas: "list[PortDelta]") -> str:
     )
 
 
+def _anomaly_banner_html(anomaly_band: str, explanation: str = "") -> str:
+    """Render an anomaly-band banner above the digest header.
+
+    Only emits markup for ``elevated`` and ``shock`` bands — ``normal``
+    days don't need a banner. The shock variant uses a red left rule
+    so it pops in an inbox preview pane.
+    """
+    if not anomaly_band:
+        return ""
+    band = anomaly_band.strip().lower()
+    if band == "shock":
+        color = "#c0392b"
+        label = "SHOCK DAY"
+    elif band == "elevated":
+        color = "#d35400"
+        label = "ELEVATED"
+    else:
+        return ""
+    detail = (
+        f"<div style=\"font-size:11px;color:{_COLOR_TEXT};margin-top:4px;\">"
+        f"{explanation}</div>"
+        if explanation else ""
+    )
+    return (
+        f"<div style=\"margin-bottom:14px;padding:10px 14px;"
+        f"border-left:4px solid {color};background:{_COLOR_ACCENT_BG};\">"
+        f"<div style=\"font-size:12px;font-weight:700;color:{color};"
+        f"letter-spacing:0.5px;\">{label}</div>"
+        f"{detail}"
+        f"</div>"
+    )
+
+
 def render_html(
     diff: "DiffReport | None",
     container_type: str = "40FT_DRY",
     snapshot_date_iso: str = "",
     prior_date_iso: str = "",
+    anomaly_band: str = "",
+    anomaly_explanation: str = "",
 ) -> str:
     """Render the diff as a complete inline-styled HTML document.
 
@@ -373,15 +425,21 @@ def render_html(
     buckets are SUPPRESSED entirely (no "(none)" filler). A diff that
     is empty across all buckets — or a ``None`` diff — produces a
     one-line confirmation body so the digest is still valid HTML.
+
+    ``anomaly_band`` (optional) renders a coloured banner above the
+    header when set to ``elevated`` or ``shock``. ``anomaly_explanation``
+    is the one-line "today X, trailing median Y" string from
+    ``processing.snapshot_diff_anomaly.AnomalyScore``.
     """
     counts = _bucket_counts(diff)
+    anomaly_banner = _anomaly_banner_html(anomaly_band, anomaly_explanation)
     header = _header_html(
         counts, container_type, snapshot_date_iso, prior_date_iso,
     )
 
     if not any(v > 0 for v in counts.values()):
         body_inner = (
-            f"{header}"
+            f"{anomaly_banner}{header}"
             f"<div style=\"margin-top:18px;padding:12px 14px;"
             f"border-left:3px solid {_COLOR_GREEN};"
             f"background:{_COLOR_ACCENT_BG};color:{_COLOR_TEXT};"
@@ -401,7 +459,7 @@ def render_html(
             _deficit_moves_section_html(diff.deficit_moves),
             _ticker_shuffles_section_html(diff.ticker_shuffles),
         ]
-        body_inner = header + "".join(sections)
+        body_inner = anomaly_banner + header + "".join(sections)
 
     return (
         "<!DOCTYPE html>"
@@ -457,26 +515,41 @@ def render_plain_text(
     container_type: str = "40FT_DRY",
     snapshot_date_iso: str = "",
     prior_date_iso: str = "",
+    anomaly_band: str = "",
+    anomaly_explanation: str = "",
 ) -> str:
     """Same content as ``render_html`` but plain text.
 
     Used as the ``text/plain`` part of multipart email AND as the body
     for Slack / webhook channels that want the human-readable form.
     Empty buckets are suppressed (same shape as the HTML body).
+
+    ``anomaly_band`` / ``anomaly_explanation`` mirror the HTML side —
+    when set, prepend a one-line banner above the standard header.
     """
     counts = _bucket_counts(diff)
     date_str = snapshot_date_iso or "-"
     prior_str = prior_date_iso or "-"
     container_str = container_type
 
-    lines: list[str] = [
+    lines: list[str] = []
+    # Anomaly banner — only render for non-normal bands.
+    band = (anomaly_band or "").strip().lower()
+    if band == "shock":
+        lines.append(f"*** SHOCK DAY *** {anomaly_explanation}".rstrip())
+        lines.append("")
+    elif band == "elevated":
+        lines.append(f"[ELEVATED] {anomaly_explanation}".rstrip())
+        lines.append("")
+
+    lines.extend([
         "Port-Supply Shock Digest",
         "=" * 56,
         f"Snapshot date:  {date_str}",
         f"Prior snapshot: {prior_str}",
         f"Container type: {container_str}",
         "",
-    ]
+    ])
 
     if not any(v > 0 for v in counts.values()):
         lines.append("No material changes overnight.")

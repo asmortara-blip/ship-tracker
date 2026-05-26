@@ -1,5 +1,5 @@
 {
-  "total": 12,
+  "total": 13,
   "validators": [
     {
       "headline_label": "Best component",
@@ -166,6 +166,22 @@
         "true_lag_days": 3
       },
       "summary": "Lag-recovery across 10 run(s) at noise=0.00, true_lag=3d, tolerance=\u00b12d: recovery_rate=100.0%, mean |error|=0.00d, mean best |r|=1.00; passed (>=70%): True."
+    },
+    {
+      "headline_label": "Replay pass rate",
+      "headline_value": "100.0% (8/8 events)",
+      "healthy": true,
+      "name": "Historical Event Replay",
+      "raw": {
+        "failed": 0,
+        "false_positive_rate": 0.875,
+        "miss_rate": 0.0,
+        "pass_rate": 1.0,
+        "passed": 8,
+        "top_missing_kinds": [],
+        "total": 8
+      },
+      "summary": "Replayed 8 registered event(s). miss_rate=0% false_positive_rate=88%"
     }
   ]
 }

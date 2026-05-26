@@ -459,3 +459,128 @@ def test_render_plain_text_includes_container_type_and_dates() -> None:
     assert "40FT_REEFER" in text
     assert "2026-05-26" in text
     assert "2026-05-25" in text
+
+
+# ── Anomaly-band rendering (new) ─────────────────────────────────────────
+
+
+def _make_material_diff():
+    """Hand-built non-empty diff so the digest renders the full body path."""
+    from tools.port_supply_diff import DiffReport, PortDelta
+    delta = PortDelta(
+        locode="CNSHA", name="Shanghai", region="Asia",
+        severity_before="Surplus", severity_after="Critical Deficit",
+        severity_shifted=True,
+        deficit_before=+2.0, deficit_after=-8.0,
+        deficit_delta=-10.0,
+        entered_deficit=True, exited_deficit=False,
+        tickers_added=[], tickers_removed=[],
+    )
+    return DiffReport(
+        n_ports_before=1, n_ports_after=1,
+        severity_shifts=[delta], deficit_moves=[delta],
+        entered_deficit=[delta], exited_deficit=[],
+        ticker_shuffles=[],
+        locodes_only_in_before=[], locodes_only_in_after=[],
+    )
+
+
+def test_subject_line_with_shock_band_prepends_uppercase_tag() -> None:
+    from delivery.port_supply_shock_digest import build_subject_line
+    diff = _make_material_diff()
+    subj = build_subject_line(diff, snapshot_date_iso="2026-05-26",
+                              anomaly_band="shock")
+    assert "[SHOCK]" in subj
+    assert "2026-05-26" in subj
+
+
+def test_subject_line_with_elevated_band_prepends_lowercase_tag() -> None:
+    from delivery.port_supply_shock_digest import build_subject_line
+    diff = _make_material_diff()
+    subj = build_subject_line(diff, snapshot_date_iso="2026-05-26",
+                              anomaly_band="elevated")
+    assert "[elevated]" in subj
+
+
+def test_subject_line_with_normal_band_omits_tag() -> None:
+    from delivery.port_supply_shock_digest import build_subject_line
+    diff = _make_material_diff()
+    subj = build_subject_line(diff, snapshot_date_iso="2026-05-26",
+                              anomaly_band="normal")
+    assert "[SHOCK]" not in subj
+    assert "[elevated]" not in subj
+    assert "[normal]" not in subj
+
+
+def test_subject_line_default_band_omits_tag() -> None:
+    """Backwards-compat: callers that don't pass anomaly_band must get
+    the same subject as before."""
+    from delivery.port_supply_shock_digest import build_subject_line
+    diff = _make_material_diff()
+    subj_no = build_subject_line(diff, snapshot_date_iso="2026-05-26")
+    subj_norm = build_subject_line(diff, snapshot_date_iso="2026-05-26",
+                                   anomaly_band="")
+    assert subj_no == subj_norm
+
+
+def test_html_with_shock_band_includes_banner() -> None:
+    from delivery.port_supply_shock_digest import render_html
+    diff = _make_material_diff()
+    html = render_html(
+        diff, snapshot_date_iso="2026-05-26",
+        anomaly_band="shock",
+        anomaly_explanation="composite=42, trailing median=5, +12 MADs",
+    )
+    assert "SHOCK DAY" in html
+    assert "trailing median" in html
+
+
+def test_html_with_elevated_band_includes_banner() -> None:
+    from delivery.port_supply_shock_digest import render_html
+    diff = _make_material_diff()
+    html = render_html(
+        diff, snapshot_date_iso="2026-05-26", anomaly_band="elevated",
+    )
+    assert "ELEVATED" in html
+
+
+def test_html_with_normal_band_no_banner() -> None:
+    from delivery.port_supply_shock_digest import render_html
+    diff = _make_material_diff()
+    html = render_html(
+        diff, snapshot_date_iso="2026-05-26", anomaly_band="normal",
+    )
+    assert "SHOCK DAY" not in html
+    assert "ELEVATED" not in html
+
+
+def test_plain_text_with_shock_band_includes_marker() -> None:
+    from delivery.port_supply_shock_digest import render_plain_text
+    diff = _make_material_diff()
+    text = render_plain_text(
+        diff, snapshot_date_iso="2026-05-26",
+        anomaly_band="shock",
+        anomaly_explanation="composite=42, trailing median=5",
+    )
+    assert "*** SHOCK DAY ***" in text
+
+
+def test_plain_text_with_elevated_band_includes_marker() -> None:
+    from delivery.port_supply_shock_digest import render_plain_text
+    diff = _make_material_diff()
+    text = render_plain_text(
+        diff, snapshot_date_iso="2026-05-26", anomaly_band="elevated",
+    )
+    assert "[ELEVATED]" in text
+
+
+def test_quiet_day_with_shock_band_still_renders_banner() -> None:
+    """Shouldn't happen in practice (shock implies non-quiet diff) but
+    the renderer mustn't drop the banner just because there's no body."""
+    from delivery.port_supply_shock_digest import render_html
+    html = render_html(
+        None, snapshot_date_iso="2026-05-26", anomaly_band="shock",
+        anomaly_explanation="forced shock",
+    )
+    assert "SHOCK DAY" in html
+    assert "No material changes" in html

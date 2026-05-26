@@ -818,22 +818,56 @@ def run_port_supply_snapshot_job(
             text_path = snapshot_dir / f"digest_{container_slug}.txt"
             subj_path = snapshot_dir / f"digest_{container_slug}.subject.txt"
 
+            # Compute the anomaly band against trailing snapshot history
+            # so the digest can flag shock days in the subject + body.
+            # Defensive — anomaly compute failure must NOT block digest
+            # render; fall back to empty band (= normal-day path).
+            anomaly_band, anomaly_explanation = "", ""
+            try:
+                from datetime import date as _date
+                from processing.snapshot_diff_anomaly import (
+                    build_history_from_snapshots,
+                    compute_diff_magnitude,
+                    score_anomaly,
+                )
+                today_dt = _date.fromisoformat(result.today)
+                history = build_history_from_snapshots(
+                    container_type=container_type,
+                    today=today_dt,
+                    window_days=30,
+                )
+                today_mag = compute_diff_magnitude(result.diff)
+                today_mag.date_iso = result.today
+                score = score_anomaly(today_mag, history)
+                anomaly_band = score.anomaly_band
+                anomaly_explanation = score.explanation
+            except Exception as anomaly_exc:   # pragma: no cover - defensive
+                logger.warning(
+                    f"run_port_supply_snapshot_job: anomaly score failed "
+                    f"({anomaly_exc}) — digest will render without band"
+                )
+
             html_body = render_html(
                 result.diff,
                 container_type=container_type,
                 snapshot_date_iso=result.today,
                 prior_date_iso=result.prior_snapshot_date,
+                anomaly_band=anomaly_band,
+                anomaly_explanation=anomaly_explanation,
             )
             text_body = render_plain_text(
                 result.diff,
                 container_type=container_type,
                 snapshot_date_iso=result.today,
                 prior_date_iso=result.prior_snapshot_date,
+                anomaly_band=anomaly_band,
+                anomaly_explanation=anomaly_explanation,
             )
             subject = build_subject_line(
                 result.diff,
                 container_type=container_type,
                 snapshot_date_iso=result.today,
+                anomaly_band=anomaly_band,
             )
 
             html_path.write_text(html_body, encoding="utf-8")

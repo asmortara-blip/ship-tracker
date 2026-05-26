@@ -349,6 +349,49 @@ def _run_port_supply_lines() -> BacktestResult:
     )
 
 
+def _run_historical_event_replay() -> BacktestResult:
+    from processing.historical_event_replay import (
+        replay_all_events, summarize_replay,
+    )
+    results = replay_all_events()
+    s = summarize_replay(results)
+    # One scorecard row per event so --verbose shows the full replay grid.
+    scorecard_rows = [
+        {"label": r.event_id or f"event{i}",
+         "metric_name": "replay outcome",
+         "value": (
+             "PASS" if r.passed
+             else f"FAIL (missing={len(r.missing_kinds)} "
+                  f"unexpected={len(r.unexpected_kinds)})"
+         )}
+        for i, r in enumerate(results)
+    ]
+    return BacktestResult(
+        name="Historical Event Replay",
+        headline_label="Replay pass rate",
+        headline_value=(
+            f"{s['pass_rate'] * 100:.1f}% "
+            f"({s['passed']}/{s['total']} events)"
+        ),
+        healthy=bool(s["pass_rate"] >= 0.7) if s["total"] > 0 else True,
+        summary=(
+            f"Replayed {s['total']} registered event(s). "
+            f"miss_rate={s['miss_rate'] * 100:.0f}% "
+            f"false_positive_rate={s['false_positive_rate'] * 100:.0f}%"
+        ),
+        raw_fields={
+            "total":               s["total"],
+            "passed":              s["passed"],
+            "failed":              s["failed"],
+            "pass_rate":           s["pass_rate"],
+            "miss_rate":           s["miss_rate"],
+            "false_positive_rate": s["false_positive_rate"],
+            "top_missing_kinds":   s["top_missing_kinds"],
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 def _run_ssi_port_correlation() -> BacktestResult:
     from processing.ssi_port_correlation_backtest import (
         validate_leading_indicator_recovery,
@@ -431,6 +474,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_port_supply_lines,
     _run_company_supply_risk,
     _run_ssi_port_correlation,
+    _run_historical_event_replay,
 ]
 
 
