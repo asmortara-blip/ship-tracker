@@ -26,7 +26,10 @@ audit any number end-to-end by following the code references in each section.
    * [`processing/congestion_predictor.py`](#congestion_predictor--per-port-mean-reversion--macro-pressure--confidence-bands)
    * [`processing/disruption_forecast.py`](#disruption_forecast--volatility-scaled-rate--symmetric-mc-tails--oversupply-cross-signal)
 3. [The Shipping Stress Index](#the-shipping-stress-index)
-   * [`processing/shipping_stress_index.py`](#shipping_stress_index--5-component-blend-with-prominence-weighting)
+   * [`processing/shipping_stress_index.py`](#shipping_stress_index--6-component-blend-with-prominence-weighting)
+   * [`processing/ssi_component_validation.py`](#ssi_component_validation--per-component-predictiveness--horizon-decay--collinearity)
+   * [`processing/disruption_forecast_backtest.py`](#disruption_forecast_backtest--per-route-mae--sign-agreement-scorecard)
+   * [`engine/momentum_ranker_backtest.py`](#momentum_ranker_backtest--per-signal-class-ladder-scorecard)
 4. [The Disruption Alpha cascade](#the-disruption-alpha-cascade)
    * [`processing/disruption_cascade.py`](#disruption_cascade--equity-idea-scorer)
 5. [Signal validation](#signal-validation)
@@ -306,22 +309,23 @@ batch — `forecast_all_stress` emits a safe neutral entry for it instead.
 
 ## The Shipping Stress Index
 
-### `shipping_stress_index` — 5-component blend, with prominence weighting
+### `shipping_stress_index` — 6-component blend, with prominence weighting
 
 **Function.** `compute_shipping_stress(freight_data, macro_data, port_results,
 route_results, voyage_fleet=None) -> ShippingStressReport`. The fleet-wide
 composite read on what is breaking. Every public function tolerates empty
 inputs and returns neutral defaults.
 
-**The blend (`COMPONENT_WEIGHTS`, asserted ∑ = 1.0).**
+**The blend (`COMPONENT_WEIGHTS`, raised at import time as `ValueError` when ∑ ≠ 1.0).**
 
 | Component       | Weight | Source                                                                  | Notes                                                |
 |-----------------|--------|-------------------------------------------------------------------------|------------------------------------------------------|
-| `chokepoint`    | 0.32   | `chokepoint_analyzer.compute_chokepoint_risk_score` + `get_current_active_disruptions` | Max chokepoint risk touching the lane + a modest compounding bump for each extra disrupted chokepoint |
-| `congestion`    | 0.22   | `congestion_predictor.predict_congestion`                                | Destination-port 7-day prediction; unknown ⇒ 0.5 (genuinely unknown, not absent) |
-| `weather`       | 0.18   | `weather_risk.compute_route_weather_risk`                                | Lane's `current_risk_score` straight onto SSI scale  |
-| `rate`          | 0.18   | `freight_data` 30-day abs % move                                         | A spike *or* crash both register as stress; a 40% move maps to full stress |
-| `vulnerability` | 0.10   | `vulnerability_scorer.score_vulnerability`                               | Structural lane fragility — a slow-moving baseline   |
+| `chokepoint`    | 0.29   | `chokepoint_analyzer.compute_chokepoint_risk_score` + `get_current_active_disruptions` | Max chokepoint risk touching the lane + a modest compounding bump for each extra disrupted chokepoint |
+| `congestion`    | 0.20   | `congestion_predictor.predict_congestion`                                | Destination-port 7-day prediction; unknown ⇒ 0.5 (genuinely unknown, not absent) |
+| `weather`       | 0.16   | `weather_risk.compute_route_weather_risk`                                | Lane's `current_risk_score` straight onto SSI scale  |
+| `rate`          | 0.16   | `freight_data` 30-day abs % move                                         | A spike *or* crash both register as stress; a 40% move maps to full stress |
+| `anomaly`       | 0.10   | Anomaly-drift detector (commit `61d4d81`)                                | Time-series anomaly flag — fires when a feed drifts below static thresholds |
+| `vulnerability` | 0.09   | `vulnerability_scorer.score_vulnerability`                               | Structural lane fragility — a slow-moving baseline   |
 
 The per-route composite `stress_score` is the weighted sum, clamped to
 `[0, 1]`. `dominant_driver` is the component contributing the most *weighted*
@@ -588,6 +592,81 @@ The Backtest tab (`ui/tab_backtest.py`) renders this scorecard *first*,
 above the older heuristic backtest, via the `_render_real_signal_validation`
 helper. It surfaces the headline KPIs, the per-tier hit-rate bar chart, and
 the per-signal detail table — every row labelled with its `DataSource` pill.
+
+### `ssi_component_validation` — per-component predictiveness + horizon decay + collinearity
+
+**Functions.** Three entry points, all deterministic and synth-backfilled:
+
+* `validate_ssi_components(history=None, *, lookahead_days=1, seed=...) -> ComponentValidationReport` —
+  per-component sign-agreement scorecard. For each of the 6 SSI components,
+  computes Pearson r and the sign-agreement rate (% of windows where the
+  stress delta correctly predicted the realized rate-move direction).
+* `validate_ssi_horizons(history=None, *, horizons=(1, 7, 14, 30, 60), seed=...) -> HorizonDecayReport` —
+  slides the lookahead pointer across multiple forecast horizons and
+  packages results as a components × horizons grid for a heatmap.
+* `compute_component_collinearity(history=None, *, seed=...) -> CollinearityReport` —
+  pairwise Pearson r across all 6 SSI components; flags pairs with
+  `|r| >= REDUNDANCY_THRESHOLD` (0.70 — high enough that the static
+  weights are double-counting the shared signal).
+
+**The gap this closes.** The SSI's static `COMPONENT_WEIGHTS` answer
+*"how much should each component contribute?"* but say nothing about
+*"do they actually predict?"*, *"...at what horizon?"*, or *"...are
+any of them redundant?"* This module is the three-axis operator-facing
+answer to all three questions.
+
+**Synthetic generator (`synthesize_component_history`).** Deterministic
+random-walk per component + a contemporaneous realized move driven by
+the component deltas. Strong components seed truth=0.85, weak ones
+seed truth=0.20 — strong components must outscore weak ones on
+sign-agreement, and that ordering is pinned by the property tests.
+
+The UI surfaces all three reports as a paired bars + heatmap + heatmap
+trio inside the *Component Predictiveness* panel in `tab_macro_projection`.
+
+### `disruption_forecast_backtest` — per-route MAE + sign-agreement scorecard
+
+**Function.** `backtest_disruption_forecast(history=None, *, seed=...) -> ForecastAccuracyReport`.
+Per-route accuracy scorecard for `processing.disruption_forecast`. For
+each route:
+
+* `mae_7d`, `mae_30d` — mean absolute error between the forecast and
+  the realized stress on the [0, 1] scale
+* `sign_agreement_7d`, `sign_agreement_30d` — fraction of windows
+  where the direction (forecast > current vs. < current) matched
+  the realized direction
+
+**Synthetic generator (`synthesize_forecast_history`).** Each row is a
+deterministic `(route_id, current_stress, forecast_7d, forecast_30d,
+realized_7d, realized_30d)` tuple where the realized series is the
+forecast plus Gaussian noise scaled by `forecast_noise` (default 0.05).
+
+The UI surfaces the report as a 4-KPI strip + per-route scorecard
+table inside `tab_disruption_radar` Section E2, directly below the
+existing 7/30-day forecast table.
+
+### `momentum_ranker_backtest` — per-signal-class ladder scorecard
+
+**Function.** `backtest_momentum_signals(history=None, *, seed=..., signal_quality=0.85) -> MomentumBacktestReport`.
+Groups a momentum-signal history by class (`STRONG_SELL` → `SELL` →
+`NEUTRAL` → `BUY` → `STRONG_BUY`) and scores each class:
+
+* `mean_forward_return` — signed mean realized return for the class
+* `directional_hit_rate` — in-favour fraction (positive return for
+  BUY-side, negative for SELL-side; NEUTRAL pinned to 0.5 since it
+  carries no directional claim)
+* `monotonic_by_signal` — True when mean return rises STRONG_SELL →
+  STRONG_BUY as a well-calibrated ladder should
+
+**Synthetic generator (`synthesize_momentum_history`).** Composite
+momentum readings + a realized return that's
+`signal_quality * composite + noise * (1 - signal_quality * 0.7)`.
+The `signal_quality ∈ [0, 1]` knob drives both ends of the property
+tests — `0.0` must NOT produce a meaningful STRONG_BUY/STRONG_SELL
+spread; `0.95` must produce a monotonic ladder with >10pp spread.
+
+The UI surfaces the report as a 4-KPI strip + per-class scorecard
+table inside `tab_data_health`'s *Signal Validation* section.
 
 ---
 
