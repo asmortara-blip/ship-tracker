@@ -43,9 +43,12 @@ __all__ = [
     "ComponentValidationReport",
     "HorizonScorecard",
     "HorizonDecayReport",
+    "ComponentPair",
+    "CollinearityReport",
     "synthesize_component_history",
     "validate_ssi_components",
     "validate_ssi_horizons",
+    "compute_component_collinearity",
     "SSI_COMPONENT_VALIDATION_SOURCE",
 ]
 
@@ -121,6 +124,58 @@ class HorizonDecayReport:
             [by_key.get((comp, h), 0.5) for h in self.horizons]
             for comp in self.components
         ]
+
+
+@dataclass
+class ComponentPair:
+    """One ordered pair of SSI components and their pairwise correlation."""
+
+    component_a: str
+    component_b: str
+    correlation: float           # Pearson r, clamped to [-1, 1]
+    n_observations: int
+    redundant: bool = False      # True if |correlation| >= REDUNDANCY_THRESHOLD
+
+
+# A pair with |r| >= this threshold is flagged as potentially redundant —
+# the components are moving together strongly enough that the SSI's static
+# weights are double-counting the shared signal.
+REDUNDANCY_THRESHOLD: float = 0.70
+
+
+@dataclass
+class CollinearityReport:
+    """Pairwise collinearity scorecard across the SSI's components.
+
+    ``corr_matrix()`` returns the symmetric, diagonal-1.0 N×N grid that
+    UI panels can render as a heatmap.
+    """
+
+    components: list[str] = field(default_factory=list)
+    pairs: list[ComponentPair] = field(default_factory=list)
+    redundant_pairs: list[ComponentPair] = field(default_factory=list)
+    n_observations: int = 0
+    source: DataSource | None = None
+    summary: str = ""
+
+    def corr_matrix(self) -> list[list[float]]:
+        """Return the full symmetric correlation matrix (N × N)."""
+        n = len(self.components)
+        by_pair = {(p.component_a, p.component_b): p.correlation
+                   for p in self.pairs}
+        # Add the reverse direction for the symmetric lookup.
+        for p in self.pairs:
+            by_pair[(p.component_b, p.component_a)] = p.correlation
+        rows: list[list[float]] = []
+        for a in self.components:
+            row: list[float] = []
+            for b in self.components:
+                if a == b:
+                    row.append(1.0)
+                else:
+                    row.append(by_pair.get((a, b), 0.0))
+            rows.append(row)
+        return rows
 
 
 SSI_COMPONENT_VALIDATION_SOURCE = DataSource.modeled(
@@ -479,6 +534,88 @@ def validate_ssi_horizons(
         horizons=horizons_list,
         n_observations=len(rows),
         best_horizon_overall=best_h,
+        source=SSI_COMPONENT_VALIDATION_SOURCE,
+        summary=summary,
+    )
+
+
+def compute_component_collinearity(
+    history: Iterable[dict] | None = None,
+    *,
+    seed: int = 20260525,
+) -> CollinearityReport:
+    """Pairwise collinearity scorecard across the SSI's components.
+
+    Answers a question complementary to ``validate_ssi_components``:
+    even if two components are individually predictive, if they move
+    together their SSI weights are double-counting the shared signal.
+    Pairs with ``|correlation| >= REDUNDANCY_THRESHOLD`` are flagged
+    so the operator can see candidates for re-weighting.
+
+    Parameters
+    ----------
+    history:
+        Same shape as ``validate_ssi_components``. Falls back to the
+        synthetic generator when empty. Note the bundled synth produces
+        each component as an INDEPENDENT random walk, so synthetic
+        pairwise correlations cluster near zero — this analyzer is
+        designed to surface real correlations on real history.
+    seed:
+        Forwarded to the synthetic generator.
+
+    Returns
+    -------
+    CollinearityReport
+        Symmetric N×N matrix exposed via ``corr_matrix()``. ``pairs``
+        carries the upper-triangle (each unordered pair once);
+        ``redundant_pairs`` carries the subset above the threshold.
+    """
+    rows = list(history or [])
+    if not rows:
+        rows = synthesize_component_history(seed=seed)
+
+    components = list(COMPONENT_WEIGHTS.keys())
+    series: dict[str, list[float]] = {c: [] for c in components}
+    for row in rows:
+        scores = (row or {}).get("component_scores") or {}
+        for c in components:
+            series[c].append(float(scores.get(c, 0.0) or 0.0))
+
+    pairs: list[ComponentPair] = []
+    redundant: list[ComponentPair] = []
+    n_obs = len(rows)
+    for i, a in enumerate(components):
+        for b in components[i + 1:]:
+            r = _pearson_r(series[a], series[b])
+            pair = ComponentPair(
+                component_a=a,
+                component_b=b,
+                correlation=r,
+                n_observations=n_obs,
+                redundant=abs(r) >= REDUNDANCY_THRESHOLD,
+            )
+            pairs.append(pair)
+            if pair.redundant:
+                redundant.append(pair)
+
+    if redundant:
+        worst = max(redundant, key=lambda p: abs(p.correlation))
+        summary = (
+            f"{len(redundant)} pair(s) above |r|={REDUNDANCY_THRESHOLD:.2f} "
+            f"redundancy threshold; strongest: {worst.component_a} ↔ "
+            f"{worst.component_b} at r={worst.correlation:+.2f}."
+        )
+    else:
+        summary = (
+            f"No pair above |r|={REDUNDANCY_THRESHOLD:.2f} — components "
+            "appear non-redundant on this history."
+        )
+
+    return CollinearityReport(
+        components=components,
+        pairs=pairs,
+        redundant_pairs=redundant,
+        n_observations=n_obs,
         source=SSI_COMPONENT_VALIDATION_SOURCE,
         summary=summary,
     )

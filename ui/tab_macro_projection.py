@@ -1123,6 +1123,79 @@ def _build_horizon_decay_heatmap(report) -> go.Figure:
     return fig
 
 
+def _build_collinearity_heatmap(report) -> go.Figure:
+    """N × N symmetric heatmap of pairwise SSI-component correlations.
+
+    Range pinned to [-1, 1] with a red → gray → green colourway centred
+    on zero. The diagonal is exactly 1.0 by construction. Operationally
+    answers: *do any two SSI components move together strongly enough
+    that the static weights are double-counting their shared signal?*
+
+    Pure builder — no ``st.*`` calls. Empty report → annotated-empty.
+    """
+    fig = go.Figure()
+    if not report or not getattr(report, "components", None):
+        fig.add_annotation(
+            text="No component history",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Component Collinearity", height=240)
+        return fig
+
+    matrix     = report.corr_matrix()
+    components = [_SSI_COMPONENT_DISPLAY.get(c, c.title())
+                  for c in report.components]
+    text = [[f"{v:+.2f}" for v in row] for row in matrix]
+
+    # Red ↔ gray ↔ green centred on zero
+    colorscale = [
+        [0.00, "#c0392b"],
+        [0.35, "#c9962b"],
+        [0.50, "#5a5650"],
+        [0.65, "#2e9e6e"],
+        [1.00, "#1f8a5b"],
+    ]
+    fig.add_trace(go.Heatmap(
+        z=matrix,
+        x=components,
+        y=components,
+        colorscale=colorscale,
+        zmin=-1.0,
+        zmax=1.0,
+        text=text,
+        texttemplate="%{text}",
+        textfont={"color": "#0c0e14", "size": 11},
+        hovertemplate=(
+            "<b>%{y}</b> ↔ <b>%{x}</b><br>"
+            "Pearson r: %{z:+.3f}<extra></extra>"
+        ),
+        showscale=True,
+        colorbar={
+            "title": {"text": "r", "side": "right",
+                      "font": {"color": C_TEXT3, "size": 10}},
+            "tickfont": {"color": C_TEXT3, "size": 9},
+            "len": 0.85,
+            "thickness": 12,
+            "outlinewidth": 0,
+        },
+    ))
+    apply_dark_layout(
+        fig,
+        title="SSI Component Collinearity — pairwise Pearson r",
+        height=max(280, 80 + 50 * len(components)),
+    )
+    fig.update_layout(
+        xaxis={"title": None, "side": "top",
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 60, "t": 60, "b": 24},
+    )
+    return fig
+
+
 def _render_component_predictiveness() -> None:
     """Surface the per-SSI-component backtest scorecard.
 
@@ -1130,13 +1203,16 @@ def _render_component_predictiveness() -> None:
     a deterministic, seed-stable backtest that scores how well each SSI
     component predicts forward rate moves. Pairs the existing
     sign-agreement bars with a horizon-decay heatmap from
-    ``validate_ssi_horizons`` so the operator sees BOTH which components
-    are predictive AND at what horizon their edge sits.
+    ``validate_ssi_horizons`` and a collinearity heatmap from
+    ``compute_component_collinearity``. Together the three answer:
+    *which components are predictive, at what horizon, and which are
+    secretly double-counting the same signal?*
 
     Lazy-imported so a backtest module failure can't break the tab.
     """
     try:
         from processing.ssi_component_validation import (
+            compute_component_collinearity,
             validate_ssi_components,
             validate_ssi_horizons,
         )
@@ -1153,6 +1229,7 @@ def _render_component_predictiveness() -> None:
     try:
         report = validate_ssi_components()
         decay  = validate_ssi_horizons(horizons=(1, 7, 14, 30, 60))
+        collin = compute_component_collinearity()
     except Exception:
         logger.exception("Macro Projection — validate_ssi_components failed")
         _empty_state(
@@ -1178,6 +1255,17 @@ def _render_component_predictiveness() -> None:
         key="macro_projection_horizon_decay",
     )
     st.caption(decay.summary)
+
+    # Collinearity heatmap — flags any two components that move together
+    # strongly enough that the static SSI weights double-count the shared
+    # signal. Complementary to the per-component predictiveness above.
+    st.plotly_chart(
+        _build_collinearity_heatmap(collin),
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="macro_projection_component_collinearity",
+    )
+    st.caption(collin.summary)
 
 
 # ── Section E: leading-indicator context strip ──────────────────────────────

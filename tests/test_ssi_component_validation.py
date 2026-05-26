@@ -12,10 +12,14 @@ import pytest
 
 from processing.shipping_stress_index import COMPONENT_WEIGHTS
 from processing.ssi_component_validation import (
+    REDUNDANCY_THRESHOLD,
+    CollinearityReport,
+    ComponentPair,
     ComponentScorecard,
     ComponentValidationReport,
     HorizonDecayReport,
     HorizonScorecard,
+    compute_component_collinearity,
     synthesize_component_history,
     validate_ssi_components,
     validate_ssi_horizons,
@@ -244,3 +248,110 @@ def test_validate_horizons_is_deterministic() -> None:
     b_keys = {(c.component, c.horizon_days, round(c.sign_agreement_rate, 6))
               for c in b.cells}
     assert a_keys == b_keys
+
+
+# ── 8. Component collinearity analyzer ────────────────────────────────────
+
+def _hist_with(component_series: dict[str, list[float]]) -> list[dict]:
+    """Helper: build a history from per-component series of equal length."""
+    components = list(component_series.keys())
+    n = len(next(iter(component_series.values()), []))
+    return [
+        {
+            "component_scores": {c: component_series[c][i] for c in components},
+            "realized_move_pct": 0.0,
+        }
+        for i in range(n)
+    ]
+
+
+def test_collinearity_returns_one_pair_per_unique_combination() -> None:
+    """Six components → C(6, 2) = 15 unordered pairs."""
+    report = compute_component_collinearity()
+    assert isinstance(report, CollinearityReport)
+    assert len(report.pairs) == 15
+
+
+def test_collinearity_pair_correlations_in_unit_interval() -> None:
+    """Every pair's correlation must sit in [-1, 1]."""
+    report = compute_component_collinearity()
+    for pair in report.pairs:
+        assert -1.0 <= pair.correlation <= 1.0
+
+
+def test_collinearity_corr_matrix_is_symmetric_and_diagonal_one() -> None:
+    """The N×N matrix must be symmetric with 1.0 on the diagonal."""
+    report = compute_component_collinearity()
+    matrix = report.corr_matrix()
+    n = len(report.components)
+    assert len(matrix) == n
+    for i in range(n):
+        assert len(matrix[i]) == n
+        assert matrix[i][i] == 1.0
+        for j in range(n):
+            assert abs(matrix[i][j] - matrix[j][i]) < 1e-9
+
+
+def test_collinearity_detects_identical_series_as_redundant() -> None:
+    """Two identical component series must read r = 1.0 and be flagged."""
+    # Use a hand-built history with two perfectly-correlated components.
+    base = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+    series = {
+        "chokepoint":    base,
+        "congestion":    base,         # identical to chokepoint → r = +1.0
+        "weather":       [v + 0.05 for v in base],  # also positive but offset
+        "rate":          list(reversed(base)),       # opposite → r = -1.0
+        "vulnerability": [0.5] * 7,                   # flat → r undefined → 0.0
+        "anomaly":       [0.3, 0.7, 0.2, 0.8, 0.4, 0.6, 0.5],  # noisy
+    }
+    report = compute_component_collinearity(history=_hist_with(series))
+    by_pair = {
+        tuple(sorted([p.component_a, p.component_b])): p
+        for p in report.pairs
+    }
+    # Identical → exactly +1.0; reversed → exactly -1.0
+    chokepoint_congestion = by_pair[("chokepoint", "congestion")]
+    chokepoint_rate       = by_pair[("chokepoint", "rate")]
+    chokepoint_weather    = by_pair[("chokepoint", "weather")]
+    chokepoint_vuln       = by_pair[("chokepoint", "vulnerability")]
+    assert abs(chokepoint_congestion.correlation - 1.0) < 1e-9
+    assert abs(chokepoint_rate.correlation - (-1.0)) < 1e-9
+    # weather is a +offset of chokepoint → also r = +1.0 (linear shift)
+    assert abs(chokepoint_weather.correlation - 1.0) < 1e-9
+    # flat series → correlation undefined → 0.0
+    assert chokepoint_vuln.correlation == 0.0
+
+    # Redundancy flag should fire for the |r| = 1.0 cases.
+    assert chokepoint_congestion.redundant is True
+    assert chokepoint_rate.redundant is True
+    # Identical AND reversed pairs should both be flagged.
+    assert any(p.redundant for p in report.redundant_pairs
+               if {p.component_a, p.component_b} == {"chokepoint", "rate"})
+
+
+def test_collinearity_runs_cleanly_on_synth() -> None:
+    """The synth produces independent random walks per component, but
+    cumulative random walks on a 120-day window can drift together by
+    chance — the analyzer must run cleanly and produce a well-formed
+    report regardless of whether spurious correlations show up.
+    """
+    report = compute_component_collinearity()
+    # Well-formed report shape — 6 components, C(6, 2) = 15 unordered pairs
+    assert len(report.components) == 6
+    assert len(report.pairs) == 15
+    # n_observations is consistent across every pair (same history)
+    n_obs = {p.n_observations for p in report.pairs}
+    assert len(n_obs) == 1
+    # Summary surfaces a sentence either way
+    assert isinstance(report.summary, str) and len(report.summary) > 0
+
+
+def test_collinearity_is_deterministic() -> None:
+    """Same seed → byte-identical pair correlations."""
+    a = compute_component_collinearity(seed=11)
+    b = compute_component_collinearity(seed=11)
+    a_map = {(p.component_a, p.component_b): round(p.correlation, 6)
+             for p in a.pairs}
+    b_map = {(p.component_a, p.component_b): round(p.correlation, 6)
+             for p in b.pairs}
+    assert a_map == b_map
