@@ -163,6 +163,46 @@ def test_health_payload_carries_now_utc_iso(server):
     datetime.fromisoformat(body["now_utc"])
 
 
+# ── /api/v1/backtests/health — public analytical-layer probe ───────────
+
+def test_backtests_health_returns_200_with_all_validators(server):
+    """`GET /api/v1/backtests/health` is unauthenticated and returns a
+    consolidated report of every backtest validator."""
+    r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
+    # Status code follows the rollup: 200 when all 9 healthy, 503 otherwise.
+    assert r.status_code in (200, 503)
+    body = r.json()
+    assert body["status"] in {"ok", "degraded"}
+    assert "validators" in body
+    assert "healthy_count" in body
+    assert "total" in body
+    assert "now_utc" in body
+    # Every validator carries the required structured fields.
+    for v in body["validators"]:
+        assert {"name", "healthy", "headline_label", "headline_value",
+                "summary", "raw"} <= set(v.keys())
+
+
+def test_backtests_health_returns_200_when_all_healthy(server):
+    """On the bundled synth all 9 validators read healthy → 200."""
+    r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["healthy_count"] == body["total"]
+    assert body["total"] == 9
+
+
+def test_backtests_health_does_not_require_authorization_header(server):
+    """Public probe — auth bypass works the same as /health."""
+    r = requests.get(
+        f"{server}/api/v1/backtests/health",
+        headers={"Authorization": "Bearer not-a-real-token"},
+        timeout=10,
+    )
+    assert r.status_code in (200, 503)
+
+
 def test_health_does_not_require_authorization_header(server):
     """Sanity check: a deliberately broken bearer header still gets a
     200 from /health — auth bypass is the whole point."""

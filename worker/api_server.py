@@ -531,6 +531,13 @@ _RE_DELIVERY_RETRY_MANUAL = re.compile(
 # serving it should be a memcpy.
 _RE_OPENAPI = re.compile(r"^/api/v1/openapi\.json/?$")
 
+# Backtests health — public endpoint that runs every validator in
+# ``tools.backtests`` and returns the consolidated health report as
+# JSON. Returns 200 when all validators report healthy and 503 when
+# any reports unhealthy, so external monitoring (Datadog, Pingdom,
+# etc.) can gate on it via status code without parsing the body.
+_RE_BACKTESTS_HEALTH = re.compile(r"^/api/v1/backtests/health/?$")
+
 # Module-level cache for the rendered OpenAPI JSON bytes. The first
 # request builds + serializes the spec; every subsequent request just
 # writes the cached bytes to the wfile. ``None`` means "not yet
@@ -658,7 +665,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
                 _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
-                _RE_OPENAPI,
+                _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
             )
         )
 
@@ -681,6 +688,14 @@ class APIHandler(BaseHTTPRequestHandler):
             # for the same reason (above the auth gate).
             if _RE_OPENAPI.match(path):
                 self._serve_openapi()
+                return
+
+            # Backtests health — public so external monitoring can
+            # alarm on platform analytical-layer health without
+            # managing per-user tokens. Returns 200 when all 9
+            # validators are healthy and 503 when any flips unhealthy.
+            if _RE_BACKTESTS_HEALTH.match(path):
+                self._backtests_health()
                 return
 
             # ICS calendar feed — public on the bearer-header level
@@ -2008,6 +2023,56 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 pass
+
+
+    # ── Endpoint: GET /api/v1/backtests/health ────────────────────
+
+    def _backtests_health(self) -> None:
+        """Public backtest-layer health probe.
+
+        Runs every validator in ``tools.backtests`` and returns the
+        consolidated JSON report. Status code is **200** when all 9
+        validators report healthy and **503** when any reports
+        unhealthy — external monitoring can alarm on the status code
+        without parsing the body.
+
+        Lazy-imports ``tools.backtests`` so a broken validator module
+        cannot block process startup. A blanket ``except`` falls back
+        to a 503 with ``status=down`` rather than letting the request
+        return a 500 with a raw traceback.
+        """
+        try:
+            from tools.backtests import format_json, run_all_backtests
+        except Exception as exc:
+            logger.exception(f"api /backtests/health import failed: {exc}")
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down",
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        try:
+            results = run_all_backtests()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception(f"api /backtests/health run failed: {exc}")
+            _send_json(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "down",
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        all_healthy = all(r.healthy for r in results)
+        body = json.loads(format_json(results))
+        # Promote the roll-up to a top-level field for monitoring tools
+        # that key off it directly (k8s liveness, Datadog HTTP check, etc.).
+        body["status"] = "ok" if all_healthy else "degraded"
+        body["now_utc"] = datetime.now(timezone.utc).isoformat()
+        status_code = HTTPStatus.OK if all_healthy else HTTPStatus.SERVICE_UNAVAILABLE
+        _send_json(self, status_code, body)
 
 
     # ── Endpoint: GET /api/v1/openapi.json ────────────────────────
