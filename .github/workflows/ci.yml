@@ -43,13 +43,22 @@ jobs:
       - name: Run pytest
         run: pytest --cov=. --cov-report=xml --cov-report=term
 
-      - name: Run consolidated backtest health gate
-        # All 8 validators must report healthy on the bundled synth;
+      - name: Run consolidated backtest health gate (strict)
+        # All 9 validators must report healthy on the bundled synth;
         # --strict exits 1 on any unhealthy flag. The synth-driven
         # property tests already cover the same surface inside pytest
         # above, so this gate is mostly belt-and-suspenders + a
         # human-readable snapshot in the CI log for triage.
         run: python -m tools.backtests --format text --strict
+
+      - name: Run baseline drift gate
+        # Sharper than --strict — catches numeric drift in either
+        # direction (e.g. chokepoint sign-agreement moves from 80.5%
+        # → 65%: still above the 0.55 healthy threshold so --strict
+        # accepts, but baseline-compare flags the 15.5pp regression).
+        # Per-metric tolerances live in tools/backtests.py
+        # (_DRIFT_TOLERANCE: ±5pp on rates, ±1.0d on MAEs).
+        run: python -m tools.backtests --compare-baseline docs/backtest-baseline.json
 
       - name: Upload coverage report
         if: always()

@@ -1,0 +1,123 @@
+{
+  "total": 9,
+  "validators": [
+    {
+      "headline_label": "Best component",
+      "headline_value": "chokepoint (80.5% sign-agreement)",
+      "healthy": true,
+      "name": "SSI Component Predictiveness",
+      "raw": {
+        "best_component": "chokepoint",
+        "best_rate": 0.8051,
+        "n_observations": 120,
+        "worst_component": "vulnerability",
+        "worst_rate": 0.4771
+      },
+      "summary": "Best signal: chokepoint (80.5% sign-agreement); weakest: vulnerability (47.7%)."
+    },
+    {
+      "headline_label": "Best dimension",
+      "headline_value": "port_capacity (72.0% sign-agreement)",
+      "healthy": true,
+      "name": "SCHI Dimension Predictiveness",
+      "raw": {
+        "best_dimension": "port_capacity",
+        "best_rate": 0.7203,
+        "n_observations": 120,
+        "worst_dimension": "inventory_cycle",
+        "worst_rate": 0.4862
+      },
+      "summary": "Best signal: port_capacity (72.0% sign-agreement); weakest: inventory_cycle (48.6%)."
+    },
+    {
+      "headline_label": "30d sign-agreement",
+      "headline_value": "91.7% (MAE 0.039)",
+      "healthy": true,
+      "name": "Disruption Forecast Accuracy",
+      "raw": {
+        "best_route": "ROUTE_5",
+        "mean_mae_30d": 0.0386,
+        "mean_mae_7d": 0.0397,
+        "mean_sa_30d": 0.9167,
+        "mean_sa_7d": 0.7971,
+        "n_observations": 144,
+        "worst_route": "ROUTE_2"
+      },
+      "summary": "Across 6 route(s): mean 7d MAE = 0.040, mean 30d MAE = 0.039; directional sign-agreement 80% / 92% at 7d / 30d."
+    },
+    {
+      "headline_label": "Monotonic ladder",
+      "headline_value": "yes",
+      "healthy": true,
+      "name": "Momentum Ranker Ladder",
+      "raw": {
+        "monotonic_by_signal": true,
+        "n_observations": 480,
+        "spread_strong_vs_weak": 0.341
+      },
+      "summary": "Across 480 obs, STRONG_BUY mean = +15.88% vs STRONG_SELL mean = -18.22% (spread +34.10pp); monotonic ladder: True."
+    },
+    {
+      "headline_label": "Momentum + reversion",
+      "headline_value": "both",
+      "healthy": true,
+      "name": "Freight Volatility Classifier",
+      "raw": {
+        "mean_reversion_works": true,
+        "momentum_works": true,
+        "n_observations": 400
+      },
+      "summary": "Across 400 obs: TRENDING_UP mean = +2.40% \u00b7 TRENDING_DOWN mean = -2.38% \u00b7 momentum_works: True \u00b7 mean_reversion_works: True."
+    },
+    {
+      "headline_label": "Calibrated",
+      "headline_value": "yes",
+      "healthy": true,
+      "name": "Leading Indicators Calibration",
+      "raw": {
+        "n_observations": 480,
+        "signals_calibrated": true,
+        "spread_bullish_vs_bearish": 0.0407
+      },
+      "summary": "Across 480 obs: BULLISH mean = +2.03% vs BEARISH mean = -2.04% (spread +4.07pp); calibrated: True."
+    },
+    {
+      "headline_label": "Calibrated",
+      "headline_value": "yes",
+      "healthy": true,
+      "name": "News Sentiment Calibration",
+      "raw": {
+        "n_observations": 240,
+        "sentiment_calibrated": true,
+        "spread_bullish_vs_bearish": 0.0385
+      },
+      "summary": "Across 240 articles: BULLISH mean = +1.79% vs BEARISH mean = -2.06% (spread +3.85pp); calibrated: True."
+    },
+    {
+      "headline_label": "Monotonic ladder",
+      "headline_value": "yes",
+      "healthy": true,
+      "name": "Vulnerability Scorer Monotonicity",
+      "raw": {
+        "monotonic_by_label": true,
+        "n_observations": 400,
+        "spread_critical_vs_low": 0.6178
+      },
+      "summary": "Across 400 obs: CRITICAL disrupt rate = 75.8% vs LOW = 14.0% (spread +61.8pp); monotonic ladder: True."
+    },
+    {
+      "headline_label": "Monotonic + low MAE",
+      "headline_value": "yes (MAE 0.69d, +7.1d spread)",
+      "healthy": true,
+      "name": "ETA Predictor Accuracy",
+      "raw": {
+        "delay_mae": 0.6944,
+        "delay_sign_agreement": 0.9875,
+        "monotonic_by_label": true,
+        "n_observations": 240,
+        "spread_severe_vs_low": 7.1167
+      },
+      "summary": "Across 240 obs: delay MAE = 0.69d \u00b7 sign-agreement = 98.8% \u00b7 SEVERE mean = 8.0d vs LOW mean = 0.9d (spread +7.1d); monotonic ladder: True."
+    }
+  ]
+}
