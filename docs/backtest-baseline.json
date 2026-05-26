@@ -1,5 +1,5 @@
 {
-  "total": 9,
+  "total": 10,
   "validators": [
     {
       "headline_label": "Best component",
@@ -118,6 +118,21 @@
         "spread_severe_vs_low": 7.1167
       },
       "summary": "Across 240 obs: delay MAE = 0.69d \u00b7 sign-agreement = 98.8% \u00b7 SEVERE mean = 8.0d vs LOW mean = 0.9d (spread +7.1d); monotonic ladder: True."
+    },
+    {
+      "headline_label": "Mean rank stability",
+      "headline_value": "99.8% (worst port 80.0%)",
+      "healthy": true,
+      "name": "Port Supply Lines Stability",
+      "raw": {
+        "n_runs": 8,
+        "noise": 0.15,
+        "overall_mean_stability": 0.998,
+        "overall_min_stability": 0.8,
+        "stable": true,
+        "top_k": 5
+      },
+      "summary": "Rank-stability across 25 ports \u00d7 8 run(s) at \u00b115% cargo-mix noise: overall mean = 99.8%, worst per-port = 80.0%; stable (\u2265 65%): True."
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Backtest Layer — Validator Catalogue + Health Snapshot
 
-The platform's analytical layer ships **9 deterministic, synth-backfilled
+The platform's analytical layer ships **10 deterministic, synth-backfilled
 validators**, one per major analytical module. Every validator follows the
 same shape: a pure scoring function + a synthetic-history generator + a
 defining-property test suite + a UI panel surfacing the result. The
@@ -40,8 +40,9 @@ python -m tools.backtests --format markdown > /tmp/table.md
 | News Sentiment Calibration | [OK] | Calibrated: yes |
 | Vulnerability Scorer Monotonicity | [OK] | Monotonic ladder: yes |
 | ETA Predictor Accuracy | [OK] | Monotonic + low MAE: yes (MAE 0.69d, +7.1d spread) |
+| Port Supply Lines Stability | [OK] | Mean rank stability: 99.8% (worst port 80.0%) |
 
-_9 of 9 validators healthy._
+_10 of 10 validators healthy._
 
 ---
 
@@ -132,6 +133,23 @@ Two scoring axes for `processing.eta_predictor`:
   * Scalar: **`delay_mae`** + **`delay_sign_agreement`** on the predicted-vs-realized delay days
   * Categorical: per-congestion-risk-label realized delay; **`monotonic_by_label`**
     flag verifies the LOW → SEVERE ladder rises
+
+### `processing/port_supply_lines_backtest.py` — Supply-Line Rank Stability
+
+Validates a load-bearing property of the port → routes → cargo →
+companies join: does the **top-K exposed-companies set per port stay
+consistent** when the cargo-mix layer is perturbed by ±N%?
+
+For every port:
+
+  * `mean_stability` — average Jaccard between the baseline top-K
+    exposed-companies set and N perturbed runs
+  * `min_stability` — worst-case Jaccard across runs
+
+Overall `stable` flag fires when mean ≥ 65% (Jaccard ≥ 0.65 means at
+least ~⅔ of the top-K survives the noise on average). The
+zero-noise property test pins that perturbed=baseline reads as 1.0
+stability (sanity-check seed).
 
 ---
 

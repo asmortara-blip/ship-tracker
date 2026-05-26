@@ -319,6 +319,36 @@ def _run_eta_predictor() -> BacktestResult:
     )
 
 
+def _run_port_supply_lines() -> BacktestResult:
+    from processing.port_supply_lines_backtest import validate_supply_chain_stability
+    r = validate_supply_chain_stability()
+    scorecard_rows = [
+        {"label": sc.locode,
+         "metric_name": "mean stability",
+         "value": f"{sc.mean_stability * 100:.1f}%"}
+        for sc in r.scorecards
+    ]
+    return BacktestResult(
+        name="Port Supply Lines Stability",
+        headline_label="Mean rank stability",
+        headline_value=(
+            f"{r.overall_mean_stability * 100:.1f}% "
+            f"(worst port {r.overall_min_stability * 100:.1f}%)"
+        ),
+        healthy=bool(r.stable),
+        summary=r.summary,
+        raw_fields={
+            "n_runs":                  r.n_runs,
+            "noise":                   r.noise,
+            "top_k":                   r.top_k,
+            "overall_mean_stability":  round(r.overall_mean_stability, 4),
+            "overall_min_stability":   round(r.overall_min_stability, 4),
+            "stable":                  bool(r.stable),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -330,6 +360,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_news_sentiment,
     _run_vulnerability_scorer,
     _run_eta_predictor,
+    _run_port_supply_lines,
 ]
 
 

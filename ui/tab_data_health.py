@@ -3615,11 +3615,34 @@ def _render_backtest_coverage() -> None:
             "sublabel": "validator unavailable",
         })
 
-    # 9 cards → flow in three rows of 3 so each card has enough width for its
-    # sublabel without truncation.
-    metric_card_row(cards[:3], columns=3)
-    metric_card_row(cards[3:6], columns=3)
-    metric_card_row(cards[6:], columns=3)
+    # Port supply lines stability backtest
+    try:
+        from processing.port_supply_lines_backtest import (
+            validate_supply_chain_stability,
+        )
+        psl_report = validate_supply_chain_stability()
+        cards.append({
+            "label":   "Supply-Line Stability",
+            "value":   f"{psl_report.overall_mean_stability * 100:.1f}%",
+            "accent":  C_HIGH if psl_report.stable else C_LOW,
+            "sublabel": (
+                f"worst port {psl_report.overall_min_stability * 100:.1f}% · "
+                f"stable: {'yes' if psl_report.stable else 'no'}"
+            ),
+        })
+    except Exception:
+        logger.exception("Backtest coverage — supply-line stability unavailable")
+        cards.append({
+            "label":   "Supply-Line Stability",
+            "value":   "—",
+            "accent":  C_TEXT3,
+            "sublabel": "validator unavailable",
+        })
+
+    # 10 cards → flow in two rows of 5 so each card has enough width
+    # for its sublabel without truncation.
+    metric_card_row(cards[:5], columns=5)
+    metric_card_row(cards[5:], columns=5)
     st.caption(
         "All four validators are deterministic and seed-stable; numbers "
         "above are computed against the bundled synthetic-history "
