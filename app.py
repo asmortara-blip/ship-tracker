@@ -855,6 +855,7 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
     "ports_routes": [
         ("Port Demand",      "ui.tab_port_demand"),
         ("Port Monitor",     "ui.tab_port_monitor"),
+        ("Port Supply Lines", "ui.tab_port_supply_lines"),
         ("Routes",           "ui.tab_routes"),
         ("Rate Analytics",   "ui.tab_rate_analytics"),
         ("ETA Predictor",    "ui.tab_eta"),
@@ -1365,8 +1366,9 @@ elif active_section == "disruption_alpha":
 
 # ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
-        "Port Demand", "Port Monitor", "Routes", "Rate Analytics",
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
+        "Port Demand", "Port Monitor", "Port Supply Lines",
+        "Routes", "Rate Analytics",
         "ETA Predictor", "Congestion", "Emerging Routes",
         "Vessel Map",
     ])
@@ -1384,35 +1386,41 @@ elif active_section == "ports_routes":
             st.error(f"Port Monitor error: {e}")
     with t2:
         try:
+            from ui.tab_port_supply_lines import render as _r
+            _r()
+        except Exception as e:
+            st.error(f"Port Supply Lines error: {e}")
+    with t3:
+        try:
             from ui.tab_routes import render as _r
             _r(route_results, freight_data, ml_forecasts or forecasts)
         except Exception as e:
             st.error(f"Routes error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_rate_analytics import render as _r
             _r(freight_data=freight_data, route_results=route_results)
         except Exception as e:
             st.error(f"Rate Analytics error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_eta import render as _r
             _r(port_results, route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"ETA Predictor error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_congestion import render as _r
             _r(port_results, ais_data, freight_data, macro_data)
         except Exception as e:
             st.error(f"Congestion error: {e}")
-    with t6:
+    with t7:
         try:
             from ui.tab_emerging_routes import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Emerging Routes error: {e}")
-    with t7:
+    with t8:
         try:
             from ui.tab_vessel_map import render as _r
             _r(port_results, route_results, freight_data)
