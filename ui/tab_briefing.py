@@ -189,73 +189,22 @@ def _build_forecast_quadrant_scatter(forecasts: list) -> go.Figure:
 def _assemble_context(port_results, route_results, freight_data, macro_data):
     """Build (NarrationContext, raw_signals_for_display).
 
-    Computes SSI + top route forecasts + headline indicators. Returns the
-    NarrationContext for the narrator and the raw signals dict so the
-    "Today's Inputs" transparency panel can render the same data the LLM saw.
+    Delegates context assembly to engine.narration_engine.
+    build_narration_context (the single source of truth shared with the
+    headless worker), then reconstructs the raw-signals dict from the
+    context so the "Today's Inputs" transparency panel renders exactly the
+    data the LLM saw.
     """
-    from engine.narration_engine import NarrationContext
+    from engine.narration_engine import build_narration_context
 
-    stress_report = None
-    forecasts: list = []
-    try:
-        from processing.shipping_stress_index import compute_shipping_stress
-        stress_report = compute_shipping_stress(
-            freight_data or {}, macro_data or {},
-            port_results or [], route_results or [],
-        )
-    except Exception as exc:
-        logger.debug(f"tab_briefing: SSI compute failed: {exc}")
-
-    try:
-        from processing.disruption_forecast import forecast_all_stress
-        all_forecasts = forecast_all_stress(
-            freight_data or {}, macro_data or {}, route_results or [],
-            stress_report=stress_report,
-        )
-        forecasts = sorted(
-            all_forecasts, key=lambda f: getattr(f, "stress_30d", 0.0),
-            reverse=True,
-        )[:6]
-    except Exception as exc:
-        logger.debug(f"tab_briefing: forecast compute failed: {exc}")
-
-    notable: dict[str, float] = {}
-    try:
-        if isinstance(macro_data, dict):
-            for k in ("BDIY", "BDI", "WCI", "FBX", "SCFI", "DCOILWTICO"):
-                df = macro_data.get(k)
-                if df is not None and not getattr(df, "empty", True):
-                    if "value" in getattr(df, "columns", []):
-                        notable[k] = float(df["value"].dropna().iloc[-1])
-    except Exception:
-        pass
-
-    # Port-deficit context — top-N most-stressed ports (negative deficit
-    # days first). The narrator's template fallback only renders a
-    # paragraph when at least one is in real deficit, so passing the
-    # full sorted list here is safe even on a calm day.
-    top_port_deficits: list = []
-    try:
-        from processing.port_supply_lines import build_port_supply_chains
-        chains = build_port_supply_chains()
-        top_port_deficits = [
-            c for c in chains
-            if c.port.supply_deficit_days < 0
-        ][:5]
-    except Exception:
-        logger.exception("Briefing — port supply chains failed")
-
-    ctx = NarrationContext(
-        stress_report=stress_report,
-        top_forecasts=forecasts,
-        notable_indicators=notable,
-        top_port_deficits=top_port_deficits,
+    ctx = build_narration_context(
+        port_results, route_results, freight_data, macro_data,
     )
     return ctx, {
-        "stress_report": stress_report,
-        "forecasts": forecasts,
-        "indicators": notable,
-        "top_port_deficits": top_port_deficits,
+        "stress_report": ctx.stress_report,
+        "forecasts": ctx.top_forecasts,
+        "indicators": ctx.notable_indicators,
+        "top_port_deficits": ctx.top_port_deficits,
     }
 
 

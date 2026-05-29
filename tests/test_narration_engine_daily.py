@@ -25,6 +25,7 @@ from engine.narration_engine import (
     DailyNarration,
     NarrationContext,
     NarrationSection,
+    build_narration_context,
     _build_daily_user_prompt,
     _narration_cache_path,
     _parse_claude_json,
@@ -109,6 +110,20 @@ def isolate_cache_and_key(monkeypatch, tmp_path):
 
 
 # ─── _summarize_* helpers ───────────────────────────────────────────────────
+
+def test_build_narration_context_never_raises_on_empty_inputs() -> None:
+    """The shared UI/worker context factory always returns a valid
+    NarrationContext — each sub-computation is independently guarded."""
+    ctx = build_narration_context([], [], {}, {})
+    assert isinstance(ctx, NarrationContext)
+    assert isinstance(ctx.top_forecasts, list)
+    assert isinstance(ctx.notable_indicators, dict)
+    assert isinstance(ctx.top_port_deficits, list)
+
+
+def test_build_narration_context_handles_all_none() -> None:
+    assert isinstance(build_narration_context(), NarrationContext)
+
 
 def test_summarize_stress_handles_none() -> None:
     assert _summarize_stress(None) == {}

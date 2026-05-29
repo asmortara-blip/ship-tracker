@@ -27,6 +27,7 @@ import argparse
 import functools
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -421,6 +422,110 @@ def run_daily_briefing_job(
             duration_s=duration,
             error_msg=str(exc),
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Daily briefing TLDR — generate once + persist ready-to-send artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Repo-root cache dir for persisted TLDR delivery artifacts (gitignored).
+_BRIEFING_TLDR_DIR: Path = (
+    Path(__file__).resolve().parent.parent / "cache" / "briefing_tldr"
+)
+
+
+@_track_run
+def run_briefing_tldr_job(data_bundle: dict) -> dict:
+    """Generate the day's one-paragraph briefing TLDR once and persist
+    ready-to-send artifacts (gated by should_send). Never raises.
+
+    This is the canonical once-per-day owner of the single Haiku TLDR
+    call: it builds a NarrationContext from the same data bundle the
+    investor-report job uses (via the shared
+    ``engine.narration_engine.build_narration_context``), generates the
+    day-cached DailyNarration + TLDR — priming ``cache/tldr/{date}.json``
+    so the UI briefing tab and any CLI hit the cache instead of calling
+    Claude — and, when the TLDR carries material signal, writes
+    html/text/subject artifacts under ``cache/briefing_tldr/{date}/`` for
+    a downstream channel to dispatch.
+
+    Mirrors ``run_port_supply_snapshot_job``: pure persistence of rendered
+    artifacts; channel dispatch is a separate, opt-in concern. Returns a
+    small status dict (``ok`` / ``source`` / ``persisted`` / ``paths``).
+    """
+    out = {"ok": False, "source": "", "persisted": False, "paths": {}}
+    try:
+        from engine.daily_briefing_tldr import generate_tldr
+        from engine.narration_engine import (
+            build_narration_context,
+            generate_daily_narration,
+        )
+
+        bundle = data_bundle or {}
+        ctx = build_narration_context(
+            bundle.get("port_results", []),
+            bundle.get("route_results", []),
+            bundle.get("freight_data", {}),
+            bundle.get("macro_data", {}),
+        )
+        # Pass the key explicitly so the headless path never reaches for
+        # st.secrets; None → generate_* resolve from env or take template.
+        api_key = os.getenv("ANTHROPIC_API_KEY") or None
+        narration = generate_daily_narration(ctx, api_key=api_key)
+        summary = generate_tldr(narration, api_key=api_key)
+        out["ok"] = True
+        out["source"] = summary.source
+        logger.info(
+            f"run_briefing_tldr_job: TLDR generated (source={summary.source})"
+        )
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_briefing_tldr_job: generation failed: {exc}")
+        return out
+
+    # ── Persist ready-to-send artifacts, gated by should_send ──────────────
+    # Defensive: a render / I/O failure here must NEVER fail the job. Quiet
+    # days (no material signal) skip persistence so channels have nothing
+    # to dispatch and the cache dir stays tidy.
+    try:
+        from delivery.briefing_tldr import (
+            build_subject_line,
+            render_html,
+            render_plain_text,
+            should_send,
+        )
+
+        if not should_send(summary):
+            logger.info(
+                "run_briefing_tldr_job: no material TLDR signal — skipping digest"
+            )
+            return out
+
+        date_iso = str(getattr(narration, "date", "") or "").strip()
+        out_dir = _BRIEFING_TLDR_DIR / (date_iso or "undated")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        html_path = out_dir / "tldr.html"
+        text_path = out_dir / "tldr.txt"
+        subj_path = out_dir / "tldr.subject.txt"
+
+        html_path.write_text(render_html(summary, date_iso), encoding="utf-8")
+        text_path.write_text(
+            render_plain_text(summary, date_iso), encoding="utf-8",
+        )
+        subj_path.write_text(
+            build_subject_line(summary, date_iso) + "\n", encoding="utf-8",
+        )
+
+        out["persisted"] = True
+        out["paths"] = {
+            "html": str(html_path),
+            "text": str(text_path),
+            "subject": str(subj_path),
+        }
+        logger.info(f"run_briefing_tldr_job: digest persisted to {out_dir}")
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_briefing_tldr_job: digest persistence failed: {exc}")
+
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1626,6 +1731,16 @@ def main(argv: Optional[list] = None) -> int:
     bundle = load_data_bundle()
     result = run_daily_briefing_job(bundle, push_to_channels=args.push)
     print(json.dumps(asdict(result), indent=2, default=str))
+
+    # Daily briefing TLDR — generate the one-paragraph summary once from
+    # the same bundle (primes the day-cache the UI briefing tab reads) and
+    # persist ready-to-send artifacts. Runs right after the report build so
+    # it reuses the freshly-loaded bundle. Belt-and-braces guard: the job
+    # itself never raises, and a TLDR failure must never touch the report.
+    try:
+        run_briefing_tldr_job(bundle)
+    except Exception as exc:
+        logger.warning(f"main: briefing TLDR step failed: {exc}")
 
     # Telemetry retention runs AFTER the briefing job so a prune failure
     # cannot block the report. Wrapped in try/except for the same reason

@@ -1315,6 +1315,84 @@ def _get_anthropic_key(explicit: _Optional[str]) -> str:
     return _os.environ.get("ANTHROPIC_API_KEY", "")
 
 
+# ── Raw daily data → NarrationContext factory ───────────────────────────────
+
+def build_narration_context(
+    port_results=None,
+    route_results=None,
+    freight_data=None,
+    macro_data=None,
+) -> NarrationContext:
+    """Assemble a ``NarrationContext`` from raw daily data.
+
+    Single source of truth for "raw signals → NarrationContext", shared by
+    the UI briefing tab (``ui.tab_briefing._assemble_context``) and the
+    headless worker (``worker.scheduler.run_briefing_tldr_job``) so both
+    narrate from an identical context — no UI/worker divergence.
+
+    Runs the SSI / forecast / port-deficit computations; each sub-step is
+    independently guarded so a failure in one (e.g. a malformed macro
+    frame) degrades that slice to empty rather than losing the whole
+    context. ALWAYS returns a valid ``NarrationContext`` — never raises,
+    never None.
+    """
+    port_results = port_results or []
+    route_results = route_results or []
+    freight_data = freight_data or {}
+    macro_data = macro_data or {}
+
+    stress_report = None
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        stress_report = compute_shipping_stress(
+            freight_data, macro_data, port_results, route_results,
+        )
+    except Exception as exc:
+        logger.debug(f"build_narration_context: SSI compute failed: {exc}")
+
+    forecasts: list = []
+    try:
+        from processing.disruption_forecast import forecast_all_stress
+        all_forecasts = forecast_all_stress(
+            freight_data, macro_data, route_results,
+            stress_report=stress_report,
+        )
+        forecasts = sorted(
+            all_forecasts, key=lambda f: getattr(f, "stress_30d", 0.0),
+            reverse=True,
+        )[:6]
+    except Exception as exc:
+        logger.debug(f"build_narration_context: forecast compute failed: {exc}")
+
+    notable: dict[str, float] = {}
+    try:
+        if isinstance(macro_data, dict):
+            for k in ("BDIY", "BDI", "WCI", "FBX", "SCFI", "DCOILWTICO"):
+                df = macro_data.get(k)
+                if df is not None and not getattr(df, "empty", True):
+                    if "value" in getattr(df, "columns", []):
+                        notable[k] = float(df["value"].dropna().iloc[-1])
+    except Exception:
+        pass
+
+    top_port_deficits: list = []
+    try:
+        from processing.port_supply_lines import build_port_supply_chains
+        chains = build_port_supply_chains()
+        top_port_deficits = [
+            c for c in chains if c.port.supply_deficit_days < 0
+        ][:5]
+    except Exception:
+        logger.debug("build_narration_context: port supply chains failed")
+
+    return NarrationContext(
+        stress_report=stress_report,
+        top_forecasts=forecasts,
+        notable_indicators=notable,
+        top_port_deficits=top_port_deficits,
+    )
+
+
 # ── Context → structured-prompt payload ─────────────────────────────────────
 
 def _summarize_stress(stress_report: _Any) -> dict:
