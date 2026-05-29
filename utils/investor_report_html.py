@@ -1662,6 +1662,29 @@ def _footer(report) -> str:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _section_tldr_lede(report) -> str:
+    """A 2-3 sentence TL;DR lede card above the report body.
+
+    Renders only when ``report.ai.tldr`` is populated (set post-build by
+    investor_report_engine); otherwise returns "" so the report layout is
+    unchanged. The text is escaped (it may be LLM-generated)."""
+    from html import escape
+
+    ai = _safe_attr(report, "ai")
+    tldr = _safe_str(_safe_attr(ai, "tldr"), "").strip() if ai is not None else ""
+    if not tldr:
+        return ""
+    return (
+        '<section style="margin:0 0 18px 0;padding:16px 22px;'
+        'background:#f5f8fb;border-left:5px solid #1a3a72;border-radius:3px">'
+        '<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;'
+        'text-transform:uppercase;color:#1a3a72;margin-bottom:6px">TL;DR</div>'
+        '<div style="font-size:15px;line-height:1.6;color:#24292e">'
+        f'{escape(tldr)}</div>'
+        '</section>'
+    )
+
+
 def render_investor_report_html(report) -> str:
     """Return a complete self-contained HTML document as a string.
 
@@ -1686,6 +1709,7 @@ def render_investor_report_html(report) -> str:
     body_parts = [
         _topbar(gen_display),
         _cover(report),
+        _section_tldr_lede(report),
         _nav(),
         _section_executive_summary(report),
         _section_alpha_signals(report),

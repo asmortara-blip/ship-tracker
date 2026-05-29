@@ -146,6 +146,7 @@ class AIAnalysis:
     outlook_30d: str                # 30-day outlook paragraph
     top_recommendations: list       # [{rank, title, action, ticker, conviction, ...}]
     disclaimer: str                 # standard investment disclaimer
+    tldr: str = ""                  # 2-3 sentence lede over the report (set post-build)
 
 
 @dataclass
@@ -1609,6 +1610,7 @@ def build_investor_report(
     macro_data: dict,
     stock_data: dict,
     news_items: list = None,
+    with_tldr: bool = True,
 ) -> InvestorReport:
     """Build a complete InvestorReport from all available data sources.
 
@@ -1637,6 +1639,7 @@ def build_investor_report(
             macro_data=macro_data,
             stock_data=stock_data,
             news_items=news_items,
+            with_tldr=with_tldr,
         )
     except Exception as _fatal:
         logger.error("build_investor_report total failure — returning safe default: {}", _fatal)
@@ -1695,6 +1698,87 @@ def build_investor_report(
         )
 
 
+# ---------------------------------------------------------------------------
+# Report TLDR — a 2-3 sentence lede over the report, via the shared
+# engine.daily_briefing_tldr summarizer. AIAnalysis has no headline /
+# sections of its own, so we adapt it (and the report's sentiment + macro)
+# into the headline/body/sections shape generate_tldr duck-types over.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _LedeSection:
+    """Duck-typed NarrationSection for the TLDR adapter."""
+    title: str
+    bullets: list
+
+
+@dataclass
+class _LedeNarration:
+    """Duck-typed DailyNarration for the TLDR adapter (headline/body/sections)."""
+    headline: str
+    body: str
+    sections: list
+    date: str = ""
+
+
+def _synthesize_headline(report) -> str:
+    """A one-line headline for the report lede — AIAnalysis has none, so
+    compose it from the composite sentiment label + a key macro figure."""
+    label = str(getattr(getattr(report, "sentiment", None), "overall_label", "") or "NEUTRAL")
+    macro = getattr(report, "macro", None)
+    bits: list[str] = []
+    bdi_chg = float(getattr(macro, "bdi_change_30d_pct", 0.0) or 0.0)
+    if bdi_chg:
+        bits.append(f"BDI {bdi_chg:+.1f}% 30d")
+    stress = str(getattr(macro, "supply_chain_stress", "") or "")
+    if stress:
+        bits.append(f"supply-chain stress {stress}")
+    tail = (" — " + ", ".join(bits)) if bits else ""
+    return f"{label} shipping outlook{tail}"
+
+
+def _build_report_tldr(report) -> str:
+    """Distill the report into a 2-3 sentence lede via generate_tldr.
+
+    Adapts the AIAnalysis (executive_summary → body, top_recommendations →
+    a 'Top Recommendations' section) plus a synthesized headline into the
+    duck-type generate_tldr consumes. Uses a SEPARATE cache namespace
+    (cache/tldr_report/) so it never collides with the shipping-briefing
+    TLDR's per-day cache slot. Best-effort: returns "" on any failure so
+    the report build is never affected.
+    """
+    try:
+        from pathlib import Path
+
+        from engine.daily_briefing_tldr import generate_tldr
+
+        ai = getattr(report, "ai", None)
+        if ai is None:
+            return ""
+
+        bullets: list[str] = []
+        for r in (list(getattr(ai, "top_recommendations", []) or [])[:3]):
+            rank = r.get("rank") if isinstance(r, dict) else getattr(r, "rank", "")
+            title = r.get("title") if isinstance(r, dict) else getattr(r, "title", "")
+            title = str(title or "").strip()
+            if title:
+                bullets.append(f"{rank}. {title}" if rank else title)
+
+        narration = _LedeNarration(
+            headline=_synthesize_headline(report),
+            body=str(getattr(ai, "executive_summary", "") or ""),
+            sections=[_LedeSection("Top Recommendations", bullets)] if bullets else [],
+            date=str(getattr(report, "generated_at", "") or "")[:10],
+        )
+        cache_dir = Path(__file__).resolve().parent.parent / "cache" / "tldr_report"
+        summary = generate_tldr(narration, cache_dir=cache_dir)
+        return summary.text or ""
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.debug("_build_report_tldr failed: {}", exc)
+        return ""
+
+
 def _build_investor_report_inner(
     port_results: list,
     route_results: list,
@@ -1703,6 +1787,7 @@ def _build_investor_report_inner(
     macro_data: dict,
     stock_data: dict,
     news_items: list = None,
+    with_tldr: bool = True,
 ) -> InvestorReport:
     """Inner implementation of build_investor_report — called by the public
     function which wraps it in a top-level try/except safety net."""
@@ -2235,6 +2320,12 @@ def _build_investor_report_inner(
         news_items=top_news,
         digest=digest,
     )
+
+    # 16. Report lede — a 2-3 sentence TLDR distilled from the report.
+    # Day-cached (separate namespace) so repeated builds reuse it; the
+    # diff-only rotation path passes with_tldr=False to skip it entirely.
+    if with_tldr:
+        report.ai.tldr = _build_report_tldr(report)
 
     logger.success(
         "InvestorReport built: quality={}, sentiment={} ({:+.3f}), {} signals",

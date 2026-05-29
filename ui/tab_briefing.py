@@ -629,6 +629,7 @@ def _rotate_investor_report_in_session(
             freight_data=freight_data or {},
             macro_data=macro_data or {},
             stock_data=stock_data or {},
+            with_tldr=False,   # diff-only snapshot; skip the lede LLM call
         )
         prev = st.session_state.get("current_investor_report")
         if prev is not None:

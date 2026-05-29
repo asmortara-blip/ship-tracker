@@ -331,6 +331,18 @@ def _build_key_findings_section(payload: Any) -> str:
     return "\n".join(lines)
 
 
+def _build_tldr_section(payload: Any) -> str:
+    """Pull the report's 2-3 sentence TLDR lede (``ai.tldr``), if present.
+
+    Empty string when the report carries no TLDR — the caller then omits
+    the section entirely rather than emitting an empty heading.
+    """
+    ai = _get(payload, "ai", None)
+    if ai is None:
+        return ""
+    return str(_get(ai, "tldr", "") or "").strip()
+
+
 def _build_executive_summary_section(payload: Any) -> str:
     """Pull the executive_summary prose verbatim.
 
@@ -459,6 +471,9 @@ def report_to_markdown(report_data: Any) -> str:
     parts.append(header_line + "\n")
     parts.append("")  # blank line before first section
 
+    _tldr = _build_tldr_section(report_data)
+    if _tldr:
+        parts.append(_md_section("TL;DR", _tldr))
     parts.append(_md_section(
         "Executive Summary",
         _build_executive_summary_section(report_data),
