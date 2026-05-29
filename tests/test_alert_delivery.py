@@ -2808,3 +2808,37 @@ def test_deliver_webhook_blocks_ssrf_target_without_posting(monkeypatch) -> None
     assert "SSRF guard" in result.error_msg
     assert posted == []                              # never made the request
     assert alert_delivery._is_retriable(result) is False   # blocked ≠ retriable
+
+
+# ─── retriable classification: definitive 4xx is never retried ───────────────
+
+def test_is_retriable_4xx_with_retriable_substring_in_body_is_not_retriable() -> None:
+    """A 400 whose response BODY happens to contain 'connection' must NOT
+    be retried — the status is definitive."""
+    r = alert_delivery.DeliveryResult(
+        success=False, status_code=400,
+        error_msg="HTTP 400: connection pool exhausted, timeout upstream",
+    )
+    assert alert_delivery._is_retriable(r) is False
+
+
+def test_is_retriable_404_not_retriable() -> None:
+    r = alert_delivery.DeliveryResult(
+        success=False, status_code=404, error_msg="HTTP 404: not found",
+    )
+    assert alert_delivery._is_retriable(r) is False
+
+
+def test_is_retriable_5xx_still_retriable() -> None:
+    r = alert_delivery.DeliveryResult(
+        success=False, status_code=503, error_msg="HTTP 503: unavailable",
+    )
+    assert alert_delivery._is_retriable(r) is True
+
+
+def test_is_retriable_transport_error_still_retriable() -> None:
+    """status_code 0 (transport-level) keeps the substring classification."""
+    r = alert_delivery.DeliveryResult(
+        success=False, status_code=0, error_msg="connection error: refused",
+    )
+    assert alert_delivery._is_retriable(r) is True

@@ -1386,6 +1386,15 @@ def _is_retriable(result: DeliveryResult) -> bool:
         status = int(getattr(result, "status_code", 0) or 0)
         if status in _RETRIABLE_STATUS_CODES:
             return True
+        if status >= 400:
+            # A definitive HTTP error status (e.g. 400/403/404) won't
+            # self-heal. Do NOT fall through to the body-substring check —
+            # a "connection"/"timeout"/"temporary" token in the response
+            # BODY (e.g. an error payload) must not trigger wasted retries
+            # of a guaranteed-permanent failure. The substring check below
+            # is only for transport-level failures (status_code == 0, where
+            # error_msg is the exception text).
+            return False
         return any(sub in msg for sub in _RETRIABLE_ERROR_SUBSTRINGS)
     except Exception:
         # Defence-in-depth — never let the classifier raise. Default
@@ -2212,6 +2221,17 @@ def save_channel(
         monthly_budget = 0
     if monthly_budget < 0:
         monthly_budget = 0
+    # Normalize severity_threshold to a canonical band. An empty / unknown
+    # value (e.g. a typo) would otherwise make _meets_threshold compare
+    # against order 99 and deliver EVERY severity unpredictably. Default to
+    # "LOW" — the explicit deliver-all band — so the stored value is always
+    # canonical. We fail LOUD (deliver) rather than closed: for an alerting
+    # channel, extra alerts are far safer than silently missing them.
+    severity_threshold = (
+        channel.severity_threshold
+        if channel.severity_threshold in _SEVERITY_ORDER
+        else "LOW"
+    )
     conn = get_connection()
     try:
         with conn:
@@ -2241,7 +2261,7 @@ def save_channel(
                     channel.name,
                     channel.kind,
                     target_to_persist,
-                    channel.severity_threshold,
+                    severity_threshold,
                     1 if channel.enabled else 0,
                     created_at,
                     digest_mode,
@@ -2577,18 +2597,17 @@ def increment_channel_usage(channel_id: str, *, user_id: str) -> None:
 
         conn = get_connection()
         now_iso = datetime.now(timezone.utc).isoformat()
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?", (key,)
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            current = 0
+        # Atomic single-statement increment — two concurrent deliveries
+        # can no longer both read the same value and lose an increment
+        # (kv_state.key is the PRIMARY KEY, so ON CONFLICT(key) fires).
         with conn:
             conn.execute(
-                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-                "VALUES (?, ?, ?)",
-                (key, str(current + 1), now_iso),
+                "INSERT INTO kv_state (key, value, updated_at) "
+                "VALUES (?, '1', ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = CAST(value AS INTEGER) + 1, "
+                "updated_at = excluded.updated_at",
+                (key, now_iso),
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug(
@@ -2710,19 +2729,16 @@ def _bump_budget_suppressed_counter(amount: int = 1) -> None:
 
         conn = get_connection()
         now_iso = datetime.now(timezone.utc).isoformat()
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?",
-            (_BUDGET_SUPPRESSED_KEY,),
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            current = 0
+        amt = int(amount)
+        # Atomic single-statement increment by ``amount`` — no lost updates.
         with conn:
             conn.execute(
-                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-                "VALUES (?, ?, ?)",
-                (_BUDGET_SUPPRESSED_KEY, str(current + amount), now_iso),
+                "INSERT INTO kv_state (key, value, updated_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = CAST(value AS INTEGER) + ?, "
+                "updated_at = excluded.updated_at",
+                (_BUDGET_SUPPRESSED_KEY, str(amt), now_iso, amt),
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug(
@@ -2868,23 +2884,24 @@ def record_delivery_failure(channel_id: str, *, user_id: str) -> int:
 
         conn = get_connection()
         now_iso = datetime.now(timezone.utc).isoformat()
+        # Atomic single-statement increment (no lost updates under
+        # concurrent dispatch), then read the post-increment value back.
+        with conn:
+            conn.execute(
+                "INSERT INTO kv_state (key, value, updated_at) "
+                "VALUES (?, '1', ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = CAST(value AS INTEGER) + 1, "
+                "updated_at = excluded.updated_at",
+                (key, now_iso),
+            )
         row = conn.execute(
             "SELECT value FROM kv_state WHERE key = ?", (key,)
         ).fetchone()
         try:
-            current = int(row["value"]) if row else 0
+            return int(row["value"]) if row else 0
         except (TypeError, ValueError):
-            current = 0
-        if current < 0:
-            current = 0
-        new_count = current + 1
-        with conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-                "VALUES (?, ?, ?)",
-                (key, str(new_count), now_iso),
-            )
-        return new_count
+            return 0
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             f"alert_delivery.record_delivery_failure: kv_state write "

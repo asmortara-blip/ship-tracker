@@ -393,3 +393,33 @@ def test_auto_disable_is_scoped_update_preserving_owner_and_target() -> None:
     assert row["user_id"] == "alice"            # NOT rewritten to '' — no hijack
     assert int(row["enabled"]) == 0             # disabled
     assert row["target"] == secret_target       # not clobbered / downgraded
+
+
+# ─── severity_threshold normalization at save (fail-loud, not fail-open) ─────
+
+def _chan_with_threshold(channel_id: str, threshold: str) -> DeliveryChannel:
+    return DeliveryChannel(
+        channel_id=channel_id, name="n", kind="webhook",
+        target="https://example.com/hook", severity_threshold=threshold,
+        enabled=True,
+    )
+
+
+def test_save_channel_normalizes_empty_threshold_to_low() -> None:
+    """An empty threshold would make _meets_threshold deliver EVERY severity
+    unpredictably; save normalizes it to the explicit deliver-all band."""
+    save_channel(_chan_with_threshold("c-empty", ""), user_id="alice")
+    loaded = load_channels(user_id="alice")
+    assert loaded[0].severity_threshold == "LOW"
+
+
+def test_save_channel_normalizes_unknown_threshold_to_low() -> None:
+    save_channel(_chan_with_threshold("c-typo", "HGIH"), user_id="alice")
+    loaded = load_channels(user_id="alice")
+    assert loaded[0].severity_threshold == "LOW"
+
+
+def test_save_channel_keeps_canonical_threshold() -> None:
+    save_channel(_chan_with_threshold("c-ok", "HIGH"), user_id="alice")
+    loaded = load_channels(user_id="alice")
+    assert loaded[0].severity_threshold == "HIGH"
