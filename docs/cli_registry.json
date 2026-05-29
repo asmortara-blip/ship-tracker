@@ -174,6 +174,50 @@
       "args": [
         {
           "choices": [],
+          "default": null,
+          "help": "UTC day to summarise as ISO YYYY-MM-DD (default: today UTC). Reads the narration cached for that day.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--date",
+          "required": false
+        },
+        {
+          "choices": [
+            "text",
+            "json",
+            "html",
+            "subject"
+          ],
+          "default": "text",
+          "help": "Output: 'text' = the raw TLDR paragraph (default, SMS/Slack-ready); 'json' = structured fields; 'html' = email-ready lede; 'subject' = a short subject line.",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--format",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": false,
+          "help": "Bypass the TLDR day-cache and re-distill (uses a key if set).",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--refresh",
+          "required": false
+        }
+      ],
+      "description": "Print the day's one-paragraph shipping-briefing TLDR (from the day-cached narration) for piping to SMS / Slack / email.",
+      "directory": "tools",
+      "discovered_via": "factory",
+      "docstring": "tools/briefing_tldr_cli.py \u2014 print the day's briefing TLDR to stdout.",
+      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/briefing_tldr_cli.py",
+      "module": "tools.briefing_tldr_cli",
+      "parse_error": "",
+      "prog": "tools.briefing_tldr_cli"
+    },
+    {
+      "args": [
+        {
+          "choices": [],
           "default": "90d",
           "help": "Lower-bound cutoff. Accepts an absolute date (`2026-01-01`), a git relative string (`2 weeks ago`), or the shorthand `30d` / `12w` / `6m` / `1y` (default: 90d).",
           "is_flag": false,
@@ -1388,6 +1432,6 @@
       "prog": "python -m tools.test_flakiness_cli"
     }
   ],
-  "total": 21,
+  "total": 22,
   "version": 1
 }
