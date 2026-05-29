@@ -204,21 +204,23 @@ def test_check_and_auto_disable_records_audit_event() -> None:
     ), f"no channel_auto_disabled audit row found: {events}"
 
 
-def test_check_and_auto_disable_per_user_scoping() -> None:
-    """Alice's failure counter does not affect Bob's channel of the
-    same channel_id — the kv_state key segregates by user_id."""
-    ch_alice = _make_channel(channel_id="shared-id", name="alice's ch")
-    ch_bob = _make_channel(channel_id="shared-id", name="bob's ch")
-    save_channel(ch_alice, user_id="alice")
-    save_channel(ch_bob, user_id="bob")
-    # Trip alice past threshold
+def test_breaker_is_channel_level_not_per_user() -> None:
+    """The auto-disable breaker is keyed by channel_id ONLY (channel-level):
+    failures written under one scope are visible when read under any other,
+    so the delivery path (writes under the alert owner, often "") and the UI
+    (reads under the logged-in operator) agree, and a channel failing across
+    multiple owners accumulates ONE count toward the threshold."""
+    ch = _make_channel(channel_id="chan-x")
+    save_channel(ch, user_id="alice")
+    # Trip the counter writing under the '' (alert-owner) scope.
     for _ in range(AUTO_DISABLE_THRESHOLD):
-        record_delivery_failure("shared-id", user_id="alice")
-    # Bob's counter still 0
-    assert get_consecutive_failures("shared-id", user_id="bob") == 0
-    # Bob's check is a no-op
-    assert check_and_auto_disable(ch_bob, user_id="bob") is False
-    assert ch_bob.enabled is True
+        record_delivery_failure("chan-x", user_id="")
+    # Reading under DIFFERENT user_ids sees the same channel-level count.
+    assert get_consecutive_failures("chan-x", user_id="alice") == AUTO_DISABLE_THRESHOLD
+    assert get_consecutive_failures("chan-x", user_id="bob") == AUTO_DISABLE_THRESHOLD
+    # And the breaker trips + flags regardless of the user_id passed.
+    assert check_and_auto_disable(ch, user_id="anyone") is True
+    assert is_auto_disabled("chan-x", user_id="someone-else") is True
 
 
 def test_check_and_auto_disable_never_raises_on_bad_input() -> None:

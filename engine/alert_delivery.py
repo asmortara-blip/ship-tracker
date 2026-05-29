@@ -2822,20 +2822,31 @@ _FAILURE_COUNTER_KEY_PREFIX: str = "channel_consecutive_failures"
 _AUTO_DISABLED_FLAG_KEY_PREFIX: str = "channel_auto_disabled_flag"
 
 
-def _failure_counter_key(channel_id: str, user_id: str) -> str:
-    """Build the kv_state key for the per-channel-per-user consecutive
-    failure counter. Shape:
-    ``channel_consecutive_failures:<user_id>:<channel_id>``.
+def _failure_counter_key(channel_id: str, user_id: str = "") -> str:
+    """Build the kv_state key for the CHANNEL-LEVEL consecutive-failure
+    counter. Shape: ``channel_consecutive_failures:<channel_id>``.
+
+    Keyed by ``channel_id`` ONLY: the auto-disable breaker is a property of
+    the channel (a single delivery endpoint), not of whichever alert-owner
+    happened to trigger the failures. ``user_id`` is accepted for call-site
+    compatibility but intentionally IGNORED — this is what lets the UI
+    (which reads under the logged-in operator) observe the same counter the
+    delivery path wrote (under the alert owner, often ""), and lets a
+    channel that fails across multiple owners accumulate one count toward
+    the threshold instead of fragmenting per user.
     """
-    return f"{_FAILURE_COUNTER_KEY_PREFIX}:{user_id}:{channel_id}"
+    return f"{_FAILURE_COUNTER_KEY_PREFIX}:{channel_id}"
 
 
-def _auto_disabled_flag_key(channel_id: str, user_id: str) -> str:
-    """Build the kv_state key for the per-channel-per-user "this channel
-    was auto-disabled" flag. Shape:
-    ``channel_auto_disabled_flag:<user_id>:<channel_id>``.
+def _auto_disabled_flag_key(channel_id: str, user_id: str = "") -> str:
+    """Build the kv_state key for the CHANNEL-LEVEL "this channel was
+    auto-disabled" flag. Shape: ``channel_auto_disabled_flag:<channel_id>``.
+
+    Keyed by ``channel_id`` only (see :func:`_failure_counter_key`);
+    ``user_id`` is accepted for call-site compatibility but ignored, so the
+    UI re-enable banner reads the same flag the delivery path set.
     """
-    return f"{_AUTO_DISABLED_FLAG_KEY_PREFIX}:{user_id}:{channel_id}"
+    return f"{_AUTO_DISABLED_FLAG_KEY_PREFIX}:{channel_id}"
 
 
 def get_consecutive_failures(channel_id: str, *, user_id: str) -> int:
