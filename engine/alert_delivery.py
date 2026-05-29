@@ -51,13 +51,16 @@ Design notes
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import smtplib
+import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from loguru import logger
@@ -850,6 +853,80 @@ def _deliver_sms(
     )
 
 
+# ── SSRF guard for operator-supplied webhook / slack target URLs ────────────
+#
+# A channel.target for kind webhook/slack is an arbitrary operator-supplied
+# URL that the SERVER then POSTs to. Without a guard, an authed user can point
+# it at an internal address (cloud metadata 169.254.169.254, localhost,
+# RFC1918, …) and use the captured response body as an SSRF read primitive.
+# We block any target that is (or resolves to) a private / loopback /
+# link-local / CGNAT / reserved / unspecified / multicast address, with an
+# explicit operator allowlist for the rare legitimate internal endpoint.
+
+_SSRF_ALLOW_HOSTS_ENV = "SHIP_WEBHOOK_ALLOW_HOSTS"
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _allowlisted_hosts() -> set:
+    """Hostnames an operator has explicitly allowed (comma-separated env)."""
+    raw = os.environ.get(_SSRF_ALLOW_HOSTS_ENV, "") or ""
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def _ip_is_blocked(ip_str: str) -> bool:
+    """True if ``ip_str`` is in a range a server-side fetch must never reach."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # unparseable → block defensively
+    if (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_unspecified or ip.is_multicast
+    ):
+        return True
+    # CGNAT (100.64/10) isn't flagged is_private on older Pythons.
+    if isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET:
+        return True
+    return False
+
+
+def validate_target_url(url: str, *, resolve: bool = True) -> Optional[str]:
+    """Return a reason string if ``url`` is an unsafe SSRF target, else None.
+
+    Checks: http/https scheme + a host; host not on the operator allowlist;
+    literal-IP not in a blocked range; and (when ``resolve``) every resolved
+    address is public. ``resolve=False`` is a hermetic save-time check
+    (scheme + literal IP + localhost, no DNS); ``resolve=True`` is the
+    delivery-time guard that also defends DNS-name-to-internal + rebinding.
+    """
+    u = str(url or "").strip()
+    parsed = urlparse(u)
+    if parsed.scheme not in ("http", "https"):
+        return f"scheme must be http(s), got {parsed.scheme or '(none)'!r}"
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return "missing host"
+    if host.lower() in _allowlisted_hosts():
+        return None
+    if host.lower() in ("localhost", "localhost.localdomain"):
+        return "host is a loopback/internal address"
+    try:
+        ipaddress.ip_address(host)            # literal IP?
+        return "host is a blocked internal address" if _ip_is_blocked(host) else None
+    except ValueError:
+        pass                                   # it's a hostname
+    if not resolve:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return None  # unresolvable → not an SSRF risk (the POST just fails)
+    for info in infos:
+        if _ip_is_blocked(info[4][0]):
+            return "host resolves to a blocked internal address"
+    return None
+
+
 def _http_post_json(url: str, payload: dict) -> tuple[int, str, Optional[Exception]]:
     """Shared HTTP POST helper used by the webhook / discord / pagerduty
     delivery paths. Returns ``(status_code, body_text, exception)``. On
@@ -922,6 +999,12 @@ def _deliver_webhook(channel: DeliveryChannel, alert: ShippingAlert) -> Delivery
     a failure; the response body (when available) is surfaced in
     ``error_msg`` so debugging doesn't require a re-run.
     """
+    blocked = validate_target_url(channel.target)
+    if blocked:
+        return DeliveryResult(
+            success=False, status_code=0,
+            error_msg=f"blocked target (SSRF guard): {blocked}",
+        )
     payload = format_webhook_payload(alert)
     status, body, exc = _http_post_json(channel.target, payload)
     if exc is not None:
@@ -1355,6 +1438,12 @@ def _dispatch_alert(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryR
             error_msg=f"unsupported channel kind: {channel.kind}",
         )
 
+    blocked = validate_target_url(channel.target)
+    if blocked:
+        return DeliveryResult(
+            success=False, status_code=0,
+            error_msg=f"blocked target (SSRF guard): {blocked}",
+        )
     payload = format_slack_payload(alert)
     try:
         resp = requests.post(channel.target, json=payload, timeout=_REQUEST_TIMEOUT_S)
@@ -1754,6 +1843,12 @@ def _post_json(url: str, payload: dict, timeout: float = _REQUEST_TIMEOUT_S) -> 
     """Shared HTTP POST → ``DeliveryResult`` helper used by the digest
     delivery paths for slack/webhook/discord/pagerduty. Returns success
     on any 2xx, surfaces the response body in ``error_msg`` otherwise."""
+    blocked = validate_target_url(url)
+    if blocked:
+        return DeliveryResult(
+            success=False, status_code=0,
+            error_msg=f"blocked target (SSRF guard): {blocked}",
+        )
     status, body, exc = _http_post_json(url, payload)
     if exc is not None:
         return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc, url))

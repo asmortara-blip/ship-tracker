@@ -2734,3 +2734,77 @@ def test_format_email_payload_escapes_html_body() -> None:
     assert "&lt;img" in html and "&lt;script&gt;" in html
     # The plain-text body is intentionally NOT escaped.
     assert "<script>steal()</script>" in payload["text_body"]
+
+
+# ─── SSRF guard: validate_target_url + delivery-time block (security) ────────
+
+@pytest.mark.parametrize("url", [
+    "http://169.254.169.254/latest/meta-data/",   # cloud metadata
+    "http://127.0.0.1:8080/x",                     # loopback
+    "http://localhost/x",                          # loopback by name
+    "https://10.0.0.5/hook",                       # RFC1918
+    "http://192.168.1.10/hook",
+    "https://172.16.0.1/hook",
+    "http://[::1]/x",                              # ipv6 loopback
+    "http://0.0.0.0/x",                            # unspecified
+    "https://100.64.0.1/hook",                     # CGNAT
+])
+def test_validate_target_url_blocks_internal(url) -> None:
+    assert alert_delivery.validate_target_url(url, resolve=False) is not None
+
+
+@pytest.mark.parametrize("url", [
+    "ftp://example.com/x",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "https://",                                    # missing host
+    "not a url",
+])
+def test_validate_target_url_blocks_bad_scheme_or_host(url) -> None:
+    assert alert_delivery.validate_target_url(url, resolve=False) is not None
+
+
+def test_validate_target_url_allows_public_literal_ip() -> None:
+    assert alert_delivery.validate_target_url("https://8.8.8.8/hook", resolve=False) is None
+
+
+def test_validate_target_url_allowlist_bypass(monkeypatch) -> None:
+    monkeypatch.setenv("SHIP_WEBHOOK_ALLOW_HOSTS", "internal.corp, localhost")
+    assert alert_delivery.validate_target_url("http://localhost/hook", resolve=False) is None
+    assert alert_delivery.validate_target_url("https://internal.corp/hook", resolve=False) is None
+
+
+def test_validate_target_url_resolve_blocks_hostname_to_internal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        alert_delivery.socket, "getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))],
+    )
+    assert alert_delivery.validate_target_url("https://evil.example/x", resolve=True) is not None
+
+
+def test_validate_target_url_resolve_allows_public(monkeypatch) -> None:
+    monkeypatch.setattr(
+        alert_delivery.socket, "getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
+    assert alert_delivery.validate_target_url("https://example.com/x", resolve=True) is None
+
+
+def test_deliver_webhook_blocks_ssrf_target_without_posting(monkeypatch) -> None:
+    posted: list = []
+
+    def fake_post(*a, **kw):
+        posted.append((a, kw))
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(alert_delivery.requests, "post", fake_post)
+    ch = alert_delivery.DeliveryChannel(
+        channel_id="c-ssrf", name="evil", kind="webhook",
+        target="http://169.254.169.254/latest/meta-data/",
+        severity_threshold="LOW", enabled=True,
+    )
+    result = alert_delivery._deliver_webhook(ch, _make_alert("HIGH"))
+    assert result.success is False
+    assert "SSRF guard" in result.error_msg
+    assert posted == []                              # never made the request
+    assert alert_delivery._is_retriable(result) is False   # blocked ≠ retriable
