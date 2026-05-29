@@ -8,12 +8,40 @@ table.
 """
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+
+def test_generate_call_matches_engine_signature() -> None:
+    """Regression: the Generate button must call build_investor_report with
+    only kwargs the real engine accepts. It previously passed
+    scope/tone/sections — which the engine never accepted — so every click
+    raised TypeError and surfaced as 'Generation Failed'."""
+    from processing.investor_report_engine import build_investor_report
+
+    sig = inspect.signature(build_investor_report)
+    # The data-source kwargs the tab passes must all bind cleanly.
+    sig.bind(
+        port_results=[], route_results=[], insights=[],
+        freight_data={}, macro_data={}, stock_data={},
+    )
+    # The presentation prefs the engine does NOT consume must stay absent,
+    # so a future edit can't silently re-introduce the broken call.
+    for unsupported in ("scope", "tone", "sections"):
+        assert unsupported not in sig.parameters
+
+    # And the tab source no longer passes them.
+    src = Path("ui/tab_report.py").read_text(encoding="utf-8")
+    m = re.search(r"report = build_investor_report\((.*?)\)", src, re.DOTALL)
+    assert m, "could not locate the build_investor_report call in tab_report.py"
+    call_args = m.group(1)
+    for unsupported in ("scope=", "tone=", "sections="):
+        assert unsupported not in call_args
 
 
 @pytest.fixture

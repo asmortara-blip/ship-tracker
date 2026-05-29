@@ -320,6 +320,12 @@ def _render_generate_button(
                 )
                 progress_bar.progress((i + 1) / len(steps))
 
+            # NB: build_investor_report does not accept scope/tone/sections
+            # (it always builds the full report). Passing them raised
+            # TypeError → "Generation Failed" on every click against the real
+            # engine — the manual Generate button never worked. Pass only the
+            # data sources the engine actually consumes. (scope/tone/sections
+            # remain UI-only presentation prefs the engine doesn't honor yet.)
             report = build_investor_report(
                 port_results=port_results,
                 route_results=route_results,
@@ -327,9 +333,6 @@ def _render_generate_button(
                 freight_data=freight_data,
                 macro_data=macro_data,
                 stock_data=stock_data,
-                scope=config.get("scope", "Full Report"),
-                tone=config.get("tone", "Formal"),
-                sections=config.get("sections", {}),
             )
             st.session_state["investor_report"] = report
             st.session_state["investor_report_ts"] = _now_utc()
