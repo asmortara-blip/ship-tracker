@@ -2830,7 +2830,11 @@ class APIHandler(BaseHTTPRequestHandler):
             if not channel_id:
                 _send_bad_request(self, "channel_id is required")
                 return
-            from engine.alert_delivery import DeliveryChannel, save_channel
+            from engine.alert_delivery import (
+                DeliveryChannel,
+                save_channel,
+                validate_target_url,
+            )
             # Build the dataclass with all defaults — fields the caller
             # didn't supply fall back to the DeliveryChannel defaults
             # (``digest_mode='immediate'``, ``enabled=True``, …) which
@@ -2859,6 +2863,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 quiet_override_critical=bool(body.get("quiet_override_critical", True)),
                 monthly_budget=monthly_budget,
             )
+            # SSRF guard: reject a webhook/slack/discord target that points
+            # at an internal/loopback/metadata address up front with a clear
+            # 400 (the delivery path blocks it too — this is reject-early UX +
+            # defence-in-depth). resolve=False keeps the request handler off a
+            # DNS lookup; the delivery-time guard does the full resolve.
+            if channel.kind in ("webhook", "slack", "discord"):
+                blocked = validate_target_url(channel.target, resolve=False)
+                if blocked:
+                    _send_bad_request(self, f"invalid target: {blocked}")
+                    return
             save_channel(channel, user_id=user_id)
             _send_json(self, HTTPStatus.OK,
                        {"saved": True, "channel_id": channel_id})

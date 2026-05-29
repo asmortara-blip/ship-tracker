@@ -1438,6 +1438,27 @@ def test_post_channel_missing_channel_id_returns_400(server):
     assert r.status_code == 400
 
 
+def test_post_channel_rejects_ssrf_target_returns_400(server):
+    """A webhook target pointing at an internal/metadata address is rejected
+    with 400 (SSRF guard) and never persisted."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    body = _sample_channel()
+    body["channel_id"] = "ch-ssrf"
+    body["kind"] = "webhook"
+    body["target"] = "http://169.254.169.254/latest/meta-data/"
+    r = requests.post(
+        f"{server}/api/v1/channels", json=body,
+        headers=_bearer(token), timeout=5,
+    )
+    assert r.status_code == 400
+    # Not persisted — a GET must not list it.
+    r2 = requests.get(
+        f"{server}/api/v1/channels", headers=_bearer(token), timeout=5,
+    )
+    assert all(c["channel_id"] != "ch-ssrf" for c in r2.json())
+
+
 def test_post_channel_with_non_json_content_type_returns_415(server):
     uid = _make_user()
     token = _mint_token(uid)
