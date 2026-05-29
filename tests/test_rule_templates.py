@@ -94,10 +94,10 @@ def test_every_template_category_is_in_allowed_set() -> None:
         )
 
 
-def test_catalog_spans_all_five_categories() -> None:
-    """Each of the 5 categories should have at least one template — a
+def test_catalog_spans_all_six_categories() -> None:
+    """Each of the 6 categories should have at least one template — a
     cold-starting operator should see meaningful coverage across the
-    macro / route / port / event / cost axes."""
+    macro / route / port / event / cost / company axes."""
     seen_categories = {t.category for t in TEMPLATES}
     assert seen_categories == ALLOWED_CATEGORIES, (
         f"missing categories: {ALLOWED_CATEGORIES - seen_categories}; "

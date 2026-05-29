@@ -41,7 +41,7 @@ from engine.alert_engine_v2 import AlertRule
 # ─────────────────────────────────────────────────────────────────────────────
 
 ALLOWED_CATEGORIES: frozenset[str] = frozenset(
-    {"macro", "route", "port", "event", "cost"}
+    {"macro", "route", "port", "event", "cost", "company"}
 )
 ALLOWED_SEVERITIES: frozenset[str] = frozenset(
     {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
@@ -70,7 +70,7 @@ class RuleTemplate:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Template catalog (~15 carefully chosen templates spanning all 5 categories)
+#  Template catalog (~15 carefully chosen templates spanning all 6 categories)
 # ─────────────────────────────────────────────────────────────────────────────
 
 TEMPLATES: list[RuleTemplate] = [
