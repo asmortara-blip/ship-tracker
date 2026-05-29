@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 import secrets
 
+import pytest
+
 from auth.ids import opaque_id
 
 
@@ -35,6 +37,14 @@ def test_opaque_id_length_matches_token_urlsafe() -> None:
     nbytes, so no caller that pins id length is disturbed."""
     for nbytes in (12, 16, 24, 32):
         assert len(opaque_id(nbytes)) == len(secrets.token_urlsafe(nbytes))
+
+
+def test_opaque_id_rejects_nonpositive_nbytes() -> None:
+    """nbytes < 1 must fail fast — token_urlsafe(0) returns '' which would
+    otherwise spin the dash-rejection loop forever."""
+    for bad in (0, -1, -5):
+        with pytest.raises(ValueError):
+            opaque_id(bad)
 
 
 def test_opaque_id_retries_past_a_leading_dash(monkeypatch) -> None:

@@ -146,6 +146,16 @@ def test_render_template_empty_returns_no_signal() -> None:
     assert render_template_tldr(narration) == _NO_SIGNAL
 
 
+def test_render_template_falls_back_to_body_first_sentence() -> None:
+    """A body-only narration (no headline, no bullets) must surface the
+    body's first sentence, not the no-signal placeholder."""
+    narration = _make_narration(
+        headline="", sections=[],
+        body="Macro regime shift underway. Second sentence with detail.",
+    )
+    assert render_template_tldr(narration) == "Macro regime shift underway"
+
+
 def test_render_template_skips_empty_leading_sections() -> None:
     narration = _make_narration(
         sections=[
@@ -316,9 +326,26 @@ def test_claude_exception_falls_back_to_template(monkeypatch, harness) -> None:
     assert not _cache_file(harness).exists()
 
 
-def test_claude_empty_response_falls_back_to_template(monkeypatch, harness) -> None:
+def test_claude_empty_but_billable_response_records_cost_then_template(
+    monkeypatch, harness,
+) -> None:
+    """An empty/whitespace response that still consumed tokens IS billable,
+    so it must be recorded — then fall back to template (not cached)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     monkeypatch.setattr(ne, "_call_claude", lambda *a, **k: ("   ", 10, 5))
+
+    out = generate_tldr(_make_narration())
+    assert out.source == "template"
+    assert len(harness.telemetry) == 1            # billable → recorded
+    assert harness.telemetry[0]["tokens_in"] == 10
+    assert harness.telemetry[0]["source"] == "daily_briefing_tldr"
+    assert not _cache_file(harness).exists()       # unusable text → not cached
+
+
+def test_claude_empty_zero_token_response_records_nothing(monkeypatch, harness) -> None:
+    """Empty response with NO tokens billed → no telemetry, template fallback."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(ne, "_call_claude", lambda *a, **k: ("", 0, 0))
 
     out = generate_tldr(_make_narration())
     assert out.source == "template"
@@ -333,6 +360,24 @@ def test_never_raises_on_attribute_light_object(harness: _Harness) -> None:
     out = generate_tldr(object())
     assert isinstance(out, TldrSummary)
     assert out.text == _NO_SIGNAL
+
+
+def test_never_raises_when_narration_attribute_raises(harness: _Harness) -> None:
+    """A duck-typed narration whose .sections property raises a non-
+    AttributeError (e.g. a failed lazy/IO load) must still yield a
+    TldrSummary, not propagate — the documented never-raises contract."""
+    class _RaisingNarration:
+        headline = "Real headline that passes _has_content"
+        body = "Body paragraph."
+        date = "2026-05-29"
+
+        @property
+        def sections(self):
+            raise RuntimeError("lazy section load failed")
+
+    out = generate_tldr(_RaisingNarration())
+    assert isinstance(out, TldrSummary)
+    assert out.source == "template"
 
 
 def test_generated_at_is_iso_parseable_on_both_paths(monkeypatch, harness) -> None:

@@ -89,9 +89,11 @@ class TldrSummary:
 def render_template_tldr(narration) -> str:
     """Build a serviceable TLDR from the narration without LLM help.
 
-    Heuristic: take the headline + first section's first bullet (which
-    is usually the highest-priority fact). Falls back to a no-signal
-    placeholder when narration is empty/sparse.
+    Heuristic: headline + first section's first bullet (usually the
+    highest-priority fact). When there is neither, fall back to the
+    body's first sentence — consistent with ``_has_content``, which
+    counts a body-only narration as signal — and only then to a
+    no-signal placeholder.
     """
     headline = str(getattr(narration, "headline", "") or "").strip()
     sections = list(getattr(narration, "sections", []) or [])
@@ -102,12 +104,18 @@ def render_template_tldr(narration) -> str:
             first_bullet = str(bullets[0]).strip()
             break
 
-    if not headline and not first_bullet:
-        return _NO_SIGNAL
-
     if headline and first_bullet:
         return f"{headline}. {first_bullet}".strip()
-    return headline or first_bullet
+    if headline or first_bullet:
+        return headline or first_bullet
+
+    # No headline, no bullets — fall back to the body's first sentence
+    # rather than misreport real content as "no signal".
+    body = str(getattr(narration, "body", "") or "").strip()
+    if body:
+        first_sentence = body.split(". ", 1)[0].strip()
+        return first_sentence or body
+    return _NO_SIGNAL
 
 
 # ---------------------------------------------------------------------------
@@ -261,61 +269,69 @@ def generate_tldr(
        Absent → template summary (not cached, so the slot stays open for
        the LLM once a key is configured).
     4. Call Claude (Haiku by default), record telemetry, write the cache,
-       return. ALWAYS returns a valid ``TldrSummary`` — never raises.
+       return.
     5. On any Claude failure → template summary (not cached).
+
+    ALWAYS returns a valid ``TldrSummary`` — never raises. Even a
+    duck-typed narration whose attribute access throws (a lazy/IO-backed
+    property) degrades to a placeholder rather than escaping.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
-
-    # ── Empty / no-content short-circuit ─────────────────────────────
-    if narration is None or not _has_content(narration):
-        return TldrSummary(
-            text=_NO_SIGNAL, source="template", generated_at=now_iso,
-        )
-
-    # ── Cache read (before key check — a key may have lapsed since the
-    #    TLDR was cached, and a valid cached claude TLDR is still good) ─
-    date_str = str(getattr(narration, "date", "") or "").strip() \
-        or datetime.now(timezone.utc).date().isoformat()
-    fingerprint = _narration_fingerprint(narration, model)
-    cache_dir = cache_dir or TLDR_CACHE_DIR
-    cache_file = _tldr_cache_path(date_str, cache_dir)
-    if use_cache:
-        cached = _read_tldr_cache(cache_file, fingerprint)
-        if cached is not None:
-            return cached
-
-    # ── API-key resolution (shared with narration_engine) ────────────
     try:
-        from engine.narration_engine import _get_anthropic_key
-        key = _get_anthropic_key(api_key)
-    except Exception:
-        key = api_key or ""
-    if not key:
-        return TldrSummary(
-            text=render_template_tldr(narration),
-            source="template", generated_at=now_iso,
-        )
+        # ── Empty / no-content short-circuit ─────────────────────────
+        if narration is None or not _has_content(narration):
+            return TldrSummary(
+                text=_NO_SIGNAL, source="template", generated_at=now_iso,
+            )
 
-    user_prompt = _narration_to_prompt(narration)
+        # ── Cache read (before key check — a key may have lapsed since
+        #    the TLDR was cached; a valid cached claude TLDR is still good)
+        date_str = str(getattr(narration, "date", "") or "").strip() \
+            or datetime.now(timezone.utc).date().isoformat()
+        fingerprint = _narration_fingerprint(narration, model)
+        cache_dir = cache_dir or TLDR_CACHE_DIR
+        cache_file = _tldr_cache_path(date_str, cache_dir)
+        if use_cache:
+            cached = _read_tldr_cache(cache_file, fingerprint)
+            if cached is not None:
+                return cached
 
-    # ── Claude call — defensive: any failure → template fallback ────
-    try:
-        # Import inside the try so a missing anthropic package falls
-        # cleanly to the template path. _call_claude imports anthropic
-        # internally; not pre-importing it here keeps the monkeypatched
-        # call fully SDK-free in tests (matches narration_engine).
+        # ── API-key resolution (shared with narration_engine) ────────
+        try:
+            from engine.narration_engine import _get_anthropic_key
+            key = _get_anthropic_key(api_key)
+        except Exception:
+            key = api_key or ""
+        if not key:
+            return TldrSummary(
+                text=render_template_tldr(narration),
+                source="template", generated_at=now_iso,
+            )
+
+        # ── Claude call ──────────────────────────────────────────────
+        # _call_claude imports anthropic internally; not pre-importing it
+        # here keeps the monkeypatched call SDK-free in tests and lets a
+        # missing package fall to the outer template fallback.
         from engine.narration_engine import _call_claude
         text, tokens_in, tokens_out = _call_claude(
             system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
+            user_prompt=_narration_to_prompt(narration),
             model=model, api_key=key,
         )
+        # The call is billable whether or not the text is usable (input
+        # tokens + cached system prompt), so record it before judging the
+        # text — otherwise an empty response would under-count cost.
+        if tokens_in or tokens_out:
+            _record_telemetry(
+                model=model, tokens_in=tokens_in, tokens_out=tokens_out,
+            )
         text = text.strip()
         if not text:
-            raise RuntimeError("empty Claude response")
-        _record_telemetry(
-            model=model, tokens_in=tokens_in, tokens_out=tokens_out,
-        )
+            # Billed but unusable text → template fallback (not cached).
+            return TldrSummary(
+                text=render_template_tldr(narration),
+                source="template", generated_at=now_iso,
+            )
         summary = TldrSummary(
             text=text, source="claude", model=model,
             tokens_in=tokens_in, tokens_out=tokens_out,
@@ -324,10 +340,16 @@ def generate_tldr(
         _write_tldr_cache(cache_file, summary, fingerprint)
         return summary
     except Exception:
-        # Claude failed before producing billable usage — nothing
-        # cost-relevant to record (matches narration_engine). Fall back
-        # to the template path; not cached.
-        return TldrSummary(
-            text=render_template_tldr(narration),
-            source="template", generated_at=now_iso,
-        )
+        # Absolute no-raise guarantee: a Claude failure, or a duck-typed
+        # narration whose attribute access raises, degrades to the safest
+        # summary we can build. render_template_tldr can itself touch a
+        # raising attribute, so guard it too.
+        try:
+            return TldrSummary(
+                text=render_template_tldr(narration),
+                source="template", generated_at=now_iso,
+            )
+        except Exception:
+            return TldrSummary(
+                text=_NO_SIGNAL, source="template", generated_at=now_iso,
+            )

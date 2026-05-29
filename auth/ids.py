@@ -40,9 +40,15 @@ def opaque_id(nbytes: int = 16) -> str:
     option flag). The rejection rate is ~1/64, so the expected number of
     underlying draws is ~1.016 — negligible, and entropy loss from the
     conditioning is < 0.03 bits.
+
+    Raises ``ValueError`` for ``nbytes < 1``. (``token_urlsafe(0)`` returns
+    ``""`` — without this guard the dash check would never be satisfied and
+    the loop would spin forever; fail fast instead.)
     """
+    if nbytes < 1:
+        raise ValueError(f"opaque_id: nbytes must be >= 1, got {nbytes}")
     while True:
+        # nbytes >= 1 guarantees a non-empty token, so token[0] is safe.
         token = secrets.token_urlsafe(nbytes)
-        # token_urlsafe(nbytes>=1) is always non-empty; guard anyway.
-        if token and token[0] != "-":
+        if token[0] != "-":
             return token
