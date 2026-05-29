@@ -1772,7 +1772,11 @@ def _build_report_tldr(report) -> str:
             date=str(getattr(report, "generated_at", "") or "")[:10],
         )
         cache_dir = Path(__file__).resolve().parent.parent / "cache" / "tldr_report"
-        summary = generate_tldr(narration, cache_dir=cache_dir)
+        # source="investor_report_tldr" so the cost panel / operator digest
+        # attribute the report lede separately from the shipping-briefing TLDR.
+        summary = generate_tldr(
+            narration, cache_dir=cache_dir, source="investor_report_tldr",
+        )
         return summary.text or ""
     except Exception as exc:   # pragma: no cover - defensive
         logger.debug("_build_report_tldr failed: {}", exc)
@@ -2322,8 +2326,13 @@ def _build_investor_report_inner(
     )
 
     # 16. Report lede — a 2-3 sentence TLDR distilled from the report.
-    # Day-cached (separate namespace) so repeated builds reuse it; the
-    # diff-only rotation path passes with_tldr=False to skip it entirely.
+    # Cached per distinct report content in a separate namespace
+    # (cache/tldr_report/{date}.json, fingerprinted on headline + exec
+    # summary): a rebuild with byte-identical content is a cache hit,
+    # but content that legitimately shifts intra-day re-distills (a stale
+    # lede would be worse than one cheap Haiku call). The once-daily
+    # scheduler build — with stable bundle news_items — is the amortized
+    # path; the diff-only rotation passes with_tldr=False to skip it.
     if with_tldr:
         report.ai.tldr = _build_report_tldr(report)
 

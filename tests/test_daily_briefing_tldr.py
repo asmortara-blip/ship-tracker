@@ -233,6 +233,17 @@ def test_claude_success_records_telemetry_once(monkeypatch, harness) -> None:
     }
 
 
+def test_source_override_is_recorded(monkeypatch, harness) -> None:
+    """A caller (e.g. the investor-report lede) can tag its own telemetry
+    source so the cost panel separates it from the briefing TLDR."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(ne, "_call_claude", _make_fake_call(harness.calls))
+
+    generate_tldr(_make_narration(), source="investor_report_tldr")
+    assert len(harness.telemetry) == 1
+    assert harness.telemetry[0]["source"] == "investor_report_tldr"
+
+
 def test_claude_success_writes_day_cache(monkeypatch, harness) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     monkeypatch.setattr(ne, "_call_claude", _make_fake_call(harness.calls))

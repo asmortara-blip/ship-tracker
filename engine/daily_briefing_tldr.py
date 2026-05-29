@@ -228,19 +228,22 @@ def _write_tldr_cache(path: Path, summary: TldrSummary, fingerprint: str) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _record_telemetry(*, model: str, tokens_in: int, tokens_out: int) -> None:
+def _record_telemetry(
+    *, source: str, model: str, tokens_in: int, tokens_out: int,
+) -> None:
     """Best-effort: record the successful Claude call in llm_telemetry.
 
     Mirrors ``engine.narration_engine`` — only the success path is
-    recorded, using the real token usage, under source
-    ``"daily_briefing_tldr"`` so the cost panel + operator digest pick
-    it up. Never raises; a telemetry write failure must not break the
-    briefing.
+    recorded, using the real token usage. ``source`` distinguishes the
+    caller in the cost panel + operator digest (which group by source
+    with no allowlist): ``"daily_briefing_tldr"`` for the shipping
+    briefing, ``"investor_report_tldr"`` for the investor-report lede.
+    Never raises; a telemetry write failure must not break the briefing.
     """
     try:
         from engine.llm_telemetry import record_call
         record_call(
-            source="daily_briefing_tldr",
+            source=source,
             model=model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -256,6 +259,7 @@ def generate_tldr(
     api_key: str | None = None,
     cache_dir: Path | None = None,
     use_cache: bool = True,
+    source: str = "daily_briefing_tldr",
 ) -> TldrSummary:
     """Distill a DailyNarration to a one-paragraph TLDR.
 
@@ -323,7 +327,8 @@ def generate_tldr(
         # text — otherwise an empty response would under-count cost.
         if tokens_in or tokens_out:
             _record_telemetry(
-                model=model, tokens_in=tokens_in, tokens_out=tokens_out,
+                source=source, model=model,
+                tokens_in=tokens_in, tokens_out=tokens_out,
             )
         text = text.strip()
         if not text:

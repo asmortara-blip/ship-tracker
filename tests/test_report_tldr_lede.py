@@ -36,6 +36,7 @@ def test_build_report_tldr_adapts_and_passes_to_generate_tldr(monkeypatch) -> No
     def _fake_gen(narration, **kwargs):
         captured["narration"] = narration
         captured["cache_dir"] = kwargs.get("cache_dir")
+        captured["source"] = kwargs.get("source")
         return TldrSummary(text="Distilled lede.", source="claude")
 
     monkeypatch.setattr("engine.daily_briefing_tldr.generate_tldr", _fake_gen)
@@ -56,6 +57,8 @@ def test_build_report_tldr_adapts_and_passes_to_generate_tldr(monkeypatch) -> No
     assert narr.date == "2026-05-29"
     # Separate cache namespace so it never collides with the briefing TLDR.
     assert captured["cache_dir"].name == "tldr_report"
+    # Distinct telemetry source so cost reporting separates the two TLDRs.
+    assert captured["source"] == "investor_report_tldr"
 
 
 def test_build_report_tldr_handles_no_recommendations(monkeypatch) -> None:
@@ -104,6 +107,7 @@ def test_html_lede_renders_escaped_when_present() -> None:
     )
     out = ihtml._section_tldr_lede(report)
     assert "TL;DR" in out
+    assert 'role="note"' in out              # matches the in-app lede a11y
     assert "Suez lifts SSI" in out
     assert "<b>watch</b>" not in out         # escaped
     assert "&lt;b&gt;" in out

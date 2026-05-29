@@ -1675,7 +1675,8 @@ def _section_tldr_lede(report) -> str:
     if not tldr:
         return ""
     return (
-        '<section style="margin:0 0 18px 0;padding:16px 22px;'
+        '<section role="note" aria-label="TL;DR" '
+        'style="margin:0 0 18px 0;padding:16px 22px;'
         'background:#f5f8fb;border-left:5px solid #1a3a72;border-radius:3px">'
         '<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;'
         'text-transform:uppercase;color:#1a3a72;margin-bottom:6px">TL;DR</div>'
