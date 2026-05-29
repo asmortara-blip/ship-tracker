@@ -31,6 +31,9 @@ def patched(monkeypatch, tmp_path):
         "engine.narration_engine.generate_daily_narration",
         lambda ctx, **k: _FakeNarration(),
     )
+    # No delivery channels by default → dispatch is a no-op and no DB is
+    # touched. Dispatch tests override this.
+    monkeypatch.setattr("engine.alert_delivery.load_channels", lambda: [])
     yield tmp_path
 
 
@@ -78,3 +81,36 @@ def test_never_raises_when_generation_fails(monkeypatch, patched) -> None:
     assert out["ok"] is False
     assert out["persisted"] is False
     assert out["paths"] == {}
+
+
+def test_no_dispatch_when_no_briefing_channels(monkeypatch, patched) -> None:
+    """Default-safe: with no 'briefing-' channels nothing is sent."""
+    _set_tldr(monkeypatch, TldrSummary(text="Suez lifts SSI.", source="claude"))
+    out = sched.run_briefing_tldr_job({})
+    assert out["persisted"] is True
+    assert out["dispatched"] == 0
+
+
+def test_dispatches_only_to_enabled_briefing_channels(monkeypatch, patched) -> None:
+    """Only enabled, 'briefing-'-prefixed channels receive the TLDR."""
+    import types
+    _set_tldr(monkeypatch, TldrSummary(text="Suez lifts SSI.", source="claude"))
+    channels = [
+        types.SimpleNamespace(name="briefing-desk", kind="slack", target="t", enabled=True),
+        types.SimpleNamespace(name="ops-desk", kind="slack", target="t", enabled=True),       # wrong prefix
+        types.SimpleNamespace(name="briefing-off", kind="slack", target="t", enabled=False),  # disabled
+    ]
+    monkeypatch.setattr("engine.alert_delivery.load_channels", lambda: channels)
+
+    sent: list = []
+
+    def _fake_send(channel, summary, date_iso=""):
+        sent.append(channel.name)
+        from engine.alert_delivery import DeliveryResult
+        return DeliveryResult(success=True, status_code=0, error_msg="")
+
+    monkeypatch.setattr("delivery.briefing_tldr.send_briefing_tldr", _fake_send)
+
+    out = sched.run_briefing_tldr_job({})
+    assert sent == ["briefing-desk"]      # the wrong-prefix + disabled ones skipped
+    assert out["dispatched"] == 1

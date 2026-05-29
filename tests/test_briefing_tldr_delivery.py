@@ -7,12 +7,16 @@ over a duck-typed summary.
 """
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
 
 from delivery.briefing_tldr import (
+    BRIEFING_CHANNEL_PREFIX,
+    _structured_payload,
     build_subject_line,
     render_html,
     render_plain_text,
+    send_briefing_tldr,
     should_send,
 )
 from engine.daily_briefing_tldr import _NO_SIGNAL
@@ -22,6 +26,23 @@ from engine.daily_briefing_tldr import _NO_SIGNAL
 class _Summary:
     text: str
     source: str = "claude"
+
+
+def _chan(kind="slack", target="https://hooks.slack.com/services/x",
+          enabled=True, name="briefing-desk"):
+    return types.SimpleNamespace(
+        name=name, kind=kind, target=target, enabled=enabled,
+    )
+
+
+def _ok_post_spy(captured: dict):
+    """A _post_json replacement that records its args and returns success."""
+    def _post(target, payload, **kwargs):
+        captured["target"] = target
+        captured["payload"] = payload
+        from engine.alert_delivery import DeliveryResult
+        return DeliveryResult(success=True, status_code=200, error_msg="")
+    return _post
 
 
 # ─── should_send gating ──────────────────────────────────────────────────────
@@ -93,3 +114,112 @@ def test_renderers_never_crash_on_attribute_light_object() -> None:
     assert render_plain_text(object()) is not None
     assert render_html(object()).startswith("<!DOCTYPE html>")
     assert build_subject_line(object(), "2026-05-29") != ""
+
+
+# ─── send_briefing_tldr dispatch ─────────────────────────────────────────────
+
+def test_prefix_constant_is_opt_in() -> None:
+    assert BRIEFING_CHANNEL_PREFIX == "briefing-"
+
+
+def test_send_disabled_channel_is_noop_success() -> None:
+    res = send_briefing_tldr(_chan(enabled=False), _Summary("Suez lifts SSI."))
+    assert res.success is True
+    assert "disabled" in res.error_msg
+
+
+def test_send_no_signal_is_noop_success() -> None:
+    res = send_briefing_tldr(_chan(), _Summary(_NO_SIGNAL, source="template"))
+    assert res.success is True
+    assert "no material signal" in res.error_msg
+
+
+def test_send_slack_posts_attachment_envelope(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr("engine.alert_delivery._post_json", _ok_post_spy(captured))
+    res = send_briefing_tldr(
+        _chan(kind="slack", target="https://hooks.slack.com/services/x"),
+        _Summary("Suez lifts SSI to 0.62."), "2026-05-29",
+    )
+    assert res.success is True
+    assert captured["target"] == "https://hooks.slack.com/services/x"
+    assert captured["payload"]["text"]                       # subject line
+    assert "Suez lifts SSI to 0.62." in captured["payload"]["attachments"][0]["text"]
+
+
+def test_send_webhook_posts_flat_envelope(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr("engine.alert_delivery._post_json", _ok_post_spy(captured))
+    send_briefing_tldr(
+        _chan(kind="webhook", target="https://example.com/hook"),
+        _Summary("Body text.", source="claude"), "2026-05-29",
+    )
+    p = captured["payload"]
+    assert p["event_type"] == "briefing_tldr"
+    assert p["source"] == "claude"
+    assert p["text"] == "Body text."
+    assert p["date"] == "2026-05-29"
+
+
+def test_send_discord_rejects_non_discord_url() -> None:
+    res = send_briefing_tldr(
+        _chan(kind="discord", target="https://example.com/x"), _Summary("x"),
+    )
+    assert res.success is False
+    assert "Discord webhook" in res.error_msg
+
+
+def test_send_discord_valid_url_posts_embed(monkeypatch) -> None:
+    from engine.alert_delivery import _DISCORD_WEBHOOK_PREFIXES
+    captured: dict = {}
+    monkeypatch.setattr("engine.alert_delivery._post_json", _ok_post_spy(captured))
+    url = _DISCORD_WEBHOOK_PREFIXES[0] + "123/abc"
+    res = send_briefing_tldr(
+        _chan(kind="discord", target=url), _Summary("Body."), "2026-05-29",
+    )
+    assert res.success is True
+    assert captured["payload"]["content"]
+    assert captured["payload"]["embeds"][0]["description"] == "Body."
+
+
+def test_send_email_without_smtp_config_fails(monkeypatch) -> None:
+    monkeypatch.setattr("engine.alert_delivery._get_smtp_config", lambda: None)
+    res = send_briefing_tldr(_chan(kind="email", target="ops@x.com"), _Summary("x"))
+    assert res.success is False
+    assert "SMTP" in res.error_msg
+
+
+def test_send_email_with_smtp_delegates_to_transport(monkeypatch) -> None:
+    monkeypatch.setattr("engine.alert_delivery._get_smtp_config", lambda: object())
+    captured: dict = {}
+
+    def _fake_deliver(channel, payload):
+        captured["payload"] = payload
+        from engine.alert_delivery import DeliveryResult
+        return DeliveryResult(success=True, status_code=0, error_msg="")
+
+    monkeypatch.setattr("engine.alert_delivery._deliver_digest_email", _fake_deliver)
+    res = send_briefing_tldr(
+        _chan(kind="email", target="ops@x.com"),
+        _Summary("Body.", source="claude"), "2026-05-29",
+    )
+    assert res.success is True
+    assert "subject" in captured["payload"]
+    assert "html_body" in captured["payload"]
+    assert "Body." in captured["payload"]["text_body"]
+
+
+def test_send_unsupported_kind_fails() -> None:
+    res = send_briefing_tldr(_chan(kind="sms"), _Summary("x"))
+    assert res.success is False
+    assert "unsupported" in res.error_msg
+
+
+def test_structured_payload_per_kind_shapes() -> None:
+    s = _Summary("T.", source="claude")
+    slack = _structured_payload(s, "2026-05-29", "slack")
+    assert slack["attachments"][0]["text"] == "T."
+    disc = _structured_payload(s, "2026-05-29", "discord")
+    assert disc["content"] and disc["embeds"][0]["description"] == "T."
+    hook = _structured_payload(s, "2026-05-29", "webhook")
+    assert hook["event_type"] == "briefing_tldr" and hook["text"] == "T."

@@ -37,7 +37,15 @@ __all__ = [
     "build_subject_line",
     "render_plain_text",
     "render_html",
+    "send_briefing_tldr",
+    "BRIEFING_CHANNEL_PREFIX",
 ]
+
+
+# Channel-naming opt-in convention (mirrors operator_digest's "ops-"):
+# only DeliveryChannels whose name starts with this prefix receive the
+# daily briefing TLDR. Nothing is dispatched by default.
+BRIEFING_CHANNEL_PREFIX = "briefing-"
 
 
 # Palette mirrors delivery.port_supply_shock_digest for a consistent
@@ -128,4 +136,93 @@ def render_html(summary, date_iso: str = "") -> str:
         f"<div style=\"max-width:680px;margin:0 auto;padding:24px;\">"
         f"{card}"
         f"</div></body></html>"
+    )
+
+
+# ─── Channel dispatch ────────────────────────────────────────────────────────
+
+
+def _structured_payload(summary, date_iso: str, kind: str) -> dict:
+    """JSON envelope for slack / webhook / discord.
+
+    Mirrors engine.operator_digest._structured_payload's per-kind shapes:
+      * slack   — ``{"text", "attachments":[{"color","text"}]}``
+      * discord — ``{"content", "embeds":[{"title","description"}]}``
+      * webhook — flat envelope with the raw fields on top-level keys
+    """
+    subject = build_subject_line(summary, date_iso)
+    text = _text_of(summary)
+    if kind == "slack":
+        return {
+            "text": subject,
+            "attachments": [{"color": _COLOR_STEEL, "text": text}],
+        }
+    if kind == "discord":
+        return {
+            "content": subject,
+            "embeds": [{"title": subject, "description": text}],
+        }
+    return {
+        "event_type":   "briefing_tldr",
+        "generated_at": str(getattr(summary, "generated_at", "") or ""),
+        "date":         date_iso,
+        "source":       str(getattr(summary, "source", "") or ""),
+        "subject":      subject,
+        "text":         text,
+    }
+
+
+def send_briefing_tldr(channel, summary, date_iso: str = ""):
+    """Dispatch the day's TLDR to one ``DeliveryChannel``.
+
+    Mirrors ``engine.operator_digest.send_operator_digest``: reuses the
+    transports in ``engine.alert_delivery`` (so timeout / retry /
+    credential-resolution logic stays in one place) and dispatches on
+    ``channel.kind`` — email via ``_deliver_digest_email``,
+    slack/webhook/discord via ``_post_json``. Always returns a
+    ``DeliveryResult``; a disabled channel or a no-signal summary is a
+    no-op success so the caller's loop stays clean.
+    """
+    from engine.alert_delivery import DeliveryResult
+
+    if not getattr(channel, "enabled", False):
+        return DeliveryResult(success=True, status_code=0, error_msg="channel disabled")
+    if not should_send(summary):
+        return DeliveryResult(
+            success=True, status_code=0, error_msg="no material signal",
+        )
+
+    kind = getattr(channel, "kind", "") or ""
+
+    if kind == "email":
+        from engine.alert_delivery import _deliver_digest_email, _get_smtp_config
+        if _get_smtp_config() is None:
+            return DeliveryResult(
+                success=False, status_code=0, error_msg="SMTP not configured",
+            )
+        payload = {
+            "subject":   build_subject_line(summary, date_iso),
+            "html_body": render_html(summary, date_iso),
+            "text_body": render_plain_text(summary, date_iso),
+        }
+        return _deliver_digest_email(channel, payload)
+
+    if kind in ("slack", "webhook"):
+        from engine.alert_delivery import _post_json
+        target = getattr(channel, "target", "") or ""
+        return _post_json(target, _structured_payload(summary, date_iso, kind))
+
+    if kind == "discord":
+        from engine.alert_delivery import _DISCORD_WEBHOOK_PREFIXES, _post_json
+        target = getattr(channel, "target", "") or ""
+        if not any(target.startswith(p) for p in _DISCORD_WEBHOOK_PREFIXES):
+            return DeliveryResult(
+                success=False, status_code=0,
+                error_msg="target must be a Discord webhook URL",
+            )
+        return _post_json(target, _structured_payload(summary, date_iso, "discord"))
+
+    return DeliveryResult(
+        success=False, status_code=0,
+        error_msg=f"unsupported channel kind: {kind}",
     )

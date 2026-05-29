@@ -453,7 +453,7 @@ def run_briefing_tldr_job(data_bundle: dict) -> dict:
     artifacts; channel dispatch is a separate, opt-in concern. Returns a
     small status dict (``ok`` / ``source`` / ``persisted`` / ``paths``).
     """
-    out = {"ok": False, "source": "", "persisted": False, "paths": {}}
+    out = {"ok": False, "source": "", "persisted": False, "dispatched": 0, "paths": {}}
     try:
         from engine.daily_briefing_tldr import generate_tldr
         from engine.narration_engine import (
@@ -482,25 +482,31 @@ def run_briefing_tldr_job(data_bundle: dict) -> dict:
         logger.warning(f"run_briefing_tldr_job: generation failed: {exc}")
         return out
 
-    # ── Persist ready-to-send artifacts, gated by should_send ──────────────
-    # Defensive: a render / I/O failure here must NEVER fail the job. Quiet
-    # days (no material signal) skip persistence so channels have nothing
-    # to dispatch and the cache dir stays tidy.
+    # ── Gate once, then persist + dispatch (each independently defensive) ──
+    # Quiet days (no material signal) produce no artifacts and send
+    # nothing, so channels stay quiet and the cache dir stays tidy.
+    try:
+        from delivery.briefing_tldr import should_send
+        material = should_send(summary)
+    except Exception:
+        material = False
+    if not material:
+        logger.info(
+            "run_briefing_tldr_job: no material TLDR signal — skipping digest"
+        )
+        return out
+
+    date_iso = str(getattr(narration, "date", "") or "").strip()
+
+    # Persist ready-to-send artifacts. A render / I/O failure here must
+    # NEVER fail the job (or block the dispatch step below).
     try:
         from delivery.briefing_tldr import (
             build_subject_line,
             render_html,
             render_plain_text,
-            should_send,
         )
 
-        if not should_send(summary):
-            logger.info(
-                "run_briefing_tldr_job: no material TLDR signal — skipping digest"
-            )
-            return out
-
-        date_iso = str(getattr(narration, "date", "") or "").strip()
         out_dir = _BRIEFING_TLDR_DIR / (date_iso or "undated")
         out_dir.mkdir(parents=True, exist_ok=True)
         html_path = out_dir / "tldr.html"
@@ -524,6 +530,39 @@ def run_briefing_tldr_job(data_bundle: dict) -> dict:
         logger.info(f"run_briefing_tldr_job: digest persisted to {out_dir}")
     except Exception as exc:   # pragma: no cover - defensive
         logger.warning(f"run_briefing_tldr_job: digest persistence failed: {exc}")
+
+    # Dispatch to opt-in 'briefing-'-prefixed channels (mirrors the
+    # operator digest's 'ops-' convention). No such channels exist by
+    # default, so nothing is sent unless an operator subscribes one —
+    # the same per-channel best-effort loop as run_operator_digest_job.
+    try:
+        from delivery.briefing_tldr import (
+            BRIEFING_CHANNEL_PREFIX,
+            send_briefing_tldr,
+        )
+        from engine.alert_delivery import load_channels
+
+        dispatched = 0
+        for channel in load_channels():
+            name = getattr(channel, "name", "") or ""
+            if not name.startswith(BRIEFING_CHANNEL_PREFIX) or not channel.enabled:
+                continue
+            try:
+                res = send_briefing_tldr(channel, summary, date_iso)
+                if getattr(res, "success", False):
+                    dispatched += 1
+                logger.info(
+                    f"run_briefing_tldr_job: channel={name!r} "
+                    f"kind={channel.kind} success={res.success}"
+                    + (f" error={res.error_msg!r}" if not res.success else "")
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"run_briefing_tldr_job: send to {name!r} failed: {exc}"
+                )
+        out["dispatched"] = dispatched
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_briefing_tldr_job: dispatch step failed: {exc}")
 
     return out
 
