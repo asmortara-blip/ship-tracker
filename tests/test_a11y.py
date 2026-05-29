@@ -28,6 +28,7 @@ from ui.styles import (
     metric_card_row,
     section_header,
     status_badge,
+    tldr_lede,
     wsj_market_table,
 )
 
@@ -91,6 +92,26 @@ def test_metric_card_row_inner_divs_are_presentation(md_spy):
         "decorative inner divs should be role='presentation' so screen "
         "readers don't re-announce label/value separately"
     )
+
+
+def test_tldr_lede_has_note_role_and_renders_text(md_spy):
+    tldr_lede("Suez disruption lifts SSI to 0.62 as rates firm.", source="claude")
+    html = md_spy.html
+    assert 'role="note"' in html, "TL;DR lede should be a note region"
+    assert "Suez disruption lifts SSI to 0.62 as rates firm." in html
+    assert "LLM" in html, "claude source should show the LLM provenance chip"
+    # Eyebrow row is decorative — must not be re-announced as content.
+    assert 'role="presentation"' in html
+
+
+def test_tldr_lede_template_source_shows_template_chip(md_spy):
+    tldr_lede("Headline. First bullet.", source="template")
+    assert "Template" in md_spy.html
+
+
+def test_tldr_lede_empty_text_renders_nothing(md_spy):
+    tldr_lede("   ", source="claude")
+    assert md_spy.html == "", "empty TL;DR text should emit no markup"
 
 
 def test_alert_banner_has_role_alert_and_aria_live(md_spy):

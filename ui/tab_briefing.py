@@ -46,6 +46,7 @@ from ui.styles import (
     section_divider,
     section_header,
     source_footer,
+    tldr_lede,
     wsj_market_table,
 )
 
@@ -259,6 +260,28 @@ def _assemble_context(port_results, route_results, freight_data, macro_data):
 
 
 # ─── Section renderers ──────────────────────────────────────────────────────
+
+def _render_tldr_lede(narration) -> None:
+    """One-paragraph TL;DR above the full briefing — the 10-second read.
+
+    Day-cached via engine.daily_briefing_tldr (first viewer of each UTC
+    day pays one cheap Haiku call; everyone else hits the cache,
+    invalidated when a force-refresh changes the narration), so this adds
+    no per-render LLM latency. Best-effort: generate_tldr never raises,
+    and the import guard keeps the tab resilient if the module is
+    somehow unavailable.
+    """
+    try:
+        from engine.daily_briefing_tldr import generate_tldr
+        summary = generate_tldr(narration)
+    except Exception:
+        logger.debug("tab_briefing: TLDR lede unavailable")
+        return
+
+    # Route the markup through the design-system helper (keeps tab_briefing
+    # within its inline-style budget; see test_tab_briefing_refactor).
+    tldr_lede(summary.text, summary.source)
+
 
 def _render_headline_card(narration) -> None:
     source_label = {
@@ -819,6 +842,9 @@ def render(
                 port_results, route_results, insights,
                 freight_data, macro_data, stock_data,
             )
+
+            # ── 0. TL;DR lede — one-paragraph 10-second read ───────────────────
+            _render_tldr_lede(narration)
 
             # ── 1-2. Headline + Body ───────────────────────────────────────────
             _render_headline_card(narration)

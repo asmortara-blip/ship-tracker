@@ -1453,6 +1453,41 @@ def gradient_card(content_html: str, border_color: str = C_ACCENT, glow: bool = 
     )
 
 
+def tldr_lede(text: str, source: str = "template") -> None:
+    """Render the one-paragraph TL;DR lede above a daily briefing.
+
+    A subtle accent-bordered callout, visually subordinate to the
+    headline beneath it so it reads as the 10-second summary rather than
+    the centerpiece. ``source`` ("claude" | "template") drives the
+    provenance chip. No-ops on empty text.
+
+    Emits ``role="note"`` + an aria-label so assistive tech announces it
+    as a summary aside; the eyebrow row is decorative (role="presentation").
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+    is_llm = source == "claude"
+    chip_text = "LLM" if is_llm else "Template"
+    chip_color = C_HIGH if is_llm else C_MOD
+    border = _hex_to_rgba(C_ACCENT, 0.22)
+    fill = _hex_to_rgba(C_TEXT, 0.02)
+    st.markdown(
+        f'<div role="note" aria-label="Briefing TL;DR" '
+        f'style="margin:0 0 18px 0;padding:14px 18px;background:{fill};'
+        f'border:1px solid {border};border-radius:var(--radius)">'
+        f'<div role="presentation" style="font-size:0.6rem;'
+        f'text-transform:uppercase;letter-spacing:0.16em;color:{C_TEXT3};'
+        f'font-weight:700;margin-bottom:6px">TL;DR &middot; '
+        f'<span style="color:{chip_color}">{chip_text}</span></div>'
+        f'<p style="margin:0;font-family:Libre Franklin,sans-serif;'
+        f'font-size:1.02rem;line-height:1.55;color:{C_TEXT};'
+        f'font-weight:500">{text}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def nav_section_button(icon: str, label: str, active: bool = False, key: str = "") -> bool:
     """Render a styled navigation section button."""
     active_class = "active" if active else ""
