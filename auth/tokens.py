@@ -62,6 +62,7 @@ from typing import Optional
 from loguru import logger
 
 from auth.gate import SALT_BYTES, _hash_password, _verify_password
+from auth.ids import opaque_id
 
 
 # ── Tuning constants ──────────────────────────────────────────────────────
@@ -172,7 +173,11 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
         hashed = _hash_password(raw_token, salt)
         token_prefix = raw_token[:_TOKEN_PREFIX_LEN]
 
-        token_id = secrets.token_urlsafe(16)
+        # opaque_id (not raw token_urlsafe): token_id is passed to the
+        # operator CLI as `tokens revoke <token_id>`, so it must never
+        # start with a `-` argparse would read as a flag. The raw_token
+        # secret above stays token_urlsafe — it is never a CLI argument.
+        token_id = opaque_id(16)
         created_at = _now_iso()
 
         from state.db import get_connection

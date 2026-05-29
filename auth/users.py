@@ -54,6 +54,7 @@ from typing import Optional
 from loguru import logger
 
 from auth.gate import _hash_password, _verify_password, SALT_BYTES
+from auth.ids import opaque_id
 
 
 # ── Constraints ───────────────────────────────────────────────────────────
@@ -208,7 +209,10 @@ def signup(
         salt = secrets.token_bytes(SALT_BYTES)
         hashed = _hash_password(password, salt)
 
-        user_id = secrets.token_urlsafe(16)
+        # opaque_id (not raw token_urlsafe): a user_id is passed to the
+        # operator CLI as `--user-id <id>`, so it must never start with a
+        # `-` that argparse would read as an option flag. See auth/ids.py.
+        user_id = opaque_id(16)
         created_at = _now_iso()
 
         # An invitation can carry a non-default role. Without an
