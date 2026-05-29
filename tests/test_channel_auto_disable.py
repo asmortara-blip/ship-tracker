@@ -361,3 +361,35 @@ def test_deliver_alert_counter_resets_on_success_even_after_partial_failures(
         assert get_consecutive_failures("c-cycle", user_id="") == 0
     # Channel was never disabled
     assert ch.enabled is True
+
+
+def test_auto_disable_is_scoped_update_preserving_owner_and_target() -> None:
+    """Regression (security): auto-disable must flip ONLY `enabled` via a
+    scoped UPDATE keyed on channel_id — never a full-row UPSERT that would
+    rewrite the channel's owner to the alert owner's id (cross-user hijack),
+    downgrade an encrypted target to plaintext, or clobber concurrent edits.
+
+    Trigger the breaker under an alert-owner scope ('') that differs from
+    the channel's owner ('alice') and assert the row's user_id + target are
+    preserved while enabled flips to 0.
+    """
+    from state.db import get_connection
+
+    secret_target = "https://hooks.slack.com/services/T/B/SEKRIT"
+    ch = _make_channel(channel_id="c-scoped", kind="slack", target=secret_target)
+    save_channel(ch, user_id="alice")
+
+    # Breaker keys its counter by the passed user_id; trip it under ''.
+    for _ in range(AUTO_DISABLE_THRESHOLD):
+        record_delivery_failure("c-scoped", user_id="")
+    assert check_and_auto_disable(ch, user_id="", last_error="connection error: x") is True
+
+    row = get_connection().execute(
+        "SELECT user_id, enabled, target FROM delivery_channels "
+        "WHERE channel_id = ?",
+        ("c-scoped",),
+    ).fetchone()
+    assert row is not None
+    assert row["user_id"] == "alice"            # NOT rewritten to '' — no hijack
+    assert int(row["enabled"]) == 0             # disabled
+    assert row["target"] == secret_target       # not clobbered / downgraded

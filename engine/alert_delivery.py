@@ -292,7 +292,15 @@ def format_email_payload(alert: ShippingAlert) -> dict:
         palette as the Slack payload (``_SEVERITY_COLOR``)
       - ``text_body``: plain-text fallback for clients that don't render
         HTML (or for sanity in mail logs)
+
+    Every alert-derived field interpolated into ``html_body`` is HTML-
+    escaped: title/body/alert_type/ticker/route/port originate from upstream
+    feeds (port names, tickers) and must not inject markup into the
+    recipient's mail client. The plain-text body and the subject (an SMTP
+    header — the email lib rejects embedded CRLF) need no escaping.
     """
+    from html import escape
+
     color = _SEVERITY_COLOR.get(alert.severity, _SEVERITY_COLOR["LOW"])
     subject = f"[{alert.severity}] {alert.title}"
 
@@ -316,14 +324,14 @@ def format_email_payload(alert: ShippingAlert) -> dict:
         f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Change %</td>"
         f"<td style='padding:4px 0;'><b>{alert.change_pct:+.2f}%</b></td></tr>"
         f"<tr><td style='padding:4px 12px 4px 0;color:#586069;'>Type</td>"
-        f"<td style='padding:4px 0;'><b>{alert.alert_type}</b></td></tr>"
+        f"<td style='padding:4px 0;'><b>{escape(str(alert.alert_type))}</b></td></tr>"
     )
 
     context_html = ""
     if context_lines:
         rows = "".join(
-            f"<tr><td style='padding:2px 12px 2px 0;color:#586069;'>{label}</td>"
-            f"<td style='padding:2px 0;'>{value}</td></tr>"
+            f"<tr><td style='padding:2px 12px 2px 0;color:#586069;'>{escape(str(label))}</td>"
+            f"<td style='padding:2px 0;'>{escape(str(value))}</td></tr>"
             for label, value in context_lines
         )
         context_html = (
@@ -337,10 +345,10 @@ def format_email_payload(alert: ShippingAlert) -> dict:
         "<div style='max-width:640px;margin:0 auto;padding:24px;'>"
         f"<div style='border-left:6px solid {color};padding:12px 16px;background:#fafbfc;'>"
         f"<div style='font-size:12px;font-weight:bold;letter-spacing:1px;color:{color};'>"
-        f"{alert.severity}</div>"
-        f"<h2 style='margin:4px 0 0 0;font-size:20px;color:#24292e;'>{alert.title}</h2>"
+        f"{escape(str(alert.severity))}</div>"
+        f"<h2 style='margin:4px 0 0 0;font-size:20px;color:#24292e;'>{escape(str(alert.title))}</h2>"
         "</div>"
-        f"<p style='font-size:14px;line-height:1.5;margin:16px 0;'>{alert.body}</p>"
+        f"<p style='font-size:14px;line-height:1.5;margin:16px 0;'>{escape(str(alert.body))}</p>"
         "<table style='border-collapse:collapse;font-size:13px;color:#24292e;'>"
         f"{fields_html}</table>"
         f"{context_html}"
@@ -868,18 +876,43 @@ def _http_post_json(url: str, payload: dict) -> tuple[int, str, Optional[Excepti
     return status, body, None
 
 
-def _classify_request_exc(exc: Exception) -> str:
+def _redact(text: str, *secrets: str) -> str:
+    """Strip secret substrings from ``text`` before it lands in a persisted
+    ``error_msg``.
+
+    For slack/discord/webhook channels the secret IS ``channel.target`` (the
+    webhook token lives in the URL path). A transport exception's ``str()``
+    embeds that full URL; ``_is_retriable`` then persists the message
+    verbatim to ``delivery_retry_queue.last_error`` and the UI/CLI/bulk-
+    export surface it — leaking a secret the operator may have encrypted at
+    rest. Replacing the target with a placeholder closes that leak.
+    """
+    out = str(text)
+    for secret in secrets:
+        s = str(secret or "")
+        if s:
+            out = out.replace(s, "<redacted>")
+    return out
+
+
+def _classify_request_exc(exc: Exception, *secrets: str) -> str:
     """Map a request-side exception onto the ``error_msg`` prefix the rest
     of the module uses ("timeout" / "connection error" / "request error" /
     "unexpected"). Keeps the wording identical to the existing Slack /
-    Twilio paths."""
+    Twilio paths.
+
+    Any ``secrets`` (e.g. ``channel.target``) are redacted from the
+    exception text so a secret URL never leaks into a persisted error
+    message — the classification prefix that ``_is_retriable`` keys on is
+    kept intact."""
+    msg = _redact(str(exc), *secrets) if secrets else str(exc)
     if isinstance(exc, requests.exceptions.Timeout):
-        return f"timeout: {exc}"
+        return f"timeout: {msg}"
     if isinstance(exc, requests.exceptions.ConnectionError):
-        return f"connection error: {exc}"
+        return f"connection error: {msg}"
     if isinstance(exc, requests.exceptions.RequestException):
-        return f"request error: {exc}"
-    return f"unexpected: {exc}"
+        return f"request error: {msg}"
+    return f"unexpected: {msg}"
 
 
 def _deliver_webhook(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryResult:
@@ -892,7 +925,7 @@ def _deliver_webhook(channel: DeliveryChannel, alert: ShippingAlert) -> Delivery
     payload = format_webhook_payload(alert)
     status, body, exc = _http_post_json(channel.target, payload)
     if exc is not None:
-        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc, channel.target))
     if 200 <= status < 300:
         return DeliveryResult(success=True, status_code=status)
     return DeliveryResult(
@@ -923,7 +956,7 @@ def _deliver_discord(channel: DeliveryChannel, alert: ShippingAlert) -> Delivery
     payload = format_discord_payload(alert)
     status, body, exc = _http_post_json(target, payload)
     if exc is not None:
-        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc, target))
     if 200 <= status < 300:
         return DeliveryResult(success=True, status_code=status)
     return DeliveryResult(
@@ -1325,15 +1358,14 @@ def _dispatch_alert(channel: DeliveryChannel, alert: ShippingAlert) -> DeliveryR
     payload = format_slack_payload(alert)
     try:
         resp = requests.post(channel.target, json=payload, timeout=_REQUEST_TIMEOUT_S)
-    except requests.exceptions.Timeout as exc:
-        return DeliveryResult(success=False, status_code=0, error_msg=f"timeout: {exc}")
-    except requests.exceptions.ConnectionError as exc:
-        return DeliveryResult(success=False, status_code=0, error_msg=f"connection error: {exc}")
-    except requests.exceptions.RequestException as exc:
-        return DeliveryResult(success=False, status_code=0, error_msg=f"request error: {exc}")
     except Exception as exc:
-        # Defence-in-depth — never let an unexpected exception propagate.
-        return DeliveryResult(success=False, status_code=0, error_msg=f"unexpected: {exc}")
+        # Defence-in-depth — never let an exception propagate. The Slack
+        # webhook secret IS channel.target, so classify+redact it out of
+        # error_msg (which is persisted to the retry queue + shown in UI).
+        return DeliveryResult(
+            success=False, status_code=0,
+            error_msg=_classify_request_exc(exc, channel.target),
+        )
 
     status = getattr(resp, "status_code", 0)
     if 200 <= status < 300:
@@ -1724,7 +1756,7 @@ def _post_json(url: str, payload: dict, timeout: float = _REQUEST_TIMEOUT_S) -> 
     on any 2xx, surfaces the response body in ``error_msg`` otherwise."""
     status, body, exc = _http_post_json(url, payload)
     if exc is not None:
-        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc))
+        return DeliveryResult(success=False, status_code=0, error_msg=_classify_request_exc(exc, url))
     if 200 <= status < 300:
         return DeliveryResult(success=True, status_code=status)
     return DeliveryResult(
@@ -2930,18 +2962,33 @@ def check_and_auto_disable(
             return False
 
         # ── 1. Flip enabled=False + persist ──────────────────────────────
-        # Mutate the in-memory dataclass first so the caller observes
-        # the flip (a downstream guard could check `channel.enabled` and
-        # skip its own dispatch). save_channel is an UPSERT so the rest
-        # of the row is preserved untouched.
+        # Mutate the in-memory dataclass first so the caller observes the
+        # flip (a downstream guard could check `channel.enabled`).
+        #
+        # Persist via a SCOPED, enabled-only UPDATE keyed on the immutable
+        # channel_id — NOT save_channel. A full-row UPSERT from this
+        # (possibly stale) dataclass would (a) reassign the channel's owner
+        # to the alert owner's user_id [cross-user hijack], (b) rewrite a
+        # vault-encrypted target back to plaintext, and (c) clobber any
+        # concurrent operator edit to target/budget/quiet-hours. So touch
+        # only the `enabled` column.
         channel.enabled = False
         try:
-            save_channel(channel, user_id=user_id or "")
+            from state.db import get_connection
+
+            conn = get_connection()
+            with conn:
+                conn.execute(
+                    "UPDATE delivery_channels SET enabled = 0 "
+                    "WHERE channel_id = ?",
+                    (getattr(channel, "channel_id", "") or "",),
+                )
         except Exception as exc:  # noqa: BLE001
-            # save_channel itself is never-raise, but defence-in-depth.
+            # defence-in-depth — the breaker is operator hygiene, not a
+            # correctness invariant.
             logger.debug(
-                f"alert_delivery.check_and_auto_disable: save_channel "
-                f"failed: {exc}"
+                f"alert_delivery.check_and_auto_disable: enabled-flag "
+                f"UPDATE failed: {exc}"
             )
 
         # ── 2. Set the "auto-disabled" kv_state flag ─────────────────────

@@ -2663,3 +2663,74 @@ def test_disabled_channel_does_not_dispatch(monkeypatch) -> None:
     assert calls == []
     # Counter did NOT change (we never reached the post-dispatch hook)
     assert get_consecutive_failures("ch-no-dispatch", user_id="") == 1
+
+
+# ─── Secret-URL redaction in error_msg (security) ───────────────────────────
+
+def test_redact_replaces_secret_substrings() -> None:
+    out = alert_delivery._redact(
+        "boom https://hooks.slack.com/services/T/B/SEKRIT happened",
+        "https://hooks.slack.com/services/T/B/SEKRIT",
+    )
+    assert "SEKRIT" not in out
+    assert "<redacted>" in out
+
+
+def test_classify_request_exc_redacts_secret_keeps_prefix() -> None:
+    """The secret URL is stripped, but the 'connection error:' prefix that
+    _is_retriable keys on is preserved."""
+    secret = "https://hooks.slack.com/services/T/B/SEKRIT"
+    exc = requests.exceptions.ConnectionError(
+        f"HTTPSConnectionPool: Max retries exceeded with url: {secret}"
+    )
+    msg = alert_delivery._classify_request_exc(exc, secret)
+    assert msg.startswith("connection error:")
+    assert secret not in msg
+    assert "<redacted>" in msg
+    # Still classified retriable (substring match preserved).
+    assert alert_delivery._is_retriable(
+        alert_delivery.DeliveryResult(success=False, status_code=0, error_msg=msg)
+    ) is True
+
+
+def test_deliver_webhook_redacts_secret_url_in_error_msg(monkeypatch) -> None:
+    """A transport exception must NOT leak the webhook secret URL into
+    error_msg (which gets persisted to the retry queue + shown in UI)."""
+    secret = "https://hooks.slack.com/services/T00/B00/SUPERSECRETTOKEN"
+    ch = alert_delivery.DeliveryChannel(
+        channel_id="c-redact", name="hook", kind="webhook",
+        target=secret, severity_threshold="LOW", enabled=True,
+    )
+
+    def boom(*a, **kw):
+        raise requests.exceptions.ConnectionError(
+            f"HTTPSConnectionPool: Max retries exceeded with url: {secret}"
+        )
+
+    monkeypatch.setattr(alert_delivery.requests, "post", boom)
+    result = alert_delivery._deliver_webhook(ch, _make_alert("HIGH"))
+    assert result.success is False
+    assert secret not in result.error_msg
+    assert "SUPERSECRETTOKEN" not in result.error_msg
+    assert "<redacted>" in result.error_msg
+    assert result.error_msg.startswith("connection error:")
+
+
+# ─── HTML/email injection: alert fields escaped in html_body (security) ──────
+
+def test_format_email_payload_escapes_html_body() -> None:
+    alert = _make_alert(
+        "HIGH",
+        title="<img src=x onerror=alert(1)>",
+        body="<script>steal()</script>",
+        ticker="</td><td><b>INJECT</b>",
+    )
+    payload = format_email_payload(alert)
+    html = payload["html_body"]
+    # Raw markup must be escaped out of the HTML body.
+    assert "<img src=x onerror=alert(1)>" not in html
+    assert "<script>steal()</script>" not in html
+    assert "</td><td><b>INJECT</b>" not in html
+    assert "&lt;img" in html and "&lt;script&gt;" in html
+    # The plain-text body is intentionally NOT escaped.
+    assert "<script>steal()</script>" in payload["text_body"]
