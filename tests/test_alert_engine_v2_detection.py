@@ -464,20 +464,68 @@ def test_load_alerts_returns_empty_when_file_missing() -> None:
 
 
 def test_save_alerts_caps_at_max_stored(monkeypatch) -> None:
-    """Stored records trim to _MAX_STORED, keeping the newest."""
+    """ACKNOWLEDGED records trim to _MAX_STORED, keeping the newest. The trim
+    is acknowledged-only (an unacked row is never evicted), so this test uses
+    ack=True; the unacknowledged + per-user cases are covered below."""
     monkeypatch.setattr(engv2, "_MAX_STORED", 3)
     base = datetime.now(timezone.utc)
     alerts = []
     for i in range(5):
-        a = _mk_alert(created_at=(base + timedelta(seconds=i)).isoformat())
         # Distinct ticker per alert so the v14 dedup_key does not
         # collapse them — this test is about the MAX_STORED trim,
         # which is independent of the dedup layer.
+        a = _mk_alert(created_at=(base + timedelta(seconds=i)).isoformat(),
+                      ack=True)
         a.ticker = f"TKR{i}"
         alerts.append(a)
     save_alerts(alerts)
     loaded = load_alerts(max_age_days=30)
     assert len(loaded) == 3
+
+
+def test_save_alerts_does_not_trim_unacknowledged(monkeypatch) -> None:
+    """The trim NEVER deletes unacknowledged rows — an unseen alert must not
+    silently disappear because the table is over its cap (mirrors
+    prune_old_alerts' acknowledged-only intent)."""
+    monkeypatch.setattr(engv2, "_MAX_STORED", 2)
+    base = datetime.now(timezone.utc)
+    alerts = []
+    for i in range(5):
+        a = _mk_alert(created_at=(base + timedelta(seconds=i)).isoformat(),
+                      ack=False)
+        a.ticker = f"UNACK{i}"
+        alerts.append(a)
+    save_alerts(alerts)
+    loaded = load_alerts(max_age_days=30)
+    assert len(loaded) == 5  # nothing trimmed — all unacknowledged
+
+
+def test_save_alerts_trim_is_per_user_and_spares_other_users(monkeypatch) -> None:
+    """Regression for the global-trim data-loss bug: the trim is scoped to the
+    saving user, so one user's burst of acknowledged alerts must NOT evict
+    another user's rows — least of all their unacknowledged ones."""
+    monkeypatch.setattr(engv2, "_MAX_STORED", 2)
+    base = datetime.now(timezone.utc)
+    # Bob has ONE unacknowledged alert, created EARLIEST — a global trim would
+    # evict it first (it's the oldest row in the whole table).
+    bob_alert = _mk_alert(created_at=base.isoformat(), ack=False)
+    bob_alert.ticker = "BOB"
+    save_alerts([bob_alert], user_id="bob")
+    # Alice floods 4 acknowledged alerts, all newer than Bob's.
+    alice_alerts = []
+    for i in range(4):
+        a = _mk_alert(
+            created_at=(base + timedelta(seconds=i + 1)).isoformat(), ack=True)
+        a.ticker = f"ALICE{i}"
+        alice_alerts.append(a)
+    save_alerts(alice_alerts, user_id="alice")
+    # Bob's unacknowledged alert MUST survive (the old global trim deleted the
+    # oldest rows table-wide and would have taken it).
+    bob_loaded = load_alerts(max_age_days=30, user_id="bob")
+    assert any(a.ticker == "BOB" for a in bob_loaded)
+    # Alice's acknowledged alerts are trimmed to HER OWN cap (2).
+    alice_loaded = load_alerts(max_age_days=30, user_id="alice")
+    assert len(alice_loaded) == 2
 
 
 # ─── get_alerts_by_rule ─────────────────────────────────────────────────────

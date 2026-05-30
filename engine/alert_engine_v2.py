@@ -1092,19 +1092,29 @@ def save_alerts(
                         1 if a.acknowledged else 0, uid, now_iso, rule_id,
                     ),
                 )
-            # Trim to _MAX_STORED keeping the newest created_at. SQLite's
-            # ROWID order matches insertion order, but we sort by created_at
-            # to be robust against backfilled or out-of-order writes.
+            # Trim to _MAX_STORED keeping the newest created_at — but ONLY
+            # within THIS user's bucket and ONLY among ACKNOWLEDGED rows. The
+            # earlier form deleted globally with no ack guard, so one user's
+            # burst of >500 alerts silently evicted another user's oldest
+            # rows — including unacknowledged CRITICALs they had never seen,
+            # with no audit trail. Scoping to (user_id = uid AND
+            # acknowledged = 1) makes the cap per-user and never drops an
+            # unseen alert, mirroring prune_old_alerts' acknowledged-only
+            # intent. (uid == '' — the legacy/no-session bucket — is a valid
+            # value and keeps its own independent cap.)
             conn.execute(
                 """
                 DELETE FROM alerts
-                WHERE alert_id IN (
-                    SELECT alert_id FROM alerts
-                    ORDER BY created_at DESC
-                    LIMIT -1 OFFSET ?
-                )
+                WHERE user_id = ?
+                  AND acknowledged = 1
+                  AND alert_id IN (
+                      SELECT alert_id FROM alerts
+                      WHERE user_id = ? AND acknowledged = 1
+                      ORDER BY created_at DESC
+                      LIMIT -1 OFFSET ?
+                  )
                 """,
-                (_MAX_STORED,),
+                (uid, uid, _MAX_STORED),
             )
     except Exception as exc:
         logger.warning(f"save_alerts: SQLite write failed: {exc}")
