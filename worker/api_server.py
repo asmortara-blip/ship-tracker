@@ -334,6 +334,80 @@ def _enforce_rate_limit(
     return True
 
 
+def _unauth_client_ip(handler: BaseHTTPRequestHandler) -> str:
+    """Best-effort client IP for the unauthenticated-throttle bucket."""
+    try:
+        addr = getattr(handler, "client_address", None)
+        return addr[0] if addr else "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Per-IP throttle for FAILED authentications. Generous on purpose: only a
+# FAILED attempt consumes a token (a resolved user_id costs nothing), so the
+# bucket measures *consecutive bad-token attempts from one IP*, and a
+# legitimate client never trips it on its own. ~1 bad attempt / 2s sustained
+# after a burst of 20.
+_UNAUTH_IP_CAPACITY = 20
+_UNAUTH_IP_REFILL_PER_SEC = 0.5
+
+
+def _authenticate_or_reject(handler: BaseHTTPRequestHandler) -> Optional[str]:
+    """Authenticate the request; on failure, send the response and return None.
+
+    Returns the resolved ``user_id`` on success (caller proceeds), or ``None``
+    after having ALREADY sent a 401 (bad/no token) or 429 (IP throttled) — the
+    caller just ``return``s.
+
+    Brute-force throttle (finding: API-token guessing was unbounded). The
+    per-user ``_enforce_rate_limit`` can only key on a RESOLVED user_id, and
+    ``_authenticate`` runs ``verify_token`` (a KDF) before any user_id exists
+    — so an unauthenticated flood was otherwise unlimited. We:
+
+      1. Check the client IP's bucket BEFORE ``verify_token`` (read-only, no
+         consume). A throttled IP is 429'd *without* paying the KDF — so a
+         flood can't keep the CPU busy, and guesses past the burst are simply
+         not evaluated.
+      2. Consume a token ONLY when auth FAILS. A legitimate client's valid
+         requests never consume, so its own traffic can't self-throttle here
+         (it is still subject to the per-user limiter downstream).
+
+    Collateral: an attacker flooding from a shared NAT IP can throttle other
+    users on that IP until the bucket refills — the standard fail2ban trade-
+    off, accepted because the alternative (unbounded guessing) is worse and
+    the bucket refills quickly. Fail-OPEN (logged) on any limiter error."""
+    ip = _unauth_client_ip(handler)
+    bucket = None
+    try:
+        from auth.rate_limit import get_bucket
+        bucket = get_bucket(
+            f"unauth-ip:{ip}",
+            capacity=_UNAUTH_IP_CAPACITY,
+            refill_per_sec=_UNAUTH_IP_REFILL_PER_SEC,
+        )
+        retry_after = bucket.time_until_available(1)  # read-only; no consume
+        if retry_after > 0.0:
+            logger.info(f"api: throttled unauthenticated ip={ip!r}")
+            _send_rate_limited(handler, retry_after)
+            return None
+    except Exception as exc:  # noqa: BLE001 — throttle must never break auth
+        logger.warning(f"api: unauth IP throttle check failed, open: {exc}")
+        bucket = None
+
+    user_id = _authenticate(handler)
+    if user_id is None:
+        # Count this FAILED attempt against the IP bucket (the only path that
+        # consumes — a successful auth above leaves the bucket untouched).
+        if bucket is not None:
+            try:
+                bucket.consume(1)
+            except Exception:  # noqa: BLE001
+                pass
+        _send_unauthorized(handler)
+        return None
+    return user_id
+
+
 def _send_not_found(handler: BaseHTTPRequestHandler) -> None:
     _send_json(handler, HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -750,10 +824,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
 
             # Every other GET requires auth.
-            user_id = _authenticate(self)
+            user_id = _authenticate_or_reject(self)
             if user_id is None:
-                _send_unauthorized(self)
-                return
+                return  # 401/429 already sent by the helper
 
             # Per-user rate limit. Health is already short-circuited
             # ABOVE the auth gate so the limiter never sees probes.
@@ -923,10 +996,9 @@ class APIHandler(BaseHTTPRequestHandler):
             path, _query = self._path_and_query()
             logger.info(f"api POST {path}")
 
-            user_id = _authenticate(self)
+            user_id = _authenticate_or_reject(self)
             if user_id is None:
-                _send_unauthorized(self)
-                return
+                return  # 401/429 already sent by the helper
 
             # Per-user rate limit. POST endpoints all touch the DB and
             # the audit log so a hammered POST is more expensive than
@@ -1000,10 +1072,9 @@ class APIHandler(BaseHTTPRequestHandler):
             path, _ = self._path_and_query()
             logger.info(f"api DELETE {path}")
 
-            user_id = _authenticate(self)
+            user_id = _authenticate_or_reject(self)
             if user_id is None:
-                _send_unauthorized(self)
-                return
+                return  # 401/429 already sent by the helper
 
             # Per-user rate limit. Same bucket as GET / POST.
             if not _enforce_rate_limit(self, user_id):
@@ -1087,10 +1158,9 @@ class APIHandler(BaseHTTPRequestHandler):
             path, _ = self._path_and_query()
             logger.info(f"api PATCH {path}")
 
-            user_id = _authenticate(self)
+            user_id = _authenticate_or_reject(self)
             if user_id is None:
-                _send_unauthorized(self)
-                return
+                return  # 401/429 already sent by the helper
 
             # Per-user rate limit. Same bucket as GET / POST / DELETE.
             if not _enforce_rate_limit(self, user_id):

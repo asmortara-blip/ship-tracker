@@ -184,6 +184,31 @@ def test_clear_buckets_resets_state():
     assert b2.tokens == pytest.approx(5.0)
 
 
+def test_reset_bucket_drops_single_key():
+    """``reset_bucket`` drops ONE key so its next lookup starts full,
+    without disturbing other keys (unlike ``clear_buckets``)."""
+    drained = rl.get_bucket("eve", capacity=5, refill_per_sec=1.0)
+    other = rl.get_bucket("frank", capacity=5, refill_per_sec=1.0)
+    assert drained.consume() is True
+    assert other.consume() is True
+    assert drained.tokens == pytest.approx(4.0)
+
+    rl.reset_bucket("eve")
+
+    # eve's bucket is recreated full on next access…
+    fresh = rl.get_bucket("eve", capacity=5, refill_per_sec=1.0)
+    assert fresh is not drained
+    assert fresh.tokens == pytest.approx(5.0)
+    # …but frank's is untouched (same instance, balance preserved).
+    assert rl.get_bucket("frank", capacity=5, refill_per_sec=1.0) is other
+    assert other.tokens == pytest.approx(4.0)
+
+
+def test_reset_bucket_unknown_key_is_noop():
+    """Resetting a key that was never created must not raise."""
+    rl.reset_bucket("never-seen-this-key")  # no exception
+
+
 def test_thread_safe_concurrent_consume():
     """Hammer one bucket from N threads, each calling ``consume(1)``
     M times. The total allowed count should equal ``capacity`` — not

@@ -523,6 +523,58 @@ def test_malformed_authorization_header_returns_401(server):
     assert r.status_code == 401
 
 
+# ─── Auth: unauthenticated-IP brute-force throttle ────────────────────────
+
+
+def test_repeated_unauthenticated_requests_get_ip_throttled(server):
+    """An IP that floods invalid-token requests is rate-limited BEFORE the
+    401 (per-IP bucket, capacity 20). Without this, token brute-force gets
+    an unbounded stream of cheap verify-and-401s — the per-user limiter
+    can't help because there is no resolved user_id to key on. The first
+    request is a clean 401 (bucket full); once the bucket drains, further
+    requests from the same IP get 429."""
+    headers = _bearer("invalid-token-xyz")
+    responses = [
+        requests.get(f"{server}/api/v1/alerts", headers=headers, timeout=5)
+        for _ in range(30)
+    ]
+    statuses = [r.status_code for r in responses]
+    # Bucket starts full → the first attempt is a normal 401, not a 429.
+    assert statuses[0] == 401
+    # The flood (30 > capacity 20) trips the throttle.
+    assert 429 in statuses
+    # The 429 carries the standard body shape + Retry-After header, and
+    # leaks nothing about the (invalid) token.
+    throttled = next(r for r in responses if r.status_code == 429)
+    assert throttled.json()["error"] == "rate_limited"
+    assert int(throttled.headers["Retry-After"]) >= 1
+
+
+def test_successful_auth_does_not_consume_unauth_ip_bucket(server):
+    """A successful authentication must NOT consume the per-IP unauth bucket
+    — only FAILED attempts do. Otherwise a busy legitimate client would
+    throttle itself out of the brute-force budget. (The throttle is checked
+    read-only before verify; the consume happens only on the failure path.)"""
+    from auth.rate_limit import get_bucket
+
+    uid = _make_user()
+    token = _mint_token(uid)
+    for _ in range(5):  # several valid requests…
+        r = requests.get(
+            f"{server}/api/v1/ports/supply-lines",
+            headers=_bearer(token), timeout=10,
+        )
+        assert r.status_code == 200
+    # …leave the per-IP unauth bucket untouched (still full). The server ran
+    # in-process (daemon thread), so this is the very bucket it consulted.
+    bucket = get_bucket(
+        "unauth-ip:127.0.0.1",
+        capacity=api_server._UNAUTH_IP_CAPACITY,
+        refill_per_sec=api_server._UNAUTH_IP_REFILL_PER_SEC,
+    )
+    assert bucket.tokens == pytest.approx(float(api_server._UNAUTH_IP_CAPACITY))
+
+
 def test_bearer_scheme_is_case_insensitive(server):
     """RFC 6750 says the auth-scheme name is case-insensitive — a
     lowercase ``bearer`` prefix must work."""

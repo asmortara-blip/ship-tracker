@@ -279,3 +279,63 @@ def test_login_unknown_user_runs_dummy_verify_for_enumeration_resistance(monkeyp
     assert len(calls) == 1                          # a verify ran despite no user
     assert calls[0][1] == users._DUMMY_PW_HASH      # against the fixed dummy
     assert calls[0][2] == users._DUMMY_PW_SALT
+
+
+# ─── login: brute-force throttle ──────────────────────────────────────────
+#
+# These use DEDICATED usernames + an explicit ``clear_buckets`` in a finally
+# so a drained bucket can't leak into other tests (the rate-limit registry is
+# process-global; the autouse ``isolated_db`` fixture only resets the DB).
+
+
+def test_login_throttles_consecutive_failures(monkeypatch) -> None:
+    """After enough consecutive FAILED logins for a username, even the
+    CORRECT password is throttled — the attempt is rejected at the rate-
+    limit gate, before the password is ever checked."""
+    import auth.users as users
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        users.signup("throttle-victim", "correct-password-123")
+        # Make the draining attempts cheap + deterministic: stub the KDF so
+        # the loop doesn't depend on PBKDF2 wall-time (which would let the
+        # bucket refill mid-loop and make the assertion timing-flaky).
+        calls: list = []
+        monkeypatch.setattr(
+            users, "_verify_password",
+            lambda pw, h, s: calls.append(pw) or False,
+        )
+        for _ in range(10):  # capacity is 10 — drain it with wrong passwords
+            assert users.login("throttle-victim", "wrong") is None
+        verifies_before = len(calls)
+        # The next attempt — even with the CORRECT password — is rejected at
+        # the throttle gate, so the KDF never runs for it.
+        assert users.login("throttle-victim", "correct-password-123") is None
+        assert len(calls) == verifies_before  # no verify ran → it was throttled
+    finally:
+        clear_buckets()
+
+
+def test_login_success_resets_throttle() -> None:
+    """A successful login clears the failed-attempt counter, so the failures
+    must be CONSECUTIVE to trip the throttle. Without the reset-on-success,
+    9 + 9 = 18 failures would blow past the cap of 10 and the final correct
+    login would be throttled; with it, each run of 9 starts fresh."""
+    from auth.users import login, signup
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        signup("resettable", "correct-password-123")
+        for _ in range(9):  # one short of the cap
+            assert login("resettable", "wrong") is None
+        # A success resets the bucket…
+        assert login("resettable", "correct-password-123") is not None
+        # …so another 9 failures still don't trip it, and the correct
+        # password is still accepted afterwards.
+        for _ in range(9):
+            assert login("resettable", "wrong") is None
+        assert login("resettable", "correct-password-123") is not None
+    finally:
+        clear_buckets()

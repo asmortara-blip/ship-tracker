@@ -262,9 +262,29 @@ def clear_buckets() -> None:
         _BUCKETS.clear()
 
 
+def reset_bucket(user_id: str) -> None:
+    """Drop one key's bucket so its NEXT access starts full again.
+
+    Unlike ``clear_buckets`` (all keys, tests only), this resets a
+    single key and IS safe in production for one specific pattern:
+    resetting a *failed-attempt* counter after a SUCCESSFUL
+    authentication. ``auth.users.login`` consumes a token per attempt
+    and calls this on success, so the bucket tracks *consecutive*
+    failures — a legitimate user who eventually logs in clears their
+    own budget, and only an unbroken run of failures (a brute-force
+    flood) can drain it to the throttle threshold.
+
+    Do NOT call this on the *failure* path — that would defeat the
+    limit. No-op for an unknown key.
+    """
+    with _BUCKETS_LOCK:
+        _BUCKETS.pop(user_id, None)
+
+
 __all__ = [
     "TokenBucket",
     "check_rate_limit",
     "clear_buckets",
     "get_bucket",
+    "reset_bucket",
 ]

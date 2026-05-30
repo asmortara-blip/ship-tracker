@@ -340,6 +340,34 @@ def login(
         if not isinstance(username, str) or not isinstance(password, str):
             return None
 
+        # Brute-force throttle: cap login attempts per username via the
+        # shared in-process limiter (best-effort, process-local — the same
+        # posture as the API limiter). Burst-tolerant (10) with a slow refill
+        # (0.2/s ≈ 1 attempt / 5s sustained) so a real user's handful of
+        # retries pass while a tight-loop flood is throttled after the burst.
+        # A SUCCESSFUL login resets this username's bucket (reset_bucket on
+        # the success path below), so the counter tracks *consecutive*
+        # failures — a legitimate user's occasional fat-finger never
+        # accumulates toward the limit; only an unbroken run of failures can
+        # drain it. A throttled attempt returns None — the SAME shape as a bad
+        # password, leaking nothing about whether the username exists. (Trade-
+        # off: an attacker can keep one username's bucket drained = a login
+        # DoS on that victim, but gains no access and the bucket refills.) The
+        # limiter is fail-OPEN: a limiter error must never block a login.
+        try:
+            from auth.rate_limit import check_rate_limit
+            allowed, _retry = check_rate_limit(
+                f"login:{username}", capacity=10, refill_per_sec=0.2,
+            )
+            if not allowed:
+                logger.warning(
+                    f"auth.users.login: rate-limited login attempts for "
+                    f"username={username!r}"
+                )
+                return None
+        except Exception as exc:  # noqa: BLE001 — limiter must never break login
+            logger.debug(f"auth.users.login: rate-limit check failed: {exc}")
+
         from state.db import get_connection
         conn = get_connection()
 
@@ -458,6 +486,17 @@ def login(
             )
         except Exception:  # noqa: BLE001
             pass
+
+        # Successful auth clears the brute-force counter (see the throttle
+        # note at the top): the bucket should track only *consecutive*
+        # failures, so a real login resets it to full. Best-effort — a reset
+        # failure must not fail an already-authenticated login.
+        try:
+            from auth.rate_limit import reset_bucket
+            reset_bucket(f"login:{username}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"auth.users.login: throttle reset failed: {exc}")
+
         return authenticated
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
         logger.warning(f"auth.users.login: failed for username={username!r}: {exc}")
