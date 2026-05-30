@@ -105,3 +105,17 @@ def test_verify_never_raises_on_garbage() -> None:
     # Should not raise on weird inputs.
     assert verify_calendar_token("\x00\x01\x02") in (None,)
     assert verify_calendar_token(" " * 100) is None
+
+
+def test_verify_matches_regardless_of_row_position() -> None:
+    """The verifier scans ALL rows (no early-return on match), so a token
+    belonging to any user resolves correctly and a non-token returns None.
+    (The no-early-return is what keeps the lookup timing from leaking the
+    match position.)"""
+    t_alice = generate_calendar_token(user_id="alice")
+    t_bob = generate_calendar_token(user_id="bob")
+    t_carol = generate_calendar_token(user_id="carol")
+    assert verify_calendar_token(t_alice) == "alice"
+    assert verify_calendar_token(t_bob) == "bob"
+    assert verify_calendar_token(t_carol) == "carol"
+    assert verify_calendar_token("nope-not-a-real-token") is None

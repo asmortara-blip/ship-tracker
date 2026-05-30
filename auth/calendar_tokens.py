@@ -211,6 +211,11 @@ def verify_calendar_token(token: str) -> Optional[str]:
         rows = conn.execute(
             "SELECT user_id, settings_json FROM user_settings",
         ).fetchall()
+        # Scan ALL rows and DO NOT early-return on a match — returning as soon
+        # as the token is found would leak (via timing) whether/where it
+        # matched. Accumulate the first hit and keep going, like verify_totp /
+        # the recovery-code path.
+        matched_uid: Optional[str] = None
         for row in rows or []:
             # ``rows`` from a Row-factory connection support both
             # dict-style and index access; handle either.
@@ -239,10 +244,12 @@ def verify_calendar_token(token: str) -> Optional[str]:
             if not isinstance(stored, str) or not stored:
                 continue
             # Constant-time compare. ``compare_digest`` accepts
-            # either bytes or strings of equal type.
+            # either bytes or strings of equal type. Record the first hit
+            # but keep iterating so timing doesn't leak the match position.
             if hmac.compare_digest(stored, token):
-                return str(stored_uid)
-        return None
+                if matched_uid is None:
+                    matched_uid = str(stored_uid)
+        return matched_uid
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"calendar_tokens.verify: failed: {exc}")
         return None

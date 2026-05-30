@@ -616,3 +616,43 @@ def test_end_to_end_real_acknowledge_alert_does_not_raise(server) -> None:
         timeout=5,
     )
     assert r.status_code == 200
+
+
+# ─── HMAC per-IP bucket bounding (memory-exhaustion guard) ───────────────────
+
+def test_hmac_bucket_evicts_idle_entries_when_over_cap(monkeypatch) -> None:
+    """Adding a new IP over the cap drops fully-refilled (idle) entries —
+    they carry no state, so the table stays bounded."""
+    import time as _t
+
+    import worker.webhook_listener as wl
+
+    wl._clear_hmac_buckets()
+    monkeypatch.setattr(wl, "_HMAC_BUCKET_MAX_IPS", 5)
+    now = _t.monotonic()
+    for i in range(5):  # idle: full capacity, last-seen long ago
+        wl._HMAC_BUCKETS[f"ip-{i}"] = (float(wl._HMAC_BUCKET_CAPACITY), now - 10_000)
+
+    allowed, _retry = wl._hmac_rate_limit("brand-new-ip")
+    assert allowed is True
+    assert len(wl._HMAC_BUCKETS) <= 5
+    wl._clear_hmac_buckets()
+
+
+def test_hmac_bucket_clears_on_active_flood(monkeypatch) -> None:
+    """When the table is full of ACTIVE (non-idle) entries that can't be
+    dropped, a new IP triggers a full clear — bounded memory, every bucket
+    just resets to full capacity."""
+    import time as _t
+
+    import worker.webhook_listener as wl
+
+    wl._clear_hmac_buckets()
+    monkeypatch.setattr(wl, "_HMAC_BUCKET_MAX_IPS", 3)
+    now = _t.monotonic()
+    for i in range(3):  # active, near-empty, just seen → not idle
+        wl._HMAC_BUCKETS[f"active-{i}"] = (0.5, now)
+
+    wl._hmac_rate_limit("flood-ip")
+    assert len(wl._HMAC_BUCKETS) <= 3
+    wl._clear_hmac_buckets()

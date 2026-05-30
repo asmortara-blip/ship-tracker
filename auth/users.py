@@ -57,6 +57,15 @@ from auth.gate import _hash_password, _verify_password, SALT_BYTES
 from auth.ids import opaque_id
 
 
+# Enumeration-resistance dummy: a fixed salt + hash so login()'s "unknown
+# username" branch can run a REAL password verification (identical PBKDF2
+# cost) and return in ~the same time as a real-user/bad-password attempt —
+# instead of returning instantly and leaking which usernames exist via a
+# response-time side-channel.
+_DUMMY_PW_SALT = b"\x00" * SALT_BYTES
+_DUMMY_PW_HASH = _hash_password("enumeration-resistance-dummy", _DUMMY_PW_SALT)
+
+
 # ── Constraints ───────────────────────────────────────────────────────────
 
 # 3–32 chars, ASCII letters / digits / underscore / dash. This is the
@@ -345,6 +354,11 @@ def login(
             (username,),
         ).fetchone()
         if row is None:
+            # Enumeration resistance: run a dummy verification so an unknown
+            # username costs ~the same wall-clock as a real one with a bad
+            # password (the real path below runs the same KDF). Without this,
+            # response time leaks which usernames exist.
+            _verify_password(password, _DUMMY_PW_HASH, _DUMMY_PW_SALT)
             return None
 
         try:

@@ -368,6 +368,31 @@ def _resolve_hmac_user_id() -> str:
 _HMAC_BUCKETS: dict[str, tuple[float, float]] = {}
 _HMAC_BUCKET_CAPACITY: int = 300
 _HMAC_BUCKET_REFILL_PER_SEC: float = 5.0
+# Cap the per-IP bucket table so varied / spoofed source addresses can't grow
+# it without bound (memory exhaustion). Evicted only when adding a NEW IP.
+_HMAC_BUCKET_MAX_IPS: int = 10_000
+
+
+def _evict_hmac_buckets(now: float) -> None:
+    """Bound ``_HMAC_BUCKETS`` against memory exhaustion from many distinct
+    (possibly spoofed) source IPs.
+
+    First drop fully-refilled (idle) entries — a bucket back at capacity
+    carries no state, since a missing key defaults to full capacity, so the
+    drop is lossless. If the table is STILL at the cap (a genuine flood of
+    distinct active IPs), clear it: bounded memory wins, and every bucket
+    simply resets to full capacity — a brief, safe rate-limit softening, not
+    a correctness break.
+    """
+    if len(_HMAC_BUCKETS) < _HMAC_BUCKET_MAX_IPS:
+        return
+    cap = float(_HMAC_BUCKET_CAPACITY)
+    for ip, (tokens, last) in list(_HMAC_BUCKETS.items()):
+        refilled = min(cap, tokens + max(0.0, now - last) * _HMAC_BUCKET_REFILL_PER_SEC)
+        if refilled >= cap:
+            _HMAC_BUCKETS.pop(ip, None)
+    if len(_HMAC_BUCKETS) >= _HMAC_BUCKET_MAX_IPS:
+        _HMAC_BUCKETS.clear()
 
 
 def _hmac_rate_limit(remote_ip: str) -> tuple[bool, float]:
@@ -385,6 +410,9 @@ def _hmac_rate_limit(remote_ip: str) -> tuple[bool, float]:
     if not remote_ip:
         remote_ip = "unknown"
     now = time.monotonic()
+    # Bound the table before inserting a previously-unseen IP.
+    if remote_ip not in _HMAC_BUCKETS:
+        _evict_hmac_buckets(now)
     tokens, last = _HMAC_BUCKETS.get(
         remote_ip, (float(_HMAC_BUCKET_CAPACITY), now),
     )

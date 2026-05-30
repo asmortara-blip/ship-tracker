@@ -263,3 +263,19 @@ def test_user_dataclass_has_no_password_material() -> None:
     assert fields == {
         "user_id", "username", "role", "created_at", "last_login_at",
     }
+
+
+def test_login_unknown_user_runs_dummy_verify_for_enumeration_resistance(monkeypatch) -> None:
+    """An unknown username must still run a password verification (against a
+    fixed dummy) so response timing doesn't leak which usernames exist."""
+    import auth.users as users
+
+    calls: list = []
+    monkeypatch.setattr(
+        users, "_verify_password",
+        lambda pw, h, s: calls.append((pw, h, s)) or False,
+    )
+    assert users.login("definitely-not-a-real-user", "whatever") is None
+    assert len(calls) == 1                          # a verify ran despite no user
+    assert calls[0][1] == users._DUMMY_PW_HASH      # against the fixed dummy
+    assert calls[0][2] == users._DUMMY_PW_SALT
