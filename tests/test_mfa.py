@@ -429,6 +429,61 @@ def test_enable_mfa_rejects_empty_inputs() -> None:
         assert codes is None
 
 
+# ─── enable_mfa proof-of-possession (#7) ──────────────────────────────────
+
+
+def test_enable_mfa_with_valid_code_succeeds() -> None:
+    """Proof-of-possession: a correct current TOTP enables MFA + mints
+    recovery codes, same as the no-code path but with the user proven able
+    to produce a code."""
+    from auth.mfa import (
+        compute_totp, enable_mfa, generate_secret, is_mfa_enabled,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    secret = generate_secret()
+    ok, codes = enable_mfa(user.user_id, secret, code=compute_totp(secret))
+    assert ok is True
+    assert isinstance(codes, list) and len(codes) == 10
+    assert is_mfa_enabled(user.user_id) is True
+
+
+def test_enable_mfa_with_invalid_code_refuses_and_leaves_off() -> None:
+    """A WRONG proof-of-possession code REFUSES the enable and leaves MFA
+    OFF — this is the whole point: a mis-scanned secret must not be made
+    mandatory (which would lock the account out on the next login)."""
+    from auth.mfa import (
+        compute_totp, enable_mfa, generate_secret, is_mfa_enabled,
+    )
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    secret = generate_secret()
+    real = compute_totp(secret)
+    wrong = str((int(real) + 1) % 1_000_000).zfill(6)
+    ok, codes = enable_mfa(user.user_id, secret, code=wrong)
+    assert ok is False
+    assert codes is None
+    assert is_mfa_enabled(user.user_id) is False  # NOT enabled
+
+
+def test_enable_mfa_without_code_still_enables_escape_hatch() -> None:
+    """Omitting the code is the operator/provisioning escape hatch — the
+    enable still succeeds (the no-PoP path is logged, not blocked), which is
+    how ``ops_cli mfa enable`` and test setup keep working."""
+    from auth.mfa import enable_mfa, generate_secret, is_mfa_enabled
+    from auth.users import signup
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    ok, codes = enable_mfa(user.user_id, generate_secret())  # no code
+    assert ok is True
+    assert is_mfa_enabled(user.user_id) is True
+
+
 def test_is_mfa_enabled_unknown_user_returns_false() -> None:
     from auth.mfa import is_mfa_enabled
 

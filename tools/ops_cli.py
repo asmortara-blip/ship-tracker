@@ -1251,17 +1251,24 @@ def _cmd_mfa_enable(args: argparse.Namespace) -> None:
     user = get_user(args.user_id)
     account = user.username if user is not None else args.user_id
 
-    secret = generate_secret()
+    # Use an operator-supplied secret when given (so --code can do a real
+    # proof-of-possession round-trip); otherwise generate a fresh one. A
+    # generated secret has no matching code the operator could supply in one
+    # shot, so the no-PoP provisioning path stays the default.
+    secret = getattr(args, "secret", None) or generate_secret()
     uri = provisioning_uri(secret, account=account)
     # v21 signature change: enable_mfa returns (ok, recovery_codes).
     # The recovery codes are surfaced to the operator EXACTLY ONCE
     # on stdout — never logged, never re-derivable from the DB. The
-    # raw secret is similarly shown once.
-    ok, recovery_codes = enable_mfa(args.user_id, secret)
+    # raw secret is similarly shown once. ``code`` (when supplied) makes
+    # enable_mfa enforce proof-of-possession and refuse on a mismatch.
+    ok, recovery_codes = enable_mfa(
+        args.user_id, secret, code=getattr(args, "code", None),
+    )
     if not ok:
         raise RuntimeError(
-            f"enable_mfa failed for user_id={args.user_id!r} — "
-            "unknown user or DB error"
+            f"enable_mfa failed for user_id={args.user_id!r} — unknown user, "
+            "DB error, or (with --code) the code did not match the secret"
         )
 
     payload = {
@@ -3360,6 +3367,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sm1 = sm.add_parser("enable", help="Generate a secret + enable MFA for a user")
     sm1.add_argument("user_id")
+    sm1.add_argument(
+        "--secret",
+        help=(
+            "Use this base32 secret instead of generating one. Pair with "
+            "--code to do a real proof-of-possession enable (the user reads "
+            "you a code generated from this secret)."
+        ),
+    )
+    sm1.add_argument(
+        "--code",
+        help=(
+            "A current TOTP code proving possession of --secret. When given, "
+            "the enable is REFUSED unless the code verifies. Omit for the "
+            "generate-and-go provisioning path (enable without proof, logged)."
+        ),
+    )
     sm1.add_argument("--json", action="store_true")
     sm1.set_defaults(func=_cmd_mfa_enable)
 

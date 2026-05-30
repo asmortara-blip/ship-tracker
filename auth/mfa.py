@@ -350,8 +350,26 @@ def provisioning_uri(
 def enable_mfa(
     user_id: str,
     secret: str,
+    *,
+    code: Optional[str] = None,
 ) -> tuple[bool, Optional[list[str]]]:
     """Persist ``secret``, flip ``mfa_enabled``, and auto-mint recovery codes.
+
+    Proof-of-possession (``code``)
+    ------------------------------
+    When ``code`` is supplied it MUST be a currently-valid TOTP for
+    ``secret`` or the enable is REFUSED (``(False, None)``). This proves the
+    user successfully configured their authenticator before we make MFA
+    mandatory on their next login — without it, a mis-scanned secret would
+    lock the account out. The user-facing enrollment flow (the Streamlit
+    security panel) always passes the code the user just typed, so that path
+    enforces PoP at this layer.
+
+    When ``code`` is ``None`` the enable proceeds but logs a WARNING — this is
+    the explicit escape hatch for operator provisioning (``ops_cli mfa
+    enable`` generates the secret itself, so it cannot supply a matching code
+    in one shot) and for test setup. The warning keeps a no-PoP enable
+    auditable rather than silent.
 
     Returns a ``(ok, recovery_codes)`` tuple:
 
@@ -394,6 +412,24 @@ def enable_mfa(
                 f"user_id={user_id!r}"
             )
             return False, None
+
+        # Proof-of-possession. A supplied code MUST verify against the secret
+        # or we refuse — enabling MFA on a secret the user can't reproduce
+        # would lock them out on the next (now-mandatory) login. A missing
+        # code is the operator/test escape hatch, but we log it so a no-PoP
+        # enable is never silent.
+        if code is not None:
+            if not verify_totp(secret, str(code)):
+                logger.warning(
+                    f"auth.mfa.enable_mfa: proof-of-possession FAILED for "
+                    f"user_id={user_id!r}; refusing to enable MFA"
+                )
+                return False, None
+        else:
+            logger.warning(
+                f"auth.mfa.enable_mfa: enabling WITHOUT proof-of-possession "
+                f"(no code supplied) for user_id={user_id!r}"
+            )
 
         from state.db import get_connection
         conn = get_connection()

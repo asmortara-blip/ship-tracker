@@ -2116,7 +2116,10 @@ def _render_security_panel() -> None:
                             # copyable st.code block — the plaintext
                             # is unrecoverable after the user
                             # navigates away.
-                            ok, codes = enable_mfa(user_id, pending)
+                            # Pass the just-verified code so enable_mfa
+                            # enforces proof-of-possession at the data layer
+                            # too (the UI already gated on verify_totp above).
+                            ok, codes = enable_mfa(user_id, pending, code=code)
                             if ok:
                                 st.session_state.pop(
                                     "pending_mfa_secret", None
@@ -2637,7 +2640,9 @@ def _render_mfa_panel(user_id: str) -> None:
                         # render lands in the enabled branch with
                         # ``mfa_pending_codes`` set, and the dedicated
                         # one-shot reveal block surfaces them ONCE.
-                        ok, new_codes = enable_mfa(user_id, pending)
+                        # PoP at the data layer (the UI already verified the
+                        # code above); see the security-panel site.
+                        ok, new_codes = enable_mfa(user_id, pending, code=code)
                         if ok:
                             st.session_state.pop("mfa_pending_secret", None)
                             st.session_state.pop("mfa_panel_code_input", None)

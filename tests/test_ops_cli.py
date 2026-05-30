@@ -1031,6 +1031,42 @@ def test_mfa_enable_unknown_user_exits_1(capsys) -> None:
     assert "error:" in err.lower()
 
 
+def test_mfa_enable_with_secret_and_valid_code_does_pop(capsys) -> None:
+    """`mfa enable --secret S --code <valid>` does a proof-of-possession
+    enable (operator supplies a known secret + a code generated from it)."""
+    from auth.mfa import compute_totp, generate_secret, is_mfa_enabled
+
+    uid = _mk_user("alice")
+    secret = generate_secret()
+    code, out, err = _run(
+        ["mfa", "enable", uid, "--secret", secret,
+         "--code", compute_totp(secret)],
+        capsys,
+    )
+    assert code == 0, (out, err)
+    assert is_mfa_enabled(uid) is True
+    # The operator-supplied secret is the one that got enabled.
+    assert secret in out
+
+
+def test_mfa_enable_with_invalid_code_exits_1_and_stays_off(capsys) -> None:
+    """`mfa enable --secret S --code <wrong>` is refused (exit 1) and leaves
+    MFA OFF — proof-of-possession enforced via the CLI."""
+    from auth.mfa import compute_totp, generate_secret, is_mfa_enabled
+
+    uid = _mk_user("alice")
+    secret = generate_secret()
+    real = compute_totp(secret)
+    wrong = str((int(real) + 1) % 1_000_000).zfill(6)
+    code, _out, err = _run(
+        ["mfa", "enable", uid, "--secret", secret, "--code", wrong],
+        capsys,
+    )
+    assert code == 1
+    assert "error:" in err.lower()
+    assert is_mfa_enabled(uid) is False
+
+
 def test_mfa_disable_round_trip(capsys) -> None:
     """enable then disable: the second call should leave is_mfa_enabled
     False and return exit 0."""
