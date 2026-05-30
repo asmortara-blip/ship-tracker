@@ -943,6 +943,31 @@ def test_tokens_create_then_list(capsys) -> None:
     assert "personal" in out
 
 
+def test_tokens_create_expires_in_days_zero_is_non_expiring(capsys) -> None:
+    """``--expires-in-days 0`` mints a non-expiring token; the kv output
+    renders expires_at as "(never)"."""
+    code, out, _ = _run(
+        ["tokens", "create", "u-3", "--label", "perp",
+         "--expires-in-days", "0"],
+        capsys,
+    )
+    assert code == 0
+    assert "(never)" in out
+
+
+def test_tokens_create_expires_in_days_sets_concrete_expiry(capsys) -> None:
+    """``--expires-in-days N`` stamps a concrete ISO expiry carried in the
+    --json ``meta`` payload."""
+    code, out, _ = _run(
+        ["tokens", "create", "u-4", "--label", "ttl",
+         "--expires-in-days", "30", "--json"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["meta"]["expires_at"]  # non-empty ISO timestamp
+
+
 # ─── export ──────────────────────────────────────────────────────────────
 
 def test_export_writes_to_custom_path(capsys, tmp_path) -> None:

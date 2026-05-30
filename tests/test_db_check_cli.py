@@ -204,10 +204,10 @@ def test_orphan_alert_detected(capsys) -> None:
     assert result.details["orphan_count"] == 1
 
 
-def test_stale_api_token_skipped_when_no_expires_at(capsys) -> None:
-    """The current api_tokens schema has no ``expires_at`` column, so
-    the check should report INFO with a "skipped" reason. This locks
-    in the forward-compat degradation."""
+def test_stale_api_token_check_passes_when_none_stale(capsys) -> None:
+    """As of schema v27 ``api_tokens`` carries ``expires_at``, so this check
+    is LIVE (it no longer degrades to a "column absent" skip). A fresh DB
+    with no expired-but-active tokens → PASS, stale_count 0."""
     _force_db_open()
     from tools.db_check_cli import check_stale_api_tokens
 
@@ -216,9 +216,48 @@ def test_stale_api_token_skipped_when_no_expires_at(capsys) -> None:
         result = check_stale_api_tokens(conn)
     finally:
         conn.close()
-    # No expires_at on the column → INFO
+    assert result.status == "PASS"
+    assert result.details["stale_count"] == 0
+
+
+def test_stale_api_token_detected_when_expired_and_active(capsys) -> None:
+    """An api_token past its ``expires_at`` that is still active (revoked=0)
+    is flagged stale (INFO + stale_count) — the check the v27 column lit up.
+    A non-expiring (empty expires_at) token must NOT count as stale."""
+    _force_db_open()
+    past_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    conn = _direct_conn()
+    try:
+        # One expired-but-active token (stale) + one non-expiring token
+        # (must be ignored — empty expires_at means "never expires").
+        conn.execute(
+            "INSERT INTO api_tokens "
+            "(token_id, user_id, label, token_hash, token_salt, "
+            " token_prefix, created_at, last_used_at, revoked, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, ?)",
+            ("tok-stale-chk", "user-1", "lbl", "h", "s", "abcd1234",
+             past_iso, past_iso),
+        )
+        conn.execute(
+            "INSERT INTO api_tokens "
+            "(token_id, user_id, label, token_hash, token_salt, "
+            " token_prefix, created_at, last_used_at, revoked, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, '')",
+            ("tok-perp-chk", "user-1", "lbl", "h", "s", "efgh5678", past_iso),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from tools.db_check_cli import check_stale_api_tokens
+
+    conn2 = sqlite3.connect(str(_live_db_path()))
+    try:
+        result = check_stale_api_tokens(conn2)
+    finally:
+        conn2.close()
     assert result.status == "INFO"
-    assert "expires_at" in result.message
+    assert result.details["stale_count"] == 1  # the perpetual token excluded
 
 
 def test_stale_invitation_detected(capsys) -> None:
@@ -309,19 +348,14 @@ def test_duplicate_rule_ids_fails(capsys) -> None:
 
 
 def test_fix_marks_stale_tokens_inactive(capsys, monkeypatch) -> None:
-    """--fix should mark expired api_tokens inactive. The current
-    api_tokens schema has no expires_at column, so the fix degrades
-    gracefully and the test asserts the "skipped" reason is recorded.
-
-    To also exercise the happy path, we ALTER the table to add the
-    column, insert a stale row, run --fix, and confirm revoked=1.
-    """
+    """--fix marks expired api_tokens inactive (revoked=1). As of schema v27
+    ``api_tokens`` carries ``expires_at``, so this exercises the real fix
+    path directly (it no longer needs to add the column itself — the
+    migration provides it)."""
     _force_db_open()
     past_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     conn = _direct_conn()
     try:
-        # Add expires_at to api_tokens for this test only.
-        conn.execute("ALTER TABLE api_tokens ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "INSERT INTO api_tokens "
             "(token_id, user_id, label, token_hash, token_salt, "

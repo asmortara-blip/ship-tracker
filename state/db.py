@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 26
+SCHEMA_VERSION: int = 27
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1427,6 +1427,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     # Safe to run on every open (fresh DB: creates the table; existing
     # DB: no-op).
     conn.executescript(_SCHEMA_V26)
+    # v27 column add — same idempotent ALTER-TABLE-in-try/except pattern as
+    # v4 / v5 / v25. Adds ``api_tokens.expires_at`` so a PAT can carry an
+    # optional expiry (empty = never expires, which grandfathers every
+    # pre-v27 token). Placed after the unconditional table-create scripts
+    # above so ``api_tokens`` (from _SCHEMA_V11) definitely exists. Safe on
+    # every open (fresh DB: adds the column; existing DB: no-op when present).
+    try:
+        from state.migrations import _migrate_to_v27
+        _migrate_to_v27(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v27 column add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1765,6 +1776,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v26(conn)
         except Exception as exc:
             logger.warning(f"state.db: v26 migration skipped: {exc}")
+
+    # Migration 26 → 27: add the ``api_tokens.expires_at`` column so a PAT
+    # can carry an optional expiry — a leaked token is no longer valid
+    # forever. Empty string = never expires, so pre-v27 tokens are
+    # grandfathered. Same idempotent ALTER-TABLE-in-try/except pattern as
+    # v4 / v5 / v25 — the helper is already invoked unconditionally above;
+    # this branch keeps the version-step ladder explicit.
+    if current < 27:
+        try:
+            from state.migrations import _migrate_to_v27
+            _migrate_to_v27(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v27 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

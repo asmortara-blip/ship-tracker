@@ -36,15 +36,15 @@ def isolated_state_db(monkeypatch, tmp_path):
 # ─── ApiToken dataclass shape ─────────────────────────────────────────────
 
 def test_apitoken_dataclass_fields_exclude_hash_and_salt() -> None:
-    """The dataclass exposes the seven public-facing fields. The hash
-    and salt MUST NOT be reachable from an ApiToken instance — that is
-    the defining property of the type."""
+    """The dataclass exposes the public-facing fields (incl. ``expires_at``
+    added in v27). The hash and salt MUST NOT be reachable from an ApiToken
+    instance — that is the defining property of the type."""
     from auth.tokens import ApiToken
 
     fields = set(ApiToken.__dataclass_fields__)
     assert fields == {
         "token_id", "user_id", "label", "token_prefix",
-        "created_at", "last_used_at", "revoked",
+        "created_at", "last_used_at", "revoked", "expires_at",
     }
     # Neither "token_hash" nor "token_salt" may be a field on the
     # dataclass — the credential material stays in the DB.
@@ -528,3 +528,138 @@ def test_revoke_token_cross_user_does_not_write_audit_event() -> None:
     assert revoke_token(meta.token_id, user_id="bob") is False
     rows = query_audit(action="revoke_api_token")
     assert rows == []
+
+
+# ─── Token expiry / TTL (v27) ─────────────────────────────────────────────
+
+
+def test_token_is_expired_helper() -> None:
+    """The expiry predicate: empty/None = never expires, a future stamp is
+    not expired, a past stamp IS expired, and a malformed stamp fails
+    CLOSED (expired)."""
+    from datetime import datetime, timedelta, timezone
+    from auth.tokens import _token_is_expired
+
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    assert _token_is_expired("", now=now) is False          # never expires
+    assert _token_is_expired(None, now=now) is False         # never expires
+    assert _token_is_expired(
+        (now + timedelta(days=1)).isoformat(), now=now
+    ) is False                                                # future
+    assert _token_is_expired(
+        (now - timedelta(days=1)).isoformat(), now=now
+    ) is True                                                 # past
+    assert _token_is_expired("not-a-timestamp", now=now) is True  # fail closed
+
+
+def test_resolve_ttl_days_precedence(monkeypatch) -> None:
+    """Explicit arg > env > built-in default; a malformed env value falls
+    back to the default rather than silently disabling expiry."""
+    from auth.tokens import _resolve_ttl_days, _DEFAULT_TOKEN_TTL_DAYS
+
+    monkeypatch.delenv("API_TOKEN_TTL_DAYS", raising=False)
+    assert _resolve_ttl_days(None) == _DEFAULT_TOKEN_TTL_DAYS  # built-in
+    assert _resolve_ttl_days(7) == 7                            # explicit
+    assert _resolve_ttl_days(0) == 0                            # explicit 0
+
+    monkeypatch.setenv("API_TOKEN_TTL_DAYS", "5")
+    assert _resolve_ttl_days(None) == 5                         # env
+    assert _resolve_ttl_days(2) == 2                            # explicit wins
+
+    monkeypatch.setenv("API_TOKEN_TTL_DAYS", "not-a-number")
+    assert _resolve_ttl_days(None) == _DEFAULT_TOKEN_TTL_DAYS   # malformed → default
+
+
+def _days_from_now(iso: str) -> float:
+    from datetime import datetime, timezone
+    when = datetime.fromisoformat(iso)
+    return (when - datetime.now(timezone.utc)).total_seconds() / 86400.0
+
+
+def test_create_token_default_ttl_is_ninety_days(monkeypatch) -> None:
+    """With no override, a new token expires ~90 days out."""
+    from auth.tokens import create_token, _DEFAULT_TOKEN_TTL_DAYS
+
+    monkeypatch.delenv("API_TOKEN_TTL_DAYS", raising=False)
+    meta, _ = create_token("u-1", "ci")
+    assert meta.expires_at  # non-empty
+    assert abs(_days_from_now(meta.expires_at) - _DEFAULT_TOKEN_TTL_DAYS) < 1.0
+
+
+def test_create_token_zero_ttl_is_non_expiring() -> None:
+    """``expires_in_days=0`` mints a perpetual token (empty expires_at) —
+    the opt-out for callers that want the pre-v27 behaviour."""
+    from auth.tokens import create_token
+
+    meta, _ = create_token("u-1", "ci", expires_in_days=0)
+    assert meta.expires_at == ""
+
+
+def test_create_token_explicit_ttl_overrides_env(monkeypatch) -> None:
+    """An explicit ``expires_in_days`` beats the env var."""
+    monkeypatch.setenv("API_TOKEN_TTL_DAYS", "999")
+    from auth.tokens import create_token
+
+    meta, _ = create_token("u-1", "ci", expires_in_days=2)
+    assert abs(_days_from_now(meta.expires_at) - 2) < 1.0
+
+
+def test_create_token_env_ttl_used_when_no_arg(monkeypatch) -> None:
+    """The env var sets the lifetime when no explicit arg is given."""
+    monkeypatch.setenv("API_TOKEN_TTL_DAYS", "5")
+    from auth.tokens import create_token
+
+    meta, _ = create_token("u-1", "ci")
+    assert abs(_days_from_now(meta.expires_at) - 5) < 1.0
+
+
+def test_verify_token_accepts_unexpired_token() -> None:
+    """A token within its TTL verifies normally."""
+    from auth.tokens import create_token, verify_token
+
+    _, raw = create_token("u-ok", "ci", expires_in_days=30)
+    assert verify_token(raw) == "u-ok"
+
+
+def test_verify_token_accepts_non_expiring_token() -> None:
+    """A non-expiring (empty expires_at) token verifies — this is also the
+    grandfather path for every pre-v27 row."""
+    from auth.tokens import create_token, verify_token
+
+    meta, raw = create_token("u-perp", "ci", expires_in_days=0)
+    assert meta.expires_at == ""
+    assert verify_token(raw) == "u-perp"
+
+
+def test_verify_token_rejects_expired_token() -> None:
+    """A token whose expires_at is in the past is rejected (returns None),
+    exactly like a wrong/unknown token — and last_used_at is NOT stamped."""
+    from auth.tokens import create_token, verify_token
+    from state.db import get_connection
+
+    meta, raw = create_token("u-exp", "ci")  # default 90-day TTL
+    # Force the row's expiry into the past, then verify.
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            "UPDATE api_tokens SET expires_at = ? WHERE token_id = ?",
+            ("2000-01-01T00:00:00+00:00", meta.token_id),
+        )
+    assert verify_token(raw) is None
+    # last_used_at stays empty — an expired verify must not stamp use.
+    row = conn.execute(
+        "SELECT last_used_at FROM api_tokens WHERE token_id = ?",
+        (meta.token_id,),
+    ).fetchone()
+    assert row["last_used_at"] == ""
+
+
+def test_list_tokens_surfaces_expires_at() -> None:
+    """``list_tokens`` exposes the expiry so a UI can show / sort by it."""
+    from auth.tokens import create_token, list_tokens
+
+    create_token("u-le", "ci", expires_in_days=10)
+    toks = list_tokens("u-le")
+    assert len(toks) == 1
+    assert toks[0].expires_at  # non-empty ISO timestamp
+    assert abs(_days_from_now(toks[0].expires_at) - 10) < 1.0

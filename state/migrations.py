@@ -1149,3 +1149,36 @@ def _migrate_to_v23(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v23 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v26 → v27 ─────────────────────────────────────────────────────
+
+def _migrate_to_v27(conn: sqlite3.Connection) -> None:
+    """Add the ``expires_at`` column to ``api_tokens`` (PAT expiry / TTL).
+
+    API tokens previously never expired — a leaked PAT stayed valid until it
+    was explicitly revoked. v27 adds an optional expiry: ``create_token``
+    stamps an ISO-8601 UTC ``expires_at`` (default 90 days, env-tunable via
+    ``API_TOKEN_TTL_DAYS``; 0 ⇒ non-expiring) and ``verify_token`` rejects a
+    token whose ``expires_at`` is in the past.
+
+    The column is ``TEXT NOT NULL DEFAULT ''`` and an EMPTY string means
+    "never expires", so every PRE-v27 token is grandfathered as non-expiring
+    — the expiry only applies to tokens minted after this upgrade. Same
+    idempotent ALTER TABLE pattern as ``_migrate_to_v4`` / ``_migrate_to_v5``
+    / ``_migrate_to_v25``: SQLite has no ``IF NOT EXISTS`` on ALTER TABLE, so
+    we swallow ``OperationalError: duplicate column name`` to stay safe to
+    re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE api_tokens ADD COLUMN "
+            "expires_at TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v27 ALTER TABLE failed: {exc}"
+        )

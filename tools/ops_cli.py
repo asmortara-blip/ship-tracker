@@ -1053,17 +1053,21 @@ def _cmd_tokens_list(args: argparse.Namespace) -> None:
             "prefix":       t.token_prefix,
             "created_at":   t.created_at,
             "last_used_at": t.last_used_at or "(never)",
+            "expires_at":   t.expires_at or "(never)",
             "revoked":      "Y" if t.revoked else "N",
         }
         for t in tokens
     ]
-    _print_table(rows, columns=["token_id", "label", "prefix", "created_at", "last_used_at", "revoked"])
+    _print_table(rows, columns=["token_id", "label", "prefix", "created_at", "last_used_at", "expires_at", "revoked"])
 
 
 def _cmd_tokens_create(args: argparse.Namespace) -> None:
     from auth.tokens import create_token
 
-    result = create_token(args.user_id, args.label)
+    result = create_token(
+        args.user_id, args.label,
+        expires_in_days=getattr(args, "expires_in_days", None),
+    )
     if result is None:
         raise RuntimeError(
             f"create_token failed for user_id={args.user_id!r} — "
@@ -1084,6 +1088,7 @@ def _cmd_tokens_create(args: argparse.Namespace) -> None:
             "label":      meta.label,
             "prefix":     meta.token_prefix,
             "created_at": meta.created_at,
+            "expires_at": meta.expires_at or "(never)",
         })
 
 
@@ -3288,6 +3293,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sk2 = sk.add_parser("create", help="Create an API token")
     sk2.add_argument("user_id")
     sk2.add_argument("--label", required=True)
+    sk2.add_argument(
+        "--expires-in-days", dest="expires_in_days", type=int, default=None,
+        help=(
+            "Token lifetime in days. Omit to use API_TOKEN_TTL_DAYS or the "
+            "90-day default; pass 0 for a non-expiring token."
+        ),
+    )
     sk2.add_argument("--json", action="store_true")
     sk2.set_defaults(func=_cmd_tokens_create)
 

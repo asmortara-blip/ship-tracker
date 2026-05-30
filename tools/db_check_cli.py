@@ -57,9 +57,10 @@ cannot accidentally mutate the DB they are diagnosing. With
 ``--fix`` the DB is opened read-write and the supported auto-fixes
 run:
 
-* Mark expired api_tokens inactive — the ``api_tokens`` schema does
-  NOT carry an ``expires_at`` column (yet); the helper degrades
-  gracefully and reports "skipped: no expires_at column".
+* Mark expired api_tokens inactive (``revoked = 1``) — ``api_tokens``
+  carries an ``expires_at`` column as of schema v27, so the fix is live.
+  (On a pre-v27 DB without the column the helper still degrades
+  gracefully and reports "skipped: no expires_at column".)
 * Mark expired invitations consumed (consumed_at=expires_at,
   consumed_by_user_id='SYSTEM_EXPIRED').
 * Delete ancient alert_silences (>30 days past expires_at). Calls
@@ -302,11 +303,10 @@ def _index_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """True iff ``table`` has ``column``. The fix path uses this to
-    skip api_tokens.expires_at when the column has not been added yet
-    (the api_tokens schema in state/db.py does NOT carry expires_at as
-    of v21 — the spec anticipates a future column, so we degrade
-    gracefully)."""
+    """True iff ``table`` has ``column``. Used by the stale-token check /
+    fix to stay robust against a pre-v27 DB whose ``api_tokens`` table
+    predates the ``expires_at`` column (added in schema v27): when the
+    column is absent the check degrades to INFO rather than erroring."""
     try:
         cur = conn.execute(f"PRAGMA table_info({table})")
         return any(row[1] == column for row in cur.fetchall())
@@ -580,12 +580,12 @@ def check_orphan_audit_users(conn: sqlite3.Connection) -> CheckResult:
 
 def check_stale_api_tokens(conn: sqlite3.Connection) -> CheckResult:
     """Count api_tokens whose ``expires_at`` is past and which are
-    still active (``revoked = 0``). The api_tokens schema as of v21
-    does NOT actually carry an ``expires_at`` column, so this check
-    degrades to INFO ("column not present") on every DB built against
-    the current schema. The check is here for forward-compat: when a
-    future migration adds ``expires_at`` the same code lights up
-    automatically.
+    still active (``revoked = 0``). As of schema v27 ``api_tokens``
+    carries ``expires_at``, so this check is LIVE: 0 stale → PASS, any
+    stale → INFO with a ``stale_count`` that ``--fix`` will clear. An
+    empty ``expires_at`` means "never expires" and is excluded. (A pre-v27
+    DB, or any connection whose table lacks the column, still degrades
+    gracefully to INFO "column not present".)
     """
     if not _table_exists(conn, "api_tokens"):
         return CheckResult(

@@ -35,9 +35,12 @@ What this module does NOT do
 * No HTTP middleware — that's the (future) API-server commit.
 * No UI surface — exposing tokens in ``ui.tab_alerts`` or a new
   auth tab is a follow-up. This commit ships the data layer only.
-* No automatic expiry. A token lives until ``revoke_token`` is
-  called. (We could add an ``expires_at`` column later; the schema
-  is designed so that's an additive ALTER, not a breaking change.)
+* Optional expiry (added v27). A token carries an ``expires_at`` —
+  ``create_token`` defaults it to now + ``API_TOKEN_TTL_DAYS`` (90 if
+  unset) and ``verify_token`` rejects an expired token. An empty
+  ``expires_at`` means "never expires", so every pre-v27 token is
+  grandfathered and ``create_token(expires_in_days=0)`` still mints a
+  perpetual token for callers that want the old behaviour.
 * No raw-token caching. The raw token exists ONLY in the
   ``create_token`` return value — nowhere else in process memory.
 
@@ -53,10 +56,11 @@ Security properties under test
 """
 from __future__ import annotations
 
+import os
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
@@ -84,6 +88,57 @@ _TOKEN_RAW_BYTES = 32
 # boundary; the prefix is purely an index hint.
 _TOKEN_PREFIX_LEN = 8
 
+# Default token lifetime in days. A leaked PAT that never expires is valid
+# forever; a TTL bounds that blast radius. 90 days is a common default for
+# machine credentials — long enough for a CI bot to run unattended, short
+# enough that a stale/leaked token rotates out. Operators can override per
+# deployment via ``API_TOKEN_TTL_DAYS`` (or per call via
+# ``create_token(expires_in_days=…)``); a value <= 0 means non-expiring.
+_DEFAULT_TOKEN_TTL_DAYS = 90
+
+
+def _resolve_ttl_days(expires_in_days: Optional[int]) -> int:
+    """Resolve a token's lifetime in days.
+
+    Precedence: the explicit ``expires_in_days`` argument wins; else the
+    ``API_TOKEN_TTL_DAYS`` env var; else ``_DEFAULT_TOKEN_TTL_DAYS`` (90). A
+    value <= 0 means "non-expiring". A malformed env value logs and falls
+    back to the default (never silently disables expiry)."""
+    if expires_in_days is not None:
+        return expires_in_days
+    raw = os.environ.get("API_TOKEN_TTL_DAYS", "").strip()
+    if not raw:
+        return _DEFAULT_TOKEN_TTL_DAYS
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            f"auth.tokens: invalid API_TOKEN_TTL_DAYS={raw!r}; "
+            f"using default {_DEFAULT_TOKEN_TTL_DAYS}"
+        )
+        return _DEFAULT_TOKEN_TTL_DAYS
+
+
+def _token_is_expired(
+    expires_at: Optional[str], *, now: Optional[datetime] = None
+) -> bool:
+    """True iff a non-empty ``expires_at`` is at or before ``now``.
+
+    Empty / ``None`` ⇒ never expires — this is how every pre-v27 token (and
+    any token minted with a non-positive TTL) is grandfathered. A malformed
+    timestamp counts as EXPIRED (fail closed): better to reject a token whose
+    expiry we cannot parse than to honour it indefinitely."""
+    if not expires_at:
+        return False
+    try:
+        when = datetime.fromisoformat(expires_at)
+    except (TypeError, ValueError):
+        return True
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    return when <= current
+
 
 # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -104,6 +159,9 @@ class ApiToken:
     created_at: str
     last_used_at: str
     revoked: bool
+    # ISO-8601 UTC timestamp after which the token is rejected. Empty string
+    # ⇒ never expires (pre-v27 tokens, and tokens minted with a <=0 TTL).
+    expires_at: str = ""
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -126,12 +184,18 @@ def _row_to_token(row: sqlite3.Row) -> ApiToken:
         created_at=row["created_at"],
         last_used_at=row["last_used_at"],
         revoked=bool(row["revoked"]),
+        expires_at=row["expires_at"],
     )
 
 
 # ── Public API: write ─────────────────────────────────────────────────────
 
-def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
+def create_token(
+    user_id: str,
+    label: str,
+    *,
+    expires_in_days: Optional[int] = None,
+) -> Optional[tuple[ApiToken, str]]:
     """Mint a fresh API token for ``user_id`` with the supplied label.
 
     Returns a ``(ApiToken, raw_secret)`` tuple on success. The
@@ -156,6 +220,12 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
         label:   A user-supplied free-form label so the user can tell
                  their tokens apart in a UI list ("CI bot", "Personal
                  laptop", …). Must be a non-empty string.
+        expires_in_days:
+                 Optional token lifetime in days. ``None`` (default) uses
+                 ``API_TOKEN_TTL_DAYS`` or the 90-day built-in default; a
+                 positive int sets an explicit lifetime; ``<= 0`` mints a
+                 non-expiring token. The computed ISO-8601 ``expires_at`` is
+                 stored on the row and enforced by ``verify_token``.
     """
     try:
         if not isinstance(user_id, str) or not user_id:
@@ -178,7 +248,15 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
         # start with a `-` argparse would read as a flag. The raw_token
         # secret above stays token_urlsafe — it is never a CLI argument.
         token_id = opaque_id(16)
-        created_at = _now_iso()
+        created_dt = datetime.now(timezone.utc)
+        created_at = created_dt.isoformat()
+        # Compute the expiry up front. A non-positive TTL ⇒ '' (never
+        # expires); otherwise created + N days as an ISO-8601 UTC string.
+        ttl_days = _resolve_ttl_days(expires_in_days)
+        expires_at = (
+            (created_dt + timedelta(days=ttl_days)).isoformat()
+            if ttl_days > 0 else ""
+        )
 
         from state.db import get_connection
         conn = get_connection()
@@ -186,8 +264,8 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
             """
             INSERT INTO api_tokens
               (token_id, user_id, label, token_hash, token_salt,
-               token_prefix, created_at, last_used_at, revoked)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+               token_prefix, created_at, last_used_at, revoked, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             """,
             (
                 token_id,
@@ -198,6 +276,7 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
                 token_prefix,
                 created_at,
                 "",
+                expires_at,
             ),
         )
 
@@ -225,6 +304,7 @@ def create_token(user_id: str, label: str) -> Optional[tuple[ApiToken, str]]:
             created_at=created_at,
             last_used_at="",
             revoked=False,
+            expires_at=expires_at,
         )
         return meta, raw_token
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
@@ -352,7 +432,8 @@ def verify_token(raw_token: str) -> Optional[str]:
         conn = get_connection()
         rows = conn.execute(
             """
-            SELECT token_id, user_id, token_hash, token_salt, revoked
+            SELECT token_id, user_id, token_hash, token_salt, revoked,
+                   expires_at
               FROM api_tokens
              WHERE token_prefix = ?
                AND revoked = 0
@@ -373,6 +454,18 @@ def verify_token(raw_token: str) -> Optional[str]:
                 # information-leak surface.
                 continue
             if _verify_password(raw_token, stored_hash, salt):
+                # Right secret. Reject if past its expiry — treat exactly
+                # like a miss (no last_used stamp, no user_id returned), so
+                # an expired token leaks no more than a wrong one. Empty
+                # expires_at ⇒ never expires (pre-v27 / non-expiring tokens).
+                # ``continue`` rather than ``return None`` for defensiveness
+                # in the (vanishingly rare) prefix-collision case.
+                if _token_is_expired(row["expires_at"]):
+                    logger.info(
+                        f"auth.tokens.verify_token: token "
+                        f"{row['token_id']!r} matched but is expired"
+                    )
+                    continue
                 # Match. Stamp last_used_at (best-effort) and return.
                 record_token_use(row["token_id"])
                 return row["user_id"]
@@ -402,7 +495,7 @@ def list_tokens(user_id: str) -> list[ApiToken]:
         rows = conn.execute(
             """
             SELECT token_id, user_id, label, token_prefix,
-                   created_at, last_used_at, revoked
+                   created_at, last_used_at, revoked, expires_at
               FROM api_tokens
              WHERE user_id = ?
              ORDER BY created_at DESC

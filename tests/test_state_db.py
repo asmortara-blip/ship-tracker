@@ -1154,3 +1154,62 @@ def test_v16_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> No
     # No duplicates from re-running the ALTER TABLE.
     assert col_names.count("mfa_secret") == 1
     assert col_names.count("mfa_enabled") == 1
+
+
+# ─── Schema v27: api_tokens.expires_at (PAT expiry / TTL) ─────────────────
+
+def test_v27_migration_adds_expires_at_column_to_api_tokens() -> None:
+    """v27 ALTER TABLE adds ``expires_at TEXT NOT NULL DEFAULT ''`` to
+    ``api_tokens`` so a PAT can carry an optional expiry. Empty string =
+    never expires, so pre-v27 rows (and inserts that omit the column) are
+    grandfathered as non-expiring."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(api_tokens)"
+        ).fetchall()
+    }
+    assert "expires_at" in cols
+    assert cols["expires_at"]["type"].upper() == "TEXT"
+    assert cols["expires_at"]["notnull"] == 1
+
+    # An INSERT that omits expires_at must pick up the '' default — this is
+    # the grandfathering path for any pre-v27 insert site.
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO api_tokens
+              (token_id, user_id, label, token_hash, token_salt,
+               token_prefix, created_at, last_used_at, revoked)
+            VALUES ('v27t', 'u', 'ci', 'deadbeef', 'cafe', 'abcd1234',
+                    '2026-05-29T00:00:00+00:00', '', 0)
+            """
+        )
+    row = conn.execute(
+        "SELECT expires_at FROM api_tokens WHERE token_id = 'v27t'"
+    ).fetchone()
+    assert row["expires_at"] == ""
+
+
+def test_v27_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v27+ database must not raise or duplicate the column
+    even though _migrate_to_v27's ALTER TABLE runs on every open. Mirrors
+    the v13 / v16 idempotency tests."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v27.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(api_tokens)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("expires_at") == 1
