@@ -3021,31 +3021,29 @@ def test_rate_limit_retry_after_is_correct_magnitude(server, monkeypatch):
 
 
 def test_rate_limit_allows_after_refill_interval(server, monkeypatch):
-    """After waiting long enough for a token to refill, the next
-    call succeeds.
+    """After waiting long enough for a token to refill, the next call
+    succeeds.
 
-    We deliberately use a SLOW refill (5 tokens/sec) for the drain
-    phase so the inter-request latency from ``requests.get`` doesn't
-    secretly refill enough to dodge the cap. Then we sleep 0.3s
-    which at 5/sec yields 1.5 tokens — enough for one more request
-    to pass.
+    Made latency-INDEPENDENT by construction: capacity 1 with a slow
+    0.5 tokens/sec refill. The previous 5/sec refill could be outraced
+    during the DRAIN phase under a loaded test runner — slow ``requests``
+    latency refilled ~1 token per call, so the bucket never emptied and the
+    test failed with "could not drain". At 0.5/sec no realistic sub-second
+    inter-request gap refills a whole token, so a couple of back-to-back
+    calls reliably surface a 429 regardless of machine load; then a 2.5s
+    sleep refills exactly one token (0.5 × 2.5 = 1.25, capped at 1).
     """
     import time as _time
 
-    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "2")
-    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "5.0")
+    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "1")
+    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "0.5")
     uid = _make_user()
     token = _mint_token(uid)
-    # Drain — 2 calls succeed, then back-to-back denied calls confirm
-    # the limit holds.
-    for _ in range(2):
-        requests.get(
-            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
-        )
-    # Try repeatedly until we observe a 429 (network jitter can refill
-    # one token between bursts; the second attempt should drain it).
+    # Drain: the first call consumes the lone token; a follow-up confirms the
+    # limit holds. The loop is generous headroom — at 0.5/sec the bucket
+    # cannot recover a full token between calls, so this drains by call ~2.
     drained = False
-    for _ in range(5):
+    for _ in range(8):
         r = requests.get(
             f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
         )
@@ -3054,22 +3052,11 @@ def test_rate_limit_allows_after_refill_interval(server, monkeypatch):
             break
     assert drained, "could not drain bucket — refill is outracing the test"
 
-    # Now wait long enough to refill at least one whole token.
-    # 5/s × 0.6s = 3 tokens → comfortable margin against test-runner
-    # preemption. (Earlier 0.3s was too tight: under full-suite load
-    # the process can lose enough wall-clock time to the OS scheduler
-    # that the bucket hasn't refilled when r2 fires. 0.6s buys 3x
-    # the headroom.)
-    _time.sleep(0.6)
-    # Retry once if the first attempt races a slow scheduler tick.
+    # Wait long enough to refill one whole token, then the next call passes.
+    _time.sleep(2.5)
     r2 = requests.get(
         f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
     )
-    if r2.status_code == 429:
-        _time.sleep(0.4)
-        r2 = requests.get(
-            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
-        )
     assert r2.status_code == 200
 
 
