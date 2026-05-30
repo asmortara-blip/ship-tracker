@@ -1312,6 +1312,7 @@ def run_multi_container_snapshot_job(
     return counts
 
 
+@_track_run
 def run_delivery_retry_job(now: Optional[datetime] = None) -> dict:
     """Walk every due pending delivery retry and re-dispatch.
 

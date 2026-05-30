@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import inspect
+import io
 import json
 import socket
 import threading
@@ -656,3 +657,51 @@ def test_hmac_bucket_clears_on_active_flood(monkeypatch) -> None:
     wl._hmac_rate_limit("flood-ip")
     assert len(wl._HMAC_BUCKETS) <= 3
     wl._clear_hmac_buckets()
+
+
+# ─── _read_body: oversize cap (unauth DoS guard) ──────────────────────────
+
+
+class _FakeBodyHandler:
+    """Minimal stand-in for a BaseHTTPRequestHandler that _read_body uses:
+    just ``.headers`` (a dict supports .get) and ``.rfile`` (a BytesIO)."""
+
+    def __init__(self, content_length, body=b""):
+        self.headers = {"Content-Length": str(content_length)}
+        self.rfile = io.BytesIO(body)
+
+
+def test_read_body_rejects_oversized_content_length():
+    """A Content-Length above the cap returns b'' WITHOUT reading the socket
+    — preventing a huge allocation from an unauthenticated client."""
+    from worker import webhook_listener as wl
+
+    h = _FakeBodyHandler(wl.MAX_BODY_BYTES + 1, body=b"x" * 100)
+    assert wl._read_body(h) == b""
+    # The body was NOT consumed (we rejected before reading).
+    assert h.rfile.tell() == 0
+
+
+def test_read_body_reads_within_cap():
+    """A within-cap Content-Length reads exactly that many bytes."""
+    from worker import webhook_listener as wl
+
+    h = _FakeBodyHandler(5, body=b"hello world")
+    assert wl._read_body(h) == b"hello"
+
+
+def test_read_body_empty_or_malformed_returns_empty():
+    """Missing/zero/garbage Content-Length → empty body, no read."""
+    from worker import webhook_listener as wl
+
+    assert wl._read_body(_FakeBodyHandler(0)) == b""
+    assert wl._read_body(_FakeBodyHandler("not-a-number")) == b""
+
+
+def test_dispatch_handler_has_socket_timeout():
+    """The handler sets a finite per-request timeout so a stalled/withheld
+    body cannot pin the single-threaded server forever."""
+    from worker import webhook_listener as wl
+
+    assert isinstance(wl._DispatchHandler.timeout, (int, float))
+    assert wl._DispatchHandler.timeout and wl._DispatchHandler.timeout > 0

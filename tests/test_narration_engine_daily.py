@@ -410,6 +410,53 @@ def test_claude_bad_json_falls_back_to_template(monkeypatch, isolate_cache_and_k
     assert not cache_file.exists()
 
 
+def test_claude_bad_json_still_records_billable_tokens(monkeypatch, isolate_cache_and_key: Path) -> None:
+    """A successful-but-unparseable Claude response is BILLABLE: its tokens
+    must be recorded even though the text falls back to the template.
+    Regression for the telemetry under-count bug — previously the cost was
+    recorded only inside the parsed-OK branch, so malformed JSON silently
+    dropped the spend."""
+    ctx = _make_full_context()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(ne, "_call_claude",
+                        lambda *a, **k: ("this is not json", 50, 30))
+
+    calls: list = []
+    import engine.llm_telemetry as tel
+    monkeypatch.setattr(tel, "record_call", lambda **kw: calls.append(kw))
+
+    n = generate_daily_narration(ctx)
+    assert n.source == "template"            # text still falls back…
+    # …but the billable tokens were recorded exactly once (not dropped, not
+    # double-counted).
+    assert len(calls) == 1
+    assert calls[0]["tokens_in"] == 50
+    assert calls[0]["tokens_out"] == 30
+    assert calls[0]["source"] == "narration"
+
+
+def test_claude_success_records_billable_tokens_once(monkeypatch, isolate_cache_and_key: Path) -> None:
+    """The happy path records cost exactly once (guards against a double-count
+    after moving the recorder out of the parsed-OK branch)."""
+    ctx = _make_full_context()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+
+    def _fake_call(system, user, *, model, api_key):
+        payload = {"headline": "H", "body": "B1.\n\nB2.",
+                   "sections": [{"title": "S", "bullets": ["a", "b"]}]}
+        return json.dumps(payload), 42, 99
+    monkeypatch.setattr(ne, "_call_claude", _fake_call)
+
+    calls: list = []
+    import engine.llm_telemetry as tel
+    monkeypatch.setattr(tel, "record_call", lambda **kw: calls.append(kw))
+
+    n = generate_daily_narration(ctx)
+    assert n.source == "claude"
+    assert len(calls) == 1
+    assert calls[0]["tokens_in"] == 42 and calls[0]["tokens_out"] == 99
+
+
 def test_use_cache_false_bypasses_cache(monkeypatch, isolate_cache_and_key: Path) -> None:
     """use_cache=False forces a fresh call even when a cache file exists."""
     ctx = _make_full_context()

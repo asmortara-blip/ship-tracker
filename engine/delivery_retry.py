@@ -32,15 +32,18 @@ Exponential backoff
 -------------------
 ``MAX_RETRIES = 5`` attempts; backoff is ``60s * 2^(attempt_count - 1)``:
 
-  attempt 1 → 60s   (initial wait after enqueue)
-  attempt 2 → 120s  (after the 1st retry attempt fails)
-  attempt 3 → 240s
-  attempt 4 → 480s
-  attempt 5 → 960s
+  attempt_count 1 → 60s   (after the 1st retry attempt fails)
+  attempt_count 2 → 120s
+  attempt_count 3 → 240s
+  attempt_count 4 → 480s
 
-After the 5th attempt fails, ``final_status`` flips to ``'failed'``
-permanently. The operator can hand-roll a ``manual_retry`` to reset
-the next_attempt_at clock if they want one more shot.
+When the 5th retry attempt fails, ``attempt_count`` reaches
+``MAX_RETRIES`` and ``final_status`` flips to ``'failed'`` immediately —
+so the 960s tier that ``_compute_backoff_seconds(5)`` would return is
+NEVER scheduled (the row finalizes instead of waiting). The maximum
+inter-retry gap the orchestrator ever applies is therefore 480s. The
+operator can hand-roll a ``manual_retry`` to reset the next_attempt_at
+clock if they want one more shot.
 
 Retriable classification
 ------------------------
@@ -96,7 +99,10 @@ MAX_RETRIES = 5
 
 # Base seconds for the exponential backoff. The Nth retry waits
 # ``BACKOFF_BASE_SECONDS * 2 ** (N - 1)`` seconds before firing:
-#   1 → 60s     2 → 120s    3 → 240s     4 → 480s    5 → 960s
+#   1 → 60s   2 → 120s   3 → 240s   4 → 480s   5 → 960s
+# NOTE: the 960s (N=5) tier is computed by _compute_backoff_seconds but
+# NEVER scheduled — the 5th retry failure hits attempt_count >= MAX_RETRIES
+# and finalizes the row, so 480s is the largest wait actually applied.
 BACKOFF_BASE_SECONDS = 60
 
 

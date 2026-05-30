@@ -101,6 +101,7 @@ KNOWN_JOBS: tuple[str, ...] = (
     "run_operator_digest_job",
     "run_report_scheduler_job",
     "run_alert_escalation_job",
+    "run_delivery_retry_job",
 )
 
 

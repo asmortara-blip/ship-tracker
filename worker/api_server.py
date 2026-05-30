@@ -2585,13 +2585,15 @@ class APIHandler(BaseHTTPRequestHandler):
                 return asdict(row)
             return dict(row) if hasattr(row, "_asdict") else row
 
-        snapshot_dir = snapshot_dir_for(snapshot_date)
+        # NB: we deliberately do NOT echo the on-disk snapshot directory.
+        # It is an ABSOLUTE server path (revealing the host layout + OS
+        # username) and was readable by any token-holder; the "date" field
+        # already identifies the snapshot for the client.
         _send_json(
             self, HTTPStatus.OK,
             {
                 "date":              date_iso,
                 "container_type":    container_type,
-                "snapshot_dir":      str(snapshot_dir),
                 "total_per_port":    len(per_port_rows),
                 "total_regional":    len(regional_rows),
                 "per_port":          [_to_dict(r) for r in per_port_rows],

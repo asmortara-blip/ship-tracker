@@ -1771,29 +1771,35 @@ def generate_daily_narration(
         return _template_daily_narration(context)
 
     user_prompt = _build_daily_user_prompt(context)
+    narration = None
     try:
         raw, tokens_in, tokens_out = _call_claude(
             _DAILY_SYSTEM_PROMPT, user_prompt, model=model, api_key=api_key,
         )
+        # Telemetry: the call is BILLABLE whether or not the text parses, so
+        # record cost here — BEFORE judging usability — mirroring
+        # engine.daily_briefing_tldr. Previously this lived in the
+        # ``narration is not None`` block, so a malformed-JSON response (which
+        # falls through to the template) silently dropped its tokens and
+        # under-counted Anthropic spend. Defensive try/except so a state-DB
+        # hiccup never breaks the briefing; ``record_call`` also no-raises.
+        if tokens_in or tokens_out:
+            try:
+                from engine.llm_telemetry import record_call
+                record_call(
+                    source="narration",
+                    model=model,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                )
+            except Exception as exc:
+                logger.debug(f"narration_engine: telemetry write failed: {exc}")
         narration = _parse_claude_json(raw, context, tokens_in, tokens_out, model)
     except Exception as exc:
         logger.warning(f"narration_engine: Claude call failed: {exc}")
         narration = None
 
     if narration is not None:
-        # Telemetry: record the successful LLM call for cost tracking.
-        # Defensive try/except so a state-DB hiccup never breaks the
-        # daily briefing; ``record_call`` also swallows exceptions.
-        try:
-            from engine.llm_telemetry import record_call
-            record_call(
-                source="narration",
-                model=narration.model,
-                tokens_in=narration.tokens_in,
-                tokens_out=narration.tokens_out,
-            )
-        except Exception as exc:
-            logger.debug(f"narration_engine: telemetry write failed: {exc}")
         _write_narration_cache(cache_file, narration)
         return narration
     return _template_daily_narration(context)

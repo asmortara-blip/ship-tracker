@@ -146,15 +146,34 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> N
     handler.wfile.write(body)
 
 
+# Hard cap on the request body we will read into memory. Webhook payloads
+# (ack confirmations, PagerDuty events, alert events) are a few KB at most;
+# 1 MiB is enormous headroom. The cap stops an unauthenticated client from
+# declaring (or sending) a huge Content-Length and forcing a giant allocation
+# on the single-threaded listener. The companion defense is the per-request
+# socket timeout on _DispatchHandler, which bounds a STALLED/withheld body so
+# rfile.read can't block the one thread forever.
+MAX_BODY_BYTES = 1 * 1024 * 1024
+
+
 def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
-    """Read the full request body using Content-Length. Returns b''
-    when the header is missing or malformed (treated as empty body)."""
+    """Read the request body using Content-Length. Returns b'' when the
+    header is missing, malformed, or declares more than ``MAX_BODY_BYTES``
+    (the oversize case is logged); callers treat b'' as an empty/invalid body
+    and reject it. Reading is reached only AFTER this bound, and the handler's
+    socket timeout guards against a body that is declared but never sent."""
     raw = handler.headers.get("Content-Length", "0")
     try:
         length = int(raw)
     except (TypeError, ValueError):
         length = 0
     if length <= 0:
+        return b""
+    if length > MAX_BODY_BYTES:
+        logger.warning(
+            f"webhook: rejecting oversized request body "
+            f"Content-Length={length} (cap {MAX_BODY_BYTES})"
+        )
         return b""
     return handler.rfile.read(length)
 
@@ -461,6 +480,15 @@ class _DispatchHandler(BaseHTTPRequestHandler):
     listen on a single port (simpler firewall / compose port-mapping)
     while still exposing every endpoint shape.
     """
+
+    # Per-request socket timeout (seconds). BaseHTTPRequestHandler honours
+    # self.timeout via StreamRequestHandler.setup -> connection.settimeout, so
+    # a client that opens a connection and then stalls — or declares a body it
+    # never finishes sending — causes rfile.read to raise socket.timeout
+    # instead of blocking the single-threaded server forever. do_POST's
+    # try/except converts that into a clean 500 + connection close. Without
+    # this, one withheld-body request is a trivial unauthenticated DoS.
+    timeout = 15
 
     # Silence the default ``BaseHTTPRequestHandler`` access log — it
     # writes to stderr in a noisy non-structured format. Route through
