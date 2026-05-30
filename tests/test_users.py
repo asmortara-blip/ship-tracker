@@ -339,3 +339,55 @@ def test_login_success_resets_throttle() -> None:
         assert login("resettable", "correct-password-123") is not None
     finally:
         clear_buckets()
+
+
+# ─── signup: invite claimed atomically BEFORE user creation ───────────────
+
+
+def test_signup_claims_invite_before_creating_user(monkeypatch) -> None:
+    """The invite must be claimed (atomic ``consume_invitation``) BEFORE the
+    user row is created. If the claim fails — e.g. a concurrent signup won
+    the race — signup must refuse and leave NO account behind. Otherwise one
+    single-use invite could mint multiple users (privilege escalation when
+    the invite grants admin)."""
+    import auth.users as users
+    from auth.invitations import create_invitation
+    from auth.users import count_users
+
+    admin = users.signup("admin-user", "admin-password-123")
+    assert admin is not None
+    inv = create_invitation(admin.user_id, role="user")
+    assert inv is not None
+
+    before = count_users()  # just the admin so far
+    # Simulate losing the atomic claim (another signup consumed it first).
+    monkeypatch.setattr(
+        "auth.invitations.consume_invitation", lambda token, uid: False,
+    )
+    result = users.signup(
+        "racer", "racer-password-123", invite_token=inv.invite_token,
+    )
+    assert result is None                # signup refused…
+    assert count_users() == before       # …and 'racer' was NOT created
+
+
+def test_signup_with_valid_invite_still_creates_user_and_consumes() -> None:
+    """Reorder regression: a valid invite still mints the user with the
+    invite's role AND marks the invite consumed by that user."""
+    from auth.users import signup
+    from auth.invitations import create_invitation, get_invitation_by_token
+
+    admin = signup("admin-user", "admin-password-123")
+    assert admin is not None
+    inv = create_invitation(admin.user_id, role="admin")
+    assert inv is not None
+
+    user = signup(
+        "invitee", "invitee-password-123", invite_token=inv.invite_token,
+    )
+    assert user is not None
+    assert user.role == "admin"  # inherited from the invite
+    consumed = get_invitation_by_token(inv.invite_token)
+    assert consumed is not None
+    assert consumed.consumed_at  # invite marked consumed…
+    assert consumed.consumed_by_user_id == user.user_id  # …by this user

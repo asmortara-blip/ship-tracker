@@ -230,6 +230,41 @@ def signup(
         # ``_VALID_ROLES`` at creation time so we trust it here.
         assigned_role = invitation.role if invitation is not None else "user"
 
+        # Claim the invite BEFORE creating the user. The conditional UPDATE
+        # inside consume_invitation (WHERE consumed_at IS NULL) is the atomic
+        # gate that makes a single-use invite truly single-use. Two
+        # concurrent signups on the same token BOTH pass the read-only
+        # validation above, so consuming AFTER the insert (best-effort, as it
+        # was) lets them BOTH mint an account — one invite, two users,
+        # possibly two admins. Consuming first means only the winner of the
+        # atomic flip proceeds; the loser gets False and bails here, before
+        # any user row exists. (This is what the docstring's "marked consumed
+        # atomically with the signup" always promised.)
+        #
+        # Trade-off: if the INSERT below then fails (a username race that
+        # slipped past the pre-check), the invite is already burned — strictly
+        # safer than the double-mint, rare in practice, and the admin can
+        # re-issue. Fail CLOSED on any consume error: never create a user
+        # against an invite we couldn't atomically claim.
+        if invitation is not None:
+            try:
+                from auth.invitations import consume_invitation
+                claimed = consume_invitation(invite_token, user_id)
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    f"auth.users.signup: consume_invitation raised "
+                    f"for invite_id={invitation.invite_id!r}: {exc}"
+                )
+                claimed = False
+            if not claimed:
+                # Already consumed, expired between check and claim, or lost a
+                # concurrent race — same generic failure shape as a bad invite.
+                logger.info(
+                    f"auth.users.signup: invite not claimable "
+                    f"(invite_id={invitation.invite_id!r}); refusing signup"
+                )
+                return None
+
         try:
             conn.execute(
                 """
@@ -249,25 +284,16 @@ def signup(
                 ),
             )
         except sqlite3.IntegrityError:
-            # Raced with another writer past the pre-check — collapse
-            # into the same generic failure path as the explicit
-            # duplicate branch above.
-            return None
-
-        # Consume the invite AFTER the user row is committed. A
-        # failure here is logged but does not roll back the signup —
-        # the user exists, the invite is one-shot, and a leftover
-        # unconsumed-but-already-used row would be visible to the
-        # admin in the invitations list (they can revoke it manually).
-        if invitation is not None:
-            try:
-                from auth.invitations import consume_invitation
-                consume_invitation(invite_token, user_id)
-            except Exception as exc:  # noqa: BLE001 — defensive
+            # Raced with another writer past the pre-check. The invite (if
+            # any) is already consumed above — log so the burned-invite state
+            # is explained, then collapse into the generic failure path.
+            if invitation is not None:
                 logger.warning(
-                    f"auth.users.signup: consume_invitation failed "
-                    f"for invite_id={invitation.invite_id!r}: {exc}"
+                    f"auth.users.signup: user INSERT failed after invite "
+                    f"claim (invite_id={invitation.invite_id!r}); the invite "
+                    f"is now consumed but no user was created"
                 )
+            return None
 
         new_user = User(
             user_id=user_id,
