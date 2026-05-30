@@ -435,6 +435,7 @@ def login(
         # row that was hand-edited; coerce defensively.
         mfa_enabled = bool(int(row["mfa_enabled"] or 0))
         mfa_used = False
+        recovery_used = False
         if mfa_enabled:
             # Defence-in-depth: an mfa_enabled row with a blank secret is a
             # corrupt / hand-edited state in which the second factor would be
@@ -464,6 +465,30 @@ def login(
                     f"for username={username!r}: {exc}"
                 )
                 ok = False
+            if not ok:
+                # TOTP didn't match — try the submitted value as a single-use
+                # RECOVERY code (the lost-authenticator fallback). Without
+                # this, recovery codes are mintable + verifiable via the
+                # primitive but unreachable from the actual login flow — a
+                # dead feature and a lockout footgun. The two code shapes
+                # can't cross-match (verify_totp already rejected this as a
+                # non-6-digit code; the recovery verifier rejects anything
+                # that isn't 10 base32 chars), so trying both is safe. A
+                # match CONSUMES the code (single-use). We only reach here
+                # with a correct password, and the per-username login
+                # throttle bounds guessing of the 50-bit codes.
+                try:
+                    from auth.mfa import verify_and_consume_recovery_code
+                    if verify_and_consume_recovery_code(
+                        row["user_id"], str(mfa_code)
+                    ):
+                        ok = True
+                        recovery_used = True
+                except Exception as exc:  # noqa: BLE001 — defensive
+                    logger.warning(
+                        f"auth.users.login: recovery-code verify failed "
+                        f"for username={username!r}: {exc}"
+                    )
             if not ok:
                 # Same return shape as bad password — no info leak about
                 # which step failed. Failed MFA does NOT audit (same
@@ -499,8 +524,15 @@ def login(
         # matches the bad_user / bad_password symmetry above — there
         # is no observable difference between the two failure paths.
         # The detail payload carries ``{'mfa': True}`` when the second
-        # factor was exercised, so a security review can spot which
-        # logins used MFA without digging through the timeline.
+        # factor was exercised, plus ``'recovery': True`` when that factor
+        # was a single-use recovery code rather than a TOTP — a recovery-
+        # code login is worth spotting in a security review (it usually
+        # means the user lost their authenticator), so it gets its own flag.
+        login_detail: Optional[dict] = None
+        if mfa_used:
+            login_detail = {"mfa": True}
+            if recovery_used:
+                login_detail["recovery"] = True
         try:
             from auth.audit import record_audit
             record_audit(
@@ -508,7 +540,7 @@ def login(
                 entity_type="user",
                 entity_id=authenticated.user_id,
                 user_id=authenticated.user_id,
-                detail={"mfa": True} if mfa_used else None,
+                detail=login_detail,
             )
         except Exception:  # noqa: BLE001
             pass

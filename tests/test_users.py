@@ -391,3 +391,101 @@ def test_signup_with_valid_invite_still_creates_user_and_consumes() -> None:
     assert consumed is not None
     assert consumed.consumed_at  # invite marked consumed…
     assert consumed.consumed_by_user_id == user.user_id  # …by this user
+
+
+# ─── login: recovery-code fallback (lost authenticator) ───────────────────
+
+
+def _enable_mfa_with_codes(username: str, password: str):
+    """Sign up ``username``, enable MFA, return (user, secret, codes)."""
+    from auth.users import signup
+    from auth.mfa import enable_mfa, generate_secret
+
+    user = signup(username, password)
+    assert user is not None
+    secret = generate_secret()
+    ok, codes = enable_mfa(user.user_id, secret)
+    assert ok is True
+    assert codes  # a batch of plaintext recovery codes
+    return user, secret, codes
+
+
+def test_login_accepts_recovery_code_as_mfa_fallback() -> None:
+    """A user who lost their authenticator can log in by entering a single-
+    use recovery code in the mfa_code field — previously these codes were
+    mintable but UNREACHABLE from login (a dead feature / lockout footgun)."""
+    from auth.users import login
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _, _secret, codes = _enable_mfa_with_codes(
+            "rec-user", "correct-password-123"
+        )
+        user = login("rec-user", "correct-password-123", mfa_code=codes[0])
+        assert user is not None
+        assert user.username == "rec-user"
+    finally:
+        clear_buckets()
+
+
+def test_login_recovery_code_is_single_use() -> None:
+    """A recovery code consumed at login cannot be reused; a different
+    unused code from the batch still works."""
+    from auth.users import login
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _, _secret, codes = _enable_mfa_with_codes(
+            "rec-once", "correct-password-123"
+        )
+        assert login(
+            "rec-once", "correct-password-123", mfa_code=codes[0]
+        ) is not None
+        # Same code again → rejected (consumed).
+        assert login(
+            "rec-once", "correct-password-123", mfa_code=codes[0]
+        ) is None
+        # A different, still-unused code → works.
+        assert login(
+            "rec-once", "correct-password-123", mfa_code=codes[1]
+        ) is not None
+    finally:
+        clear_buckets()
+
+
+def test_login_still_accepts_totp_after_recovery_wiring() -> None:
+    """Regression: wiring the recovery-code fallback must not break the
+    primary TOTP path."""
+    from auth.users import login
+    from auth.mfa import compute_totp
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _, secret, _codes = _enable_mfa_with_codes(
+            "totp-user", "correct-password-123"
+        )
+        user = login(
+            "totp-user", "correct-password-123", mfa_code=compute_totp(secret)
+        )
+        assert user is not None
+    finally:
+        clear_buckets()
+
+
+def test_login_rejects_unminted_recovery_code() -> None:
+    """A recovery-shaped value that was never minted is rejected (None) —
+    it must not authenticate just because it has the right shape."""
+    from auth.users import login
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _enable_mfa_with_codes("rec-bogus", "correct-password-123")
+        assert login(
+            "rec-bogus", "correct-password-123", mfa_code="ZZZZZ-ZZZZZ"
+        ) is None
+    finally:
+        clear_buckets()
