@@ -144,7 +144,7 @@ def test_verify_hmac_uses_constant_time_compare() -> None:
 def test_ack_one_with_correct_hmac_calls_acknowledge_alert(server, monkeypatch) -> None:
     calls = []
 
-    def fake_ack(alert_id: str) -> None:
+    def fake_ack(alert_id: str, **kwargs) -> None:
         calls.append(alert_id)
 
     monkeypatch.setattr(engv2, "acknowledge_alert", fake_ack)
@@ -168,7 +168,7 @@ def test_ack_one_with_wrong_hmac_returns_401_and_does_not_ack(
 ) -> None:
     calls = []
     monkeypatch.setattr(engv2, "acknowledge_alert",
-                        lambda aid: calls.append(aid))
+                        lambda aid, **kwargs: calls.append(aid))
 
     body = b""
     bad_sig = "deadbeef" * 8  # 64-char hex but wrong digest
@@ -219,8 +219,12 @@ def test_ack_one_empty_id_returns_404(server) -> None:
 
 
 def test_ack_all_with_correct_hmac_calls_acknowledge_all(server, monkeypatch) -> None:
+    # /ack-all is now scoped to a resolved owner. Configure one so the call
+    # resolves to a real user and acks ONLY that user's alerts.
+    monkeypatch.setenv("WEBHOOK_INBOUND_USER_ID", "ops-user")
     calls = []
-    monkeypatch.setattr(engv2, "acknowledge_all", lambda: calls.append(1))
+    monkeypatch.setattr(engv2, "acknowledge_all",
+                        lambda **kwargs: calls.append(kwargs.get("user_id")))
 
     body = b""
     sig = _sign(body)
@@ -231,13 +235,54 @@ def test_ack_all_with_correct_hmac_calls_acknowledge_all(server, monkeypatch) ->
         timeout=5,
     )
     assert r.status_code == 200
-    assert r.json() == {"acknowledged": True, "scope": "all"}
-    assert calls == [1]
+    assert r.json() == {"acknowledged": True, "scope": "user"}
+    assert calls == ["ops-user"]   # scoped to the resolved owner, not global
+
+
+def test_ack_passes_resolved_user_id_not_global(server, monkeypatch) -> None:
+    """Regression for the cross-tenant ack bug: /ack must pass the RESOLVED
+    owning user_id to acknowledge_alert (so the engine scopes the UPDATE to
+    that user), instead of calling it bare — which disabled scoping out-of-
+    process and let one shared-secret holder ack ANY user's alert."""
+    monkeypatch.setenv("WEBHOOK_INBOUND_USER_ID", "ops-user")
+    seen = []
+    monkeypatch.setattr(
+        engv2, "acknowledge_alert",
+        lambda aid, **kw: seen.append((aid, kw.get("user_id"))),
+    )
+    body = b""
+    sig = _sign(body)
+    r = requests.post(
+        f"{server}/ack/alert-xyz", data=body,
+        headers={"X-Signature-SHA256": sig}, timeout=5,
+    )
+    assert r.status_code == 200
+    assert seen == [("alert-xyz", "ops-user")]  # scoped, not global (None)
+
+
+def test_ack_all_refuses_when_no_resolvable_user(server, monkeypatch) -> None:
+    """/ack-all must NOT fall through to a global sweep when no owner can be
+    resolved — it refuses (400) rather than acknowledging every user's open
+    alerts."""
+    monkeypatch.delenv("WEBHOOK_INBOUND_USER_ID", raising=False)
+    # Force the no-owner case deterministically (no env, no admin user).
+    monkeypatch.setattr(webhook_listener, "_resolve_hmac_user_id", lambda: "")
+    called = []
+    monkeypatch.setattr(engv2, "acknowledge_all",
+                        lambda **kw: called.append(1))
+    body = b""
+    sig = _sign(body)
+    r = requests.post(
+        f"{server}/ack-all", data=body,
+        headers={"X-Signature-SHA256": sig}, timeout=5,
+    )
+    assert r.status_code == 400
+    assert called == []  # never swept globally
 
 
 def test_ack_all_with_wrong_hmac_returns_401(server, monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(engv2, "acknowledge_all", lambda: calls.append(1))
+    monkeypatch.setattr(engv2, "acknowledge_all", lambda **kwargs: calls.append(1))
 
     r = requests.post(
         f"{server}/ack-all",
@@ -255,7 +300,7 @@ def test_ack_all_with_wrong_hmac_returns_401(server, monkeypatch) -> None:
 def test_pagerduty_incident_resolved_acks_dedup_key(server, monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(engv2, "acknowledge_alert",
-                        lambda aid: calls.append(aid))
+                        lambda aid, **kwargs: calls.append(aid))
 
     payload = {
         "event": {
@@ -285,7 +330,7 @@ def test_pagerduty_incident_triggered_does_not_ack(server, monkeypatch) -> None:
     it accepted our outgoing event. We must NOT ack on this path."""
     calls = []
     monkeypatch.setattr(engv2, "acknowledge_alert",
-                        lambda aid: calls.append(aid))
+                        lambda aid, **kwargs: calls.append(aid))
 
     payload = {
         "event": {
@@ -312,7 +357,7 @@ def test_pagerduty_resolved_with_empty_dedup_key_no_ops(server, monkeypatch) -> 
     would silently match no rows and look like success."""
     calls = []
     monkeypatch.setattr(engv2, "acknowledge_alert",
-                        lambda aid: calls.append(aid))
+                        lambda aid, **kwargs: calls.append(aid))
 
     payload = {
         "event": {
@@ -348,7 +393,7 @@ def test_pagerduty_malformed_json_returns_400(server) -> None:
 def test_pagerduty_wrong_hmac_returns_401(server, monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(engv2, "acknowledge_alert",
-                        lambda aid: calls.append(aid))
+                        lambda aid, **kwargs: calls.append(aid))
 
     payload = {"event": {"event_type": "incident.resolved",
                          "data": {"incident": {"dedup_key": "x"}}}}

@@ -733,6 +733,27 @@ class _DispatchHandler(BaseHTTPRequestHandler):
 
     # ── Endpoint: POST /ack/{alert_id} ─────────────────────────────
 
+    def _bearer_or_hmac_user_id(self) -> str:
+        """Owning user_id for an ack action: the bearer token's user when a
+        valid token is present, else the HMAC fallback
+        (``_resolve_hmac_user_id`` — ``WEBHOOK_INBOUND_USER_ID`` or the oldest
+        admin). This MUST be passed to the engine's ``acknowledge_*`` helpers:
+        out-of-process they would otherwise resolve user_id via the Streamlit
+        session (empty here), which disables per-user scoping — i.e. a single
+        shared-secret holder could acknowledge ANY user's alerts."""
+        auth_header = self.headers.get("Authorization", "") or ""
+        if auth_header.lower().startswith("bearer "):
+            raw_token = auth_header[len("bearer "):].strip()
+            if raw_token:
+                try:
+                    from auth.tokens import verify_token
+                    uid = verify_token(raw_token)
+                    if uid:
+                        return uid
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"webhook ack: bearer verify failed: {exc}")
+        return _resolve_hmac_user_id()
+
     def _handle_ack_one(self, alert_id: str) -> None:
         try:
             body = _read_body(self)
@@ -747,10 +768,16 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             # UPDATE just affects zero rows) — we deliberately do NOT
             # verify the alert exists first, because that would let a
             # caller distinguish known vs unknown IDs via response
-            # codes. Always returning 200 keeps it idempotent.
+            # codes. Always returning 200 keeps it idempotent. Scope to the
+            # resolved owner so an ack can only touch THAT user's alert
+            # (cross-user acks were possible when this passed no user_id).
+            uid = self._bearer_or_hmac_user_id()
             from engine.alert_engine_v2 import acknowledge_alert
-            acknowledge_alert(alert_id)
-            logger.info(f"webhook /ack: acknowledged alert_id={alert_id}")
+            acknowledge_alert(alert_id, user_id=uid)
+            logger.info(
+                f"webhook /ack: acknowledged alert_id={alert_id} "
+                f"(user_id={uid!r})"
+            )
             _send_json(self, HTTPStatus.OK, {"acknowledged": True, "alert_id": alert_id})
         except Exception as exc:
             logger.exception(f"webhook /ack/{alert_id} crashed: {exc}")
@@ -769,10 +796,31 @@ class _DispatchHandler(BaseHTTPRequestHandler):
                            {"error": "invalid signature"})
                 return
 
+            # Scope to the resolved owner so /ack-all acks only THAT user's
+            # open alerts — not every user's. Refuse rather than fall through
+            # to a global sweep when no owner can be resolved (an empty
+            # user_id disables scoping in the engine, the original bug).
+            uid = self._bearer_or_hmac_user_id()
+            if not uid:
+                logger.warning(
+                    "webhook /ack-all: no resolvable owner (set "
+                    "WEBHOOK_INBOUND_USER_ID or use a bearer token); refusing "
+                    "to ack globally"
+                )
+                _send_json(
+                    self, HTTPStatus.BAD_REQUEST,
+                    {"error": "no resolvable user for ack-all"},
+                )
+                return
             from engine.alert_engine_v2 import acknowledge_all
-            acknowledge_all()
-            logger.info("webhook /ack-all: acknowledged every open alert")
-            _send_json(self, HTTPStatus.OK, {"acknowledged": True, "scope": "all"})
+            acknowledge_all(user_id=uid)
+            logger.info(
+                f"webhook /ack-all: acknowledged every open alert "
+                f"for user_id={uid!r}"
+            )
+            _send_json(
+                self, HTTPStatus.OK, {"acknowledged": True, "scope": "user"},
+            )
         except Exception as exc:
             logger.exception(f"webhook /ack-all crashed: {exc}")
             _send_json(self, HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -1147,11 +1195,15 @@ class _DispatchHandler(BaseHTTPRequestHandler):
             )
 
             if event_type == "incident.resolved" and dedup_key:
+                # Scope to the HMAC-resolved owner (PagerDuty webhooks are
+                # HMAC-only, no bearer) so a resolved incident acks only that
+                # owner's alert — not every user's matching dedup_key.
+                uid = _resolve_hmac_user_id()
                 from engine.alert_engine_v2 import acknowledge_alert
-                acknowledge_alert(dedup_key)
+                acknowledge_alert(dedup_key, user_id=uid)
                 logger.info(
                     f"webhook /webhooks/pagerduty: resolved {dedup_key} "
-                    f"(event_type={event_type})"
+                    f"(event_type={event_type}, user_id={uid!r})"
                 )
                 _send_json(self, HTTPStatus.OK,
                            {"acknowledged": True, "alert_id": dedup_key})
