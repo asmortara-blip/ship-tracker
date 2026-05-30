@@ -242,18 +242,16 @@ def _bump_flap_suppressed_counter() -> None:
 
         conn = get_connection()
         now_iso = _now_iso()
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?",
-            (_FLAP_SUPPRESSED_KEY,),
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            current = 0
+        # Atomic increment in ONE statement — the old SELECT-then-INSERT-OR-
+        # REPLACE had a lost-update window (two callers both read N, both
+        # wrote N+1). CAST(value AS INTEGER) yields 0 for a missing/corrupt
+        # value, matching the prior reset-to-0 fallback.
         conn.execute(
-            "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-            "VALUES (?, ?, ?)",
-            (_FLAP_SUPPRESSED_KEY, str(current + 1), now_iso),
+            "INSERT INTO kv_state (key, value, updated_at) VALUES (?, '1', ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = CAST(value AS INTEGER) + 1, "
+            "updated_at = excluded.updated_at",
+            (_FLAP_SUPPRESSED_KEY, now_iso),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(

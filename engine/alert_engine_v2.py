@@ -2120,31 +2120,26 @@ def _in_cooldown(
 def _bump_suppressed_counter() -> None:
     """Increment the kv_state counter of cooldown-suppressed fires.
 
-    Read-modify-write under the connection's autocommit boundary —
-    SQLite serializes writers via WAL so the increment is atomic for
-    a single-process app. Best-effort: any failure is swallowed and
-    logged because the counter is for operator-overview telemetry,
-    not correctness.
+    Single atomic upsert (INSERT … ON CONFLICT DO UPDATE) so the
+    increment cannot lose updates even when writers interleave (the
+    earlier SELECT-then-INSERT-OR-REPLACE had a read-modify-write
+    window). Best-effort: any failure is swallowed and logged because
+    the counter is for operator-overview telemetry, not correctness.
     """
     from state.db import get_connection
 
     conn = get_connection()
     now_iso = _now_iso()
     try:
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?",
-            (_COOLDOWN_SUPPRESSED_KEY,),
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            # A corrupt counter value resets to 0 so a single bad
-            # write does not jam the increment path forever.
-            current = 0
+        # CAST(value AS INTEGER) yields 0 for a missing/corrupt value,
+        # matching the prior reset-to-0 fallback; the whole thing is one
+        # atomic statement so concurrent writers can't lose an increment.
         conn.execute(
-            "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-            "VALUES (?, ?, ?)",
-            (_COOLDOWN_SUPPRESSED_KEY, str(current + 1), now_iso),
+            "INSERT INTO kv_state (key, value, updated_at) VALUES (?, '1', ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = CAST(value AS INTEGER) + 1, "
+            "updated_at = excluded.updated_at",
+            (_COOLDOWN_SUPPRESSED_KEY, now_iso),
         )
     except Exception as exc:
         logger.warning(f"_bump_suppressed_counter: kv_state write failed: {exc}")

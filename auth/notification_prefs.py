@@ -474,20 +474,18 @@ def _bump_suppressed_counter(amount: int = 1) -> None:
 
         conn = get_connection()
         now_iso = _now_iso()
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?",
-            (_PREFS_SUPPRESSED_KEY,),
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            current = 0
-        with conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-                "VALUES (?, ?, ?)",
-                (_PREFS_SUPPRESSED_KEY, str(current + amount), now_iso),
-            )
+        # Atomic increment-by-amount in ONE statement — no lost-update window
+        # (the old SELECT-then-INSERT-OR-REPLACE under autocommit had one; note
+        # `with conn:` is a no-op for transactions under isolation_level=None).
+        # First write seeds the value at `amount`; later writes add it.
+        # CAST(value AS INTEGER) yields 0 for a missing/corrupt value.
+        conn.execute(
+            "INSERT INTO kv_state (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = CAST(value AS INTEGER) + ?, "
+            "updated_at = excluded.updated_at",
+            (_PREFS_SUPPRESSED_KEY, str(amount), now_iso, amount),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             f"auth.notification_prefs._bump_suppressed_counter: "

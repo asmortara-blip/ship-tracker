@@ -317,6 +317,52 @@ def get_due_retries(
         return []
 
 
+# Seconds a claimed retry row is "leased" (next_attempt_at pushed out) while a
+# pass dispatches it, so a concurrent pass can't grab the same row.
+# mark_retry_attempt overwrites next_attempt_at with the real backoff on a
+# still-pending outcome, so the lease only governs the brief dispatch window;
+# if a pass crashes mid-dispatch the row is re-picked once the lease expires.
+_CLAIM_LEASE_SECONDS = 120
+
+
+def _claim_retry(queue_id: str, *, now: Optional[datetime] = None) -> bool:
+    """Atomically claim a due, pending retry row for dispatch.
+
+    A conditional UPDATE that pushes ``next_attempt_at`` out by
+    ``_CLAIM_LEASE_SECONDS`` — but ONLY if the row is still ``pending`` AND
+    still due (``next_attempt_at <= now``). SQLite serializes writers, so when
+    two passes race (the cron worker + an ``ops_cli`` run, or an overrunning
+    pass) exactly ONE gets ``rowcount == 1`` and proceeds; the other gets 0 and
+    skips. Without this, ``get_due_retries`` hands the same row to both passes
+    and ``_redispatch_one`` physically delivers it (page/SMS/email) twice.
+
+    Returns True iff this caller won the claim. NEVER raises (False on error).
+    """
+    if not queue_id:
+        return False
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        now_dt = _now(now)
+        now_iso = now_dt.isoformat()
+        lease_iso = (
+            now_dt + timedelta(seconds=_CLAIM_LEASE_SECONDS)
+        ).isoformat()
+        cur = conn.execute(
+            "UPDATE delivery_retry_queue SET next_attempt_at = ? "
+            "WHERE queue_id = ? AND final_status = 'pending' "
+            "AND next_attempt_at <= ?",
+            (lease_iso, queue_id, now_iso),
+        )
+        return (getattr(cur, "rowcount", 0) or 0) > 0
+    except Exception as exc:
+        logger.warning(
+            f"_claim_retry: SQLite claim failed for {queue_id!r}: {exc}"
+        )
+        return False
+
+
 def mark_retry_attempt(
     queue_id: str,
     *,
@@ -678,6 +724,15 @@ def run_retry_pass(*, now: Optional[datetime] = None) -> dict:
         return counts
 
     for entry in due:
+        # Atomically CLAIM the row before dispatching. Two concurrent passes
+        # (the cron worker + ops_cli, or an overrunning pass) both SELECT the
+        # same due row in get_due_retries; the claim lets only ONE proceed, so
+        # the alert is delivered + counted exactly once. A row claimed by
+        # another pass is skipped here (not counted as processed by this pass);
+        # in the normal single-pass case the claim always wins, so behaviour is
+        # unchanged.
+        if not _claim_retry(entry.queue_id, now=now):
+            continue
         counts["processed"] += 1
         # Snapshot the attempt_count BEFORE we mark, so we can tell
         # whether this attempt was the one that hit MAX_RETRIES.

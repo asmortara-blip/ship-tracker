@@ -545,20 +545,16 @@ def _bump_silenced_counter() -> None:
 
         conn = get_connection()
         now_iso = _now_iso()
-        row = conn.execute(
-            "SELECT value FROM kv_state WHERE key = ?",
-            (_SILENCED_COUNTER_KEY,),
-        ).fetchone()
-        try:
-            current = int(row["value"]) if row else 0
-        except (TypeError, ValueError):
-            # Corrupt counter resets to 0 so a single bad write does
-            # not jam the increment path forever.
-            current = 0
+        # Atomic increment in ONE statement — the old SELECT-then-INSERT-OR-
+        # REPLACE had a lost-update window under concurrency. CAST(value AS
+        # INTEGER) yields 0 for a missing/corrupt value, matching the prior
+        # corrupt-counter reset-to-0 behaviour.
         conn.execute(
-            "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
-            "VALUES (?, ?, ?)",
-            (_SILENCED_COUNTER_KEY, str(current + 1), now_iso),
+            "INSERT INTO kv_state (key, value, updated_at) VALUES (?, '1', ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = CAST(value AS INTEGER) + 1, "
+            "updated_at = excluded.updated_at",
+            (_SILENCED_COUNTER_KEY, now_iso),
         )
     except Exception as exc:
         logger.warning(f"_bump_silenced_counter: kv_state write failed: {exc}")

@@ -95,6 +95,41 @@ def test_get_due_empty_when_nothing_pending() -> None:
     assert get_due_retries() == []
 
 
+# ─── _claim_retry (atomic claim — anti double-dispatch) ───────────────────
+
+
+def test_claim_retry_is_exclusive() -> None:
+    """A due pending row can be claimed once; a second claim (a concurrent
+    pass) loses because the first pushed next_attempt_at out by the lease.
+    This is what stops two passes from double-delivering the same alert."""
+    from engine.delivery_retry import _claim_retry
+
+    entry = enqueue_for_retry(
+        "alert-1", "ch-1", user_id="alice", error_message="x")
+    assert entry is not None
+    # The row becomes due 60s out; claim from a time well past that.
+    future = datetime.now(timezone.utc) + timedelta(seconds=120)
+    assert _claim_retry(entry.queue_id, now=future) is True   # first wins
+    assert _claim_retry(entry.queue_id, now=future) is False  # second loses
+
+
+def test_claim_retry_skips_not_due_and_terminal() -> None:
+    """A not-yet-due row and a finalized row both refuse the claim."""
+    from engine.delivery_retry import _claim_retry
+
+    entry = enqueue_for_retry(
+        "alert-2", "ch-2", user_id="alice", error_message="x")
+    assert entry is not None
+    # Not yet due (next_attempt_at is 60s out; claiming "now" must fail).
+    assert _claim_retry(
+        entry.queue_id, now=datetime.now(timezone.utc)
+    ) is False
+    # Finalize it; a terminal (non-pending) row can't be claimed even when due.
+    assert mark_retry_attempt(entry.queue_id, success=True) is True
+    future = datetime.now(timezone.utc) + timedelta(seconds=120)
+    assert _claim_retry(entry.queue_id, now=future) is False
+
+
 # ─── mark_retry_attempt ───────────────────────────────────────────────────
 
 
