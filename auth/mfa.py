@@ -239,6 +239,14 @@ def verify_totp(
     try:
         if not isinstance(code, str) or not isinstance(secret_b32, str):
             return False
+        # Fail CLOSED on an empty / whitespace-only secret. _b32_decode_padded
+        # of "" returns b"", which would make compute_totp build an HMAC with a
+        # KNOWN (empty) key — i.e. an attacker-computable second factor. A
+        # mfa_enabled row must never carry an empty secret; treat it as a hard
+        # verification failure rather than a deterministic pass (honours this
+        # function's "empty / malformed secret -> False" contract).
+        if not secret_b32.strip():
+            return False
         code_norm = "".join(code.split())
         if not code_norm or not code_norm.isdigit():
             return False
@@ -756,7 +764,7 @@ def verify_and_consume_recovery_code(user_id: str, code: str) -> bool:
 
         used_at = _now_iso()
         try:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE mfa_recovery_codes SET used_at = ? "
                 "WHERE code_id = ? AND used_at IS NULL",
                 (used_at, matched_id),
@@ -766,6 +774,13 @@ def verify_and_consume_recovery_code(user_id: str, code: str) -> bool:
                 f"auth.mfa.verify_and_consume_recovery_code: stamp "
                 f"failed for code_id={matched_id!r}: {exc}"
             )
+            return False
+        # Single-use guard: the conditional UPDATE (used_at IS NULL) is the
+        # race resolver — if it matched 0 rows, a concurrent caller already
+        # consumed this code, so this attempt must FAIL rather than
+        # authenticate the same code twice. Mirrors the rowcount gate in
+        # invitations.consume_invitation and tokens.revoke_token.
+        if (getattr(cur, "rowcount", 0) or 0) == 0:
             return False
 
         try:

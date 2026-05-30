@@ -248,6 +248,19 @@ def test_verify_totp_strips_whitespace_in_code() -> None:
     assert verify_totp(_RFC6238_SECRET_B32, spaced, when=when) is True
 
 
+def test_verify_totp_rejects_empty_secret_with_attacker_computable_code() -> None:
+    """An empty / blank secret makes compute_totp build an HMAC with a KNOWN
+    (empty) key, so the code is attacker-computable. verify_totp must FAIL
+    CLOSED — never deterministically accept the empty-key code. (Without the
+    guard, verify_totp("", compute_totp("")) returns True at a shared `when`.)"""
+    from auth.mfa import compute_totp, verify_totp
+
+    when = 1700000000.0
+    attacker_code = compute_totp("", when=when)
+    assert verify_totp("", attacker_code, when=when) is False
+    assert verify_totp("   ", attacker_code, when=when) is False
+
+
 # ── provisioning_uri ──────────────────────────────────────────────────────
 
 def test_provisioning_uri_contains_required_pieces() -> None:
@@ -665,6 +678,38 @@ def test_verify_and_consume_recovery_code_accepts_valid_code() -> None:
         (user.user_id,),
     ).fetchone()
     assert used["n"] == 2
+
+
+def test_verify_and_consume_recovery_code_blocks_concurrent_double_spend(monkeypatch) -> None:
+    """The conditional UPDATE (used_at IS NULL) is the single-use race guard;
+    its rowcount must be honoured. Simulate a concurrent consumer that marks
+    the matched code used BETWEEN this call's read and its stamp — the stamp
+    then matches 0 rows, so the call must return False (not authenticate the
+    same code twice)."""
+    import auth.mfa as mfa
+    from auth.mfa import generate_recovery_codes, verify_and_consume_recovery_code
+    from auth.users import signup
+    from state.db import get_connection
+
+    user = signup("alice", "correct-password-123")
+    assert user is not None
+    codes = generate_recovery_codes(user.user_id)
+    assert codes
+
+    orig_now = mfa._now_iso
+
+    def racing_now():
+        ts = orig_now()
+        # Concurrent consumer wins the race: mark every unused code used
+        # out-of-band, so THIS call's conditional UPDATE matches 0 rows.
+        get_connection().execute(
+            "UPDATE mfa_recovery_codes SET used_at = ? WHERE used_at IS NULL",
+            (ts,),
+        )
+        return ts
+
+    monkeypatch.setattr(mfa, "_now_iso", racing_now)
+    assert verify_and_consume_recovery_code(user.user_id, codes[0]) is False
 
 
 def test_verify_recovery_code_strips_dash_and_whitespace() -> None:

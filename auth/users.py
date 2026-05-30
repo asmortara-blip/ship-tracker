@@ -368,6 +368,18 @@ def login(
         mfa_enabled = bool(int(row["mfa_enabled"] or 0))
         mfa_used = False
         if mfa_enabled:
+            # Defence-in-depth: an mfa_enabled row with a blank secret is a
+            # corrupt / hand-edited state in which the second factor would be
+            # attacker-computable (empty HMAC key). Refuse the login hard
+            # rather than delegating to verify_totp. (verify_totp also fails
+            # closed on an empty secret — this is the explicit guard so a
+            # future refactor of that function can't reopen the hole.)
+            if not str(row["mfa_secret"] or "").strip():
+                logger.warning(
+                    "auth.users.login: mfa_enabled row with blank secret for "
+                    f"username={username!r}; refusing login"
+                )
+                return None
             if mfa_code is None:
                 # Caller must prompt for the second factor and retry.
                 # Returning None (same shape as bad password) keeps the
