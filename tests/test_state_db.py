@@ -1213,3 +1213,45 @@ def test_v27_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> No
     ).fetchall()]
     # No duplicates from re-running the ALTER TABLE.
     assert col_names.count("expires_at") == 1
+
+
+# ─── Schema v28: users.mfa_last_used_step (TOTP replay protection) ────────
+
+def test_v28_migration_adds_mfa_last_used_step_column() -> None:
+    """v28 ALTER TABLE adds ``mfa_last_used_step INTEGER NOT NULL DEFAULT -1``
+    to ``users`` — login records the highest accepted TOTP step here and
+    rejects any code whose step is <= it (anti-replay). -1 = none used yet."""
+    from state.db import get_connection
+
+    conn = get_connection()
+    cols = {
+        r["name"]: r for r in conn.execute(
+            "PRAGMA table_info(users)"
+        ).fetchall()
+    }
+    assert "mfa_last_used_step" in cols
+    assert cols["mfa_last_used_step"]["type"].upper() == "INTEGER"
+    assert cols["mfa_last_used_step"]["notnull"] == 1
+    assert str(cols["mfa_last_used_step"]["dflt_value"]) == "-1"
+
+
+def test_v28_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> None:
+    """Re-opening a v28+ database must not raise or duplicate the column even
+    though _migrate_to_v28's ALTER TABLE runs on every open. Mirrors the
+    v13 / v16 / v27 idempotency tests."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "v28.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # initial open — runs the migration
+
+    state_db.reset_for_tests()
+    state_db.get_connection()  # second open — must be a no-op
+
+    state_db.reset_for_tests()
+    conn = state_db.get_connection()  # third open
+    col_names = [r["name"] for r in conn.execute(
+        "PRAGMA table_info(users)"
+    ).fetchall()]
+    # No duplicates from re-running the ALTER TABLE.
+    assert col_names.count("mfa_last_used_step") == 1

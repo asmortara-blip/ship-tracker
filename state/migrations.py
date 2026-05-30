@@ -1182,3 +1182,37 @@ def _migrate_to_v27(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v27 ALTER TABLE failed: {exc}"
         )
+
+
+# ─── Schema v27 → v28 ─────────────────────────────────────────────────────
+
+def _migrate_to_v28(conn: sqlite3.Connection) -> None:
+    """Add ``users.mfa_last_used_step`` for TOTP replay protection.
+
+    A TOTP code is valid for its whole ±window (≈90s at window=1), so a
+    captured code could be replayed until it ages out. v28 records the
+    highest TOTP time-step (``floor(unix_time / period)``) the account has
+    ever authenticated with; ``auth.users.login`` rejects any code whose
+    matched step is ``<=`` the stored value, making each code single-use and
+    forbidding an older in-window code after a newer one.
+
+    The column is ``INTEGER NOT NULL DEFAULT -1`` — ``-1`` is the "no step
+    consumed yet" sentinel (real steps are large positive integers, and even
+    a test using ``when=0`` lands on step 0 > -1, so the first login always
+    passes). Same idempotent ALTER TABLE pattern as ``_migrate_to_v16`` /
+    ``_migrate_to_v25`` / ``_migrate_to_v27``: SQLite has no ``IF NOT
+    EXISTS`` on ALTER TABLE, so we swallow ``OperationalError: duplicate
+    column name`` to stay safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN "
+            "mfa_last_used_step INTEGER NOT NULL DEFAULT -1"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v28 ALTER TABLE failed: {exc}"
+        )

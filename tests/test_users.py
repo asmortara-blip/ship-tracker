@@ -489,3 +489,58 @@ def test_login_rejects_unminted_recovery_code() -> None:
         ) is None
     finally:
         clear_buckets()
+
+
+# ─── login: TOTP replay protection (#5) ───────────────────────────────────
+
+
+def test_login_rejects_replayed_totp_code() -> None:
+    """A TOTP code is single-use at login: the very code that just
+    authenticated is rejected on a second login (anti-replay). Deterministic
+    regardless of window-boundary timing — verify reports the CODE's step,
+    and the consumed step is already recorded."""
+    from auth.users import login
+    from auth.mfa import compute_totp
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _, secret, _ = _enable_mfa_with_codes(
+            "replay-user", "correct-password-123"
+        )
+        code = compute_totp(secret)
+        assert login(
+            "replay-user", "correct-password-123", mfa_code=code
+        ) is not None
+        # SAME code again → rejected (the step is already consumed).
+        assert login(
+            "replay-user", "correct-password-123", mfa_code=code
+        ) is None
+    finally:
+        clear_buckets()
+
+
+def test_login_accepts_newer_totp_after_replay_block() -> None:
+    """Replay protection blocks REUSE, not forward progress: a code from a
+    later step still authenticates after an earlier one was consumed."""
+    import time as _time
+    from auth.users import login
+    from auth.mfa import compute_totp
+    from auth.rate_limit import clear_buckets
+
+    clear_buckets()
+    try:
+        _, secret, _ = _enable_mfa_with_codes(
+            "replay-fwd", "correct-password-123"
+        )
+        assert login(
+            "replay-fwd", "correct-password-123",
+            mfa_code=compute_totp(secret),
+        ) is not None
+        # A code from the next step (still inside the verify window) → ok.
+        newer = compute_totp(secret, when=_time.time() + 30)
+        assert login(
+            "replay-fwd", "correct-password-123", mfa_code=newer
+        ) is not None
+    finally:
+        clear_buckets()

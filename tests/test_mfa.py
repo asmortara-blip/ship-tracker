@@ -154,6 +154,62 @@ def test_verify_totp_accepts_current_code() -> None:
     assert verify_totp(_RFC6238_SECRET_B32, code, when=when) is True
 
 
+# ─── verify_totp_step (matched-step, for replay protection #5) ─────────────
+
+
+def test_verify_totp_step_returns_the_matched_step() -> None:
+    """On a match, returns the integer time-step ``floor(when / period)``."""
+    from auth.mfa import compute_totp, verify_totp_step
+
+    when = 1700000000.0
+    code = compute_totp(_RFC6238_SECRET_B32, when=when)
+    step = verify_totp_step(_RFC6238_SECRET_B32, code, when=when)
+    assert step == int(when // 30)
+
+
+def test_verify_totp_step_reports_the_codes_step_not_now() -> None:
+    """A code from the PREVIOUS step, verified now with window=1, matches and
+    reports the PREVIOUS step — not 'now'. This is what makes login's replay
+    gate robust across window boundaries (it stores the code's real step)."""
+    from auth.mfa import compute_totp, verify_totp_step
+
+    when = 1700000000.0
+    period = 30
+    prev_code = compute_totp(_RFC6238_SECRET_B32, when=when - period)
+    step = verify_totp_step(
+        _RFC6238_SECRET_B32, prev_code, when=when, window=1
+    )
+    assert step == int((when - period) // period)
+
+
+def test_verify_totp_step_returns_none_on_wrong_code() -> None:
+    """A non-matching code returns None. window=0 (strict) so there is exactly
+    one valid candidate and ``real + 1`` is guaranteed to differ from it."""
+    from auth.mfa import compute_totp, verify_totp_step
+
+    when = 1700000000.0
+    real = compute_totp(_RFC6238_SECRET_B32, when=when)
+    wrong = str((int(real) + 1) % 1_000_000).zfill(6)
+    assert verify_totp_step(
+        _RFC6238_SECRET_B32, wrong, when=when, window=0
+    ) is None
+
+
+def test_verify_totp_step_agrees_with_verify_totp() -> None:
+    """The bool wrapper is exactly ``verify_totp_step(...) is not None``."""
+    from auth.mfa import compute_totp, verify_totp, verify_totp_step
+
+    when = 1700000000.0
+    code = compute_totp(_RFC6238_SECRET_B32, when=when)
+    wrong = str((int(code) + 1) % 1_000_000).zfill(6)
+    assert verify_totp(_RFC6238_SECRET_B32, code, when=when) is True
+    assert verify_totp_step(_RFC6238_SECRET_B32, code, when=when) is not None
+    assert verify_totp(_RFC6238_SECRET_B32, wrong, when=when, window=0) is False
+    assert verify_totp_step(
+        _RFC6238_SECRET_B32, wrong, when=when, window=0
+    ) is None
+
+
 def test_verify_totp_rejects_wrong_code() -> None:
     from auth.mfa import verify_totp
 

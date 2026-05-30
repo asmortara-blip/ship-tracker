@@ -206,6 +206,75 @@ def compute_totp(
     return str(code_int).zfill(digits)
 
 
+def verify_totp_step(
+    secret_b32: str,
+    code: str,
+    *,
+    when: Optional[float] = None,
+    window: int = _DEFAULT_WINDOW,
+    digits: int = _DEFAULT_DIGITS,
+    period: int = _DEFAULT_PERIOD,
+) -> Optional[int]:
+    """Like :func:`verify_totp` but return the MATCHED time-step on success.
+
+    Returns the integer counter (``floor(t / period)`` for whichever in-
+    window candidate matched), or ``None`` on no match / bad input. The login
+    flow uses this for REPLAY protection: it records the highest step it has
+    ever accepted for an account and rejects any code whose step is ``<=``
+    that, so a captured login code cannot be replayed (and an older still-in-
+    window code cannot be used after a newer one). ``verify_totp`` is a thin
+    bool wrapper over this for callers that only need yes/no (e.g. MFA
+    enrollment, which has no replay surface).
+
+    Same constant-time discipline as the original: EVERY candidate in the
+    window is evaluated (no early-out) so timing does not leak which offset
+    matched. The FIRST matching step is recorded (realistically at most one
+    candidate matches). NEVER raises — returns ``None`` on any bad input.
+    """
+    try:
+        if not isinstance(code, str) or not isinstance(secret_b32, str):
+            return None
+        # Fail CLOSED on an empty / whitespace-only secret. _b32_decode_padded
+        # of "" returns b"", which would make compute_totp build an HMAC with a
+        # KNOWN (empty) key — i.e. an attacker-computable second factor. A
+        # mfa_enabled row must never carry an empty secret; treat it as a hard
+        # verification failure rather than a deterministic pass.
+        if not secret_b32.strip():
+            return None
+        code_norm = "".join(code.split())
+        if not code_norm or not code_norm.isdigit():
+            return None
+        if len(code_norm) != digits:
+            return None
+        if not isinstance(window, int) or window < 0:
+            return None
+
+        if when is None:
+            when = time.time()
+
+        matched_step: Optional[int] = None
+        for delta in range(-window, window + 1):
+            t = when + delta * period
+            try:
+                candidate = compute_totp(
+                    secret_b32, when=t, digits=digits, period=period,
+                )
+            except Exception:
+                # A malformed secret will raise on the first iteration —
+                # propagate as None rather than letting the loop continue.
+                return None
+            # NOTE: we keep iterating after a match so timing does not leak
+            # which offset matched. matched_step is set on the FIRST hit and
+            # never overwritten.
+            if hmac.compare_digest(candidate, code_norm):
+                if matched_step is None:
+                    matched_step = int(t // period)
+        return matched_step
+    except Exception as exc:  # noqa: BLE001 — generic by contract
+        logger.warning(f"auth.mfa.verify_totp_step: failed: {exc}")
+        return None
+
+
 def verify_totp(
     secret_b32: str,
     code: str,
@@ -228,57 +297,18 @@ def verify_totp(
                     with a 30-second period). A window of 0 is strict.
         digits, period: Forwarded to ``compute_totp``.
 
-    Uses ``hmac.compare_digest`` for the comparison so a bad-by-one-
-    char code is timing-indistinguishable from a totally wrong code.
-    Tests the candidate codes one-at-a-time but ALWAYS exhausts the
-    full window — early-out on a match would leak the matched offset
-    via timing.
+    Returns ``True`` iff ``code`` matches some candidate in the window.
+    Thin bool wrapper over :func:`verify_totp_step` (which carries the
+    constant-time discipline + the matched-step value). Callers that need
+    replay protection should use ``verify_totp_step`` and track the step;
+    yes/no callers (MFA enrollment proof-of-possession) use this.
 
     NEVER raises. Returns ``False`` on any unexpected input.
     """
-    try:
-        if not isinstance(code, str) or not isinstance(secret_b32, str):
-            return False
-        # Fail CLOSED on an empty / whitespace-only secret. _b32_decode_padded
-        # of "" returns b"", which would make compute_totp build an HMAC with a
-        # KNOWN (empty) key — i.e. an attacker-computable second factor. A
-        # mfa_enabled row must never carry an empty secret; treat it as a hard
-        # verification failure rather than a deterministic pass (honours this
-        # function's "empty / malformed secret -> False" contract).
-        if not secret_b32.strip():
-            return False
-        code_norm = "".join(code.split())
-        if not code_norm or not code_norm.isdigit():
-            return False
-        if len(code_norm) != digits:
-            return False
-        if not isinstance(window, int) or window < 0:
-            return False
-
-        if when is None:
-            when = time.time()
-
-        matched = False
-        for delta in range(-window, window + 1):
-            try:
-                candidate = compute_totp(
-                    secret_b32,
-                    when=when + delta * period,
-                    digits=digits,
-                    period=period,
-                )
-            except Exception:
-                # A malformed secret will raise on the first iteration —
-                # propagate as False rather than letting the loop continue.
-                return False
-            # NOTE: we keep iterating after a match so timing does not
-            # leak which offset matched. ``|=`` on a bool is fine here.
-            if hmac.compare_digest(candidate, code_norm):
-                matched = True
-        return matched
-    except Exception as exc:  # noqa: BLE001 — generic by contract
-        logger.warning(f"auth.mfa.verify_totp: failed: {exc}")
-        return False
+    return verify_totp_step(
+        secret_b32, code,
+        when=when, window=window, digits=digits, period=period,
+    ) is not None
 
 
 def provisioning_uri(
@@ -909,6 +939,7 @@ __all__ = [
     "generate_secret",
     "compute_totp",
     "verify_totp",
+    "verify_totp_step",
     "provisioning_uri",
     "enable_mfa",
     "disable_mfa",

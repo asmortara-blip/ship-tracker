@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 27
+SCHEMA_VERSION: int = 28
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1439,6 +1439,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     except Exception as exc:
         logger.warning(f"state.db: v27 column add skipped: {exc}")
 
+    # v28 column add — same idempotent ALTER-TABLE-in-try/except pattern as
+    # v16 / v25 / v27. Adds ``users.mfa_last_used_step`` for TOTP replay
+    # protection (login rejects a code whose step <= the last one used).
+    # Default -1 = "no step consumed yet". Safe on every open (fresh DB:
+    # adds the column; existing DB: no-op when present).
+    try:
+        from state.migrations import _migrate_to_v28
+        _migrate_to_v28(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v28 column add skipped: {exc}")
+
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
     row = cur.fetchone()
@@ -1789,6 +1800,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v27(conn)
         except Exception as exc:
             logger.warning(f"state.db: v27 migration skipped: {exc}")
+
+    # Migration 27 → 28: add ``users.mfa_last_used_step`` for TOTP replay
+    # protection. Same idempotent ALTER-TABLE pattern as v16 / v25 / v27 —
+    # the helper is already invoked unconditionally above; this branch keeps
+    # the version-step ladder explicit.
+    if current < 28:
+        try:
+            from state.migrations import _migrate_to_v28
+            _migrate_to_v28(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v28 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

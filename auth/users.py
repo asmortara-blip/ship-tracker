@@ -456,15 +456,50 @@ def login(
                 # ``login_requires_mfa`` helper exists for the UI to ask
                 # explicitly whether this username carries MFA.
                 return None
+            ok = False
             try:
-                from auth.mfa import verify_totp
-                ok = verify_totp(row["mfa_secret"] or "", str(mfa_code))
+                from auth.mfa import verify_totp_step
+                matched_step = verify_totp_step(
+                    row["mfa_secret"] or "", str(mfa_code)
+                )
             except Exception as exc:  # noqa: BLE001 — defensive
                 logger.warning(
                     f"auth.users.login: mfa verify failed "
                     f"for username={username!r}: {exc}"
                 )
-                ok = False
+                matched_step = None
+            if matched_step is not None:
+                # Anti-replay (#5): a TOTP code is valid for its whole ±window,
+                # so the same code — or an older still-in-window code — could
+                # be replayed. The conditional UPDATE (WHERE mfa_last_used_step
+                # < matched) atomically records the highest accepted step and
+                # gates reuse: rowcount 0 means the stored step is already >=
+                # this one (a replay) OR a concurrent login won the race —
+                # either way the code is spent, so reject. (-1 default = none
+                # used yet, so the first real login always passes.)
+                try:
+                    cur = conn.execute(
+                        "UPDATE users SET mfa_last_used_step = ? "
+                        "WHERE user_id = ? AND mfa_last_used_step < ?",
+                        (matched_step, row["user_id"], matched_step),
+                    )
+                    consumed = (getattr(cur, "rowcount", 0) or 0) > 0
+                except Exception as exc:  # noqa: BLE001
+                    # Bookkeeping failed (transient DB error). Fail OPEN — a DB
+                    # hiccup must not lock the user out — but log it; the code
+                    # ages out of its window in ~90s regardless.
+                    logger.warning(
+                        f"auth.users.login: mfa_last_used_step update failed "
+                        f"for username={username!r}: {exc}"
+                    )
+                    consumed = True
+                if not consumed:
+                    logger.warning(
+                        f"auth.users.login: rejected replayed/old TOTP for "
+                        f"username={username!r} (step={matched_step})"
+                    )
+                    return None
+                ok = True
             if not ok:
                 # TOTP didn't match — try the submitted value as a single-use
                 # RECOVERY code (the lost-authenticator fallback). Without
