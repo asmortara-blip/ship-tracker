@@ -711,11 +711,17 @@ def _render_history() -> None:
     download_specs: list[dict] = []
     for i, rep in enumerate(reports[:10]):
         try:
-            rep_id   = rep.get("id", f"rep_{i}")
-            rep_date = rep.get("date", rep.get("created_at", "Unknown"))
-            rep_sent = rep.get("sentiment_label", rep.get("sentiment", "—"))
-            rep_qual = rep.get("data_quality", "—")
-            rep_size = rep.get("file_size_kb", rep.get("size_kb", "—"))
+            # _list_reports() returns ReportMeta DATACLASSES — use the shape-
+            # agnostic _rep_field, not dict .get() (which raised AttributeError
+            # on every row → the per-row except below swallowed it → the entire
+            # history table + re-download buttons never rendered, even with
+            # saved reports). Field names are the ReportMeta ones.
+            rep_id   = _rep_field(rep, "report_id", f"rep_{i}")
+            rep_date = _rep_field(rep, "report_date",
+                                  _rep_field(rep, "generated_at", "Unknown"))
+            rep_sent = _rep_field(rep, "sentiment_label", "—")
+            rep_qual = _rep_field(rep, "data_quality", "—")
+            rep_size = _rep_field(rep, "file_size_kb", "—")
             sent_color = (
                 C_HIGH if "BULL" in str(rep_sent).upper()
                 else (C_LOW if "BEAR" in str(rep_sent).upper() else C_MOD)

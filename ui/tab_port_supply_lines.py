@@ -46,6 +46,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     metric_card_row,
@@ -1028,25 +1029,32 @@ def _render_spillover_graph(container_type: str) -> None:
          "delta": "", "color": C_TEXT2},
     ])
 
-    # Leaderboard table — top-N by lift.
+    # Leaderboard table — top-N by lift. wsj_market_table takes
+    # (headers, rows=list[list[str]], title=...) — the old call passed no
+    # headers (TypeError) and list-of-DICT rows (which the renderer iterates
+    # as keys), so this whole section raised on every edge. Build positional
+    # headers + list-of-lists, matching the other call sites in this file.
     top_edges = graph.edges[: int(top_n)]
-    table_rows: list[dict] = []
+    headers = ["Source", "Target", "Co-occur", "Source events",
+               "Support", "Base rate", "Lift"]
+    table_rows: list[list[str]] = []
     for e in top_edges:
-        table_rows.append({
-            "Source":     e.source_locode,
-            "Target":     e.target_locode,
-            "Co-occur":   f"{e.co_occurrence_count}",
-            "Source events": f"{e.source_event_count}",
-            "Support":    f"{e.support * 100:.0f}%",
-            "Base rate":  f"{e.target_base_rate * 100:.0f}%",
-            "Lift":       f"{e.lift:.2f}x",
-        })
+        table_rows.append([
+            e.source_locode,
+            e.target_locode,
+            f"{e.co_occurrence_count}",
+            f"{e.source_event_count}",
+            f"{e.support * 100:.0f}%",
+            f"{e.target_base_rate * 100:.0f}%",
+            f"{e.lift:.2f}x",
+        ])
     wsj_market_table(
+        headers,
+        table_rows,
         title=(
             f"Top {len(table_rows)} contagion edges "
             f"(lag ≤ {graph.lag_within_days}d, min co-occur=2, min lift=1.0)"
         ),
-        rows=table_rows,
     )
 
 

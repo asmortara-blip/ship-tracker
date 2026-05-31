@@ -2769,13 +2769,14 @@ def _render_source_health() -> None:
                 last_at,
             ])
 
-        st.markdown(
-            wsj_market_table(
-                headers=["Source", "Status", "Up / Total", "Down", "Avg Latency", "Last Ping"],
-                rows=rows,
-                title="Per-source health (last 24h)",
-            ),
-            unsafe_allow_html=True,
+        # wsj_market_table does its own st.markdown internally and returns
+        # None — wrapping it in st.markdown(...) rendered a stray literal
+        # "None" under the table. Call it as a bare statement like every other
+        # call site.
+        wsj_market_table(
+            headers=["Source", "Status", "Up / Total", "Down", "Avg Latency", "Last Ping"],
+            rows=rows,
+            title="Per-source health (last 24h)",
         )
 
         _render_source_health_alert_config()

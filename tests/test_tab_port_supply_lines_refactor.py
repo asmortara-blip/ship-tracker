@@ -77,6 +77,18 @@ def test_render_with_no_kwargs_no_exception(streamlit_stub) -> None:
     tab_port_supply_lines.render()
 
 
+def test_render_spillover_graph_does_not_raise(streamlit_stub) -> None:
+    """Regression: _render_spillover_graph used alert_banner without importing
+    it (NameError) and called wsj_market_table with the wrong signature
+    (TypeError) — every branch raised, killing the Contagion section. render()
+    swallows that into st.error, so call the function DIRECTLY (its own try
+    only wraps imports) to actually surface a recurrence. Either branch
+    (<2 snapshots → alert_banner, or edges present → wsj_market_table) must
+    now complete without raising."""
+    from ui import tab_port_supply_lines
+    tab_port_supply_lines._render_spillover_graph("40FT_DRY")
+
+
 # ── Required ui.styles helpers wired in ───────────────────────────────────
 
 def test_imports_design_system_helpers() -> None:
@@ -90,6 +102,9 @@ def test_imports_design_system_helpers() -> None:
         "apply_dark_layout", "badge", "metric_card_row",
         "page_header", "section_divider", "section_header",
         "source_footer", "wsj_market_table",
+        # alert_banner is called in _render_spillover_graph's branches; it was
+        # used-but-never-imported (NameError killed the Contagion section).
+        "alert_banner",
     }
     missing = required - imported
     assert not missing, f"missing helpers: {sorted(missing)}"
