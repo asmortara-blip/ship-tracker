@@ -898,3 +898,31 @@ def test_fetch_all_news_enhanced_handles_rss_exception(tmp_path):
 
     # Should return an empty list, not raise.
     assert out == []
+
+
+def test_extract_regions_word_boundary_no_substring_false_positives() -> None:
+    """Regression: bare 'us'/'eu' region tokens must match on WORD BOUNDARIES,
+    not as substrings of Russia/August/customs/Reuters/neutral — the substring
+    test mistagged nearly every article's region."""
+    from processing.news_sentiment import _extract_regions
+    assert "North America" not in _extract_regions(
+        "Russia tightens August customs checks on surplus cargo")
+    assert "Europe" not in _extract_regions(
+        "Reuters: a neutral outlook from the cluster survey")
+    # Genuine standalone US / EU mentions still tag correctly.
+    assert "North America" in _extract_regions("US ports report record volume")
+    assert "Europe" in _extract_regions("EU tariffs hit container rates")
+
+
+def test_deduplicate_keeps_higher_relevance_copy() -> None:
+    """Regression: among near-duplicate titles, dedup keeps the HIGHER
+    relevance_score copy (the docstring contract), not whichever was fetched
+    first (old behavior: survivor was just feed-iteration order, and dedup
+    runs before the relevance sort)."""
+    from processing.news_sentiment import _deduplicate
+    title = "Suez Canal traffic resumes after Houthi ceasefire pause ends"
+    low = _make_article(title=title, relevance=0.10)
+    high = _make_article(title=title + " today", relevance=0.90)  # near-identical
+    kept = _deduplicate([low, high])          # low encountered first
+    assert len(kept) == 1
+    assert kept[0].relevance_score == 0.90    # higher-relevance copy survives
