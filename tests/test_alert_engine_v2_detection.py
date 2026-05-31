@@ -571,3 +571,52 @@ def test_get_alerts_by_rule_empty_id_and_zero_limit_return_empty() -> None:
     assert get_alerts_by_rule("rule_x", limit=-5) == []
     # Unknown rule_id → [].
     assert get_alerts_by_rule("rule_does_not_exist") == []
+
+
+# ── COMPANY_CONCENTRATION wiring (was zero-coverage; see analytics hunt) ──
+
+def test_company_concentration_alert_fires_on_high_hhi(monkeypatch) -> None:
+    """Wiring smoke test: a footprint with a high full-footprint HHI flows
+    footprint → compute_concentration_alerts → ShippingAlert carrying the
+    COMPANY_CONCENTRATION type, ticker, severity, and HHI value."""
+    from types import SimpleNamespace as NS
+    import processing.port_supply_lines as psl
+    from engine.alert_engine_v2 import check_company_concentration_alerts
+
+    fake_fp = NS(
+        ticker="ACME",
+        port_exposures=[
+            NS(port_locode="AAA", exposure_weight=9.0),
+            NS(port_locode="BBB", exposure_weight=1.0),
+        ],
+        concentration_hhi=0.90,   # single-port risk over the FULL footprint
+    )
+    monkeypatch.setattr(psl, "build_company_port_footprints", lambda **kw: [fake_fp])
+    alerts = check_company_concentration_alerts()
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a.alert_type == "COMPANY_CONCENTRATION"
+    assert a.ticker == "ACME"
+    assert a.severity == "CRITICAL"          # 0.90 >= 0.85 critical threshold
+    assert abs(a.value - 0.90) < 1e-9
+
+
+def test_company_concentration_no_alert_when_diversified(monkeypatch) -> None:
+    """A diversified footprint (low full-footprint HHI) fires nothing even
+    though its top-2 displayed ports look 50/50 — the precomputed
+    full-footprint HHI governs, not the capped shares (regression for the
+    HHI-over-capped bug)."""
+    from types import SimpleNamespace as NS
+    import processing.port_supply_lines as psl
+    from engine.alert_engine_v2 import check_company_concentration_alerts
+
+    fake_fp = NS(
+        ticker="DIVERSE",
+        port_exposures=[
+            NS(port_locode="AAA", exposure_weight=5.0),
+            NS(port_locode="BBB", exposure_weight=5.0),
+        ],
+        concentration_hhi=0.08,
+    )
+    monkeypatch.setattr(psl, "build_company_port_footprints", lambda **kw: [fake_fp])
+    assert check_company_concentration_alerts() == []
