@@ -398,7 +398,6 @@ def _empty_summary() -> dict[str, Any]:
         "n_pairs":          0,
         "mae":              0.0,
         "mae_by_horizon":   {f"{h}d": None for h in _SUMMARY_HORIZONS},
-        "sign_agreement":   None,
         "mean_signed_error": 0.0,
     }
 
@@ -412,16 +411,24 @@ def summarize_accuracy(rows: list[AccuracyRow]) -> dict[str, Any]:
       * ``mae`` — mean absolute error across every pair
       * ``mae_by_horizon`` — dict ``{"7d": float|None, "14d": ..., "30d": ...}``;
         ``None`` for any horizon that had no observations in the input
-      * ``sign_agreement`` — fraction in ``[0, 1]`` where the signs of
-        predicted and actual matched; ``None`` when no pair had non-zero
-        predicted AND non-zero actual (sign agreement is undefined when
-        either side is exactly zero)
       * ``mean_signed_error`` — average of ``predicted - actual`` — a
         positive bias means the model is consistently optimistic; a
         negative bias means it is consistently pessimistic
 
     Empty input returns the defensible empty-summary shape so the UI can
     rely on the schema being present regardless of data state.
+
+    NOTE: this summary intentionally carries NO directional ("sign
+    agreement") metric. The forecasts it scores are stress LEVELS in
+    [0, 1] (always non-negative), so a sign-of-level comparison is
+    degenerate — it trivially "agrees" ~100% of the time. Meaningful
+    directional accuracy needs the baseline level at forecast time; the
+    correct form already lives in
+    ``disruption_forecast_backtest._sign_agreement_against`` (sign of
+    forecast-minus-baseline vs actual-minus-baseline), wired into the
+    disruption-radar UI. If this tracker is ever wired to a producer, add
+    a baseline to ``ForecastRecord`` and reuse that form rather than
+    reviving a sign-of-level check.
     """
     if not rows:
         return _empty_summary()
@@ -437,21 +444,10 @@ def summarize_accuracy(rows: list[AccuracyRow]) -> dict[str, Any]:
             sum(bucket) / len(bucket) if bucket else None
         )
 
-    agree = 0
-    total = 0
-    for r in rows:
-        if r.predicted == 0.0 or r.actual == 0.0:
-            continue
-        total += 1
-        if (r.predicted > 0) == (r.actual > 0):
-            agree += 1
-    sign_agreement = (agree / total) if total else None
-
     return {
         "n_pairs":           n,
         "mae":               mae_all,
         "mae_by_horizon":    mae_by_h,
-        "sign_agreement":    sign_agreement,
         "mean_signed_error": mean_signed,
     }
 

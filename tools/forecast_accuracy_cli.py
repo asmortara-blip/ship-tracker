@@ -54,7 +54,6 @@ def _format_text(summary: dict, rows: list, lane: str | None) -> str:
     # when populated so the output stays compact.
     for key, label in [
         ("mae_by_horizon",       "MAE by horizon"),
-        ("sign_agreement_rate",  "Sign agreement"),
         ("mean_abs_error",       "Mean |error|"),
     ]:
         if key in summary and summary[key] is not None:

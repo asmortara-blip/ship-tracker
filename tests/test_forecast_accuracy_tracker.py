@@ -195,3 +195,14 @@ def test_summarize_aggregates_mae_correctly(tmp_path) -> None:
     s = summarize_accuracy(rows)
     assert s["n_pairs"] == 2
     assert s["mae"] == pytest.approx(0.1)
+
+
+def test_summary_omits_degenerate_sign_agreement() -> None:
+    """#9: the degenerate sign-of-level 'sign_agreement' metric is removed from
+    the summary schema — the forecasts it scores are non-negative stress LEVELS
+    in [0, 1], so a sign comparison trivially "agreed" ~100% of the time. The
+    real directional metric lives in disruption_forecast_backtest
+    (_sign_agreement_against, baseline-relative)."""
+    keys = set(summarize_accuracy([]).keys())
+    assert "sign_agreement" not in keys
+    assert keys == {"n_pairs", "mae", "mae_by_horizon", "mean_signed_error"}
