@@ -581,3 +581,20 @@ def test_run_perf_prune_job_default_retention_is_30_days(monkeypatch) -> None:
 
     run_perf_prune_job()
     assert captured["retention_days"] == 30
+
+
+def test_summary_by_tab_emits_true_mean_distinct_from_median() -> None:
+    """Regression: by_tab must emit mean_ms = arithmetic mean. perf_budgets'
+    observed_mean + the max_mean_seconds severity bump read this key; they
+    previously read median_ms, mislabeling the median as the "mean". A
+    right-skewed set (mean != median) proves it's the real mean."""
+    from engine.perf_telemetry import get_perf_summary, record_render
+
+    # durations 10,10,10,10,950 → median = 10, mean = 990/5 = 198.
+    for d in (10, 10, 10, 10, 950):
+        record_render(tab_name="skew", duration_ms=d, success=True)
+
+    stats = get_perf_summary(window_hours=24)["by_tab"]["skew"]
+    assert stats["median_ms"] == 10                 # median unchanged
+    assert stats["mean_ms"] == 198                  # true mean, not the median
+    assert stats["mean_ms"] != stats["median_ms"]

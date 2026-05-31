@@ -529,8 +529,14 @@ def check_budgets(
                     continue
                 observed_p95_ms = int(stats.get("p95_ms", 0) or 0)
                 observed_p95_s = observed_p95_ms / 1000.0
-                observed_median_ms = int(stats.get("median_ms", 0) or 0)
-                observed_mean_s = observed_median_ms / 1000.0
+                # Use the real mean (get_perf_summary now emits mean_ms). This
+                # field + the max_mean_seconds bump below are named for the
+                # mean; they previously read median_ms, so the alert body
+                # mislabeled the median as the "mean" and the severity bump
+                # compared a mean budget against the median (under-firing for
+                # right-skewed render latency).
+                observed_mean_ms = int(stats.get("mean_ms", 0) or 0)
+                observed_mean_s = observed_mean_ms / 1000.0
 
                 if observed_p95_s <= budget.max_p95_seconds:
                     continue

@@ -311,6 +311,7 @@ def get_perf_summary(window_hours: int = 24) -> dict[str, Any]:
         for name, durations in durations_by_tab.items():
             by_tab[name] = {
                 "count":       len(durations),
+                "mean_ms":     int(round(sum(durations) / len(durations))),
                 "median_ms":   _median_int(durations),
                 "p95_ms":      _p95_int(durations),
                 "error_count": int(errors_by_tab.get(name, 0)),
