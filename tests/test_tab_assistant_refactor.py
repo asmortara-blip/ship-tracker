@@ -263,3 +263,15 @@ def test_topic_distribution_top_category_highlighted_in_accent() -> None:
     freight_idx = y_labels.index("Freight Rates")
     assert colors[bdi_idx]     == C_ACCENT
     assert colors[freight_idx] == C_TEXT2
+
+
+def test_message_html_escapes_user_text_not_assistant() -> None:
+    """#6 self-XSS guard: the USER bubble escapes free text; the ASSISTANT
+    bubble stays raw (engine-built HTML with controlled markup)."""
+    from ui.tab_assistant import _message_html
+    payload = "<script>alert(1)</script>"
+    user = _message_html("user", payload, "12:00")
+    assert "<script>alert(1)" not in user      # raw payload must NOT appear
+    assert "&lt;script&gt;" in user             # …escaped
+    asst = _message_html("assistant", "<b>Bold</b>", "12:00")
+    assert "<b>Bold</b>" in asst                # assistant markup preserved

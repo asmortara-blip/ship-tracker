@@ -8,6 +8,7 @@ Rule-based NLP answer engine — no external API calls.
 from __future__ import annotations
 
 import datetime
+import html
 from typing import Optional
 
 import plotly.graph_objects as go
@@ -541,10 +542,15 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
 
 def _message_html(role: str, text: str, ts: str) -> str:
     if role == "user":
+        # Escape the user's free text at the display sink (it's rendered via
+        # unsafe_allow_html). NOT escaped at store time — the raw text is also
+        # the LLM prompt. Without this a typed <img onerror=…> / <script>
+        # executes in the user's own session (self-XSS). The assistant branch
+        # below is intentionally raw — engine-built HTML with controlled markup.
         return (
             f'<div class="msg-row-user">'
-            f'<div><div class="msg-bubble-user">{text}</div>'
-            f'<div class="msg-meta">{ts}</div></div>'
+            f'<div><div class="msg-bubble-user">{html.escape(text)}</div>'
+            f'<div class="msg-meta">{html.escape(ts)}</div></div>'
             f'</div>'
         )
     return (

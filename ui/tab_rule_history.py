@@ -34,6 +34,7 @@ affected section; the rest of the tab still renders.
 """
 from __future__ import annotations
 
+import html
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -346,7 +347,10 @@ def _render_rule_metadata(rule: dict) -> None:
         thr_str = str(threshold)
 
     pieces = [
-        f"<b>{name}</b>",
+        # Escape the user-authored rule name — this blob is emitted via
+        # st.markdown(unsafe_allow_html=True), so an unescaped name is stored
+        # XSS. metric/severity come from selectboxes (controlled).
+        f"<b>{html.escape(str(name))}</b>",
         f"metric: <code>{metric}</code>",
         f"threshold: <code>{thr_str}</code>",
         f"severity: <code>{severity}</code>",

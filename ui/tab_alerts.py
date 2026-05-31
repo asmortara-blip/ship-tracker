@@ -37,6 +37,7 @@ the offending predicate silently; the rest of the filter still applies.
 """
 from __future__ import annotations
 
+import html
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -356,16 +357,23 @@ _RULES_SRC   = DataSource(
 # Cell formatters for WSJ market tables
 # ---------------------------------------------------------------------------
 def _sans(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    # HTML-escape the value: these fragments are emitted via unsafe_allow_html
+    # (wsj_market_table / st.markdown), and callers pass user free-text such as
+    # alert-rule and delivery-channel NAMES — escaping here closes the stored
+    # XSS at the shared sink rather than per call site. Callers pass plain text
+    # (names/labels/icons), never pre-built markup, so this never garbles.
     return (
         f'<span style="font-family:var(--sans);color:{color};font-weight:{weight};">'
-        f'{value}</span>'
+        f'{html.escape(str(value))}</span>'
     )
 
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
+    # Escape too (defense-in-depth — mono mostly renders numbers/timestamps,
+    # but the same unsafe_allow_html sink rule applies and it's cheap).
     return (
         f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};'
-        f'font-variant-numeric:tabular-nums;">{value}</span>'
+        f'font-variant-numeric:tabular-nums;">{html.escape(str(value))}</span>'
     )
 
 

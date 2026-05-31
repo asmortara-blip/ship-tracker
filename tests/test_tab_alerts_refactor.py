@@ -254,3 +254,12 @@ def test_effectiveness_bubble_has_50pct_reference_line() -> None:
     annotations = [a.text for a in (fig.layout.annotations or []) if a.text]
     assert any("50" in a for a in annotations), \
         "expected a '50%' annotation on the reference line"
+
+
+def test_sans_and_mono_escape_user_text() -> None:
+    """#7 stored-XSS guard: _sans/_mono escape their value — alert-rule and
+    delivery-channel NAMES flow through them into unsafe_allow_html sinks."""
+    from ui.tab_alerts import _sans, _mono
+    out = _sans("<img src=x onerror=alert(1)>")
+    assert "<img" not in out and "&lt;img" in out
+    assert "&lt;script&gt;" in _mono("<script>")

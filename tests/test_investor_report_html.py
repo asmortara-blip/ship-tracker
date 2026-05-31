@@ -924,3 +924,29 @@ class TestRenderInvestorReportHtml:
         html = render_investor_report_html(report)
         # gen_display falls back to report_date
         assert "2026-05-20" in html
+
+
+def test_render_escapes_xss_in_news_and_narrative() -> None:
+    """Stored-XSS guard (#4): a <script> payload in a news headline
+    (RSS-sourced) or the executive-summary narrative (LLM-generated) must be
+    HTML-escaped in the rendered report, not emitted raw — the HTML is served
+    as text/html AND persisted for unauthenticated public share links."""
+    payload = "<script>alert('xss')</script>"
+    report = _Report(
+        ai=_AI(executive_summary=f"Markets are buoyant. {payload}"),
+        news_items=[_NewsItem(headline=f"Rates surge {payload}")],
+    )
+    out = render_investor_report_html(report)
+    assert "<script>alert(" not in out         # raw payload must NOT appear
+    assert "&lt;script&gt;" in out              # …it is HTML-escaped instead
+
+
+def test_render_does_not_double_escape_tldr() -> None:
+    """The TL;DR lede is escaped exactly once (it used to be escaped by both
+    _safe_str AND an explicit escape() → '&amp;amp;')."""
+    ai = _AI()
+    ai.tldr = "Rates up & to the right"  # a literal ampersand
+    report = _Report(ai=ai)
+    out = render_investor_report_html(report)
+    assert "Rates up &amp; to the right" in out   # escaped once
+    assert "&amp;amp;" not in out                  # not twice
