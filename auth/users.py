@@ -203,11 +203,18 @@ def signup(
         from state.db import get_connection
         conn = get_connection()
 
-        # Pre-check for duplicate (the UNIQUE index on username is the
-        # source of truth, but checking up-front lets us avoid spending
-        # KDF time on a doomed insert).
+        # Pre-check for duplicate. Case-INSENSITIVE (#13): reject a new
+        # username that collides with an existing one under case-folding, so
+        # an attacker can't register "Admin" alongside an existing "admin" to
+        # impersonate or sow confusion. The username charset is ASCII
+        # ([A-Za-z0-9_-]), so SQLite's NOCASE collation folds it completely.
+        # This only constrains NEW signups — login lookup stays case-sensitive
+        # and no existing data is migrated, so it's backward-compatible; the
+        # case-sensitive UNIQUE index still backs the row. The tiny TOCTOU
+        # window before the insert is acceptable (signup is a human-paced
+        # form, not a concurrency hot path).
         existing = conn.execute(
-            "SELECT 1 FROM users WHERE username = ?",
+            "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE",
             (username,),
         ).fetchone()
         if existing is not None:

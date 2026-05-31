@@ -544,3 +544,19 @@ def test_login_accepts_newer_totp_after_replay_block() -> None:
         ) is not None
     finally:
         clear_buckets()
+
+
+def test_signup_rejects_case_insensitive_duplicate_username() -> None:
+    """#13: a new username that collides with an existing one under case-
+    folding is rejected (can't register 'Admin' alongside an existing 'admin')
+    — closes a forward impersonation/confusion vector. Login lookup is
+    unchanged (still case-sensitive); only NEW signups are constrained."""
+    from auth.users import signup
+
+    assert signup("admin", "correct-horse-battery-staple") is not None
+    # Every case-variant is now a duplicate.
+    assert signup("Admin", "another-good-password") is None
+    assert signup("ADMIN", "another-good-password") is None
+    assert signup("aDmIn", "another-good-password") is None
+    # A genuinely distinct username is unaffected.
+    assert signup("admin2", "another-good-password") is not None
