@@ -192,3 +192,16 @@ def test_zero_ssi_returns_no_signal_explanation() -> None:
     report = _make_report(overall=0.0)
     out = attribute_ssi(report)
     assert out.explanation == "(no signal)"
+
+
+def test_attribution_component_contributions_reconcile_to_ssi_total() -> None:
+    """#8: with prominence-weighted component_scores the attribution's
+    component_contributions decompose the headline ssi_total exactly, and the
+    per-component pct_shares sum to 1."""
+    from processing.shipping_stress_index import compute_shipping_stress
+    from processing.ssi_attribution import attribute_ssi
+    a = attribute_ssi(compute_shipping_stress({}, {}, [], []))
+    assert sum(c.weighted for c in a.component_contributions) == pytest.approx(
+        a.ssi_total, abs=1e-3)
+    assert sum(c.pct_share for c in a.component_contributions) == pytest.approx(
+        1.0, abs=1e-3)

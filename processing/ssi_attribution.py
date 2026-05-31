@@ -14,15 +14,14 @@ per-route, but the fleet-wide view needs the full breakdown.
 Output is two complementary views:
 
   * **Component contributions** — per-component weighted contribution
-    to the component-weighted stress blend (Σ weightₖ·scoreₖ), sorted by
+    to the headline ``ssi_total`` (Σ weightₖ·scoreₖ), sorted by
     magnitude. Each entry includes the raw component score, the weight,
-    the weighted contribution, and the percent share of THAT blend.
-    CAVEAT: the blend equals the headline ``ssi_total`` only when the
-    prominent-route weighting doesn't shift the fleet aggregate —
-    ``component_scores`` are simple per-route means while ``ssi_total``
-    is prominence-weighted — so the shares decompose the blend, not
-    necessarily the exact displayed SSI. (Reconciling them, or relabeling
-    the UI, is bug-hunt #8 — a pending metric decision.)
+    the weighted contribution, and the percent share. The contributions
+    decompose the displayed SSI EXACTLY (modulo rounding): as of the
+    bug-hunt #8 fix, ``component_scores`` are prominence-weighted with the
+    same per-route weights as ``ssi_total``, so Σ weightₖ·scoreₖ
+    reconciles to ``ssi_total`` and the shares are genuinely
+    "% of the displayed SSI".
   * **Route contributions** — per-route weighted contribution to the
     fleet-wide score (using the prominent-route weighting). Sorted by
     magnitude. Top entry is the route doing the most damage today.
@@ -137,13 +136,11 @@ def attribute_ssi(report: ShippingStressReport) -> SSIAttributionReport:
     """Decompose ``report`` into per-component + per-route contributions.
 
     Pure function over the public ``ShippingStressReport`` shape. The
-    component contributions decompose the component-weighted stress
-    blend (Σ weightₖ·scoreₖ) — a UI can render "component X = N% of the
-    stress blend". That blend equals the headline ``ssi_total`` only when
-    prominence-route weighting doesn't shift the fleet aggregate
-    (``component_scores`` are simple per-route means; ``ssi_total`` is
-    prominence-weighted), so do NOT label the share as "% of the displayed
-    SSI" without reconciling them first (bug-hunt #8, a pending decision).
+    component contributions decompose the headline ``ssi_total`` exactly
+    (Σ weightₖ·scoreₖ == ssi_total, modulo rounding) — a UI can render
+    "component X = N% of the displayed SSI". Since the bug-hunt #8 fix,
+    ``component_scores`` are prominence-weighted with the same per-route
+    weights as ``ssi_total``, so the two reconcile.
 
     Edge cases:
       * Empty report (``route_stress=[]``) → returns an empty

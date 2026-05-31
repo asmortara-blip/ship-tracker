@@ -192,3 +192,17 @@ def test_route_congestion_dict_path_honors_zero_reading() -> None:
         rid, [{"locode": dest, "current_congestion": 0.0, "congestion_index": 0.9}])
     assert dict_stress == obj_stress    # dict branch honors 0.0 like the object branch
     assert shadowed == obj_stress       # real 0.0 not overridden by the 0.9 secondary
+
+
+def test_component_scores_decompose_overall_ssi() -> None:
+    """#8: component_scores are prominence-weighted with the SAME per-route
+    weights as overall_ssi, so Σ_k COMPONENT_WEIGHTS[k]·component_scores[k]
+    reconciles to the displayed overall_ssi — the breakdown decomposes the
+    headline number, not a separate equal-weighted blend."""
+    from processing.shipping_stress_index import (
+        compute_shipping_stress, COMPONENT_WEIGHTS,
+    )
+    r = compute_shipping_stress({}, {}, [], [])
+    recon = sum(COMPONENT_WEIGHTS[k] * r.component_scores.get(k, 0.0)
+                for k in COMPONENT_WEIGHTS)
+    assert recon == pytest.approx(r.overall_ssi, abs=1e-3)

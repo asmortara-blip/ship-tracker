@@ -583,7 +583,10 @@ def compute_shipping_stress(
     delayed_by_route = _delayed_counts_by_route(voyage_fleet)
 
     route_stress: list[RouteStress] = []
-    # Running per-component sums for the fleet-wide component_scores dict.
+    # Running prominence-WEIGHTED per-component sums — each route's component
+    # value times its route_weight — so the fleet-wide component_scores
+    # decompose the prominence-weighted overall_ssi exactly
+    # (Σ_k COMPONENT_WEIGHTS[k] · component_scores[k] == overall_ssi).
     component_totals: dict[str, float] = {k: 0.0 for k in COMPONENT_WEIGHTS}
 
     weighted_stress_sum = 0.0
@@ -629,9 +632,6 @@ def compute_shipping_stress(
         )
         dominant_driver = _DRIVER_LABELS[dominant_key]
 
-        for key, value in components.items():
-            component_totals[key] += value
-
         route_stress.append(
             RouteStress(
                 route_id=route_id,
@@ -649,7 +649,13 @@ def compute_shipping_stress(
             )
         )
 
+        # Prominence-weight BOTH the overall SSI and the per-component
+        # breakdown by the SAME route_weight, so the component_scores below
+        # decompose the displayed overall_ssi rather than a separate equal-
+        # weighted average that wouldn't reconcile.
         route_weight = _PROMINENT_ROUTES.get(route_id, _DEFAULT_ROUTE_WEIGHT)
+        for key, value in components.items():
+            component_totals[key] += value * route_weight
         weighted_stress_sum += stress_score * route_weight
         weight_sum += route_weight
 
@@ -657,8 +663,10 @@ def compute_shipping_stress(
     overall_ssi = round(_clamp(weighted_stress_sum / weight_sum), 4) if weight_sum else 0.0
 
     n_routes = len(route_stress)
+    # Prominence-weighted component averages (same weights as overall_ssi), so
+    # Σ_k COMPONENT_WEIGHTS[k] · component_scores[k] reconciles to overall_ssi.
     component_scores = {
-        key: round(total / n_routes, 4) if n_routes else 0.0
+        key: round(total / weight_sum, 4) if weight_sum else 0.0
         for key, total in component_totals.items()
     }
 
