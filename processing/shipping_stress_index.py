@@ -411,10 +411,16 @@ def _route_congestion_stress(route_id: str, port_results: list | dict | None) ->
 
     # Current congestion at the destination port (modeled, [0, 1]).
     if isinstance(dest_result, dict):
-        current = (
-            dest_result.get("current_congestion")
-            or dest_result.get("congestion_index")
-            or dest_result.get("congestion_component")
+        # Use `is not None` (not `or`) so a legitimate 0.0 reading — the
+        # calmest, genuinely-uncongested port — is honored instead of being
+        # treated as missing and falling through to the neutral 0.5 default
+        # (which would inflate the congestion component + headline SSI). This
+        # mirrors the object branch below.
+        current = next(
+            (dest_result[k] for k in
+             ("current_congestion", "congestion_index", "congestion_component")
+             if dest_result.get(k) is not None),
+            None,
         )
     else:
         current = (

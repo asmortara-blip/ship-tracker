@@ -168,3 +168,27 @@ def test_compute_is_repeatable_for_same_inputs() -> None:
     assert [rs.route_id for rs in a.route_stress] == [
         rs.route_id for rs in b.route_stress
     ]
+
+
+def test_route_congestion_dict_path_honors_zero_reading() -> None:
+    """Regression: a dict port-result reporting a legitimate 0.0 congestion
+    (the calmest, genuinely-uncongested port) must be honored, not coalesced
+    away by an `or`-chain to the neutral 0.5 default (which inflates the
+    congestion component + headline SSI). The dict branch must agree with the
+    correct object branch, and a real 0.0 must NOT be overridden by a stale
+    secondary field."""
+    from types import SimpleNamespace as NS
+    from processing.shipping_stress_index import (
+        _route_congestion_stress, ROUTES_BY_ID,
+    )
+
+    rid, route = next(iter(ROUTES_BY_ID.items()))
+    dest = route.dest_locode
+    dict_stress = _route_congestion_stress(
+        rid, [{"locode": dest, "current_congestion": 0.0}])
+    obj_stress = _route_congestion_stress(
+        rid, [NS(locode=dest, current_congestion=0.0)])
+    shadowed = _route_congestion_stress(
+        rid, [{"locode": dest, "current_congestion": 0.0, "congestion_index": 0.9}])
+    assert dict_stress == obj_stress    # dict branch honors 0.0 like the object branch
+    assert shadowed == obj_stress       # real 0.0 not overridden by the 0.9 secondary
