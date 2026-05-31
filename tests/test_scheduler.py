@@ -432,6 +432,73 @@ def test_main_push_flag_is_forwarded(monkeypatch) -> None:
     assert captured["push"] is True
 
 
+# ─── per-job cadence gates (#4) ───────────────────────────────────────────
+
+def test_job_due_first_run_then_within_interval() -> None:
+    """A never-run job is due (and stamps); a second check within the
+    interval is NOT due."""
+    from datetime import datetime, timezone
+    from worker.scheduler import _job_due
+
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert _job_due("cadence-x", 3600, now=now) is True   # never run → due
+    assert _job_due("cadence-x", 3600, now=now) is False  # within 1h → not
+
+
+def test_job_due_again_after_interval_elapsed() -> None:
+    from datetime import datetime, timedelta, timezone
+    from worker.scheduler import _job_due
+
+    t0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert _job_due("cadence-y", 3600, now=t0) is True
+    assert _job_due("cadence-y", 3600, now=t0 + timedelta(minutes=30)) is False
+    assert _job_due("cadence-y", 3600, now=t0 + timedelta(hours=2)) is True
+
+
+def test_job_due_force_bypasses_the_gate() -> None:
+    from datetime import datetime, timezone
+    from worker.scheduler import _job_due
+
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert _job_due("cadence-z", 3600, now=now) is True
+    assert _job_due("cadence-z", 3600, now=now) is False           # gated
+    assert _job_due("cadence-z", 3600, now=now, force=True) is True  # forced
+
+
+def test_main_gates_heavy_jobs_but_runs_sla_jobs_every_pass(monkeypatch) -> None:
+    """The cadence fix: across two back-to-back main() invocations the heavy
+    briefing build runs ONCE (daily gate), while the SLA jobs (escalation,
+    delivery retry) run on BOTH passes."""
+    monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+    counts = {"briefing": 0, "escalation": 0, "retry": 0}
+
+    def fake_briefing(bundle, *, push_to_channels=False):
+        counts["briefing"] += 1
+        return ReportJobResult(report_id="r", file_path="/tmp/x",
+                               success=True, duration_s=0.1, error_msg="")
+
+    def fake_esc(*a, **k):
+        counts["escalation"] += 1
+        return {}
+
+    def fake_retry(*a, **k):
+        counts["retry"] += 1
+        return {}
+
+    monkeypatch.setattr(scheduler, "run_daily_briefing_job", fake_briefing)
+    monkeypatch.setattr(scheduler, "run_alert_escalation_job", fake_esc)
+    monkeypatch.setattr(scheduler, "run_delivery_retry_job", fake_retry)
+    monkeypatch.setattr(sys, "argv", ["worker.scheduler"])
+
+    for _ in range(2):
+        with pytest.raises(SystemExit):
+            main()
+
+    assert counts["briefing"] == 1     # heavy job gated daily → ran once
+    assert counts["escalation"] == 2   # SLA job → ran every pass
+    assert counts["retry"] == 2        # SLA job → ran every pass
+
+
 # ─── load_data_bundle ──────────────────────────────────────────────────────
 
 def test_load_data_bundle_returns_expected_keys() -> None:

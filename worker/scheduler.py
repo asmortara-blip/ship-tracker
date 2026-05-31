@@ -11,12 +11,27 @@ The Streamlit app does not run a long-lived event loop, so we use an
 external scheduler. This module is the worker; cron (or a Docker
 sibling container) is the scheduler.
 
-    # Default cron line — 07:00 UTC every day
-    0 7 * * * cd /path/to/ship && /usr/bin/python3 -m worker.scheduler --push >> logs/scheduler.log 2>&1
+Cadence
+-------
+``main()`` is safe to invoke FREQUENTLY. The SLA-critical jobs
+(source-health alerting, alert escalation, delivery retry) run on EVERY
+invocation; the heavy jobs (the briefing build, prunes, snapshots,
+digests) self-throttle via per-job kv_state last-run gates (see
+``_job_due`` / ``_run_gated``). So a single fast cron satisfies both —
+escalation/retry fire within minutes while the heavy jobs run at most
+once per their interval (briefing/prunes/snapshots daily, perf-budget +
+health-ping hourly, anomaly 6-hourly):
+
+    # Recommended — every 5 minutes; heavy jobs gate themselves.
+    */5 * * * * cd /path/to/ship && /usr/bin/python3 -m worker.scheduler --push >> logs/scheduler.log 2>&1
+
+A daily cron still works (every gate is then trivially due each run);
+pass ``--force`` to bypass the gates for a manual full run.
 
 The module is intentionally crash-proof: ``run_daily_briefing_job``
 catches every exception and always returns a populated
-``ReportJobResult``. The CLI exits 0 on success, 1 on failure.
+``ReportJobResult``. The CLI exits 0 on success (a within-cadence
+skipped briefing counts as success), 1 on failure.
 
 This module must NOT import ``streamlit``. It is invoked outside the
 Streamlit process and therefore has no ``st.*`` available.
@@ -1752,6 +1767,107 @@ def run_snapshot_prune_job(keep_n: int = 30) -> int:
 #  CLI entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Per-job cadence gates ─────────────────────────────────────────────────
+#
+# main() runs the full job list on every invocation. The SLA-critical jobs
+# (source-health alerting, alert escalation, delivery retry) must fire on a
+# FAST (~5 min) cadence so an unacked CRITICAL escalates / a transient
+# delivery failure retries within minutes. The HEAVY jobs (the briefing
+# build, prunes, snapshots, digests) must NOT re-run that often. The old
+# all-jobs-every-invocation design forced a single cron to choose between the
+# two — a daily cron left escalation/retry up to ~24h late.
+#
+# Fix: gate the heavy jobs on a kv_state last-run timestamp so each runs at
+# most once per its interval no matter how often main() fires, while the SLA
+# jobs are left ungated (every pass). A single ``*/5 * * * *`` cron then
+# satisfies both: the SLA jobs run every 5 min, the heavy jobs self-throttle.
+_DAILY_SECONDS = 24 * 60 * 60
+_HOURLY_SECONDS = 60 * 60
+_SIX_HOURLY_SECONDS = 6 * 60 * 60
+
+_JOB_LASTRUN_KEY = "scheduler:lastrun:{name}"
+
+
+def _job_due(
+    name: str,
+    interval_seconds: int,
+    *,
+    now: Optional[datetime] = None,
+    force: bool = False,
+) -> bool:
+    """True iff job ``name`` is due (>= ``interval_seconds`` since its last
+    run, or never run) — and STAMP the run time when returning True.
+
+    Backed by a kv_state row ``scheduler:lastrun:<name>``. ``force`` bypasses
+    the gate (still stamps). Fail-OPEN: on ANY error this returns True — better
+    to run a heavy job an extra time than to silently stop running it because
+    the gate's own bookkeeping broke.
+    """
+    now_dt = now or datetime.now(timezone.utc)
+    key = _JOB_LASTRUN_KEY.format(name=name)
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        if not force:
+            row = conn.execute(
+                "SELECT value FROM kv_state WHERE key = ?", (key,),
+            ).fetchone()
+            if row is not None:
+                try:
+                    last = datetime.fromisoformat(row["value"])
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    last = None
+                if last is not None and (
+                    now_dt - last
+                ).total_seconds() < interval_seconds:
+                    return False
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
+            "VALUES (?, ?, ?)",
+            (key, now_dt.isoformat(), now_dt.isoformat()),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — gate must never stop the worker
+        logger.warning(
+            f"_job_due: gate check failed for {name!r}, running anyway: {exc}"
+        )
+        return True
+
+
+def _run_gated(
+    name: str,
+    interval_seconds: int,
+    fn: Callable,
+    *,
+    now: Optional[datetime] = None,
+    force: bool = False,
+    label: Optional[str] = None,
+) -> None:
+    """Run heavy job ``fn`` iff ``_job_due`` says so; swallow + log any error.
+
+    Skipping (within-interval) is logged at DEBUG; a job exception is logged
+    at WARNING. The job itself already no-raises — this is belt-and-braces."""
+    if not _job_due(name, interval_seconds, now=now, force=force):
+        logger.debug(f"main: {label or name} skipped (within cadence)")
+        return
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"main: {label or name} step failed: {exc}")
+
+
+def _run_always(label: str, fn: Callable) -> None:
+    """Run an ungated job (SLA every-pass, or one that self-gates internally);
+    swallow + log any error."""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"main: {label} step failed: {exc}")
+
+
 def _parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="worker.scheduler",
@@ -1762,244 +1878,108 @@ def _parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         action="store_true",
         help="Also push pending alerts to every enabled DeliveryChannel.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Bypass the per-job cadence gates and run every job this pass "
+            "(for a manual full run)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list] = None) -> int:
     """CLI entry point. Returns the process exit code (0 success, 1 failure)."""
     args = _parse_args(argv)
-    bundle = load_data_bundle()
-    result = run_daily_briefing_job(bundle, push_to_channels=args.push)
-    print(json.dumps(asdict(result), indent=2, default=str))
+    now = datetime.now(timezone.utc)
+    force = getattr(args, "force", False)
 
-    # Daily briefing TLDR — generate the one-paragraph summary once from
-    # the same bundle (primes the day-cache the UI briefing tab reads) and
-    # persist ready-to-send artifacts. Runs right after the report build so
-    # it reuses the freshly-loaded bundle. Belt-and-braces guard: the job
-    # itself never raises, and a TLDR failure must never touch the report.
-    try:
-        run_briefing_tldr_job(bundle)
-    except Exception as exc:
-        logger.warning(f"main: briefing TLDR step failed: {exc}")
+    # Daily briefing — the headline build. Gated daily (the LLM report must
+    # not rebuild on every fast pass) with a LAZY bundle load so a skipped
+    # pass doesn't pay load_data_bundle()'s cost. ``result`` stays None when
+    # skipped and is treated as success for the exit code.
+    result = None
+    if _job_due("run_daily_briefing_job", _DAILY_SECONDS, now=now, force=force):
+        bundle = load_data_bundle()
+        result = run_daily_briefing_job(bundle, push_to_channels=args.push)
+        print(json.dumps(asdict(result), indent=2, default=str))
+        # Daily briefing TLDR — primes the day-cache the UI reads + persists
+        # ready-to-send artifacts, reusing the freshly-loaded bundle. A TLDR
+        # failure must never touch the report.
+        _run_always("briefing TLDR", lambda: run_briefing_tldr_job(bundle))
+    else:
+        print(json.dumps(
+            {"briefing": "skipped", "reason": "ran within the daily interval"}
+        ))
 
-    # Telemetry retention runs AFTER the briefing job so a prune failure
-    # cannot block the report. Wrapped in try/except for the same reason
-    # the helper itself already swallows errors — belt-and-braces.
-    try:
-        run_telemetry_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: telemetry prune step failed: {exc}")
+    # Daily retention prunes — gated so a fast cron doesn't re-prune 288×/day.
+    _run_gated("run_telemetry_prune_job", _DAILY_SECONDS, run_telemetry_prune_job,
+               now=now, force=force, label="telemetry prune")
+    _run_gated("run_perf_prune_job", _DAILY_SECONDS, run_perf_prune_job,
+               now=now, force=force, label="perf prune")
+    _run_gated("run_snapshot_prune_job", _DAILY_SECONDS, run_snapshot_prune_job,
+               now=now, force=force, label="snapshot prune")
 
-    # Render-event retention runs immediately after the LLM-call prune
-    # so both telemetry tables are kept in trim by the same daily cron.
-    # Same belt-and-braces guard — the helper already swallows errors.
-    try:
-        run_perf_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: perf prune step failed: {exc}")
+    # Data-source health: ping hourly, prune the ping rows daily.
+    _run_gated("run_health_ping_job", _HOURLY_SECONDS, run_health_ping_job,
+               now=now, force=force, label="health ping")
+    _run_gated("run_health_prune_job", _DAILY_SECONDS, run_health_prune_job,
+               now=now, force=force, label="health prune")
 
-    # InvestorReport snapshot retention. The diff widget only ever
-    # reads the two most-recent rows; the long-tail history is purely
-    # for ad-hoc post-mortems, so 30 rows is plenty. Same belt-and-
-    # braces guard — the helper already swallows errors.
-    try:
-        run_snapshot_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: snapshot prune step failed: {exc}")
+    # SLA job — EVERY pass: classify the freshest data-source snapshot so a
+    # degradation alert fires within minutes.
+    _run_always("source health alert", run_source_health_alert_job)
 
-    # Data-source health pings. Runs AFTER every prune so the briefing
-    # is not slowed down by a slow probe — at the cost of the ping row
-    # potentially landing just before the prune cutoff on the NEXT
-    # tick. The order is "ping → prune ping rows": the freshly-written
-    # row is well inside the retention window because the prune uses
-    # ``now - retention_days`` as its cutoff. Same belt-and-braces
-    # guard — both helpers already swallow errors.
-    try:
-        run_health_ping_job()
-    except Exception as exc:
-        logger.warning(f"main: health ping step failed: {exc}")
+    # Per-tab perf-budget check (hourly) + anomaly detection (6-hourly; the
+    # per-metric 24h cooldown de-dupes regardless of cadence).
+    _run_gated("run_perf_budget_check_job", _HOURLY_SECONDS, run_perf_budget_check_job,
+               now=now, force=force, label="perf budget check")
+    _run_gated("run_anomaly_detection_job", _SIX_HOURLY_SECONDS, run_anomaly_detection_job,
+               now=now, force=force, label="anomaly detection")
 
-    try:
-        run_health_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: health prune step failed: {exc}")
+    # SLA jobs — EVERY pass: an unacked CRITICAL escalates, and a transient
+    # delivery failure retries, within minutes. These are the reason main()
+    # must be safe to invoke every ~5 minutes.
+    _run_always("alert escalation", run_alert_escalation_job)
+    _run_always("delivery retry", run_delivery_retry_job)
 
-    # Source-health auto-alerting. Runs AFTER the health ping so the
-    # alerter classifies the freshest snapshot. The orchestrator
-    # already swallows per-source errors, the wrapper swallows the
-    # top-level — same belt-and-braces guard.
-    try:
-        run_source_health_alert_job()
-    except Exception as exc:
-        logger.warning(f"main: source health alert step failed: {exc}")
+    # Daily retention / cleanup prunes.
+    _run_gated("run_bulk_export_prune_job", _DAILY_SECONDS, run_bulk_export_prune_job,
+               now=now, force=force, label="bulk export prune")
+    _run_gated("run_alert_prune_job", _DAILY_SECONDS, run_alert_prune_job,
+               now=now, force=force, label="alert prune")
+    _run_gated("run_silence_cleanup_job", _DAILY_SECONDS, run_silence_cleanup_job,
+               now=now, force=force, label="silence cleanup")
+    _run_gated("run_audit_prune_job", _DAILY_SECONDS, run_audit_prune_job,
+               now=now, force=force, label="audit prune")
+    _run_gated("run_report_prune_job", _DAILY_SECONDS, run_report_prune_job,
+               now=now, force=force, label="report prune")
 
-    # Per-tab perf-budget check. Runs AFTER the source-health alerter
-    # so the two alert paths sit next to each other in the job list.
-    # The orchestrator already swallows per-tab errors, the wrapper
-    # swallows the top-level — same belt-and-braces guard.
-    try:
-        run_perf_budget_check_job()
-    except Exception as exc:
-        logger.warning(f"main: perf budget check step failed: {exc}")
+    # Operator daily digest (gated daily); weekly digest self-gates on the
+    # per-user day/hour + a kv lock, so it runs every pass and decides
+    # internally whether to send.
+    _run_gated("run_operator_digest_job", _DAILY_SECONDS, run_operator_digest_job,
+               now=now, force=force, label="operator digest")
+    _run_always("weekly digest", run_weekly_digest_job_wrapper)
 
-    # Time-series anomaly detection across BDI / FBX / SCFI / WTI etc.
-    # Runs AFTER the perf-budget check so the alert-firing paths sit
-    # together in the job list. Detection is sub-daily (the cron fires
-    # every 6h) — the per-metric cooldown of 24h prevents duplicate
-    # fires regardless of cadence. Same belt-and-braces guard as the
-    # sibling alerters.
-    try:
-        run_anomaly_detection_job()
-    except Exception as exc:
-        logger.warning(f"main: anomaly detection step failed: {exc}")
+    # Daily snapshot pipeline (write → multi-container fan-out → cargo-mix +
+    # company-risk history → integrity sweep → GC), in dependency order.
+    _run_gated("run_port_supply_snapshot_job", _DAILY_SECONDS, run_port_supply_snapshot_job,
+               now=now, force=force, label="port supply snapshot")
+    _run_gated("run_multi_container_snapshot_job", _DAILY_SECONDS, run_multi_container_snapshot_job,
+               now=now, force=force, label="multi container snapshot")
+    _run_gated("run_cargo_mix_snapshot_job", _DAILY_SECONDS, run_cargo_mix_snapshot_job,
+               now=now, force=force, label="cargo mix snapshot")
+    _run_gated("run_company_risk_snapshot_job", _DAILY_SECONDS, run_company_risk_snapshot_job,
+               now=now, force=force, label="company risk snapshot")
+    _run_gated("run_snapshot_integrity_check_job", _DAILY_SECONDS, run_snapshot_integrity_check_job,
+               now=now, force=force, label="snapshot integrity check")
+    _run_gated("run_port_supply_snapshot_gc_job", _DAILY_SECONDS, run_port_supply_snapshot_gc_job,
+               now=now, force=force, label="port supply snapshot gc")
 
-    # Alert escalation pass — walks unacked alerts whose next chain
-    # step has come due and dispatches to the step's channel. Same
-    # 5-minute cadence as the source-health alerter (the operator-
-    # facing latency budget is "an unacked CRITICAL should escalate
-    # within a few minutes of its timer expiring"). The orchestrator
-    # already swallows per-alert errors, the wrapper swallows the
-    # top-level — same belt-and-braces guard.
-    try:
-        run_alert_escalation_job()
-    except Exception as exc:
-        logger.warning(f"main: alert escalation step failed: {exc}")
-
-    # Delivery retry pass — re-dispatches every due pending row in
-    # ``delivery_retry_queue`` (v26). Designed for the same 5-minute
-    # cadence so a transient transport blip (HTTP 5xx, network
-    # timeout, SMTP failure) is re-attempted within minutes. The
-    # orchestrator already swallows per-row errors, the wrapper
-    # swallows the top-level — same belt-and-braces guard.
-    try:
-        run_delivery_retry_job()
-    except Exception as exc:
-        logger.warning(f"main: delivery retry step failed: {exc}")
-
-    # Bulk-export archive retention. Runs AFTER the health prune so a
-    # bulk-export taken on the same tick (if a future cron triggers one)
-    # would still be inside the retention window. Same belt-and-braces
-    # guard — the helper already swallows errors.
-    try:
-        run_bulk_export_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: bulk export prune step failed: {exc}")
-
-    # Stale acknowledged alerts. Default keeps 180 days so multi-month
-    # backtests over alert_backtest still find the rows. Unacknowledged
-    # alerts are never auto-pruned regardless of age. Same belt-and-
-    # braces guard.
-    try:
-        run_alert_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: alert prune step failed: {exc}")
-
-    # Alert-silence cleanup — sweep expired silences past the audit
-    # retention window. Runs AFTER the alert prune so a silence that
-    # accompanied an alert pruned this tick stays around for the same
-    # retention as any other audit-relevant row. Same belt-and-braces
-    # guard — the helper already swallows errors.
-    try:
-        run_silence_cleanup_job()
-    except Exception as exc:
-        logger.warning(f"main: silence cleanup step failed: {exc}")
-
-    # Audit retention — defaults to a full year. Audit is forensic
-    # state so we keep it longer than telemetry. Same try/except guard.
-    try:
-        run_audit_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: audit prune step failed: {exc}")
-
-    # Report retention — keep the newest 30 reports on disk. save_report
-    # auto-prunes on every write already; this is the belt-and-suspenders
-    # pass that catches any drift.
-    try:
-        run_report_prune_job()
-    except Exception as exc:
-        logger.warning(f"main: report prune step failed: {exc}")
-
-    # Operator Dashboard daily digest. Runs LAST so the digest reflects
-    # the state after every prune / health ping has settled. Subscribers
-    # are the ``DeliveryChannel`` rows whose ``name`` starts with
-    # ``ops-``. Same belt-and-braces guard — the helper already swallows
-    # per-channel errors and never raises.
-    try:
-        run_operator_digest_job()
-    except Exception as exc:
-        logger.warning(f"main: operator digest step failed: {exc}")
-
-    # Weekly digest — runs every worker tick, self-gates on the
-    # per-user day-of-week + hour-of-day config AND a kv_state lock so
-    # a back-to-back hourly fire never double-sends to the same user.
-    # Placed AFTER the operator digest so a freshly-bumped per-channel
-    # budget counter is reflected in the weekly summary. Same belt-and-
-    # braces guard — the helper already swallows per-user errors and
-    # never raises.
-    try:
-        run_weekly_digest_job_wrapper()
-    except Exception as exc:
-        logger.warning(f"main: weekly digest step failed: {exc}")
-
-    # Port-supply daily snapshot — writes today's per-port summary CSV
-    # under cache/port_supply_snapshots/<date>/ + diffs vs the prior
-    # snapshot if one exists. The diff goes into the log so operators
-    # tailing the worker output see overnight changes inline.
-    # Runs AFTER the digests so a freshly-saved snapshot doesn't sit
-    # while delivery work is happening. Same belt-and-braces guard
-    # as the rest of main() — the helper itself never raises.
-    try:
-        run_port_supply_snapshot_job()
-    except Exception as exc:
-        logger.warning(f"main: port supply snapshot step failed: {exc}")
-
-    # Fan the daily snapshot out across container types — same belt-
-    # and-braces guard; per-container failures isolated inside the
-    # helper. Runs AFTER the 40FT_DRY single-container save so the
-    # default container's diff is always the authoritative signal.
-    try:
-        run_multi_container_snapshot_job()
-    except Exception as exc:
-        logger.warning(f"main: multi container snapshot step failed: {exc}")
-
-    # Per-route cargo mix snapshot — feeds CARGO_FLOW_ANOMALY alerts
-    # on the next tick once the trailing window populates. Runs in
-    # the snapshot block so it shares the same retention + integrity
-    # cadence. Never raises.
-    try:
-        run_cargo_mix_snapshot_job()
-    except Exception as exc:
-        logger.warning(f"main: cargo mix snapshot step failed: {exc}")
-
-    # Per-ticker risk score snapshot — feeds the company-risk trend
-    # UI + band-transition narrations. Runs alongside the cargo mix
-    # snapshot so both daily history streams stay in sync. Never raises.
-    try:
-        run_company_risk_snapshot_job()
-    except Exception as exc:
-        logger.warning(f"main: company risk snapshot step failed: {exc}")
-
-    # Sweep recent snapshot dirs for missing or corrupted files. Runs
-    # AFTER all snapshot writes so anything wrong is caught the same
-    # tick that produced it; the helper logs the count to the worker
-    # output so operators see "X of Y healthy" inline.
-    try:
-        run_snapshot_integrity_check_job()
-    except Exception as exc:
-        logger.warning(f"main: snapshot integrity check step failed: {exc}")
-
-    # Prune old port-supply snapshot dirs per the retention policy.
-    # Runs LAST among the snapshot steps so today's writes are never
-    # GC'd by the same tick that produced them. Helper never raises.
-    try:
-        run_port_supply_snapshot_gc_job()
-    except Exception as exc:
-        logger.warning(f"main: port supply snapshot gc step failed: {exc}")
-
-    # User-configured report schedules. Runs AFTER the operator digest
-    # so a freshly-generated scheduled report can ride the same data
-    # bundle the digest just read. Same belt-and-braces guard — the
-    # helper already swallows per-schedule errors and never raises.
+    # User-configured report schedules — self-gates per schedule via
+    # next_run_at, so it runs every pass and fires only what's due.
     try:
         sched_summary = run_report_scheduler_job()
         logger.info(
@@ -2010,7 +1990,8 @@ def main(argv: Optional[list] = None) -> int:
     except Exception as exc:
         logger.warning(f"main: report scheduler step failed: {exc}")
 
-    exit_code = 0 if result.success else 1
+    # A skipped (within-cadence) briefing is success, not failure.
+    exit_code = 0 if (result is None or result.success) else 1
     sys.exit(exit_code)
 
 

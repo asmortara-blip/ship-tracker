@@ -34,6 +34,23 @@ from worker import scheduler
 from worker.scheduler import ReportJobResult, main
 
 
+@pytest.fixture(autouse=True)
+def _isolated_db(monkeypatch, tmp_path):
+    """Isolate the SQLite state DB to a per-test tmp file.
+
+    main() reads/writes kv_state for its per-job cadence gates (see
+    worker.scheduler._job_due), so without isolation these tests would (a)
+    see last-run stamps left by another run and SKIP gated jobs, and (b)
+    pollute the real cache DB. A fresh DB per test makes every gate due, so
+    the full job sequence runs exactly as these tests assert."""
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "ship_tracker.db")
+    state_db.reset_for_tests()
+    yield
+    state_db.reset_for_tests()
+
+
 # ─── Every run_*_job invoked by main(), in documented sequence ────────────
 #
 # Sourced by reading worker/scheduler.py::main() top to bottom. The
