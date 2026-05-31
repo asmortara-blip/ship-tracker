@@ -3658,6 +3658,23 @@ def test_spillover_graph_rejects_negative_min_lift(server):
     assert r.status_code == 400
 
 
+def test_spillover_graph_rejects_nonfinite_min_lift(server):
+    """NaN/inf parse as floats and slip past a bare `< 0` guard, but they
+    serialize to the invalid-JSON tokens NaN/Infinity and defeat the lift
+    filter (lift < nan always False; lift < inf always True) — must 400."""
+    uid = _make_user()
+    token = _mint_token(uid)
+    for bad in ("nan", "inf", "-inf", "Infinity"):
+        r = requests.get(
+            f"{server}/api/v1/ports/spillover-graph",
+            params={"min_lift": bad},
+            headers=_bearer(token), timeout=10,
+        )
+        assert r.status_code == 400, (
+            f"expected 400 for min_lift={bad}, got {r.status_code}"
+        )
+
+
 def test_spillover_graph_response_envelope(
     server, isolated_snapshot_root,
 ):

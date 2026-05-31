@@ -344,3 +344,30 @@ def test_company_supply_risk_verbose_renders_per_run_rows(capsys) -> None:
     # Run labels are run0, run1, ... — pin at least one shows up.
     assert "        - run0" in out
     assert "top-N jaccard = " in out
+
+
+def test_compare_baseline_missing_file_returns_2(capsys) -> None:
+    """A missing baseline path is a config error → exit 2, NOT exit 1 (which is
+    reserved for 'drift detected'), so CI can distinguish the two."""
+    from tools.backtests import main
+    rc = main(["--compare-baseline", "/nonexistent/dir/missing-baseline.json"])
+    assert rc == 2
+    assert "cannot read baseline" in capsys.readouterr().err
+
+
+def test_compare_baseline_corrupt_file_returns_2(tmp_path, capsys) -> None:
+    """A malformed baseline JSON exits 2 cleanly, not via an uncaught traceback."""
+    from tools.backtests import main
+    bad = tmp_path / "corrupt.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    rc = main(["--compare-baseline", str(bad)])
+    assert rc == 2
+    assert "cannot read baseline" in capsys.readouterr().err
+
+
+def test_save_baseline_bad_dir_returns_2(tmp_path, capsys) -> None:
+    """--save-baseline into a non-existent directory exits 2, not a traceback."""
+    from tools.backtests import main
+    rc = main(["--save-baseline", str(tmp_path / "no_such_dir" / "b.json")])
+    assert rc == 2
+    assert "cannot write baseline" in capsys.readouterr().err

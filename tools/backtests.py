@@ -981,13 +981,26 @@ def main(argv: list[str] | None = None) -> int:
     results = run_all_backtests()
 
     if args.save_baseline:
-        save_baseline(results, args.save_baseline)
+        try:
+            save_baseline(results, args.save_baseline)
+        except OSError as exc:
+            print(f"error: cannot write baseline {args.save_baseline!r}: {exc}",
+                  file=sys.stderr)
+            return 2
         print(f"Wrote baseline snapshot for {len(results)} validators to "
               f"{args.save_baseline}")
         return 0
 
     if args.compare_baseline:
-        drifts = compare_to_baseline(results, args.compare_baseline)
+        # Exit 2 (usage/config error, matching the argparse + mutual-exclusion
+        # convention) for a missing/corrupt baseline, so CI can distinguish it
+        # from the exit-1 "drift detected" contract below.
+        try:
+            drifts = compare_to_baseline(results, args.compare_baseline)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: cannot read baseline {args.compare_baseline!r}: {exc}",
+                  file=sys.stderr)
+            return 2
         print(format_drift_report(drifts, results))
         return 1 if drifts else 0
 

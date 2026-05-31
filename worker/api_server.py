@@ -2693,8 +2693,16 @@ class APIHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             _send_bad_request(self, f"min_lift must be a number; got {raw_lift!r}")
             return
-        if min_lift < 0.0:
-            _send_bad_request(self, f"min_lift must be >= 0; got {min_lift}")
+        # Reject NaN/inf as well as negatives. float("nan")/float("inf") parse
+        # cleanly and slip past a bare `< 0` guard, but they (a) serialize to
+        # the invalid-JSON tokens NaN/Infinity and (b) defeat the lift filter:
+        # `lift < nan` is always False (every edge survives) and `lift < inf`
+        # is always True (graph silently emptied) — the opposite of the param.
+        if (min_lift != min_lift                       # NaN
+                or min_lift in (float("inf"), float("-inf"))
+                or min_lift < 0.0):
+            _send_bad_request(
+                self, f"min_lift must be a finite number >= 0; got {raw_lift!r}")
             return
 
         # Walk the snapshot history. Quietly skip dates that don't have
