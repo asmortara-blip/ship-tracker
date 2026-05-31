@@ -163,10 +163,12 @@ def test_summary_high_magnitude_low_persistence_no_alert() -> None:
 
 
 def test_persistence_threshold_override_respected() -> None:
-    """A 60% persistence window won't alert at default 0.70 threshold
-    but will at 0.50."""
-    # 6 surplus days + 4 balanced days → mean ~0.20, persistence 6/6=100%
-    # within nonzero days, but the count of nonzero is only 6 of 10.
+    """A 60% persistence window won't meet the default 0.70 persistence gate
+    but does once the threshold is lowered to 0.50."""
+    # 6 surplus days + 4 balanced days → persistence = 6 of 10 = 0.60. Balanced
+    # (zero-divergence) days count in the WINDOW denominator (the documented
+    # "fraction of days" / "7 of 10 days" contract), so this is 0.60, NOT the
+    # 6/6=1.0 you'd get by dividing only by the nonzero days.
     points = []
     for i in range(10):
         if i < 6:
@@ -179,10 +181,15 @@ def test_persistence_threshold_override_respected() -> None:
                 route_id="x", date_iso=f"d{i}",
                 capacity_teu=1000.0, demand_teu=1000.0,
             ))
-    r = summarize_persistent_divergence(points)
-    # Persistence is 6/6 (only nonzero days counted) = 1.0 -> alert worthy
-    # already, regardless of threshold; verify the threshold mechanism.
-    assert r.persistence_rate == pytest.approx(1.0)
+    r = summarize_persistent_divergence(points)                 # default 0.70
+    assert r.persistence_rate == pytest.approx(0.6)
+    # 0.60 < 0.70 → the persistence gate fails, so the route can't alert
+    # regardless of band.
+    assert r.is_alert_worthy is False
+    # Lower the threshold below the observed persistence → the gate is now met.
+    r2 = summarize_persistent_divergence(points, persistence_threshold=0.50)
+    assert r2.persistence_rate == pytest.approx(0.6)
+    assert r2.persistence_rate >= 0.50
 
 
 # ── Summary string ──────────────────────────────────────────────────────

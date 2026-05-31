@@ -194,9 +194,12 @@ def summarize_persistent_divergence(
     abs_mean = abs(mean_div)
     band = _band_for(abs_mean)
 
-    # Persistence — fraction of days whose sign matches the mean's sign.
-    # Days with divergence == 0 are neutral and don't count against
-    # persistence (they don't contradict the prevailing direction).
+    # Persistence — fraction of the WINDOW whose sign matches the mean's
+    # sign (denominator = N days, per the documented "7 of 10 days"
+    # contract). Balanced (zero-divergence) days DO count in the denominator:
+    # a day that didn't move in the prevailing direction dilutes persistence,
+    # which is the intended "how consistently does this route lean one way"
+    # reading.
     if mean_div > 0:
         same_sign = sum(1 for d in divs if d > 0)
     elif mean_div < 0:
@@ -204,8 +207,7 @@ def summarize_persistent_divergence(
     else:
         # Mean is exactly zero — persistence undefined; report as 0.
         same_sign = 0
-    nonzero = sum(1 for d in divs if d != 0)
-    persistence = (same_sign / nonzero) if nonzero else 0.0
+    persistence = (same_sign / n) if n else 0.0
 
     direction = (
         "capacity_surplus" if mean_div > 0
