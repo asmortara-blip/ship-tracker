@@ -145,11 +145,16 @@ def test_main_function_calls_snapshot_job_under_try_except() -> None:
     every other run_*_job follows in this file."""
     import inspect
     src = inspect.getsource(sched.main)
-    # The call site exists
-    assert "run_port_supply_snapshot_job()" in src
-    # ...and is wrapped in a try block (logger.warning pairs with the
-    # try/except idiom used by every sibling job).
-    assert "port supply snapshot step failed" in src
+    helpers = (inspect.getsource(sched._run_gated)
+               + inspect.getsource(sched._run_always))
+    # The job is wired into main() with its step label …
+    assert "run_port_supply_snapshot_job" in src
+    assert "port supply snapshot" in src
+    # … and the shared _run_gated / _run_always wrapper provides the
+    # try/except + "main: <label> step failed" log (the per-job guard moved
+    # out of inline blocks into those helpers in the cadence-gate refactor).
+    assert "step failed" in helpers
+    assert "except Exception" in helpers
 
 
 # ── 5. Digest persistence — quiet day vs material day ────────────────────
@@ -417,10 +422,13 @@ def test_main_function_calls_gc_and_multi_under_try_except() -> None:
     same as every other sibling step."""
     import inspect
     src = inspect.getsource(sched.main)
-    assert "run_port_supply_snapshot_gc_job()" in src
-    assert "run_multi_container_snapshot_job()" in src
-    assert "port supply snapshot gc step failed" in src
-    assert "multi container snapshot step failed" in src
+    helpers = (inspect.getsource(sched._run_gated)
+               + inspect.getsource(sched._run_always))
+    assert "run_port_supply_snapshot_gc_job" in src
+    assert "run_multi_container_snapshot_job" in src
+    assert "port supply snapshot gc" in src
+    assert "multi container snapshot" in src
+    assert "step failed" in helpers and "except Exception" in helpers
 
 
 # ── 7. Snapshot integrity check wrapper ──────────────────────────────────
@@ -464,5 +472,8 @@ def test_integrity_wrapper_flags_unhealthy_dir(
 def test_main_function_calls_integrity_under_try_except() -> None:
     import inspect
     src = inspect.getsource(sched.main)
-    assert "run_snapshot_integrity_check_job()" in src
-    assert "snapshot integrity check step failed" in src
+    helpers = (inspect.getsource(sched._run_gated)
+               + inspect.getsource(sched._run_always))
+    assert "run_snapshot_integrity_check_job" in src
+    assert "snapshot integrity check" in src
+    assert "step failed" in helpers and "except Exception" in helpers
