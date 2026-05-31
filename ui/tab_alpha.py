@@ -591,7 +591,16 @@ def render(
             # Try live engine first
             try:
                 if stock_data:
-                    raw = generate_all_signals(stock_data)
+                    # Pass the feeds this tab has (stock + freight + macro); the
+                    # engine defaults the port/route feeds it doesn't. The call
+                    # previously passed only stock_data, which raised TypeError
+                    # (5 required args) and was silently swallowed — so the
+                    # engine path was dead and the tab always showed mock data.
+                    raw = generate_all_signals(
+                        stock_data,
+                        freight_data=freight_data,
+                        macro_data=macro_data,
+                    )
                     for s in (raw or []):
                         try:
                             signals.append({

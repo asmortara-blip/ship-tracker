@@ -335,3 +335,16 @@ def test_build_signal_scorecard_has_one_row_per_signal() -> None:
     df = build_signal_scorecard(sigs)
     assert len(df) == 2
     assert set(df["ticker"]) == {"ZIM", "MATX"}
+
+
+def test_generate_all_signals_callable_with_stock_data_only() -> None:
+    """Regression: the Alpha tab calls generate_all_signals(stock_data) with a
+    SINGLE arg. The other feeds must be optional — otherwise it raised
+    TypeError (5 required args), which the tab swallowed at debug level, so the
+    engine path was permanently dead and the tab always showed mock signals."""
+    from engine.alpha_engine import generate_all_signals
+    assert isinstance(generate_all_signals({}), list)                 # no TypeError
+    assert isinstance(generate_all_signals({}, freight_data={}), list)
+    assert isinstance(
+        generate_all_signals({}, freight_data={}, macro_data={}), list
+    )
