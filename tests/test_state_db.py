@@ -1255,3 +1255,78 @@ def test_v28_migration_is_idempotent_across_reopens(tmp_path, monkeypatch) -> No
     ).fetchall()]
     # No duplicates from re-running the ALTER TABLE.
     assert col_names.count("mfa_last_used_step") == 1
+
+
+# ─── Connection model: thread-local + concurrent-safe (#2) ────────────────
+
+def test_get_connection_is_thread_local() -> None:
+    """Each thread gets its OWN sqlite3.Connection. sqlite3.threadsafety==1
+    forbids sharing one Connection across threads (the old design did, which
+    is undefined behaviour); this is the defining property of the fix."""
+    import threading
+    from state.db import get_connection
+
+    main_conn = get_connection()
+    other = {}
+
+    def worker():
+        other["conn"] = get_connection()
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert other["conn"] is not main_conn  # distinct objects per thread
+    # Same thread → same cached connection.
+    assert get_connection() is main_conn
+
+
+def test_get_connection_concurrent_writes_are_safe(tmp_path, monkeypatch) -> None:
+    """Hammer get_connection().execute() from many threads at once: no errors,
+    distinct connections, and every committed write is visible across them
+    (WAL). The old shared-Connection design could corrupt state / crash the
+    interpreter under exactly this load."""
+    import threading
+    from state import db as state_db
+
+    monkeypatch.setattr(state_db, "DB_PATH", tmp_path / "threads.db")
+    state_db.reset_for_tests()
+    state_db.get_connection()  # prime schema init once
+
+    N = 8
+    conn_ids: dict = {}
+    errors: list = []
+    barrier = threading.Barrier(N)
+
+    def worker(i: int) -> None:
+        try:
+            barrier.wait()  # release all threads together for max contention
+            c = state_db.get_connection()
+            conn_ids[i] = id(c)
+            for _ in range(20):
+                c.execute(
+                    "INSERT INTO kv_state(key, value, updated_at) "
+                    "VALUES(?, '1', 't') "
+                    "ON CONFLICT(key) DO UPDATE SET "
+                    "value = CAST(value AS INTEGER) + 1, updated_at = 't'",
+                    (f"thr-{i}",),
+                )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], errors                 # no corruption / threading error
+    assert len(set(conn_ids.values())) == N     # one distinct connection per thread
+    # Every thread's 20 atomic increments landed and are visible from the
+    # main thread's own connection (cross-connection commit visibility).
+    main_conn = state_db.get_connection()
+    for i in range(N):
+        row = main_conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?", (f"thr-{i}",),
+        ).fetchone()
+        assert int(row["value"]) == 20
+    state_db.reset_for_tests()

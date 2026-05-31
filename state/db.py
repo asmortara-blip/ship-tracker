@@ -292,48 +292,73 @@ SCHEMA_VERSION: int = 28
 
 # ─── Connection cache ──────────────────────────────────────────────────────
 
-_conn_lock = threading.Lock()
-_conn: Optional[sqlite3.Connection] = None
+# Per-THREAD connections. ``sqlite3.threadsafety == 1`` on CPython means a
+# single ``Connection`` object MUST NOT be shared across threads — doing so is
+# undefined and can corrupt state / crash the interpreter. Streamlit runs each
+# session's script in its own ScriptRunner thread, so the old single shared
+# connection was unsafe. Instead each thread gets its OWN connection: WAL mode
+# lets many connections (readers + one writer) operate on the same file
+# concurrently, across threads AND processes, so this is safe and does NOT
+# serialize. The public API is unchanged — callers still ``get_connection()``.
+_conn_lock = threading.Lock()          # guards _all_conns + _schema_ready
+_tls = threading.local()               # this thread's Connection (._conn)
+_all_conns: list = []                  # every open conn, so reset_for_tests can close them
+_schema_ready: bool = False            # _init_schema runs exactly once per process
 
 
 def get_connection() -> sqlite3.Connection:
-    """Return the shared sqlite3.Connection, opening + initializing the
-    database file lazily on first call."""
-    global _conn
+    """Return THIS THREAD's sqlite3.Connection, opening it lazily.
+
+    Each thread owns its connection (sqlite3.threadsafety==1 forbids sharing
+    one across threads). The file is WAL, which supports many concurrent
+    connections, so per-thread handles are safe without serialization. Schema
+    initialization runs exactly once process-wide (the first connection to
+    open does it under ``_conn_lock``); the migrations are idempotent but
+    running them on every thread's first open would be wasteful and could race
+    on a brand-new DB file.
+    """
+    conn = getattr(_tls, "_conn", None)
+    if conn is not None:
+        return conn
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # check_same_thread defaults to True now (each thread owns its connection,
+    # so we no longer need to disable the guard). autocommit (isolation_level
+    # =None) is preserved; multi-statement invariants use explicit
+    # BEGIN IMMEDIATE / atomic single statements.
+    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    global _schema_ready
     with _conn_lock:
-        if _conn is None:
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # check_same_thread=False is safe because we serialize through
-            # _conn_lock for connection setup; SQLite WAL mode handles
-            # concurrent statements once the connection is established.
-            _conn = sqlite3.connect(
-                DB_PATH,
-                check_same_thread=False,
-                isolation_level=None,  # autocommit; we use explicit transactions where it matters
-            )
-            _conn.row_factory = sqlite3.Row
-            # WAL gives us concurrent readers + a single writer without
-            # blocking on every transaction.
-            _conn.execute("PRAGMA journal_mode=WAL")
-            _conn.execute("PRAGMA foreign_keys=ON")
-            _init_schema(_conn)
-            logger.debug(f"state.db: opened SQLite at {DB_PATH}")
-    return _conn
+        _all_conns.append(conn)
+        if not _schema_ready:
+            _init_schema(conn)
+            _schema_ready = True
+    _tls._conn = conn
+    logger.debug(f"state.db: opened thread-local SQLite at {DB_PATH}")
+    return conn
 
 
 def reset_for_tests() -> None:
-    """Drop the cached connection so the next get_connection() re-opens.
+    """Close + drop EVERY open connection so the next get_connection() re-opens
+    against the (possibly newly-monkeypatched) DB_PATH and re-runs schema init.
 
-    Tests call this after monkeypatching DB_PATH to a tmp_path so each
-    test gets a fresh database file."""
-    global _conn
+    Tests call this after monkeypatching DB_PATH to a tmp_path so each test
+    gets a fresh database file. Replacing ``_tls`` with a fresh
+    ``threading.local()`` clears the cached handle for EVERY thread at once
+    (e.g. a test's daemon HTTP-server thread), so none can hand back a closed
+    connection afterwards."""
+    global _tls, _schema_ready
     with _conn_lock:
-        if _conn is not None:
+        for c in _all_conns:
             try:
-                _conn.close()
+                c.close()
             except Exception:
                 pass
-            _conn = None
+        _all_conns.clear()
+        _schema_ready = False
+        _tls = threading.local()
 
 
 # ─── Schema ────────────────────────────────────────────────────────────────

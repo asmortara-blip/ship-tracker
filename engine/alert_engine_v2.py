@@ -1048,17 +1048,22 @@ def save_alerts(
                     # the UI shows the latest reading. Do NOT touch
                     # created_at — that anchors the window for future
                     # bumps and surfaces "when did this start" to the UI.
-                    new_count = int(existing["fire_count"] or 1) + 1
+                    # Atomic increment in SQL (fire_count = fire_count + 1)
+                    # rather than read-in-Python-then-write — the latter lost
+                    # an increment when two saves of the same dedup_key
+                    # interleaved (each read N, each wrote N+1). The other
+                    # freshness fields are last-writer-wins, which is the
+                    # intended "latest reading wins" behaviour.
                     conn.execute(
                         """
                         UPDATE alerts
-                        SET fire_count    = ?,
+                        SET fire_count    = fire_count + 1,
                             last_fired_at = ?,
                             value         = ?,
                             change_pct    = ?
                         WHERE alert_id = ?
                         """,
-                        (new_count, now_iso, a.value, a.change_pct,
+                        (now_iso, a.value, a.change_pct,
                          existing["alert_id"]),
                     )
                     # _dedup_key matched — skip the INSERT entirely.
