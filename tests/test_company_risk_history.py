@@ -223,3 +223,32 @@ def test_job_failure_during_save_returns_ok_false(
     )
     assert r.ok is False
     assert "save_company_risk_snapshot failed" in r.error_msg
+
+
+def test_gc_old_company_risk_snapshots_prunes_old_keeps_recent_and_artefacts(tmp_path) -> None:
+    """GC deletes dirs past the keep window, keeps recent ones, and never
+    touches a dir holding a non-snapshot (operator) file. (This tree
+    previously had NO GC and grew one dir/day forever.)"""
+    from datetime import date, timedelta
+    from processing.company_risk_history import (
+        gc_old_company_risk_snapshots, _FILENAME,
+    )
+
+    today = date(2026, 5, 30)
+    old = tmp_path / (today - timedelta(days=200)).isoformat()
+    old.mkdir()
+    (old / _FILENAME).write_text("{}\n", encoding="utf-8")
+    recent = tmp_path / (today - timedelta(days=10)).isoformat()
+    recent.mkdir()
+    (recent / _FILENAME).write_text("{}\n", encoding="utf-8")
+    artefact = tmp_path / (today - timedelta(days=300)).isoformat()
+    artefact.mkdir()
+    (artefact / _FILENAME).write_text("{}\n", encoding="utf-8")
+    (artefact / "operator_note.txt").write_text("keep me", encoding="utf-8")
+
+    out = gc_old_company_risk_snapshots(keep_days=90, root=tmp_path, today=today)
+    assert not old.exists()
+    assert recent.exists()
+    assert artefact.exists()
+    assert out["n_dirs_deleted"] == 1
+    assert (today - timedelta(days=300)).isoformat() in out["preserved_artefacts"]

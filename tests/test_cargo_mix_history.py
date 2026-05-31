@@ -182,3 +182,38 @@ def test_job_failure_during_save_returns_ok_false(monkeypatch, tmp_path) -> None
     )
     assert r.ok is False
     assert "save_cargo_mix_snapshot failed" in r.error_msg
+
+
+def test_gc_old_cargo_mix_snapshots_prunes_old_keeps_recent_and_artefacts(tmp_path) -> None:
+    """GC deletes dirs past the keep window, keeps recent ones, and never
+    touches a dir holding a non-snapshot (operator) file. Non-date dirs are
+    ignored entirely. (This tree previously had NO GC and grew forever.)"""
+    from datetime import date, timedelta
+    from processing.cargo_mix_history import gc_old_cargo_mix_snapshots, _FILENAME
+
+    today = date(2026, 5, 30)
+    old = tmp_path / (today - timedelta(days=200)).isoformat()
+    old.mkdir()
+    (old / _FILENAME).write_text("{}\n", encoding="utf-8")
+    recent = tmp_path / (today - timedelta(days=10)).isoformat()
+    recent.mkdir()
+    (recent / _FILENAME).write_text("{}\n", encoding="utf-8")
+    artefact = tmp_path / (today - timedelta(days=300)).isoformat()
+    artefact.mkdir()
+    (artefact / _FILENAME).write_text("{}\n", encoding="utf-8")
+    (artefact / "operator_note.txt").write_text("keep me", encoding="utf-8")
+    (tmp_path / "not-a-date").mkdir()
+
+    out = gc_old_cargo_mix_snapshots(keep_days=90, root=tmp_path, today=today)
+    assert not old.exists()                       # past window → deleted
+    assert recent.exists()                        # inside window → kept
+    assert artefact.exists()                      # operator artefact → preserved
+    assert out["n_dirs_scanned"] == 3             # 3 ISO dirs (not the non-date one)
+    assert out["n_dirs_deleted"] == 1
+    assert (today - timedelta(days=300)).isoformat() in out["preserved_artefacts"]
+
+
+def test_gc_old_cargo_mix_snapshots_missing_root_is_noop(tmp_path) -> None:
+    from processing.cargo_mix_history import gc_old_cargo_mix_snapshots
+    out = gc_old_cargo_mix_snapshots(root=tmp_path / "does_not_exist")
+    assert out["n_dirs_deleted"] == 0 and out["n_dirs_scanned"] == 0

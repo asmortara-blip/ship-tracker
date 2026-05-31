@@ -1280,6 +1280,72 @@ def run_port_supply_snapshot_gc_job(
 
 
 @_track_run
+def run_cargo_mix_snapshot_gc_job(*, keep_days: int = 90) -> dict:
+    """Prune old cargo-mix snapshot dirs — this tree had no GC, so it grew
+    one dated dir/day forever.
+
+    Thin wrapper around
+    ``processing.cargo_mix_history.gc_old_cargo_mix_snapshots`` adding
+    logging + the no-raise contract. Runs AFTER the cargo-mix save so the
+    same tick never collects today's write.
+    """
+    try:
+        from processing.cargo_mix_history import gc_old_cargo_mix_snapshots
+        out = gc_old_cargo_mix_snapshots(keep_days=keep_days)
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_cargo_mix_snapshot_gc_job: top-level failure: {exc}")
+        return {"ok": False, "n_dirs_scanned": 0, "n_dirs_deleted": 0,
+                "n_bytes_freed": 0, "preserved_artefacts": 0}
+    counts = {
+        "ok":                  True,
+        "n_dirs_scanned":      int(out.get("n_dirs_scanned", 0)),
+        "n_dirs_deleted":      int(out.get("n_dirs_deleted", 0)),
+        "n_bytes_freed":       int(out.get("n_bytes_freed", 0)),
+        "preserved_artefacts": len(out.get("preserved_artefacts", []) or []),
+    }
+    logger.info(
+        f"run_cargo_mix_snapshot_gc_job: scanned={counts['n_dirs_scanned']} "
+        f"deleted={counts['n_dirs_deleted']} "
+        f"bytes_freed={counts['n_bytes_freed']:,} "
+        f"preserved={counts['preserved_artefacts']}"
+    )
+    return counts
+
+
+@_track_run
+def run_company_risk_snapshot_gc_job(*, keep_days: int = 90) -> dict:
+    """Prune old company-risk snapshot dirs — this tree had no GC, so it
+    grew one dated dir/day forever.
+
+    Thin wrapper around
+    ``processing.company_risk_history.gc_old_company_risk_snapshots``
+    adding logging + the no-raise contract. Runs AFTER the company-risk
+    save so the same tick never collects today's write.
+    """
+    try:
+        from processing.company_risk_history import gc_old_company_risk_snapshots
+        out = gc_old_company_risk_snapshots(keep_days=keep_days)
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.warning(f"run_company_risk_snapshot_gc_job: top-level failure: {exc}")
+        return {"ok": False, "n_dirs_scanned": 0, "n_dirs_deleted": 0,
+                "n_bytes_freed": 0, "preserved_artefacts": 0}
+    counts = {
+        "ok":                  True,
+        "n_dirs_scanned":      int(out.get("n_dirs_scanned", 0)),
+        "n_dirs_deleted":      int(out.get("n_dirs_deleted", 0)),
+        "n_bytes_freed":       int(out.get("n_bytes_freed", 0)),
+        "preserved_artefacts": len(out.get("preserved_artefacts", []) or []),
+    }
+    logger.info(
+        f"run_company_risk_snapshot_gc_job: scanned={counts['n_dirs_scanned']} "
+        f"deleted={counts['n_dirs_deleted']} "
+        f"bytes_freed={counts['n_bytes_freed']:,} "
+        f"preserved={counts['preserved_artefacts']}"
+    )
+    return counts
+
+
+@_track_run
 def run_multi_container_snapshot_job(
     *,
     container_types: Optional[list] = None,
@@ -1964,7 +2030,9 @@ def main(argv: Optional[list] = None) -> int:
     _run_always("weekly digest", run_weekly_digest_job_wrapper)
 
     # Daily snapshot pipeline (write → multi-container fan-out → cargo-mix +
-    # company-risk history → integrity sweep → GC), in dependency order.
+    # company-risk history → integrity sweep → GC every tree), in dependency
+    # order. Each snapshot tree's GC runs AFTER its save so the same tick
+    # never collects today's write.
     _run_gated("run_port_supply_snapshot_job", _DAILY_SECONDS, run_port_supply_snapshot_job,
                now=now, force=force, label="port supply snapshot")
     _run_gated("run_multi_container_snapshot_job", _DAILY_SECONDS, run_multi_container_snapshot_job,
@@ -1977,6 +2045,10 @@ def main(argv: Optional[list] = None) -> int:
                now=now, force=force, label="snapshot integrity check")
     _run_gated("run_port_supply_snapshot_gc_job", _DAILY_SECONDS, run_port_supply_snapshot_gc_job,
                now=now, force=force, label="port supply snapshot gc")
+    _run_gated("run_cargo_mix_snapshot_gc_job", _DAILY_SECONDS, run_cargo_mix_snapshot_gc_job,
+               now=now, force=force, label="cargo mix snapshot gc")
+    _run_gated("run_company_risk_snapshot_gc_job", _DAILY_SECONDS, run_company_risk_snapshot_gc_job,
+               now=now, force=force, label="company risk snapshot gc")
 
     # User-configured report schedules — self-gates per schedule via
     # next_run_at, so it runs every pass and fires only what's due.

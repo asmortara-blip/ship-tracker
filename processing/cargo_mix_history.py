@@ -49,6 +49,7 @@ __all__ = [
     "save_cargo_mix_snapshot",
     "load_cargo_mix_for_route",
     "list_cargo_mix_dates",
+    "gc_old_cargo_mix_snapshots",
     "run_daily_cargo_mix_snapshot_job",
 ]
 
@@ -224,6 +225,72 @@ def list_cargo_mix_dates(
             continue
     dates.sort()
     return dates
+
+
+def gc_old_cargo_mix_snapshots(
+    *,
+    keep_days: int = 90,
+    root: Path | None = None,
+    today: date | None = None,
+) -> dict:
+    """Garbage-collect cargo-mix snapshot dirs older than ``keep_days``.
+
+    Mirrors :func:`processing.port_supply_history.gc_old_snapshots` — the
+    cargo-mix tree was added alongside the port-supply tree but never got
+    a GC job, so it grew one dated dir per day forever. Walks every
+    ISO-named subdir under ``root`` (default :data:`CARGO_MIX_ROOT`) and
+    deletes those older than ``today - keep_days``. An operator-artefact
+    guard preserves any dir holding a file other than ``_FILENAME`` — we
+    never delete data we did not write. Never raises; a per-dir failure
+    is swallowed so one bad dir can't abort the sweep.
+
+    Returns ``{"n_dirs_scanned", "n_dirs_deleted", "n_bytes_freed",
+    "preserved_artefacts"}``.
+    """
+    import shutil
+
+    base = Path(root) if root is not None else CARGO_MIX_ROOT
+    anchor = today or datetime.now(timezone.utc).date()
+    cutoff = anchor - timedelta(days=max(0, int(keep_days)))
+    result: dict = {
+        "n_dirs_scanned": 0,
+        "n_dirs_deleted": 0,
+        "n_bytes_freed": 0,
+        "preserved_artefacts": [],
+    }
+    if not base.exists():
+        return result
+    try:
+        children = list(base.iterdir())
+    except OSError:
+        return result
+
+    for child in children:
+        if not child.is_dir():
+            continue
+        try:
+            snap_date = date.fromisoformat(child.name)
+        except ValueError:
+            continue                      # non-date dir — not ours, skip
+        result["n_dirs_scanned"] += 1
+        if snap_date >= cutoff:
+            continue                      # inside the keep window
+        try:
+            files = [e for e in child.iterdir() if e.is_file()]
+            extra = [e for e in files if e.name != _FILENAME]
+            size = sum(e.stat().st_size for e in files)
+        except OSError:
+            continue
+        if extra:                         # operator artefact — never delete
+            result["preserved_artefacts"].append(snap_date.isoformat())
+            continue
+        try:
+            shutil.rmtree(child)
+        except OSError:
+            continue                      # one bad dir doesn't kill the run
+        result["n_dirs_deleted"] += 1
+        result["n_bytes_freed"] += size
+    return result
 
 
 # ---------------------------------------------------------------------------
