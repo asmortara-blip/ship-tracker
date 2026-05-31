@@ -225,9 +225,10 @@ def _bdi_frame(values: list[float]) -> pd.DataFrame:
 
 
 # generate_alerts resolves the BDI frame via an explicit None-check chain
-# over the FRED canonical key ("BDIY") first, then "BDI" / "bdi" as legacy
-# aliases — never `a or b` on a DataFrame (which invokes DataFrame.__bool__
-# and raises ValueError).
+# over the CANONICAL FRED series id ("BSXRLM" — the key fetch_macro_series
+# actually emits) first, then "BDIY" / "BDI" / "bdi" as legacy aliases —
+# never `a or b` on a DataFrame (which invokes DataFrame.__bool__ and raises
+# ValueError).
 
 
 def test_macro_shift_fires_on_steep_bdi_decline() -> None:
@@ -264,9 +265,20 @@ def test_macro_shift_fires_with_uppercase_BDI_key() -> None:
     assert macro_alerts[0].severity == "CRITICAL"
 
 
-def test_macro_shift_fires_with_canonical_BDIY_key() -> None:
-    """The canonical FRED key 'BDIY' is the live-data path; the alert must
-    fire from it (previously it was silently ignored)."""
+def test_macro_shift_fires_with_canonical_BSXRLM_key() -> None:
+    """The CANONICAL FRED series id 'BSXRLM' is the LIVE-data path
+    (fetch_macro_series keys the BDI under it). The alert MUST fire from it —
+    regression guard: the engine previously started its lookup at 'BDIY' and
+    never tried 'BSXRLM', so the live MACRO_SHIFT BDI alert was dead."""
+    macro = {"BSXRLM": _bdi_frame([2000.0] * 40 + [1100.0])}
+    alerts = generate_alerts([], [], {}, macro, [])
+    macro_alerts = [a for a in alerts if a.alert_type == "MACRO_SHIFT"]
+    assert len(macro_alerts) == 1
+    assert macro_alerts[0].severity == "CRITICAL"
+
+
+def test_macro_shift_fires_with_legacy_BDIY_alias() -> None:
+    """The legacy Bloomberg 'BDIY' alias still resolves (alias chain)."""
     macro = {"BDIY": _bdi_frame([2000.0] * 40 + [1100.0])}
     alerts = generate_alerts([], [], {}, macro, [])
     macro_alerts = [a for a in alerts if a.alert_type == "MACRO_SHIFT"]

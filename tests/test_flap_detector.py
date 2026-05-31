@@ -472,3 +472,21 @@ def test_subsequent_fires_in_window_do_not_create_more_flap_alerts() -> None:
         fire_rule(rule, [_alert(ticker=f"T{i}")], user_id="")
     # Exactly one FLAP alert across the whole burst.
     assert _count_alert_type_rows("r_once", "FLAP") == 1
+
+
+def test_record_crossing_prunes_stale_persisted_entries() -> None:
+    """#8: record_threshold_crossing prunes crossings older than the safety
+    horizon on the WRITE path — the old code pruned only on reads and threw
+    the result away, so the persisted list grew unbounded."""
+    from datetime import datetime, timedelta, timezone
+    from engine import flap_detector as fd
+
+    stale = (
+        datetime.now(timezone.utc)
+        - timedelta(minutes=fd._MAX_RETAINED_MINUTES + 60)
+    ).isoformat()
+    fd._save_blob("u1", "r1", {"crossings": [stale, stale]})
+    fd.record_threshold_crossing("r1", "fire", user_id="u1")
+    blob = fd._load_blob("u1", "r1")
+    assert stale not in blob["crossings"]   # stale entries pruned out
+    assert len(blob["crossings"]) == 1      # only the fresh crossing remains

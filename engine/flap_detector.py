@@ -21,10 +21,13 @@ One ``kv_state`` row per (user, rule), keyed
         "flap_alert_emitted_at": "2026-05-22T15:30:00+00:00"  // optional
     }
 
-``crossings`` holds the ISO-8601 timestamps of every crossing recorded.
-On every read the list is pruned to the configured window before the
-length is consulted, so old crossings naturally fall out without a
-separate sweep job.
+``crossings`` holds the ISO-8601 timestamps of recorded crossings. On
+every read the list is pruned to the rule's window before the length is
+consulted. The PERSISTED list is ALSO bounded: ``record_threshold_crossing``
+prunes to a generous safety horizon (``_MAX_RETAINED_MINUTES``) before saving,
+so a persistently-flapping rule can't grow the blob without limit. (Read-side
+pruning alone never wrote its result back, so without this the stored list
+grew one timestamp per crossing forever.)
 
 ``flap_alert_emitted_at`` is set by :func:`mark_flap_alert_emitted`
 the first time a consolidated flap alert is created within the current
@@ -60,6 +63,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
+
+# Safety horizon for the PERSISTED crossings list. record_threshold_crossing
+# prunes to this before saving so a persistently-flapping rule can't grow its
+# kv_state blob without bound. It's far larger than any real flap window (the
+# read paths prune to the rule's actual window when deciding), so it never
+# affects a flap DECISION — it only caps storage.
+_MAX_RETAINED_MINUTES = 24 * 60
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,6 +322,11 @@ def record_threshold_crossing(
         if not isinstance(crossings, list):
             crossings = []
         crossings.append(_now_iso())
+        # Bound the PERSISTED list (see _MAX_RETAINED_MINUTES). The read paths
+        # still prune to the rule's actual window when consulting; this just
+        # stops unbounded storage growth — the old code pruned only on reads
+        # and threw that result away, never writing it back.
+        crossings = _prune(crossings, window_minutes=_MAX_RETAINED_MINUTES)
         blob["crossings"] = crossings
         _save_blob(uid, rule_id, blob)
         logger.debug(
