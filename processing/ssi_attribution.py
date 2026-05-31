@@ -14,9 +14,15 @@ per-route, but the fleet-wide view needs the full breakdown.
 Output is two complementary views:
 
   * **Component contributions** — per-component weighted contribution
-    to today's score, sorted by magnitude. Each entry includes the
-    raw component score, the weight, the weighted contribution, and
-    the percent share of the total. Sums to ``ssi_total``.
+    to the component-weighted stress blend (Σ weightₖ·scoreₖ), sorted by
+    magnitude. Each entry includes the raw component score, the weight,
+    the weighted contribution, and the percent share of THAT blend.
+    CAVEAT: the blend equals the headline ``ssi_total`` only when the
+    prominent-route weighting doesn't shift the fleet aggregate —
+    ``component_scores`` are simple per-route means while ``ssi_total``
+    is prominence-weighted — so the shares decompose the blend, not
+    necessarily the exact displayed SSI. (Reconciling them, or relabeling
+    the UI, is bug-hunt #8 — a pending metric decision.)
   * **Route contributions** — per-route weighted contribution to the
     fleet-wide score (using the prominent-route weighting). Sorted by
     magnitude. Top entry is the route doing the most damage today.
@@ -131,8 +137,13 @@ def attribute_ssi(report: ShippingStressReport) -> SSIAttributionReport:
     """Decompose ``report`` into per-component + per-route contributions.
 
     Pure function over the public ``ShippingStressReport`` shape. The
-    contributions in the result reconcile to the fleet-wide score so
-    a UI can render "component X accounts for N% of today's stress".
+    component contributions decompose the component-weighted stress
+    blend (Σ weightₖ·scoreₖ) — a UI can render "component X = N% of the
+    stress blend". That blend equals the headline ``ssi_total`` only when
+    prominence-route weighting doesn't shift the fleet aggregate
+    (``component_scores`` are simple per-route means; ``ssi_total`` is
+    prominence-weighted), so do NOT label the share as "% of the displayed
+    SSI" without reconciling them first (bug-hunt #8, a pending decision).
 
     Edge cases:
       * Empty report (``route_stress=[]``) → returns an empty
