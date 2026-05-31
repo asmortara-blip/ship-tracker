@@ -225,3 +225,33 @@ def test_history_with_no_entered_deficit_events_returns_empty() -> None:
     ]
     g = build_spillover_graph(history, min_co_occurrences=1, min_lift=0.0)
     assert g.edges == []
+
+
+def test_support_never_exceeds_one_when_target_reenters_window() -> None:
+    """Regression: a single source event must contribute AT MOST 1 to a
+    target's co-occurrence count, even when the target enters deficit on
+    several days inside the lookahead window (it oscillates across the 0d
+    crossover). The old tally counted once per window-day, so support — a
+    probability — could exceed 1.0 and the min_co_occurrences filter was
+    defeated by one source event whose target merely re-entered."""
+    history = [
+        _day(("A", +5.0), ("B", +5.0)),   # day0
+        _day(("A", -1.0), ("B", +5.0)),   # day1: A enters deficit (once)
+        _day(("A", +5.0), ("B", -1.0)),   # day2: A exits, B enters (1st)
+        _day(("A", +5.0), ("B", +5.0)),   # day3: B exits
+        _day(("A", +5.0), ("B", -1.0)),   # day4: B re-enters (2nd)
+    ]
+    g = build_spillover_graph(
+        history, lag_within_days=3, min_co_occurrences=1, min_lift=0.0,
+    )
+    ab = [e for e in g.edges
+          if e.source_locode == "A" and e.target_locode == "B"]
+    assert ab, "expected an A->B spillover edge"
+    e = ab[0]
+    assert e.source_event_count == 1
+    assert e.co_occurrence_count == 1     # one source event → counts once
+    assert e.support == 1.0               # NOT 2.0
+    # Invariant that must hold for every edge in any graph.
+    for edge in g.edges:
+        assert edge.co_occurrence_count <= edge.source_event_count
+        assert 0.0 <= edge.support <= 1.0

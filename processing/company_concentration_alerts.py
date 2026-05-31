@@ -217,7 +217,15 @@ def compute_concentration_alerts(
         shares = [s for _loc, s in port_share_pairs]
         port_count = len(port_share_pairs)
 
-        hhi = _hhi_from_shares(shares)
+        # Prefer the builder's HHI when present: the live footprint computes
+        # it over the FULL set of ports the ticker touches, whereas
+        # ``port_exposures`` here is capped to the top-N for display — squaring
+        # only the capped shares overstates concentration (and couples it to
+        # the unrelated render cap). Stub fixtures carry no precomputed value
+        # (it defaults to 0.0, impossible for a real non-empty footprint), so
+        # they fall back to the shares we just normalized.
+        precomputed_hhi = float(getattr(fp, "concentration_hhi", 0.0) or 0.0)
+        hhi = precomputed_hhi if precomputed_hhi > 0 else _hhi_from_shares(shares)
         if hhi < fire_threshold_hhi:
             continue
 

@@ -204,3 +204,61 @@ def test_summary_string_includes_ticker_hhi_and_band() -> None:
     assert "HHI=1.00" in s
     assert "Single-Port Risk" in s
     assert "CNSHA" in s
+
+
+def test_concentration_prefers_full_footprint_hhi_over_capped_shares() -> None:
+    """Regression (#2): HHI must come from the builder's full-footprint value,
+    NOT recomputed over the top-N-capped port_exposures. A footprint whose
+    *capped* shares look concentrated (50/50 → HHI 0.5, would fire) but whose
+    true full-footprint HHI is low must NOT raise a false alert."""
+    from types import SimpleNamespace as NS
+    from processing.company_concentration_alerts import compute_concentration_alerts
+
+    fp = NS(
+        ticker="DIVERSE",
+        port_exposures=[
+            NS(port_locode="AAA", exposure_weight=5.0),
+            NS(port_locode="BBB", exposure_weight=5.0),
+        ],
+        concentration_hhi=0.08,   # diversified over the FULL (uncapped) footprint
+    )
+    assert compute_concentration_alerts([fp]) == []
+
+
+def test_concentration_fires_on_high_precomputed_hhi() -> None:
+    """When the builder's full-footprint HHI is genuinely high, it fires and
+    that precomputed value drives the band/severity decision."""
+    from types import SimpleNamespace as NS
+    from processing.company_concentration_alerts import compute_concentration_alerts
+
+    fp = NS(
+        ticker="CONC",
+        port_exposures=[
+            NS(port_locode="AAA", exposure_weight=9.0),
+            NS(port_locode="BBB", exposure_weight=1.0),
+        ],
+        concentration_hhi=0.90,   # single-port-risk over the full footprint
+    )
+    alerts = compute_concentration_alerts([fp])
+    assert len(alerts) == 1
+    assert alerts[0].ticker == "CONC"
+    assert alerts[0].hhi == 0.90
+    assert alerts[0].severity == "CRITICAL"   # >= 0.85 critical threshold
+
+
+def test_stub_fixture_without_precomputed_hhi_still_computes_from_shares() -> None:
+    """Back-compat: a stub footprint (no concentration_hhi) falls back to the
+    shares it exposes, so existing fixture-driven behavior is unchanged."""
+    from types import SimpleNamespace as NS
+    from processing.company_concentration_alerts import compute_concentration_alerts
+
+    fp = NS(
+        ticker="STUB",
+        ports=[
+            NS(locode="AAA", share_within_company=0.95),
+            NS(locode="BBB", share_within_company=0.05),
+        ],
+    )
+    alerts = compute_concentration_alerts([fp])
+    assert len(alerts) == 1                      # 0.95^2+0.05^2 = 0.905 → fires
+    assert alerts[0].severity == "CRITICAL"

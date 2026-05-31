@@ -145,6 +145,11 @@ class CompanyPortFootprint:
     ticker: str
     port_exposures: list[PortExposureForCompany] = field(default_factory=list)
     total_exposure: float = 0.0
+    # Herfindahl-Hirschman concentration index over the FULL footprint
+    # (every port the ticker touches), in [0, 1]. Computed here because
+    # ``port_exposures`` is capped to the top-N for display — squaring only
+    # the capped shares would overstate concentration. 0.0 when unknown.
+    concentration_hhi: float = 0.0
     deficit_weighted_score: float = 0.0
     n_deficit_ports: int = 0
     summary: str = ""
@@ -412,6 +417,14 @@ def build_company_port_footprints(
         exposures.sort(key=lambda e: e.exposure_weight, reverse=True)
         capped = exposures[:max(1, int(top_n_ports))]
         total = sum(e.exposure_weight for e in exposures)
+        # HHI over EVERY port the ticker touches (not the top-N display cap):
+        # concentration is a property of the whole distribution, so the
+        # shares must sum to 1 over the full footprint.
+        hhi = (
+            sum((e.exposure_weight / total) ** 2
+                for e in exposures if e.exposure_weight > 0)
+            if total > 0 else 0.0
+        )
         deficit_score = sum(
             e.exposure_weight * max(0.0, -e.supply_deficit_days)
             for e in exposures
@@ -427,6 +440,7 @@ def build_company_port_footprints(
             ticker=ticker,
             port_exposures=capped,
             total_exposure=round(total, 6),
+            concentration_hhi=round(hhi, 6),
             deficit_weighted_score=round(deficit_score, 6),
             n_deficit_ports=n_deficit,
             summary=summary,

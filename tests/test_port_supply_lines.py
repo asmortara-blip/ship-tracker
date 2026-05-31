@@ -291,3 +291,25 @@ def test_active_voyage_arcs_empty_fleet_returns_empty() -> None:
     # Empty list passed → falls through to synth backfill, so this
     # actually returns the synthetic fleet's arcs. Verify with None too.
     assert isinstance(arcs, list)
+
+
+def test_company_footprint_hhi_is_full_footprint_not_capped() -> None:
+    """Regression (#2): concentration_hhi is computed over EVERY port the
+    ticker touches, so it never exceeds the HHI of the (smaller, capped)
+    displayed port_exposures — adding ports to the denominator can only lower
+    concentration. The old code squared only the capped shares (~2x inflated)."""
+    from processing.port_supply_lines import build_company_port_footprints
+
+    fps = [f for f in build_company_port_footprints(container_type="40FT_DRY")
+           if len(f.port_exposures) >= 2]
+    assert fps, "expected at least one multi-port footprint in registry data"
+    for fp in fps:
+        capped_total = sum(p.exposure_weight for p in fp.port_exposures)
+        capped_hhi = (
+            sum((p.exposure_weight / capped_total) ** 2 for p in fp.port_exposures)
+            if capped_total > 0 else 0.0
+        )
+        assert 0.0 < fp.concentration_hhi <= capped_hhi + 1e-9, (
+            f"{fp.ticker}: full HHI {fp.concentration_hhi} should be <= "
+            f"capped HHI {capped_hhi}"
+        )

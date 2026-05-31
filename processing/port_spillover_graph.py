@@ -183,16 +183,23 @@ def build_spillover_graph(
         source_locodes = entries_by_day[day_idx]
         for src in source_locodes:
             source_event_count[src] = source_event_count.get(src, 0) + 1
-            # Look ahead through the window — clamp at end of history.
+            # Collect the DISTINCT targets that entered deficit anywhere in
+            # the lookahead window, then count each once for THIS source
+            # event. Counting per-source-event (not once per window-day a
+            # target re-enters) keeps co_occurrence_count <= source_event_count
+            # so support stays a probability in [0, 1] — and a target that
+            # merely oscillates across the 0d crossover inside one window
+            # can't satisfy min_co_occurrences on a single source event.
+            followers: set[str] = set()
             for ahead in range(1, lag + 1):
                 target_idx = day_idx + ahead
                 if target_idx >= len(entries_by_day):
                     break
-                for tgt in entries_by_day[target_idx]:
-                    if tgt == src:
-                        continue   # don't self-loop
-                    co_count.setdefault(src, {})
-                    co_count[src][tgt] = co_count[src].get(tgt, 0) + 1
+                followers |= entries_by_day[target_idx]
+            followers.discard(src)   # don't self-loop
+            for tgt in followers:
+                co_count.setdefault(src, {})
+                co_count[src][tgt] = co_count[src].get(tgt, 0) + 1
 
     # ── Step 3: per-port base rate ──────────────────────────────────
     # base_rate[X] = total entries for X / total day-transitions
