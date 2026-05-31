@@ -620,3 +620,42 @@ def test_company_concentration_no_alert_when_diversified(monkeypatch) -> None:
     )
     monkeypatch.setattr(psl, "build_company_port_footprints", lambda **kw: [fake_fp])
     assert check_company_concentration_alerts() == []
+
+
+# ── CARGO_FLOW_ANOMALY wiring — jump-only signal now fires (#5) ──
+
+def test_cargo_flow_anomaly_jump_only_fires_high(monkeypatch) -> None:
+    """#5: a jump-only anomaly (is_anomaly True via a category jump, but JSD
+    below the alert band) now fires a HIGH alert — it was previously dropped by
+    the JSD-only gate. High JSD → CRITICAL; not-an-anomaly → nothing."""
+    from types import SimpleNamespace as NS
+    from engine.alert_engine_v2 import check_cargo_flow_anomaly_alerts
+
+    # Deps are function-local imports → patch them at their source modules.
+    monkeypatch.setattr("routes.route_registry.ROUTES",
+                        [NS(id="r1", name="Route One")])
+    monkeypatch.setattr("processing.cargo_analyzer.get_route_cargo_mix",
+                        lambda rid, d: {"electronics": 1.0})
+    monkeypatch.setattr("processing.cargo_mix_history.load_cargo_mix_for_route",
+                        lambda rid, window_days: [{"electronics": 1.0}])
+
+    jump_only = NS(is_anomaly=True, jsd=0.05, drift_band="stable",
+                   surges=[NS(category="electronics", delta_pp=12.0)], collapses=[])
+    monkeypatch.setattr("processing.cargo_flow_anomaly.compute_cargo_flow_anomaly",
+                        lambda **kw: jump_only)
+    alerts = check_cargo_flow_anomaly_alerts(
+        jsd_alert_threshold=0.15, jsd_critical_threshold=0.30)
+    assert len(alerts) == 1
+    assert alerts[0].alert_type == "CARGO_FLOW_ANOMALY"
+    assert alerts[0].severity == "HIGH"        # jump-only, JSD below band → HIGH
+
+    big_jsd = NS(is_anomaly=True, jsd=0.40, drift_band="shock", surges=[], collapses=[])
+    monkeypatch.setattr("processing.cargo_flow_anomaly.compute_cargo_flow_anomaly",
+                        lambda **kw: big_jsd)
+    assert check_cargo_flow_anomaly_alerts(
+        jsd_alert_threshold=0.15, jsd_critical_threshold=0.30)[0].severity == "CRITICAL"
+
+    calm = NS(is_anomaly=False, jsd=0.05, drift_band="stable", surges=[], collapses=[])
+    monkeypatch.setattr("processing.cargo_flow_anomaly.compute_cargo_flow_anomaly",
+                        lambda **kw: calm)
+    assert check_cargo_flow_anomaly_alerts() == []     # not an anomaly → nothing

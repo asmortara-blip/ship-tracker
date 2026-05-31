@@ -530,12 +530,18 @@ def check_cargo_flow_anomaly_alerts(
             )
             continue
 
-        if report.jsd < jsd_alert_threshold:
+        if not report.is_anomaly:
             continue
 
-        severity = (
-            "CRITICAL" if report.jsd >= jsd_critical_threshold else "HIGH"
-        )
+        # JSD drives the CRITICAL/HIGH ladder. A jump-only anomaly — a single
+        # category crossed jump_threshold_pp while the overall JSD stayed below
+        # the alert band — is a real regime shift that compute_cargo_flow_anomaly
+        # emits as a co-equal signal (is_anomaly = high-JSD OR surge OR collapse),
+        # so it fires HIGH rather than being silently dropped.
+        if report.jsd >= jsd_critical_threshold:
+            severity = "CRITICAL"
+        else:
+            severity = "HIGH"
         surge_clause = (
             "Top surges: " + ", ".join(
                 f"{j.category} {j.delta_pp:+.1f}pp" for j in report.surges[:3]
