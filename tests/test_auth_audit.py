@@ -624,3 +624,37 @@ def test_hook_login_does_not_write_audit_event_on_failure() -> None:
     assert bad2 is None
     rows = query_audit(action="login")
     assert rows == []
+
+
+# ─── #9: failed-login auditing ──────────────────────────────────────────────
+
+def test_record_login_failure_logs_hashed_username_not_raw() -> None:
+    """A failed login records a 'login_failed' event carrying a HASHED
+    attempted username (for correlation) — never the raw value — and no
+    authenticated user_id."""
+    import hashlib
+    from auth.audit import record_login_failure, query_audit
+
+    record_login_failure("AdminUser")
+    events = query_audit(action="login_failed")
+    assert len(events) == 1
+    e = events[0]
+    assert e.action == "login_failed"
+    assert e.user_id == ""                       # no authenticated user
+    assert e.entity_type == "user"
+    expected = hashlib.sha256(b"adminuser").hexdigest()[:16]
+    assert e.detail_json.get("username_hash") == expected
+    # The raw attempted username (any case) must NOT appear in the payload.
+    blob = json.dumps(e.detail_json)
+    assert "AdminUser" not in blob and "adminuser" not in blob
+
+
+def test_record_login_failure_empty_username_is_safe() -> None:
+    """An empty attempted username records a clean event with an empty hash
+    (never raises, no crash on the blank-input path)."""
+    from auth.audit import record_login_failure, query_audit
+
+    record_login_failure("")
+    events = query_audit(action="login_failed")
+    assert len(events) == 1
+    assert events[0].detail_json.get("username_hash") == ""

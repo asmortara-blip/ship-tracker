@@ -41,6 +41,7 @@ What this module does NOT do
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -209,6 +210,37 @@ def record_audit(
         )
 
 
+def record_login_failure(username_attempt: str = "") -> None:
+    """Record a failed login attempt for security review. NEVER raises.
+
+    Called from the login form when ``auth.users.login`` returns None on a
+    credential failure (#9 — failed-login auditing; successful logins were
+    already audited, failures were not). We store a truncated SHA-256 hash of
+    the attempted username — NOT the raw value — so a reviewer can correlate
+    repeated hits on a single target (brute-force / credential-stuffing shows
+    up as a spike of ``login_failed`` events) WITHOUT persisting a possibly-PII
+    or typo'd-real-credential identifier in the clear. The hash is unsalted:
+    its purpose is correlation, not secrecy (the audit log is admin-only).
+
+    ``user_id`` is empty — a failed login has no authenticated user — and the
+    attempt is recorded uniformly regardless of whether the username exists,
+    so the audit carries none of the enumeration signal ``login`` withholds.
+    No client IP is recorded: ``login`` is reached only via the Streamlit gate,
+    which does not expose the request IP.
+    """
+    attempt = (username_attempt or "").strip().lower()
+    uhash = (
+        hashlib.sha256(attempt.encode("utf-8")).hexdigest()[:16]
+        if attempt else ""
+    )
+    record_audit(
+        "login_failed",
+        entity_type="user",
+        detail={"username_hash": uhash},
+        user_id="",
+    )
+
+
 # ─── Public API: read ──────────────────────────────────────────────────────
 
 def query_audit(
@@ -333,6 +365,7 @@ from datetime import timedelta as _timedelta  # noqa: E402
 __all__ = [
     "AuditEvent",
     "record_audit",
+    "record_login_failure",
     "query_audit",
     "prune_old_audit_events",
 ]

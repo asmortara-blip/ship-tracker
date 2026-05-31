@@ -515,6 +515,16 @@ def require_auth_with_users() -> bool:
                     "current code from your authenticator app."
                 )
             else:
+                # #9: audit the failed credential attempt for security review
+                # (brute-force / credential-stuffing surfaces as a spike of
+                # login_failed events). Guarded so an audit hiccup can never
+                # break the login form. Not fired on the benign MFA-required
+                # branch above (a legit user's password-then-code two-step).
+                try:
+                    from auth.audit import record_login_failure
+                    record_login_failure(username_in)
+                except Exception:
+                    pass
                 st.error("Invalid username, password, or MFA code.")
 
     with signup_tab:
