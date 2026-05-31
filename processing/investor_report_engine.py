@@ -424,7 +424,7 @@ _MOCK_LONG_SIGNALS = [
     },
     {
         "ticker": "SBLK", "direction": "LONG", "conviction": "HIGH",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "BDI Divergence Long",
+        "signal_type": "MACRO", "signal_name": "BDI Divergence Long",
         "strength": 0.71, "expected_return_pct": 16.8, "time_horizon": "2M",
         "entry_price": 14.80, "target_price": 17.30, "stop_loss": 13.76, "risk_reward": 2.40,
         "rationale": (
@@ -471,7 +471,7 @@ _MOCK_LONG_SIGNALS = [
 _MOCK_SHORT_SIGNALS = [
     {
         "ticker": "STNG", "direction": "SHORT", "conviction": "HIGH",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "Product Tanker Macro Short",
+        "signal_type": "MACRO", "signal_name": "Product Tanker Macro Short",
         "strength": 0.74, "expected_return_pct": -13.5, "time_horizon": "1M",
         "entry_price": 38.20, "target_price": 35.33, "stop_loss": 41.15, "risk_reward": 2.08,
         "rationale": (
@@ -504,7 +504,7 @@ _MOCK_SHORT_SIGNALS = [
     },
     {
         "ticker": "HAFNI", "direction": "SHORT", "conviction": "LOW",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "Product Tanker Supply Overhang",
+        "signal_type": "MACRO", "signal_name": "Product Tanker Supply Overhang",
         "strength": 0.50, "expected_return_pct": -8.0, "time_horizon": "2M",
         "entry_price": 7.20, "target_price": 6.70, "stop_loss": 7.70, "risk_reward": 1.10,
         "rationale": (
@@ -2008,7 +2008,7 @@ def _build_investor_report_inner(
 
         signal_count_by_type = {
             "MOMENTUM": 0, "MEAN_REVERSION": 0,
-            "MACRO_OVERLAY": 0, "FUNDAMENTAL": 0, "TECHNICAL": 0,
+            "MACRO": 0, "FUNDAMENTAL": 0, "TECHNICAL": 0,
         }
         signal_count_by_conviction = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         for sig in signals:
@@ -2019,7 +2019,7 @@ def _build_investor_report_inner(
                 signal_count_by_conviction[conv] += 1
 
         # Ensure all 5 signal types are always present (at least 0)
-        for _stype in ("MOMENTUM", "MEAN_REVERSION", "MACRO_OVERLAY", "FUNDAMENTAL", "TECHNICAL"):
+        for _stype in ("MOMENTUM", "MEAN_REVERSION", "MACRO", "FUNDAMENTAL", "TECHNICAL"):
             signal_count_by_type.setdefault(_stype, 0)
 
         alpha = AlphaSignalSummary(

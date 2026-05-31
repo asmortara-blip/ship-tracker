@@ -1192,3 +1192,15 @@ def test_build_investor_report_high_conviction_count_threshold() -> None:
     assert report.market.high_conviction_count == 2
     # active_opportunities counts Prioritize + Monitor → 3
     assert report.market.active_opportunities == 3
+
+
+def test_report_signal_type_taxonomy_matches_alpha_engine() -> None:
+    """Regression: the report seeded the signal-type breakdown with
+    'MACRO_OVERLAY' but the alpha engine emits 'MACRO' — producing a phantom
+    'MACRO OVERLAY: 0' row and (in the PDF's 4-slot panel) pushing the real
+    MACRO count out. The report must use the engine's canonical taxonomy."""
+    from pathlib import Path
+    from engine.alpha_engine import _SIGNAL_TYPES
+    src = Path(ire.__file__).read_text(encoding="utf-8")
+    assert "MACRO_OVERLAY" not in src          # the phantom key is gone
+    assert "MACRO" in set(_SIGNAL_TYPES)        # canonical taxonomy
