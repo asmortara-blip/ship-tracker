@@ -169,3 +169,20 @@ def test_rank_by_growth_orders_by_cagr() -> None:
     assert isinstance(ranked[0], PortTEUTrend)
     # a single-year port is excluded from growth ranking (needs >=2 years)
     assert all(t.n_years >= 2 for t in ranked)
+
+
+# ── Liner shipping connectivity (real WB LSCI) ────────────────────────────
+
+def test_connectivity_pulled_from_wb_lsci() -> None:
+    """Each port carries its country's real WB Liner Shipping Connectivity Index
+    (IS.SHP.GCNW.XQ); 0.0 when the indicator is absent."""
+    wb = _wb()
+    wb["IS.SHP.GCNW.XQ"] = pd.DataFrame([
+        {"country_iso3": "XXA", "year": 2022, "value": 150.0},
+        {"country_iso3": "XXB", "year": 2022, "value": 40.0},
+    ])
+    by = {pt.locode: pt for pt in build_port_teu_map(wb, ports=_ports())}
+    assert by["XXAPT"].connectivity == pytest.approx(150.0)
+    assert by["XXBPT"].connectivity == pytest.approx(40.0)
+    # base fixture has no LSCI indicator → connectivity defaults to 0.0
+    assert build_port_teu_map(_wb(), ports=_ports())[0].connectivity == 0.0

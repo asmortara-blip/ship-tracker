@@ -78,6 +78,7 @@ class PortTEU:
     teu_export: float
     teu_net: float
     export_share: float          # [0, 1] — from the country's real trade values
+    connectivity: float = 0.0    # real WB Liner Shipping Connectivity Index (country-level)
     provenance: str = "real WB country TEU × modeled port split; import/export modeled from real trade-value ratio"
 
     def value_for(self, category: str) -> float:
@@ -143,9 +144,12 @@ def build_port_teu_map(wb_data: Optional[dict], *, ports=None) -> list[PortTEU]:
             return []
 
     try:
-        from data.worldbank_feed import get_teu_for_country
+        from data.worldbank_feed import (
+            get_connectivity_for_country,
+            get_teu_for_country,
+        )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.debug(f"port_teu_map: get_teu_for_country unavailable: {exc}")
+        logger.debug(f"port_teu_map: WB accessors unavailable: {exc}")
         return []
 
     out: list[PortTEU] = []
@@ -161,6 +165,12 @@ def build_port_teu_map(wb_data: Optional[dict], *, ports=None) -> list[PortTEU]:
         share = export_share_for_country(iso3, wb_data)
         exp = round(total * share, 4)
         imp = round(total * (1.0 - share), 4)
+        try:  # real WB Liner Shipping Connectivity Index (country-level)
+            conn = float(get_connectivity_for_country(iso3, wb_data or {}))
+        except Exception:
+            conn = 0.0
+        if conn != conn or conn < 0:  # NaN / negative guard
+            conn = 0.0
         out.append(PortTEU(
             locode=locode,
             name=getattr(p, "name", locode) or locode,
@@ -173,6 +183,7 @@ def build_port_teu_map(wb_data: Optional[dict], *, ports=None) -> list[PortTEU]:
             teu_export=exp,
             teu_net=round(exp - imp, 4),
             export_share=round(share, 4),
+            connectivity=round(conn, 1),
         ))
     return out
 

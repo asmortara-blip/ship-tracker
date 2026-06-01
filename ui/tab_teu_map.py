@@ -298,6 +298,44 @@ def _build_trend_lines(trends, *, top_n: int = 8, height: int = 420) -> go.Figur
     return fig
 
 
+def _build_connectivity_scatter(teus, *, height: int = 420) -> go.Figure:
+    """Liner connectivity (real WB LSCI) vs container throughput (TEU).
+
+    Global hubs sit top-right (high volume + well-connected). Pure builder —
+    empty / no-connectivity input returns an annotated-empty figure.
+    """
+    pts = [pt for pt in teus if pt.connectivity > 0 and pt.teu_total > 0]
+    if not pts:
+        return _annotated_empty("Connectivity vs throughput", height=height)
+    xs = [pt.teu_total for pt in pts]
+    ys = [pt.connectivity for pt in pts]
+    names = [pt.name for pt in pts]
+    mx = max(xs) or 1.0
+    sizes = [10.0 + 26.0 * (x / mx) for x in xs]
+    fig = go.Figure(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        text=names,
+        marker={
+            "size": sizes, "color": C_ACCENT,
+            "line": {"color": C_BG, "width": 1.0}, "opacity": 0.85,
+        },
+        hovertemplate=(
+            "<b>%{text}</b><br>Throughput: %{x:.1f}M TEU<br>"
+            "Connectivity (LSCI): %{y:.0f}<extra></extra>"
+        ),
+    ))
+    apply_dark_layout(
+        fig, title="Liner connectivity vs throughput — global hubs sit top-right",
+        height=height,
+    )
+    fig.update_layout(
+        margin={"l": 8, "r": 8, "t": 44, "b": 44},
+        xaxis={"title": "Container throughput (M TEU/yr)"},
+        yaxis={"title": "Liner Shipping Connectivity Index"},
+    )
+    return fig
+
+
 def render(wb_data=None, **_kwargs) -> None:
     """Render the Global TEU Throughput map tab.
 
@@ -494,6 +532,26 @@ def render(wb_data=None, **_kwargs) -> None:
         except Exception:
             logger.exception("teu_map: trends section failed")
             st.error("Throughput trends unavailable.")
+
+        section_divider("Liner connectivity")
+
+        # ── C3. Connectivity vs throughput (real WB Liner Shipping Connectivity) ─
+        try:
+            st.plotly_chart(
+                _build_connectivity_scatter(teus),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="teu_connectivity",
+            )
+            st.caption(
+                "Liner Shipping Connectivity Index (real World Bank / UNCTAD, "
+                "country-level; China ~ baseline 100+) vs container throughput. "
+                "Ports toward the top-right are the best-connected high-volume "
+                "hubs. Throughput's per-port split is modeled; LSCI is real."
+            )
+        except Exception:
+            logger.exception("teu_map: connectivity section failed")
+            st.error("Connectivity view unavailable.")
 
         # ── D. Source footer ───────────────────────────────────────────────
         try:
