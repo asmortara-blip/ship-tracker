@@ -34,6 +34,12 @@ audit any number end-to-end by following the code references in each section.
    * [`processing/disruption_cascade.py`](#disruption_cascade--equity-idea-scorer)
 5. [Signal validation](#signal-validation)
    * [`processing/signal_validation.py`](#signal_validation--hit-rate-scorecard-vs-equal-weight-baseline)
+6. [Port-supply & company analytics](#port-supply--company-analytics)
+   * [`processing/company_concentration_alerts.py`](#company_concentration_alerts--single-point-of-failure-hhi-detector)
+   * [`processing/cargo_flow_anomaly.py`](#cargo_flow_anomaly--per-route-cargo-mix-drift-detector)
+   * [`processing/capacity_demand_divergence.py`](#capacity_demand_divergence--per-route-capacity-vs-demand-lean)
+   * [`processing/port_spillover_graph.py`](#port_spillover_graph--port-to-port-deficit-contagion)
+   * [`processing/ssi_attribution.py`](#ssi_attribution--live-ssi-decomposition)
 
 ---
 
@@ -669,6 +675,68 @@ spread; `0.95` must produce a monotonic ladder with >10pp spread.
 
 The UI surfaces the report as a 4-KPI strip + per-class scorecard
 table inside `tab_data_health`'s *Signal Validation* section.
+
+---
+
+## Port-supply & company analytics
+
+A family of pure-function analytics over the daily port-supply snapshots + the
+company↔port exposure map. Each is a module + UI wiring + (most) an alert or
+API surface, following the same build pattern as the rest of the platform. The
+two alert types below are evaluated in `engine.alert_engine_v2` and configured
+via `engine.rule_templates`.
+
+### `company_concentration_alerts` — single-point-of-failure (HHI) detector
+
+Computes each ticker's port-footprint **Herfindahl-Hirschman Index** over the
+*full* set of ports it touches (not the top-N display cap), bands it
+(`Diversified` < 0.25 ≤ `Moderate` < 0.45 ≤ `Concentrated` < 0.65 ≤ `Highly
+Concentrated` < 0.85 ≤ `Single-Port Risk`), and emits a `COMPANY_CONCENTRATION`
+alert (HIGH ≥ 0.45, CRITICAL ≥ 0.85) when a ticker is dangerously dependent on
+one port. The HHI is computed by `build_company_port_footprints` and stored on
+`CompanyPortFootprint.concentration_hhi`, so the alert, the UI, and the CSV
+export all report the same value.
+
+### `cargo_flow_anomaly` — per-route cargo-mix drift detector
+
+Compares a route's current cargo mix to its trailing baseline two ways:
+**Jensen-Shannon divergence** (overall distribution shift, banded
+`stable`→`shock`) AND **per-category jumps** (a single commodity crossing
+`jump_threshold_pp`, classified as a surge or collapse). `is_anomaly` fires on
+*either* signal. Wired to a `CARGO_FLOW_ANOMALY` alert — JSD drives the
+CRITICAL/HIGH ladder, and a jump-only shift (calm overall JSD) fires HIGH.
+
+### `capacity_demand_divergence` — per-route capacity-vs-demand lean
+
+The signed divergence between modeled capacity and demand per route, summarized
+over a window as a banded mean (`balanced`→`stretched`) plus a **persistence
+rate** — the fraction of the *window* whose sign matches the mean's sign
+(balanced days count in the denominator). A route is alert-worthy when its lean
+is both stretched and persistent (default ≥ 0.70).
+
+### `port_spillover_graph` — port-to-port deficit contagion
+
+Walks the snapshot history: when port A enters container deficit, which ports B
+follow within a lookahead window? Emits directed edges with **support**
+(`P(B follows | A)` ∈ [0, 1] — one count per source event) and **lift**
+(support ÷ B's unconditional base rate; > 1 = B follows A more than chance),
+sorted by lift. Served at `GET /api/v1/ports/spillover-graph` and rendered in
+the Contagion section of the Port Supply Lines tab.
+
+### `ssi_attribution` — live SSI decomposition
+
+Decomposes a live `ShippingStressReport` into per-component and per-route
+contributions. Because `component_scores` are prominence-weighted with the same
+route weights as `overall_ssi`, the component contributions decompose the
+headline SSI **exactly** (`Σ_k weightₖ · scoreₖ == ssi_total`, modulo
+rounding); the route contributions re-normalize into the same number. Drives
+the SSI-attribution narration on the Disruption Radar.
+
+**Daily history + backtests.** `cargo_mix_history` and `company_risk_history`
+each persist one dated snapshot per day with a garbage-collection job mirroring
+`port_supply_history.gc_old_snapshots` (90-day retention), and
+`analytics_backtests` walk-forward-validates the analytics above so a
+regression flips a defining-property test.
 
 ---
 
