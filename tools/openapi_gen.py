@@ -2318,6 +2318,118 @@ def _paths() -> dict:
         },
     }
 
+    # ── /api/v1/ports/spillover-graph (authenticated) ──────────────────
+    paths["/api/v1/ports/spillover-graph"] = {
+        "get": {
+            "operationId": "getPortSpilloverGraph",
+            "summary": "Port-to-port deficit-contagion (spillover) graph.",
+            "description": (
+                "Walks the recent daily port-supply snapshots and tallies "
+                "lead-lag co-occurrence: when port A enters container deficit, "
+                "which ports B follow within the lookahead window? Returns the "
+                "directed spillover edges (support = P(B follows | A) in [0, 1]; "
+                "lift = support / B's unconditional base rate, > 1 = more than "
+                "chance), sorted by lift descending. Authenticated (per-user "
+                "bearer token); reads shared snapshot history (not per-user)."
+            ),
+            "tags": ["Ports"],
+            "security": _bearer_security(),
+            "parameters": [
+                _query_string(
+                    "container_type",
+                    "Container-type slice. One of 40FT_DRY | 20FT_DRY | "
+                    "40FT_HC | 40FT_REEFER | 20FT_TANK. Default 40FT_DRY.",
+                    default="40FT_DRY",
+                ),
+                _query_int(
+                    "window_days",
+                    "Trailing window of snapshot days to walk. Range [2, 365]. "
+                    "Default 60.",
+                    default=60,
+                ),
+                _query_int(
+                    "lag_within_days",
+                    "Lookahead: B must enter deficit within this many days "
+                    "after A. Range [1, 14]. Default 3.",
+                    default=3,
+                ),
+                _query_int(
+                    "min_co",
+                    "Minimum co-occurrence count for an edge to survive "
+                    "(filters single coincidences). Range [1, 100]. Default 2.",
+                    default=2,
+                ),
+                {
+                    "name": "min_lift",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "number", "default": 1.0, "minimum": 0.0},
+                    "description": (
+                        "Minimum lift for an edge to survive. Must be a finite "
+                        "number >= 0 (NaN / inf are rejected with 400). "
+                        "Default 1.0."
+                    ),
+                },
+            ],
+            "responses": {
+                "200": {
+                    "description": (
+                        "Spillover-graph envelope: the echoed query params plus "
+                        "summary counts and the directed edge list."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "container_type": {"type": "string"},
+                                    "window_days": {"type": "integer"},
+                                    "lag_within_days": {"type": "integer"},
+                                    "min_co": {"type": "integer"},
+                                    "min_lift": {"type": "number"},
+                                    "n_days_examined": {"type": "integer"},
+                                    "n_unique_sources": {"type": "integer"},
+                                    "n_unique_targets": {"type": "integer"},
+                                    "total_edges": {"type": "integer"},
+                                    "edges": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "source_locode": {"type": "string"},
+                                                "target_locode": {"type": "string"},
+                                                "co_occurrence_count": {"type": "integer"},
+                                                "source_event_count": {"type": "integer"},
+                                                "support": {"type": "number"},
+                                                "target_base_rate": {"type": "number"},
+                                                "lift": {"type": "number"},
+                                                "lag_within_days": {"type": "integer"},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                **_standard_auth_responses(include_400=True),
+                "503": {
+                    "description": (
+                        "Snapshot-history walk raised an unexpected error "
+                        "(defensive — the builder tolerates empty inputs)."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "schema": {"type": "object"},
+                            "example": {"status": "down",
+                                        "error": "ImportError: ..."},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
     return paths
 
 

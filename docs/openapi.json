@@ -3163,6 +3163,223 @@
         ]
       }
     },
+    "/api/v1/ports/spillover-graph": {
+      "get": {
+        "description": "Walks the recent daily port-supply snapshots and tallies lead-lag co-occurrence: when port A enters container deficit, which ports B follow within the lookahead window? Returns the directed spillover edges (support = P(B follows | A) in [0, 1]; lift = support / B's unconditional base rate, > 1 = more than chance), sorted by lift descending. Authenticated (per-user bearer token); reads shared snapshot history (not per-user).",
+        "operationId": "getPortSpilloverGraph",
+        "parameters": [
+          {
+            "description": "Container-type slice. One of 40FT_DRY | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK. Default 40FT_DRY.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Trailing window of snapshot days to walk. Range [2, 365]. Default 60.",
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Lookahead: B must enter deficit within this many days after A. Range [1, 14]. Default 3.",
+            "in": "query",
+            "name": "lag_within_days",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Minimum co-occurrence count for an edge to survive (filters single coincidences). Range [1, 100]. Default 2.",
+            "in": "query",
+            "name": "min_co",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Minimum lift for an edge to survive. Must be a finite number >= 0 (NaN / inf are rejected with 400). Default 1.0.",
+            "in": "query",
+            "name": "min_lift",
+            "required": false,
+            "schema": {
+              "default": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "container_type": {
+                      "type": "string"
+                    },
+                    "edges": {
+                      "items": {
+                        "properties": {
+                          "co_occurrence_count": {
+                            "type": "integer"
+                          },
+                          "lag_within_days": {
+                            "type": "integer"
+                          },
+                          "lift": {
+                            "type": "number"
+                          },
+                          "source_event_count": {
+                            "type": "integer"
+                          },
+                          "source_locode": {
+                            "type": "string"
+                          },
+                          "support": {
+                            "type": "number"
+                          },
+                          "target_base_rate": {
+                            "type": "number"
+                          },
+                          "target_locode": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "lag_within_days": {
+                      "type": "integer"
+                    },
+                    "min_co": {
+                      "type": "integer"
+                    },
+                    "min_lift": {
+                      "type": "number"
+                    },
+                    "n_days_examined": {
+                      "type": "integer"
+                    },
+                    "n_unique_sources": {
+                      "type": "integer"
+                    },
+                    "n_unique_targets": {
+                      "type": "integer"
+                    },
+                    "total_edges": {
+                      "type": "integer"
+                    },
+                    "window_days": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Spillover-graph envelope: the echoed query params plus summary counts and the directed edge list."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Snapshot-history walk raised an unexpected error (defensive — the builder tolerates empty inputs)."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Port-to-port deficit-contagion (spillover) graph.",
+        "tags": [
+          "Ports"
+        ]
+      }
+    },
     "/api/v1/ports/supply-lines": {
       "get": {
         "description": "Returns the same per-port chain data the **Port Supply Lines** tab consumes. Each chain ties a port's container-supply state to the publicly-traded shipping companies exposed to the supply lines flowing through it (port → routes → cargo mix → company commodity weights). Sorted most-stressed (largest deficit) first. Authenticated (per-user bearer token).",
