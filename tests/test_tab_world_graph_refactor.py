@@ -278,3 +278,34 @@ def test_layout_module_finite_and_deterministic() -> None:
     assert fruchterman_reingold_layout(np.zeros((0, 0))).shape == (0, 2)
     assert fruchterman_reingold_layout(np.zeros((1, 1))).shape == (1, 2)
     assert spectral_layout(np.zeros((2, 2))).shape == (2, 2)
+
+
+# ── TEU sizing toggle (size_attr) ──────────────────────────────────────────
+
+def test_network_figure_honors_size_attr_for_teu_overlay() -> None:
+    """The builder sizes markers by ``size_attr`` (default 'criticality'),
+    which powers the criticality-vs-TEU toggle. Under size_attr='teu_norm' a
+    high-TEU/zero-criticality node renders larger than a zero-TEU one, and the
+    hover label reflects size_label."""
+    from ui.tab_world_graph import _build_network_figure
+    nodes = [
+        SimpleNamespace(node_id="port:A", node_type="port", label="A",
+                        attrs={"criticality": 0.0, "teu_norm": 1.0, "degree_count": 1}),
+        SimpleNamespace(node_id="port:B", node_type="port", label="B",
+                        attrs={"criticality": 0.0, "teu_norm": 0.0, "degree_count": 1}),
+    ]
+    matrix = np.zeros((2, 2))
+    pos = np.array([[0.0, 0.0], [1.0, 1.0]])
+    fig = _build_network_figure(
+        nodes, matrix, pos, size_attr="teu_norm", size_label="TEU",
+    )
+    port_traces = [t for t in fig.data if getattr(t, "mode", "") == "markers"]
+    assert port_traces
+    sizes = list(port_traces[0].marker.size)
+    assert sizes[0] > sizes[1]                 # A (teu_norm 1) bigger than B (0)
+    assert "TEU" in port_traces[0].hovertemplate
+    # default size_attr still sizes by criticality (non-breaking)
+    nodes[0].attrs["criticality"] = 1.0
+    fig2 = _build_network_figure(nodes, matrix, pos)
+    s2 = list([t for t in fig2.data if getattr(t, "mode", "") == "markers"][0].marker.size)
+    assert s2[0] > s2[1]

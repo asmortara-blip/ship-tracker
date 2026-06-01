@@ -114,6 +114,8 @@ def _build_network_figure(
     pos: np.ndarray,
     *,
     selected_id: str | None = None,
+    size_attr: str = "criticality",
+    size_label: str = "Criticality",
 ) -> go.Figure:
     """Cartesian node-link diagram of the world graph.
 
@@ -184,8 +186,8 @@ def _build_network_figure(
             continue
         xs = [pos[i, 0] for i in members]
         ys = [pos[i, 1] for i in members]
-        crit = [float(nodes[i].attrs.get("criticality", 0.0)) for i in members]
-        sizes = [7.0 + 23.0 * max(0.0, min(1.0, c)) for c in crit]
+        size_vals = [float(nodes[i].attrs.get(size_attr, 0.0)) for i in members]
+        sizes = [7.0 + 23.0 * max(0.0, min(1.0, s)) for s in size_vals]
         labels = [nodes[i].label or nodes[i].node_id for i in members]
         ids = [nodes[i].node_id for i in members]
         degrees = [int(nodes[i].attrs.get("degree_count", 0)) for i in members]
@@ -210,13 +212,13 @@ def _build_network_figure(
             },
             text=labels,
             # customdata[0] = node_id (the selection event maps a click back to
-            # its node via this); customdata[1] = true criticality in [0,1] for
-            # the hover (NOT the marker pixel size).
-            customdata=[[nid, c] for nid, c in zip(ids, crit)],
+            # its node via this); customdata[1] = the sizing metric in [0,1]
+            # (criticality or normalized TEU, per size_attr) for the hover.
+            customdata=[[nid, s] for nid, s in zip(ids, size_vals)],
             hovertemplate=(
                 "<b>%{text}</b><br>"
                 f"Type: {ntype}<br>"
-                "Criticality: %{customdata[1]:.2f}<br>"
+                f"{size_label}: " "%{customdata[1]:.2f}<br>"
                 "<extra></extra>"
             ),
             showlegend=True,
@@ -248,6 +250,7 @@ def _build_geo_figure(
     adjacency: np.ndarray,
     *,
     selected_id: str | None = None,
+    size_attr: str = "criticality",
 ) -> go.Figure:
     """Scattergeo of the geo-mappable nodes (ports / chokepoints / vessels).
 
@@ -288,8 +291,8 @@ def _build_geo_figure(
         lats = [nd.lat for nd in bucket]
         lons = [nd.lon for nd in bucket]
         names = [nd.label or nd.node_id for nd in bucket]
-        crit = [float(nd.attrs.get("criticality", 0.0)) for nd in bucket]
-        sizes = [8.0 + 18.0 * max(0.0, min(1.0, c)) for c in crit]
+        size_vals = [float(nd.attrs.get(size_attr, 0.0)) for nd in bucket]
+        sizes = [8.0 + 18.0 * max(0.0, min(1.0, s)) for s in size_vals]
         # Highlight: when a node is selected, its geo neighbourhood pops and the
         # rest fades. With no selection, everything sits at a uniform opacity.
         if sel_i is None:
@@ -613,6 +616,27 @@ def render(**_kwargs) -> None:
         # Keep degree_centrality available too (unused for sizing but cheap).
         del deg
 
+        # ── TEU overlay: real World Bank container throughput per PORT node ──
+        # (real country TEU × modeled port weight; see processing.port_teu_map).
+        # Lets the user re-size the network/geo by volume instead of criticality.
+        teu_available = False
+        try:
+            from processing.port_teu_map import build_port_teu_map
+            teu_by_locode = {
+                pt.locode: pt.teu_total
+                for pt in build_port_teu_map(_kwargs.get("wb_data"))
+            }
+            max_teu = max(teu_by_locode.values()) if teu_by_locode else 0.0
+            for nd in nodes:
+                if nd.node_type == "port":
+                    locode = nd.node_id.partition(":")[2]
+                    teu = float(teu_by_locode.get(locode, 0.0) or 0.0)
+                    nd.attrs["teu"] = round(teu, 3)
+                    nd.attrs["teu_norm"] = (teu / max_teu) if max_teu > 0 else 0.0
+            teu_available = max_teu > 0
+        except Exception:
+            logger.exception("world_graph: TEU overlay failed")
+
         # ── Ordered node list + adjacency MATRIX (numpy) + layout ──────────
         index = {nid: i for i, nid in enumerate(node_ids)}
         n = len(nodes)
@@ -635,12 +659,30 @@ def render(**_kwargs) -> None:
         if "wg_selected_id" not in st.session_state:
             st.session_state["wg_selected_id"] = None
 
+        # ── Sizing mode: criticality (default) or real TEU throughput ──────
+        size_attr, size_label = "criticality", "Criticality"
+        if teu_available:
+            _size_choice = st.radio(
+                "Size nodes by",
+                ["Systemic criticality", "Container throughput (TEU)"],
+                horizontal=True,
+                key="wg_size_mode",
+                help=(
+                    "Criticality = Brandes betweenness (systemic flow). TEU = real "
+                    "World Bank per-port container throughput (per-port split is "
+                    "modeled). TEU sizes ports; other node types stay small."
+                ),
+            )
+            if _size_choice.startswith("Container"):
+                size_attr, size_label = "teu_norm", "TEU (norm)"
+
         # ── A. Node-link network (SELECTION MASTER via on_select) ──────────
         selected_id = st.session_state.get("wg_selected_id")
         try:
             event = st.plotly_chart(
                 _build_network_figure(
                     nodes, matrix, pos, selected_id=selected_id,
+                    size_attr=size_attr, size_label=size_label,
                 ),
                 use_container_width=True,
                 config={"displayModeBar": False},
@@ -715,7 +757,7 @@ def render(**_kwargs) -> None:
         # ── B. Geographic map (read-only — follows selection) ──────────────
         try:
             st.plotly_chart(
-                _build_geo_figure(nodes, matrix, selected_id=selected_id),
+                _build_geo_figure(nodes, matrix, selected_id=selected_id, size_attr=size_attr),
                 use_container_width=True,
                 config={"displayModeBar": False},
                 key="wg_geo",

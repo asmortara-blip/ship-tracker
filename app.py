@@ -1480,7 +1480,7 @@ elif active_section == "ports_routes":
     with t9:
         try:
             from ui.tab_world_graph import render as _r
-            _r()
+            _r(wb_data=wb_data)
         except Exception as e:
             st.error(f"World Graph error: {e}")
     with t10:
