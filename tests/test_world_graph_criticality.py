@@ -108,8 +108,11 @@ def test_node_stress_missing_attrs_degrade_to_zero() -> None:
 
 
 def test_default_thresholds_are_modest() -> None:
-    """Documented modest defaults so the alert isn't permanently silent."""
-    assert DEFAULT_BETWEENNESS_THRESHOLD == 0.05
+    """Documented defaults. The betweenness gate is modest (0.03) because the
+    candidate is the most-central STRESSED node (gate-on-stress-first), so the
+    gate only rejects stress on structurally-trivial nodes — a stressed primary
+    chokepoint (Suez ~0.043) clears it."""
+    assert DEFAULT_BETWEENNESS_THRESHOLD == 0.03
     assert DEFAULT_STRESS_THRESHOLD == 0.30
     assert DEFAULT_CRITICAL_STRESS_THRESHOLD == 0.60
 
@@ -187,19 +190,26 @@ def test_no_alert_when_no_node_is_stressed(monkeypatch) -> None:
     assert find_critical_stressed_node() is None
 
 
-def test_no_alert_when_most_central_stressable_is_unstressed_even_if_others_stressed(
+def test_stressed_node_fires_even_when_a_more_central_node_is_unstressed(
     monkeypatch,
 ) -> None:
-    """The candidate is the MOST-CENTRAL stressable node; if it isn't stressed,
-    no alert — a less-central but stressed node does not rescue it (matches the
-    literal 'argmax over stressable nodes' contract)."""
+    """Gate-on-stress-FIRST: a STRESSED node is surfaced even when a more-central
+    node is unstressed, as long as the stressed node clears the betweenness gate.
+    This is the real cascade signal (e.g. a stressed Suez while Shanghai — more
+    central — carries no live deficit). It replaces the old argmax-then-gate
+    contract that left the alert effectively dead on live data."""
     nodes = [
-        _node("port:HUB", "port", "Hub Port", supply_deficit_days=0.0),     # central, no stress
-        _node("port:SMALL", "port", "Small Port", supply_deficit_days=-14.0),  # stressed, not central
+        _node("port:HUB", "port", "Hub Port", supply_deficit_days=0.0),       # most central, no stress
+        _node("port:SMALL", "port", "Small Port", supply_deficit_days=-14.0),  # stressed (1.0), less central
     ]
-    btw = {"port:HUB": 10.0, "port:SMALL": 1.0}
+    btw = {"port:HUB": 10.0, "port:SMALL": 1.0}   # SMALL normalizes to 0.1 >= 0.03 gate
     _patch(monkeypatch, nodes, btw)
-    assert find_critical_stressed_node() is None
+    alert = find_critical_stressed_node()
+    assert alert is not None
+    assert alert.node_id == "port:SMALL"          # the stressed node, not the central-but-calm hub
+    assert alert.stress == pytest.approx(1.0)
+    # ...but a structurally-trivial stressed node (below the gate) stays silent.
+    assert find_critical_stressed_node(betweenness_threshold=0.5) is None
 
 
 def test_no_alert_when_candidate_below_betweenness_threshold(monkeypatch) -> None:

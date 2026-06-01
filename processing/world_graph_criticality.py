@@ -10,9 +10,10 @@ likely to cascade network-wide.
 
 This module joins the two signals. It builds the world graph, computes
 betweenness centrality, and — restricting attention to nodes that can actually
-carry a stress signal — finds the single most-central such node and gates it on
-both a centrality threshold and a stress threshold. If it clears both, one
-``WorldGraphCriticalityAlert`` is returned; otherwise ``None``.
+carry a stress signal — gates on stress FIRST (the nodes that are actually
+strained), then surfaces the most systemically-central of those. If that node
+also carries non-trivial centrality, one ``WorldGraphCriticalityAlert`` is
+returned; otherwise ``None``.
 
 Why restrict to "stressable" geo nodes
 --------------------------------------
@@ -34,16 +35,16 @@ well-defined.
 
 Threshold defaults
 ------------------
-``betweenness_threshold=0.05`` / ``stress_threshold=0.30`` /
-``critical_stress_threshold=0.60`` are deliberately MODEST — the smoke dataset
-carries only chokepoint risk (no live port deficits), so a higher bar would
-mean the alert never fires. On the current live graph the most-central
-stressable node is a major transshipment port whose smoke-data stress is 0, so
-the *literal* most-central node does not clear the stress gate (the alert is
-silent until a real port deficit or a re-ranking shock lands) — see the module
-test + the wiring report. All three thresholds are keyword-configurable so an
-operator can tighten (fewer, higher-conviction alerts) or loosen (catch
-earlier-stage stress) without code changes.
+``betweenness_threshold=0.03`` / ``stress_threshold=0.30`` /
+``critical_stress_threshold=0.60``. Because the candidate is chosen by
+gate-on-stress-FIRST-then-rank-by-centrality, the betweenness gate only has to
+reject stress on structurally-trivial nodes — a stressed PRIMARY chokepoint
+clears it (Suez normalizes to ~0.043 against a max dominated by big
+transshipment ports). On the current live graph the stressed nodes are the
+chokepoints (Suez/Bab-el-Mandeb/Hormuz carry risk_score), so the alert fires on
+the most-central stressed chokepoint. All three thresholds are
+keyword-configurable so an operator can tighten (fewer, higher-conviction
+alerts) or loosen (catch earlier-stage stress) without code changes.
 
 Pure function — no I/O of its own beyond what ``build_world_graph`` does, and
 never raises: every failure path degrades to ``None``.
@@ -67,10 +68,12 @@ __all__ = [
 ]
 
 
-# Default thresholds — wired into the alert engine. See the module docstring
-# for the rationale (smoke data carries modest stress; modest bars keep the
-# alert from being permanently silent while staying configurable).
-DEFAULT_BETWEENNESS_THRESHOLD: float = 0.05
+# Default thresholds — wired into the alert engine. With gate-on-stress-first
+# (see find_critical_stressed_node) the betweenness gate only rejects stress on
+# structurally-trivial nodes; a stressed PRIMARY chokepoint clears 0.03 (Suez
+# normalizes to ~0.043 against a max dominated by big transshipment ports). All
+# three are keyword-configurable.
+DEFAULT_BETWEENNESS_THRESHOLD: float = 0.03
 DEFAULT_STRESS_THRESHOLD: float = 0.30
 DEFAULT_CRITICAL_STRESS_THRESHOLD: float = 0.60
 
@@ -176,18 +179,20 @@ def find_critical_stressed_node(
     2. Compute betweenness centrality over all node ids + edges, then normalize
        to [0, 1] by dividing by the graph maximum (so the most-central node of
        any graph scores 1.0).
-    3. Over the **stressable** node set (ports + chokepoints) pick the candidate
-       with the highest normalized betweenness — the most systemically-central
-       node where "stress" is even defined.
-    4. Fire iff that candidate clears BOTH gates: normalized betweenness
-       >= ``betweenness_threshold`` AND stress >= ``stress_threshold``. Severity
-       is CRITICAL when stress >= ``critical_stress_threshold``, else HIGH.
+    3. Restrict to the **stressable** node set (ports + chokepoints) and gate on
+       stress FIRST: keep only nodes with stress >= ``stress_threshold``. Among
+       those, pick the one with the highest normalized betweenness — the most
+       systemically-central node that is actually strained.
+    4. Fire iff that candidate's normalized betweenness >=
+       ``betweenness_threshold`` (it is already stressed by construction).
+       Severity is CRITICAL when stress >= ``critical_stress_threshold``, else
+       HIGH.
 
     Parameters
     ----------
     betweenness_threshold:
-        Minimum *normalized* betweenness for the candidate to count as
-        "critically central". Default 0.05.
+        Minimum *normalized* betweenness for the (already-stressed) candidate to
+        count as "critically central". Default 0.03.
     stress_threshold:
         Minimum stress for the candidate to fire. Default 0.30.
     critical_stress_threshold:
@@ -198,9 +203,10 @@ def find_critical_stressed_node(
     Returns
     -------
     Optional[WorldGraphCriticalityAlert]
-        The alert when the most-central stressable node clears both gates;
-        otherwise ``None`` (including: empty/edgeless graph, no stressable
-        nodes, candidate not central enough, or candidate not stressed enough).
+        The alert for the most-central STRESSED node when it also clears the
+        centrality gate; otherwise ``None`` (including: empty/edgeless graph, no
+        stressable nodes, nothing stressed enough, or the most-central stressed
+        node not central enough).
 
     Never raises — any failure (import, build, metric) degrades to ``None``
     with a logged warning.
@@ -223,9 +229,15 @@ def find_critical_stressed_node(
         btw = betweenness_centrality(node_ids, graph.edge_tuples())
         max_btw = max(btw.values()) if btw else 0.0
 
-        # Walk the stressable nodes, tracking the one with the highest
-        # NORMALIZED betweenness. We keep its (un-normalized → normalized)
-        # betweenness + stress so the gate below reads cleanly.
+        # Gate-on-stress FIRST, then rank by centrality. Among the stressable
+        # nodes, restrict to those that are actually STRESSED (stress >=
+        # stress_threshold), then pick the most systemically-central of THOSE.
+        # This fires when ANY sufficiently-stressed node is also central — the
+        # real cascade signal — instead of only when the single most-central
+        # node happens to be stressed. The latter (rank-then-gate) essentially
+        # never fired: big transshipment ports dominate betweenness while
+        # carrying no live stress, so a stressed primary chokepoint (e.g. Suez)
+        # was never even the candidate. See the threshold note in the docstring.
         best_node = None
         best_btw_norm = -1.0
         best_stress = 0.0
@@ -234,8 +246,8 @@ def find_critical_stressed_node(
             if node is None or node.node_type not in STRESSABLE_NODE_TYPES:
                 continue
             stress = node_stress(node)
-            if stress is None:
-                continue
+            if stress is None or stress < stress_threshold:
+                continue  # gate on stress FIRST — only stressed nodes compete
             raw = float(btw.get(nid, 0.0) or 0.0)
             btw_norm = (raw / max_btw) if max_btw > 0 else 0.0
             if btw_norm > best_btw_norm:
@@ -243,13 +255,14 @@ def find_critical_stressed_node(
                 best_node = node
                 best_stress = stress
 
+        # No stressable node is stressed enough → nothing to flag.
         if best_node is None:
             return None
 
-        # Two-part gate: must be both critically central AND stressed.
+        # Second gate: the most-central STRESSED node must also carry
+        # non-trivial systemic flow (else the stress sits on a structurally
+        # peripheral node and won't cascade network-wide).
         if best_btw_norm < betweenness_threshold:
-            return None
-        if best_stress < stress_threshold:
             return None
 
         return WorldGraphCriticalityAlert(
