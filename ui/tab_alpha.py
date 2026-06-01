@@ -585,6 +585,13 @@ def render(
                 badge_color=C_ACCENT,
             )
 
+            st.warning(
+                "**Modeled, illustrative — not investment advice.** The "
+                "entry / target / stop levels below come from rule-based models "
+                "running on a mix of real prices and *synthetic* shipping data; "
+                "they are not tradeable price targets. See docs/DATA_PROVENANCE.md."
+            )
+
             # ── Resolve signals ──────────────────────────────────────────────────
             signals: list[dict] = []
 

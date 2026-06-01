@@ -2,6 +2,8 @@
 .env
 .env.*
 *.env
+# ...but DO ship the template (placeholders only, no secrets).
+!.env.example
 
 # Cache & logs
 cache/

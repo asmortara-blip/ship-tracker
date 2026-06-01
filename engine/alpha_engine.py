@@ -1,4 +1,14 @@
-"""Multi-factor alpha signal generator for shipping stocks."""
+"""Multi-factor alpha signal generator for shipping stocks.
+
+The signals here are MODELED, rule-based outputs computed from a mix of real
+market data (equity prices, FRED macro) and the platform's modeled shipping
+signals — and several inputs fall back to synthetic values when a feed is
+absent (see ``_fallback_price``). They emit illustrative entry/target/stop
+levels for research and scenario framing only. They are NOT investment advice
+and NOT price targets to trade on. See ``docs/DATA_PROVENANCE.md`` for the full
+real-vs-modeled map. This mirrors the discipline already in
+``processing.disruption_cascade``.
+"""
 from __future__ import annotations
 
 import datetime
@@ -20,6 +30,11 @@ _SIGNAL_TYPES = ("MOMENTUM", "MEAN_REVERSION", "FUNDAMENTAL", "MACRO", "TECHNICA
 _DIRECTIONS = ("LONG", "SHORT", "NEUTRAL")
 _CONVICTIONS = ("HIGH", "MEDIUM", "LOW")
 _HORIZONS = ("1W", "1M", "3M")
+
+# Appended to every emitted signal's rationale so the caveat travels with the
+# signal into every UI table + export. These are modeled, illustrative levels —
+# not investment advice and not tradeable price targets.
+DISCLAIMER = "Modeled signal — not investment advice, not a price target."
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +176,10 @@ def _make_signal(
     risk_reward = round(target_dist / stop_dist, 2) if stop_dist > 0 else 0.0
 
     strength = max(0.0, min(1.0, strength))
+
+    # Carry the modeled/not-advice disclaimer with every signal.
+    if DISCLAIMER not in rationale:
+        rationale = f"{rationale} {DISCLAIMER}".strip()
 
     return AlphaSignal(
         ticker=ticker,
