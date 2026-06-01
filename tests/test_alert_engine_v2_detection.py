@@ -659,3 +659,87 @@ def test_cargo_flow_anomaly_jump_only_fires_high(monkeypatch) -> None:
     monkeypatch.setattr("processing.cargo_flow_anomaly.compute_cargo_flow_anomaly",
                         lambda **kw: calm)
     assert check_cargo_flow_anomaly_alerts() == []     # not an anomaly → nothing
+
+
+# ── WORLD_GRAPH_CRITICALITY wiring ──
+
+def _wg_alert(severity="HIGH", node_id="chokepoint:suez", label="Suez Canal",
+              betweenness=0.42, stress=0.95):
+    """A controlled WorldGraphCriticalityAlert stand-in (its summary() is real
+    so the wrapper's body comes through unchanged)."""
+    from processing.world_graph_criticality import WorldGraphCriticalityAlert
+    return WorldGraphCriticalityAlert(
+        node_id=node_id, label=label, node_type="chokepoint",
+        betweenness=betweenness, stress=stress, severity=severity,
+    )
+
+
+def test_world_graph_criticality_alert_fires(monkeypatch) -> None:
+    """A stressed critical node flows find_critical_stressed_node →
+    ShippingAlert carrying the WORLD_GRAPH_CRITICALITY type, the node id in
+    port_locode, the stress as value, and the compute-module severity."""
+    from engine.alert_engine_v2 import check_world_graph_criticality_alerts
+
+    monkeypatch.setattr(
+        "processing.world_graph_criticality.find_critical_stressed_node",
+        lambda **kw: _wg_alert(severity="CRITICAL", stress=0.95),
+    )
+    alerts = check_world_graph_criticality_alerts()
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a.alert_type == "WORLD_GRAPH_CRITICALITY"
+    assert a.severity == "CRITICAL"
+    assert a.port_locode == "chokepoint:suez"
+    assert abs(a.value - 0.95) < 1e-9
+    assert a.threshold == 0.30            # default stress_threshold
+    assert "Suez Canal" in a.title
+    assert "cascades network-wide" in a.body
+
+
+def test_world_graph_criticality_high_severity_passes_through(monkeypatch) -> None:
+    """A HIGH-severity compute result surfaces as a HIGH ShippingAlert."""
+    from engine.alert_engine_v2 import check_world_graph_criticality_alerts
+
+    monkeypatch.setattr(
+        "processing.world_graph_criticality.find_critical_stressed_node",
+        lambda **kw: _wg_alert(severity="HIGH", stress=0.40),
+    )
+    out = check_world_graph_criticality_alerts()
+    assert len(out) == 1
+    assert out[0].severity == "HIGH"
+
+
+def test_world_graph_criticality_no_alert_when_none(monkeypatch) -> None:
+    """No critical-stressed node → empty list."""
+    from engine.alert_engine_v2 import check_world_graph_criticality_alerts
+
+    monkeypatch.setattr(
+        "processing.world_graph_criticality.find_critical_stressed_node",
+        lambda **kw: None,
+    )
+    assert check_world_graph_criticality_alerts() == []
+
+
+def test_world_graph_criticality_swallows_compute_error(monkeypatch) -> None:
+    """A blow-up in the compute call degrades to [] (logged), never raises."""
+    from engine.alert_engine_v2 import check_world_graph_criticality_alerts
+
+    def boom(**kw):
+        raise RuntimeError("graph exploded")
+
+    monkeypatch.setattr(
+        "processing.world_graph_criticality.find_critical_stressed_node", boom,
+    )
+    assert check_world_graph_criticality_alerts() == []
+
+
+def test_run_all_checks_includes_world_graph_criticality(monkeypatch) -> None:
+    """run_all_checks aggregates the world-graph criticality alert alongside
+    the others without crashing."""
+    monkeypatch.setattr(
+        "processing.world_graph_criticality.find_critical_stressed_node",
+        lambda **kw: _wg_alert(severity="CRITICAL"),
+    )
+    out = run_all_checks([], [], [], {}, {}, {})
+    types = {a.alert_type for a in out}
+    assert "WORLD_GRAPH_CRITICALITY" in types
