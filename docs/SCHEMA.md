@@ -1,9 +1,9 @@
 # Ship Tracker - Database Schema
 
-**Schema version:** 26  
-**Generated:** 2026-05-25T17:49:42.993612+00:00  
+**Schema version:** 28  
+**Generated:** 2026-06-01T04:30:55.129322+00:00  
 **Total tables:** 20  
-**Total rows (this snapshot):** 18121  
+**Total rows (this snapshot):** 28011  
 **DB path:** `/Users/aaronmortara/MC/Models/Ship/cache/ship_tracker.db`
 
 ## Table of contents
@@ -104,7 +104,7 @@ Empty (0 rows).
 
 ## alerts
 
-Empty (0 rows).
+3 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -151,6 +151,7 @@ Empty (0 rows).
 | `created_at` | TEXT | no | - | - |  |
 | `last_used_at` | TEXT | no | `''` | - |  |
 | `revoked` | INTEGER | no | `0` | - | 0/1 — when 1, the token can no longer authenticate. |
+| `expires_at` | TEXT | no | `''` | - |  |
 
 **Indexes:**
 
@@ -159,7 +160,7 @@ Empty (0 rows).
 
 ## audit_events
 
-Empty (0 rows).
+6 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -240,7 +241,7 @@ Empty (0 rows).
 
 ## investor_report_snapshots
 
-246 rows.
+418 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -256,7 +257,7 @@ Empty (0 rows).
 
 ## kv_state
 
-1 row.
+2 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -266,7 +267,7 @@ Empty (0 rows).
 
 ## llm_calls
 
-290 rows.
+450 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -288,7 +289,7 @@ Empty (0 rows).
 
 ## mfa_recovery_codes
 
-Empty (0 rows).
+20 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -335,7 +336,7 @@ Empty (0 rows).
 
 ## report_schedules
 
-Empty (0 rows).
+3 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -357,7 +358,7 @@ Empty (0 rows).
 
 ## tab_render_events
 
-17584 rows.
+27108 rows.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -405,7 +406,7 @@ Empty (0 rows).
 
 ## users
 
-Empty (0 rows).
+1 row.
 
 | Column | Type | Nullable | Default | PK | Description |
 |---|---|---|---|---|---|
@@ -418,6 +419,7 @@ Empty (0 rows).
 | `last_login_at` | TEXT | no | `''` | - |  |
 | `mfa_secret` | TEXT | no | `''` | - | Base32 TOTP secret (empty when MFA disabled). |
 | `mfa_enabled` | INTEGER | no | `0` | - | 0/1 — when 1, login requires a valid TOTP code. |
+| `mfa_last_used_step` | INTEGER | no | `-1` | - |  |
 
 **Indexes:**
 

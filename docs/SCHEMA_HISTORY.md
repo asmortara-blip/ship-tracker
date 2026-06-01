@@ -1,7 +1,7 @@
 # Ship Tracker - Migration History
 
-**Total migrations:** 25  
-**Generated:** 2026-05-25T17:49:43.054649+00:00  
+**Total migrations:** 27  
+**Generated:** 2026-06-01T04:30:54.900264+00:00  
 
 Source-of-truth: `state/migrations.py`. Each entry is the docstring + any inline SQL extracted via the stdlib `ast` module. Schemas declared via `_SCHEMA_VN` constants in `state/db.py` are documented by their summary; see that module for the literal SQL.
 
@@ -176,4 +176,24 @@ ALTER TABLE delivery_channels ADD COLUMN monthly_budget INTEGER NOT NULL DEFAULT
 ## v26 - `_migrate_to_v26`
 
 Add the ``delivery_retry_queue`` table for the retry-queue machinery.
+
+## v27 - `_migrate_to_v27`
+
+Add the ``expires_at`` column to ``api_tokens`` (PAT expiry / TTL).
+
+**SQL excerpts:**
+
+```sql
+ALTER TABLE api_tokens ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''
+```
+
+## v28 - `_migrate_to_v28`
+
+Add ``users.mfa_last_used_step`` for TOTP replay protection.
+
+**SQL excerpts:**
+
+```sql
+ALTER TABLE users ADD COLUMN mfa_last_used_step INTEGER NOT NULL DEFAULT -1
+```
 
