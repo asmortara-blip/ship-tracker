@@ -1010,6 +1010,15 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # ── Command palette / global search — jump to any tab/company/port/route ─
+    # Lazy + defensive so a search-index hiccup never takes down the sidebar.
+    try:
+        from ui.command_palette import default_entities, render_command_palette
+        render_command_palette(SECTIONS, SECTION_TABS, entities=default_entities())
+    except Exception as _cp_exc:
+        logger.debug(f"Command palette unavailable: {_cp_exc}")
+
     # ── Pinned tabs cluster (per-user favourites) ─────────────────────────
     # Lazy import so a broken state.tab_favorites NEVER takes down the
     # sidebar. Clicking a pinned entry routes to the parent section —
