@@ -182,3 +182,23 @@ def test_tab_render_populated_does_not_crash(mock_streamlit, module_path: str) -
     else:
         kwargs = {k: v for k, v in bundle.items() if k in sig.parameters}
     mod.render(**kwargs)
+
+
+def test_app_binds_stock_data_to_tab_alpha_by_keyword() -> None:
+    """Regression: app.py dispatched tab_alpha.render POSITIONALLY in an order
+    that bound route_results→stock_data (render's signature is stock_data-first),
+    so the Alpha tab silently ran on the wrong data and its engine path always
+    crashed to mock. The dispatch must bind stock_data explicitly by keyword."""
+    import re
+    from pathlib import Path
+    src = Path("app.py").read_text(encoding="utf-8")
+    m = re.search(
+        r"from ui\.tab_alpha import render as _r\b.*?_r\((.*?)\)",
+        src, re.DOTALL,
+    )
+    assert m, "tab_alpha render dispatch not found in app.py"
+    call = m.group(1)
+    assert "stock_data=stock_data" in call, (
+        f"tab_alpha must receive stock_data by keyword (it drifted to a "
+        f"positional call that misbound route_results→stock_data); got: {call!r}"
+    )

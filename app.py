@@ -1252,7 +1252,15 @@ elif active_section == "markets":
     with t2:
         try:
             from ui.tab_alpha import render as _r
-            _r(route_results, port_results, freight_data, macro_data, stock_data, insights)
+            # Bind by KEYWORD: render's signature is (stock_data, insights,
+            # freight_data, macro_data, ...). The old positional call passed
+            # route_results→stock_data and port_results→insights, so the tab
+            # silently ran on the wrong data and its engine path always
+            # crashed-to-mock (the b4da425 arity fix couldn't help while
+            # stock_data was actually a route-results list). Keywords match
+            # the convention the sibling tabs (sector, indices) already use.
+            _r(stock_data=stock_data, insights=insights,
+               freight_data=freight_data, macro_data=macro_data)
         except Exception as e:
             st.error(f"Alpha error: {e}")
     with t3:
