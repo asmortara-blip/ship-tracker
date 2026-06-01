@@ -339,6 +339,46 @@ def _build_geo_figure(
     return fig
 
 
+def _build_sankey_figure(
+    sankey: dict, *, title: str, height: int = 460,
+) -> go.Figure:
+    """Plotly Sankey from a ``processing.supply_path.to_sankey()`` dict.
+
+    ``sankey`` is ``{"labels", "source", "target", "value"}`` with integer node
+    indices (the contract :func:`to_sankey` guarantees). Empty / single-node
+    input returns an annotated-empty figure so the caller can render
+    unconditionally. Pure builder — no ``st.*``.
+    """
+    labels = list(sankey.get("labels") or [])
+    source = list(sankey.get("source") or [])
+    target = list(sankey.get("target") or [])
+    value = list(sankey.get("value") or [])
+    if not labels or not source:
+        return _annotated_empty(title, height=height)
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node={
+            "label": labels,
+            "pad": 14,
+            "thickness": 14,
+            "color": C_ACCENT,
+            "line": {"color": C_BG, "width": 0.5},
+        },
+        link={
+            "source": source,
+            "target": target,
+            "value": value,
+            "color": "rgba(120,170,210,0.22)",
+        },
+    ))
+    apply_dark_layout(fig, title=title, height=height)
+    fig.update_layout(
+        margin={"l": 8, "r": 8, "t": 44, "b": 8},
+        font={"color": C_TEXT2, "size": 10},
+    )
+    return fig
+
+
 # ── Render layer (Streamlit) ───────────────────────────────────────────────
 
 
@@ -412,6 +452,76 @@ def _render_detail_panel(g, selected_id: str | None) -> None:
         rows,
         title=f"{len(rows)} direct neighbour(s) of {node.label or node.node_id}",
     )
+
+
+def _render_supply_path(g, selected_id: str | None) -> None:
+    """Trace + render the selected node's MODELED supply dependencies.
+
+    Upstream (what feeds it) as a Sankey + a ranked dependency table, with a
+    one-line downstream summary (what it feeds). No-op hint when nothing is
+    selected. The linkages are MODELED exposure (the platform's port↔company /
+    commodity↔company weights are illustrative), NOT verified sourcing.
+    """
+    from processing.supply_path import (
+        rank_supply_dependencies,
+        to_sankey,
+        trace_downstream,
+        trace_upstream,
+    )
+
+    if not selected_id:
+        st.caption(
+            "Select a node above to trace its supply dependencies — the modeled "
+            "chain of what feeds it (upstream) and what it feeds (downstream). "
+            "These are MODELED exposure links, not verified sourcing."
+        )
+        return
+
+    node = g.get_node(selected_id)
+    name = (node.label if node else selected_id) or selected_id
+
+    up = trace_upstream(g, selected_id, max_hops=3)
+    down = trace_downstream(g, selected_id, max_hops=2)
+    st.caption(
+        f"{name}: {len(up.reached())} upstream dependency node(s) feed it; it "
+        f"reaches {len(down.reached())} downstream node(s). Modeled exposure — "
+        "not verified sourcing."
+    )
+
+    # Upstream dependency Sankey (what feeds the selected node).
+    sankey = to_sankey(up, g)
+    if sankey.get("labels") and sankey.get("source"):
+        st.plotly_chart(
+            _build_sankey_figure(
+                sankey,
+                title=f"Upstream supply path into {name} (modeled exposure)",
+            ),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="wg_supply_sankey",
+        )
+    else:
+        st.info("No modeled upstream dependencies for this node.")
+
+    # Ranked modeled dependencies.
+    ranked = rank_supply_dependencies(g, selected_id, max_hops=3)
+    if ranked:
+        rows: list[list[str]] = []
+        for nid, score in ranked[:12]:
+            nd = g.get_node(nid)
+            ntype = nd.node_type if nd else nid.partition(":")[0]
+            label = (nd.label if nd else nid) or nid
+            accent = _TYPE_COLOR.get(ntype, C_TEXT2)
+            rows.append([
+                badge(ntype, color=accent),
+                badge(label, color=C_TEXT2),
+                badge(f"{score:.2f}", color=accent),
+            ])
+        wsj_market_table(
+            ["Type", "Dependency", "Exposure score"],
+            rows,
+            title=f"Top modeled supply dependencies of {name}",
+        )
 
 
 def render(**_kwargs) -> None:
@@ -619,6 +729,15 @@ def render(**_kwargs) -> None:
         except Exception:
             logger.exception("world_graph: detail panel failed")
             st.error("Node detail unavailable.")
+
+        section_divider("Supply path")
+
+        # ── C2. Supply-path tracing (who-supplies-who, follow the path) ─────
+        try:
+            _render_supply_path(g, selected_id)
+        except Exception:
+            logger.exception("world_graph: supply-path section failed")
+            st.error("Supply-path view unavailable.")
 
         # ── D. Source footer ───────────────────────────────────────────────
         try:

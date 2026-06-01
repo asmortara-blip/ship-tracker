@@ -843,6 +843,8 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Portfolio",        "ui.tab_portfolio"),
         ("Options & Flow",   "ui.tab_options"),
         ("Convergence",      "ui.tab_convergence"),
+        ("Event Study",      "ui.tab_event_study"),
+        ("Valuation",        "ui.tab_valuation"),
     ],
     "disruption_alpha": [
         ("Voyage Tracker",   "ui.tab_voyage_tracker"),
@@ -1233,10 +1235,11 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13 = st.tabs([
         "Markets", "Sector Dashboard", "Alpha Signals", "Results",
         "Indices", "Derivatives", "Scenarios", "Monte Carlo",
         "Backtesting", "Portfolio", "Options & Flow", "Convergence",
+        "Event Study", "Valuation",
     ])
     with t0:
         try:
@@ -1322,6 +1325,18 @@ elif active_section == "markets":
             )
         except Exception as e:
             st.error(f"Convergence error: {e}")
+    with t12:
+        try:
+            from ui.tab_event_study import render as _r
+            _r(stock_data=stock_data)
+        except Exception as e:
+            st.error(f"Event Study error: {e}")
+    with t13:
+        try:
+            from ui.tab_valuation import render as _r
+            _r(stock_data=stock_data)
+        except Exception as e:
+            st.error(f"Valuation error: {e}")
 
 # ── 3. Disruption Alpha ───────────────────────────────────────────────────
 elif active_section == "disruption_alpha":
