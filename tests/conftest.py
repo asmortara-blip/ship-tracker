@@ -17,6 +17,52 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
+def block_network(monkeypatch):
+    """Fail every outbound TCP connection instantly.
+
+    Network-backed data feeds (stock / FRED / freight / World Bank, …) wrap
+    their fetches in try/except and degrade to a fallback or empty result, so
+    blocking the socket makes those paths run *fast and deterministically*
+    instead of waiting on real HTTP — which is what flaked these tests under
+    the suite's per-test timeout. Local file / SQLite I/O uses no sockets and
+    is untouched.
+    """
+    import socket
+
+    def _blocked(*_args, **_kwargs):
+        raise ConnectionError("network disabled in this test")
+
+    monkeypatch.setattr(socket, "create_connection", _blocked, raising=False)
+    monkeypatch.setattr(socket.socket, "connect", _blocked, raising=False)
+    monkeypatch.setattr(socket.socket, "connect_ex", _blocked, raising=False)
+    yield
+
+
+@pytest.fixture
+def unavailable_data_feeds(monkeypatch):
+    """Make every external data-feed loader raise, so callers like
+    ``load_data_bundle`` exercise their "source unavailable → fallback/empty"
+    path deterministically and FAST. This patches the loader functions
+    themselves (not the socket) because some feeds use HTTP clients that
+    bypass Python's ``socket`` module (e.g. curl_cffi-backed stock fetchers),
+    so a socket block alone can still hang on the real network.
+    """
+    def _unavailable(*_args, **_kwargs):
+        raise ConnectionError("data feed unavailable in this test")
+
+    for target in (
+        "data.stock_feed.fetch_all_stocks",
+        "data.fred_feed.fetch_macro_series",
+        "data.freight_scraper.fetch_fbx_rates",
+        "data.comtrade_feed.fetch_all_ports",
+        "data.ais_feed.fetch_vessel_counts",
+        "data.worldbank_feed.fetch_port_throughput",
+    ):
+        monkeypatch.setattr(target, _unavailable)
+    yield
+
+
+@pytest.fixture
 def freight_data_fixture() -> dict[str, pd.DataFrame]:
     """Synthetic freight rate history for two routes × 90 days."""
     base = date.today() - timedelta(days=90)

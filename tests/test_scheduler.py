@@ -501,7 +501,7 @@ def test_main_gates_heavy_jobs_but_runs_sla_jobs_every_pass(monkeypatch) -> None
 
 # ─── load_data_bundle ──────────────────────────────────────────────────────
 
-def test_load_data_bundle_returns_expected_keys() -> None:
+def test_load_data_bundle_returns_expected_keys(unavailable_data_feeds) -> None:
     """Even when every data source is unavailable, the bundle still has
     the keys downstream callers expect."""
     bundle = load_data_bundle()

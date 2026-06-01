@@ -204,7 +204,7 @@ def test_country_export_mixes_differ():
     assert cn["electronics"] > br["electronics"]
 
 
-def test_wb_merchandise_fallback_schema():
+def test_wb_merchandise_fallback_schema(block_network):
     """The World Bank merchandise fallback must keep its exact DataFrame
     schema (columns, row count, flow / source values)."""
     from data.cache_manager import CacheManager
