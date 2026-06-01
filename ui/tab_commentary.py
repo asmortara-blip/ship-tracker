@@ -26,7 +26,9 @@ from ui.styles import (
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -147,17 +149,22 @@ def _render_header_and_lede(wrap: dict) -> None:
 
     body = wrap.get("body") or []
     if body:
-        paras = "".join(
-            f'<p style="font-family:var(--sans);font-size:0.88rem;color:var(--text2);'
-            f'line-height:1.7;margin:0 0 12px 0;">{p}</p>'
-            for p in body
+        for p in body:
+            st.markdown(p)
+    else:
+        st.markdown(
+            f'<p style="font-family:var(--serif);font-size:0.92rem;'
+            f'color:{C_TEXT2};line-height:1.6;">'
+            f'No narrative copy available for this session — feed coverage is '
+            f'thin or the wrap engine returned an empty body.</p>',
+            unsafe_allow_html=True,
         )
-        st.html(f'<section style="margin:14px 0 4px;">{paras}</section>')
 
 
 def _render_key_movers(movers: list[dict]) -> None:
     if not movers:
         return
+    section_divider("Market Movers")
     section_header("Key Movers", subtitle="Largest single-day moves across tracked shipping equities")
     st.html(
         live_data_badge(
@@ -189,6 +196,7 @@ def _render_key_movers(movers: list[dict]) -> None:
 def _render_shipping_indices(indices: list[dict]) -> None:
     if not indices:
         return
+    section_divider("Freight Benchmarks")
     section_header(
         "Shipping Indices",
         subtitle="Key freight benchmarks with 52-week context and momentum regime",
@@ -255,6 +263,7 @@ def _render_shipping_indices(indices: list[dict]) -> None:
 
 
 def _render_forward_outlook(outlook: dict) -> None:
+    section_divider("Outlook")
     section_header("Forward Outlook", subtitle="Opportunities and risks over the next 5–20 sessions")
     st.html(
         live_data_badge(
@@ -267,10 +276,7 @@ def _render_forward_outlook(outlook: dict) -> None:
 
     narrative = outlook.get("narrative", "")
     if narrative:
-        st.html(
-            f'<p style="font-family:var(--sans);font-size:0.88rem;color:var(--text2);'
-            f'line-height:1.65;margin:8px 0 16px 0;">{narrative}</p>'
-        )
+        st.markdown(narrative)
 
     opportunities = outlook.get("opportunities", []) or []
     risks = outlook.get("risks", []) or []
@@ -303,30 +309,38 @@ def _render_signal_column(
     value_color: str,
 ) -> None:
     """Render a titled column of signal rows (Opportunities / Risks)."""
+    st.markdown(
+        f'<div class="sub-section-header">{heading}</div>',
+        unsafe_allow_html=True,
+    )
+
     if not items:
-        st.html(
-            f'<div class="sub-section-header" style="color:{accent};">{heading}</div>'
-            f'<p style="font-family:var(--sans);font-size:0.8rem;color:var(--text3);'
-            f'padding:8px 0;margin:0;">No items to report.</p>'
+        st.markdown(
+            f'<div class="wsj-whats-news">'
+            f'<div style="font-family:var(--sans);font-size:0.78rem;'
+            f'color:{C_TEXT3};padding:4px 0;">'
+            f'No {heading.lower()} surfaced in the current insight store.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
         return
-
-    st.html(f'<div class="sub-section-header" style="color:{accent};">{heading}</div>')
 
     rows_html = []
     for it in items:
         title = str(it.get("title", ""))[:80]
         meta = value_fn(it)
         rows_html.append(
-            f'<li style="list-style:none;padding:8px 0;'
-            f'border-bottom:1px dotted rgba(232,230,225,0.04);">'
+            f'<div class="wsj-news-item">'
             f'<span style="display:block;font-family:var(--serif);font-size:0.84rem;'
             f'font-weight:700;color:var(--text);line-height:1.3;">{title}</span>'
             f'<span style="display:block;font-family:var(--mono);font-size:0.7rem;'
             f'color:{value_color};margin-top:3px;">{meta}</span>'
-            f'</li>'
+            f'</div>'
         )
-    st.html(f'<ul style="margin:0;padding:0;">{"".join(rows_html)}</ul>')
+    st.markdown(
+        f'<div class="wsj-whats-news">{"".join(rows_html)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -340,38 +354,61 @@ def render(
     **kwargs,
 ) -> None:
     """Render the daily market commentary dashboard."""
-    try:
-        from processing.index_tracker import compute_index_dashboard
-        from processing.market_commentary import (
-            generate_daily_wrap,
-            generate_forward_outlook,
-        )
-    except ImportError as e:
-        st.error(f"Commentary modules unavailable: {e}")
-        return
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('commentary'):
+        try:
+            from processing.index_tracker import compute_index_dashboard
+            from processing.market_commentary import (
+                generate_daily_wrap,
+                generate_forward_outlook,
+            )
+        except ImportError as e:
+            st.error(f"Commentary modules unavailable: {e}")
+            return
 
-    stock_data = stock_data or {}
-    freight_data = freight_data or {}
-    macro_data = macro_data or {}
-    port_results = port_results or []
-    insights = insights or []
+        stock_data = stock_data or {}
+        freight_data = freight_data or {}
+        macro_data = macro_data or {}
+        port_results = port_results or []
+        insights = insights or []
 
-    try:
-        wrap = generate_daily_wrap(
-            stock_data, freight_data, macro_data, port_results, insights
-        )
-        outlook = generate_forward_outlook(insights, macro_data, freight_data)
-        indices = compute_index_dashboard(freight_data, macro_data)
-    except Exception:
-        logger.exception("Commentary generation failed")
-        st.error("Daily Market Commentary could not be generated.")
-        return
+        try:
+            wrap = generate_daily_wrap(
+                stock_data, freight_data, macro_data, port_results, insights
+            )
+            outlook = generate_forward_outlook(insights, macro_data, freight_data)
+            indices = compute_index_dashboard(freight_data, macro_data)
+        except Exception:
+            logger.exception("Commentary generation failed")
+            st.error("Daily Market Commentary could not be generated.")
+            return
 
-    try:
-        _render_header_and_lede(wrap)
-        _render_key_movers(wrap.get("key_movers", []) or [])
-        _render_shipping_indices(indices or [])
-        _render_forward_outlook(outlook or {})
-    except Exception:
-        logger.exception("tab_commentary top-level render failed")
-        st.error("Daily Market Commentary encountered an error.")
+        try:
+            _render_header_and_lede(wrap)
+            _render_key_movers(wrap.get("key_movers", []) or [])
+            _render_shipping_indices(indices or [])
+            _render_forward_outlook(outlook or {})
+        except Exception:
+            logger.exception("tab_commentary top-level render failed")
+            st.error("Daily Market Commentary encountered an error.")
+            return
+
+        # ── Provenance footer ───────────────────────────────────────────────────
+        try:
+            st.markdown(
+                source_footer([
+                    _narration_source(
+                        "Market Commentary Engine",
+                        "Daily wrap and forward outlook",
+                    ),
+                    DataSource.modeled(
+                        "Index Tracker",
+                        notes="Baltic / Drewry / Freightos composite benchmarks",
+                    ),
+                ]),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            logger.exception("tab_commentary source footer failed")

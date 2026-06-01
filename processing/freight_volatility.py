@@ -41,8 +41,12 @@ def analyze_freight_volatility(
     rates = df["rate_usd_per_feu"]
     pct_chg = rates.pct_change().dropna()
 
-    vol_30d = float(pct_chg.rolling(30).std().iloc[-1]) if len(pct_chg) >= 30 else float(pct_chg.std())
-    vol_90d = float(pct_chg.rolling(90).std().iloc[-1]) if len(pct_chg) >= 90 else float(pct_chg.std())
+    _vol_30d_raw = pct_chg.rolling(30).std().iloc[-1] if len(pct_chg) >= 30 else pct_chg.std()
+    _vol_90d_raw = pct_chg.rolling(90).std().iloc[-1] if len(pct_chg) >= 90 else pct_chg.std()
+    # Constant / near-constant series can yield NaN; guard so downstream
+    # percentileofscore doesn't propagate NaN through the report.
+    vol_30d = float(_vol_30d_raw) if pd.notna(_vol_30d_raw) else 0.0
+    vol_90d = float(_vol_90d_raw) if pd.notna(_vol_90d_raw) else 0.0
 
     # Volatility percentile vs own history
     rolling_vol = pct_chg.rolling(30).std().dropna()

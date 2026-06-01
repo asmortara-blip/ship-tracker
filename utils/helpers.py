@@ -66,4 +66,21 @@ def safe_normalize(series, min_val: float | None = None, max_val: float | None =
 def sigmoid(x: float) -> float:
     """Sigmoid function for converting z-scores to [0,1]."""
     import math
+    # Clamp to avoid math.exp overflow on extreme inputs — z-scores are
+    # normally bounded but defensive clamping keeps the function total.
+    x = max(-700.0, min(700.0, x))
     return 1 / (1 + math.exp(-x))
+
+
+def stable_hash(s: object) -> int:
+    """Process-stable non-negative 32-bit hash. Use instead of ``hash()`` whenever
+    the integer is being used as a *seed* (synthetic data, sinusoidal phases,
+    deterministic IDs).
+
+    Python's built-in ``hash()`` is salted per process (PYTHONHASHSEED defaults
+    to random), which is correct for dict ordering but breaks anything that needs
+    the same input to map to the same number across app restarts.
+    """
+    import hashlib
+    digest = hashlib.blake2b(str(s).encode("utf-8"), digest_size=4).digest()
+    return int.from_bytes(digest, "big")

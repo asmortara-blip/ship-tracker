@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 from dataclasses import dataclass, field
+from datetime import timezone
 from typing import Optional
 
 import numpy as np
@@ -55,7 +56,29 @@ class RateForecast:
 
 
 # ── Simple in-process cache (avoids re-training within one session) ──────────
-_FORECAST_CACHE: dict[str, tuple[RateForecast, datetime.datetime]] = {}
+# Key is ``(route_id, data_fingerprint)`` so that when the route's rate history
+# changes, the cache misses and we retrain — instead of serving a stale forecast
+# computed against earlier data. Without the fingerprint, two callers feeding
+# different histories under the same route_id would silently share a forecast.
+_FORECAST_CACHE: dict[tuple[str, str], tuple[RateForecast, datetime.datetime]] = {}
+
+
+def _data_fingerprint(rate_df: pd.DataFrame) -> str:
+    """Stable short hash of the route's rate column.
+
+    Uses blake2b on the raw float64 bytes — deterministic, content-addressed,
+    fast (single-digit µs on a 240-row series). Returns ``"empty"`` for any
+    input that lacks the expected column so the cache key is still well-formed.
+    """
+    if rate_df is None or "rate_usd_per_feu" not in getattr(rate_df, "columns", []):
+        return "empty"
+    values = rate_df["rate_usd_per_feu"].to_numpy(dtype=np.float64, copy=False)
+    return hashlib.blake2b(values.tobytes(), digest_size=8).hexdigest()
+
+
+def clear_forecast_cache() -> None:
+    """Reset the in-process forecast cache. Public so test fixtures can call it."""
+    _FORECAST_CACHE.clear()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,9 +158,11 @@ def _build_features(rate_series: pd.Series, macro_data: dict) -> pd.DataFrame:
     is_cny       = 1 if month in (1, 2) else 0
 
     # ── BDI ───────────────────────────────────────────────────────────────────
-    bdi_level  = _latest_macro_value(macro_data, "BDIY")
-    bdi_chg30  = _macro_pct_change(macro_data, "BDIY", 30)
-    bdi_chg90  = _macro_pct_change(macro_data, "BDIY", 90)
+    # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
+    bdi_key = "BSXRLM" if "BSXRLM" in macro_data else "BDIY"
+    bdi_level  = _latest_macro_value(macro_data, bdi_key)
+    bdi_chg30  = _macro_pct_change(macro_data, bdi_key, 30)
+    bdi_chg90  = _macro_pct_change(macro_data, bdi_key, 90)
 
     # ── WTI (bunker fuel proxy) ───────────────────────────────────────────────
     wti = _latest_macro_value(macro_data, "DCOILWTICO")
@@ -367,10 +392,12 @@ def forecast_route(
     global _FORECAST_CACHE
 
     # ── Cache check ───────────────────────────────────────────────────────────
-    cache_key = route_id
+    # Fingerprinting the input means callers feeding new data for an existing
+    # route_id correctly miss the cache and get a freshly-trained forecast.
+    cache_key = (route_id, _data_fingerprint(rate_df))
     if cache_key in _FORECAST_CACHE:
         cached_fc, cached_at = _FORECAST_CACHE[cache_key]
-        age_h = (datetime.datetime.utcnow() - cached_at).total_seconds() / 3600
+        age_h = (datetime.datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
         if age_h < cache_ttl_hours:
             return cached_fc
 
@@ -477,10 +504,10 @@ def forecast_route(
             direction_confidence=direction_confidence,
             key_drivers=key_drivers,
             model_r2=float(np.clip(model_r2, 0.0, 1.0)),
-            last_updated=datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            last_updated=datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         )
 
-        _FORECAST_CACHE[cache_key] = (fc, datetime.datetime.utcnow())
+        _FORECAST_CACHE[cache_key] = (fc, datetime.datetime.now(timezone.utc))
         return fc
 
     except Exception as exc:

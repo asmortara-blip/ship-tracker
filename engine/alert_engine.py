@@ -288,7 +288,21 @@ def generate_alerts(
             ))
 
     # ── 4. MACRO_SHIFT — BDI ──────────────────────────────────────────────────
-    bdi_df = (macro_data or {}).get("BDI") or (macro_data or {}).get("bdi")
+    # Resolve the BDI frame by the CANONICAL FRED series id (BSXRLM) FIRST,
+    # then legacy aliases. data.fred_feed.fetch_macro_series keys the Baltic
+    # Dry Index under "BSXRLM"; the old chain started at "BDIY" (a Bloomberg
+    # alias that fetch_macro_series never emits), so bdi_df was ALWAYS None and
+    # this MACRO_SHIFT branch never fired — matching alert_engine_v2._bdi_series
+    # which already tries BSXRLM first. Use an explicit None chain — never
+    # `a or b` on DataFrames (which invokes DataFrame.__bool__ and raises).
+    _macro = macro_data or {}
+    bdi_df = _macro.get("BSXRLM")
+    if bdi_df is None:
+        bdi_df = _macro.get("BDIY")
+    if bdi_df is None:
+        bdi_df = _macro.get("BDI")
+    if bdi_df is None:
+        bdi_df = _macro.get("bdi")
     if bdi_df is not None and not getattr(bdi_df, "empty", True):
         try:
             import pandas as pd

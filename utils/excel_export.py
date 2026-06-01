@@ -157,9 +157,14 @@ def _write_table(ws, headers: list[str], rows: list[list[Any]]) -> int:
 
 def _add_footer(ws, row_num: int, ncols: int) -> None:
     """Append platform footer spanning all columns."""
-    # Ensure we're writing at exactly row_num by padding if needed
-    while ws.max_row < row_num - 1:
-        ws.append([])
+    # Ensure we're writing at exactly row_num by padding if needed.
+    # openpyxl's ws.append([]) on an empty list does NOT advance max_row,
+    # so the original `while ws.max_row < row_num - 1: ws.append([])` was
+    # an infinite loop in the common case where row_num was 1 past max_row.
+    # Append a single-cell row instead, and bound iterations defensively.
+    padding_needed = max(0, row_num - 1 - ws.max_row)
+    for _ in range(padding_needed):
+        ws.append([""])
     ws.append([PLATFORM_FOOTER])
     r = ws.max_row
     ws.row_dimensions[r].height = 14

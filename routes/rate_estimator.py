@@ -23,6 +23,8 @@ def compute_rate_momentum(
         return 0.5
 
     df = df.sort_values("date")
+    if "rate_usd_per_feu" not in df.columns:
+        return 0.5
     rates = df["rate_usd_per_feu"].dropna()
 
     if len(rates) < 2:
@@ -54,6 +56,8 @@ def compute_rate_pct_change(
     recent = df.tail(days + 1)
 
     if len(recent) < 2:
+        return 0.0
+    if "rate_usd_per_feu" not in recent.columns:
         return 0.0
 
     start = recent["rate_usd_per_feu"].iloc[0]

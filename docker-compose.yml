@@ -1,0 +1,106 @@
+# Ship Tracker — docker compose stack.
+#
+# Three containers built from the same Dockerfile that share the cache/
+# directory (SQLite DB, narration cache, persisted reports) and the
+# logs/ directory via bind mounts:
+#
+#   app     — Streamlit UI on host port 8501
+#   worker  — sleeps 24h, then runs `python -m worker.scheduler --push`,
+#             then loops. No host cron needed.
+#   webhook — stdlib HTTP listener on host port 8502 that turns
+#             PagerDuty (or generic) ack POSTs into
+#             `engine.alert_engine_v2.acknowledge_alert` calls.
+#
+# Quickstart:
+#   cp .env.example .env       # then fill in your keys
+#   docker compose up -d
+#   docker compose logs -f app
+#   docker compose logs -f worker
+#
+# The compose file deliberately omits a top-level `version:` key —
+# modern docker compose (v2+) treats it as informational only and warns
+# when it's present. No custom networks either; the default bridge is
+# fine because the two containers don't need to talk to each other
+# over the network — they coordinate exclusively through the shared
+# cache/ bind mount (SQLite DB + report files on disk).
+
+services:
+  app:
+    build: .
+    image: ship-tracker:latest
+    container_name: ship-tracker-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    build: .
+    image: ship-tracker:latest
+    container_name: ship-tracker-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+    # Override the Dockerfile CMD (which starts Streamlit). The worker
+    # sleeps 24h then runs the briefing job, in an infinite loop. We
+    # run the job FIRST so a fresh `compose up` immediately produces
+    # a briefing rather than waiting a day. Stdout/stderr stream to
+    # the container log (visible via `docker compose logs -f worker`)
+    # AND get tee'd into the shared logs/ volume so they survive a
+    # `compose down`. `exec` on the inner sleep makes SIGTERM from
+    # `compose down` propagate cleanly instead of waiting up to 24h.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          echo "[worker] $(date -u +%FT%TZ) running daily briefing"
+          python3 -m worker.scheduler --push 2>&1 | tee -a /app/logs/scheduler.log
+          echo "[worker] $(date -u +%FT%TZ) sleeping 24h"
+          sleep 86400
+        done
+
+  webhook:
+    # Stdlib HTTP listener that closes the loop with external paging
+    # systems. POST /ack/{alert_id} or /webhooks/pagerduty here and the
+    # listener calls engine.alert_engine_v2.acknowledge_alert against
+    # the shared SQLite DB (same bind mount as app + worker).
+    #
+    # HMAC SHA256 verified against WEBHOOK_SECRET from .env on every
+    # request — set it before exposing this port publicly. See
+    # docs/DEPLOYMENT.md for the full curl example.
+    build: .
+    image: ship-tracker:latest
+    container_name: ship-tracker-webhook
+    restart: unless-stopped
+    ports:
+      - "8502:8502"
+    env_file:
+      - .env
+    volumes:
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+    command: ["python3", "-m", "worker.webhook_listener", "--host", "0.0.0.0", "--port", "8502"]
+    # Liveness via the GET /health endpoint (no HMAC required — see
+    # docs/DEPLOYMENT.md). wget over busybox is used instead of curl
+    # because the python:3.11-slim base image doesn't ship curl, but
+    # busybox wget IS available. --spider does a HEAD-style check
+    # against a GET — exits 0 on 200, non-zero on 5xx (e.g. 503/down).
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8502/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

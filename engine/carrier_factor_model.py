@@ -261,6 +261,140 @@ def residual_zscore(
     return z.rename(f"{fit.name}_z")
 
 
+# ── Factor attribution ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class FactorAttribution:
+    """Decomposes a carrier's window return into factor contributions + alpha.
+
+    The decomposition mirrors the regression's own structure:
+
+        r_t  ≈  α  +  Σ_f  β_f · f_t  +  ε_t
+
+    summed over the window. Each factor's *contribution* is ``β_f × Σ Δf``
+    over the window; alpha's contribution is ``α × len(window)``; the residual
+    is whatever isn't explained.
+
+    "Why is ZIM up 8% this week?" → look at which factor contributions are
+    biggest and what sign they carry. If most of the move is in ``residual``,
+    the regression model doesn't explain it — alpha or a missing factor.
+    """
+    name: str
+    window_size: int                          # number of periods aggregated
+    observed_return: float                    # realized Σ r_t over the window
+    explained_return: float                   # α·n + Σ β_f · Σ f_t
+    residual_return: float                    # observed − explained
+    alpha_contribution: float                 # α × window_size
+    factor_contributions: dict[str, float]    # β_f × Σ f_t per factor
+    r_squared_in_sample: float                # fit's r² (context)
+    n_obs_in_sample: int                      # fit's n_obs (context)
+
+
+def attribute_window_return(
+    fit: CarrierFactorFit,
+    returns_series: pd.Series,
+    factors_df: pd.DataFrame,
+    *,
+    window: int = 4,
+) -> FactorAttribution:
+    """Decompose the most recent ``window`` periods of ``returns_series`` into
+    α + per-factor contributions + residual, using ``fit``'s β vector.
+
+    The decomposition is **exact** by construction: the contributions plus
+    the residual sum to the observed window return up to floating-point
+    roundoff. Callers can therefore display them as a stacked bar chart
+    that totals the realized return.
+
+    Notes
+    -----
+    - ``window`` is in periods of the input series, not days. If the series
+      is weekly, ``window=4`` aggregates ~1 month.
+    - The aligned overlap of ``returns_series`` and ``factors_df`` is what's
+      used; if either truncates the other, the actual window may be smaller.
+    - Returns a zero-attribution result if the window is empty / mis-shaped,
+      so the UI path doesn't have to guard.
+    """
+    try:
+        y, x = _align(returns_series, factors_df)
+    except ValueError:
+        # `_align` raises when there's no overlap (empty input, mismatched
+        # indices, etc.). Treat as "nothing to attribute".
+        return _empty_attribution(fit)
+    if y.empty or x.empty:
+        return _empty_attribution(fit)
+    effective_window = min(int(window), len(y))
+    if effective_window < 1:
+        return _empty_attribution(fit)
+
+    y_win = y.iloc[-effective_window:]
+    x_win = x.iloc[-effective_window:]
+
+    observed = float(y_win.sum())
+    alpha_contribution = float(fit.alpha) * effective_window
+    factor_contributions: dict[str, float] = {}
+    explained = alpha_contribution
+    for col in x_win.columns:
+        beta = float(fit.betas.get(col, 0.0))
+        contrib = beta * float(x_win[col].sum())
+        factor_contributions[col] = round(contrib, 6)
+        explained += contrib
+    residual = observed - explained
+
+    return FactorAttribution(
+        name=fit.name,
+        window_size=effective_window,
+        observed_return=round(observed, 6),
+        explained_return=round(explained, 6),
+        residual_return=round(residual, 6),
+        alpha_contribution=round(alpha_contribution, 6),
+        factor_contributions=factor_contributions,
+        r_squared_in_sample=round(float(fit.r_squared), 4),
+        n_obs_in_sample=int(fit.n_obs),
+    )
+
+
+def _empty_attribution(fit: CarrierFactorFit) -> FactorAttribution:
+    """Identity-shaped attribution used when alignment yields no usable data."""
+    return FactorAttribution(
+        name=fit.name,
+        window_size=0,
+        observed_return=0.0,
+        explained_return=0.0,
+        residual_return=0.0,
+        alpha_contribution=0.0,
+        factor_contributions={c: 0.0 for c in fit.betas},
+        r_squared_in_sample=round(float(fit.r_squared), 4),
+        n_obs_in_sample=int(fit.n_obs),
+    )
+
+
+def attribute_all_carriers(
+    fits: dict[str, CarrierFactorFit],
+    returns_df: pd.DataFrame,
+    factors_df: pd.DataFrame,
+    *,
+    window: int = 4,
+) -> list[FactorAttribution]:
+    """Apply :func:`attribute_window_return` to every fitted carrier.
+
+    Returns the attributions sorted by ``observed_return`` descending so the
+    biggest movers float to the top — natural ordering for a "what moved?"
+    table.
+    """
+    out: list[FactorAttribution] = []
+    for ticker, fit in fits.items():
+        if ticker not in returns_df.columns:
+            continue
+        out.append(
+            attribute_window_return(
+                fit, returns_df[ticker], factors_df, window=window,
+            )
+        )
+    out.sort(key=lambda a: a.observed_return, reverse=True)
+    return out
+
+
 # ── Walk-forward backtest ───────────────────────────────────────────────────
 
 

@@ -167,7 +167,10 @@ class ShippingStockCorrelator:
         series_dict: dict[str, pd.Series] = {}
 
         # Baltic Dry Index
-        bdi_df = macro_data.get("BDIY")
+        # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
+        bdi_df = macro_data.get("BSXRLM")
+        if bdi_df is None:
+            bdi_df = macro_data.get("BDIY")
         if bdi_df is not None and not bdi_df.empty:
             series_dict["BDI"] = bdi_df.set_index("date")["value"]
 

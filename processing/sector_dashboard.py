@@ -107,8 +107,10 @@ def compute_sector_performance(stock_data: dict, freight_data: dict) -> list[dic
         idx_key = cfg["index"]
         freight_df = freight_data.get(idx_key)
         if freight_df is not None and isinstance(freight_df, pd.DataFrame) and not freight_df.empty:
-            col = freight_df.columns[0]
-            vals = freight_df[col].dropna()
+            # Select by name; freight frames have `date` at column 0, so a
+            # positional pick would feed dates into float() below.
+            col = "rate_usd_per_feu" if "rate_usd_per_feu" in freight_df.columns else freight_df.columns[-1]
+            vals = pd.to_numeric(freight_df[col], errors="coerce").dropna()
             if len(vals) >= 2:
                 sector["index_current"] = float(vals.iloc[-1])
                 sector["index_prev"] = float(vals.iloc[-2])

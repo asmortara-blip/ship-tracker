@@ -38,6 +38,16 @@ except ImportError:  # pragma: no cover
     _FEEDPARSER_OK = False
     logger.warning("feedparser not installed – RSS fetching disabled")
 
+try:
+    import requests as _requests  # type: ignore
+    _REQUESTS_OK = True
+except ImportError:  # pragma: no cover
+    _REQUESTS_OK = False
+    logger.warning("requests not installed – RSS fetches will lack a timeout")
+
+# Hard per-feed network timeout (seconds) — feedparser.parse(url) has none.
+_FEED_TIMEOUT = 8
+
 # ── RSS Feed Registry ─────────────────────────────────────────────────────────
 
 RSS_FEEDS: dict[str, str] = {
@@ -420,12 +430,19 @@ def _score_urgency(text: str) -> float:
 
 
 def _extract_regions(text: str) -> list[str]:
-    """Extract geographic region mentions from text."""
+    """Extract geographic region mentions from text.
+
+    Matches keywords on WORD BOUNDARIES, not bare substrings: the two-letter
+    tokens "us"/"eu" are substrings of Russia, August, customs, surplus,
+    status, Europe, neutral, Reuters, … so a substring test mistagged nearly
+    every article's region. ``\\b`` also tightens the longer tokens (so "asia"
+    no longer matches inside "Malaysia", nor "china" inside "Indochina").
+    """
     lower = text.lower()
     found: list[str] = []
     for region, keywords in REGION_KEYWORDS.items():
         for kw in keywords:
-            if kw in lower:
+            if re.search(r"\b" + re.escape(kw) + r"\b", lower):
                 found.append(region)
                 break
     return found
@@ -461,11 +478,28 @@ def _deduplicate(articles: list[NewsArticle]) -> list[NewsArticle]:
     """
     kept: list[NewsArticle] = []
     for candidate in articles:
-        for existing in kept:
+        dup_idx = None
+        for i, existing in enumerate(kept):
             if _titles_similar(candidate.title, existing.title):
+                dup_idx = i
                 break
-        else:
+        if dup_idx is None:
             kept.append(candidate)
+            continue
+        # Near-duplicate: honor the documented policy — keep the higher
+        # relevance_score; on a tie, keep the earlier publication. (The old
+        # code kept whichever was encountered first, and dedup runs BEFORE
+        # the relevance sort, so the survivor was just feed-iteration order.)
+        existing = kept[dup_idx]
+        cand_rel = getattr(candidate, "relevance_score", 0.0) or 0.0
+        exist_rel = getattr(existing, "relevance_score", 0.0) or 0.0
+        if cand_rel > exist_rel:
+            kept[dup_idx] = candidate
+        elif cand_rel == exist_rel:
+            cand_dt = getattr(candidate, "published_dt", None)
+            exist_dt = getattr(existing, "published_dt", None)
+            if cand_dt is not None and exist_dt is not None and cand_dt < exist_dt:
+                kept[dup_idx] = candidate
     return kept
 
 
@@ -541,7 +575,19 @@ def _fetch_one_feed(source_name: str, url: str) -> list[NewsArticle]:
 
     try:
         logger.debug("Fetching feed: {} — {}", source_name, url)
-        parsed = _feedparser.parse(url, agent="ShipSentiment/2.0 (RSS reader; research bot)")
+        # feedparser.parse(url) fetches with NO network timeout — a slow or
+        # dead feed would hang the whole app. Fetch via requests with a hard
+        # timeout, then hand the bytes to feedparser.
+        if _REQUESTS_OK:
+            resp = _requests.get(
+                url,
+                timeout=_FEED_TIMEOUT,
+                headers={"User-Agent": "ShipSentiment/2.0 (RSS reader; research bot)"},
+            )
+            resp.raise_for_status()
+            parsed = _feedparser.parse(resp.content)
+        else:
+            parsed = _feedparser.parse(url, agent="ShipSentiment/2.0 (RSS reader; research bot)")
     except Exception as exc:
         logger.warning("Feed fetch error [{}]: {}", source_name, exc)
         return []

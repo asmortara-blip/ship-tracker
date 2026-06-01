@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Optional
 
 try:
     import streamlit as st
@@ -144,4 +144,104 @@ def as_dict(state: SessionState) -> dict[str, Any]:
     return out
 
 
-__all__ = ["SessionState", "Filters", "get_session", "reset_session", "as_dict"]
+# ─────────────────────────────────────────────────────────────────────────────
+# Apply-filters helpers
+#
+# Pure functions that take a feed dict + a Filters object and return a
+# narrowed-down dict. Used by tabs that want to respect the cross-tab
+# filter bar. Identity behavior when filters are at defaults — call sites
+# can use these unconditionally.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _trim_to_date_range(df: Any, date_start: Optional["date"], date_end: Optional["date"]) -> Any:
+    """Return ``df`` truncated to rows whose ``date`` column falls in the
+    [date_start, date_end] window. Identity when both bounds are None or
+    when ``df`` is missing the column.
+    """
+    if df is None or getattr(df, "empty", True):
+        return df
+    if "date" not in getattr(df, "columns", []):
+        return df
+    if date_start is None and date_end is None:
+        return df
+    try:
+        import pandas as pd
+        # Coerce the date column to datetimes for comparison; original frame
+        # is not mutated.
+        dates = pd.to_datetime(df["date"], errors="coerce")
+        mask = pd.Series(True, index=df.index)
+        if date_start is not None:
+            mask &= dates >= pd.Timestamp(date_start)
+        if date_end is not None:
+            mask &= dates <= pd.Timestamp(date_end)
+        return df.loc[mask].copy()
+    except Exception:
+        return df
+
+
+def apply_filters_to_freight(freight_data: dict | None, filters: "Filters") -> dict:
+    """Filter a freight_data dict (route_id → DataFrame) by ``filters``.
+
+    - If ``filters.routes`` is non-empty, only those route_ids are kept.
+    - If date bounds are set, each surviving DataFrame is truncated by date.
+
+    Identity behavior on empty filters → caller's ``freight_data`` is
+    returned unchanged (modulo defensive copy for date-trimmed frames).
+    """
+    if not freight_data:
+        return {}
+    if not isinstance(freight_data, dict):
+        return {}
+
+    # Route filter
+    if filters.routes:
+        allowed = set(filters.routes)
+        narrowed = {k: v for k, v in freight_data.items() if k in allowed}
+    else:
+        narrowed = dict(freight_data)
+
+    # Date trim per surviving route
+    if filters.date_start is not None or filters.date_end is not None:
+        narrowed = {
+            k: _trim_to_date_range(v, filters.date_start, filters.date_end)
+            for k, v in narrowed.items()
+        }
+    return narrowed
+
+
+def apply_filters_to_stock(stock_data: dict | None, filters: "Filters") -> dict:
+    """Filter a stock_data dict (ticker → DataFrame or dict) by ``filters``.
+
+    - If ``filters.universe`` is non-empty, only those tickers are kept.
+    - If date bounds are set, each surviving DataFrame is truncated by date.
+      Dict values (price snapshots) are passed through unchanged — they
+      have no date dimension to truncate.
+    """
+    if not stock_data:
+        return {}
+    if not isinstance(stock_data, dict):
+        return {}
+
+    # Universe filter
+    if filters.universe:
+        allowed = set(filters.universe)
+        narrowed = {k: v for k, v in stock_data.items() if k in allowed}
+    else:
+        narrowed = dict(stock_data)
+
+    # Date trim per surviving ticker (only when value is a DataFrame)
+    if filters.date_start is not None or filters.date_end is not None:
+        narrowed = {
+            k: (
+                _trim_to_date_range(v, filters.date_start, filters.date_end)
+                if hasattr(v, "columns") else v
+            )
+            for k, v in narrowed.items()
+        }
+    return narrowed
+
+
+__all__ = [
+    "SessionState", "Filters", "get_session", "reset_session", "as_dict",
+    "apply_filters_to_freight", "apply_filters_to_stock",
+]

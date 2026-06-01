@@ -1,0 +1,62 @@
+# Keep the image small and build-cache stable. Anything listed here is
+# excluded from the build context, so a change to one of these never
+# invalidates `docker build` layers.
+
+# Version control / IDE
+.git/
+.github/
+.gitignore
+.idea/
+.vscode/
+.cursor/
+.claude/
+
+# Python noise
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# Runtime / data we don't want baked into the image
+cache/
+logs/
+*.log
+*.parquet
+*.sqlite
+*.sqlite3
+*.db
+
+# OS / misc
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Tests + dev-only docs (the app doesn't need them at runtime)
+tests/
+docs/
+tools/
+
+# Secrets we definitely don't want in an image
+.streamlit/secrets.toml
+.env
+.env.*
+*.pem
+*.key
+
+# Editor backup
+*~

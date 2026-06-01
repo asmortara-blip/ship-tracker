@@ -18,43 +18,32 @@ import streamlit as st
 
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_HIGH,
     C_LOW,
+    C_MACRO,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+from data.quality import DataSource
 
 
 # ---------------------------------------------------------------------------
-# Status → palette/badge mapping
+# Status → palette color mapping (hex values from design system)
 # ---------------------------------------------------------------------------
-
-_STATUS_COLOR: dict[str, str] = {
-    "EXPANDING":   "green",
-    "CONTRACTING": "red",
-    "STABLE":      "yellow",
-    "POSITIVE":    "green",
-    "NEGATIVE":    "red",
-    "NEUTRAL":     "yellow",
-    "UP":          "green",
-    "DOWN":        "red",
-    "FLAT":        "yellow",
-}
 
 _STATUS_FG: dict[str, str] = {
-    "EXPANDING":   C_HIGH, "CONTRACTING": C_LOW, "STABLE":      C_MOD,
-    "POSITIVE":    C_HIGH, "NEGATIVE":    C_LOW, "NEUTRAL":     C_MOD,
-    "UP":          C_HIGH, "DOWN":        C_LOW, "FLAT":        C_MOD,
+    "EXPANDING":   C_HIGH, "CONTRACTING": C_LOW,  "STABLE":  C_MOD,
+    "POSITIVE":    C_HIGH, "NEGATIVE":    C_LOW,  "NEUTRAL": C_MOD,
+    "UP":          C_HIGH, "DOWN":        C_LOW,  "FLAT":    C_MOD,
 }
 
 
@@ -204,10 +193,11 @@ def _pct(value: float) -> str:
 
 
 def _region_header(title: str, color: str) -> None:
-    st.html(
-        f'<div style="color:{color};font-size:13px;font-weight:700;letter-spacing:0.06em;'
-        f'text-transform:uppercase;margin:18px 0 8px 0;padding-left:10px;'
-        f'border-left:3px solid {color};">{title}</div>'
+    """Render a region sub-header using the design-system sub-section-header class."""
+    st.markdown(
+        f'<div class="sub-section-header" style="color:{color};border-bottom-color:{color};">'
+        f'{title}</div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -249,6 +239,11 @@ def _render_macro_dashboard(kpis: dict) -> None:
         except Exception as exc:
             logger.warning(f"Macro dashboard region {region} error: {exc}")
 
+    st.markdown(
+        source_footer([DataSource.demo("Macro KPIs")]),
+        unsafe_allow_html=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Section 2: Shipping Demand Drivers
@@ -267,11 +262,15 @@ def _render_demand_drivers(drivers: list[dict]) -> None:
                 _sans(d["factor"], color=C_TEXT, weight=600),
                 _sans(d["segment"], color=C_ACCENT),
                 _mono(d["current"]),
-                badge(d.get("trend", "FLAT"),   _STATUS_COLOR.get(d.get("trend", "FLAT"),   "yellow")),
-                badge(d.get("impact", "NEUTRAL"), _STATUS_COLOR.get(d.get("impact", "NEUTRAL"), "yellow")),
+                badge(d.get("trend", "FLAT"),   _STATUS_FG.get(d.get("trend", "FLAT"),   C_MOD)),
+                badge(d.get("impact", "NEUTRAL"), _STATUS_FG.get(d.get("impact", "NEUTRAL"), C_MOD)),
                 _sans(d["assessment"]),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(
+            source_footer([DataSource.demo("Shipping Demand Drivers")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Demand drivers render error: {exc}")
         st.info("Demand drivers data unavailable.")
@@ -287,33 +286,24 @@ def _render_leading_indicators(indicators: list[dict]) -> None:
         "3-6 month forward view on freight market direction",
     )
     try:
-        cols = st.columns(4)
-        for i, ind in enumerate(indicators):
-            try:
-                trend   = ind.get("trend", "FLAT")
-                c_trend = _STATUS_FG.get(trend, C_MOD)
-                arrow   = "▲" if trend == "UP" else ("▼" if trend == "DOWN" else "▬")
-                card_html = (
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-radius:6px;padding:14px;margin-bottom:12px;">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
-                    f'<div style="color:{C_TEXT};font-size:13px;font-weight:600;line-height:1.3;max-width:75%;">{ind["indicator"]}</div>'
-                    f'<span style="color:{c_trend};font-size:18px;">{arrow}</span>'
-                    f'</div>'
-                    f'<div style="color:{C_ACCENT};font-size:20px;font-weight:700;margin:8px 0 4px 0;'
-                    f'font-family:var(--mono);">{ind["value"]}</div>'
-                    f'<div style="margin-bottom:8px;">'
-                    f'<span style="color:{C_TEXT3};font-size:11px;background:{C_SURFACE};'
-                    f'padding:2px 6px;border-radius:4px;">Lead: {ind["lead_time"]}</span>'
-                    f'</div>'
-                    f'<div style="color:{C_TEXT2};font-size:11px;line-height:1.4;'
-                    f'border-top:1px solid {C_BORDER};padding-top:8px;">{ind["implication"]}</div>'
-                    f'</div>'
-                )
-                with cols[i % 4]:
-                    st.html(card_html)
-            except Exception as exc:
-                logger.warning(f"Leading indicator card {i} error: {exc}")
+        headers = ["Indicator", "Value", "Trend", "Lead Time", "Implication"]
+        rows = []
+        for ind in indicators:
+            trend     = ind.get("trend", "FLAT")
+            trend_clr = _STATUS_FG.get(trend, C_MOD)
+            arrow     = "▲" if trend == "UP" else ("▼" if trend == "DOWN" else "▬")
+            rows.append([
+                _sans(ind["indicator"], color=C_TEXT, weight=600),
+                _mono(ind["value"], color=C_ACCENT),
+                badge(f"{arrow} {trend}", color=trend_clr),
+                _sans(ind["lead_time"], color=C_TEXT3),
+                _sans(ind["implication"]),
+            ])
+        wsj_market_table(headers, rows)
+        st.markdown(
+            source_footer([DataSource.demo("Leading Indicators")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Leading indicators render error: {exc}")
         st.info("Leading indicators data unavailable.")
@@ -361,6 +351,10 @@ def _render_oecd_imf(data: dict) -> None:
                     _mono(rev_s, color=rev_c),
                 ])
             wsj_market_table(["Country", "2025F", "2026F", "Revision"], rows)
+            st.markdown(
+                source_footer([DataSource.demo("OECD/IMF GDP Forecasts")]),
+                unsafe_allow_html=True,
+            )
 
         with tab_trade:
             rows_data = data.get("trade_flows", [])
@@ -374,6 +368,10 @@ def _render_oecd_imf(data: dict) -> None:
                     _mono(f"{r['share_pct']:.1f}%"),
                 ])
             wsj_market_table(["Region", "Volume ($B)", "YoY %", "Global Share"], rows)
+            st.markdown(
+                source_footer([DataSource.demo("OECD/IMF Trade Flows")]),
+                unsafe_allow_html=True,
+            )
 
         with tab_comm:
             rows_data = data.get("commodity_forecasts", [])
@@ -385,9 +383,13 @@ def _render_oecd_imf(data: dict) -> None:
                     _sans(r["unit"], color=C_TEXT3),
                     _mono(f"{r['2025F']:,.1f}"),
                     _mono(f"{r['2026F']:,.1f}"),
-                    badge(risk, _STATUS_COLOR.get(risk, "yellow")),
+                    badge(risk, _STATUS_FG.get(risk, C_MOD)),
                 ])
             wsj_market_table(["Commodity", "Unit", "2025F", "2026F", "Risk"], rows)
+            st.markdown(
+                source_footer([DataSource.demo("OECD/IMF Commodity Forecasts")]),
+                unsafe_allow_html=True,
+            )
     except Exception as exc:
         logger.warning(f"OECD/IMF panel render error: {exc}")
         st.info("OECD/IMF panel data unavailable.")
@@ -403,12 +405,12 @@ def _render_rates_credit(data: dict) -> None:
         "How the current rate environment shapes vessel financing, orderbook, and credit spreads",
     )
     try:
-        left, right = st.columns([1, 1])
+        left, right = st.columns([1, 1], gap="large")
 
         with left:
-            st.html(
-                f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
-                f'text-transform:uppercase;margin-bottom:10px;">Benchmark Rates</div>'
+            st.markdown(
+                '<div class="sub-section-header">Benchmark Rates</div>',
+                unsafe_allow_html=True,
             )
             base = data.get("base_rates", {})
             base_rows = [
@@ -417,10 +419,9 @@ def _render_rates_credit(data: dict) -> None:
             ]
             wsj_market_table(["Rate", "Value"], base_rows)
 
-            st.html("<div style='height:16px;'></div>")
-            st.html(
-                f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
-                f'text-transform:uppercase;margin-bottom:10px;">HY Spreads — Shipping Bonds</div>'
+            st.markdown(
+                '<div class="sub-section-header">HY Spreads — Shipping Bonds</div>',
+                unsafe_allow_html=True,
             )
             hy = data.get("hy_spreads", {})
             hy_rows = []
@@ -435,9 +436,9 @@ def _render_rates_credit(data: dict) -> None:
             wsj_market_table(["Metric", "Value"], hy_rows)
 
         with right:
-            st.html(
-                f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
-                f'text-transform:uppercase;margin-bottom:10px;">Vessel Financing — All-In Cost</div>'
+            st.markdown(
+                '<div class="sub-section-header">Vessel Financing — All-In Cost</div>',
+                unsafe_allow_html=True,
             )
             vf = data.get("vessel_financing", [])
             vf_rows = [
@@ -451,10 +452,9 @@ def _render_rates_credit(data: dict) -> None:
             ]
             wsj_market_table(["Vessel Type", "Spread", "All-In", "Max LTV"], vf_rows)
 
-            st.html("<div style='height:16px;'></div>")
-            st.html(
-                f'<div style="color:{C_TEXT2};font-size:12px;font-weight:700;letter-spacing:0.05em;'
-                f'text-transform:uppercase;margin-bottom:10px;">Newbuild Order Book — Rate Sensitivity</div>'
+            st.markdown(
+                '<div class="sub-section-header">Newbuild Order Book — Rate Sensitivity</div>',
+                unsafe_allow_html=True,
             )
             obs = data.get("orderbook_sensitivity", [])
             ob_rows = [
@@ -462,11 +462,16 @@ def _render_rates_credit(data: dict) -> None:
                     _sans(row["rate_scenario"], color=C_TEXT),
                     _mono(row["new_orders_delta"]),
                     badge(row.get("sentiment", "NEUTRAL"),
-                          _STATUS_COLOR.get(row.get("sentiment", "NEUTRAL"), "yellow")),
+                          _STATUS_FG.get(row.get("sentiment", "NEUTRAL"), C_MOD)),
                 ]
                 for row in obs
             ]
             wsj_market_table(["Rate Scenario", "New Orders Δ", "Sentiment"], ob_rows)
+
+        st.markdown(
+            source_footer([DataSource.demo("Rates & Credit")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Rates & credit panel render error: {exc}")
         st.info("Interest rate & credit data unavailable.")
@@ -488,8 +493,10 @@ def _render_commodities(rows_in: list[dict]) -> None:
             unit  = r.get("unit", "")
             price_str = f"{price:,.1f}" if price < 1000 else f"{price:,.0f}"
             price_cell = (
-                f'<span style="font-family:var(--mono);color:{C_ACCENT};font-weight:700;">{price_str}</span>'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-weight:400;"> {unit}</span>'
+                f'<span style="font-family:var(--mono);color:{C_ACCENT};font-weight:700;'
+                f'font-variant-numeric:tabular-nums;">{price_str}</span>'
+                f'<span style="font-family:var(--sans);color:{C_TEXT3};'
+                f'font-size:0.7rem;font-weight:400;"> {unit}</span>'
             )
             rows.append([
                 _sans(r["commodity"], color=C_TEXT, weight=600),
@@ -503,6 +510,10 @@ def _render_commodities(rows_in: list[dict]) -> None:
             ["Commodity", "Price", "WoW %", "MoM %", "YoY %", "Key Shipping Route"],
             rows,
         )
+        st.markdown(
+            source_footer([DataSource.demo("Commodity Prices")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"Commodity dashboard render error: {exc}")
         st.info("Commodity price data unavailable.")
@@ -514,76 +525,90 @@ def _render_commodities(rows_in: list[dict]) -> None:
 
 def render(macro_data, stock_data=None, insights=None) -> None:
     """Render the Global Macro Intelligence tab."""
-    try:
-        page_header(
-            title="Global Macro Intelligence",
-            subtitle=(
-                "Macro drivers, leading indicators, and commodity dynamics influencing "
-                "global shipping demand across all vessel segments"
-            ),
-            icon="🌐",
-            badge_text="Goldman Sachs Quality",
-            badge_color=C_ACCENT,
-        )
-    except Exception as exc:
-        logger.warning(f"Header render error: {exc}")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('macro'):
+        try:
+            page_header(
+                title="Global Macro Intelligence",
+                subtitle=(
+                    "Macro drivers, leading indicators, and commodity dynamics influencing "
+                    "global shipping demand across all vessel segments"
+                ),
+                icon="🌐",
+                badge_text="Goldman Sachs Quality",
+                badge_color=C_MACRO,
+            )
+        except Exception as exc:
+            logger.warning(f"Header render error: {exc}")
 
-    try:
-        if isinstance(macro_data, dict) and "kpis" in macro_data:
-            kpis = macro_data["kpis"]
-        else:
-            kpis = _mock_global_kpis()
-        _render_macro_dashboard(kpis)
-    except Exception as exc:
-        logger.error(f"Section 1 (Macro Dashboard) error: {exc}")
-        st.error("Macro dashboard unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "kpis" in macro_data:
+                kpis = macro_data["kpis"]
+            else:
+                kpis = _mock_global_kpis()
+            _render_macro_dashboard(kpis)
+        except Exception as exc:
+            logger.error(f"Section 1 (Macro Dashboard) error: {exc}")
+            st.error("Macro dashboard unavailable.")
 
-    try:
-        if isinstance(macro_data, dict) and "demand_drivers" in macro_data:
-            drivers = macro_data["demand_drivers"]
-        else:
-            drivers = _mock_demand_drivers()
-        _render_demand_drivers(drivers)
-    except Exception as exc:
-        logger.error(f"Section 2 (Demand Drivers) error: {exc}")
-        st.error("Demand drivers unavailable.")
+        section_divider("Demand & Leading Signals")
 
-    try:
-        if isinstance(macro_data, dict) and "leading_indicators" in macro_data:
-            indicators = macro_data["leading_indicators"]
-        else:
-            indicators = _mock_leading_indicators()
-        _render_leading_indicators(indicators)
-    except Exception as exc:
-        logger.error(f"Section 3 (Leading Indicators) error: {exc}")
-        st.error("Leading indicators unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "demand_drivers" in macro_data:
+                drivers = macro_data["demand_drivers"]
+            else:
+                drivers = _mock_demand_drivers()
+            _render_demand_drivers(drivers)
+        except Exception as exc:
+            logger.error(f"Section 2 (Demand Drivers) error: {exc}")
+            st.error("Demand drivers unavailable.")
 
-    try:
-        if isinstance(macro_data, dict) and "oecd_imf" in macro_data:
-            oecd_imf_data = macro_data["oecd_imf"]
-        else:
-            oecd_imf_data = _load_oecd_imf()
-        _render_oecd_imf(oecd_imf_data)
-    except Exception as exc:
-        logger.error(f"Section 4 (OECD/IMF) error: {exc}")
-        st.error("OECD/IMF panel unavailable.")
+        st.divider()
 
-    try:
-        if isinstance(macro_data, dict) and "rates_credit" in macro_data:
-            rates_data = macro_data["rates_credit"]
-        else:
-            rates_data = _mock_rates_credit()
-        _render_rates_credit(rates_data)
-    except Exception as exc:
-        logger.error(f"Section 5 (Rates & Credit) error: {exc}")
-        st.error("Interest rate & credit panel unavailable.")
+        try:
+            if isinstance(macro_data, dict) and "leading_indicators" in macro_data:
+                indicators = macro_data["leading_indicators"]
+            else:
+                indicators = _mock_leading_indicators()
+            _render_leading_indicators(indicators)
+        except Exception as exc:
+            logger.error(f"Section 3 (Leading Indicators) error: {exc}")
+            st.error("Leading indicators unavailable.")
 
-    try:
-        if isinstance(macro_data, dict) and "commodities" in macro_data:
-            commodities = macro_data["commodities"]
-        else:
-            commodities = _mock_commodities()
-        _render_commodities(commodities)
-    except Exception as exc:
-        logger.error(f"Section 6 (Commodities) error: {exc}")
-        st.error("Commodity dashboard unavailable.")
+        section_divider("Institutional Forecasts")
+
+        try:
+            if isinstance(macro_data, dict) and "oecd_imf" in macro_data:
+                oecd_imf_data = macro_data["oecd_imf"]
+            else:
+                oecd_imf_data = _load_oecd_imf()
+            _render_oecd_imf(oecd_imf_data)
+        except Exception as exc:
+            logger.error(f"Section 4 (OECD/IMF) error: {exc}")
+            st.error("OECD/IMF panel unavailable.")
+
+        section_divider("Rates, Credit & Commodities")
+
+        try:
+            if isinstance(macro_data, dict) and "rates_credit" in macro_data:
+                rates_data = macro_data["rates_credit"]
+            else:
+                rates_data = _mock_rates_credit()
+            _render_rates_credit(rates_data)
+        except Exception as exc:
+            logger.error(f"Section 5 (Rates & Credit) error: {exc}")
+            st.error("Interest rate & credit panel unavailable.")
+
+        st.divider()
+
+        try:
+            if isinstance(macro_data, dict) and "commodities" in macro_data:
+                commodities = macro_data["commodities"]
+            else:
+                commodities = _mock_commodities()
+            _render_commodities(commodities)
+        except Exception as exc:
+            logger.error(f"Section 6 (Commodities) error: {exc}")
+            st.error("Commodity dashboard unavailable.")

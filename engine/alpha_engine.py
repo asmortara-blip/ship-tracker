@@ -584,12 +584,18 @@ def _strategy_seasonal(
 
 def generate_all_signals(
     stock_data: dict,
-    freight_data: dict,
-    macro_data: dict,
-    port_results: list,
-    route_results: list,
+    freight_data: dict | None = None,
+    macro_data: dict | None = None,
+    port_results: list | None = None,
+    route_results: list | None = None,
 ) -> List[AlphaSignal]:
     """Generate alpha signals across all strategies.
+
+    Only ``stock_data`` is required; the other feeds are optional so callers
+    that only have a subset (e.g. the Alpha tab, which has stock/freight/macro
+    but not port/route results) can still drive the stock- and feed-available
+    strategies. A missing feed simply yields no signals from the strategies
+    that depend on it — it never raises.
 
     Args:
         stock_data:    dict[ticker -> DataFrame with 'close', 'date' columns]
@@ -601,6 +607,13 @@ def generate_all_signals(
     Returns:
         List[AlphaSignal] sorted by conviction then strength descending.
     """
+    # Normalize optional feeds so the strategies receive their expected
+    # container types regardless of which the caller supplied.
+    freight_data = freight_data or {}
+    macro_data = macro_data or {}
+    port_results = port_results or []
+    route_results = route_results or []
+
     logger.info("AlphaEngine: generating signals...")
 
     all_signals: List[AlphaSignal] = []

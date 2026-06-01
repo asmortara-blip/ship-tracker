@@ -811,10 +811,14 @@ def _entry_to_update(entry, carrier: str) -> Optional[CarrierUpdate]:
         return None
 
 
-_CACHE_DIR = Path("cache/carrier_intel")
+# Anchor to the project root so the cache lives in the same place regardless
+# of the current working directory.
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "carrier_intel"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _MEM_CACHE: dict[str, tuple[float, list[CarrierUpdate]]] = {}
-_REQUEST_TIMEOUT = 14
+_REQUEST_TIMEOUT = 8            # hard per-feed network timeout (seconds)
+_FETCH_BUDGET_SECONDS = 20      # overall wall-clock cap for fetch_carrier_updates
+_FEED_HEADERS = {"User-Agent": "Mozilla/5.0 (ShipTracker carrier-intel)"}
 
 
 def _cache_key(carrier: str) -> str:
@@ -857,11 +861,30 @@ def _write_file_cache(carrier: str, updates: list[CarrierUpdate]) -> None:
         logger.debug(f"carrier_intelligence: file-cache write failed: {exc}")
 
 
+def _parse_feed(feed_url: str):
+    """Fetch a feed URL with a HARD network timeout, then parse it.
+
+    ``feedparser.parse(url)`` does its own fetch with NO timeout — a slow or
+    dead feed blocks the calling thread (and the whole Streamlit app) forever.
+    Always fetch via ``requests`` with a timeout first, then hand the bytes to
+    feedparser. Returns the parsed feed, or ``None`` on any failure.
+    """
+    if not _FEEDPARSER_OK or not _REQUESTS_OK:
+        return None
+    try:
+        resp = requests.get(feed_url, timeout=_REQUEST_TIMEOUT, headers=_FEED_HEADERS)
+        resp.raise_for_status()
+        return feedparser.parse(resp.content)
+    except Exception as exc:
+        logger.debug(f"carrier_intelligence: feed fetch failed ({feed_url}): {exc}")
+        return None
+
+
 def _fetch_carrier_feed(carrier: str, feed_url: str, max_items: int) -> list[CarrierUpdate]:
-    if not _FEEDPARSER_OK:
+    d = _parse_feed(feed_url)
+    if d is None:
         return []
     try:
-        d = feedparser.parse(feed_url)
         updates: list[CarrierUpdate] = []
         for entry in d.entries[:max_items]:
             upd = _entry_to_update(entry, carrier)
@@ -871,7 +894,7 @@ def _fetch_carrier_feed(carrier: str, feed_url: str, max_items: int) -> list[Car
             logger.info(f"carrier_intelligence: {carrier} — {len(updates)} items from {feed_url}")
         return updates
     except Exception as exc:
-        logger.debug(f"carrier_intelligence: feed failed ({carrier} / {feed_url}): {exc}")
+        logger.debug(f"carrier_intelligence: feed parse failed ({carrier} / {feed_url}): {exc}")
         return []
 
 
@@ -892,8 +915,10 @@ def _fetch_fallback_for_carrier(carrier: str, max_items: int) -> list[CarrierUpd
     for feed_url in FALLBACK_FEEDS:
         if len(updates) >= max_items:
             break
+        d = _parse_feed(feed_url)
+        if d is None:
+            continue
         try:
-            d = feedparser.parse(feed_url)
             for entry in d.entries[:30]:
                 text = (
                     (entry.get("title") or "") + " " +
@@ -937,6 +962,7 @@ def fetch_carrier_updates(
     """
     target_carriers = carriers if carriers else ALL_CARRIERS
     results: dict[str, list[CarrierUpdate]] = {}
+    _start = time.monotonic()
 
     for carrier in target_carriers:
         cached = _read_mem_cache(carrier, cache_ttl_hours)
@@ -948,6 +974,16 @@ def fetch_carrier_updates(
         if cached is not None:
             _write_mem_cache(carrier, cached)
             results[carrier] = cached[:max_per_carrier]
+            continue
+
+        # Network work below — once the overall budget is spent, stop fetching
+        # so a slow or dead feed cluster can never stall the calling tab.
+        if time.monotonic() - _start > _FETCH_BUDGET_SECONDS:
+            logger.warning(
+                "carrier_intelligence: fetch budget exhausted — skipping live "
+                f"fetch for {carrier} and any remaining carriers"
+            )
+            results[carrier] = []
             continue
 
         feed_url = CARRIER_FEEDS.get(carrier)

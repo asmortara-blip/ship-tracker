@@ -24,23 +24,25 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_RULE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     insight_card_html,
-    live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -65,12 +67,12 @@ _LEVEL_LABEL: dict[str, str] = {
     "CRITICAL": "CRITICAL",
 }
 
-# Badge color tokens accepted by `badge(text, color)` helper.
+# Badge color tokens accepted by `badge(text, color)` helper — hex required.
 _LEVEL_BADGE_COLOR: dict[str, str] = {
-    "LOW":      "green",
-    "MOD":      "yellow",
-    "HIGH":     "yellow",
-    "CRITICAL": "red",
+    "LOW":      C_HIGH,
+    "MOD":      C_MOD,
+    "HIGH":     C_MOD,
+    "CRITICAL": C_LOW,
 }
 
 _VOL_REGIME_COLOR: dict[str, str] = {
@@ -88,10 +90,10 @@ _SEVERITY_COLOR: dict[str, str] = {
 }
 
 _SEVERITY_BADGE_COLOR: dict[str, str] = {
-    "CRITICAL": "red",
-    "HIGH":     "yellow",
-    "MODERATE": "blue",
-    "LOW":      "green",
+    "CRITICAL": C_LOW,
+    "HIGH":     C_MOD,
+    "MODERATE": C_ACCENT,
+    "LOW":      C_HIGH,
 }
 
 
@@ -124,8 +126,8 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 def _sans_with_sub(value: str, sub: str, color: str = C_TEXT) -> str:
     return (
         f'<span style="font-family:var(--sans);color:{color};font-weight:600;">{value}</span>'
-        f'<div style="font-family:var(--sans);color:{C_TEXT3};font-size:0.74rem;'
-        f'font-weight:400;margin-top:2px;">{sub}</div>'
+        f'<span style="display:block;font-family:var(--sans);color:{C_TEXT3};font-size:0.74rem;'
+        f'font-weight:400;margin-top:2px;">{sub}</span>'
     )
 
 
@@ -136,7 +138,7 @@ def _sans_with_sub(value: str, sub: str, color: str = C_TEXT) -> str:
 def _seed(stock_data) -> int:
     try:
         s = stock_data.get("ticker", "SHIP") if isinstance(stock_data, dict) else "SHIP"
-        return hash(s) % 10000
+        return stable_hash(s) % 10000
     except Exception:
         return 42
 
@@ -162,11 +164,8 @@ def _risk_score_color(score: float) -> str:
 
 
 def _render_badge_row(source: DataSource) -> None:
-    """Render a single `live_data_badge` pill aligned to the right."""
-    st.html(
-        f'<div style="display:flex;justify-content:flex-end;margin-bottom:6px;">'
-        f'{live_data_badge(source)}</div>'
-    )
+    """Render a single provenance pill right-aligned via source_footer."""
+    st.markdown(source_footer([source]), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,7 +351,7 @@ def _render_risk_factor_matrix(source: DataSource) -> None:
         for rf in _RISK_FACTORS:
             lv      = rf["level"]
             lv_lbl  = _LEVEL_LABEL.get(lv, lv)
-            lv_bdg  = _LEVEL_BADGE_COLOR.get(lv, "blue")
+            lv_bdg  = _LEVEL_BADGE_COLOR.get(lv, C_ACCENT)
             chg     = rf["change"]
             chg_clr = C_LOW if chg.startswith("+") else C_HIGH
 
@@ -646,7 +645,7 @@ def _severity_action(sev: str) -> str:
 def _render_alert_queue(alerts: list[dict], source: DataSource) -> None:
     try:
         if not alerts:
-            st.info("No active risk alerts.")
+            alert_banner("No active risk alerts — the queue is clear.", level="success")
             return
 
         _render_badge_row(source)
@@ -669,75 +668,84 @@ def _render_alert_queue(alerts: list[dict], source: DataSource) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render(stock_data, macro_data, insights, freight_data=None):
-    try:
-        seed = _seed(stock_data)
-        rng  = random.Random(seed)
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('risk_matrix'):
+        try:
+            seed = _seed(stock_data)
+            rng  = random.Random(seed)
 
-        # Provenance sources — all sections currently draw from synthetic fixtures,
-        # so every pill will display red "DEMO" to signal distrust.
-        kpi_source     = _risk_demo_source("Risk KPI Model")
-        matrix_source  = _risk_demo_source("Risk Factor Matrix")
-        corr_source    = _risk_demo_source("Cross-Asset Correlations")
-        dd_source      = _risk_demo_source("Historical Drawdown Ledger")
-        stress_source  = _risk_demo_source("Macro Stress Scenarios")
-        alert_source   = _risk_demo_source("Alert Engine")
+            # Provenance sources — all sections currently draw from synthetic fixtures,
+            # so every pill will display red "DEMO" to signal distrust.
+            kpi_source     = _risk_demo_source("Risk KPI Model")
+            matrix_source  = _risk_demo_source("Risk Factor Matrix")
+            corr_source    = _risk_demo_source("Cross-Asset Correlations")
+            dd_source      = _risk_demo_source("Historical Drawdown Ledger")
+            stress_source  = _risk_demo_source("Macro Stress Scenarios")
+            alert_source   = _risk_demo_source("Alert Engine")
 
-        page_header(
-            title="Risk Management Dashboard",
-            subtitle="Institutional risk intelligence — shipping & macro factors",
-            badge_text="DEMO",
-            badge_color=C_LOW,
-        )
+            page_header(
+                title="Risk Management Dashboard",
+                subtitle="Institutional risk intelligence — shipping & macro factors",
+                badge_text="DEMO",
+                badge_color=C_LOW,
+            )
 
-        # ── Section 1: KPI hero ─────────────────────────────────────────────
-        section_header(
-            "Risk Dashboard",
-            "Live risk KPIs across volatility, drawdown, and tail exposure",
-        )
-        kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
-        _render_kpis(kpis, kpi_source)
+            # ── Section 1: KPI hero ─────────────────────────────────────────────
+            section_header(
+                "Risk Dashboard",
+                "Headline risk KPIs across volatility, drawdown, and tail exposure",
+            )
+            kpis = _compute_kpis(stock_data, macro_data, freight_data, rng)
+            _render_kpis(kpis, kpi_source)
 
-        # ── Section 2: Risk factor matrix ──────────────────────────────────
-        section_header(
-            "Risk Factor Matrix",
-            "Exposure level, recent trend, and mitigation for 10 core risk factors",
-        )
-        _render_risk_factor_matrix(matrix_source)
+            # ── Section 2: Risk factor matrix ──────────────────────────────────
+            section_divider("Exposures")
 
-        # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
-        section_header(
-            "Correlation Heatmap & Historical Drawdowns",
-            "Cross-asset correlations and largest shipping market drawdowns",
-        )
-        col_left, col_right = st.columns(2)
-        with col_left:
-            _render_correlation_heatmap(rng, corr_source)
-        with col_right:
-            _render_drawdown_waterfall(dd_source)
+            section_header(
+                "Risk Factor Matrix",
+                "Exposure level, recent trend, and mitigation for 10 core risk factors",
+            )
+            _render_risk_factor_matrix(matrix_source)
 
-        # ── Section 5: Stress test ──────────────────────────────────────────
-        section_header(
-            "Scenario Stress Test",
-            "Probability-weighted impact across 6 macro and shipping shock scenarios",
-        )
-        _render_stress_test(stress_source)
+            # ── Section 3 & 4: Heatmap + drawdown side by side ────────────────
+            section_divider("Correlations & Drawdowns")
 
-        # ── Section 6: Alert queue ──────────────────────────────────────────
-        section_header(
-            "Risk Alert Queue",
-            "Current alerts ranked by severity",
-        )
-        alerts = _build_alerts(insights, macro_data, freight_data, rng)
-        _render_alert_queue(alerts, alert_source)
+            section_header(
+                "Correlation Heatmap & Historical Drawdowns",
+                "Cross-asset correlations and the largest shipping market drawdowns",
+            )
+            col_left, col_right = st.columns(2, gap="large")
+            with col_left:
+                _render_correlation_heatmap(rng, corr_source)
+            with col_right:
+                _render_drawdown_waterfall(dd_source)
 
-        # Footer timestamp (uses sub-section-header class + thin rule).
-        now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        st.html(
-            f'<div style="text-align:right;color:{C_TEXT3};font-family:var(--sans);'
-            f'font-size:0.72rem;margin-top:24px;padding-top:10px;'
-            f'border-top:1px solid {C_RULE};">Last updated: {now}</div>'
-        )
+            # ── Section 5: Stress test ──────────────────────────────────────────
+            section_divider("Stress Testing")
 
-    except Exception as exc:
-        logger.error(f"tab_risk_matrix render error: {exc}")
-        st.error(f"Risk dashboard render error: {exc}")
+            section_header(
+                "Scenario Stress Test",
+                "Probability-weighted impact across 6 macro and shipping shock scenarios",
+            )
+            _render_stress_test(stress_source)
+
+            # ── Section 6: Alert queue ──────────────────────────────────────────
+            section_divider("Alerts")
+
+            section_header(
+                "Risk Alert Queue",
+                "Current alerts ranked by severity — most urgent first",
+            )
+            alerts = _build_alerts(insights, macro_data, freight_data, rng)
+            _render_alert_queue(alerts, alert_source)
+
+            # Footer timestamp — divider provides the thin top rule; caption handles muted text.
+            now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            st.divider()
+            st.caption(f"Last updated: {now}")
+
+        except Exception as exc:
+            logger.error(f"tab_risk_matrix render error: {exc}")
+            st.error(f"Risk dashboard render error: {exc}")

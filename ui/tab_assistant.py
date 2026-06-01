@@ -8,32 +8,36 @@ Rule-based NLP answer engine — no external API calls.
 from __future__ import annotations
 
 import datetime
-import json
+import html
 from typing import Optional
 
+import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-from ports.demand_analyzer import PortDemandResult
-from routes.optimizer import RouteOpportunity
-from engine.insight import Insight
 from ui.styles import (
-    C_BG, C_CARD, C_BORDER, C_TEXT, C_TEXT2, C_TEXT3,
-    C_HIGH, C_LOW, C_ACCENT, C_MOD,
-    _hex_to_rgba as _rgba,
+    C_ACCENT,
+    C_BG,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    metric_card_row,
+    page_header,
+    section_divider,
     section_header,
+    source_footer,
+    status_badge,
+    wsj_market_table,
 )
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-C_SURFACE = "#12151e"
-
-_C_USER_BG  = "#1d4ed8"
-_C_ASST_BG  = "#181c28"
-_C_USER_TXT = "#ffffff"
-_C_ASST_TXT = "#e8e6e1"
 
 QUICK_QUESTIONS = [
     "What are current Asia-Europe freight rates?",
@@ -47,6 +51,106 @@ QUICK_QUESTIONS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Topic classifier — used only by the conversation-insights visual below.
+# Standalone (does not gate _build_response) so we can refactor either side
+# without entanglement. The keyword lists deliberately mirror the branches
+# in _build_response so the visual stays in sync with what's actually
+# answerable.
+# ---------------------------------------------------------------------------
+
+_QUESTION_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
+    ("Freight Rates",      ("freight rate", "rate", "asia-europe", "asia europe",
+                            "container rate", "shipping rate")),
+    ("BDI / Dry Bulk",     ("bdi", "baltic", "dry bulk", "capesize", "panamax")),
+    ("Red Sea",            ("red sea", "houthi", "suez reroute", "cape of good hope")),
+    ("Panama Canal",       ("panama", "canal", "drought", "locks")),
+    ("Equity Signals",     ("long signal", "buy signal", "which stock",
+                            "shipping stock")),
+    ("Outlook",            ("q2 2026", "outlook", "forecast", "q2")),
+    ("Carrier Reliability", ("carrier", "reliability", "schedule", "on-time")),
+]
+
+
+def _classify_question(question: str) -> str:
+    """Map a user question to one of the documented categories or 'General'."""
+    if not question:
+        return "General"
+    q = question.lower()
+    for label, keywords in _QUESTION_CATEGORIES:
+        if any(kw in q for kw in keywords):
+            return label
+    return "General"
+
+
+def _build_topic_distribution_bars(messages: list[dict]) -> go.Figure:
+    """Horizontal bar of categories the user has asked about this session.
+
+    Only the user's own questions count toward the tally — assistant
+    messages are skipped. Empty / no-user-messages returns an annotated
+    placeholder figure (the render-layer only shows the chart once enough
+    history exists, but the builder must be safe in isolation too).
+    """
+    user_questions = [
+        m.get("content", "") for m in (messages or [])
+        if m.get("role") == "user"
+    ]
+
+    fig = go.Figure()
+    if not user_questions:
+        fig.add_annotation(
+            text="No questions in this session yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Session topics", height=180)
+        return fig
+
+    # Tally classifications, but only show categories that actually appear.
+    counts: dict[str, int] = {}
+    for q in user_questions:
+        cat = _classify_question(q)
+        counts[cat] = counts.get(cat, 0) + 1
+
+    # Sort ascending so the most-asked category sits at the top of the chart
+    # (Plotly stacks categorical y-values bottom-up).
+    items = sorted(counts.items(), key=lambda kv: kv[1])
+    labels = [k for k, _ in items]
+    values = [v for _, v in items]
+
+    # Colour: top category = C_ACCENT, others = C_TEXT2 so the active focus
+    # stands out without a rainbow.
+    top_cat = items[-1][0]
+    colors = [C_ACCENT if k == top_cat else C_TEXT2 for k in labels]
+
+    fig.add_trace(go.Bar(
+        x=values,
+        y=labels,
+        orientation="h",
+        marker={"color": colors, "line": {"color": C_BG, "width": 1}},
+        text=[str(v) for v in values],
+        textposition="outside",
+        textfont={"color": C_TEXT2, "size": 11},
+        hovertemplate="<b>%{y}</b><br>%{x} question(s)<extra></extra>",
+        showlegend=False,
+    ))
+    apply_dark_layout(
+        fig,
+        title=f"Session topics — {len(user_questions)} question(s)",
+        height=max(160, 50 + 28 * len(items)),
+    )
+    fig.update_layout(
+        xaxis={"title": None, "showgrid": False,
+               "tickfont": {"color": C_TEXT3, "size": 10}},
+        yaxis={"title": None, "automargin": True,
+               "tickfont": {"color": C_TEXT2, "size": 11}},
+        margin={"l": 8, "r": 32, "t": 36, "b": 24},
+        bargap=0.40,
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # CSS
 # ---------------------------------------------------------------------------
 
@@ -56,214 +160,74 @@ _CHAT_CSS = """
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
 }
-@keyframes pulse-dot {
-    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-    40%            { opacity: 1;   transform: scale(1.1); }
-}
-.assistant-hero {
-    background: linear-gradient(135deg, #0c0e14 0%, #0f172a 40%, #12151e 100%);
-    border: 1px solid rgba(53,114,176,0.25);
-    border-radius: 16px;
-    padding: 32px 36px 28px;
-    margin-bottom: 20px;
-    position: relative;
-    overflow: hidden;
-}
-.assistant-hero::before {
-    content: "";
-    position: absolute;
-    top: -60px; right: -60px;
-    width: 220px; height: 220px;
-    background: radial-gradient(circle, rgba(53,114,176,0.12) 0%, transparent 70%);
-    pointer-events: none;
-}
-.assistant-hero-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 3px;
-    color: #3572b0;
-    text-transform: uppercase;
-    margin-bottom: 6px;
-}
-.assistant-hero-title {
-    font-size: 22px;
-    font-weight: 800;
-    color: #e8e6e1;
-    letter-spacing: 1px;
-    margin-bottom: 6px;
-}
-.assistant-hero-sub {
-    font-size: 13px;
-    color: #6b6760;
-    line-height: 1.5;
-}
-.chip-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 20px;
-}
-.chip {
-    background: #181c28;
-    border: 1px solid rgba(53,114,176,0.3);
-    border-radius: 20px;
-    padding: 5px 13px;
-    font-size: 11px;
-    color: #9a968e;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    white-space: nowrap;
-}
-.chip:hover {
-    background: rgba(53,114,176,0.15);
-    border-color: #3572b0;
-    color: #e8e6e1;
-}
-.chat-window {
-    background: #0c0e14;
-    border: 1px solid rgba(232,230,225,0.06);
-    border-radius: 6px;
-    padding: 20px;
-    min-height: 320px;
-    max-height: 520px;
-    overflow-y: auto;
-    margin-bottom: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
 .msg-row-user {
     display: flex;
     justify-content: flex-end;
     animation: slide-in-up 0.2s ease;
+    margin-bottom: 14px;
 }
 .msg-row-asst {
     display: flex;
     justify-content: flex-start;
     gap: 10px;
     animation: slide-in-up 0.2s ease;
+    margin-bottom: 14px;
 }
 .msg-avatar {
     width: 32px;
     height: 32px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, #1d4ed8, #3572b0);
+    border-radius: 4px;
+    background: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
-    color: #fff;
+    letter-spacing: 0.04em;
+    color: #f4f3f0;
     flex-shrink: 0;
     margin-top: 2px;
+    font-family: var(--sans);
 }
 .msg-bubble-user {
-    background: #1d4ed8;
-    color: #fff;
-    border-radius: 16px 4px 16px 16px;
+    background: var(--accent);
+    color: #f4f3f0;
+    border-radius: 7px 2px 7px 7px;
     padding: 10px 15px;
     max-width: 72%;
     font-size: 13px;
     line-height: 1.55;
+    font-family: var(--sans);
 }
 .msg-bubble-asst {
-    background: #181c28;
-    color: #e8e6e1;
-    border: 1px solid rgba(232,230,225,0.06);
-    border-radius: 4px 16px 16px 16px;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--accent);
+    border-radius: 2px 7px 7px 7px;
     padding: 12px 16px;
     max-width: 82%;
     font-size: 13px;
     line-height: 1.6;
+    font-family: var(--sans);
 }
 .msg-meta {
     font-size: 10px;
-    color: #6b6760;
+    color: var(--text3);
     margin-top: 4px;
     text-align: right;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 .msg-meta-left {
     font-size: 10px;
-    color: #6b6760;
+    color: var(--text3);
     margin-top: 4px;
-}
-.followup-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid rgba(232,230,225,0.05);
-}
-.followup-chip {
-    background: rgba(53,114,176,0.08);
-    border: 1px solid rgba(53,114,176,0.2);
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 11px;
-    color: #3572b0;
-    cursor: pointer;
-}
-.ctx-panel {
-    background: #12151e;
-    border: 1px solid rgba(232,230,225,0.06);
-    border-radius: 6px;
-    padding: 18px;
-    margin-bottom: 14px;
-}
-.ctx-title {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 2.5px;
-    color: #6b6760;
+    margin-left: 42px;
+    font-family: var(--mono);
     text-transform: uppercase;
-    margin-bottom: 12px;
-}
-.ctx-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 7px 0;
-    border-bottom: 1px solid rgba(232,230,225,0.04);
-}
-.ctx-row:last-child { border-bottom: none; }
-.ctx-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    margin-right: 8px;
-    flex-shrink: 0;
-}
-.ctx-label {
-    font-size: 12px;
-    color: #9a968e;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.ctx-fresh {
-    font-size: 10px;
-    color: #6b6760;
-    background: rgba(232,230,225,0.04);
-    border-radius: 6px;
-    padding: 2px 7px;
-}
-.empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 48px 20px;
-    gap: 10px;
-}
-.empty-icon {
-    font-size: 36px;
-    opacity: 0.3;
-}
-.empty-text {
-    font-size: 13px;
-    color: #6b6760;
-    text-align: center;
-    line-height: 1.6;
+    letter-spacing: 0.05em;
 }
 </style>
 """
@@ -566,100 +530,56 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
 # HTML builders
 # ---------------------------------------------------------------------------
 
-def _hero_html() -> str:
-    return """
-<div class="assistant-hero">
-  <div class="assistant-hero-label">&#9679; LIVE INTELLIGENCE</div>
-  <div class="assistant-hero-title">SHIPPING INTELLIGENCE ASSISTANT</div>
-  <div class="assistant-hero-sub">
-    Bloomberg-grade analysis &nbsp;|&nbsp; Real-time freight context &nbsp;|&nbsp;
-    Signal-driven insights &nbsp;|&nbsp; No external API calls
-  </div>
-</div>
-"""
+# ── Cell formatters for wsj_market_table() ─────────────────────────────────
+# Mirror the pattern used in ui/tab_results.py and ui/tab_rate_analytics.py.
 
-
-def _chip_row_html() -> str:
-    chips = "".join(
-        f'<span class="chip">{q}</span>'
-        for q in QUICK_QUESTIONS
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
     )
-    return f'<div class="chip-row">{chips}</div>'
 
 
 def _message_html(role: str, text: str, ts: str) -> str:
     if role == "user":
+        # Escape the user's free text at the display sink (it's rendered via
+        # unsafe_allow_html). NOT escaped at store time — the raw text is also
+        # the LLM prompt. Without this a typed <img onerror=…> / <script>
+        # executes in the user's own session (self-XSS). The assistant branch
+        # below is intentionally raw — engine-built HTML with controlled markup.
         return (
             f'<div class="msg-row-user">'
-            f'<div><div class="msg-bubble-user">{text}</div>'
-            f'<div class="msg-meta">{ts}</div></div>'
+            f'<div><div class="msg-bubble-user">{html.escape(text)}</div>'
+            f'<div class="msg-meta">{html.escape(ts)}</div></div>'
             f'</div>'
         )
-    else:
-        return (
-            f'<div class="msg-row-asst">'
-            f'<div class="msg-avatar">AI</div>'
-            f'<div><div class="msg-bubble-asst">{text}</div>'
-            f'<div class="msg-meta-left">{ts}</div></div>'
-            f'</div>'
-        )
-
-
-def _followup_html(followups: list[str]) -> str:
-    chips = "".join(
-        f'<span class="followup-chip">{q}</span>'
-        for q in followups
-    )
-    return f'<div class="followup-row">{chips}</div>'
-
-
-def _empty_state_html() -> str:
     return (
-        '<div class="empty-state">'
-        '<div class="empty-icon">&#9960;</div>'
-        '<div class="empty-text">Ask a question about freight rates, shipping stocks,<br>'
-        'geopolitical disruptions, or market signals below.</div>'
-        '</div>'
-    )
-
-
-def _context_panel_html(freight_data, macro_data, stock_data,
-                         port_results, route_results) -> str:
-    now_str = datetime.datetime.now().strftime("%H:%M")
-
-    def _row(dot_color: str, label: str, status: str) -> str:
-        return (
-            f'<div class="ctx-row">'
-            f'<div class="ctx-label">'
-            f'<div class="ctx-dot" style="background:{dot_color}"></div>{label}'
-            f'</div>'
-            f'<div class="ctx-fresh">{status}</div>'
-            f'</div>'
-        )
-
-    freight_ok = bool(freight_data)
-    port_ok = bool(port_results)
-    signal_ok = bool(stock_data)
-    macro_ok = bool(macro_data)
-
-    rows = (
-        _row("#2e9e6e" if freight_ok else "#6b6760", "Freight Data",
-             f"Live {now_str}" if freight_ok else "Unavailable")
-        + _row("#2e9e6e" if port_ok else "#6b6760", "Port Data",
-               f"Live {now_str}" if port_ok else "Unavailable")
-        + _row("#2e9e6e" if signal_ok else "#6b6760", "Signal Data",
-               f"Live {now_str}" if signal_ok else "Unavailable")
-        + _row("#2e9e6e" if macro_ok else "#6b6760", "Macro Data",
-               f"Live {now_str}" if macro_ok else "Unavailable")
-        + _row("#c9962b", "News Data", "~15 min delay")
-    )
-
-    return (
-        f'<div class="ctx-panel">'
-        f'<div class="ctx-title">&#9632; AVAILABLE DATA CONTEXT</div>'
-        f'{rows}'
+        f'<div class="msg-row-asst">'
+        f'<div class="msg-avatar">AI</div>'
+        f'<div><div class="msg-bubble-asst">{text}</div>'
+        f'<div class="msg-meta-left">{ts}</div></div>'
         f'</div>'
     )
+
+
+def _context_sources(freight_data, macro_data, stock_data,
+                     port_results, route_results) -> list[dict]:
+    """Return live-data-style source dicts for the right-rail data feed list."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    def _entry(name: str, ok: bool) -> dict:
+        if ok:
+            return {"name": name, "kind": "live", "quality": "good", "as_of": now}
+        return {"name": name, "kind": "demo", "quality": "demo"}
+
+    return [
+        _entry("Freight Data", bool(freight_data)),
+        _entry("Port Data",    bool(port_results)),
+        _entry("Signal Data",  bool(stock_data)),
+        _entry("Macro Data",   bool(macro_data)),
+        {"name": "News Data", "kind": "cached", "quality": "stale",
+         "notes": "~15 min delay"},
+    ]
 
 
 def _export_text(messages: list[dict]) -> str:
@@ -691,168 +611,249 @@ def render(
     route_results_all=None,
 ):
     """Render the AI Shipping Intelligence Assistant tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('assistant'):
 
-    st.markdown(_CHAT_CSS, unsafe_allow_html=True)
+        st.markdown(_CHAT_CSS, unsafe_allow_html=True)
 
-    # ── Session state ────────────────────────────────────────────────────────
-    if "asst_messages" not in st.session_state:
-        st.session_state.asst_messages = []
-    if "asst_input_val" not in st.session_state:
-        st.session_state.asst_input_val = ""
-
-    # ── Layout: chat column + sidebar ───────────────────────────────────────
-    col_chat, col_sidebar = st.columns([3, 1], gap="medium")
-
-    with col_chat:
-        # Hero
-        st.markdown(_hero_html(), unsafe_allow_html=True)
-
-        # Quick question chips (display only — buttons below handle interaction)
-        st.markdown(
-            '<div style="font-size:10px;font-weight:700;letter-spacing:2px;color:#6b6760;'
-            'text-transform:uppercase;margin-bottom:8px">&#9632; QUICK QUESTIONS</div>', unsafe_allow_html=True)
-
-        chip_cols = st.columns(4)
-        for i, q in enumerate(QUICK_QUESTIONS):
-            with chip_cols[i % 4]:
-                if st.button(q, key=f"chip_{i}", use_container_width=True,
-                             help="Click to ask this question"):
-                    st.session_state.asst_input_val = q
-
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-        # ── Chat window ──────────────────────────────────────────────────────
-        messages = st.session_state.asst_messages
-
-        if not messages:
-            st.markdown(_empty_state_html(), unsafe_allow_html=True)
-        else:
-            # Render all messages
-            for i, msg in enumerate(messages):
-                st.markdown(
-                    _message_html(msg["role"], msg["content"], msg["ts"]), unsafe_allow_html=True)
-                # After last assistant message, show follow-ups
-                if (msg["role"] == "assistant"
-                        and i == len(messages) - 1
-                        and msg.get("followups")):
-                    st.markdown(
-                        _followup_html(msg["followups"]), unsafe_allow_html=True)
-                    fu_cols = st.columns(3)
-                    for j, fu in enumerate(msg["followups"]):
-                        with fu_cols[j]:
-                            if st.button(fu, key=f"fu_{i}_{j}",
-                                         use_container_width=True,
-                                         help="Click to ask this follow-up"):
-                                st.session_state.asst_input_val = fu
-
-        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-        # ── Input row ────────────────────────────────────────────────────────
-        inp_col, btn_col = st.columns([5, 1])
-        with inp_col:
-            user_input = st.text_input(
-                label="Ask a shipping intelligence question",
-                value=st.session_state.asst_input_val,
-                placeholder="e.g. What are current Asia-Europe freight rates?",
-                label_visibility="collapsed",
-                key="asst_text_input",
-            )
-        with btn_col:
-            send = st.button("Send", type="primary", use_container_width=True,
-                             key="asst_send_btn")
-
-        # ── Process send ─────────────────────────────────────────────────────
-        question = (user_input or "").strip()
-        if send and question:
-            ts = _ts()
-
-            # Append user message
-            st.session_state.asst_messages.append({
-                "role": "user",
-                "content": question,
-                "ts": ts,
-                "followups": [],
-            })
-
-            # Generate response
-            try:
-                answer, followups = _build_response(
-                    question, freight_data, macro_data, stock_data,
-                    port_results, route_results, insights,
-                )
-            except Exception as exc:
-                logger.exception("Assistant response error")
-                answer = (
-                    "Unable to generate a response at this time. "
-                    f"Error: {exc}"
-                )
-                followups = [
-                    "Try asking about freight rates",
-                    "Ask about the BDI",
-                    "Ask about shipping stock signals",
-                ]
-
-            st.session_state.asst_messages.append({
-                "role": "assistant",
-                "content": answer,
-                "ts": _ts(),
-                "followups": followups,
-            })
-
-            # Clear input and rerun
+        # ── Session state ────────────────────────────────────────────────────────
+        if "asst_messages" not in st.session_state:
+            st.session_state.asst_messages = []
+        if "asst_input_val" not in st.session_state:
             st.session_state.asst_input_val = ""
-            st.rerun()
 
-        elif send and not question:
-            st.warning("Please enter a question before sending.")
+        page_header(
+            title="Shipping Intelligence Assistant",
+            subtitle="Rule-based Q&A over live freight, macro, port, and signal context — no external API calls.",
+            badge_text="ASSISTANT",
+            badge_color=C_ACCENT,
+        )
 
-        # ── Export button ────────────────────────────────────────────────────
-        if st.session_state.asst_messages:
-            export_text = _export_text(st.session_state.asst_messages)
-            st.download_button(
-                label="Export Chat",
-                data=export_text,
-                file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                mime="text/plain",
-                key="asst_export_btn",
-            )
+        # ── Top-of-tab KPIs: assistant context snapshot ─────────────────────────
+        msg_count = len(st.session_state.asst_messages)
+        long_count = len(_long_signals(stock_data))
+        feeds_live = sum(
+            bool(x) for x in (freight_data, macro_data, stock_data, port_results)
+        )
+        metric_card_row(
+            [
+                {"label": "Live Data Feeds", "value": f"{feeds_live} / 4",
+                 "accent": C_HIGH if feeds_live == 4 else C_MOD,
+                 "sublabel": "freight, macro, signals, ports"},
+                {"label": "LONG Signals",   "value": f"{long_count}",
+                 "accent": C_HIGH, "sublabel": "tickers flagged by engine"},
+                {"label": "Messages",        "value": f"{msg_count}",
+                 "accent": C_ACCENT, "sublabel": "this session"},
+                {"label": "Quick Prompts",   "value": f"{len(QUICK_QUESTIONS)}",
+                 "accent": C_ACCENT, "sublabel": "preset starter questions"},
+            ],
+            columns=4,
+        )
 
-        # Clear chat
-        if st.session_state.asst_messages:
-            if st.button("Clear Chat", key="asst_clear_btn"):
-                st.session_state.asst_messages = []
+        section_divider("Workspace")
+
+        # ── Layout: chat column + sidebar ───────────────────────────────────────
+        col_chat, col_sidebar = st.columns([3, 1], gap="large")
+
+        with col_chat:
+            # Quick-question chips render as buttons; section_header gives the WSJ rule.
+            section_header("Quick Questions",
+                           "Tap a prompt to seed the input below.")
+
+            chip_cols = st.columns(4)
+            for i, q in enumerate(QUICK_QUESTIONS):
+                with chip_cols[i % 4]:
+                    if st.button(q, key=f"chip_{i}", use_container_width=True,
+                                 help="Click to ask this question"):
+                        st.session_state.asst_input_val = q
+
+            section_header("Conversation",
+                           "Threaded answers with follow-up suggestions.")
+
+            # ── Chat window ──────────────────────────────────────────────────────
+            messages = st.session_state.asst_messages
+
+            if not messages:
+                st.info(
+                    "No questions yet — tap a prompt above or type below. "
+                    "The assistant covers freight rates, shipping equities, "
+                    "geopolitical disruptions and market signals."
+                )
+            else:
+                # Render all messages
+                for i, msg in enumerate(messages):
+                    st.markdown(
+                        _message_html(msg["role"], msg["content"], msg["ts"]), unsafe_allow_html=True)
+                    # After last assistant message, show follow-ups
+                    if (msg["role"] == "assistant"
+                            and i == len(messages) - 1
+                            and msg.get("followups")):
+                        fu_cols = st.columns(3)
+                        for j, fu in enumerate(msg["followups"]):
+                            with fu_cols[j]:
+                                if st.button(fu, key=f"fu_{i}_{j}",
+                                             use_container_width=True,
+                                             help="Click to ask this follow-up"):
+                                    st.session_state.asst_input_val = fu
+
+            # ── Input row ────────────────────────────────────────────────────────
+            inp_col, btn_col = st.columns([5, 1])
+            with inp_col:
+                user_input = st.text_input(
+                    label="Ask a shipping intelligence question",
+                    value=st.session_state.asst_input_val,
+                    placeholder="e.g. What are current Asia-Europe freight rates?",
+                    label_visibility="collapsed",
+                    key="asst_text_input",
+                )
+            with btn_col:
+                send = st.button("Send", type="primary", use_container_width=True,
+                                 key="asst_send_btn")
+
+            # ── Process send ─────────────────────────────────────────────────────
+            question = (user_input or "").strip()
+            if send and question:
+                ts = _ts()
+
+                # Append user message
+                st.session_state.asst_messages.append({
+                    "role": "user",
+                    "content": question,
+                    "ts": ts,
+                    "followups": [],
+                })
+
+                # Generate response
+                try:
+                    answer, followups = _build_response(
+                        question, freight_data, macro_data, stock_data,
+                        port_results, route_results, insights,
+                    )
+                except Exception as exc:
+                    logger.exception("Assistant response error")
+                    answer = (
+                        "Unable to generate a response at this time. "
+                        f"Error: {exc}"
+                    )
+                    followups = [
+                        "Try asking about freight rates",
+                        "Ask about the BDI",
+                        "Ask about shipping stock signals",
+                    ]
+
+                st.session_state.asst_messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "ts": _ts(),
+                    "followups": followups,
+                })
+
+                # Clear input and rerun
                 st.session_state.asst_input_val = ""
                 st.rerun()
 
-    # ── Right sidebar ────────────────────────────────────────────────────────
-    with col_sidebar:
-        st.markdown(
-            _context_panel_html(freight_data, macro_data, stock_data,
-                                port_results, route_results), unsafe_allow_html=True)
+            elif send and not question:
+                st.warning("Please enter a question before sending.")
 
-        # Tips panel
-        st.markdown(
-            '<div class="ctx-panel" style="margin-top:0">'
-            '<div class="ctx-title">&#9632; HOW TO USE</div>'
-            '<div style="font-size:12px;color:#9a968e;line-height:1.7">'
-            '&#8226; Click any quick question chip<br>'
-            '&#8226; Ask about specific tickers<br>'
-            '&#8226; Ask about freight routes<br>'
-            '&#8226; Follow-up with context chips<br>'
-            '&#8226; Export your chat history'
-            '</div>'
-            '</div>', unsafe_allow_html=True)
+            # ── Conversation controls ────────────────────────────────────────────
+            if st.session_state.asst_messages:
+                st.divider()
+                export_text = _export_text(st.session_state.asst_messages)
+                ctl_export, ctl_clear = st.columns(2, gap="medium")
+                with ctl_export:
+                    st.download_button(
+                        label="Export Chat",
+                        data=export_text,
+                        file_name=f"shipping_assistant_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                        mime="text/plain",
+                        key="asst_export_btn",
+                        use_container_width=True,
+                        help="Download the conversation as plain text.",
+                    )
+                with ctl_clear:
+                    if st.button("Clear Chat", key="asst_clear_btn",
+                                 use_container_width=True,
+                                 help="Discard all messages in this session."):
+                        st.session_state.asst_messages = []
+                        st.session_state.asst_input_val = ""
+                        st.rerun()
 
-        # Signal summary mini-panel
-        longs = _long_signals(stock_data)
-        if longs:
-            long_items = "".join(
-                f'<div style="color:#2e9e6e;font-size:12px;font-weight:600;padding:3px 0">'
-                f'&#8679; {t}</div>'
-                for t in longs[:6]
-            )
-            st.markdown(
-                f'<div class="ctx-panel" style="margin-top:0">'
-                f'<div class="ctx-title">&#9632; ACTIVE LONG SIGNALS</div>'
-                f'{long_items}'
-                f'</div>', unsafe_allow_html=True)
+        # ── Right sidebar ────────────────────────────────────────────────────────
+        with col_sidebar:
+            section_header("Available Data Context",
+                           "Live feeds wired into the answer engine.")
+
+            ctx_sources = _context_sources(freight_data, macro_data, stock_data,
+                                           port_results, route_results)
+            _STATUS_FOR = {"good": "success", "stale": "warning", "demo": "danger"}
+            ctx_rows = []
+            for s in ctx_sources:
+                label = _sans(s["name"], color=C_TEXT, weight=600)
+                status_text = s.get("notes") or (
+                    "Live" if s["quality"] == "good" else
+                    "Cached" if s["quality"] == "stale" else
+                    "Unavailable"
+                )
+                ctx_rows.append([
+                    label,
+                    status_badge(status_text, _STATUS_FOR.get(s["quality"], "info")),
+                ])
+            wsj_market_table(["Source", "Status"], ctx_rows)
+            st.markdown(source_footer(ctx_sources), unsafe_allow_html=True)
+
+            section_header("How to Use", "Quick reference for the assistant.")
+            howto_rows = [
+                [_sans("1", color=C_ACCENT, weight=700),
+                 _sans("Click any quick-question button to seed the input.",
+                       color=C_TEXT)],
+                [_sans("2", color=C_ACCENT, weight=700),
+                 _sans("Ask about specific tickers (ZIM, MATX, GOGL, ...).",
+                       color=C_TEXT)],
+                [_sans("3", color=C_ACCENT, weight=700),
+                 _sans("Ask about freight routes or geopolitical disruptions.",
+                       color=C_TEXT)],
+                [_sans("4", color=C_ACCENT, weight=700),
+                 _sans("Use follow-up chips to drill deeper into context.",
+                       color=C_TEXT)],
+                [_sans("5", color=C_ACCENT, weight=700),
+                 _sans("Export your chat history as plain text.",
+                       color=C_TEXT)],
+            ]
+            wsj_market_table(["#", "Tip"], howto_rows)
+
+            # Signal summary mini-panel
+            longs = _long_signals(stock_data)
+            if longs:
+                section_header("Active LONG Signals",
+                               "Tickers flagged by the multi-factor signal engine.")
+                long_rows = [
+                    [_sans(t, color=C_TEXT, weight=700),
+                     badge("LONG", color=C_HIGH)]
+                    for t in longs[:6]
+                ]
+                wsj_market_table(["Ticker", "Signal"], long_rows)
+                st.markdown(
+                    source_footer([{
+                        "name": "Internal signal engine",
+                        "kind": "modeled",
+                        "quality": "good",
+                    }]),
+                    unsafe_allow_html=True,
+                )
+
+            # Session topic distribution — only meaningful once a few
+            # questions are in. Hidden below the threshold so the sidebar
+            # doesn't carry empty chrome before the user has asked anything.
+            user_msgs = [m for m in st.session_state.asst_messages
+                         if m.get("role") == "user"]
+            if len(user_msgs) >= 3:
+                section_header("Session Focus",
+                               "How your questions break down by topic.")
+                st.plotly_chart(
+                    _build_topic_distribution_bars(st.session_state.asst_messages),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="assistant_topic_distribution",
+                )

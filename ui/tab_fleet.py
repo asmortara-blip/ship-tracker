@@ -12,65 +12,51 @@ Renders global fleet analytics across 8 major sections:
 """
 from __future__ import annotations
 
-import random
 from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 from loguru import logger
 
-# ── Color palette ─────────────────────────────────────────────────────────────
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
-C_ORANGE  = "#f97316"
+from ui.styles import (
+    C_ACCENT,
+    C_BG,
+    C_BORDER,
+    C_CARD,
+    C_CONV,
+    C_HIGH,
+    C_LOW,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    insight_card_html,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    source_footer,
+)
 
 
-# ── Layout helper ─────────────────────────────────────────────────────────────
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_results.py.
 
-def _dark_layout(height: int = 360, l: int = 52, r: int = 24, t: int = 36, b: int = 44) -> dict:
-    return dict(
-        template="plotly_dark",
-        paper_bgcolor=C_BG,
-        plot_bgcolor=C_BG,
-        font=dict(family="Libre Franklin, sans-serif", color=C_TEXT2, size=11),
-        margin=dict(l=l, r=r, t=t, b=b),
-        height=height,
-        hoverlabel=dict(bgcolor=C_CARD, font_color=C_TEXT, bordercolor=C_BORDER),
-    )
-
-
-def _section(title: str, subtitle: str = "") -> None:
-    sub_html = f'<span style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-left:10px;">{subtitle}</span>' if subtitle else ""
-    st.markdown(
-        f'<div style="border-left:3px solid {C_ACCENT};padding:6px 0 6px 12px;margin:24px 0 12px 0;">'
-        f'<span style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:15px;font-weight:700;letter-spacing:0.3px;">{title}</span>'
-        f'{sub_html}</div>', unsafe_allow_html=True)
-
-
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> str:
-    delta_html = (
-        f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{color};font-size:11px;margin-top:4px;">{delta}</div>'
-        if delta else ""
-    )
+def _mono(value: str, color: str = C_TEXT) -> str:
     return (
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:16px 20px;text-align:center;">'
-        f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">{label}</div>'
-        f'<div style="font-family:\'JetBrains Mono\',monospace;color:{C_TEXT};font-size:24px;font-weight:700;">{value}</div>'
-        f'{delta_html}</div>'
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
     )
 
 
@@ -78,18 +64,23 @@ def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> s
 
 def _render_kpis(insights: Optional[dict]) -> None:
     try:
-        _section("Global Fleet KPIs", "As of Q1 2026 — global merchant fleet snapshot")
-        cols = st.columns(5)
-        kpis = [
-            ("Total Fleet TEU Capacity", "30.4M TEU", "+3.2% YoY", C_HIGH),
-            ("Active Vessels", "6,842", "+124 net adds", C_ACCENT),
-            ("Vessels on Order", "1,207", "Newbuild pipeline", C_MOD),
-            ("Scrapping Rate", "38 / month", "Avg YTD 2026", C_LOW),
-            ("Net Fleet Growth % YoY", "+3.2%", "Supply growth above demand", C_MOD),
-        ]
-        for col, (label, value, delta, color) in zip(cols, kpis):
-            with col:
-                st.markdown(_kpi_card(label, value, delta, color), unsafe_allow_html=True)
+        section_header("Global Fleet KPIs", "As of Q1 2026 — global merchant fleet snapshot")
+        metric_card_row([
+            {"label": "Total Fleet TEU Capacity", "value": "30.4M TEU",
+             "accent": C_HIGH,   "sublabel": "+3.2% YoY"},
+            {"label": "Active Vessels",           "value": "6,842",
+             "accent": C_ACCENT, "sublabel": "+124 net adds"},
+            {"label": "Vessels on Order",         "value": "1,207",
+             "accent": C_MOD,    "sublabel": "Newbuild pipeline"},
+            {"label": "Scrapping Rate",           "value": "38 / month",
+             "accent": C_LOW,    "sublabel": "Avg YTD 2026"},
+            {"label": "Net Fleet Growth % YoY",   "value": "+3.2%",
+             "accent": C_MOD,    "sublabel": "Supply growth above demand"},
+        ], columns=5)
+        st.markdown(source_footer([
+            {"name": "Clarksons Research Fleet Database", "kind": "modeled", "quality": "demo"},
+            {"name": "Alphaliner Monthly Monitor",        "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Fleet KPIs render failed")
 
@@ -98,7 +89,7 @@ def _render_kpis(insights: Optional[dict]) -> None:
 
 def _render_composition() -> None:
     try:
-        _section("Fleet Composition Breakdown", "By vessel type and age bracket")
+        section_header("Fleet Composition Breakdown", "By vessel type and age bracket")
         left, right = st.columns(2)
 
         # Donut — by vessel type
@@ -106,7 +97,7 @@ def _render_composition() -> None:
             try:
                 types   = ["Container", "Dry Bulk", "Tanker", "LNG", "Other"]
                 shares  = [34, 29, 18, 6, 13]
-                colors  = [C_ACCENT, C_HIGH, C_MOD, C_PURPLE, C_TEXT3]
+                colors  = [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_TEXT3]
                 fig = go.Figure(go.Pie(
                     labels=types,
                     values=shares,
@@ -116,10 +107,10 @@ def _render_composition() -> None:
                     textfont=dict(color=C_TEXT, size=11),
                     hovertemplate="<b>%{label}</b><br>Share: %{percent}<extra></extra>",
                 ))
+                apply_dark_layout(fig, height=340, showlegend=True)
                 fig.update_layout(
-                    **_dark_layout(height=340, l=10, r=10, t=30, b=10),
+                    margin=dict(l=10, r=10, t=30, b=10),
                     title=dict(text="Fleet by Vessel Type", font=dict(color=C_TEXT, size=13), x=0.5),
-                    showlegend=True,
                     legend=dict(font=dict(color=C_TEXT2, size=10), x=0.7, y=0.5),
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -141,11 +132,12 @@ def _render_composition() -> None:
                     textfont=dict(color=C_TEXT2, size=10),
                     hovertemplate="<b>%{x}</b><br>Vessels: %{y:,}<extra></extra>",
                 ))
+                apply_dark_layout(fig2, height=340, showlegend=False)
                 fig2.update_layout(
-                    **_dark_layout(height=340, l=52, r=16, t=30, b=40),
+                    margin=dict(l=52, r=16, t=30, b=40),
                     title=dict(text="Fleet by Age Bracket — Ageing Fleet Narrative", font=dict(color=C_TEXT, size=13), x=0.5),
-                    xaxis=dict(title="Age Bracket", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
-                    yaxis=dict(title="Vessel Count", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
+                    xaxis=dict(title="Age Bracket", color=C_TEXT3),
+                    yaxis=dict(title="Vessel Count", color=C_TEXT3),
                 )
                 # annotation for "ageing fleet" note
                 fig2.add_annotation(
@@ -156,6 +148,11 @@ def _render_composition() -> None:
                 st.plotly_chart(fig2, use_container_width=True)
             except Exception:
                 logger.exception("Age bracket bar failed")
+
+        st.markdown(source_footer([
+            {"name": "Clarksons Research Fleet Database", "kind": "modeled", "quality": "demo"},
+            {"name": "BRS Alphaliner Vessel Census",      "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Fleet composition section failed")
 
@@ -164,7 +161,7 @@ def _render_composition() -> None:
 
 def _render_orderbook() -> None:
     try:
-        _section("Newbuild Order Book", "Active orders — LNG dual-fuel trend dominant")
+        section_header("Newbuild Order Book", "Active orders — LNG dual-fuel trend dominant")
         data = [
             {
                 "Vessel Type": "Ultra Large Container (24k+ TEU)",
@@ -218,41 +215,22 @@ def _render_orderbook() -> None:
         df = pd.DataFrame(data)
 
         # Highlight dual-fuel row
-        def _row_style(row: pd.Series) -> list:
-            if "Dual-Fuel" in row["Vessel Type"] or "LNG Carrier" in row["Vessel Type"]:
-                return [f"background-color:rgba(124,110,175,0.12);color:{C_TEXT}"] * len(row)
-            return [f"color:{C_TEXT}"] * len(row)
-
-        styled = (
-            df.style
-            .apply(_row_style, axis=1)
-            .set_table_styles([
-                {"selector": "thead th", "props": [
-                    ("background-color", C_CARD),
-                    ("color", C_TEXT2),
-                    ("font-size", "11px"),
-                    ("text-transform", "uppercase"),
-                    ("letter-spacing", "0.5px"),
-                    ("border-bottom", f"1px solid {C_BORDER}"),
-                    ("padding", "8px 12px"),
-                ]},
-                {"selector": "tbody td", "props": [
-                    ("border-bottom", f"1px solid {C_BORDER}"),
-                    ("padding", "8px 12px"),
-                    ("font-size", "12px"),
-                ]},
-                {"selector": "table", "props": [
-                    ("background-color", C_SURFACE),
-                    ("border-radius", "6px"),
-                    ("width", "100%"),
-                ]},
-            ])
-        )
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.markdown(
-            f'<div style="color:{C_PURPLE};font-size:12px;margin-top:6px;">'
-            f'Trend: LNG dual-fuel vessels now represent the largest single category in the global orderbook, '
-            f'driven by IMO 2030 carbon-intensity targets and EU ETS compliance pressure.</div>', unsafe_allow_html=True)
+        st.markdown(insight_card_html(
+            title="LNG Dual-Fuel Trend",
+            score=0.75,
+            action="Watch",
+            rationale=(
+                "Dual-fuel vessels now represent the largest single category in the global "
+                "orderbook, driven by IMO 2030 carbon-intensity targets and EU ETS compliance "
+                "pressure."
+            ),
+            category="MACRO",
+        ), unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": "Clarksons Newbuilding Orderbook", "kind": "modeled", "quality": "demo"},
+            {"name": "MAN Energy Solutions / GTT trend reports", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Order book section failed")
 
@@ -261,7 +239,7 @@ def _render_orderbook() -> None:
 
 def _render_scrapping() -> None:
     try:
-        _section("Scrapping Analysis", "YTD 2026 scrapped vessels + 12-month forecast")
+        section_header("Scrapping Analysis", "YTD 2026 scrapped vessels + 12-month forecast")
         left, right = st.columns([1, 1.5])
 
         with left:
@@ -275,14 +253,16 @@ def _render_scrapping() -> None:
                 ]
                 df_s = pd.DataFrame(scrap_data)
                 st.dataframe(df_s, use_container_width=True, hide_index=True)
-                avg_age = 26
-                st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid rgba(192,57,43,0.3);border-radius:6px;'
-                    f'padding:10px 14px;margin-top:10px;">'
-                    f'<span style="color:{C_LOW};font-weight:700;">Avg Scrapping Age:</span> '
-                    f'<span style="color:{C_TEXT};font-size:20px;font-weight:700;">{avg_age} years</span><br>'
-                    f'<span style="color:{C_TEXT3};font-size:11px;">Vessels 20+ years face accelerating scrapping pressure '
-                    f'under CII ratings and EU ETS compliance costs.</span></div>', unsafe_allow_html=True)
+                st.markdown(insight_card_html(
+                    title="Avg Scrapping Age — 26 years",
+                    score=0.85,
+                    action="Caution",
+                    rationale=(
+                        "Vessels 20+ years face accelerating scrapping pressure under CII "
+                        "ratings and EU ETS compliance costs."
+                    ),
+                    category="SCRAP",
+                ), unsafe_allow_html=True)
             except Exception:
                 logger.exception("Scrapping table failed")
 
@@ -304,17 +284,23 @@ def _render_scrapping() -> None:
                     marker_color="rgba(192,57,43,0.35)",
                     hovertemplate="<b>%{x}</b><br>Forecast: %{y}<extra></extra>",
                 ))
+                apply_dark_layout(fig, height=300, showlegend=True)
                 fig.update_layout(
-                    **_dark_layout(height=300, l=44, r=16, t=30, b=44),
+                    margin=dict(l=44, r=16, t=30, b=44),
                     title=dict(text="Scrapping by Vessel Type — YTD vs Forecast", font=dict(color=C_TEXT, size=12), x=0.5),
                     barmode="group",
                     xaxis=dict(color=C_TEXT3),
-                    yaxis=dict(title="Vessels Scrapped", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
+                    yaxis=dict(title="Vessels Scrapped", color=C_TEXT3),
                     legend=dict(font=dict(color=C_TEXT2, size=10)),
                 )
                 st.plotly_chart(fig, use_container_width=True)
             except Exception:
                 logger.exception("Scrapping bar chart failed")
+
+        st.markdown(source_footer([
+            {"name": "VesselsValue Scrapping Tracker",  "kind": "modeled", "quality": "demo"},
+            {"name": "Internal CII / EU ETS forecasts", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Scrapping section failed")
 
@@ -323,7 +309,7 @@ def _render_scrapping() -> None:
 
 def _render_utilization_map() -> None:
     try:
-        _section("Fleet Utilization Map", "Vessel density by region — darker = higher concentration")
+        section_header("Fleet Utilization Map", "Vessel density by region — darker = higher concentration")
         vessel_hubs = [
             ("South China Sea",      115.0,  20.0, 1840, "South China Sea: 1,840 vessels"),
             ("Singapore Strait",     104.0,   1.3, 1420, "Singapore Strait: 1,420 vessels"),
@@ -345,7 +331,6 @@ def _render_utilization_map() -> None:
         lats   = [h[2] for h in vessel_hubs]
         sizes  = [h[3] for h in vessel_hubs]
         labels = [h[4] for h in vessel_hubs]
-        names  = [h[0] for h in vessel_hubs]
 
         fig = go.Figure(go.Scattergeo(
             lon=lons,
@@ -385,15 +370,28 @@ def _render_utilization_map() -> None:
             showcountries=True,
             countrycolor="rgba(100,116,139,0.2)",
         )
+        apply_dark_layout(fig, height=440, showlegend=False)
         fig.update_layout(
-            **_dark_layout(height=440, l=0, r=0, t=20, b=0),
+            margin=dict(l=0, r=0, t=20, b=0),
             geo=dict(bgcolor=C_BG),
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.markdown(
-            f'<div style="color:{C_TEXT3};font-size:11px;margin-top:-6px;">'
-            f'Red Sea (38°E, 20°N) shows sharp vessel density drop due to Houthi disruptions rerouting traffic via Cape of Good Hope. '
-            f'This has added ~10–14 days to Asia-Europe voyages and effectively tightened global capacity 8–12%.</div>', unsafe_allow_html=True)
+        st.markdown(insight_card_html(
+            title="Red Sea Disruption — Capacity Tightening",
+            score=0.7,
+            action="Caution",
+            rationale=(
+                "Red Sea (38°E, 20°N) shows sharp vessel density drop due to Houthi "
+                "disruptions rerouting traffic via Cape of Good Hope. This has added "
+                "~10–14 days to Asia-Europe voyages and effectively tightened global "
+                "capacity 8–12%."
+            ),
+            category="ROUTE",
+        ), unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": "MarineTraffic AIS density",          "kind": "scraped", "quality": "demo"},
+            {"name": "Internal disruption-to-capacity model", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Utilization map failed")
 
@@ -402,7 +400,7 @@ def _render_utilization_map() -> None:
 
 def _render_capacity_vs_demand() -> None:
     try:
-        _section("Capacity vs Demand", "Fleet supply growth % vs trade volume growth % — 2020–2025")
+        section_header("Capacity vs Demand", "Fleet supply growth % vs trade volume growth % — 2020–2025")
         years    = [2020, 2021, 2022, 2023, 2024, 2025]
         supply   = [2.1,  4.3,  3.8,  8.2,  6.4,  4.1]   # fleet capacity growth %
         demand   = [1.2,  6.8,  4.1,  3.1,  5.9,  3.2]   # trade volume growth %
@@ -470,14 +468,19 @@ def _render_capacity_vs_demand() -> None:
             font=dict(color=C_LOW, size=9),
             ax=60, ay=-30,
         )
+        apply_dark_layout(fig, height=360, showlegend=True)
         fig.update_layout(
-            **_dark_layout(height=360, l=52, r=24, t=36, b=48),
+            margin=dict(l=52, r=24, t=36, b=48),
             title=dict(text="Fleet Capacity vs Trade Volume Growth (2020–2025)", font=dict(color=C_TEXT, size=13), x=0.5),
-            xaxis=dict(title="Year", color=C_TEXT3, tickvals=years, gridcolor="rgba(232,230,225,0.04)"),
-            yaxis=dict(title="YoY Growth %", color=C_TEXT3, gridcolor="rgba(232,230,225,0.04)"),
+            xaxis=dict(title="Year", color=C_TEXT3, tickvals=years),
+            yaxis=dict(title="YoY Growth %", color=C_TEXT3),
             legend=dict(font=dict(color=C_TEXT2, size=10), x=0.01, y=0.99),
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([
+            {"name": "Clarksons Supply / IMF WEO Trade",    "kind": "modeled", "quality": "demo"},
+            {"name": "Internal supply-demand growth model", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Capacity vs demand section failed")
 
@@ -486,7 +489,7 @@ def _render_capacity_vs_demand() -> None:
 
 def _render_age_risk() -> None:
     try:
-        _section("Age Profile Risk", "Vessel types with oldest fleets — renewal and IMO 2030 readiness")
+        section_header("Age Profile Risk", "Vessel types with oldest fleets — renewal and IMO 2030 readiness")
         data = [
             {
                 "Vessel Type": "General Cargo",
@@ -547,53 +550,21 @@ def _render_age_risk() -> None:
         ]
         df = pd.DataFrame(data).sort_values("Avg Fleet Age (yrs)", ascending=False)
 
-        def _color_risk(val: str) -> str:
-            mapping = {
-                "High": f"color:{C_LOW};font-weight:700",
-                "Medium": f"color:{C_MOD};font-weight:700",
-                "Low": f"color:{C_HIGH};font-weight:700",
-                "Minimal": f"color:{C_ACCENT};font-weight:700",
-            }
-            return mapping.get(val, "")
-
-        def _color_imo(val: str) -> str:
-            if val == "Yes":
-                return f"color:{C_HIGH};font-weight:700"
-            if val == "Partial":
-                return f"color:{C_MOD}"
-            return f"color:{C_LOW}"
-
-        styled = (
-            df.style
-            .applymap(_color_risk, subset=["CII Rating Risk"])
-            .applymap(_color_imo, subset=["IMO 2030 Ready"])
-            .set_table_styles([
-                {"selector": "thead th", "props": [
-                    ("background-color", C_CARD),
-                    ("color", C_TEXT2),
-                    ("font-size", "11px"),
-                    ("text-transform", "uppercase"),
-                    ("padding", "8px 12px"),
-                    ("border-bottom", f"1px solid {C_BORDER}"),
-                ]},
-                {"selector": "tbody td", "props": [
-                    ("border-bottom", f"1px solid {C_BORDER}"),
-                    ("padding", "7px 12px"),
-                    ("font-size", "12px"),
-                    ("color", C_TEXT),
-                ]},
-                {"selector": "table", "props": [
-                    ("background-color", C_SURFACE),
-                    ("border-radius", "6px"),
-                    ("width", "100%"),
-                ]},
-            ])
-        )
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.markdown(
-            f'<div style="color:{C_TEXT3};font-size:11px;margin-top:8px;">'
-            f'IMO 2030 targets require 40% carbon intensity reduction vs 2008 baseline. '
-            f'Vessels rated CII D/E for two consecutive years face trading restrictions from 2026.</div>', unsafe_allow_html=True)
+        st.markdown(insight_card_html(
+            title="IMO 2030 / CII Compliance",
+            score=0.65,
+            action="Caution",
+            rationale=(
+                "IMO 2030 targets require 40% carbon intensity reduction vs 2008 baseline. "
+                "Vessels rated CII D/E for two consecutive years face trading restrictions from 2026."
+            ),
+            category="MACRO",
+        ), unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": "Clarksons Fleet Census",            "kind": "modeled", "quality": "demo"},
+            {"name": "IMO MEPC 80 / 81 final reports",    "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Age profile risk section failed")
 
@@ -602,7 +573,7 @@ def _render_age_risk() -> None:
 
 def _render_route_metrics(route_results: Optional[dict]) -> None:
     try:
-        _section("Key Fleet Metrics by Route", "Deployed capacity, utilization, and vessel count by major trade lane")
+        section_header("Key Fleet Metrics by Route", "Deployed capacity, utilization, and vessel count by major trade lane")
         routes = [
             {
                 "Trade Lane": "Asia–Europe",
@@ -635,59 +606,68 @@ def _render_route_metrics(route_results: Optional[dict]) -> None:
 
         for r in routes:
             util_val = int(r["Utilization Rate"].replace("%", ""))
-            util_color = C_HIGH if util_val >= 90 else C_MOD if util_val >= 80 else C_LOW
-            trend_color = C_HIGH if "+" in r["Trend"] else C_LOW
+            util_color = C_HIGH if util_val >= 90 else (C_MOD if util_val >= 80 else C_LOW)
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-                f'padding:16px 20px;margin-bottom:12px;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-                f'<span style="color:{C_TEXT};font-size:14px;font-weight:700;">{r["Trade Lane"]}</span>'
-                f'<span style="color:{trend_color};font-size:12px;font-weight:600;">{r["Trend"]}</span>'
-                f'</div>'
-                f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;margin-bottom:3px;">Deployed Capacity</div>'
-                f'<div style="color:{C_TEXT};font-size:14px;font-weight:600;">{r["Deployed Capacity (TEU)"]} TEU</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;margin-bottom:3px;">Utilization</div>'
-                f'<div style="color:{util_color};font-size:14px;font-weight:700;">{r["Utilization Rate"]}</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;margin-bottom:3px;">Vessels Deployed</div>'
-                f'<div style="color:{C_TEXT};font-size:14px;font-weight:600;">{r["Deployed Vessels"]}</div></div>'
-                f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;margin-bottom:3px;">Avg Vessel Size</div>'
-                f'<div style="color:{C_TEXT};font-size:14px;font-weight:600;">{r["Avg Vessel Size (TEU)"]} TEU</div></div>'
-                f'</div>'
-                f'<div style="margin-top:10px;color:{C_TEXT3};font-size:11px;">Note: {r["Disruption Note"]}</div>'
-                f'</div>', unsafe_allow_html=True)
+                f'<div class="sub-section-header">{r["Trade Lane"]}</div>'
+                f'<div style="font-size:0.78rem;color:{C_TEXT3};margin:-6px 0 12px;'
+                f'font-family:var(--sans);">Trend: {r["Trend"]}'
+                f'<span style="color:{C_TEXT2};"> &nbsp;·&nbsp; </span>'
+                f'{r["Disruption Note"]}</div>',
+                unsafe_allow_html=True,
+            )
+            metric_card_row([
+                {"label": "Deployed Capacity", "value": f"{r['Deployed Capacity (TEU)']} TEU",
+                 "accent": C_TEXT,    "sublabel": "active deployment"},
+                {"label": "Utilization",       "value": r["Utilization Rate"],
+                 "accent": util_color, "sublabel": "lane fill rate"},
+                {"label": "Vessels Deployed",  "value": str(r["Deployed Vessels"]),
+                 "accent": C_ACCENT,  "sublabel": "active service"},
+                {"label": "Avg Vessel Size",   "value": f"{r['Avg Vessel Size (TEU)']} TEU",
+                 "accent": C_MOD,     "sublabel": "per deployment"},
+            ], columns=4)
+
+        st.markdown(source_footer([
+            {"name": "Alphaliner Trade Lane Monitor",    "kind": "modeled", "quality": "demo"},
+            {"name": "Drewry Container Forecaster",      "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Route metrics section failed")
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Global Fleet Analytics tab."""
-    try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_SURFACE} 0%,rgba(10,15,26,0.8) 100%);'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;margin-bottom:20px;">'
-            f'<div style="font-family:\'Libre Baskerville\',serif;color:{C_TEXT};font-size:20px;font-weight:800;letter-spacing:0.3px;">Global Fleet Analytics</div>'
-            f'<div style="font-family:\'Libre Franklin\',sans-serif;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
-            f'Comprehensive supply-side analysis — fleet composition, orderbook, scrapping dynamics, '
-            f'capacity vs demand, and trade lane deployment. Data as of Q1 2026.</div>'
-            f'</div>', unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Fleet header failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('fleet'):
+        try:
+            page_header(
+                title="Global Fleet Analytics",
+                subtitle=(
+                    "Comprehensive supply-side analysis — fleet composition, orderbook, "
+                    "scrapping dynamics, capacity vs demand, and trade lane deployment. "
+                    "Data as of Q1 2026."
+                ),
+                badge_text="FLEET",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("Fleet header failed")
 
-    _render_kpis(insights)
-    st.divider()
-    _render_composition()
-    st.divider()
-    _render_orderbook()
-    st.divider()
-    _render_scrapping()
-    st.divider()
-    _render_utilization_map()
-    st.divider()
-    _render_capacity_vs_demand()
-    st.divider()
-    _render_age_risk()
-    st.divider()
-    _render_route_metrics(route_results)
+        _render_kpis(insights)
+        section_divider("Fleet Composition")
+        _render_composition()
+        section_divider("Orderbook & Scrapping")
+        _render_orderbook()
+        st.divider()
+        _render_scrapping()
+        section_divider("Deployment")
+        _render_utilization_map()
+        st.divider()
+        _render_capacity_vs_demand()
+        section_divider("Renewal Risk")
+        _render_age_risk()
+        section_divider("Trade Lane Detail")
+        _render_route_metrics(route_results)

@@ -7,30 +7,56 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
-C_BG      = "#0c0e14"
-C_SURFACE = "#12151e"
-C_CARD    = "#181c28"
-C_BORDER  = "rgba(232,230,225,0.06)"
-C_HIGH    = "#2e9e6e"
-C_MOD     = "#c9962b"
-C_LOW     = "#c0392b"
-C_ACCENT  = "#3572b0"
-C_TEXT    = "#e8e6e1"
-C_TEXT2   = "#9a968e"
-C_TEXT3   = "#6b6760"
-C_PURPLE  = "#7c6eaf"
-C_CYAN    = "#4a90a4"
-C_ARCTIC  = "#38bdf8"
-C_ORANGE  = "#f97316"
+from ui.styles import (
+    C_ACCENT,
+    C_HIGH,
+    C_LOW,
+    C_MACRO,
+    C_MOD,
+    C_TEXT,
+    C_TEXT2,
+    C_TEXT3,
+    apply_dark_layout,
+    badge,
+    insight_card_html,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    source_footer,
+    wsj_market_table,
+)
 
 _MATURITY_COLOR = {
     "NASCENT":     C_LOW,
     "GROWING":     C_MOD,
     "ESTABLISHED": C_HIGH,
 }
+
+_RISK_COLOR = {
+    "HIGH":   C_LOW,
+    "MEDIUM": C_MOD,
+    "LOW":    C_HIGH,
+}
+
+
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
+# only style content (font + conditional color); table CSS handles alignment
+# and rule lines. Mirrors the pattern in ui/tab_rate_analytics.py.
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 # ---------------------------------------------------------------------------
 # Static route data
@@ -263,47 +289,14 @@ _RISKS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _kpi_card(label: str, value: str, delta: str = "", color: str = C_HIGH) -> None:
-    delta_html = (
-        f'<div style="font-size:0.72rem;color:{color};margin-top:2px;">{delta}</div>'
-        if delta else ""
-    )
-    st.markdown(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-        f'padding:16px 18px;text-align:center;">'
-        f'<div style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;'
-        f'letter-spacing:0.08em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-size:1.6rem;font-weight:700;color:{C_TEXT};">{value}</div>'
-        f'{delta_html}'
-        f'</div>', unsafe_allow_html=True)
-
-
-def _section_header(title: str, subtitle: str = "") -> None:
-    sub = (
-        f'<div style="font-size:0.82rem;color:{C_TEXT3};margin-top:2px;">{subtitle}</div>'
-        if subtitle else ""
-    )
-    st.markdown(
-        f'<div style="margin:28px 0 12px;">'
-        f'<div style="font-size:1.05rem;font-weight:600;color:{C_TEXT};">{title}</div>'
-        f'{sub}'
-        f'</div>', unsafe_allow_html=True)
-
-
 def _risk_badge(level: str) -> str:
-    color = {"HIGH": C_LOW, "MEDIUM": C_MOD, "LOW": C_HIGH}.get(level, C_TEXT3)
-    return (
-        f'<span style="background:{color}22;color:{color};font-size:0.7rem;'
-        f'font-weight:700;padding:2px 8px;border-radius:4px;">{level}</span>'
-    )
+    color = _RISK_COLOR.get(level, C_TEXT3)
+    return badge(level, color=color)
 
 
 def _maturity_badge(m: str) -> str:
     color = _MATURITY_COLOR.get(m, C_TEXT3)
-    return (
-        f'<span style="background:{color}22;color:{color};font-size:0.7rem;'
-        f'font-weight:700;padding:2px 8px;border-radius:4px;">{m}</span>'
-    )
+    return badge(m, color=color)
 
 
 # ---------------------------------------------------------------------------
@@ -311,22 +304,19 @@ def _maturity_badge(m: str) -> str:
 # ---------------------------------------------------------------------------
 def _render_hero() -> None:
     try:
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,{C_CARD},{C_SURFACE});'
-            f'border:1px solid {C_BORDER};border-radius:6px;padding:24px 28px;margin-bottom:20px;">'
-            f'<div style="font-size:1.4rem;font-weight:700;color:{C_TEXT};">Emerging Routes Intelligence</div>'
-            f'<div style="font-size:0.85rem;color:{C_TEXT2};margin-top:4px;">'
-            f'12 new corridors identified · Strategic macro drivers · Real-time carrier adoption tracking</div>'
-            f'</div>', unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            _kpi_card("New Routes Identified", "12", "vs 7 in 2024", C_HIGH)
-        with c2:
-            _kpi_card("Total New Capacity", "94K TEU/wk", "▲ 31% YoY", C_ACCENT)
-        with c3:
-            _kpi_card("Avg Cost Advantage", "28%", "vs established alternatives", C_MOD)
-        with c4:
-            _kpi_card("Carriers Adopting", "8 major lines", "across all emerging routes", C_CYAN)
+        metric_card_row([
+            {"label": "New Routes Identified", "value": "12",
+             "accent": C_HIGH,   "sublabel": "vs 7 in 2024"},
+            {"label": "Total New Capacity",    "value": "94K TEU/wk",
+             "accent": C_ACCENT, "sublabel": "▲ 31% YoY"},
+            {"label": "Avg Cost Advantage",    "value": "28%",
+             "accent": C_MOD,    "sublabel": "vs established alternatives"},
+            {"label": "Carriers Adopting",     "value": "8 major lines",
+             "accent": C_MACRO,  "sublabel": "across all emerging routes"},
+        ], columns=4)
+        st.markdown(source_footer([
+            {"name": "Emerging route corridor library", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Emerging routes hero failed")
         st.error("Hero section unavailable.")
@@ -334,42 +324,31 @@ def _render_hero() -> None:
 
 def _render_route_discovery_table() -> None:
     try:
-        _section_header("Route Discovery Table", "12 emerging routes with capacity, carriers, maturity, and strategic driver")
-        cols = "1.8fr 0.8fr 0.7fr 0.8fr 0.9fr 0.8fr 1.2fr 0.9fr"
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:{cols};'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 14px;">'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Dist (nm)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Days</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Rate (new)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Cost Adv.</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Cap (TEU/wk)</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Key Carriers</span>'
-            f'<span style="font-size:0.7rem;color:{C_TEXT3};text-transform:uppercase;">Maturity</span>'
-            f'</div>'
+        section_header(
+            "Route Discovery Table",
+            "12 emerging routes with capacity, carriers, maturity, and strategic driver",
         )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, r in enumerate(_ROUTES):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            mat_badge = _maturity_badge(r["maturity"])
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:{cols};'
-                f'gap:0;background:{bg};padding:9px 14px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{r["short"]}</span>'
-                f'<span style="font-size:0.8rem;color:{C_TEXT2};">{r["distance_nm"]:,}</span>'
-                f'<span style="font-size:0.8rem;color:{C_TEXT};">{r["transit_d"]}d</span>'
-                f'<span style="font-size:0.8rem;color:{C_HIGH};font-weight:600;">${r["rate_new"]:,}</span>'
-                f'<span style="font-size:0.78rem;color:{C_MOD};">{r["cost_adv"]}</span>'
-                f'<span style="font-size:0.8rem;color:{C_TEXT2};">{r["capacity_teu"]:,}</span>'
-                f'<span style="font-size:0.75rem;color:{C_TEXT3};">{r["carriers"]}</span>'
-                f'<span>{mat_badge}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        rows = []
+        for r in _ROUTES:
+            mat_color = _MATURITY_COLOR.get(r["maturity"], C_TEXT3)
+            rows.append([
+                _sans(r["short"], color=C_TEXT, weight=700),
+                _mono(f"{r['distance_nm']:,}", color=C_TEXT2),
+                _mono(f"{r['transit_d']}d"),
+                _mono(f"${r['rate_new']:,}", color=C_HIGH),
+                _sans(r["cost_adv"], color=C_MOD),
+                _mono(f"{r['capacity_teu']:,}", color=C_TEXT2),
+                _sans(r["carriers"], color=C_TEXT3),
+                badge(r["maturity"], color=mat_color),
+            ])
+        wsj_market_table(
+            ["Route", "Dist (nm)", "Days", "Rate (new)", "Cost Adv.",
+             "Cap (TEU/wk)", "Key Carriers", "Maturity"],
+            rows,
+        )
+        st.markdown(source_footer([
+            {"name": "Emerging route corridor library", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Route discovery table failed")
         st.error("Route discovery table unavailable.")
@@ -377,19 +356,25 @@ def _render_route_discovery_table() -> None:
 
 def _render_strategic_drivers() -> None:
     try:
-        _section_header("Strategic Driver Analysis", "Macro trends creating emerging route opportunities")
-        driver_colors = [C_ACCENT, C_ARCTIC, C_HIGH, C_LOW, C_MOD, C_PURPLE]
+        section_header(
+            "Strategic Driver Analysis",
+            "Macro trends creating emerging route opportunities",
+        )
+        # Driver-specific scores (impact magnitude, 0-1) and recommended actions.
+        driver_scores  = [0.85, 0.55, 0.70, 0.80, 0.65, 0.75]
+        driver_actions = ["Monitor", "Watch", "Monitor", "Caution", "Monitor", "Monitor"]
         for idx, (driver, desc, routes) in enumerate(_DRIVERS):
-            color = driver_colors[idx % len(driver_colors)]
             routes_str = " · ".join(routes)
-            st.markdown(
-                f'<div style="background:{C_CARD};border-left:3px solid {color};'
-                f'border-radius:0 10px 10px 0;border:1px solid {C_BORDER};'
-                f'border-left:3px solid {color};padding:14px 18px;margin-bottom:8px;">'
-                f'<div style="font-size:0.88rem;font-weight:600;color:{C_TEXT};">{driver}</div>'
-                f'<div style="font-size:0.8rem;color:{C_TEXT2};margin-top:4px;">{desc}</div>'
-                f'<div style="font-size:0.75rem;color:{color};margin-top:6px;">Routes: {routes_str}</div>'
-                f'</div>', unsafe_allow_html=True)
+            st.markdown(insight_card_html(
+                title=driver,
+                score=driver_scores[idx % len(driver_scores)],
+                action=driver_actions[idx % len(driver_actions)],
+                rationale=f"{desc} · Routes: {routes_str}",
+                category="MACRO",
+            ), unsafe_allow_html=True)
+        st.markdown(source_footer([
+            {"name": "Macro driver thesis (manual)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Strategic drivers render failed")
         st.error("Strategic driver analysis unavailable.")
@@ -397,7 +382,7 @@ def _render_strategic_drivers() -> None:
 
 def _render_route_map() -> None:
     try:
-        _section_header("Emerging Routes World Map", "Dashed = emerging · Solid = established alternative")
+        section_header("Emerging Routes World Map", "Dashed = emerging · Solid = established alternative")
         fig = go.Figure()
         established_routes = [
             {"name": "Asia–Europe (Suez)", "lons": [121.5, 55.3, 13.4], "lats": [31.2, 23.6, 52.5]},
@@ -425,8 +410,10 @@ def _render_route_map() -> None:
                 name=r["short"],
                 showlegend=True,
             ))
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
+        apply_dark_layout(
+            fig,
+            height=480,
+            showlegend=True,
             geo=dict(
                 bgcolor="rgba(0,0,0,0)",
                 showland=True, landcolor="#1e293b",
@@ -435,11 +422,12 @@ def _render_route_map() -> None:
                 showcoastlines=True, coastlinecolor="rgba(255,255,255,0.1)",
                 projection_type="natural earth",
             ),
-            legend=dict(font_color=C_TEXT2, bgcolor="rgba(0,0,0,0)", font_size=10),
             margin=dict(t=10, b=10, l=0, r=0),
-            height=480,
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(source_footer([
+            {"name": "Emerging route corridor library", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Route map render failed")
         st.error("Route map unavailable.")
@@ -447,34 +435,27 @@ def _render_route_map() -> None:
 
 def _render_carrier_adoption() -> None:
     try:
-        _section_header("Carrier Adoption Tracker", "Which major carriers are investing in emerging route services")
-        adoption_color = {"HIGH": C_HIGH, "MEDIUM": C_MOD, "ESTABLISHED": C_ACCENT}
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1fr 1.8fr 1.4fr 0.8fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Carrier</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Routes</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Activity</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Commitment</span>'
-            f'</div>'
+        section_header(
+            "Carrier Adoption Tracker",
+            "Which major carriers are investing in emerging route services",
         )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, (carrier, routes, activity, level) in enumerate(_CARRIER_ADOPTION):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
+        adoption_color = {"HIGH": C_HIGH, "MEDIUM": C_MOD, "ESTABLISHED": C_ACCENT}
+        rows = []
+        for carrier, routes, activity, level in _CARRIER_ADOPTION:
             lc = adoption_color.get(level, C_TEXT2)
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1fr 1.8fr 1.4fr 0.8fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:700;color:{C_TEXT};">{carrier}</span>'
-                f'<span style="font-size:0.78rem;color:{C_ACCENT};">{routes}</span>'
-                f'<span style="font-size:0.78rem;color:{C_TEXT2};">{activity}</span>'
-                f'<span style="font-size:0.78rem;font-weight:700;color:{lc};">{level}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+            rows.append([
+                _sans(carrier, color=C_TEXT, weight=700),
+                _sans(routes, color=C_ACCENT),
+                _sans(activity, color=C_TEXT2),
+                badge(level, color=lc),
+            ])
+        wsj_market_table(
+            ["Carrier", "Routes", "Activity", "Commitment"],
+            rows,
+        )
+        st.markdown(source_footer([
+            {"name": "Carrier service announcements", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Carrier adoption render failed")
         st.error("Carrier adoption tracker unavailable.")
@@ -482,34 +463,26 @@ def _render_carrier_adoption() -> None:
 
 def _render_risk_assessment() -> None:
     try:
-        _section_header("Risk Assessment per Route", "Political · Infrastructure · Seasonal weather risks")
-        header_html = (
-            f'<div style="display:grid;grid-template-columns:1.6fr 0.8fr 0.8fr 0.8fr 2fr;'
-            f'gap:0;background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px 10px 0 0;'
-            f'padding:10px 16px;">'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Route</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Political</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Infra.</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Weather</span>'
-            f'<span style="font-size:0.72rem;color:{C_TEXT3};text-transform:uppercase;">Key Concern</span>'
-            f'</div>'
+        section_header(
+            "Risk Assessment per Route",
+            "Political · Infrastructure · Seasonal weather risks",
         )
-        st.markdown(header_html, unsafe_allow_html=True)
-        rows_html = f'<div style="border:1px solid {C_BORDER};border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        for i, (route, pol, infra, wx, concern) in enumerate(_RISKS):
-            bg = C_CARD if i % 2 == 0 else C_SURFACE
-            rows_html += (
-                f'<div style="display:grid;grid-template-columns:1.6fr 0.8fr 0.8fr 0.8fr 2fr;'
-                f'gap:0;background:{bg};padding:9px 16px;align-items:center;">'
-                f'<span style="font-size:0.82rem;font-weight:600;color:{C_TEXT};">{route}</span>'
-                f'<span>{_risk_badge(pol)}</span>'
-                f'<span>{_risk_badge(infra)}</span>'
-                f'<span>{_risk_badge(wx)}</span>'
-                f'<span style="font-size:0.75rem;color:{C_TEXT3};">{concern}</span>'
-                f'</div>'
-            )
-        rows_html += "</div>"
-        st.markdown(rows_html, unsafe_allow_html=True)
+        rows = []
+        for route, pol, infra, wx, concern in _RISKS:
+            rows.append([
+                _sans(route, color=C_TEXT, weight=600),
+                _risk_badge(pol),
+                _risk_badge(infra),
+                _risk_badge(wx),
+                _sans(concern, color=C_TEXT3),
+            ])
+        wsj_market_table(
+            ["Route", "Political", "Infra.", "Weather", "Key Concern"],
+            rows,
+        )
+        st.markdown(source_footer([
+            {"name": "Route risk assessment (modeled)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Risk assessment render failed")
         st.error("Risk assessment unavailable.")
@@ -523,13 +496,28 @@ def render(
     port_results=None,
     insights=None,
 ) -> None:
-    try:
-        _render_hero()
-        _render_route_discovery_table()
-        _render_strategic_drivers()
-        _render_route_map()
-        _render_carrier_adoption()
-        _render_risk_assessment()
-    except Exception:
-        logger.exception("tab_emerging_routes top-level render failed")
-        st.error("Emerging Routes tab encountered an error.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('emerging_routes'):
+        try:
+            page_header(
+                title="Emerging Routes Intelligence",
+                subtitle="12 new corridors identified across macro drivers and carrier adoption tracking",
+                badge_text="EMERGING",
+                badge_color=C_ACCENT,
+            )
+            _render_hero()
+            section_divider("Route Discovery")
+            _render_route_discovery_table()
+            section_divider("Strategic Drivers")
+            _render_strategic_drivers()
+            section_divider("Corridor Map")
+            _render_route_map()
+            section_divider("Carrier Adoption")
+            _render_carrier_adoption()
+            section_divider("Risk Assessment")
+            _render_risk_assessment()
+        except Exception:
+            logger.exception("tab_emerging_routes top-level render failed")
+            st.error("Emerging Routes tab encountered an error.")

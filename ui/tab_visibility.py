@@ -9,16 +9,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_BORDER,
-    C_CARD,
     C_CONV,
     C_HIGH,
     C_LOW,
     C_MACRO,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -28,12 +26,19 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
-# Local aliases for single-purpose accents
-C_PURPLE = C_CONV
-C_CYAN   = C_MACRO
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+
+_VIS_SOURCES = [
+    DataSource.demo("AIS Feed (mock)"),
+    DataSource.demo("Carrier APIs (mock)"),
+    DataSource.demo("Port EDI Streams (mock)"),
+]
 
 # ---------------------------------------------------------------------------
 # Static data
@@ -133,11 +138,14 @@ _CARRIER_RANKINGS = [
 
 
 # ---------------------------------------------------------------------------
-# Cell formatters
+# Cell / content formatters
 # ---------------------------------------------------------------------------
 
 def _mono(value: str, color: str = C_TEXT, weight: int = 500) -> str:
-    return f'<span style="font-family:var(--mono);color:{color};font-weight:{weight};">{value}</span>'
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-weight:{weight};font-variant-numeric:tabular-nums;">{value}</span>'
+    )
 
 
 def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
@@ -145,18 +153,21 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _score_bar(score: int, color: str, width: int = 120) -> str:
+    """Inline progress bar used as a cell content widget."""
     pct = max(0, min(100, score))
+    # Outer container uses the global .progress-bar-custom class; only the
+    # dynamic fill width is kept as an inline style on the class-based element
+    # (permitted exception for data-driven width per-playbook step 4).
     return (
-        f'<div style="background:{C_SURFACE};border-radius:4px;height:8px;width:{width}px;display:inline-block;vertical-align:middle;">'
-        f'<div style="background:{color};width:{pct}%;height:100%;border-radius:4px;"></div>'
-        f'</div>'
+        f'<span class="progress-bar-custom" '
+        f'style="display:inline-block;width:{width}px;vertical-align:middle;">'
+        f'<span class="progress-bar-fill" style="width:{pct}%;background:{color};"></span>'
+        f'</span>'
     )
 
 
 def _score_cell(score: int, color: str) -> str:
-    return (
-        f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
-    )
+    return f'<span style="color:{color};font-weight:700;">{score}%</span> {_score_bar(score, color)}'
 
 
 def _overall_cell(score: int, color: str) -> str:
@@ -167,10 +178,7 @@ def _overall_cell(score: int, color: str) -> str:
 
 
 def _grade_badge(grade: str, color: str) -> str:
-    return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-        f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">{grade}</span>'
-    )
+    return badge(grade, color)
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +198,9 @@ def _render_hero_kpis() -> None:
             ],
             columns=6,
         )
-    except Exception as exc:
-        logger.warning(f"hero kpis error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — hero KPI strip render failed")
         st.info("KPI data unavailable.")
 
 
@@ -202,8 +211,8 @@ def _render_pipeline() -> None:
         col_colors = {
             "ORIGIN LOADED": C_MOD,
             "IN TRANSIT":    C_ACCENT,
-            "CUSTOMS":       C_PURPLE,
-            "AT PORT":       C_CYAN,
+            "CUSTOMS":       C_CONV,
+            "AT PORT":       C_MACRO,
             "LAST MILE":     "#f97316",
             "DELIVERED":     C_HIGH,
         }
@@ -213,24 +222,28 @@ def _render_pipeline() -> None:
             color = col_colors.get(stage, C_TEXT2)
             cards_html = ""
             for sid, route, teu in shipments:
+                # port-card provides background/border/radius/padding via class;
+                # <span style="color:..."> is the permitted content-level coloring.
                 cards_html += (
-                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:8px 10px;margin-bottom:6px;'
-                    f'border-left:3px solid {color};">'
-                    f'<div style="font-size:10px;color:{C_TEXT};font-weight:700;">{sid}</div>'
-                    f'<div style="font-size:9px;color:{C_TEXT2};margin-top:2px;">{route}</div>'
-                    f'<div style="font-size:9px;color:{color};margin-top:2px;">{teu}</div>'
+                    f'<div class="port-card">'
+                    f'<div class="port-name">{sid}</div>'
+                    f'<div class="port-detail">{route}</div>'
+                    f'<div class="port-detail"><span style="color:{color};">{teu}</span></div>'
                     f'</div>'
                 )
             with col:
                 st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:12px;">'
-                    f'<div style="font-size:10px;font-weight:800;color:{color};letter-spacing:0.08em;margin-bottom:6px;">{stage}</div>'
-                    f'<div style="font-size:20px;font-weight:800;color:{C_TEXT};margin-bottom:10px;">{len(shipments)}</div>'
+                    f'<div class="wsj-card">'
+                    f'<div class="sub-section-header">'
+                    f'<span style="color:{color};">{stage}</span>'
+                    f'</div>'
+                    f'<span class="kpi-value">{len(shipments)}</span>'
                     f'{cards_html}'
                     f'</div>'
                 )
-    except Exception as exc:
-        logger.warning(f"pipeline error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — shipment pipeline render failed")
         st.info("Pipeline data unavailable.")
 
 
@@ -250,8 +263,9 @@ def _render_visibility_scores() -> None:
                 _overall_cell(overall, color),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"visibility scores error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — trade-lane score table render failed")
         st.info("Visibility score data unavailable.")
 
 
@@ -266,14 +280,15 @@ def _render_exception_management() -> None:
             rows.append([
                 _sans(ref, weight=700),
                 _sans(vessel, color=C_TEXT2),
-                badge(issue, color_name),
+                badge(issue, severity_color),
                 _mono(duration, color=severity_color, weight=700),
                 _sans(location, color=C_TEXT2),
                 _sans(detail, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"exception mgmt error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — exception management render failed")
         st.info("Exception data unavailable.")
 
 
@@ -288,52 +303,38 @@ def _render_milestone_tracking() -> None:
         total = len(_MILESTONE_STEPS)
         pct = int(completed_count / total * 100)
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:16px 20px;margin-bottom:14px;">'
-            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size:12px;color:{C_TEXT2};">Journey Progress</span>'
-            f'<span style="font-size:12px;color:{C_HIGH};font-weight:700;">{completed_count}/{total} milestones complete ({pct}%)</span>'
-            f'</div>'
-            f'<div style="background:{C_CARD};border-radius:6px;height:12px;">'
-            f'<div style="background:linear-gradient(90deg,{C_ACCENT},{C_HIGH});width:{pct}%;height:100%;border-radius:6px;"></div>'
-            f'</div>'
-            f'</div>'
+        # Journey-progress KPI row (replaces inline progress card)
+        metric_card_row(
+            [
+                {"label": "Milestones Complete", "value": f"{completed_count}/{total}", "accent": C_HIGH,
+                 "sublabel": f"{pct}% of journey"},
+                {"label": "Current Stage", "value": "Indian Ocean", "accent": C_ACCENT,
+                 "sublabel": "In transit — vessel on schedule"},
+                {"label": "Next Milestone", "value": "Arrive Rotterdam", "accent": C_MOD,
+                 "sublabel": "ETA 2026-03-15 07:00"},
+            ],
+            columns=3,
         )
 
-        timeline_html = f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;padding:20px 24px;">'
-        for i, (name, ts, done, color, note) in enumerate(_MILESTONE_STEPS):
-            is_last = i == len(_MILESTONE_STEPS) - 1
-            connector = "" if is_last else (
-                f'<div style="width:2px;height:28px;background:{"linear-gradient(180deg," + color + "," + C_TEXT3 + ")" if done else C_TEXT3};'
-                f'margin-left:11px;"></div>'
-            )
-            dot_style = (
-                f'width:24px;height:24px;border-radius:50%;background:{color};'
-                f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
-            ) if done else (
-                f'width:24px;height:24px;border-radius:50%;border:2px solid {C_TEXT3};'
-                f'background:{C_CARD};flex-shrink:0;'
-            )
-            checkmark = '<span style="color:#fff;font-size:11px;font-weight:900;">✓</span>' if done else ""
-            timeline_html += (
-                f'<div style="display:flex;align-items:flex-start;gap:14px;">'
-                f'<div>'
-                f'<div style="{dot_style}">{checkmark}</div>'
-                f'{connector}'
-                f'</div>'
-                f'<div style="padding-bottom:8px;flex:1;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                f'<span style="font-size:13px;font-weight:700;color:{color if done else C_TEXT2};">{name}</span>'
-                f'<span style="font-size:11px;color:{C_TEXT3};">{ts}</span>'
-                f'</div>'
-                f'<div style="font-size:11px;color:{C_TEXT3};margin-top:2px;">{note}</div>'
-                f'</div>'
-                f'</div>'
-            )
-        timeline_html += "</div>"
-        st.html(timeline_html)
-    except Exception as exc:
-        logger.warning(f"milestone tracking error: {exc}")
+        # Milestone timeline rendered as a WSJ market table; each row uses
+        # _mono/_sans content spans for per-row coloring.
+        milestone_rows = []
+        for name, ts, done, color, note in _MILESTONE_STEPS:
+            status_color = color if done else C_TEXT3
+            status_text  = "✓ Done" if done else "Pending"
+            milestone_rows.append([
+                badge(status_text, status_color),
+                _sans(name,  color=status_color, weight=700),
+                _mono(ts,    color=C_TEXT3),
+                _sans(note,  color=C_TEXT3),
+            ])
+        wsj_market_table(
+            headers=["Status", "Milestone", "Timestamp", "Detail"],
+            rows=milestone_rows,
+        )
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — milestone tracking render failed")
         st.info("Milestone data unavailable.")
 
 
@@ -347,7 +348,7 @@ def _render_carrier_rankings() -> None:
         headers = ["#", "Carrier", "Visibility Score", "Grade", "Capabilities"]
         rows = []
         for i, (carrier, score, grade, caps, color) in enumerate(_CARRIER_RANKINGS):
-            rank_color = [C_MOD, C_TEXT2, C_PURPLE][min(i, 2)] if i < 3 else C_TEXT3
+            rank_color = [C_MOD, C_TEXT2, C_CONV][min(i, 2)] if i < 3 else C_TEXT3
             rows.append([
                 _mono(str(i + 1), color=rank_color, weight=800),
                 _sans(carrier, weight=700),
@@ -356,8 +357,9 @@ def _render_carrier_rankings() -> None:
                 _sans(caps, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"carrier rankings error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — carrier rankings render failed")
         st.info("Carrier ranking data unavailable.")
 
 
@@ -373,10 +375,8 @@ def _render_visibility_chart() -> None:
         fig.add_trace(go.Bar(name="Milestone Tracking", x=lanes, y=ms_vals,   marker_color=C_HIGH,   opacity=0.85))
         fig.add_trace(go.Bar(name="Predictive ETA",     x=lanes, y=pred_vals, marker_color=C_MOD,    opacity=0.85))
 
-        apply_dark_layout(
-            fig,
-            title="Visibility Scores by Trade Lane",
-            height=320,
+        apply_dark_layout(fig, title="Score Components by Lane", height=320)
+        fig.update_layout(
             margin=dict(l=10, r=10, t=46, b=80),
             barmode="group",
             legend=dict(
@@ -387,61 +387,54 @@ def _render_visibility_chart() -> None:
             yaxis=dict(range=[0, 100], title="Score (%)"),
         )
         st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        logger.warning(f"visibility chart error: {exc}")
+        st.markdown(source_footer(_VIS_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Visibility — score component chart render failed")
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Supply Chain Visibility & Tracking tab."""
-    try:
-        page_header(
-            title="Supply Chain Visibility & Tracking",
-            subtitle="Real-time shipment pipeline · AIS monitoring · Exception management · Milestone tracking · Carrier benchmarking",
-            icon="🛰️",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
-    except Exception as exc:
-        logger.warning(f"header error: {exc}")
-
-    _render_hero_kpis()
-    _render_pipeline()
-
-    section_divider()
-
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
-        _render_visibility_scores()
-    with col_right:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('visibility'):
         try:
-            _render_visibility_chart()
-        except Exception as exc:
-            logger.warning(f"chart col error: {exc}")
+            page_header(
+                title="Supply Chain Visibility & Tracking",
+                subtitle="Real-time shipment pipeline, AIS monitoring, exception management, "
+                "milestone tracking and carrier benchmarking",
+                badge_text="VISIBILITY",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("Visibility — page header render failed")
 
-    section_divider()
+        _render_hero_kpis()
+        _render_pipeline()
 
-    _render_exception_management()
+        section_divider("Lane Visibility")
 
-    section_divider()
+        col_left, col_right = st.columns([3, 2], gap="large")
+        with col_left:
+            _render_visibility_scores()
+        with col_right:
+            try:
+                _render_visibility_chart()
+            except Exception:
+                logger.exception("Visibility — score component chart column failed")
 
-    col_a, col_b = st.columns([2, 3])
-    with col_a:
-        _render_carrier_rankings()
-    with col_b:
-        _render_milestone_tracking()
+        section_divider("Exceptions")
 
-    try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
-            f'Data refreshed every 15 minutes from AIS feeds, carrier APIs, and port EDI streams. '
-            f'Visibility scores calculated as rolling 30-day averages. '
-            f'Exception alerts generated when deviations exceed configured thresholds.'
-            f'</div>'
-        )
-    except Exception as exc:
-        logger.warning(f"footer error: {exc}")
+        _render_exception_management()
+
+        section_divider("Carriers & Milestones")
+
+        col_a, col_b = st.columns([2, 3], gap="large")
+        with col_a:
+            _render_carrier_rankings()
+        with col_b:
+            _render_milestone_tracking()

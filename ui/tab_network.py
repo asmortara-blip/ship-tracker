@@ -12,14 +12,12 @@ from loguru import logger
 from ui.styles import (
     C_ACCENT,
     C_BG,
-    C_BORDER,
     C_CARD,
     C_CONV,
     C_HIGH,
     C_LOW,
     C_MACRO,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
@@ -29,11 +27,22 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
-C_PURPLE = C_CONV
-C_CYAN   = C_MACRO
+# ---------------------------------------------------------------------------
+# Data provenance
+# ---------------------------------------------------------------------------
+#
+# Network topology figures are illustrative demos (port lists, centrality,
+# carrier service counts, stress scenarios). Mark them as demo so the
+# provenance pill is honest.
+
+_NETWORK_SOURCES = [
+    {"name": "Vessel scheduling & AIS (demo)",      "kind": "modeled", "quality": "demo"},
+    {"name": "Carrier service announcements (demo)", "kind": "modeled", "quality": "demo"},
+]
 
 # ---------------------------------------------------------------------------
 # Static network data
@@ -41,7 +50,7 @@ C_CYAN   = C_MACRO
 
 _PORTS = [
     ("Shanghai",      31.23,  121.47, 47.3, "Asia East",         C_ACCENT),
-    ("Singapore",      1.29,  103.85, 37.2, "Southeast Asia",    C_CYAN),
+    ("Singapore",      1.29,  103.85, 37.2, "Southeast Asia",    C_MACRO),
     ("Ningbo",        29.87,  121.55, 33.5, "Asia East",         C_ACCENT),
     ("Shenzhen",      22.54,  114.06, 30.0, "Asia East",         C_ACCENT),
     ("Guangzhou",     23.09,  113.26, 24.2, "Asia East",         C_ACCENT),
@@ -49,15 +58,15 @@ _PORTS = [
     ("Busan",         35.18,  129.08, 21.7, "Asia East",         C_ACCENT),
     ("Hong Kong",     22.30,  114.18, 17.8, "Asia East",         C_ACCENT),
     ("Rotterdam",     51.92,    4.48, 14.5, "Europe",            C_HIGH),
-    ("Port Klang",     3.00,  101.40, 13.2, "Southeast Asia",    C_CYAN),
+    ("Port Klang",     3.00,  101.40, 13.2, "Southeast Asia",    C_MACRO),
     ("Antwerp",       51.22,    4.40, 11.9, "Europe",            C_HIGH),
     ("Kaohsiung",     22.62,  120.30, 11.4, "Asia East",         C_ACCENT),
     ("Hamburg",       53.55,    9.99, 10.0, "Europe",            C_HIGH),
     ("Los Angeles",   33.73, -118.26,  9.9, "North America West",C_MOD),
     ("Long Beach",    33.75, -118.22,  9.4, "North America West",C_MOD),
-    ("Tanjung Pelepas", 1.36,  103.55,  9.2, "Southeast Asia",   C_CYAN),
+    ("Tanjung Pelepas", 1.36,  103.55,  9.2, "Southeast Asia",   C_MACRO),
     ("Dubai (Jebel Ali)", 24.99, 55.06, 14.4, "Middle East",     "#f97316"),
-    ("Colombo",        6.93,   79.85,  7.2, "South Asia",        C_PURPLE),
+    ("Colombo",        6.93,   79.85,  7.2, "South Asia",        C_CONV),
     ("New York",      40.69,  -74.15,  8.7, "North America East","#eab308"),
     ("Felixstowe",    51.96,    1.33,  3.7, "Europe",            C_HIGH),
     ("Valencia",      39.45,   -0.32,  5.4, "Europe",            C_HIGH),
@@ -69,21 +78,21 @@ _PORTS = [
 
 _ROUTES = [
     ("Shanghai",   "Rotterdam",     14, C_ACCENT),
-    ("Shanghai",   "Los Angeles",   18, C_CYAN),
+    ("Shanghai",   "Los Angeles",   18, C_MACRO),
     ("Shanghai",   "Singapore",     22, C_MOD),
     ("Singapore",  "Rotterdam",     12, C_ACCENT),
-    ("Singapore",  "Colombo",       10, C_PURPLE),
-    ("Ningbo",     "Long Beach",    16, C_CYAN),
-    ("Busan",      "Los Angeles",   10, C_CYAN),
+    ("Singapore",  "Colombo",       10, C_CONV),
+    ("Ningbo",     "Long Beach",    16, C_MACRO),
+    ("Busan",      "Los Angeles",   10, C_MACRO),
     ("Shenzhen",   "Antwerp",        8, C_ACCENT),
     ("Rotterdam",  "New York",       8, "#eab308"),
     ("Qingdao",    "Hamburg",        6, C_ACCENT),
     ("Dubai (Jebel Ali)", "Rotterdam", 10, "#f97316"),
     ("Port Klang", "Felixstowe",    8, C_HIGH),
-    ("Colombo",    "Hamburg",        6, C_PURPLE),
+    ("Colombo",    "Hamburg",        6, C_CONV),
     ("Shanghai",   "Santos",         4, C_LOW),
     ("Rotterdam",  "Durban",         4, "#84cc16"),
-    ("Singapore",  "Port Klang",    20, C_CYAN),
+    ("Singapore",  "Port Klang",    20, C_MACRO),
     ("Tanjung Pelepas", "Rotterdam", 6, C_ACCENT),
     ("Antwerp",    "New York",       6, "#eab308"),
     ("Algeciras",  "Rotterdam",      8, C_HIGH),
@@ -173,12 +182,19 @@ def _sans(value: str, color: str = C_TEXT, weight: int = 500) -> str:
 
 
 def _score_bar(score: int, color: str, width: int = 100) -> str:
+    """Inline progress bar for table cells.
+
+    The outer container uses the global .progress-bar-custom class (no ad-hoc
+    div style blocks).  Only the dynamic fill width (data-driven %) is kept as
+    an inline style on the class-based fill element — the permitted exception per
+    playbook step 4.
+    """
     pct = max(0, min(100, score))
     return (
-        f'<div style="background:{C_SURFACE};border-radius:3px;height:6px;width:{width}px;'
-        f'display:inline-block;vertical-align:middle;">'
-        f'<div style="background:{color};width:{pct}%;height:100%;border-radius:3px;"></div>'
-        f'</div>'
+        f'<span class="progress-bar-custom" '
+        f'style="display:inline-block;width:{width}px;vertical-align:middle;">'
+        f'<span class="progress-bar-fill" style="width:{pct}%;background:{color};"></span>'
+        f'</span>'
     )
 
 
@@ -195,14 +211,15 @@ def _render_hero_stats() -> None:
         metric_card_row(
             [
                 {"label": "Ports in Network",         "value": "847",    "accent": C_ACCENT, "sublabel": "Active container services"},
-                {"label": "Trade Routes",             "value": "2,340",  "accent": C_CYAN,   "sublabel": "Unique port-pair routes tracked"},
+                {"label": "Trade Routes",             "value": "2,340",  "accent": C_MACRO,   "sublabel": "Unique port-pair routes tracked"},
                 {"label": "Network Resilience Score", "value": "73/100", "accent": C_MOD,    "sublabel": "Composite redundancy & connectivity index"},
                 {"label": "Single Points of Failure", "value": "7",      "accent": C_LOW,    "sublabel": "Closure disrupts >5% of global trade"},
             ],
             columns=4,
         )
-    except Exception as exc:
-        logger.warning(f"hero stats error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — hero stats render failed")
         st.info("Network stats unavailable.")
 
 
@@ -269,8 +286,9 @@ def _render_network_map() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        logger.warning(f"network map error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — global network map render failed")
         st.info("Network map unavailable.")
 
 
@@ -292,17 +310,22 @@ def _render_centrality() -> None:
                 f'<span style="font-size:14px;font-weight:800;color:{impact_color};">{disruption:.1f}%</span>'
                 f'<span style="font-size:10px;color:{C_TEXT3};"> global trade</span>'
             )
+            role_text = (
+                description if len(description) <= 60
+                else f"{description[:59]}…"
+            )
             rows.append([
                 _mono(str(i + 1), color=C_TEXT3, weight=700),
                 _sans(port, weight=700),
                 _score_cell(centrality, color),
                 _mono(str(connections), color=C_TEXT2, weight=600),
                 impact_cell,
-                _sans(f"{description[:60]}…", color=C_TEXT3),
+                _sans(role_text, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"centrality error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — centrality table render failed")
         st.info("Centrality data unavailable.")
 
 
@@ -314,21 +337,22 @@ def _render_hub_spoke() -> None:
         rows = []
         for route, rtype, cost, days, reliability, note in _HUB_SPOKE:
             is_direct = rtype == "Direct Call"
-            type_color_name = "blue" if is_direct else "purple"
+            type_color = C_ACCENT if is_direct else C_CONV
             rel_color = C_HIGH if reliability >= 90 else (C_MOD if reliability >= 80 else C_LOW)
             cost_color = C_HIGH if cost < 700 else (C_MOD if cost < 900 else C_LOW)
             days_color = C_HIGH if days <= 20 else (C_MOD if days <= 30 else C_LOW)
             rows.append([
                 _sans(route, weight=700),
-                badge(rtype, type_color_name),
+                badge(rtype, type_color),
                 _mono(f"${cost:,}", color=cost_color, weight=700),
                 _mono(f"{days}d", color=days_color, weight=700),
                 _score_cell(reliability, rel_color),
                 _sans(note, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"hub spoke error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — hub-and-spoke table render failed")
         st.info("Hub-and-spoke data unavailable.")
 
 
@@ -338,8 +362,8 @@ def _render_carrier_services() -> None:
 
         alliance_colors = {
             "Gemini":  C_ACCENT,
-            "Premier": C_PURPLE,
-            "Ocean":   C_CYAN,
+            "Premier": C_CONV,
+            "Ocean":   C_MACRO,
             "MSC":     C_MOD,
             "ZIM":     C_HIGH,
             "PIL":     C_TEXT2,
@@ -359,8 +383,9 @@ def _render_carrier_services() -> None:
                 _sans(flagship, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.warning(f"carrier services error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — carrier services table render failed")
         st.info("Carrier service data unavailable.")
 
 
@@ -371,39 +396,25 @@ def _render_stress_test() -> None:
             "Port Closure Scenarios (30-Day Simulation) — rate, routing, and recovery impact",
         )
 
+        headers = [
+            "Port Closure", "Scenario", "Affected Routes",
+            "Alternative Routing", "Rate Impact", "Add. Days", "Recovery",
+        ]
+        rows = []
         for port, scenario, affected, alternative, rate_impact, add_days, recovery in _STRESS_TESTS:
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-left:4px solid {C_LOW};'
-                f'border-radius:6px;padding:16px 20px;margin-bottom:12px;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
-                f'<div>'
-                f'<span style="font-size:14px;font-weight:800;color:{C_LOW};">{port} Closure</span>'
-                f'<div style="font-size:11px;color:{C_TEXT3};margin-top:3px;">{scenario}</div>'
-                f'</div>'
-                f'<div style="text-align:right;">'
-                f'<div style="font-size:18px;font-weight:800;color:{C_LOW};">{rate_impact}</div>'
-                f'<div style="font-size:10px;color:{C_TEXT3};">rate impact</div>'
-                f'</div>'
-                f'</div>'
-                f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">AFFECTED ROUTES</div>'
-                f'<div style="font-size:11px;color:{C_TEXT2};">{affected}</div>'
-                f'</div>'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">ALTERNATIVE ROUTING</div>'
-                f'<div style="font-size:11px;color:{C_TEXT2};">{alternative}</div>'
-                f'</div>'
-                f'<div style="background:{C_SURFACE};border-radius:6px;padding:10px 12px;">'
-                f'<div style="font-size:10px;color:{C_TEXT3};font-weight:600;margin-bottom:4px;">ADDITIONAL DAYS / RECOVERY</div>'
-                f'<div style="font-size:11px;color:{C_MOD};font-weight:700;">{add_days}</div>'
-                f'<div style="font-size:10px;color:{C_TEXT3};">Recovery: {recovery}</div>'
-                f'</div>'
-                f'</div>'
-                f'</div>'
-            )
-    except Exception as exc:
-        logger.warning(f"stress test error: {exc}")
+            rows.append([
+                _sans(f"{port} Closure", color=C_LOW, weight=800),
+                _sans(scenario, color=C_TEXT3),
+                _sans(affected, color=C_TEXT2),
+                _sans(alternative, color=C_TEXT2),
+                _mono(rate_impact, color=C_LOW, weight=800),
+                _mono(add_days, color=C_MOD, weight=700),
+                _sans(recovery, color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — stress test table render failed")
         st.info("Stress test data unavailable.")
 
 
@@ -429,8 +440,8 @@ def _render_centrality_chart() -> None:
             name="Trade Disruption %",
             x=ports, y=disruption,
             mode="lines+markers",
-            line=dict(color=C_PURPLE, width=2),
-            marker=dict(size=7, color=C_PURPLE),
+            line=dict(color=C_CONV, width=2),
+            marker=dict(size=7, color=C_CONV),
             yaxis="y2",
             hovertemplate="%{x}<br>Disruption: %{y}%<extra></extra>",
         ))
@@ -454,61 +465,65 @@ def _render_centrality_chart() -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True)
-    except Exception as exc:
-        logger.warning(f"centrality chart error: {exc}")
+        st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Network — centrality chart render failed")
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Shipping Network Topology & Resilience tab."""
-    try:
-        page_header(
-            title="Shipping Network Topology & Resilience",
-            subtitle="Global network map · Port centrality · Hub-and-spoke analysis · Alliance coverage · Stress testing",
-            icon="🕸️",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
-    except Exception as exc:
-        logger.warning(f"header error: {exc}")
-
-    _render_hero_stats()
-    _render_network_map()
-
-    section_divider()
-
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
-        _render_centrality()
-    with col_right:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('network'):
         try:
-            _render_centrality_chart()
-        except Exception as exc:
-            logger.warning(f"centrality chart col error: {exc}")
+            page_header(
+                title="Shipping Network Topology & Resilience",
+                subtitle="Global network map, port centrality, hub-and-spoke analysis, "
+                "alliance coverage and stress testing",
+                badge_text="NETWORK",
+                badge_color=C_ACCENT,
+            )
+        except Exception:
+            logger.exception("Network — page header render failed")
 
-    section_divider()
+        _render_hero_stats()
+        _render_network_map()
 
-    _render_hub_spoke()
+        section_divider("Centrality")
 
-    section_divider()
+        col_left, col_right = st.columns([3, 2], gap="large")
+        with col_left:
+            _render_centrality()
+        with col_right:
+            try:
+                _render_centrality_chart()
+            except Exception:
+                logger.exception("Network — centrality chart column failed")
 
-    _render_carrier_services()
+        section_divider("Routing Structure")
+        _render_hub_spoke()
 
-    section_divider()
+        section_divider("Alliance Coverage")
+        _render_carrier_services()
 
-    _render_stress_test()
+        section_divider("Stress Testing")
+        _render_stress_test()
 
-    try:
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
-            f'padding:14px 18px;margin-top:28px;font-size:11px;color:{C_TEXT3};font-family:var(--sans);">'
-            f'Network topology derived from vessel scheduling data, AIS tracking, and carrier service announcements. '
-            f'Centrality scores calculated using betweenness centrality weighted by TEU throughput. '
-            f'Stress test scenarios are modelled simulations — actual outcomes depend on market conditions and carrier response.'
-            f'</div>'
-        )
-    except Exception as exc:
-        logger.warning(f"footer error: {exc}")
+        section_divider("Methodology")
+
+        try:
+            section_header(
+                "Methodology & Provenance",
+                "Topology derived from vessel scheduling data, AIS tracking and carrier "
+                "service announcements. Centrality is betweenness weighted by TEU "
+                "throughput; stress-test scenarios are modeled simulations — actual "
+                "outcomes depend on market conditions and carrier response.",
+            )
+            st.markdown(source_footer(_NETWORK_SOURCES), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Network — methodology footer render failed")

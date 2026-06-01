@@ -13,8 +13,8 @@ Sections:
 
 Refactored to the shared WSJ design system (see ``docs/TAB_MIGRATION.md``):
 palette constants import from ``ui.styles``; all headers/cards/tables use
-shared helpers; every figure and table carries a ``live_data_badge`` that
-honestly labels the synthetic data as ``DEMO``.
+shared helpers; every figure and table carries a ``source_footer`` provenance
+strip that honestly labels the synthetic data as ``DEMO``.
 """
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
-    C_CARD,
     C_CONV,
     C_HIGH,
     C_LOW,
@@ -42,10 +41,11 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
-    live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -86,8 +86,8 @@ _SIG_BADGE_COLOR: dict[str, str] = {
 
 
 # ── Provenance ──────────────────────────────────────────────────────────────
-# Attribution data is fully synthetic; every figure/table above gets a red
-# DEMO pill so users know not to trust the numbers.
+# Attribution data is fully synthetic; every figure/table is followed by a
+# red ``DEMO`` source_footer so users know not to trust the numbers.
 
 def _attribution_source(notes: str = "") -> DataSource:
     return DataSource(
@@ -98,9 +98,12 @@ def _attribution_source(notes: str = "") -> DataSource:
     )
 
 
-def _provenance_pill(notes: str = "") -> None:
-    """Render the shared data-quality pill above a figure/table."""
-    st.html(live_data_badge(_attribution_source(notes)))
+def _attribution_footer(notes: str = "") -> None:
+    """Render the shared multi-source provenance strip beneath a figure/table."""
+    st.markdown(
+        source_footer([_attribution_source(notes)]),
+        unsafe_allow_html=True,
+    )
 
 
 # ── Cell formatters for WSJ market tables ───────────────────────────────────
@@ -146,7 +149,7 @@ def _sector_dot(name: str) -> str:
 
 
 # ── Synthetic data helpers ──────────────────────────────────────────────────
-# Every data helper feeds a section labelled ``DEMO`` via ``_provenance_pill``.
+# Every data helper feeds a section labelled ``DEMO`` via ``_attribution_footer``.
 
 def _seed() -> int:
     return 42
@@ -258,18 +261,16 @@ def _render_hero(contributions: Dict[str, float]) -> None:
         total_color = C_HIGH if total >= 0 else C_LOW
         total_sign  = "+" if total >= 0 else ""
 
-        # Total portfolio return card
-        st.html(
-            f'<div style="padding:16px 20px;background:{C_SURFACE};'
-            f'border:1px solid {C_BORDER};border-radius:6px;margin-bottom:14px;">'
-            f'<div style="color:{C_TEXT3};font-size:11px;text-transform:uppercase;'
-            f'letter-spacing:1.5px;">Total Portfolio Return</div>'
-            f'<div style="color:{total_color};font-size:42px;font-weight:800;'
-            f'font-family:var(--mono);line-height:1;">'
-            f'{total_sign}{total:.0f} bps</div>'
-            f'<div style="color:{C_TEXT3};font-size:11px;margin-top:4px;">'
-            f'Attribution decomposition across 6 factors</div>'
-            f'</div>'
+        # Total portfolio return card — shared metric card helper, full width
+        metric_card_row(
+            [{
+                "label":       "Total Portfolio Return",
+                "value":       f"{total_sign}{total:.0f} bps",
+                "accent":      total_color,
+                "sublabel":    "Attribution decomposition across 6 factors",
+                "delta_color": total_color,
+            }],
+            columns=1,
         )
 
         # Factor-level breakdown using shared metric cards
@@ -391,10 +392,14 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
     try:
         col_l, col_r = st.columns(2)
 
+        headers = ["Trade", "Sector", "Impact", "Reason"]
+
         with col_l:
-            st.html('<div class="sub-section-header">Top 5 Best Calls</div>')
-            headers = ["Trade", "Sector", "Impact", "Reason"]
-            rows = [
+            section_header(
+                "Top 5 Best Calls",
+                "Largest positive attribution impact",
+            )
+            best_rows = [
                 [
                     _sans(row["Trade"], color=C_TEXT, weight=600),
                     _sans(row["Sector"], color=C_TEXT3, weight=500),
@@ -403,12 +408,14 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 ]
                 for _, row in best.iterrows()
             ]
-            wsj_market_table(headers, rows)
+            wsj_market_table(headers, best_rows)
 
         with col_r:
-            st.html('<div class="sub-section-header">Top 5 Worst Calls</div>')
-            headers = ["Trade", "Sector", "Impact", "Reason"]
-            rows = [
+            section_header(
+                "Top 5 Worst Calls",
+                "Largest drag on attribution impact",
+            )
+            worst_rows = [
                 [
                     _sans(row["Trade"], color=C_TEXT, weight=600),
                     _sans(row["Sector"], color=C_TEXT3, weight=500),
@@ -417,7 +424,7 @@ def _render_best_worst(best: pd.DataFrame, worst: pd.DataFrame) -> None:
                 ]
                 for _, row in worst.iterrows()
             ]
-            wsj_market_table(headers, rows)
+            wsj_market_table(headers, worst_rows)
     except Exception:
         logger.exception("Best/worst render failed")
         st.error("Best/worst decisions unavailable.")
@@ -469,90 +476,97 @@ def _render_attribution_over_time(df: pd.DataFrame) -> None:
 
 # ── Main render ─────────────────────────────────────────────────────────────
 
-def render(stock_data=None, insights=None, freight_data=None) -> None:
+def render(stock_data=None, insights=None, freight_data=None, *args, **kwargs) -> None:
     """Render the Performance Attribution Analysis tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('attribution'):
 
-    page_header(
-        title="Performance Attribution",
-        subtitle="Factor decomposition and alpha analysis",
-        badge_text="Demo Data",
-        badge_color=C_LOW,
-    )
-
-    # ── 1. Attribution Hero ─────────────────────────────────────────────────
-    try:
-        section_header(
-            "1. Attribution Hero",
-            subtitle="Total return decomposed into 6 factors",
+        page_header(
+            title="Performance Attribution",
+            subtitle="Brinson-Hood-Beebower factor decomposition and alpha decay analysis",
+            badge_text="ATTRIBUTION",
+            badge_color=C_ACCENT,
         )
-        _provenance_pill("Total portfolio return and per-factor contribution (bps).")
-        contributions = _build_factor_contributions()
-        _render_hero(contributions)
-    except Exception:
-        logger.exception("Attribution section 1 failed")
-        st.warning("Section 1 unavailable.")
 
-    # ── 2. Factor Attribution Table ─────────────────────────────────────────
-    try:
-        section_header(
-            "2. Factor Attribution Table",
-            subtitle="Contribution, significance, current vs historical average",
-        )
-        _provenance_pill("Per-factor contribution with t-stat significance.")
-        factor_df = _build_factor_table()
-        _render_factor_table(factor_df)
-    except Exception:
-        logger.exception("Attribution section 2 failed")
-        st.warning("Section 2 unavailable.")
+        # ── Return decomposition ────────────────────────────────────────────────
+        try:
+            section_header(
+                "Attribution Hero",
+                subtitle="Total portfolio return decomposed into six factor contributions",
+            )
+            contributions = _build_factor_contributions()
+            _render_hero(contributions)
+            _attribution_footer("Total portfolio return and per-factor contribution (bps).")
+        except Exception:
+            logger.exception("Attribution hero section failed")
+            st.warning("Attribution hero unavailable.")
 
-    # ── 3. BHB Attribution ──────────────────────────────────────────────────
-    try:
-        section_header(
-            "3. Brinson-Hood-Beebower Attribution",
-            subtitle="Allocation + Selection + Interaction by sub-sector (bps)",
-        )
-        _provenance_pill("Allocation / selection / interaction by sub-sector.")
-        bhb_df = _build_bhb_data()
-        _render_bhb(bhb_df)
-    except Exception:
-        logger.exception("Attribution section 3 failed")
-        st.warning("Section 3 unavailable.")
+        try:
+            section_header(
+                "Factor Attribution Table",
+                subtitle="Contribution, significance, and current vs historical average",
+            )
+            factor_df = _build_factor_table()
+            _render_factor_table(factor_df)
+            _attribution_footer("Per-factor contribution with t-stat significance.")
+        except Exception:
+            logger.exception("Attribution factor-table section failed")
+            st.warning("Factor attribution table unavailable.")
 
-    # ── 4. Alpha Decay ──────────────────────────────────────────────────────
-    try:
-        section_header(
-            "4. Alpha Decay",
-            subtitle="Alpha remaining after 1/5/10/20/30 days - optimal holding period",
-        )
-        _provenance_pill("Alpha-remaining curve over 1-30 day holding periods.")
-        decay_df = _build_alpha_decay()
-        _render_alpha_decay_chart(decay_df)
-    except Exception:
-        logger.exception("Attribution section 4 failed")
-        st.warning("Section 4 unavailable.")
+        try:
+            section_header(
+                "Brinson-Hood-Beebower Attribution",
+                subtitle="Allocation, selection, and interaction effects by sub-sector (bps)",
+            )
+            bhb_df = _build_bhb_data()
+            _render_bhb(bhb_df)
+            _attribution_footer("Allocation / selection / interaction by sub-sector.")
+        except Exception:
+            logger.exception("Attribution BHB section failed")
+            st.warning("BHB attribution table unavailable.")
 
-    # ── 5. Best / Worst Decisions ───────────────────────────────────────────
-    try:
-        section_header(
-            "5. Best / Worst Attribution Decisions",
-            subtitle="Top 5 best calls and top 5 worst calls by attribution impact",
-        )
-        _provenance_pill("Top and bottom 5 trades by attribution impact.")
-        best_df, worst_df = _build_best_worst()
-        _render_best_worst(best_df, worst_df)
-    except Exception:
-        logger.exception("Attribution section 5 failed")
-        st.warning("Section 5 unavailable.")
+        section_divider("Alpha Decay")
 
-    # ── 6. Attribution over Time ────────────────────────────────────────────
-    try:
-        section_header(
-            "6. Attribution over Time",
-            subtitle="Stacked area - factor contributions each month, last 12 months",
-        )
-        _provenance_pill("Rolling 12-month factor contributions (bps).")
-        monthly_df = _build_monthly_attribution()
-        _render_attribution_over_time(monthly_df)
-    except Exception:
-        logger.exception("Attribution section 6 failed")
-        st.warning("Section 6 unavailable.")
+        # ── Alpha decay ─────────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Alpha Decay Curve",
+                subtitle="Alpha remaining after 1 / 5 / 10 / 20 / 30 days — optimal holding period",
+            )
+            decay_df = _build_alpha_decay()
+            _render_alpha_decay_chart(decay_df)
+            _attribution_footer("Alpha-remaining curve over 1-30 day holding periods.")
+        except Exception:
+            logger.exception("Attribution alpha-decay section failed")
+            st.warning("Alpha decay chart unavailable.")
+
+        section_divider("Decision Quality")
+
+        # ── Decision quality ────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Best / Worst Attribution Decisions",
+                subtitle="The five highest and five lowest trades by attribution impact",
+            )
+            best_df, worst_df = _build_best_worst()
+            _render_best_worst(best_df, worst_df)
+            _attribution_footer("Top and bottom 5 trades by attribution impact.")
+        except Exception:
+            logger.exception("Attribution best/worst section failed")
+            st.warning("Best/worst decisions unavailable.")
+
+        st.divider()
+
+        try:
+            section_header(
+                "Attribution Over Time",
+                subtitle="Stacked factor contributions per month across the trailing 12 months",
+            )
+            monthly_df = _build_monthly_attribution()
+            _render_attribution_over_time(monthly_df)
+            _attribution_footer("Rolling 12-month factor contributions (bps).")
+        except Exception:
+            logger.exception("Attribution over-time section failed")
+            st.warning("Attribution over time chart unavailable.")

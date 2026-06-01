@@ -146,6 +146,7 @@ class AIAnalysis:
     outlook_30d: str                # 30-day outlook paragraph
     top_recommendations: list       # [{rank, title, action, ticker, conviction, ...}]
     disclaimer: str                 # standard investment disclaimer
+    tldr: str = ""                  # 2-3 sentence lede over the report (set post-build)
 
 
 @dataclass
@@ -423,7 +424,7 @@ _MOCK_LONG_SIGNALS = [
     },
     {
         "ticker": "SBLK", "direction": "LONG", "conviction": "HIGH",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "BDI Divergence Long",
+        "signal_type": "MACRO", "signal_name": "BDI Divergence Long",
         "strength": 0.71, "expected_return_pct": 16.8, "time_horizon": "2M",
         "entry_price": 14.80, "target_price": 17.30, "stop_loss": 13.76, "risk_reward": 2.40,
         "rationale": (
@@ -470,7 +471,7 @@ _MOCK_LONG_SIGNALS = [
 _MOCK_SHORT_SIGNALS = [
     {
         "ticker": "STNG", "direction": "SHORT", "conviction": "HIGH",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "Product Tanker Macro Short",
+        "signal_type": "MACRO", "signal_name": "Product Tanker Macro Short",
         "strength": 0.74, "expected_return_pct": -13.5, "time_horizon": "1M",
         "entry_price": 38.20, "target_price": 35.33, "stop_loss": 41.15, "risk_reward": 2.08,
         "rationale": (
@@ -503,7 +504,7 @@ _MOCK_SHORT_SIGNALS = [
     },
     {
         "ticker": "HAFNI", "direction": "SHORT", "conviction": "LOW",
-        "signal_type": "MACRO_OVERLAY", "signal_name": "Product Tanker Supply Overhang",
+        "signal_type": "MACRO", "signal_name": "Product Tanker Supply Overhang",
         "strength": 0.50, "expected_return_pct": -8.0, "time_horizon": "2M",
         "entry_price": 7.20, "target_price": 6.70, "stop_loss": 7.70, "risk_reward": 1.10,
         "rationale": (
@@ -1609,6 +1610,7 @@ def build_investor_report(
     macro_data: dict,
     stock_data: dict,
     news_items: list = None,
+    with_tldr: bool = True,
 ) -> InvestorReport:
     """Build a complete InvestorReport from all available data sources.
 
@@ -1637,6 +1639,7 @@ def build_investor_report(
             macro_data=macro_data,
             stock_data=stock_data,
             news_items=news_items,
+            with_tldr=with_tldr,
         )
     except Exception as _fatal:
         logger.error("build_investor_report total failure — returning safe default: {}", _fatal)
@@ -1695,6 +1698,91 @@ def build_investor_report(
         )
 
 
+# ---------------------------------------------------------------------------
+# Report TLDR — a 2-3 sentence lede over the report, via the shared
+# engine.daily_briefing_tldr summarizer. AIAnalysis has no headline /
+# sections of its own, so we adapt it (and the report's sentiment + macro)
+# into the headline/body/sections shape generate_tldr duck-types over.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _LedeSection:
+    """Duck-typed NarrationSection for the TLDR adapter."""
+    title: str
+    bullets: list
+
+
+@dataclass
+class _LedeNarration:
+    """Duck-typed DailyNarration for the TLDR adapter (headline/body/sections)."""
+    headline: str
+    body: str
+    sections: list
+    date: str = ""
+
+
+def _synthesize_headline(report) -> str:
+    """A one-line headline for the report lede — AIAnalysis has none, so
+    compose it from the composite sentiment label + a key macro figure."""
+    label = str(getattr(getattr(report, "sentiment", None), "overall_label", "") or "NEUTRAL")
+    macro = getattr(report, "macro", None)
+    bits: list[str] = []
+    bdi_chg = float(getattr(macro, "bdi_change_30d_pct", 0.0) or 0.0)
+    if bdi_chg:
+        bits.append(f"BDI {bdi_chg:+.1f}% 30d")
+    stress = str(getattr(macro, "supply_chain_stress", "") or "")
+    if stress:
+        bits.append(f"supply-chain stress {stress}")
+    tail = (" — " + ", ".join(bits)) if bits else ""
+    return f"{label} shipping outlook{tail}"
+
+
+def _build_report_tldr(report) -> str:
+    """Distill the report into a 2-3 sentence lede via generate_tldr.
+
+    Adapts the AIAnalysis (executive_summary → body, top_recommendations →
+    a 'Top Recommendations' section) plus a synthesized headline into the
+    duck-type generate_tldr consumes. Uses a SEPARATE cache namespace
+    (cache/tldr_report/) so it never collides with the shipping-briefing
+    TLDR's per-day cache slot. Best-effort: returns "" on any failure so
+    the report build is never affected.
+    """
+    try:
+        from pathlib import Path
+
+        from engine.daily_briefing_tldr import generate_tldr
+
+        ai = getattr(report, "ai", None)
+        if ai is None:
+            return ""
+
+        bullets: list[str] = []
+        for r in (list(getattr(ai, "top_recommendations", []) or [])[:3]):
+            rank = r.get("rank") if isinstance(r, dict) else getattr(r, "rank", "")
+            title = r.get("title") if isinstance(r, dict) else getattr(r, "title", "")
+            title = str(title or "").strip()
+            if title:
+                bullets.append(f"{rank}. {title}" if rank else title)
+
+        narration = _LedeNarration(
+            headline=_synthesize_headline(report),
+            body=str(getattr(ai, "executive_summary", "") or ""),
+            sections=[_LedeSection("Top Recommendations", bullets)] if bullets else [],
+            date=str(getattr(report, "generated_at", "") or "")[:10],
+        )
+        cache_dir = Path(__file__).resolve().parent.parent / "cache" / "tldr_report"
+        # source="investor_report_tldr" so the cost panel / operator digest
+        # attribute the report lede separately from the shipping-briefing TLDR.
+        summary = generate_tldr(
+            narration, cache_dir=cache_dir, source="investor_report_tldr",
+        )
+        return summary.text or ""
+    except Exception as exc:   # pragma: no cover - defensive
+        logger.debug("_build_report_tldr failed: {}", exc)
+        return ""
+
+
 def _build_investor_report_inner(
     port_results: list,
     route_results: list,
@@ -1703,6 +1791,7 @@ def _build_investor_report_inner(
     macro_data: dict,
     stock_data: dict,
     news_items: list = None,
+    with_tldr: bool = True,
 ) -> InvestorReport:
     """Inner implementation of build_investor_report — called by the public
     function which wraps it in a top-level try/except safety net."""
@@ -1919,7 +2008,7 @@ def _build_investor_report_inner(
 
         signal_count_by_type = {
             "MOMENTUM": 0, "MEAN_REVERSION": 0,
-            "MACRO_OVERLAY": 0, "FUNDAMENTAL": 0, "TECHNICAL": 0,
+            "MACRO": 0, "FUNDAMENTAL": 0, "TECHNICAL": 0,
         }
         signal_count_by_conviction = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         for sig in signals:
@@ -1930,7 +2019,7 @@ def _build_investor_report_inner(
                 signal_count_by_conviction[conv] += 1
 
         # Ensure all 5 signal types are always present (at least 0)
-        for _stype in ("MOMENTUM", "MEAN_REVERSION", "MACRO_OVERLAY", "FUNDAMENTAL", "TECHNICAL"):
+        for _stype in ("MOMENTUM", "MEAN_REVERSION", "MACRO", "FUNDAMENTAL", "TECHNICAL"):
             signal_count_by_type.setdefault(_stype, 0)
 
         alpha = AlphaSignalSummary(
@@ -2235,6 +2324,17 @@ def _build_investor_report_inner(
         news_items=top_news,
         digest=digest,
     )
+
+    # 16. Report lede — a 2-3 sentence TLDR distilled from the report.
+    # Cached per distinct report content in a separate namespace
+    # (cache/tldr_report/{date}.json, fingerprinted on headline + exec
+    # summary): a rebuild with byte-identical content is a cache hit,
+    # but content that legitimately shifts intra-day re-distills (a stale
+    # lede would be worse than one cheap Haiku call). The once-daily
+    # scheduler build — with stable bundle news_items — is the amortized
+    # path; the diff-only rotation passes with_tldr=False to skip it.
+    if with_tldr:
+        report.ai.tldr = _build_report_tldr(report)
 
     logger.success(
         "InvestorReport built: quality={}, sentiment={} ({:+.3f}), {} signals",

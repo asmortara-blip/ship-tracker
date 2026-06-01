@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import html
 import math
 from datetime import datetime, timezone
 from typing import Any, List
@@ -82,10 +83,22 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 
 
 def _safe_str(val: Any, default: str = "—") -> str:
+    """Coerce ``val`` to a display string AND HTML-escape it.
+
+    Every value-bearing field in the report flows through here before being
+    interpolated into the HTML (which is served as text/html AND persisted for
+    unauthenticated public share links). Escaping by default closes a stored
+    XSS: news headlines come from RSS feeds and the executive-summary / risk /
+    opportunity / sentiment narratives are LLM-generated free text — any of
+    which could carry ``<script>`` / ``<img onerror=…>`` and would otherwise
+    execute in a viewer's (incl. a public link recipient's) browser.
+    ``html.escape`` (quote=True) is safe for text content AND quoted-attribute
+    values, so the single escape point covers both.
+    """
     if val is None:
         return default
     s = str(val).strip()
-    return s if s else default
+    return html.escape(s) if s else default
 
 
 def _safe_attr(obj: Any, *attrs: str, default: Any = None) -> Any:
@@ -1662,6 +1675,29 @@ def _footer(report) -> str:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _section_tldr_lede(report) -> str:
+    """A 2-3 sentence TL;DR lede card above the report body.
+
+    Renders only when ``report.ai.tldr`` is populated (set post-build by
+    investor_report_engine); otherwise returns "" so the report layout is
+    unchanged. The text is escaped (it may be LLM-generated)."""
+    ai = _safe_attr(report, "ai")
+    # _safe_str already HTML-escapes, so tldr is safe to interpolate directly.
+    tldr = _safe_str(_safe_attr(ai, "tldr"), "").strip() if ai is not None else ""
+    if not tldr:
+        return ""
+    return (
+        '<section role="note" aria-label="TL;DR" '
+        'style="margin:0 0 18px 0;padding:16px 22px;'
+        'background:#f5f8fb;border-left:5px solid #1a3a72;border-radius:3px">'
+        '<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;'
+        'text-transform:uppercase;color:#1a3a72;margin-bottom:6px">TL;DR</div>'
+        '<div style="font-size:15px;line-height:1.6;color:#24292e">'
+        f'{tldr}</div>'
+        '</section>'
+    )
+
+
 def render_investor_report_html(report) -> str:
     """Return a complete self-contained HTML document as a string.
 
@@ -1686,6 +1722,7 @@ def render_investor_report_html(report) -> str:
     body_parts = [
         _topbar(gen_display),
         _cover(report),
+        _section_tldr_lede(report),
         _nav(),
         _section_executive_summary(report),
         _section_alpha_signals(report),

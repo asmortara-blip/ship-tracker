@@ -56,9 +56,20 @@ def _safe_series(data: dict, key: str) -> pd.Series | None:
     if isinstance(val, pd.DataFrame):
         if val.empty:
             return None
-        return val.iloc[:, 0].dropna()
+        # Freight frames have `rate_usd_per_feu`; FRED macro frames have `value`;
+        # select by name so we never positionally grab `date` (column 0).
+        if "rate_usd_per_feu" in val.columns:
+            col = val["rate_usd_per_feu"]
+        elif "value" in val.columns:
+            col = val["value"]
+        else:
+            numeric = val.select_dtypes(include="number")
+            if numeric.shape[1] == 0:
+                return None
+            col = numeric.iloc[:, 0]
+        return pd.to_numeric(col, errors="coerce").dropna()
     if isinstance(val, pd.Series):
-        return val.dropna()
+        return pd.to_numeric(val, errors="coerce").dropna()
     return None
 
 
@@ -83,9 +94,12 @@ def compute_index_dashboard(freight_data: dict, macro_data: dict = None) -> list
                 key_mapping[idx_key] = fk
                 break
 
-    # Also check for BDI in macro data (FRED: BDIY)
+    # Also check for BDI in macro data.
+    # Prefer the canonical FRED key (BSXRLM); fall back to BDIY for legacy callers.
     if "BDI" not in key_mapping and macro_data:
-        if "BDIY" in macro_data:
+        if "BSXRLM" in macro_data:
+            key_mapping["BDI"] = "BSXRLM"
+        elif "BDIY" in macro_data:
             key_mapping["BDI"] = "BDIY"
 
     for idx_key, defn in INDEX_DEFINITIONS.items():

@@ -18,7 +18,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
     C_BG,
     C_BORDER,
@@ -26,18 +28,44 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+
+# ── Provenance ────────────────────────────────────────────────────────────────
+# Trade-war metrics here are a mix of reported policy figures and modeled
+# projections. All flows shown are illustrative; demo pills make the
+# uncertainty explicit.
+
+_DS_TARIFF_POLICY = DataSource.modeled(
+    "USTR / MOFCOM tariff schedules",
+    notes="Tariff rates as announced April 2025; impact estimates modeled.",
+)
+_DS_TRADE_FLOWS = DataSource.modeled(
+    "Trade flow diversion model",
+    notes="Bilateral and rerouted flows projected from customs + AIS data.",
+)
+_DS_VOLUME = DataSource.modeled(
+    "Transpacific TEU model",
+    notes="Container volumes projected from carrier sailing schedules.",
+)
+_DS_DEALS = DataSource.demo("Trade deal tracker (illustrative)")
+_DS_HISTORY = DataSource.modeled(
+    "Historical tariff episodes",
+    notes="Compiled from BEA / Census trade balance series.",
+)
+_DS_SCENARIO = DataSource.demo("De-escalation scenario (illustrative)")
 
 
 # ── Commodity data ─────────────────────────────────────────────────────────────
@@ -105,8 +133,8 @@ def _render_hero(macro_data: dict | None) -> None:
         page_header(
             title="Trade War Intelligence",
             subtitle="US 145% / China 125% bilateral tariff regime — April 2025 escalation",
-            badge_text="LIVE TARIFF SITUATION",
-            badge_color=C_LOW,
+            badge_text="TRADE WAR",
+            badge_color=C_ACCENT,
         )
         metric_card_row(
             [
@@ -117,21 +145,12 @@ def _render_hero(macro_data: dict | None) -> None:
             ],
             columns=4,
         )
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-radius:6px;padding:14px 20px;margin-top:4px;'
-            f'display:flex;gap:32px;flex-wrap:wrap;">'
-            f'<div style="color:{C_TEXT2};font-size:13px;">'
-            f'<span style="color:{C_LOW};font-weight:700;">&#9650;</span> '
-            f'145% tariff = effective embargo on most goods</div>'
-            f'<div style="color:{C_TEXT2};font-size:13px;">'
-            f'<span style="color:{C_MOD};font-weight:700;">&#9654;</span> '
-            f'Trade diverting to Vietnam, Mexico, India — not disappearing</div>'
-            f'<div style="color:{C_TEXT2};font-size:13px;">'
-            f'<span style="color:{C_ACCENT};font-weight:700;">&#9679;</span> '
-            f'Transpacific bookings down 28% month-over-month</div>'
-            f'</div>'
+        st.caption(
+            "145% tariff = effective embargo on most goods · "
+            "trade is diverting to Vietnam, Mexico, India rather than disappearing · "
+            "transpacific bookings down 28% month-over-month."
         )
+        st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | hero render failed")
         st.error("Dashboard hero failed to render.")
@@ -163,19 +182,12 @@ def _render_commodity_table() -> None:
             ["Commodity", "US Tariff on CN", "CN Tariff on US", "US Imports", "Tariff Burden", "Shipping Impact", "Alternative Sources"],
             rows,
         )
-        st.html(
-            f'<div style="display:flex;gap:20px;margin-top:10px;flex-wrap:wrap;">'
-            f'<div style="display:flex;align-items:center;gap:6px;">'
-            f'{badge("HIGH", color=C_LOW)}'
-            f'<span style="color:{C_TEXT3};font-size:12px;">Major route disruption / volume loss</span></div>'
-            f'<div style="display:flex;align-items:center;gap:6px;">'
-            f'{badge("MODERATE", color=C_MOD)}'
-            f'<span style="color:{C_TEXT3};font-size:12px;">Partial diversion, some resilience</span></div>'
-            f'<div style="display:flex;align-items:center;gap:6px;">'
-            f'{badge("LOW", color=C_HIGH)}'
-            f'<span style="color:{C_TEXT3};font-size:12px;">Limited impact, inelastic demand</span></div>'
-            f'</div>'
+        st.caption(
+            "Shipping Impact key — HIGH: major route disruption / volume loss · "
+            "MODERATE: partial diversion, some resilience · "
+            "LOW: limited impact, inelastic demand."
         )
+        st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | commodity table failed")
         st.error("Commodity table failed to render.")
@@ -255,25 +267,32 @@ def _render_diversion_map() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, key="trade_diversion_map")
 
-        st.html(
-            f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:4px;">'
-            f'<div style="background:{C_LOW}11;border:1px solid {C_LOW}33;'
-            f'border-radius:8px;padding:12px 16px;">'
-            f'<div style="color:{C_LOW};font-size:12px;font-weight:700;">&#9660; Losers</div>'
-            f'<div style="color:{C_TEXT};font-size:13px;margin-top:4px;">Direct China–US transpacific</div>'
-            f'<div style="color:{C_TEXT2};font-size:12px;">-28% bookings YTD</div></div>'
-            f'<div style="background:{C_HIGH}11;border:1px solid {C_HIGH}33;'
-            f'border-radius:8px;padding:12px 16px;">'
-            f'<div style="color:{C_HIGH};font-size:12px;font-weight:700;">&#9650; Winners</div>'
-            f'<div style="color:{C_TEXT};font-size:13px;margin-top:4px;">Vietnam, Mexico, India lanes</div>'
-            f'<div style="color:{C_TEXT2};font-size:12px;">+35–55% volume growth</div></div>'
-            f'<div style="background:{C_ACCENT}11;border:1px solid {C_ACCENT}33;'
-            f'border-radius:8px;padding:12px 16px;">'
-            f'<div style="color:{C_ACCENT};font-size:12px;font-weight:700;">&#9654; Emerging</div>'
-            f'<div style="color:{C_TEXT};font-size:13px;margin-top:4px;">Brazil–China agricultural route</div>'
-            f'<div style="color:{C_TEXT2};font-size:12px;">Brazil fills US soy gap</div></div>'
-            f'</div>'
-        )
+        col_l, col_w, col_e = st.columns(3, gap="medium")
+        with col_l:
+            st.markdown(insight_card_html(
+                title="Direct China–US transpacific",
+                score=0.85,
+                action="Avoid",
+                rationale="-28% bookings YTD; 145% effective tariff has collapsed direct flow.",
+                category="LOSERS",
+            ), unsafe_allow_html=True)
+        with col_w:
+            st.markdown(insight_card_html(
+                title="Vietnam, Mexico, India lanes",
+                score=0.75,
+                action="Buy",
+                rationale="+35-55% volume growth as production migrates out of China.",
+                category="WINNERS",
+            ), unsafe_allow_html=True)
+        with col_e:
+            st.markdown(insight_card_html(
+                title="Brazil-China agricultural route",
+                score=0.55,
+                action="Watch",
+                rationale="Brazil filling US soy gap; structural shift in Pacific bulk flows.",
+                category="EMERGING",
+            ), unsafe_allow_html=True)
+        st.markdown(source_footer([_DS_TRADE_FLOWS]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | diversion map failed")
         st.error("Trade flow diversion map failed to render.")
@@ -288,29 +307,39 @@ def _render_nearshoring() -> None:
             "Manufacturing migrating from China — new shipping corridors forming",
         )
         shifts = [
-            {"country": "Vietnam",    "flag": "🇻🇳", "sectors": "Electronics, Textiles, Furniture",   "volume_growth": "+55%", "color": C_HIGH, "commentary": "Primary China+1 beneficiary. Nike, Apple, Samsung shifting production.", "lane": "Vietnam → US Pacific"},
-            {"country": "Mexico",     "flag": "🇲🇽", "sectors": "Auto Parts, Machinery, Appliances",  "volume_growth": "+42%", "color": C_HIGH, "commentary": "USMCA advantage. Tesla Monterrey, GM expansions driving nearshore boom.", "lane": "Mexico → US land / Gulf"},
-            {"country": "India",      "flag": "🇮🇳", "sectors": "Pharma, Textiles, Software goods",   "volume_growth": "+31%", "color": C_MOD,  "commentary": "Slower regulatory environment but massive labor cost advantage.",         "lane": "India → US (Suez / Pacific)"},
-            {"country": "Bangladesh", "flag": "🇧🇩", "sectors": "Apparel, Textiles",                  "volume_growth": "+28%", "color": C_MOD,  "commentary": "Garment sector surging. Factory capacity straining port infrastructure.",  "lane": "Bangladesh → US (Suez)"},
-            {"country": "Indonesia",  "flag": "🇮🇩", "sectors": "Electronics assembly, Palm oil",     "volume_growth": "+19%", "color": C_MOD,  "commentary": "Growing electronics hub. Nickel processing for EV supply chains.",         "lane": "Indonesia → US Pacific"},
+            {"country": "Vietnam",    "sectors": "Electronics · Textiles · Furniture",   "volume_growth": "+55%", "color": C_HIGH, "lane": "Vietnam → US Pacific"},
+            {"country": "Mexico",     "sectors": "Auto Parts · Machinery · Appliances",  "volume_growth": "+42%", "color": C_HIGH, "lane": "Mexico → US land / Gulf"},
+            {"country": "India",      "sectors": "Pharma · Textiles · Software goods",   "volume_growth": "+31%", "color": C_MOD,  "lane": "India → US (Suez / Pacific)"},
+            {"country": "Bangladesh", "sectors": "Apparel · Textiles",                   "volume_growth": "+28%", "color": C_MOD,  "lane": "Bangladesh → US (Suez)"},
+            {"country": "Indonesia",  "sectors": "Electronics assembly · Palm oil",      "volume_growth": "+19%", "color": C_MOD,  "lane": "Indonesia → US Pacific"},
         ]
-        cols = st.columns(len(shifts))
-        for col, s in zip(cols, shifts):
-            with col:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {s["color"]}33;'
-                    f'border-radius:6px;padding:16px;height:100%;">'
-                    f'<div style="font-size:24px;margin-bottom:6px;">{s["flag"]}</div>'
-                    f'<div style="color:{C_TEXT};font-size:14px;font-weight:700;">{s["country"]}</div>'
-                    f'<div style="color:{s["color"]};font-size:22px;font-weight:800;margin:6px 0;">{s["volume_growth"]}</div>'
-                    f'<div style="color:{C_TEXT2};font-size:11px;margin-bottom:8px;">volume growth YTD</div>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Sectors</div>'
-                    f'<div style="color:{C_TEXT2};font-size:12px;margin-bottom:8px;">{s["sectors"]}</div>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;line-height:1.5;">{s["commentary"]}</div>'
-                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:6px 10px;margin-top:10px;">'
-                    f'<div style="color:{C_ACCENT};font-size:11px;font-weight:600;">&#9658; {s["lane"]}</div></div>'
-                    f'</div>'
-                )
+        metric_card_row(
+            [
+                {
+                    "label": s["country"],
+                    "value": s["volume_growth"],
+                    "accent": s["color"],
+                    "delta": s["lane"],
+                    "delta_color": C_ACCENT,
+                    "sublabel": s["sectors"],
+                }
+                for s in shifts
+            ],
+            columns=len(shifts),
+        )
+
+        commentary_rows = [
+            ["Vietnam",    "Primary China+1 beneficiary. Nike, Apple, Samsung shifting production."],
+            ["Mexico",     "USMCA advantage. Tesla Monterrey, GM expansions driving nearshore boom."],
+            ["India",      "Slower regulatory environment but massive labor cost advantage."],
+            ["Bangladesh", "Garment sector surging. Factory capacity straining port infrastructure."],
+            ["Indonesia",  "Growing electronics hub. Nickel processing for EV supply chains."],
+        ]
+        wsj_market_table(
+            ["Origin", "Why it is winning"],
+            [[_sans(name, weight=700), _sans(note, color=C_TEXT2, size="12px")] for name, note in commentary_rows],
+        )
+        st.markdown(source_footer([_DS_TRADE_FLOWS]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | nearshoring section failed")
         st.error("Nearshoring section failed to render.")
@@ -339,7 +368,7 @@ def _render_volume_chart() -> None:
         fig.add_trace(go.Scatter(
             x=months, y=post_tariff_2025, name="China→US 2025 (Post-Tariff)",
             line={"color": C_LOW, "width": 3}, mode="lines+markers",
-            marker={"size": 6}, fill="tonexty", fillcolor=f"{C_LOW}15",
+            marker={"size": 6}, fill="tonexty", fillcolor=_hex_to_rgba(C_LOW, 0.08),
             hovertemplate="%{y}K TEUs<extra>China→US 2025</extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -354,47 +383,45 @@ def _render_volume_chart() -> None:
             marker={"size": 5},
             hovertemplate="%{y}K TEUs<extra>Mexico→US 2025</extra>",
         ))
-        fig.add_vline(
-            x="Apr", line_dash="dot", line_color=C_LOW, line_width=2,
-            annotation_text="145% tariff", annotation_font_color=C_LOW,
-            annotation_font_size=11,
+        # add_vline's annotation positioning averages the x-coords, which fails
+        # on a categorical axis — draw the line and annotation separately.
+        fig.add_vline(x="Apr", line_dash="dot", line_color=C_LOW, line_width=2)
+        fig.add_annotation(
+            x="Apr", y=1.0, yref="paper", yanchor="bottom",
+            text="145% tariff", showarrow=False,
+            font={"color": C_LOW, "size": 11},
         )
         apply_dark_layout(fig, title="", height=360, showlegend=True)
         fig.update_layout(
             xaxis={"gridcolor": C_BORDER, "title": "Month 2025"},
             yaxis={"gridcolor": C_BORDER, "title": "TEUs (thousands)"},
-            legend={"bgcolor": "transparent", "font": {"size": 11}},
+            legend={"bgcolor": "rgba(0,0,0,0)", "font": {"size": 11}},
             margin={"l": 50, "r": 20, "t": 20, "b": 40},
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, key="transpacific_volume_chart")
 
-        carrier_col1, carrier_col2 = st.columns(2)
+        carrier_col1, carrier_col2 = st.columns(2, gap="large")
         cut_rows = [("COSCO", -22, C_LOW), ("MSC", -18, C_LOW), ("Evergreen", -14, C_LOW), ("Yang Ming", -8, C_MOD)]
         add_rows = [("Maersk (Vietnam)", 16, C_HIGH), ("CMA CGM (India)", 12, C_HIGH), ("Hapag-Lloyd (SE Asia)", 10, C_HIGH), ("ONE (Indonesia)", 6, C_MOD)]
         with carrier_col1:
-            _render_carrier_card("Carriers Cutting Transpacific Capacity", cut_rows)
+            st.markdown('<div class="sub-section-header">Carriers Cutting Transpacific Capacity</div>', unsafe_allow_html=True)
+            wsj_market_table(
+                ["Carrier", "Δ Sailings"],
+                [[_sans(name, weight=700), _mono(f"{delta:+d}", color=color, weight=700)]
+                 for name, delta, color in cut_rows],
+            )
         with carrier_col2:
-            _render_carrier_card("Carriers Adding ASEAN Capacity", add_rows)
+            st.markdown('<div class="sub-section-header">Carriers Adding ASEAN Capacity</div>', unsafe_allow_html=True)
+            wsj_market_table(
+                ["Carrier", "Δ Sailings"],
+                [[_sans(name, weight=700), _mono(f"{delta:+d}", color=color, weight=700)]
+                 for name, delta, color in add_rows],
+            )
+        st.markdown(source_footer([_DS_VOLUME]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | volume chart failed")
         st.error("Shipping volume chart failed to render.")
-
-
-def _render_carrier_card(title: str, rows: list[tuple[str, int, str]]) -> None:
-    body = "".join(
-        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-        f'<span style="color:{C_TEXT};font-size:13px;">{name}</span>'
-        f'<span style="color:{color};font-weight:700;">{delta:+d} sailings</span></div>'
-        for name, delta, color in rows
-    )
-    st.html(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-radius:6px;padding:20px 24px;margin-bottom:16px;">'
-        f'<div style="color:{C_TEXT};font-size:14px;font-weight:700;margin-bottom:12px;">{title}</div>'
-        f'<div style="display:flex;flex-direction:column;gap:8px;">{body}</div>'
-        f'</div>'
-    )
 
 
 # ── Section 6: Trade Deal Tracker ─────────────────────────────────────────────
@@ -418,6 +445,7 @@ def _render_deal_tracker() -> None:
             ["Parties", "Status", "Key Issues", "Likelihood", "Shipping Impact if Resolved"],
             rows,
         )
+        st.markdown(source_footer([_DS_DEALS]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | deal tracker failed")
         st.error("Trade deal tracker failed to render.")
@@ -431,34 +459,28 @@ def _render_history() -> None:
             "Historical Tariff Wars",
             "Shipping market behavior across tariff escalation episodes",
         )
-        cols = st.columns(len(_HISTORY))
         episode_colors = [C_ACCENT, C_MOD, C_LOW, C_LOW]
-        for col, h, color in zip(cols, _HISTORY, episode_colors):
-            with col:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {color}33;'
-                    f'border-radius:6px;padding:16px;">'
-                    f'<div style="color:{color};font-size:11px;font-weight:700;'
-                    f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">'
-                    f'{h["period"]}</div>'
-                    f'<div style="color:{C_TEXT};font-size:13px;font-weight:700;'
-                    f'margin-bottom:12px;line-height:1.4;">{h["episode"]}</div>'
-                    f'<div style="display:flex;flex-direction:column;gap:8px;">'
-                    f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                    f'letter-spacing:0.5px;">Peak Rate</div>'
-                    f'<div style="color:{C_TEXT};font-size:13px;">{h["peak_rate"]}</div></div>'
-                    f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                    f'letter-spacing:0.5px;">Trade Drop</div>'
-                    f'<div style="color:{C_LOW};font-size:13px;font-weight:600;">{h["trade_drop"]}</div></div>'
-                    f'<div><div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                    f'letter-spacing:0.5px;">Shipping Impact</div>'
-                    f'<div style="color:{C_MOD};font-size:13px;">{h["shipping_impact"]}</div></div>'
-                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:8px 10px;margin-top:4px;">'
-                    f'<div style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                    f'letter-spacing:0.5px;margin-bottom:4px;">Resolution</div>'
-                    f'<div style="color:{C_TEXT2};font-size:12px;">{h["resolution"]}</div></div>'
-                    f'</div></div>'
-                )
+        metric_card_row(
+            [
+                {
+                    "label": f"{h['period']} — {h['episode']}",
+                    "value": h["peak_rate"],
+                    "accent": color,
+                    "delta": h["trade_drop"],
+                    "delta_color": C_LOW,
+                    "sublabel": h["shipping_impact"],
+                }
+                for h, color in zip(_HISTORY, episode_colors)
+            ],
+            columns=len(_HISTORY),
+        )
+
+        resolution_rows = [
+            [_sans(h["episode"], weight=700), _sans(h["resolution"], color=C_TEXT2, size="12px")]
+            for h in _HISTORY
+        ]
+        wsj_market_table(["Episode", "Resolution"], resolution_rows)
+        st.markdown(source_footer([_DS_HISTORY]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | history section failed")
         st.error("Historical tariff wars section failed to render.")
@@ -472,18 +494,18 @@ def _render_scenario() -> None:
             "Scenario: Trade De-Escalation",
             "If US-China tariffs reduced to 50% by end of 2026 — modeled market recovery",
         )
-        st.html(
-            f'<div style="background:linear-gradient(135deg,{C_HIGH}11,{C_CARD});'
-            f'border:1px solid {C_HIGH}33;border-radius:6px;padding:20px 24px;margin-bottom:16px;">'
-            f'<div style="color:{C_HIGH};font-size:13px;font-weight:700;margin-bottom:12px;">'
-            f'&#9654; Base Scenario: Tariffs fall from 145% → 50% by Q4 2026</div>'
-            f'<div style="color:{C_TEXT2};font-size:13px;line-height:1.7;">'
-            f'A partial de-escalation — driven by bilateral negotiations, economic pressure, or a new '
-            f'framework deal — would unlock significant suppressed trade demand. Not a full reversal: '
-            f'some manufacturing has already relocated, supply chains have restructured. '
-            f'But the volume recovery would be substantial and rapid.</div>'
-            f'</div>'
-        )
+        st.markdown(insight_card_html(
+            title="Base scenario — tariffs fall from 145% to 50% by Q4 2026",
+            score=0.6,
+            action="Watch",
+            rationale=(
+                "A partial de-escalation — driven by bilateral negotiations, economic pressure, "
+                "or a new framework deal — would unlock significant suppressed trade demand. "
+                "Not a full reversal: some manufacturing has already relocated and supply chains "
+                "have restructured. But the volume recovery would be substantial and rapid."
+            ),
+            category="SCENARIO",
+        ), unsafe_allow_html=True)
         metric_card_row(
             [
                 {"label": "Volume Recovery",      "value": "+28%",       "accent": C_HIGH,   "sublabel": "transpacific TEUs"},
@@ -493,68 +515,76 @@ def _render_scenario() -> None:
             ],
             columns=4,
         )
-        winners = [("China–US Transpacific", "+30–35%"), ("COSCO / Evergreen", "+25–30%"), ("Shanghai / Ningbo ports", "+20% TEU throughput"), ("US agricultural exporters", "+$8B soy/LNG")]
-        losers  = [("Vietnam→US (post-deal)", "~60% retained"), ("Mexico nearshoring", "~70% retained"), ("Brazil→China soy route", "~50% retained"), ("India pharma/textile", "~80% retained")]
-        col_w, col_l = st.columns(2)
-        with col_w:
-            _render_scenario_card("▲ Winner Carriers & Routes", winners, C_HIGH)
-        with col_l:
-            _render_scenario_card("▼ Volume Lost to Permanent Diversion", losers, C_MOD)
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-left:3px solid {C_ACCENT};border-radius:8px;'
-            f'padding:14px 18px;margin-top:4px;">'
-            f'<span style="color:{C_ACCENT};font-weight:700;">Key insight: </span>'
-            f'<span style="color:{C_TEXT2};font-size:13px;">'
-            f'Even a full tariff reversal would not restore pre-2025 trade patterns. '
-            f'An estimated 30–40% of diverted manufacturing stays in Vietnam, Mexico, and India '
-            f'permanently — the supply chain reconfiguration has already happened. '
-            f'The de-escalation upside for shipping is real but structurally capped.</span>'
-            f'</div>'
-        )
+        winners = [
+            ("China–US Transpacific", "+30–35%"),
+            ("COSCO / Evergreen", "+25–30%"),
+            ("Shanghai / Ningbo ports", "+20% TEU throughput"),
+            ("US agricultural exporters", "+$8B soy/LNG"),
+        ]
+        losers = [
+            ("Vietnam→US (post-deal)", "~60% retained"),
+            ("Mexico nearshoring", "~70% retained"),
+            ("Brazil→China soy route", "~50% retained"),
+            ("India pharma/textile", "~80% retained"),
+        ]
+        col_w, col_l = st.columns(2, gap="large")
+        with col_w:
+            st.markdown('<div class="sub-section-header">Winner Carriers and Routes</div>', unsafe_allow_html=True)
+            wsj_market_table(
+                ["Beneficiary", "Upside"],
+                [[_sans(name, weight=700), _mono(val, color=C_HIGH, weight=700)] for name, val in winners],
+            )
+        with col_l:
+            st.markdown('<div class="sub-section-header">Volume Lost to Permanent Diversion</div>', unsafe_allow_html=True)
+            wsj_market_table(
+                ["Diverted Lane", "Retained Share"],
+                [[_sans(name, weight=700), _mono(val, color=C_MOD, weight=700)] for name, val in losers],
+            )
+
+        st.markdown(insight_card_html(
+            title="Key insight — supply chain reconfiguration is largely permanent",
+            score=0.8,
+            action="Caution",
+            rationale=(
+                "Even a full tariff reversal would not restore pre-2025 trade patterns. An estimated "
+                "30–40% of diverted manufacturing stays in Vietnam, Mexico, and India permanently — "
+                "the supply chain reconfiguration has already happened. The de-escalation upside for "
+                "shipping is real but structurally capped."
+            ),
+            category="OUTLOOK",
+        ), unsafe_allow_html=True)
+        st.markdown(source_footer([_DS_SCENARIO]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | scenario section failed")
         st.error("De-escalation scenario section failed to render.")
 
 
-def _render_scenario_card(title: str, rows: list[tuple[str, str]], title_color: str) -> None:
-    body = "".join(
-        f'<div style="display:flex;justify-content:space-between;">'
-        f'<span style="color:{C_TEXT};font-size:13px;">{name}</span>'
-        f'<span style="color:{title_color if "%" in val or "retained" not in val else C_TEXT2};font-weight:700;">{val}</span></div>'
-        for name, val in rows
-    )
-    st.html(
-        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-        f'border-radius:6px;padding:20px 24px;margin-bottom:16px;">'
-        f'<div style="color:{title_color};font-size:14px;font-weight:700;margin-bottom:12px;">{title}</div>'
-        f'<div style="display:flex;flex-direction:column;gap:8px;">{body}</div>'
-        f'</div>'
-    )
-
-
 # ── Main render ────────────────────────────────────────────────────────────────
-def render(macro_data=None, freight_data=None, insights=None) -> None:
+def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Trade Policy & Tariff Impact Intelligence tab."""
-    try:
-        logger.info("trade_war | render start")
-        _render_hero(macro_data)
-        section_divider()
-        _render_commodity_table()
-        section_divider()
-        _render_diversion_map()
-        section_divider()
-        _render_nearshoring()
-        section_divider()
-        _render_volume_chart()
-        section_divider()
-        _render_deal_tracker()
-        section_divider()
-        _render_history()
-        section_divider()
-        _render_scenario()
-        logger.info("trade_war | render complete")
-    except Exception:
-        logger.exception("trade_war | render failed")
-        st.error("Trade War tab encountered an error. Check logs for details.")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('trade_war'):
+        try:
+            logger.info("trade_war | render start")
+            _render_hero(macro_data)
+            section_divider("Tariff Exposure")
+            _render_commodity_table()
+            section_divider("Flow Diversion")
+            _render_diversion_map()
+            section_divider("Supply-Chain Shift")
+            _render_nearshoring()
+            section_divider("Volume Impact")
+            _render_volume_chart()
+            section_divider("Negotiation Tracker")
+            _render_deal_tracker()
+            section_divider("Historical Context")
+            _render_history()
+            section_divider("Scenario")
+            _render_scenario()
+            logger.info("trade_war | render complete")
+        except Exception:
+            logger.exception("trade_war | render failed")
+            st.error("Trade War tab encountered an error. Check logs for details.")

@@ -67,6 +67,32 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Authentication gate ──────────────────────────────────────────────────
+# Single-password gate (NOT multi-user). When APP_PASSWORD_HASH and
+# APP_PASSWORD_SALT are unset, the app runs in open mode (intentional
+# for local dev). See docs/AUTH.md for setup. Wrapped in try/except so
+# a broken auth module never takes down the whole app.
+try:
+    # require_auth_with_users() activates the multi-user surface when
+    # the users table is populated; it transparently falls back to the
+    # legacy single-password gate (or open mode) when count_users() == 0,
+    # so this one-line switch is safe to ship without breaking existing
+    # deployments. See docs/AUTH.md for the migration path.
+    from auth.gate import require_auth_with_users
+    require_auth_with_users()  # calls st.stop() if not authenticated
+except Exception as _auth_exc:
+    logger.warning(f"Auth gate unavailable, allowing through: {_auth_exc}")
+
+# ── Logging — rotated file sink + stderr ─────────────────────────────────
+# Idempotent across Streamlit hot-reloads. Writes to <project_root>/logs/
+# which the Dockerfile mounts via the cache/logs volume.
+try:
+    from utils.logging_setup import configure_logging
+    configure_logging(level="INFO", max_size_mb=10, retention=5)
+except Exception as _exc:
+    # Don't let a logging setup failure take down the whole app.
+    logger.warning(f"Could not configure rotated logging: {_exc}")
+
 # ── Config ────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_config() -> dict:
@@ -91,6 +117,26 @@ try:
     inject_global_css()
 except Exception as _css_err:
     logger.warning(f"CSS load error: {_css_err}")
+
+
+# ── First-run setup wizard ───────────────────────────────────────────────
+# Fresh install = zero registered users + the user hasn't already
+# completed the wizard this session. Once an admin user exists, this
+# block becomes invisible on the next rerun. Wrapped in try/except so a
+# broken wizard never takes down the whole app — falling through to the
+# regular render is the safe default.
+try:
+    from auth.users import count_users as _setup_count_users
+    from ui import tab_setup as _setup_tab
+    _SETUP_DONE_KEY = "setup_wizard_complete"
+    if (
+        _setup_count_users() == 0
+        and not st.session_state.get(_SETUP_DONE_KEY, False)
+    ):
+        _setup_tab.render()
+        st.stop()
+except Exception as _setup_exc:
+    logger.warning(f"Setup wizard check failed; rendering normally: {_setup_exc}")
 
 
 # ── Data loading (cached) ─────────────────────────────────────────────────
@@ -190,6 +236,53 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+
+    # ── What-if scenario selector ──────────────────────────────────────────
+    # Wired to state/scenarios.py via active_scenario / set_active_scenario.
+    # Any tab can read the active scenario through `overlay_value(...)` etc.
+    try:
+        from state.scenarios import (
+            SCENARIO_CATALOG,
+            active_scenario,
+            list_scenarios,
+            set_active_scenario,
+        )
+
+        st.caption("**What-If Scenario**")
+        _scenario_options = ["— No scenario —"] + [
+            f"{s.name}" for s in list_scenarios()
+        ]
+        _scenario_ids = [None] + [s.id for s in list_scenarios()]
+        _current = active_scenario()
+        _default_idx = (
+            _scenario_ids.index(_current.id) if _current and _current.id in _scenario_ids else 0
+        )
+        _picked = st.selectbox(
+            "Active scenario",
+            options=_scenario_options,
+            index=_default_idx,
+            label_visibility="collapsed",
+            key="scenario_selector",
+        )
+        _picked_id = _scenario_ids[_scenario_options.index(_picked)]
+        if _picked_id != (_current.id if _current else None):
+            set_active_scenario(_picked_id)
+            st.rerun()
+
+        if _current is not None:
+            st.markdown(
+                f'<div style="font-size:0.7rem;line-height:1.35;color:#a8a39a;'
+                f'background:rgba(53,114,176,0.08);border-left:2px solid #3572b0;'
+                f'padding:6px 8px;margin-top:4px;border-radius:2px">'
+                f'<b style="color:#e8e6e1">{_current.category}</b> · '
+                f'{len(_current.shocks)} shock{"s" if len(_current.shocks)!=1 else ""}<br>'
+                f'<span style="color:#7a756c">{_current.summary[:140]}…</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+    except Exception as _exc:
+        logger.debug(f"Scenario selector unavailable: {_exc}")
 
     # API health
     st.caption("**Data Sources**")
@@ -563,9 +656,8 @@ st.markdown(f"""
 @keyframes pulse-live {{ 0%,100%{{opacity:1}} 50%{{opacity:.35}} }}
 .wsj-live {{ animation: pulse-live 2.5s ease-in-out infinite; }}
 </style>
-
 <div style="padding:12px 0 0 0; margin-bottom:0">
-    <!-- WSJ Masthead -->
+<!-- WSJ Masthead -->
     <div style="text-align:center;padding-bottom:14px;border-bottom:3px double rgba(232,230,225,0.12)">
         <div style="font-family:'Libre Franklin',system-ui,sans-serif;font-size:0.62rem;
                     font-weight:700;color:#6b6760;text-transform:uppercase;letter-spacing:0.2em;
@@ -591,7 +683,6 @@ st.markdown(f"""
             </span>
         </div>
     </div>
-
     <!-- Summary line -->
     <div style="display:flex;justify-content:space-between;align-items:center;
                 padding:10px 0;border-bottom:1px solid rgba(232,230,225,0.08);
@@ -701,6 +792,7 @@ components.html(f"""
 SECTIONS = [
     ("dashboard",    "🏠", "Dashboard",          "Overview, scorecard & live data"),
     ("markets",      "📈", "Markets & Signals",   "Alpha, correlations & derivatives"),
+    ("disruption_alpha", "📡", "Disruption Alpha", "Voyage tracking → disruption → equity ideas"),
     ("ports_routes", "🚢", "Ports & Routes",      "Demand, congestion & ETA"),
     ("carriers",     "🏢", "Carriers & Ops",      "Fleet, cargo & booking"),
     ("trade_macro",  "🌍", "Trade & Macro",       "Geopolitics, tariffs & macro"),
@@ -713,6 +805,7 @@ SECTIONS = [
 SECTION_COLORS = {
     "dashboard":    "#3b82f6",
     "markets":      "#10b981",
+    "disruption_alpha": "#3572b0",
     "ports_routes": "#06b6d4",
     "carriers":     "#8b5cf6",
     "trade_macro":  "#f59e0b",
@@ -722,45 +815,282 @@ SECTION_COLORS = {
     "reports":      "#64748b",
 }
 
+# Inventory of (label, module_name) for every tab in each section.
+# Drives the sidebar "Pinned" cluster (label/module resolution) and the
+# in-section "Manage Pins" panel (the per-section tab list). Adding a
+# new tab is a one-line append to the relevant section entry. The label
+# matches the inner ``st.tabs([...])`` label so the pinned cluster reads
+# the same as the section's inner tab strip.
+SECTION_TABS: dict[str, list[tuple[str, str]]] = {
+    "dashboard": [
+        ("Overview",         "ui.tab_overview"),
+        ("Daily Briefing",   "ui.tab_briefing"),
+        ("Market Commentary","ui.tab_commentary"),
+        ("Scorecard",        "ui.tab_scorecard"),
+        ("Live Feed",        "ui.tab_live_feed"),
+        ("Data Health",      "ui.tab_data_health"),
+    ],
+    "markets": [
+        ("Markets",          "ui.tab_markets"),
+        ("Sector Dashboard", "ui.tab_sector"),
+        ("Alpha Signals",    "ui.tab_alpha"),
+        ("Results",          "ui.tab_results"),
+        ("Indices",          "ui.tab_indices"),
+        ("Derivatives",      "ui.tab_derivatives"),
+        ("Scenarios",        "ui.tab_scenarios"),
+        ("Monte Carlo",      "ui.tab_monte_carlo"),
+        ("Backtesting",      "ui.tab_backtest"),
+        ("Portfolio",        "ui.tab_portfolio"),
+        ("Options & Flow",   "ui.tab_options"),
+        ("Convergence",      "ui.tab_convergence"),
+    ],
+    "disruption_alpha": [
+        ("Voyage Tracker",   "ui.tab_voyage_tracker"),
+        ("Disruption Radar", "ui.tab_disruption_radar"),
+        ("Macro Projection", "ui.tab_macro_projection"),
+        ("Supply Linkage",   "ui.tab_supply_linkage"),
+        ("Equity Signals",   "ui.tab_equity_signals"),
+        ("Idea Engine",      "ui.tab_idea_engine"),
+    ],
+    "ports_routes": [
+        ("Port Demand",      "ui.tab_port_demand"),
+        ("Port Monitor",     "ui.tab_port_monitor"),
+        ("Port Supply Lines", "ui.tab_port_supply_lines"),
+        ("Routes",           "ui.tab_routes"),
+        ("Rate Analytics",   "ui.tab_rate_analytics"),
+        ("ETA Predictor",    "ui.tab_eta"),
+        ("Congestion",       "ui.tab_congestion"),
+        ("Emerging Routes",  "ui.tab_emerging_routes"),
+        ("Vessel Map",       "ui.tab_vessel_map"),
+    ],
+    "carriers": [
+        ("Carriers",         "ui.tab_carriers"),
+        ("Fleet",            "ui.tab_fleet"),
+        ("Equipment",        "ui.tab_equipment"),
+        ("Cargo",            "ui.tab_cargo"),
+        ("Booking",          "ui.tab_booking"),
+        ("Bunker Fuel",      "ui.tab_bunker"),
+    ],
+    "trade_macro": [
+        ("Macro",            "ui.tab_macro"),
+        ("Bellwethers",      "ui.tab_bellwethers"),
+        ("Trade Flows",      "ui.tab_trade_flows"),
+        ("Trade War",        "ui.tab_trade_war"),
+        ("Geopolitical",     "ui.tab_geopolitical"),
+        ("Chokepoints",      "ui.tab_chokepoints"),
+        ("Trade Finance",    "ui.tab_finance"),
+        ("E-Commerce",       "ui.tab_ecommerce"),
+        ("Nowcast",          "ui.tab_nowcast"),
+    ],
+    "supply_chain": [
+        ("Supply Chain",     "ui.tab_supply_chain"),
+        ("Visibility",       "ui.tab_visibility"),
+        ("Intermodal",       "ui.tab_intermodal"),
+        ("Network",          "ui.tab_network"),
+        ("Attribution",      "ui.tab_attribution"),
+    ],
+    "risk": [
+        ("Risk Matrix",      "ui.tab_risk_matrix"),
+        ("Risk Lab",         "ui.tab_risk_lab"),
+        ("Weather",          "ui.tab_weather"),
+        ("Compliance",       "ui.tab_compliance"),
+        ("Market Cycle",     "ui.tab_cycle"),
+        ("Fundamentals",     "ui.tab_fundamentals"),
+        ("Operator",         "ui.tab_operator"),
+        ("Operator Overview","ui.tab_operator_overview"),
+        ("Worker Health",    "ui.tab_worker_health"),
+    ],
+    "intelligence": [
+        ("News & Sentiment", "ui.tab_news"),
+        ("Deep Dive",        "ui.tab_deep_dive"),
+        ("AI Assistant",     "ui.tab_assistant"),
+        ("Sustainability",   "ui.tab_sustainability"),
+        ("Alerts",           "ui.tab_alerts"),
+        ("Rule History",     "ui.tab_rule_history"),
+    ],
+    "reports": [
+        ("Investor Report",  "ui.tab_report"),
+    ],
+}
+
+
+def _lookup_pinned_meta(module_name: str) -> tuple[str, str, str] | None:
+    """Map a pinned ``ui.tab_*`` module to ``(section_key, label, icon)``.
+
+    Returns ``None`` if the module no longer belongs to any section (the
+    pin is "dead" — the UI silently filters those out).
+    """
+    for sec_key, tabs in SECTION_TABS.items():
+        for label, mod in tabs:
+            if mod == module_name:
+                icon = next(
+                    (s[1] for s in SECTIONS if s[0] == sec_key), "•"
+                )
+                return sec_key, label, icon
+    return None
+
 if "nav_section" not in st.session_state:
     st.session_state["nav_section"] = "dashboard"
 
 # Inject WSJ section nav CSS
 st.markdown("""<style>
-.sec-nav-btn > div > button {
-    background: transparent !important;
+/* ── Sidebar masthead ──────────────────────────────────────────── */
+.nav-brand { padding: 4px 4px 12px; margin-bottom: 2px; }
+.nav-brand-title {
+    font-family: 'Libre Baskerville','Georgia',serif;
+    font-size: 1.18rem; font-weight: 700; color: #e8e6e1;
+    letter-spacing: -0.01em; line-height: 1.15;
+    display: flex; align-items: center; gap: 8px;
+}
+.nav-brand-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    background: #2e9e6e; box-shadow: 0 0 8px rgba(46,158,110,0.7);
+    animation: nav-pulse 2.6s ease-in-out infinite;
+}
+@keyframes nav-pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.35 } }
+.nav-brand-sub {
+    font-family: 'Libre Franklin',sans-serif; font-size: 0.6rem;
+    font-weight: 600; color: #6b6760; letter-spacing: 0.16em;
+    text-transform: uppercase; margin-top: 6px;
+}
+.nav-cluster-label {
+    font-family: 'Libre Franklin',sans-serif; font-size: 0.58rem;
+    font-weight: 700; color: #6b6760; letter-spacing: 0.14em;
+    text-transform: uppercase; padding: 15px 8px 5px;
+}
+/* ── Sidebar nav buttons ───────────────────────────────────────── */
+.sec-nav-btn > div > button, .sec-nav-active > div > button {
     border: none !important;
-    border-bottom: 1px dotted rgba(232,230,225,0.06) !important;
-    border-radius: 0 !important;
-    color: #9a968e !important;
-    font-size: 0.82rem !important;
-    font-weight: 500 !important;
+    border-left: 2px solid transparent !important;
+    border-radius: 6px !important;
+    font-size: 0.83rem !important;
     font-family: 'Libre Franklin', sans-serif !important;
     text-align: left !important;
-    transition: all 0.15s ease !important;
-    padding: 8px 10px !important;
-    margin-bottom: 0 !important;
+    padding: 9px 12px !important;
+    margin-bottom: 1px !important;
+    transition: all 0.18s cubic-bezier(0.4,0,0.2,1) !important;
+}
+.sec-nav-btn > div > button {
+    background: transparent !important;
+    color: #9a968e !important;
+    font-weight: 500 !important;
 }
 .sec-nav-btn > div > button:hover {
-    background: rgba(53,114,176,0.04) !important;
+    background: rgba(53,114,176,0.05) !important;
+    border-left-color: rgba(53,114,176,0.35) !important;
     color: #e8e6e1 !important;
 }
 .sec-nav-active > div > button {
-    background: rgba(53,114,176,0.06) !important;
-    border-left: 2px solid #3572b0 !important;
+    background: var(--sec-bg, rgba(53,114,176,0.13)) !important;
+    border-left: 3px solid var(--sec-accent, #3572b0) !important;
     color: #e8e6e1 !important;
     font-weight: 600 !important;
 }
 </style>""", unsafe_allow_html=True)
 
 # Render nav in sidebar
+_NAV_CLUSTER2 = "trade_macro"  # second visual group starts here
 with st.sidebar:
-    st.divider()
-    st.caption("**Navigation**")
+    st.markdown(
+        '<div class="nav-brand">'
+        '<div class="nav-brand-title"><span class="nav-brand-dot"></span>ShipTracker</div>'
+        '<div class="nav-brand-sub">Shipping Intelligence Platform</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    # ── Pinned tabs cluster (per-user favourites) ─────────────────────────
+    # Lazy import so a broken state.tab_favorites NEVER takes down the
+    # sidebar. Clicking a pinned entry routes to the parent section —
+    # Streamlit's inner ``st.tabs()`` selection is client-side only, so
+    # the user lands on the section and selects the inner tab.
+    try:
+        from state.tab_favorites import get_pinned_tabs, unpin_tab
+        _pinned_modules = get_pinned_tabs()
+    except Exception as _pin_exc:
+        logger.debug(f"Pinned-tabs read failed: {_pin_exc}")
+        _pinned_modules = []
+    if _pinned_modules:
+        st.markdown(
+            '<div class="nav-cluster-label">📌 Pinned</div>',
+            unsafe_allow_html=True,
+        )
+        for _pm in _pinned_modules:
+            _meta = _lookup_pinned_meta(_pm)
+            if _meta is None:
+                # Pin is dead (the tab was removed). Render an unpin
+                # row so the user can clean it up rather than silently
+                # hiding it.
+                _pin_cols = st.columns([6, 1])
+                with _pin_cols[0]:
+                    st.markdown(
+                        f'<div style="font-family:Libre Franklin,sans-serif;'
+                        f'font-size:0.74rem;color:#6b6760;padding:6px 8px">'
+                        f'<span style="opacity:0.55">⚠ {_pm}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                with _pin_cols[1]:
+                    if st.button("×", key=f"unpin_dead_{_pm}",
+                                 help="Remove this dead pin"):
+                        try:
+                            unpin_tab(_pm)
+                        except Exception:
+                            pass
+                        st.rerun()
+                continue
+            _sec_key_pin, _label_pin, _icon_pin = _meta
+            _active_pin = st.session_state["nav_section"] == _sec_key_pin
+            _pin_cols = st.columns([6, 1])
+            with _pin_cols[0]:
+                if _active_pin:
+                    _ac = SECTION_COLORS.get(_sec_key_pin, "#3572b0").lstrip("#")
+                    _rgb = (
+                        f"{int(_ac[0:2], 16)},{int(_ac[2:4], 16)},"
+                        f"{int(_ac[4:6], 16)}"
+                    )
+                    st.markdown(
+                        f'<div class="sec-nav-active" '
+                        f'style="--sec-accent:#{_ac};'
+                        f'--sec-bg:rgba({_rgb},0.13);">',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="sec-nav-btn">', unsafe_allow_html=True
+                    )
+                if st.button(
+                    f"{_icon_pin}  {_label_pin}",
+                    key=f"pin_nav_{_pm}",
+                    use_container_width=True,
+                ):
+                    st.session_state["nav_section"] = _sec_key_pin
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            with _pin_cols[1]:
+                if st.button("×", key=f"unpin_{_pm}",
+                             help=f"Unpin {_label_pin}"):
+                    try:
+                        unpin_tab(_pm)
+                    except Exception as _e:
+                        st.warning(f"Could not unpin: {_e}")
+                    else:
+                        st.rerun()
+
+    st.markdown('<div class="nav-cluster-label">Core</div>', unsafe_allow_html=True)
     for sec_key, sec_icon, sec_label, sec_desc in SECTIONS:
+        if sec_key == _NAV_CLUSTER2:
+            st.markdown('<div class="nav-cluster-label">Analysis &amp; Risk</div>',
+                        unsafe_allow_html=True)
         active = st.session_state["nav_section"] == sec_key
-        css_class = "sec-nav-active" if active else "sec-nav-btn"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if active:
+            _ac = SECTION_COLORS.get(sec_key, "#3572b0").lstrip("#")
+            _rgb = f"{int(_ac[0:2], 16)},{int(_ac[2:4], 16)},{int(_ac[4:6], 16)}"
+            st.markdown(
+                f'<div class="sec-nav-active" '
+                f'style="--sec-accent:#{_ac};--sec-bg:rgba({_rgb},0.13);">',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown('<div class="sec-nav-btn">', unsafe_allow_html=True)
         btn_label = f"{sec_icon}  {sec_label}"
         if alerts and sec_key == "risk":
             btn_label += f"  ({len(alerts)})"
@@ -789,11 +1119,73 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
+# ── 📌 Pin manager (collapsed) ────────────────────────────────────────────
+# Per-section pin toggles. Lives ABOVE the inner-tab strip so users can
+# pin/unpin without leaving the section. Wrapped in try/except + a
+# st.warning fallback so a broken state.tab_favorites NEVER breaks the
+# section's render. Hidden for logged-out users (current_user_id is "").
+try:
+    from state.tab_favorites import (
+        get_pinned_tabs as _get_pins,
+        is_pinned as _is_pinned,
+        pin_tab as _pin_tab,
+        unpin_tab as _unpin_tab,
+    )
+    from state.user_scope import current_user_id as _pin_uid
+    if _pin_uid():  # only show the manager for authenticated users
+        _section_tabs = SECTION_TABS.get(active_section, [])
+        if _section_tabs:
+            with st.expander("📌 Manage pinned tabs in this section", expanded=False):
+                st.caption(
+                    "Pinned tabs appear at the top of the sidebar for "
+                    "one-click access from any section."
+                )
+                _pinned_now = set(_get_pins())
+                for _tab_label, _tab_mod in _section_tabs:
+                    _was_pinned = _tab_mod in _pinned_now
+                    _new_pinned = st.checkbox(
+                        f"{_tab_label}",
+                        value=_was_pinned,
+                        key=f"pin_toggle_{active_section}_{_tab_mod}",
+                    )
+                    if _new_pinned and not _was_pinned:
+                        try:
+                            if not _pin_tab(_tab_mod):
+                                st.warning(f"Could not pin {_tab_label}.")
+                            else:
+                                st.rerun()
+                        except Exception as _e:
+                            st.warning(f"Pin error: {_e}")
+                    elif _was_pinned and not _new_pinned:
+                        try:
+                            if not _unpin_tab(_tab_mod):
+                                st.warning(f"Could not unpin {_tab_label}.")
+                            else:
+                                st.rerun()
+                        except Exception as _e:
+                            st.warning(f"Unpin error: {_e}")
+except Exception as _pin_mgr_exc:
+    logger.debug(f"Pin manager unavailable: {_pin_mgr_exc}")
+
+
+# ── Cross-tab filter bar ─────────────────────────────────────────────────
+# Rendered once above the section tabs. State persists via state/session.py.
+try:
+    from ui.filter_bar import render_filter_bar
+    _active_filters = render_filter_bar()
+except Exception as _exc:
+    logger.debug(f"Filter bar unavailable: {_exc}")
+    _active_filters = None
+
+
 # ── Section routing ───────────────────────────────────────────────────────
 
 # ── 1. Dashboard ──────────────────────────────────────────────────────────
 if active_section == "dashboard":
-    t0, t1, t2, t3, t4 = st.tabs(["Overview", "Market Commentary", "Scorecard", "Live Feed", "Data Health"])
+    t0, t_brief, t1, t2, t3, t4 = st.tabs([
+        "Overview", "Daily Briefing", "Market Commentary",
+        "Scorecard", "Live Feed", "Data Health",
+    ])
     with t0:
         try:
             from ui.tab_overview import render as _r
@@ -802,6 +1194,16 @@ if active_section == "dashboard":
                stock_data=stock_data, alerts=alerts)
         except Exception as e:
             st.error(f"Overview error: {e}")
+    with t_brief:
+        try:
+            from ui.tab_briefing import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Daily Briefing error: {e}")
     with t1:
         try:
             from ui.tab_commentary import render as _r
@@ -830,10 +1232,10 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
         "Markets", "Sector Dashboard", "Alpha Signals", "Results",
         "Indices", "Derivatives", "Scenarios", "Monte Carlo",
-        "Backtesting", "Portfolio", "Options & Flow",
+        "Backtesting", "Portfolio", "Options & Flow", "Convergence",
     ])
     with t0:
         try:
@@ -850,7 +1252,15 @@ elif active_section == "markets":
     with t2:
         try:
             from ui.tab_alpha import render as _r
-            _r(route_results, port_results, freight_data, macro_data, stock_data, insights)
+            # Bind by KEYWORD: render's signature is (stock_data, insights,
+            # freight_data, macro_data, ...). The old positional call passed
+            # route_results→stock_data and port_results→insights, so the tab
+            # silently ran on the wrong data and its engine path always
+            # crashed-to-mock (the b4da425 arity fix couldn't help while
+            # stock_data was actually a route-results list). Keywords match
+            # the convention the sibling tabs (sector, indices) already use.
+            _r(stock_data=stock_data, insights=insights,
+               freight_data=freight_data, macro_data=macro_data)
         except Exception as e:
             st.error(f"Alpha error: {e}")
     with t3:
@@ -901,11 +1311,72 @@ elif active_section == "markets":
             tab_options.render(stock_data, insights, signals=insights)
         except Exception as e:
             st.error(f"Options & Flow error: {e}")
+    with t11:
+        try:
+            from ui.tab_convergence import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Convergence error: {e}")
 
-# ── 3. Ports & Routes ─────────────────────────────────────────────────────
+# ── 3. Disruption Alpha ───────────────────────────────────────────────────
+elif active_section == "disruption_alpha":
+    t0, t1, t2, t3, t4, t5 = st.tabs([
+        "Voyage Tracker", "Disruption Radar", "Macro Projection",
+        "Supply Linkage", "Equity Signals", "Idea Engine",
+    ])
+    with t0:
+        try:
+            from ui.tab_voyage_tracker import render as _r
+            _r(freight_data, route_results)
+        except Exception as e:
+            st.error(f"Voyage Tracker error: {e}")
+    with t1:
+        try:
+            from ui.tab_disruption_radar import render as _r
+            _r(freight_data, macro_data, port_results, route_results)
+        except Exception as e:
+            st.error(f"Disruption Radar error: {e}")
+    with t2:
+        try:
+            from ui.tab_macro_projection import render as _r
+            _r(port_results, freight_data, macro_data, route_results)
+        except Exception as e:
+            st.error(f"Macro Projection error: {e}")
+    with t3:
+        try:
+            from ui.tab_supply_linkage import render as _r
+            _r(stock_data, freight_data, macro_data, port_results, route_results, trade_data)
+        except Exception as e:
+            st.error(f"Supply Linkage error: {e}")
+    with t4:
+        try:
+            from ui.tab_equity_signals import render as _r
+            _r(stock_data, freight_data, macro_data, port_results, route_results, insights)
+        except Exception as e:
+            st.error(f"Equity Signals error: {e}")
+    with t5:
+        try:
+            from ui.tab_idea_engine import render as _r
+            _r(
+                port_results=port_results,
+                route_results=route_results,
+                insights=insights,
+                freight_data=freight_data,
+                macro_data=macro_data,
+                stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Idea Engine error: {e}")
+
+# ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
-        "Port Demand", "Port Monitor", "Routes", "Rate Analytics",
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
+        "Port Demand", "Port Monitor", "Port Supply Lines",
+        "Routes", "Rate Analytics",
         "ETA Predictor", "Congestion", "Emerging Routes",
         "Vessel Map",
     ])
@@ -923,42 +1394,48 @@ elif active_section == "ports_routes":
             st.error(f"Port Monitor error: {e}")
     with t2:
         try:
+            from ui.tab_port_supply_lines import render as _r
+            _r()
+        except Exception as e:
+            st.error(f"Port Supply Lines error: {e}")
+    with t3:
+        try:
             from ui.tab_routes import render as _r
             _r(route_results, freight_data, ml_forecasts or forecasts)
         except Exception as e:
             st.error(f"Routes error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_rate_analytics import render as _r
             _r(freight_data=freight_data, route_results=route_results)
         except Exception as e:
             st.error(f"Rate Analytics error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_eta import render as _r
             _r(port_results, route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"ETA Predictor error: {e}")
-    with t5:
+    with t6:
         try:
             from ui.tab_congestion import render as _r
             _r(port_results, ais_data, freight_data, macro_data)
         except Exception as e:
             st.error(f"Congestion error: {e}")
-    with t6:
+    with t7:
         try:
             from ui.tab_emerging_routes import render as _r
             _r(route_results, freight_data, macro_data)
         except Exception as e:
             st.error(f"Emerging Routes error: {e}")
-    with t7:
+    with t8:
         try:
             from ui.tab_vessel_map import render as _r
             _r(port_results, route_results, freight_data)
         except Exception as e:
             st.error(f"Vessel Map error: {e}")
 
-# ── 4. Carriers & Ops ────────────────────────────────────────────────────
+# ── 5. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":
     t0, t1, t2, t3, t4, t5 = st.tabs([
         "Carriers", "Fleet", "Equipment",
@@ -1001,11 +1478,11 @@ elif active_section == "carriers":
         except Exception as e:
             st.error(f"Bunker Fuel error: {e}")
 
-# ── 5. Trade & Macro ─────────────────────────────────────────────────────
+# ── 6. Trade & Macro ─────────────────────────────────────────────────────
 elif active_section == "trade_macro":
-    t0, t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         "Macro", "Bellwethers", "Trade Flows", "Trade War", "Geopolitical",
-        "Chokepoints", "Trade Finance", "E-Commerce",
+        "Chokepoints", "Trade Finance", "E-Commerce", "Nowcast",
     ])
     with t0:
         try:
@@ -1056,8 +1533,18 @@ elif active_section == "trade_macro":
             _r(trade_data, freight_data, macro_data, route_results)
         except Exception as e:
             st.error(f"E-Commerce error: {e}")
+    with t8:
+        try:
+            from ui.tab_nowcast import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Nowcast error: {e}")
 
-# ── 6. Supply Chain ───────────────────────────────────────────────────────
+# ── 7. Supply Chain ───────────────────────────────────────────────────────
 elif active_section == "supply_chain":
     t0, t1, t2, t3, t4 = st.tabs([
         "Supply Chain", "Visibility", "Intermodal",
@@ -1094,11 +1581,12 @@ elif active_section == "supply_chain":
         except Exception as e:
             st.error(f"Attribution error: {e}")
 
-# ── 7. Risk & Compliance ──────────────────────────────────────────────────
+# ── 8. Risk & Compliance ──────────────────────────────────────────────────
 elif active_section == "risk":
-    t0, t1, t2, t3, t4 = st.tabs([
-        "Risk Matrix", "Weather", "Compliance",
-        "Market Cycle", "Fundamentals",
+    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
+        "Risk Matrix", "Risk Lab", "Weather", "Compliance",
+        "Market Cycle", "Fundamentals", "Operator", "Operator Overview",
+        "Worker Health",
     ])
     with t0:
         try:
@@ -1108,35 +1596,66 @@ elif active_section == "risk":
             st.error(f"Risk Matrix error: {e}")
     with t1:
         try:
+            from ui.tab_risk_lab import render as _r
+            _r(
+                port_results=port_results, route_results=route_results,
+                insights=insights, freight_data=freight_data,
+                macro_data=macro_data, stock_data=stock_data,
+            )
+        except Exception as e:
+            st.error(f"Risk Lab error: {e}")
+    with t2:
+        try:
             from ui.tab_weather import render as _r
             _r(port_results, route_results, freight_data)
         except Exception as e:
             st.error(f"Weather error: {e}")
-    with t2:
+    with t3:
         try:
             from ui.tab_compliance import render as _r
             _r(route_results, port_results, macro_data)
         except Exception as e:
             st.error(f"Compliance error: {e}")
-    with t3:
+    with t4:
         try:
             from ui.tab_cycle import render as _r
             _r(freight_data, macro_data, stock_data, route_results)
         except Exception as e:
             st.error(f"Market Cycle error: {e}")
-    with t4:
+    with t5:
         try:
             from ui.tab_fundamentals import render as _r
             _r(stock_data, freight_data, macro_data)
         except Exception as e:
             st.error(f"Fundamentals error: {e}")
+    with t6:
+        try:
+            from ui import tab_operator
+            tab_operator.render(
+                stock_data=stock_data, freight_data=freight_data, macro_data=macro_data,
+                port_results=port_results, route_results=route_results, insights=insights,
+            )
+        except Exception as e:
+            st.error(f"Operator error: {e}")
+    with t7:
+        try:
+            from ui import tab_operator_overview
+            tab_operator_overview.render()
+        except Exception as e:
+            st.error(f"Operator Overview error: {e}")
+    with t8:
+        try:
+            from ui import tab_worker_health
+            tab_worker_health.render()
+        except Exception as e:
+            st.error(f"Worker Health error: {e}")
 
-# ── 8. Intelligence ───────────────────────────────────────────────────────
+# ── 9. Intelligence ───────────────────────────────────────────────────────
 elif active_section == "intelligence":
-    t0, t1, t2, t3, t4 = st.tabs([
+    t0, t1, t2, t3, t4, t5 = st.tabs([
         "News & Sentiment", "Deep Dive",
         "AI Assistant", "Sustainability",
-        "Alerts",
+        "Alerts", "Rule History",
     ])
     with t0:
         try:
@@ -1171,9 +1690,15 @@ elif active_section == "intelligence":
             tab_alerts.render(port_results, route_results, insights, freight_data, macro_data, stock_data)
         except Exception as e:
             st.error(f"Tab error: {e}")
+    with t5:
+        try:
+            from ui import tab_rule_history
+            tab_rule_history.render()
+        except Exception as e:
+            st.error(f"Rule History error: {e}")
 
 
-# ── 9. Reports ────────────────────────────────────────────────────────────
+# ── 10. Reports ───────────────────────────────────────────────────────────
 elif active_section == "reports":
     from ui import tab_report
     fundamentals_data = get_fundamentals_data()

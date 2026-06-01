@@ -55,6 +55,87 @@ RISK_COLORS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  WCAG COLOR-CONTRAST HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Streamlit doesn't expose deep a11y APIs, but our custom HTML emits explicit
+# foreground/background pairs. WCAG 2.1 AA requires a contrast ratio of at
+# least 4.5:1 for normal text (3:1 for large text). The helpers below let us
+# verify, in tests, that every documented text/badge combination clears AA.
+#
+# The formula follows the WCAG spec exactly:
+#   1. Hex string -> sRGB channels in [0, 1].
+#   2. Linearize each channel (gamma-2.4 with a low-end linear ramp).
+#   3. Relative luminance L = 0.2126*R + 0.7152*G + 0.0722*B.
+#   4. Contrast ratio = (L_lighter + 0.05) / (L_darker + 0.05).
+# Identical colors give ratio 1.0; pure white-on-black gives 21.0.
+
+def _srgb_channel_to_linear(c: float) -> float:
+    """Convert one sRGB channel in [0, 1] to its linear-light equivalent."""
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _hex_to_relative_luminance(hex_color: str) -> float:
+    """Compute WCAG relative luminance for a #RRGGBB hex color."""
+    h = hex_color.lstrip("#")
+    r = int(h[0:2], 16) / 255.0
+    g = int(h[2:4], 16) / 255.0
+    b = int(h[4:6], 16) / 255.0
+    return (
+        0.2126 * _srgb_channel_to_linear(r)
+        + 0.7152 * _srgb_channel_to_linear(g)
+        + 0.0722 * _srgb_channel_to_linear(b)
+    )
+
+
+def _contrast_ratio(fg_hex: str, bg_hex: str) -> float:
+    """Return the WCAG contrast ratio between two #RRGGBB hex colors.
+
+    Output ranges from 1.0 (identical) to 21.0 (white-on-black). WCAG 2.1 AA
+    passes at 4.5+ for normal text, 3.0+ for large/UI components.
+    """
+    l1 = _hex_to_relative_luminance(fg_hex)
+    l2 = _hex_to_relative_luminance(bg_hex)
+    lighter, darker = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+# WCAG 2.1 contrast thresholds.
+#   - 4.5:1 — normal body text (AA)
+#   - 3.0:1 — large text (>=18pt or 14pt bold) and non-text UI components (AA)
+WCAG_AA_THRESHOLD = 4.5
+WCAG_AA_LARGE_THRESHOLD = 3.0
+
+# The app's primary body-text combinations. Every pair below must pass AA
+# (>= 4.5:1) — `tests/test_a11y.py` enforces this so palette tweaks can't
+# silently regress accessibility. Keep this list in sync with any new
+# body-text foreground/background combo introduced in custom HTML.
+A11Y_TEXT_PAIRS: list[tuple[str, str, str]] = [
+    # (foreground, background, human-readable label)
+    (C_TEXT,   C_BG,      "body text on app background"),
+    (C_TEXT,   C_SURFACE, "body text on surface"),
+    (C_TEXT,   C_CARD,    "body text on card"),
+    (C_TEXT2,  C_BG,      "secondary text on app background"),
+    (C_TEXT2,  C_CARD,    "secondary text on card"),
+    (C_HIGH,   C_BG,      "high/positive accent on background"),
+    (C_MOD,    C_BG,      "moderate/warning accent on background"),
+]
+
+# Large-text / UI-component combinations. These are used for headlines (>=18pt
+# or 14pt bold), badge chips, progress bars, and chart marks where WCAG 2.1
+# permits the relaxed 3.0:1 threshold. Documenting them here keeps tests aware
+# of the actual usage and surfaces any future regression.
+#
+# C_LOW (#c0392b) and C_ACCENT (#3572b0) are intentionally below the 4.5 body
+# threshold but above 3.0 — they are reserved for large headings, badges, and
+# graphical accents, never small body copy.
+A11Y_LARGE_TEXT_PAIRS: list[tuple[str, str, str]] = [
+    (C_LOW,    C_BG, "low/negative accent (large/UI only) on background"),
+    (C_ACCENT, C_BG, "steel-blue accent (large/UI only) on background"),
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  PLOTLY LAYOUT HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -71,20 +152,25 @@ def dark_layout(
         margin = {"l": 24, "r": 24, "t": 44 if title else 24, "b": 24}
     return {
         "template": "plotly_dark",
-        "paper_bgcolor": C_BG,
-        "plot_bgcolor": C_SURFACE,
+        # Transparent canvas — charts blend seamlessly into whatever card holds them.
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        # Default multi-series palette — harmonized with the WSJ design system
+        # so any chart that doesn't set explicit colors stays on-brand.
+        "colorway": [C_ACCENT, C_HIGH, C_MOD, C_CONV, C_MACRO, C_LOW, C_TEXT2],
         "font": {"color": C_TEXT2, "family": "'Libre Franklin', 'Inter', system-ui, sans-serif", "size": 12},
         "title": {
             "text": title,
             "font": {"size": 15, "color": C_TEXT, "family": "'Libre Baskerville', 'Georgia', serif", "weight": 700},
             "x": 0.01,
+            "xanchor": "left",
         } if title else {},
         "height": height,
         "margin": margin,
         "showlegend": showlegend,
         "legend": {
             "bgcolor": "rgba(0,0,0,0)",
-            "bordercolor": "rgba(232,230,225,0.05)",
+            "bordercolor": "rgba(0,0,0,0)",
             "font": {"color": C_TEXT2, "size": 11},
             "orientation": legend_orientation,
             "yanchor": "bottom",
@@ -93,21 +179,27 @@ def dark_layout(
             "x": 1,
         },
         "xaxis": {
-            "gridcolor": "rgba(232,230,225,0.04)",
-            "zerolinecolor": "rgba(232,230,225,0.06)",
+            "gridcolor": "rgba(232,230,225,0.05)",
+            "zerolinecolor": "rgba(232,230,225,0.09)",
             "tickfont": {"color": C_TEXT3, "size": 11},
-            "linecolor": "rgba(232,230,225,0.06)",
+            "linecolor": "rgba(232,230,225,0.08)",
         },
         "yaxis": {
-            "gridcolor": "rgba(232,230,225,0.04)",
-            "zerolinecolor": "rgba(232,230,225,0.06)",
+            "gridcolor": "rgba(232,230,225,0.05)",
+            "zerolinecolor": "rgba(232,230,225,0.09)",
             "tickfont": {"color": C_TEXT3, "size": 11},
-            "linecolor": "rgba(232,230,225,0.06)",
+            "linecolor": "rgba(232,230,225,0.08)",
         },
         "hoverlabel": {
             "bgcolor": C_CARD,
-            "bordercolor": "rgba(255,255,255,0.1)",
-            "font": {"color": C_TEXT, "size": 12},
+            "bordercolor": "rgba(232,230,225,0.14)",
+            "font": {"color": C_TEXT, "size": 12, "family": "'Libre Franklin', sans-serif"},
+            "align": "left",
+        },
+        "modebar": {
+            "bgcolor": "rgba(0,0,0,0)",
+            "color": C_TEXT3,
+            "activecolor": C_ACCENT,
         },
     }
 
@@ -158,15 +250,20 @@ def inject_global_css() -> None:
         --text:         {C_TEXT};
         --text2:        {C_TEXT2};
         --text3:        {C_TEXT3};
-        --radius:       6px;
-        --radius-lg:    10px;
-        --radius-xl:    14px;
+        --radius:       7px;
+        --radius-lg:    11px;
+        --radius-xl:    16px;
         --mono:         'JetBrains Mono', 'Fira Code', monospace;
         --sans:         'Libre Franklin', 'Inter', system-ui, -apple-system, sans-serif;
         --serif:        'Libre Baskerville', 'Georgia', 'Times New Roman', serif;
-        --transition:   all 0.2s ease;
-        --shadow-card:  0 2px 12px rgba(0,0,0,0.3);
-        --shadow-lift:  0 4px 20px rgba(0,0,0,0.4);
+        --ease:         cubic-bezier(0.4, 0, 0.2, 1);
+        --ease-out:     cubic-bezier(0.16, 0.84, 0.44, 1);
+        --transition:   all 0.19s cubic-bezier(0.4, 0, 0.2, 1);
+        --shadow-card:  0 1px 2px rgba(0,0,0,0.45), 0 5px 18px -6px rgba(0,0,0,0.5);
+        --shadow-lift:  0 2px 6px rgba(0,0,0,0.5), 0 18px 40px -10px rgba(0,0,0,0.62);
+        --shadow-hover: 0 2px 5px rgba(0,0,0,0.5), 0 14px 32px -8px rgba(0,0,0,0.6);
+        --edge-hi:      inset 0 1px 0 rgba(255,255,255,0.05);
+        --glow-accent:  0 0 24px -6px rgba(53,114,176,0.45);
     }}
 
     /* ── Base Reset ── */
@@ -183,6 +280,20 @@ def inject_global_css() -> None:
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 1400px;
+    }}
+
+    /* ── App canvas — subtle layered depth ── */
+    [data-testid="stAppViewContainer"] {{
+        background:
+            radial-gradient(1100px 520px at 78% -8%, rgba(53,114,176,0.07), transparent 62%),
+            radial-gradient(900px 600px at 12% 108%, rgba(74,144,164,0.045), transparent 60%),
+            var(--bg);
+    }}
+
+    /* ── Text selection ── */
+    ::selection {{
+        background: rgba(53,114,176,0.32);
+        color: var(--text);
     }}
 
     /* ── Hide chrome ── */
@@ -349,10 +460,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px !important;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     [data-testid="stMetric"]:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     [data-testid="stMetricLabel"] {{
         font-size: 0.7rem !important;
@@ -394,15 +508,20 @@ def inject_global_css() -> None:
         font-size: 0.84rem;
         font-family: var(--sans);
         letter-spacing: 0.01em;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .stButton > button:hover {{
         background: rgba(53,114,176,0.1);
         border-color: rgba(53,114,176,0.3);
         color: var(--text);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-1px);
     }}
     .stButton > button:active {{
         background: rgba(53,114,176,0.15);
+        transform: translateY(0);
+        box-shadow: var(--shadow-card), var(--edge-hi);
     }}
 
     /* ════════════════════════════════════════════════
@@ -412,11 +531,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule) !important;
         border-radius: var(--radius) !important;
         background: var(--card) !important;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
         overflow: hidden;
     }}
     [data-testid="stExpander"]:hover {{
         border-color: var(--border-hover) !important;
+        box-shadow: var(--shadow-hover), var(--edge-hi);
     }}
     .streamlit-expanderHeader {{
         background: transparent !important;
@@ -460,10 +581,10 @@ def inject_global_css() -> None:
     /* ════════════════════════════════════════════════
        ALERTS
     ════════════════════════════════════════════════ */
-    .stInfo    {{ background: rgba(53,114,176,0.06);  border-color: {C_ACCENT}; border-radius: var(--radius); border-left-width: 2px; }}
-    .stSuccess {{ background: rgba(46,158,110,0.06);  border-color: {C_HIGH};   border-radius: var(--radius); border-left-width: 2px; }}
-    .stWarning {{ background: rgba(201,150,43,0.06);  border-color: {C_MOD};    border-radius: var(--radius); border-left-width: 2px; }}
-    .stError   {{ background: rgba(192,57,43,0.06);   border-color: {C_LOW};    border-radius: var(--radius); border-left-width: 2px; }}
+    .stInfo    {{ background: rgba(53,114,176,0.07);  border-color: {C_ACCENT}; border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stSuccess {{ background: rgba(46,158,110,0.07);  border-color: {C_HIGH};   border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stWarning {{ background: rgba(201,150,43,0.07);  border-color: {C_MOD};    border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
+    .stError   {{ background: rgba(192,57,43,0.07);   border-color: {C_LOW};    border-radius: var(--radius); border-left-width: 3px; box-shadow: var(--shadow-card); }}
 
     /* ════════════════════════════════════════════════
        DIVIDERS — WSJ thin rules
@@ -626,10 +747,13 @@ def inject_global_css() -> None:
         border-radius: var(--radius);
         padding: 18px 22px;
         margin-bottom: 12px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .wsj-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .wsj-card-accent {{
         border-top: 2px solid var(--accent);
@@ -643,11 +767,14 @@ def inject_global_css() -> None:
         padding: 18px 20px;
         text-align: center;
         height: 100%;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
         position: relative;
     }}
     .kpi-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .kpi-value {{
         font-size: 1.8rem;
@@ -768,11 +895,14 @@ def inject_global_css() -> None:
         border-radius: var(--radius);
         padding: 16px 20px;
         margin-bottom: 10px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
-        animation: slide-in-up 0.35s ease both;
+        animation: slide-in-up 0.4s var(--ease-out) both;
     }}
     .insight-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .insight-card:nth-child(1) {{ animation-delay: 0.00s; }}
     .insight-card:nth-child(2) {{ animation-delay: 0.04s; }}
@@ -963,6 +1093,7 @@ def inject_global_css() -> None:
         border-radius: 0 0 var(--radius) var(--radius);
         padding: 16px 18px;
         background: var(--card);
+        box-shadow: var(--shadow-card), var(--edge-hi);
     }}
     .wsj-stat-number {{
         font-family: var(--mono);
@@ -1025,10 +1156,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .route-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .route-label {{
         font-size: 0.66rem;
@@ -1059,10 +1193,13 @@ def inject_global_css() -> None:
         border: 1px solid var(--rule);
         border-radius: var(--radius);
         padding: 16px 20px;
+        box-shadow: var(--shadow-card), var(--edge-hi);
         transition: var(--transition);
     }}
     .port-card:hover {{
         border-color: var(--border-hover);
+        box-shadow: var(--shadow-hover), var(--edge-hi);
+        transform: translateY(-2px);
     }}
     .port-name {{
         font-family: var(--serif);
@@ -1133,9 +1270,9 @@ def inject_global_css() -> None:
         animation: pulse-dot 2s ease-in-out infinite;
         flex-shrink: 0;
     }}
-    .slide-in      {{ animation: slide-in-up 0.35s ease both; }}
-    .fade-in       {{ animation: fade-in 0.4s ease both; }}
-    .page-enter    {{ animation: page-enter 0.3s ease both; }}
+    .slide-in      {{ animation: slide-in-up 0.4s var(--ease-out) both; }}
+    .fade-in       {{ animation: fade-in 0.45s var(--ease-out) both; }}
+    .page-enter    {{ animation: page-enter 0.4s var(--ease-out) both; }}
 
     /* ════════════════════════════════════════════════
        INPUT WIDGETS
@@ -1212,11 +1349,20 @@ def kpi_card(
 
 
 def badge(text: str, color: str = C_ACCENT) -> str:
-    """Return HTML for a colored status badge."""
+    """Return HTML for a colored status badge.
+
+    Includes ``role="status"`` + ``aria-label`` so screen readers announce
+    the badge content as a status, not just inline text. Every badge in
+    the platform inherits this — there is no other public entry point.
+    """
     bg    = _hex_to_rgba(color, 0.1)
     bord  = _hex_to_rgba(color, 0.25)
+    # Strip HTML tags from the aria-label so a badge containing a nested
+    # <span> doesn't bleed markup into the accessibility tree.
+    import re as _re
+    aria = _re.sub(r"<[^>]+>", "", str(text)).strip()
     return (
-        f'<span class="badge" '
+        f'<span class="badge" role="status" aria-label="{aria}" '
         f'style="background:{bg}; color:{color}; border:1px solid {bord};">'
         f'{text}</span>'
     )
@@ -1225,12 +1371,12 @@ def badge(text: str, color: str = C_ACCENT) -> str:
 def section_header(title: str, subtitle: str = "") -> None:
     """Render a WSJ-style section header with top rule."""
     sub_html = (
-        f'<div class="wsj-section-subtitle">{subtitle}</div>'
+        f'<div class="wsj-section-subtitle" role="presentation">{subtitle}</div>'
         if subtitle else ""
     )
     st.markdown(f"""
-    <div class="wsj-section-header">
-        <div class="wsj-section-title">{title}</div>
+    <div class="wsj-section-header" role="presentation">
+        <div class="wsj-section-title" role="heading" aria-level="2">{title}</div>
         {sub_html}
     </div>
     """, unsafe_allow_html=True)
@@ -1295,13 +1441,50 @@ def live_badge(text: str = "LIVE") -> str:
 
 
 def gradient_card(content_html: str, border_color: str = C_ACCENT, glow: bool = False) -> str:
-    """Wrap content in a WSJ-style card."""
+    """Wrap content in a WSJ-style card with layered depth (optional accent glow)."""
     rgba_border = _hex_to_rgba(border_color, 0.2)
+    glow_shadow = f", 0 0 28px -8px {_hex_to_rgba(border_color, 0.45)}" if glow else ""
     return (
         f'<div style="background:var(--card);'
         f'border:1px solid {rgba_border};border-radius:var(--radius);padding:20px;'
-        f'border-top:2px solid {border_color};">'
+        f'border-top:2px solid {border_color};'
+        f'box-shadow:var(--shadow-card), var(--edge-hi){glow_shadow};">'
         f'{content_html}</div>'
+    )
+
+
+def tldr_lede(text: str, source: str = "template") -> None:
+    """Render the one-paragraph TL;DR lede above a daily briefing.
+
+    A subtle accent-bordered callout, visually subordinate to the
+    headline beneath it so it reads as the 10-second summary rather than
+    the centerpiece. ``source`` ("claude" | "template") drives the
+    provenance chip. No-ops on empty text.
+
+    Emits ``role="note"`` + an aria-label so assistive tech announces it
+    as a summary aside; the eyebrow row is decorative (role="presentation").
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+    is_llm = source == "claude"
+    chip_text = "LLM" if is_llm else "Template"
+    chip_color = C_HIGH if is_llm else C_MOD
+    border = _hex_to_rgba(C_ACCENT, 0.22)
+    fill = _hex_to_rgba(C_TEXT, 0.02)
+    st.markdown(
+        f'<div role="note" aria-label="Briefing TL;DR" '
+        f'style="margin:0 0 18px 0;padding:14px 18px;background:{fill};'
+        f'border:1px solid {border};border-radius:var(--radius)">'
+        f'<div role="presentation" style="font-size:0.6rem;'
+        f'text-transform:uppercase;letter-spacing:0.16em;color:{C_TEXT3};'
+        f'font-weight:700;margin-bottom:6px">TL;DR &middot; '
+        f'<span style="color:{chip_color}">{chip_text}</span></div>'
+        f'<p style="margin:0;font-family:Libre Franklin,sans-serif;'
+        f'font-size:1.02rem;line-height:1.55;color:{C_TEXT};'
+        f'font-weight:500">{text}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -1360,7 +1543,17 @@ def page_header(
 
 
 def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
-    """Render a responsive row of metric cards."""
+    """Render a responsive row of metric cards.
+
+    Note: the HTML below is intentionally NOT indented and contains no
+    blank-line gaps between elements. Streamlit's markdown parser treats
+    a blank line followed by 4+ space-indented content as a code block,
+    so an empty {delta_html} or {sub_html} interpolation inside an
+    indented template would silently turn the rest of the card into a
+    <code> block (seen in the wild — KPI sublabels rendered as raw HTML
+    text). De-indenting the template prevents this regardless of which
+    optional pieces are empty.
+    """
     n    = min(columns, len(metrics))
     cols = st.columns(n)
     for i, (col, m) in enumerate(zip(cols, metrics)):
@@ -1370,23 +1563,27 @@ def metric_card_row(metrics: list[dict], columns: int = 4) -> None:
             d_color = m.get("delta_color", C_TEXT2)
             sub     = m.get("sublabel", "")
             delta_html = (
-                f'<div style="font-size:0.78rem;color:{d_color};'
+                f'<div role="presentation" style="font-size:0.78rem;color:{d_color};'
                 f'font-family:var(--mono);font-weight:500;margin-top:4px;">'
                 f'{delta}</div>'
                 if delta else ""
             )
             sub_html = (
-                f'<div style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
+                f'<div role="presentation" style="font-size:0.72rem;color:var(--text3);margin-top:2px;">{sub}</div>'
                 if sub else ""
             )
-            st.markdown(f"""
-            <div class="kpi-card slide-in" style="border-top:2px solid {accent};">
-                <div class="kpi-label">{m.get("label","")}</div>
-                <div class="kpi-value">{m.get("value","")}</div>
-                {delta_html}
-                {sub_html}
-            </div>
-            """, unsafe_allow_html=True)
+            label_text = m.get("label", "")
+            value_text = m.get("value", "")
+            aria_label = f"{label_text}: {value_text}".strip(": ").strip()
+            st.markdown(
+                f'<div class="kpi-card slide-in" role="group" aria-label=\'{aria_label}\' style="border-top:2px solid {accent};">'
+                f'<div class="kpi-label" role="presentation">{label_text}</div>'
+                f'<div class="kpi-value" role="presentation">{value_text}</div>'
+                f'{delta_html}'
+                f'{sub_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def insight_card_html(
@@ -1416,27 +1613,27 @@ def insight_card_html(
         if rationale else ""
     )
     return f"""
-    <div class="insight-card">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
-            <div style="flex:1;min-width:0;">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+    <div class="insight-card" role="article" aria-label='{title}'>
+        <div role="presentation" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div role="presentation" style="flex:1;min-width:0;">
+                <div role="presentation" style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
                     {cat_html}
                 </div>
-                <div style="font-family:var(--serif);font-size:0.92rem;font-weight:700;color:var(--text);
+                <div role="heading" aria-level="3" style="font-family:var(--serif);font-size:0.92rem;font-weight:700;color:var(--text);
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>
                 {rationale_html}
             </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-                <span style="background:{action_bg};color:{action_color};border:1px solid {action_bord};
+            <div role="presentation" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+                <span role="status" aria-label='Action: {action}' style="background:{action_bg};color:{action_color};border:1px solid {action_bord};
                     padding:2px 9px;border-radius:3px;font-size:0.68rem;font-weight:700;
                     text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;
                     font-family:var(--sans);">{action}</span>
-                <span style="font-family:var(--mono);font-size:0.82rem;
+                <span aria-label='Score: {score_pct} percent' style="font-family:var(--mono);font-size:0.82rem;
                     font-weight:700;color:{score_color};">{score_pct}%</span>
             </div>
         </div>
-        <div class="progress-bar-custom">
-            <div class="progress-bar-fill" style="width:{score_pct}%;background:{bar_fill};"></div>
+        <div class="progress-bar-custom" role="progressbar" aria-valuenow="{score_pct}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar-fill" role="presentation" style="width:{score_pct}%;background:{bar_fill};"></div>
         </div>
     </div>
     """
@@ -1457,8 +1654,8 @@ def status_badge(text: str, status: str = "info") -> str:
     dot_color = color
     pulse = ' animation:pulse-dot 2s ease-in-out infinite;' if status == "danger" else ""
     return (
-        f'<span class="status-chip" style="background:{bg};color:{color};border:1px solid {bord};">'
-        f'<span class="status-chip-dot" style="background:{dot_color};{pulse}"></span>'
+        f'<span class="status-chip" role="status" aria-label=\'{text}\' style="background:{bg};color:{color};border:1px solid {bord};">'
+        f'<span class="status-chip-dot" role="presentation" aria-hidden="true" style="background:{dot_color};{pulse}"></span>'
         f'{text}</span>'
     )
 
@@ -1532,16 +1729,25 @@ def wsj_news_list(items: list[str]) -> None:
     """, unsafe_allow_html=True)
 
 
-def wsj_market_table(headers: list[str], rows: list[list[str]]) -> None:
-    """Render a WSJ-style market data table."""
-    thead = "".join(f"<th>{h}</th>" for h in headers)
+def wsj_market_table(headers: list[str], rows: list[list[str]], title: str = "") -> None:
+    """Render a WSJ-style market data table.
+
+    Accessibility: emits explicit ARIA roles for screen readers — when ``title``
+    is non-empty, a ``<caption>`` element is rendered so assistive tech can
+    announce the table's purpose. Roles mirror native semantics (the table is
+    already a ``<table>``) which is redundant but safe and keeps the contract
+    explicit for tests.
+    """
+    thead = "".join(f'<th role="columnheader" scope="col">{h}</th>' for h in headers)
     tbody = ""
     for row in rows:
-        cells = "".join(f"<td>{c}</td>" for c in row)
-        tbody += f"<tr>{cells}</tr>"
+        cells = "".join(f'<td role="cell">{c}</td>' for c in row)
+        tbody += f'<tr role="row">{cells}</tr>'
+    caption = f"<caption>{title}</caption>" if title else ""
     st.markdown(f"""
-    <table class="wsj-market-table">
-        <thead><tr>{thead}</tr></thead>
+    <table class="wsj-market-table" role="table">
+        {caption}
+        <thead><tr role="row">{thead}</tr></thead>
         <tbody>{tbody}</tbody>
     </table>
     """, unsafe_allow_html=True)
@@ -1903,10 +2109,10 @@ def alert_banner(message: str, level: str = "info", dismissible: bool = False) -
     border = _hex_to_rgba(color, 0.35)
     anim   = "pulse-glow" if pulse else ""
     st.markdown(f"""
-        <div class="{anim}" style="background:{bg};border:1px solid {border};
+        <div class="{anim}" role="alert" aria-live="polite" style="background:{bg};border:1px solid {border};
             border-left:4px solid {color};border-radius:8px;padding:12px 16px;
             display:flex;align-items:flex-start;gap:10px;margin:8px 0;">
-          <span style="font-size:1.1rem;line-height:1.4">{icon}</span>
+          <span role="presentation" aria-hidden="true" style="font-size:1.1rem;line-height:1.4">{icon}</span>
           <span style="color:{C_TEXT};font-size:0.88rem;line-height:1.5">{message}</span>
         </div>
     """, unsafe_allow_html=True)
@@ -2019,4 +2225,7 @@ __all__ = [
     # Folded in from components.py
     "stat_counter", "mini_sparkline", "gauge_ring", "alert_banner",
     "kpi_row", "shipping_heat_bar", "section_divider",
+    # Accessibility
+    "_contrast_ratio", "A11Y_TEXT_PAIRS", "A11Y_LARGE_TEXT_PAIRS",
+    "WCAG_AA_THRESHOLD", "WCAG_AA_LARGE_THRESHOLD",
 ]

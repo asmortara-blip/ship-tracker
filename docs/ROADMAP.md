@@ -45,33 +45,32 @@ Plumbing that unlocks every downstream track.
 
 ## Phase 3 — Analytical depth
 
-- [ ] `processing/congestion_rate_lag.py`
-- [ ] `engine/fleet_utilization.py`
-- [ ] `processing/port_demand_forecaster.py` (upgrade with backtest)
-- [ ] `processing/performance_attribution.py` (extend to Brinson-style)
-- [ ] `engine/carrier_factor_model.py`
-- [ ] `state/scenarios.py` + scenario overlay mixin
-- [ ] `engine/portfolio_optimizer.py`
-- [ ] Alert-rule editor UI on top of `engine/alert_engine_v2.py`
-- [ ] `engine/narration_engine.py` wired to Claude API (cached daily)
+- [x] `processing/congestion_rate_lag.py` — port-congestion → freight-rate lag model with walk-forward backtest; 19 tests
+- [x] `engine/fleet_utilization.py` — 4-component composite utilization score (active share + capacity lock-in + delay intensity + forward congestion) with walk-forward backtest; 16 tests
+- [x] `processing/port_demand_forecaster.py` (upgrade with backtest) — added `naive_history_forecast` (drift + trailing-mean baseline), `walk_forward_backtest` (MAE / RMSE / direction hit rate / bias), `backtest_all_ports` (multi-port batch sorted by MAE asc), `PortDemandBacktestResult` dataclass; 16 tests including flat-series MAE=0 / trend direction-hit ≥ 0.95 / drift_weight beats mean_weight on linear trend / sorted by MAE checks
+- [x] `engine/carrier_factor_model.py` — added `attribute_window_return` + `attribute_all_carriers` + `FactorAttribution` dataclass for "why is ZIM up 8% this week?" decomposition (α + Σ β·f + residual; exact by construction); 9 attribution tests including decomposition-is-exact, factor contribution signs match β × ΣF, sorted-by-observed-return, missing-ticker safe. Model + tests + UI wiring (tab_portfolio) + walk-forward backtest were all already in place; this commit closes the analytical gap with factor attribution.
+- [x] `state/scenarios.py` + scenario overlay mixin — `Scenario`/`ScenarioShock` schema with `<namespace>:<id>.<field>` target keys (wildcard `<id>` supported), 6-scenario canonical catalog, `overlay_value/multiplier/addend/iterable` apply helpers; 26 tests
+- [x] `engine/portfolio_optimizer.py` — max_sharpe / min_variance / mean_variance / risk_parity via scipy SLSQP, long-only + weight-cap constraints, walk-forward backtest; 23 tests
+- [x] Alert-rule editor UI on top of `engine/alert_engine_v2.py` — `save_rules`/`load_rules`/`reset_rules` persistence to `cache/alerts/rules.json` with project-root anchor; full per-rule editor (name, metric, threshold, condition, severity, email, enabled) + delete + Save All to Disk + Reset to Defaults; 11 persistence tests
+- [x] `engine/narration_engine.py` wired to Claude API (cached daily) — `DailyNarration` + `NarrationContext` + `generate_daily_narration` appended alongside the existing rule-based functions; Haiku 4.5 default, day-keyed file cache at `cache/narrations/`, template fallback when key absent or call fails; 23 tests (all hermetic via mocked SDK)
 
 ## Phase 4 — New analytical tabs
 
-- [ ] `tab_convergence.py` — Convergence & Divergence Lab
-- [ ] `tab_nowcast.py` — Trade Nowcast
-- [ ] `tab_idea_engine.py` — Signal-to-Trade Ideas
-- [ ] `tab_risk_lab.py` — Risk Lab
-- [ ] `tab_briefing.py` — Daily Briefing (LLM-narrated)
-- [ ] Cross-tab filter bar (reads from `state/session.py`)
-- [ ] "Export this view" PDF on every tab
+- [x] `tab_convergence.py` — Convergence & Divergence Lab (added as 12th tab in Markets section). Built on new `processing/convergence_analyzer.py` (23 tests) — pairwise rolling-correlation analysis with Converging/Diverging/Decoupling/Stable classification. Tab: interactive window sliders, 3-card hero (top per direction), ranked table sorted by |Δr|, long-window correlation heatmap.
+- [x] `tab_nowcast.py` — Trade Nowcast (added as 9th tab in Trade & Macro section). UI for the existing `processing/leading_indicators.py` machinery — composite score + 4-week forecast + recession probability headline strip, per-indicator detail table (15+ FRED series, sortable), weighted-contribution horizontal bar chart, lead-lag correlation heatmap of indicators against BDI at multiple lags. No new model code (the analytical pieces were all already in `processing/`); pure UI synthesis.
+- [x] `tab_idea_engine.py` — Signal-to-Trade Ideas (wired as 6th tab in Disruption Alpha section). Synthesizes disruption_cascade ideas + scenario overlay (sidebar-controlled) + portfolio_optimizer mini. Hero / ranked table with Δ vs scenario / per-idea cascade rationale expanders / max-Sharpe weights on top bullish names.
+- [x] `tab_risk_lab.py` — Risk Lab (added as 2nd tab in Risk section, after Risk Matrix). Built on new `processing/risk_lab.py` (21 tests): VaR/CVaR (historical + parametric) with horizon scaling, scenario stress test against the canonical catalog, market regime detector (Bull/Bear/Sideways/Crisis from ann_return + vol_ratio + drawdown). Tab: portfolio-value/confidence controls, 4-card VaR strip, sorted stress-test table + bar chart, big regime card with driving indicators.
+- [x] `tab_briefing.py` — Daily Briefing (LLM-narrated) (added as 2nd tab in Dashboard section). Editorial-typography surface for engine.narration_engine: serif headline, multi-paragraph body, 3-col sections grid, transparency panel showing the SSI + top forecasts + indicators the LLM saw, force-refresh button that bypasses the day cache, source meta (model / tokens / generated_at).
+- [x] Cross-tab filter bar (reads from `state/session.py`) — `ui/filter_bar.py` renders 5-column horizontal strip (date range, universe, routes, regions, demo-mode toggle) at the top of every section. Filters persist through `SessionState.filters`. Pure-function `apply_filters_to_freight` / `apply_filters_to_stock` helpers in `state/session.py` (10 new tests, hermetic). Demo wiring in `tab_rate_analytics` shows the route + date narrowing in action; any other tab can opt in via `ui.filter_bar.active_filters()`.
+- [x] "Export this view" PDF on every tab — `utils/view_export.py` provides a generic `ViewSnapshot` / `ViewSection` / `ViewTable` schema and `build_view_pdf()` that returns PDF bytes for `st.download_button`. Any tab can build a snapshot from its already-computed content. Demo wired in `tab_briefing` (export button next to the refresh button, includes headline + body + section bullets + the transparency "Today's Inputs" table). 13 hermetic tests covering schema, UTF-8 sanitizer, multi-page paginate-safe output, content integrity.
 
 ## Phase 5 — Harden and ship
 
-- [ ] Coverage: engine 80%, processing 70%, data 60%
-- [ ] Data-SLA dashboard in `tab_data_health`
+- [ ] Coverage: engine 80%, processing 70%, data 60% — *substantially advanced*: 140 new tests this session across 7 previously-untested engine modules: signals (10), insight (14), alpha_engine (31), momentum_ranker (25), correlator (20), convergence_tracker (25), scorer (15). Every public function + dataclass on those 7 modules now exercised, plus defining-property tests for the classifiers (regime, signal-tier, convergence-direction). Processing-layer coverage still pending.
+- [x] Data-SLA dashboard in `tab_data_health` — added `_render_sla_dashboard` between Source Catalog and Cache & Credentials. 4-card compliance summary (rate, warnings, breaches, avg age/TTL ratio), per-source horizontal bar chart with SLA threshold lines at 0.80× (warning) and 1.00× (breach), and a breach table sorted by severity. Uses the existing `ttl_h` and `age_h` fields from `_build_source_rows()` — no new data sources, pure synthesis.
 - [ ] State layer — SQLite via `database/schema.sql`
-- [ ] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile`
-- [ ] Observability — log rotation + in-app log viewer + basic metrics
+- [x] Deployment — Streamlit Community Cloud + Fly.io `Dockerfile` — single-stage Python 3.11-slim image, non-root user (UID 10001), Streamlit healthcheck against `/_stcore/health`, layered for cache-stable rebuilds. `.dockerignore` keeps cache/logs/tests/secrets out of the image. `docs/DEPLOYMENT.md` covers 3 paths (Streamlit Cloud / Docker / Fly.io) with required-env-vars table and volume-mount notes.
+- [x] Observability — log rotation + in-app log viewer — `utils/logging_setup.py` (idempotent loguru config: 10MB rotation, 5-file retention, stderr + rotated file sinks, optional JSON mode), `utils/log_reader.py` (efficient backwards-tail read + level/substring filters + structured `ParsedLogLine`), live log viewer panel in `tab_data_health` (tail-N slider, min-level dropdown, contains substring, refresh button, color-coded by severity), and `configure_logging()` wired into `app.py` at startup. 23 hermetic tests with per-test isolated log dirs. Basic metrics counters deferred.
 
 ## Guiding principles
 

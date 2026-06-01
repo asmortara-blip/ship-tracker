@@ -28,16 +28,17 @@ from ui.styles import (
     C_HIGH,
     C_LOW,
     C_MOD,
-    C_SURFACE,
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
     apply_dark_layout,
     badge,
-    live_data_badge,
+    insight_card_html,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -196,45 +197,35 @@ def _score_bar(score: float) -> str:
 # ── Section renderers ────────────────────────────────────────────────────────
 def _render_cycle_dashboard(phase: str) -> None:
     try:
-        color = _PHASE_COLOR.get(phase, C_ACCENT)
         desc  = _PHASE_DESC.get(phase, "")
         hist  = _PHASE_HIST.get(phase, "")
 
-        st.html(live_data_badge(_CYCLE_SOURCE))
-
-        pills_html = ""
+        # Phase progression as a metric row — active phase rendered in its
+        # phase color, others muted. Matches the WSJ "current state" pattern.
+        cards = []
         for p in _ALL_PHASES:
             pc     = _PHASE_COLOR.get(p, C_TEXT3)
             active = p == phase
-            bg     = f"{pc}30" if active else "transparent"
-            border = pc if active else C_BORDER
-            fw     = "700" if active else "400"
-            pills_html += (
-                f'<span style="background:{bg};border:1px solid {border};'
-                f'color:{pc};padding:4px 14px;border-radius:4px;font-size:11px;'
-                f'font-weight:{fw};letter-spacing:1px;white-space:nowrap;">'
-                f'{p}</span>'
-            )
+            cards.append({
+                "label":    p,
+                "value":    "CURRENT" if active else "—",
+                "accent":   pc if active else C_BORDER,
+                "sublabel": _PHASE_HIST.get(p, "").split(".")[0] if active else "",
+            })
+        metric_card_row(cards, columns=5)
 
-        st.html(
-            f'<div style="background:{C_SURFACE};border:1px solid {C_BORDER};'
-            f'border-left:5px solid {color};border-radius:6px;padding:24px 28px;'
-            f'margin-bottom:20px;">'
-            f'<div style="color:{C_TEXT3};font-family:var(--sans);font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">'
-            f'Current Cycle Phase</div>'
-            f'<div style="color:{color};font-size:52px;font-weight:900;'
-            f'font-family:var(--mono);letter-spacing:2px;line-height:1;">'
-            f'{phase}</div>'
-            f'<div style="color:{C_TEXT2};font-family:var(--sans);'
-            f'font-size:13px;margin-top:12px;max-width:600px;">{desc}</div>'
-            f'<div style="color:{C_TEXT3};font-size:11px;margin-top:8px;">'
-            f'{hist}</div>'
-            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;">'
-            f'{pills_html}'
-            f'</div>'
-            f'</div>'
+        # Narrative tile for the active phase
+        st.markdown(
+            insight_card_html(
+                title=f"{phase} — {desc}",
+                score=0.7,
+                action="Monitor",
+                rationale=hist,
+                category="MACRO",
+            ),
+            unsafe_allow_html=True,
         )
+        st.markdown(source_footer([_CYCLE_SOURCE]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Cycle dashboard render failed")
         st.warning("Cycle dashboard unavailable.")
@@ -298,33 +289,28 @@ def _render_cycle_clock(phase: str, position_score: float) -> None:
             f'</svg>'
         )
 
-        legend_html = (
-            f'<span class="sub-section-header" '
-            f'style="display:block;margin-bottom:8px;">Cycle Clock</span>'
-            f'<span style="display:block;color:{color};font-size:26px;font-weight:800;'
-            f'font-family:var(--mono);">{phase}</span>'
-            f'<span style="display:block;color:{C_TEXT3};font-size:12px;margin-top:6px;">'
-            f'12 o\'clock = PEAK &nbsp;|&nbsp; 6 o\'clock = TROUGH</span>'
-            f'<span style="display:block;color:{C_TEXT3};font-size:12px;margin-top:4px;">'
-            f'Cycle position score: '
-            f'<span style="color:{C_TEXT2};font-family:var(--mono);">'
-            f'{position_score:.0%}</span> of peak</span>'
-            f'<span style="display:block;margin-top:14px;background:{C_CARD};'
-            f'border-radius:6px;height:8px;width:180px;overflow:hidden;">'
-            f'<span style="display:block;background:{color};'
-            f'width:{position_score*100:.0f}%;height:100%;border-radius:6px;">'
-            f'</span></span>'
-            f'<span style="display:flex;color:{C_TEXT3};font-size:10px;'
-            f'margin-top:4px;justify-content:space-between;width:180px;">'
-            f'<span>TROUGH</span><span>PEAK</span></span>'
-        )
-
-        st.html(live_data_badge(_CYCLE_SOURCE))
-        left, right = st.columns([1, 2])
+        left, right = st.columns([1, 2], gap="large")
         with left:
             st.html(clock_svg)
         with right:
-            st.html(legend_html)
+            metric_card_row(
+                [
+                    {
+                        "label":    "Current Phase",
+                        "value":    phase,
+                        "accent":   color,
+                        "sublabel": "12 o'clock = PEAK / 6 o'clock = TROUGH",
+                    },
+                    {
+                        "label":    "Cycle Position",
+                        "value":    f"{position_score:.0%}",
+                        "accent":   color,
+                        "sublabel": "0% = trough, 100% = peak",
+                    },
+                ],
+                columns=2,
+            )
+        st.markdown(source_footer([_CYCLE_SOURCE]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Cycle clock render failed")
         st.warning("Cycle clock unavailable.")
@@ -358,8 +344,6 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
             ],
             columns=3,
         )
-        st.html("<div style='height:12px;'></div>")
-        st.html(live_data_badge(_INDICATOR_SOURCE))
 
         headers = ["Indicator", "Current Reading", "Cycle Signal", "Weight", "Score"]
         rows = []
@@ -373,6 +357,7 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
                 _score_bar(row["Score"]),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(source_footer([_INDICATOR_SOURCE]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Indicator table render failed")
         st.warning("Indicator table unavailable.")
@@ -380,8 +365,6 @@ def _render_indicator_table(df: pd.DataFrame) -> None:
 
 def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
     try:
-        st.html(live_data_badge(_BDI_DEMO_SOURCE))
-
         fig = go.Figure()
 
         for start_s, end_s, label, rgba in _CYCLE_PHASES_HIST:
@@ -440,6 +423,7 @@ def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
             yaxis=dict(title="BDI", zeroline=False),
         )
         st.plotly_chart(fig, use_container_width=True, key="cycle_historical_bdi")
+        st.markdown(source_footer([_BDI_DEMO_SOURCE]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Historical cycle map render failed")
         st.warning("Historical cycle map unavailable.")
@@ -447,8 +431,6 @@ def _render_historical_cycle_map(bdi_df: pd.DataFrame) -> None:
 
 def _render_trade_recommendations(current_phase: str) -> None:
     try:
-        st.html(live_data_badge(_RECS_SOURCE))
-
         recs = {
             "RECOVERY": {
                 "action":  "BUY",
@@ -522,83 +504,56 @@ def _render_trade_recommendations(current_phase: str) -> None:
         }
 
         for phase in _ALL_PHASES:
-            rec   = recs.get(phase, {})
-            color = _PHASE_COLOR.get(phase, C_ACCENT)
-            is_current = (phase == current_phase)
-            border_style = (
-                f"border:2px solid {color};"
-                if is_current else f"border:1px solid {C_BORDER};"
-            )
-            opacity = "1" if is_current else "0.6"
-            current_pill = (
-                f'<span style="background:{color}33;color:{color};padding:2px 10px;'
-                f'border-radius:6px;font-size:10px;font-weight:700;margin-left:10px;">'
-                f'CURRENT</span>'
-                if is_current else ""
-            )
-
-            action_rows = []
-            for ticker, sector, reason in rec.get("buys", []):
-                action_rows.append(
-                    f'<div style="display:flex;align-items:center;gap:10px;'
-                    f'padding:6px 0;border-bottom:1px solid {C_BORDER};">'
-                    f'<span style="background:{C_HIGH}22;color:{C_HIGH};'
-                    f'padding:2px 8px;border-radius:4px;font-size:11px;'
-                    f'font-weight:700;min-width:44px;text-align:center;">BUY</span>'
-                    f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:var(--mono);min-width:44px;">{ticker}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
-                    f'{sector}</span>'
-                    f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
-                    f'</div>'
-                )
-            for ticker, sector, reason in rec.get("sells", []):
-                action_rows.append(
-                    f'<div style="display:flex;align-items:center;gap:10px;'
-                    f'padding:6px 0;border-bottom:1px solid {C_BORDER};">'
-                    f'<span style="background:{C_LOW}22;color:{C_LOW};'
-                    f'padding:2px 8px;border-radius:4px;font-size:11px;'
-                    f'font-weight:700;min-width:44px;text-align:center;">SELL</span>'
-                    f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;'
-                    f'font-family:var(--mono);min-width:44px;">{ticker}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:11px;min-width:70px;">'
-                    f'{sector}</span>'
-                    f'<span style="color:{C_TEXT2};font-size:11px;">{reason}</span>'
-                    f'</div>'
-                )
-
-            opts = rec.get("options", "")
-            opts_block = (
-                f'<div style="margin-top:10px;padding:10px;background:{C_CARD};'
-                f'border-radius:6px;border-left:3px solid {C_ACCENT};">'
-                f'<span style="color:{C_TEXT3};font-size:10px;text-transform:uppercase;'
-                f'letter-spacing:1px;">Options Strategy: </span>'
-                f'<span style="color:{C_TEXT2};font-size:12px;">{opts}</span>'
-                f'</div>'
-                if opts else ""
-            )
-
+            rec          = recs.get(phase, {})
+            is_current   = (phase == current_phase)
             action_label = rec.get("action", phase)
             summary      = rec.get("summary", "")
+            opts         = rec.get("options", "")
 
-            st.html(
-                f'<div style="{border_style}border-radius:6px;padding:16px 18px;'
-                f'margin-bottom:14px;background:{C_SURFACE};opacity:{opacity};">'
-                f'<div style="display:flex;align-items:center;gap:8px;'
-                f'margin-bottom:10px;">'
-                f'<span style="color:{color};font-size:15px;font-weight:800;'
-                f'letter-spacing:1px;">{phase}</span>'
-                f'{current_pill}'
-                f'<span style="margin-left:auto;background:{color}22;color:{color};'
-                f'padding:3px 12px;border-radius:6px;font-size:11px;font-weight:700;">'
-                f'{action_label}</span>'
-                f'</div>'
-                f'<div style="color:{C_TEXT2};font-family:var(--sans);'
-                f'font-size:12px;margin-bottom:12px;">{summary}</div>'
-                f'{"".join(action_rows)}'
-                f'{opts_block}'
-                f'</div>'
+            # Phase header — current phase gets a "CURRENT" badge + colored
+            # action pill via section_header subtitle markup.
+            current_tag = " — CURRENT" if is_current else ""
+            section_header(
+                f"{phase}{current_tag}",
+                f"{action_label} · {summary}",
             )
+
+            # Buys / sells in a single WSJ market table
+            rows = []
+            for ticker, sector, reason in rec.get("buys", []):
+                rows.append([
+                    badge("BUY", color=C_HIGH),
+                    _sans(ticker, color=C_TEXT, weight=700),
+                    _sans(sector, color=C_TEXT3, weight=400),
+                    _sans(reason, color=C_TEXT2, weight=400),
+                ])
+            for ticker, sector, reason in rec.get("sells", []):
+                rows.append([
+                    badge("SELL", color=C_LOW),
+                    _sans(ticker, color=C_TEXT, weight=700),
+                    _sans(sector, color=C_TEXT3, weight=400),
+                    _sans(reason, color=C_TEXT2, weight=400),
+                ])
+            if rows:
+                wsj_market_table(
+                    ["Action", "Ticker", "Sector", "Rationale"],
+                    rows,
+                )
+
+            # Options strategy as an insight tile when present
+            if opts:
+                st.markdown(
+                    insight_card_html(
+                        title=f"{phase} — Options Strategy",
+                        score=0.6 if is_current else 0.3,
+                        action="Monitor" if is_current else "Watch",
+                        rationale=opts,
+                        category="MACRO",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown(source_footer([_RECS_SOURCE]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Trade recommendations render failed")
         st.warning("Trade recommendations unavailable.")
@@ -607,112 +562,124 @@ def _render_trade_recommendations(current_phase: str) -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 def render(macro_data=None, freight_data=None, insights=None, stock_data=None) -> None:
     """Render the Shipping Market Cycle Positioning tab."""
-    try:
-        phase     = _current_phase()
-        pos_score = _cycle_position_score()
-    except Exception:
-        logger.exception("Failed to resolve current cycle phase")
-        phase, pos_score = "RECOVERY", 0.35
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('cycle'):
+        try:
+            phase     = _current_phase()
+            pos_score = _cycle_position_score()
+        except Exception:
+            logger.exception("Failed to resolve current cycle phase")
+            phase, pos_score = "RECOVERY", 0.35
 
-    current_color = _PHASE_COLOR.get(phase, C_ACCENT)
+        current_color = _PHASE_COLOR.get(phase, C_ACCENT)
 
-    page_header(
-        title="Shipping Cycle Positioning",
-        subtitle="~7-year cycle analysis and trade recommendations",
-        badge_text=phase,
-        badge_color=current_color,
-    )
-
-    # Hero KPI strip summarising the current cycle read
-    try:
-        metric_card_row(
-            [
-                {
-                    "label": "Current Phase",
-                    "value": phase,
-                    "accent": current_color,
-                    "sublabel": _PHASE_HIST.get(phase, ""),
-                },
-                {
-                    "label": "Cycle Position",
-                    "value": f"{pos_score:.0%}",
-                    "accent": current_color,
-                    "sublabel": "0% = trough, 100% = peak",
-                },
-                {
-                    "label": "Next Likely Phase",
-                    "value": _next_phase(phase),
-                    "accent": _PHASE_COLOR.get(_next_phase(phase), C_ACCENT),
-                    "sublabel": "Based on typical ordering",
-                },
-                {
-                    "label": "Playbook",
-                    "value": "Accumulate",
-                    "accent": C_HIGH,
-                    "sublabel": "Quality names on dips",
-                },
-            ],
-            columns=4,
+        page_header(
+            title="Shipping Cycle Positioning",
+            subtitle="~7-year cycle analysis and trade recommendations",
+            badge_text=phase,
+            badge_color=current_color,
         )
-    except Exception:
-        logger.exception("Hero metrics render failed")
 
-    # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
-    try:
-        section_header(
-            "Cycle Dashboard",
-            "Current phase with historical context",
-        )
-        _render_cycle_dashboard(phase)
-    except Exception:
-        logger.exception("Section 1 render failed")
-        st.warning("Cycle dashboard section unavailable.")
+        # Hero KPI strip summarising the current cycle read
+        try:
+            metric_card_row(
+                [
+                    {
+                        "label": "Current Phase",
+                        "value": phase,
+                        "accent": current_color,
+                        "sublabel": _PHASE_HIST.get(phase, ""),
+                    },
+                    {
+                        "label": "Cycle Position",
+                        "value": f"{pos_score:.0%}",
+                        "accent": current_color,
+                        "sublabel": "0% = trough, 100% = peak",
+                    },
+                    {
+                        "label": "Next Likely Phase",
+                        "value": _next_phase(phase),
+                        "accent": _PHASE_COLOR.get(_next_phase(phase), C_ACCENT),
+                        "sublabel": "Based on typical ordering",
+                    },
+                    {
+                        "label": "Playbook",
+                        "value": "Accumulate",
+                        "accent": C_HIGH,
+                        "sublabel": "Quality names on dips",
+                    },
+                ],
+                columns=4,
+            )
+        except Exception:
+            logger.exception("Hero metrics render failed")
 
-    # ── 2. Cycle Clock ────────────────────────────────────────────────────────
-    try:
-        section_header(
-            "Cycle Clock",
-            "12 o'clock = PEAK, 6 o'clock = TROUGH",
-        )
-        _render_cycle_clock(phase, pos_score)
-    except Exception:
-        logger.exception("Section 2 render failed")
-        st.warning("Cycle clock section unavailable.")
+        # ── 1. Cycle Dashboard ────────────────────────────────────────────────────
+        section_divider("Cycle Position")
 
-    # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
-    try:
-        section_header(
-            "Cycle Indicator Scorecard",
-            "10 indicators - current reading, cycle signal, composite score",
-        )
-        ind_df = _build_indicators()
-        _render_indicator_table(ind_df)
-    except Exception:
-        logger.exception("Section 3 render failed")
-        st.warning("Cycle indicator section unavailable.")
+        try:
+            section_header(
+                "Cycle Dashboard",
+                "Current phase with historical context",
+            )
+            _render_cycle_dashboard(phase)
+        except Exception:
+            logger.exception("Section 1 render failed")
+            st.warning("Cycle dashboard section unavailable.")
 
-    # ── 4. Historical Cycle Map ───────────────────────────────────────────────
-    try:
-        section_header(
-            "Historical Cycle Map",
-            "BDI 2000-2025 with cycle phase regions - key events marked",
-        )
-        bdi_df = _build_bdi_history()
-        _render_historical_cycle_map(bdi_df)
-    except Exception:
-        logger.exception("Section 4 render failed")
-        st.warning("Historical cycle map section unavailable.")
+        # ── 2. Cycle Clock ────────────────────────────────────────────────────────
+        try:
+            section_header(
+                "Cycle Clock",
+                "12 o'clock = PEAK, 6 o'clock = TROUGH",
+            )
+            _render_cycle_clock(phase, pos_score)
+        except Exception:
+            logger.exception("Section 2 render failed")
+            st.warning("Cycle clock section unavailable.")
 
-    # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
-    try:
-        section_header(
-            "Cycle-Based Trade Recommendations",
-            "What to buy / sell in each phase - current phase highlighted",
-        )
-        _render_trade_recommendations(phase)
-    except Exception:
-        logger.exception("Section 5 render failed")
-        st.warning("Trade recommendations section unavailable.")
+        # ── 3. Cycle Indicator Table ──────────────────────────────────────────────
+        section_divider("Indicators")
+
+        try:
+            section_header(
+                "Cycle Indicator Scorecard",
+                "10 indicators — current reading, cycle signal, composite score",
+            )
+            ind_df = _build_indicators()
+            _render_indicator_table(ind_df)
+        except Exception:
+            logger.exception("Section 3 render failed")
+            st.warning("Cycle indicator section unavailable.")
+
+        # ── 4. Historical Cycle Map ───────────────────────────────────────────────
+        section_divider("Historical Context")
+
+        try:
+            section_header(
+                "Historical Cycle Map",
+                "BDI 2000–2025 with cycle phase regions — key events marked",
+            )
+            bdi_df = _build_bdi_history()
+            _render_historical_cycle_map(bdi_df)
+        except Exception:
+            logger.exception("Section 4 render failed")
+            st.warning("Historical cycle map section unavailable.")
+
+        # ── 5. Cycle-Based Trade Recommendations ─────────────────────────────────
+        section_divider("Playbook")
+
+        try:
+            section_header(
+                "Cycle-Based Trade Recommendations",
+                "What to buy / sell in each phase — current phase highlighted",
+            )
+            _render_trade_recommendations(phase)
+        except Exception:
+            logger.exception("Section 5 render failed")
+            st.warning("Trade recommendations section unavailable.")
 
 
 def _next_phase(phase: str) -> str:

@@ -1,0 +1,312 @@
+#compdef ops_cli
+# Auto-generated zsh completion. Regenerate via:
+#   python -m tools.completion_cli zsh --program ops_cli --out _<program>
+# Install: drop this file into a directory on $fpath as ``_<program>``,
+# then ``autoload -U _<program> && compinit``.
+
+_ops_cli() {
+    local -a _commands
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _commands=(
+                'alerts:Alert subcommands'
+                'annotations:Alert-annotation subcommands'
+                'anomalies:Time-series anomaly detection (BDI, FBX, SCFI, WTI, ...)'
+                'audit:Audit-log subcommands'
+                'calendar:Calendar (ICS) subcommands'
+                'channels:Delivery-channel subcommands'
+                'digest:Weekly-digest subcommands'
+                'escalations:Alert-escalation chain subcommands'
+                'export:Build a bulk-state tar.gz archive'
+                'filters:Saved filter-preset subcommands'
+                'health:Data-source health subcommands'
+                'health-alerts:Auto-alerting for degraded data sources'
+                'incidents:Alert-correlation subcommands'
+                'invite:User-invitation subcommands'
+                'mfa:TOTP second-factor subcommands'
+                'perf:Render-performance subcommands'
+                'perf-budgets:Per-tab render-latency budget admin'
+                'prefs:Per-user notification-prefs subcommands'
+                'reports:Report-history subcommands'
+                'retries:Delivery-retry-queue subcommands'
+                'rules:Alert-rule config-as-code subcommands'
+                'schedules:Report-schedule subcommands'
+                'settings:Per-user preferences subcommands'
+                'silences:Alert-silence subcommands'
+                'status:Show schema version + counts'
+                'telemetry:LLM-telemetry subcommands'
+                'tokens:API-token subcommands'
+                'users:User-account subcommands'
+            )
+            _describe -t commands 'ops_cli command' _commands
+            ;;
+        args)
+            case $line[1] in
+                alerts)
+                    local -a _subs
+                    _subs=(
+                        'ack:Acknowledge a single alert'
+                        'ack-all:Acknowledge every unread alert'
+                        'list:List recent alerts'
+                        'metrics:Aggregate acknowledgement metrics'
+                    )
+                    _describe -t commands 'alerts subcommand' _subs
+                    ;;
+                annotations)
+                    local -a _subs
+                    _subs=(
+                        'add:Add one annotation to an alert'
+                        'delete:Delete one annotation (author-only)'
+                        'list:List the annotation thread for one alert'
+                    )
+                    _describe -t commands 'annotations subcommand' _subs
+                    ;;
+                anomalies)
+                    local -a _subs
+                    _subs=(
+                        'check:Run detection NOW + print results'
+                        'configs:Show the current per-metric configs'
+                        'disable:Disable detection for one metric'
+                        'enable:Enable detection for one metric'
+                        'set:Update z-threshold / lookback / method on a metric'
+                    )
+                    _describe -t commands 'anomalies subcommand' _subs
+                    ;;
+                audit)
+                    local -a _subs
+                    _subs=(
+                        'export:Export audit_events as JSONL (one JSON object per line)'
+                    )
+                    _describe -t commands 'audit subcommand' _subs
+                    ;;
+                calendar)
+                    local -a _subs
+                    _subs=(
+                        'export:Render the user'\''s incident feed to an .ics file or stdout'
+                        'token-generate:Generate (or rotate) the user'\''s calendar subscription token'
+                        'token-revoke:Clear the saved calendar subscription token for a user'
+                        'token-show:Show the user'\''s current calendar subscription token'
+                    )
+                    _describe -t commands 'calendar subcommand' _subs
+                    ;;
+                channels)
+                    local -a _subs
+                    _subs=(
+                        'delete:Delete a delivery channel'
+                        'list:List delivery channels'
+                        'reset-usage:Zero the monthly counter for one channel'
+                        'set-budget:Set the monthly delivery budget for one channel (0 = unlimited)'
+                        'usage:Show per-channel monthly delivery usage'
+                    )
+                    _describe -t commands 'channels subcommand' _subs
+                    ;;
+                digest)
+                    local -a _subs
+                    _subs=(
+                        'config:Show the user'\''s current digest config'
+                        'disable:Disable the weekly digest for a user'
+                        'enable:Enable the weekly digest for a user'
+                        'preview:Render this week'\''s digest as markdown'
+                        'send-now:Dispatch the digest immediately (bypasses the schedule)'
+                    )
+                    _describe -t commands 'digest subcommand' _subs
+                    ;;
+                escalations)
+                    local -a _subs
+                    _subs=(
+                        'add:Persist or replace one step in a chain'
+                        'clear:Delete every step in a rule'\''s chain'
+                        'delete:Delete one step in a chain by chain_id'
+                        'list:List a rule'\''s escalation chain (step ASC)'
+                    )
+                    _describe -t commands 'escalations subcommand' _subs
+                    ;;
+                export)
+                    # (no nested subcommands)
+                    ;;
+                filters)
+                    local -a _subs
+                    _subs=(
+                        'delete:Delete one preset by name+scope'
+                        'list:List a user'\''s saved filter presets'
+                    )
+                    _describe -t commands 'filters subcommand' _subs
+                    ;;
+                health)
+                    local -a _subs
+                    _subs=(
+                        'ping:Ping every data source NOW'
+                        'summary:Data-source health summary'
+                    )
+                    _describe -t commands 'health subcommand' _subs
+                    ;;
+                health-alerts)
+                    local -a _subs
+                    _subs=(
+                        'disable:Turn auto-alerting OFF'
+                        'enable:Turn auto-alerting ON'
+                        'run-once:Run the alerter NOW (for testing)'
+                        'status:Show config + recent fire count'
+                    )
+                    _describe -t commands 'health-alerts subcommand' _subs
+                    ;;
+                incidents)
+                    local -a _subs
+                    _subs=(
+                        'list:List recent correlated incidents'
+                        'stats:Aggregate incident summary stats'
+                    )
+                    _describe -t commands 'incidents subcommand' _subs
+                    ;;
+                invite)
+                    local -a _subs
+                    _subs=(
+                        'create:Mint a new invitation (prints the token ONCE)'
+                        'list:List invitations (unconsumed by default)'
+                        'revoke:Delete an UNCONSUMED invitation (consumed rows are immutable)'
+                    )
+                    _describe -t commands 'invite subcommand' _subs
+                    ;;
+                mfa)
+                    local -a _subs
+                    _subs=(
+                        'disable:Clear the MFA secret + flag for a user'
+                        'enable:Generate a secret + enable MFA for a user'
+                        'recovery-codes:Show the count of UNUSED recovery codes (does NOT print the codes)'
+                        'regenerate-codes:Wipe existing recovery codes and mint a fresh batch (prints codes ONCE)'
+                        'status:Show whether MFA is enabled for a user'
+                    )
+                    _describe -t commands 'mfa subcommand' _subs
+                    ;;
+                perf)
+                    local -a _subs
+                    _subs=(
+                        'summary:Render-performance summary'
+                    )
+                    _describe -t commands 'perf subcommand' _subs
+                    ;;
+                perf-budgets)
+                    local -a _subs
+                    _subs=(
+                        'check:Run check_and_alert NOW (prints count dict)'
+                        'list:Show every budget + current p95 + status'
+                        'reset:Wipe customisations, revert to defaults'
+                        'set:Set / replace the budget for one tab'
+                    )
+                    _describe -t commands 'perf-budgets subcommand' _subs
+                    ;;
+                prefs)
+                    local -a _subs
+                    _subs=(
+                        'reset:Wipe one user'\''s prefs back to defaults'
+                        'set:Update one or more pref fields'
+                        'show:Pretty-print one user'\''s prefs (or defaults)'
+                    )
+                    _describe -t commands 'prefs subcommand' _subs
+                    ;;
+                reports)
+                    local -a _subs
+                    _subs=(
+                        'delete:Delete a saved report'
+                        'diff:Compare two reports and print the structured diff'
+                        'list:List saved reports'
+                        'stats:Report-history aggregate stats'
+                    )
+                    _describe -t commands 'reports subcommand' _subs
+                    ;;
+                retries)
+                    local -a _subs
+                    _subs=(
+                        'cancel:Cancel a pending retry (marks it failed with reason)'
+                        'cleanup:Delete completed rows older than --retention-days'
+                        'list:List retry rows by status (default: pending)'
+                        'manual:Set next_attempt_at=NOW so the next worker pass picks it up'
+                        'process:Run one retry pass NOW (synchronous)'
+                    )
+                    _describe -t commands 'retries subcommand' _subs
+                    ;;
+                rules)
+                    local -a _subs
+                    _subs=(
+                        'diff:Show unified diff between YAML file and the user'\''s current rules'
+                        'diff-csv:Show unified diff between CSV file and the user'\''s current rules'
+                        'export:Render the user'\''s rules as YAML (stdout, or --out FILE)'
+                        'export-csv:Render the user'\''s rules as CSV (stdout, or --out FILE)'
+                        'import:Parse YAML file and save_rules (overwrites existing set)'
+                        'import-csv:Parse CSV file and save_rules (overwrites existing set)'
+                    )
+                    _describe -t commands 'rules subcommand' _subs
+                    ;;
+                schedules)
+                    local -a _subs
+                    _subs=(
+                        'create:Create a new schedule'
+                        'delete:Delete one schedule'
+                        'disable:Disable one schedule'
+                        'enable:Enable one schedule'
+                        'list:List a user'\''s report schedules'
+                        'run-once:Trigger an immediate manual run'
+                    )
+                    _describe -t commands 'schedules subcommand' _subs
+                    ;;
+                settings)
+                    local -a _subs
+                    _subs=(
+                        'set:Update one or more preference keys'
+                        'show:Show a user'\''s saved preferences (or defaults)'
+                    )
+                    _describe -t commands 'settings subcommand' _subs
+                    ;;
+                silences)
+                    local -a _subs
+                    _subs=(
+                        'create:Create a new silence (operator + duration + filters)'
+                        'delete:Cancel a silence early'
+                        'list:List a user'\''s silences'
+                    )
+                    _describe -t commands 'silences subcommand' _subs
+                    ;;
+                status)
+                    # (no nested subcommands)
+                    ;;
+                telemetry)
+                    local -a _subs
+                    _subs=(
+                        'prune:Prune old LLM-call rows'
+                        'recent:Recent LLM calls'
+                        'usage:LLM usage summary over a window'
+                    )
+                    _describe -t commands 'telemetry subcommand' _subs
+                    ;;
+                tokens)
+                    local -a _subs
+                    _subs=(
+                        'create:Create an API token'
+                        'list:List a user'\''s API tokens'
+                        'revoke:Revoke an API token'
+                    )
+                    _describe -t commands 'tokens subcommand' _subs
+                    ;;
+                users)
+                    local -a _subs
+                    _subs=(
+                        'create:Create a new user'
+                        'list:List registered users'
+                    )
+                    _describe -t commands 'users subcommand' _subs
+                    ;;
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_ops_cli "$@"

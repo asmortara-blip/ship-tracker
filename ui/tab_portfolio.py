@@ -10,15 +10,21 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
-    C_SURFACE, C_CARD, C_BORDER,
+    _hex_to_rgba,
     C_HIGH, C_LOW, C_ACCENT, C_MOD, C_TEXT, C_TEXT2, C_TEXT3,
-    dark_layout,
     apply_dark_layout,
-    section_header,
-    metric_card_row,
-    wsj_market_table,
+    badge,
+    insight_card_html,
     live_data_badge,
+    metric_card_row,
+    page_header,
+    section_divider,
+    section_header,
+    source_footer,
+    wsj_market_table,
 )
 
 from engine.carrier_factor_model import (
@@ -82,7 +88,22 @@ _MOCK_DAY_CHANGE = {
     "HAFNI": +2.88,
 }
 
-_HR = "<hr style='border:none;border-top:1px solid rgba(232,230,225,0.05);margin:20px 0'>"
+
+
+# ── Cell formatters for wsj_market_table() ────────────────────────────────
+
+def _mono(value: str, color: str = C_TEXT) -> str:
+    return (
+        f'<span style="font-family:var(--mono);color:{color};'
+        f'font-variant-numeric:tabular-nums;">{value}</span>'
+    )
+
+
+def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
+    return (
+        f'<span style="font-family:var(--sans);color:{color};'
+        f'font-weight:{weight};">{value}</span>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -147,22 +168,12 @@ def _init_positions() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_hero() -> None:
-    st.markdown("""
-    <div style="padding:28px 0 18px 0;">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
-        <div style="width:44px;height:44px;background:linear-gradient(135deg,#3572b0,#1d4ed8);
-                    border-radius:6px;display:flex;align-items:center;justify-content:center;
-                    font-size:22px;">💼</div>
-        <div>
-          <div style="font-size:26px;font-weight:800;color:#e8e6e1;letter-spacing:-0.5px;
-                      font-family:'Libre Franklin',sans-serif;">Portfolio Tracker</div>
-          <div style="font-size:13px;color:#9a968e;font-weight:500;margin-top:1px;">
-            Shipping Sector Position Management
-          </div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    page_header(
+        title="Portfolio Tracker",
+        subtitle="Shipping sector position management — P&L, risk metrics, and factor attribution.",
+        badge_text="PORTFOLIO",
+        badge_color=C_ACCENT,
+    )
 
 
 def _build_snapshot(positions: list[dict], stock_data) -> pd.DataFrame:
@@ -211,49 +222,16 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
         total_ret   = (total_pnl / cost_total * 100) if cost_total > 0 else 0.0
         port_beta   = (df["Beta"] * df["Weight %"] / 100).sum() if not df.empty else 1.0
 
-        day_color   = _color(day_pnl)
-        ret_color   = _color(total_ret)
-
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Total Portfolio Value</div>
-            <div style="font-size:26px;font-weight:800;color:{C_TEXT};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_dollar_abs(total_val)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Shipping Sector Exposure</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Day P&amp;L</div>
-            <div style="font-size:26px;font-weight:800;color:{day_color};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_dollar(day_pnl)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Today's unrealized change</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Total Return</div>
-            <div style="font-size:26px;font-weight:800;color:{ret_color};font-family:'Libre Franklin',sans-serif;">
-              {_fmt_pct(total_ret)}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">{_fmt_dollar(total_pnl)} unrealized P&amp;L</div>
-          </div>
-          <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                      padding:20px 22px;">
-            <div style="font-size:11px;font-weight:600;color:{C_TEXT3};text-transform:uppercase;
-                        letter-spacing:0.08em;margin-bottom:6px;">Portfolio Beta</div>
-            <div style="font-size:26px;font-weight:800;color:{C_ACCENT};font-family:'Libre Franklin',sans-serif;">
-              {port_beta:.2f}
-            </div>
-            <div style="font-size:12px;color:{C_TEXT2};margin-top:4px;">Weighted avg vs. SPY</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        metric_card_row([
+            {"label": "Total Portfolio Value", "value": _fmt_dollar_abs(total_val),
+             "accent": C_TEXT,         "sublabel": "Shipping Sector Exposure"},
+            {"label": "Day P&L",               "value": _fmt_dollar(day_pnl),
+             "accent": _color(day_pnl), "sublabel": "Today's unrealized change"},
+            {"label": "Total Return",          "value": _fmt_pct(total_ret),
+             "accent": _color(total_ret), "sublabel": f"{_fmt_dollar(total_pnl)} unrealized P&L"},
+            {"label": "Portfolio Beta",        "value": f"{port_beta:.2f}",
+             "accent": C_ACCENT,        "sublabel": "Weighted avg vs. SPY"},
+        ], columns=4)
     except Exception as e:
         logger.warning(f"summary metrics error: {e}")
 
@@ -261,10 +239,6 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
 def _render_add_position_form() -> None:
     """Expander form to add a new position."""
     with st.expander("➕  Add / Edit Position", expanded=False):
-        st.markdown(f"""
-        <div style="background:{C_SURFACE};border-radius:6px;padding:4px 0 8px 0;">
-        </div>
-        """, unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1:
             ticker_in = st.text_input("Ticker Symbol", placeholder="e.g. ZIM", key="add_ticker").upper().strip()
@@ -281,7 +255,6 @@ def _render_add_position_form() -> None:
             beta_in = st.number_input("Beta", min_value=0.1, max_value=5.0, value=1.2,
                                        step=0.05, format="%.2f", key="add_beta")
         with c6:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             add_btn = st.button("Add Position", type="primary", use_container_width=True)
 
         if add_btn:
@@ -313,7 +286,6 @@ def _render_add_position_form() -> None:
                 st.error(f"Error adding position: {e}")
 
         # Remove position
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
         positions = st.session_state.get("portfolio_positions", [])
         if positions:
             tickers_list = [p["ticker"] for p in positions]
@@ -326,118 +298,166 @@ def _render_add_position_form() -> None:
                 st.rerun()
 
 
+def _render_editorial_commentary(df: pd.DataFrame) -> None:
+    """1-2 paragraph editorial read on the current portfolio snapshot.
+
+    Sits between the summary KPI strip and the holdings table. Wraps the
+    engine call in try/except — template fallback is safe; the only failure
+    mode we guard against here is import / DB errors.
+    """
+    try:
+        from engine.tab_commentary import build_commentary
+
+        if df is None or df.empty:
+            return  # No holdings → no editorial commentary to render.
+
+        total_val = float(df["Market Value"].sum())
+        total_pnl = float(df["P&L $"].sum())
+        day_pnl = float(df["Day P&L $"].sum())
+        cost_basis = float((df["Shares"] * df["Avg Cost"]).sum())
+        total_ret_pct = (
+            (total_pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+        )
+        port_beta = float(
+            (df["Beta"] * df["Weight %"] / 100.0).sum()
+        ) if "Weight %" in df.columns else 1.0
+
+        # Top holding by market value + best/worst single-day mover.
+        top_idx = df["Market Value"].idxmax()
+        top = df.loc[top_idx]
+        sorted_day = df.sort_values("Day Chg %", ascending=False)
+        best = sorted_day.iloc[0]
+        worst = sorted_day.iloc[-1]
+
+        # Sector exposure as a simple dict, rounded to whole pct points.
+        sector_exposure: dict[str, float] = {}
+        try:
+            sector_grp = (
+                df.groupby("Sector")["Market Value"].sum() / total_val * 100.0
+            )
+            sector_exposure = {
+                str(k): round(float(v), 1)
+                for k, v in sector_grp.sort_values(ascending=False).items()
+            }
+        except Exception:
+            pass
+
+        context: dict[str, object] = {
+            "n_positions": int(len(df)),
+            "total_value_usd": round(total_val, 2),
+            "total_pnl_usd": round(total_pnl, 2),
+            "total_return_pct": round(total_ret_pct, 2),
+            "day_pnl_usd": round(day_pnl, 2),
+            "portfolio_beta": round(port_beta, 2),
+            "top_holding": (
+                f"{top['Ticker']} ({top['Sector']}, "
+                f"{float(top['Weight %']):.1f}% of book)"
+            ),
+            "best_today": f"{best['Ticker']} ({float(best['Day Chg %']):+.2f}%)",
+            "worst_today": f"{worst['Ticker']} ({float(worst['Day Chg %']):+.2f}%)",
+            "sector_exposure_pct": sector_exposure,
+        }
+
+        commentary = build_commentary("Portfolio", context)
+
+        section_header(
+            "Editorial",
+            subtitle=(
+                "LLM-narrated read on the current portfolio snapshot. "
+                "Falls back to a deterministic template when no API key is "
+                "configured."
+            ),
+        )
+
+        source_label, source_color = (
+            ("LLM", C_HIGH) if commentary.source == "llm"
+            else ("Template", C_MOD)
+        )
+        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
+        if commentary.source == "llm" and commentary.model:
+            meta_bits.append(
+                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
+            )
+        if commentary.tokens_in or commentary.tokens_out:
+            meta_bits.append(
+                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
+                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
+            )
+
+        body_html = "".join(
+            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
+            f'color:{C_TEXT2}">{para.strip()}</p>'
+            for para in commentary.body.split("\n\n") if para.strip()
+        )
+        st.markdown(
+            f'<div style="background:rgba(53,114,176,0.06);'
+            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
+            f'margin-bottom:14px">'
+            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
+            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
+            f'Source: {" · ".join(meta_bits)}'
+            f'</div>'
+            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
+            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
+            f'{commentary.headline}</div>'
+            f'{body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Portfolio — editorial commentary render failed")
+
+
 def _render_holdings_table(df: pd.DataFrame) -> None:
-    """Color-coded holdings table."""
-    st.markdown(section_header("Holdings", icon="📋"), unsafe_allow_html=True)
+    """Sector-coded holdings table."""
+    section_header("Holdings", "Sector-coded position table with P&L and weight allocation")
     if df.empty:
         st.info("No positions in portfolio. Add one above.")
         return
 
     try:
-        rows_html = ""
+        rows = []
         for _, row in df.iterrows():
-            pnl_color   = _color(row["P&L $"])
-            day_color   = _color(row["Day Chg %"])
-            sector_col  = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
+            pnl_color  = _color(row["P&L $"])
+            day_color  = _color(row["Day Chg %"])
+            sector_col = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
+            rows.append([
+                _sans(row["Ticker"], color=C_TEXT, weight=700),
+                badge(row["Sector"], color=sector_col),
+                _mono(f"{int(row['Shares']):,}"),
+                _mono(f"${row['Avg Cost']:.2f}"),
+                _mono(f"${row['Price']:.2f}", color=C_TEXT),
+                _mono(_fmt_dollar_abs(row["Market Value"]), color=C_TEXT),
+                _mono(_fmt_dollar(row["P&L $"]), color=pnl_color),
+                _mono(_fmt_pct(row["P&L %"]), color=pnl_color),
+                _mono(_fmt_pct(row["Day Chg %"]), color=day_color),
+                _mono(f"{row['Weight %']:.1f}%"),
+            ])
 
-            rows_html += f"""
-            <tr style="border-bottom:1px solid rgba(232,230,225,0.04);">
-              <td style="padding:12px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
-                {row['Ticker']}
-              </td>
-              <td style="padding:12px 8px;">
-                <span style="background:{sector_col}22;color:{sector_col};border-radius:4px;
-                             padding:3px 8px;font-size:11px;font-weight:600;">
-                  {row['Sector']}
-                </span>
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                {int(row['Shares']):,}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                ${row['Avg Cost']:.2f}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT};text-align:right;font-size:13px;font-weight:600;">
-                ${row['Price']:.2f}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT};text-align:right;font-size:13px;font-weight:600;">
-                {_fmt_dollar_abs(row['Market Value'])}
-              </td>
-              <td style="padding:12px 8px;color:{pnl_color};text-align:right;font-size:13px;font-weight:700;">
-                {_fmt_dollar(row['P&L $'])}
-              </td>
-              <td style="padding:12px 8px;color:{pnl_color};text-align:right;font-size:13px;font-weight:700;">
-                {_fmt_pct(row['P&L %'])}
-              </td>
-              <td style="padding:12px 8px;color:{day_color};text-align:right;font-size:13px;font-weight:600;">
-                {_fmt_pct(row['Day Chg %'])}
-              </td>
-              <td style="padding:12px 8px;color:{C_TEXT2};text-align:right;font-size:13px;">
-                {row['Weight %']:.1f}%
-              </td>
-            </tr>"""
-
+        # Footer totals row (rendered as a final row)
         total_val  = df["Market Value"].sum()
         total_pnl  = df["P&L $"].sum()
         total_day  = df["Day P&L $"].sum()
         tot_color  = _color(total_pnl)
         day_color2 = _color(total_day)
+        rows.append([
+            _sans("TOTAL", color=C_TEXT, weight=800),
+            "", "", "", "",
+            _mono(_fmt_dollar_abs(total_val), color=C_TEXT),
+            _mono(_fmt_dollar(total_pnl), color=tot_color),
+            "",
+            _mono(f"Day: {_fmt_dollar(total_day)}", color=day_color2),
+            _mono("100%"),
+        ])
 
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                    overflow:hidden;margin-bottom:24px;">
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-family:'Libre Franklin',sans-serif;">
-              <thead>
-                <tr style="background:rgba(232,230,225,0.03);border-bottom:1px solid rgba(255,255,255,0.1);">
-                  <th style="padding:11px 14px;text-align:left;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
-                  <th style="padding:11px 8px;text-align:left;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Sector</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Shares</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Avg Cost</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Price</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Mkt Value</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">P&amp;L $</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">P&amp;L %</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Day Chg</th>
-                  <th style="padding:11px 8px;text-align:right;font-size:11px;color:{C_TEXT3};
-                              font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Weight</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows_html}
-              </tbody>
-              <tfoot>
-                <tr style="background:rgba(53,114,176,0.06);border-top:1px solid rgba(255,255,255,0.1);">
-                  <td colspan="5" style="padding:11px 14px;font-weight:700;color:{C_TEXT};font-size:13px;">
-                    TOTAL
-                  </td>
-                  <td style="padding:11px 8px;font-weight:800;color:{C_TEXT};text-align:right;font-size:13px;">
-                    {_fmt_dollar_abs(total_val)}
-                  </td>
-                  <td style="padding:11px 8px;font-weight:800;color:{tot_color};text-align:right;font-size:13px;">
-                    {_fmt_dollar(total_pnl)}
-                  </td>
-                  <td colspan="2" style="padding:11px 8px;font-weight:700;color:{day_color2};
-                                         text-align:right;font-size:13px;">
-                    Day: {_fmt_dollar(total_day)}
-                  </td>
-                  <td style="padding:11px 8px;font-weight:700;color:{C_TEXT2};
-                              text-align:right;font-size:13px;">100%</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        wsj_market_table(
+            ["Ticker", "Sector", "Shares", "Avg Cost", "Price",
+             "Mkt Value", "P&L $", "P&L %", "Day Chg", "Weight"],
+            rows,
+        )
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"holdings table error: {e}")
         st.error(f"Holdings table error: {e}")
@@ -469,8 +489,11 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
             font=dict(size=15, color="#e8e6e1"),
         )
 
-        fig.update_layout(**dark_layout(title="Sector Allocation", height=360))
+        apply_dark_layout(fig, title="Sector Allocation", height=360)
         st.plotly_chart(fig, use_container_width=True, key="portfolio_donut")
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"composition chart error: {e}")
 
@@ -478,13 +501,13 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
 def _render_performance_chart(df: pd.DataFrame) -> None:
     """90-day simulated portfolio NAV vs shipping index."""
     try:
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         days = 90
         dates = pd.date_range(end=datetime.date.today(), periods=days, freq="B")
 
-        # Simulate correlated returns
-        port_ret   = np.random.normal(0.0008, 0.018, days)
-        index_ret  = np.random.normal(0.0003, 0.020, days)
+        # Simulate correlated returns — instance-scoped RNG, not global
+        port_ret   = rng.normal(0.0008, 0.018, days)
+        index_ret  = rng.normal(0.0003, 0.020, days)
 
         # Add some correlation + trending
         port_ret   = port_ret + 0.0005
@@ -511,21 +534,132 @@ def _render_performance_chart(df: pd.DataFrame) -> None:
             hovertemplate="<b>Index</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
         ))
 
-        layout = dark_layout(title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
-        layout["yaxis"]["title"] = dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))
-        fig.update_layout(**layout)
+        apply_dark_layout(fig, title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
+        fig.update_layout(yaxis={"title": dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))})
 
         st.plotly_chart(fig, use_container_width=True, key="portfolio_nav")
+        st.markdown(source_footer([
+            {"name": "Simulated 90-day NAV path", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"performance chart error: {e}")
+
+
+def _build_risk_return_scatter(df: pd.DataFrame) -> go.Figure:
+    """Per-position risk × return scatter — Beta on x, total P&L % on y.
+
+    Marker size scales with portfolio weight; colour follows P&L direction
+    (gain/loss/flat). Reference lines at Beta=1 (market) and P&L=0 split
+    the plane into the canonical four quadrants, so the reader sees at a
+    glance which holdings carry the most cycle exposure and how the bets
+    have actually played.
+
+    Pure builder — no ``st.*`` calls — so the lock-in tests exercise it
+    directly. Returns an annotated-empty figure when the snapshot is empty.
+    """
+    fig = go.Figure()
+    if df is None or df.empty:
+        fig.add_annotation(
+            text="No positions to plot",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font={"color": C_TEXT3, "size": 12},
+        )
+        apply_dark_layout(fig, title="Risk × Return", height=300)
+        return fig
+
+    betas    = df["Beta"].to_list()
+    pnl_pcts = df["P&L %"].to_list()
+    weights  = df["Weight %"].to_list()
+    tickers  = df["Ticker"].to_list()
+    market_vals = df["Market Value"].to_list()
+
+    # Marker size: scale weight (0-100%) into a 12-44px range so the smallest
+    # position is still visible and the largest doesn't dominate.
+    max_w = max(weights) if weights else 1.0
+    sizes = [
+        12 + (32 * (w / max_w if max_w > 0 else 0.0))
+        for w in weights
+    ]
+    colors = [_color(p) for p in pnl_pcts]
+
+    fig.add_trace(go.Scatter(
+        x=betas,
+        y=pnl_pcts,
+        mode="markers+text",
+        marker={
+            "size": sizes,
+            "color": colors,
+            "line": {"color": "#0c0e14", "width": 1.5},
+            "opacity": 0.88,
+        },
+        text=tickers,
+        textposition="top center",
+        textfont={"color": C_TEXT3, "size": 10},
+        customdata=list(zip(weights, market_vals)),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Beta: %{x:.2f}<br>"
+            "P&L: %{y:+.1f}%<br>"
+            "Weight: %{customdata[0]:.1f}%<br>"
+            "Market value: $%{customdata[1]:,.0f}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
+    # Reference lines: market beta = 1, breakeven P&L = 0
+    fig.add_vline(
+        x=1.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+        annotation_text="Market β",
+        annotation_position="top",
+        annotation_font={"color": C_TEXT3, "size": 9},
+    )
+    fig.add_hline(
+        y=0.0,
+        line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
+    )
+
+    apply_dark_layout(
+        fig,
+        title="Risk × Return — per-position decomposition",
+        height=340,
+    )
+    fig.update_layout(
+        xaxis={"title": "Beta (systematic risk vs. SPY)",
+               "gridcolor": "rgba(255,255,255,0.04)"},
+        yaxis={"title": "Total P&L (%)",
+               "gridcolor": "rgba(255,255,255,0.04)",
+               "zeroline": False},
+        margin={"l": 70, "r": 30, "t": 48, "b": 50},
+    )
+    return fig
+
+
+def _render_risk_return_scatter(df: pd.DataFrame) -> None:
+    """Render the risk-return scatter with a one-line caption underneath."""
+    if df is None or df.empty:
+        return
+    st.plotly_chart(
+        _build_risk_return_scatter(df),
+        use_container_width=True,
+        key="portfolio_risk_return_scatter",
+    )
+    st.caption(
+        "Marker size = portfolio weight; colour = P&L direction. Reference "
+        "lines split the plane at Beta=1 (market) and P&L=0. Top-right is "
+        "cycle-on winners; top-left is defensive winners; bottom-right is "
+        "cycle-down losers; bottom-left is defensive losers (where something "
+        "is probably wrong with the thesis)."
+    )
 
 
 def _render_risk_metrics(df: pd.DataFrame) -> None:
     """VaR, Sharpe, Max Drawdown, BDI correlation panel."""
     try:
-        np.random.seed(7)
+        rng = np.random.default_rng(7)
         n = 252
-        port_ret = np.random.normal(0.0008, 0.018, n)
+        port_ret = rng.normal(0.0008, 0.018, n)
 
         # VaR 95% 1-day
         var_95 = float(np.percentile(port_ret, 5))
@@ -542,57 +676,27 @@ def _render_risk_metrics(df: pd.DataFrame) -> None:
         drawdown = (nav - peak) / peak
         max_dd = float(drawdown.min()) * 100
 
-        # BDI correlation (simulated)
-        bdi_ret = 0.6 * port_ret + np.random.normal(0, 0.012, n)
+        # BDI correlation (simulated) — same instance RNG continues
+        bdi_ret = 0.6 * port_ret + rng.normal(0, 0.012, n)
         bdi_corr = float(np.corrcoef(port_ret, bdi_ret)[0, 1])
 
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
         dd_color     = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
-        corr_color   = C_ACCENT
 
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;
-                    padding:20px 24px;margin-bottom:24px;">
-          <div style="font-size:13px;font-weight:700;color:{C_TEXT};margin-bottom:16px;
-                      text-transform:uppercase;letter-spacing:0.06em;">Risk Metrics</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">VaR (95%, 1-Day)</div>
-              <div style="font-size:22px;font-weight:800;color:{C_LOW};">
-                {_fmt_dollar_abs(var_dollar)}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">
-                {abs(var_95)*100:.2f}% of portfolio
-              </div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Sharpe Ratio</div>
-              <div style="font-size:22px;font-weight:800;color:{sharpe_color};">
-                {sharpe:.2f}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Annualised, rf=4.5%</div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Max Drawdown</div>
-              <div style="font-size:22px;font-weight:800;color:{dd_color};">
-                {max_dd:.1f}%
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Trailing 252 days</div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:{C_TEXT3};font-weight:600;text-transform:uppercase;
-                          letter-spacing:0.06em;margin-bottom:5px;">Corr. to BDI</div>
-              <div style="font-size:22px;font-weight:800;color:{corr_color};">
-                {bdi_corr:.2f}
-              </div>
-              <div style="font-size:11px;color:{C_TEXT2};margin-top:3px;">Baltic Dry Index</div>
-            </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        section_header("Risk Metrics", "VaR, Sharpe, drawdown, and BDI correlation — trailing 252 days")
+        metric_card_row([
+            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(var_dollar),
+             "accent": C_LOW,         "sublabel": f"{abs(var_95)*100:.2f}% of portfolio"},
+            {"label": "Sharpe Ratio",    "value": f"{sharpe:.2f}",
+             "accent": sharpe_color,   "sublabel": "Annualised, rf=4.5%"},
+            {"label": "Max Drawdown",    "value": f"{max_dd:.1f}%",
+             "accent": dd_color,       "sublabel": "Trailing 252 days"},
+            {"label": "Corr. to BDI",    "value": f"{bdi_corr:.2f}",
+             "accent": C_ACCENT,       "sublabel": "Baltic Dry Index"},
+        ], columns=4)
+        st.markdown(source_footer([
+            {"name": "Simulated daily P&L (252-day Monte Carlo)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"risk metrics error: {e}")
 
@@ -606,48 +710,37 @@ def _render_top_movers(df: pd.DataFrame) -> None:
         best = sorted_df.iloc[0]
         worst = sorted_df.iloc[-1]
 
-        def _mover_block(row, label, label_color):
-            chg = row["Day Chg %"]
-            chg_color = _color(chg)
-            sector_col = _SECTOR_COLORS.get(row["Sector"], C_TEXT2)
-            return f"""
-            <div style="background:{C_SURFACE};border:1px solid {C_BORDER};border-radius:6px;
-                        padding:16px 18px;">
-              <div style="font-size:10px;font-weight:700;color:{label_color};text-transform:uppercase;
-                          letter-spacing:0.08em;margin-bottom:8px;">{label}</div>
-              <div style="display:flex;align-items:center;justify-content:space-between;">
-                <div>
-                  <div style="font-size:20px;font-weight:800;color:{C_TEXT};">{row['Ticker']}</div>
-                  <div style="font-size:11px;margin-top:2px;">
-                    <span style="background:{sector_col}22;color:{sector_col};border-radius:4px;
-                                 padding:2px 7px;font-size:10px;font-weight:600;">{row['Sector']}</span>
-                  </div>
-                </div>
-                <div style="text-align:right;">
-                  <div style="font-size:22px;font-weight:800;color:{chg_color};">{_fmt_pct(chg)}</div>
-                  <div style="font-size:12px;color:{chg_color};margin-top:2px;">{_fmt_dollar(row['Day P&L $'])}</div>
-                </div>
-              </div>
-              <div style="margin-top:10px;display:flex;gap:16px;">
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Price</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">${row['Price']:.2f}</div>
-                </div>
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Mkt Value</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">{_fmt_dollar_abs(row['Market Value'])}</div>
-                </div>
-                <div>
-                  <div style="font-size:10px;color:{C_TEXT3};">Weight</div>
-                  <div style="font-size:13px;color:{C_TEXT};font-weight:600;">{row['Weight %']:.1f}%</div>
-                </div>
-              </div>
-            </div>"""
+        section_header("Top Movers", "Best and worst single-day performers across the portfolio")
 
-        best_block  = _mover_block(best, "Best Performer Today", C_HIGH)
-        worst_block = _mover_block(worst, "Worst Performer Today", C_LOW)
+        col_best, col_worst = st.columns(2)
+        with col_best:
+            st.markdown(insight_card_html(
+                title=f"{best['Ticker']} — {best['Sector']}",
+                score=max(0.0, min(1.0, (best['Day Chg %'] + 5) / 10)),
+                action="Watch",
+                rationale=(
+                    f"Best Performer Today · {_fmt_pct(best['Day Chg %'])} "
+                    f"({_fmt_dollar(best['Day P&L $'])}). "
+                    f"Price ${best['Price']:.2f} · Mkt Value {_fmt_dollar_abs(best['Market Value'])} · "
+                    f"Weight {best['Weight %']:.1f}%."
+                ),
+                category="GAINER",
+            ), unsafe_allow_html=True)
+        with col_worst:
+            st.markdown(insight_card_html(
+                title=f"{worst['Ticker']} — {worst['Sector']}",
+                score=max(0.0, min(1.0, (worst['Day Chg %'] + 5) / 10)),
+                action="Caution",
+                rationale=(
+                    f"Worst Performer Today · {_fmt_pct(worst['Day Chg %'])} "
+                    f"({_fmt_dollar(worst['Day P&L $'])}). "
+                    f"Price ${worst['Price']:.2f} · Mkt Value {_fmt_dollar_abs(worst['Market Value'])} · "
+                    f"Weight {worst['Weight %']:.1f}%."
+                ),
+                category="LOSER",
+            ), unsafe_allow_html=True)
 
-        # Also build a small bar chart for all positions
+        # Bar chart for all positions
         bar_colors = [_color(v) for v in df["Day Chg %"]]
         fig = go.Figure(go.Bar(
             x=df["Ticker"],
@@ -658,18 +751,12 @@ def _render_top_movers(df: pd.DataFrame) -> None:
             textfont=dict(size=11, color="#e8e6e1"),
             hovertemplate="<b>%{x}</b><br>Day Change: %{y:+.2f}%<extra></extra>",
         ))
-        layout = dark_layout(title="Today's Returns by Position", height=280, showlegend=False)
-        layout["yaxis"]["ticksuffix"] = "%"
-        fig.update_layout(**layout)
-
-        st.markdown(section_header("Top Movers", icon="📈"), unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-          {best_block}
-          {worst_block}
-        </div>
-        """, unsafe_allow_html=True)
+        apply_dark_layout(fig, title="Today's Returns by Position", height=280, showlegend=False)
+        fig.update_layout(yaxis={"ticksuffix": "%"})
         st.plotly_chart(fig, use_container_width=True, key="top_movers_bar")
+        st.markdown(source_footer([
+            {"name": "Live quote feed (yfinance / IEX fallback)", "kind": "live", "quality": "demo"},
+        ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"top movers error: {e}")
 
@@ -679,9 +766,10 @@ def _render_position_details(df: pd.DataFrame) -> None:
     try:
         if df.empty:
             return
-        st.markdown(section_header("Position Detail", icon="🔍"), unsafe_allow_html=True)
+        section_header("Position Detail", "Per-position price chart, key stats, and sector context")
 
-        np.random.seed(0)
+        # Note: the outer np.random.seed(0) here was dead — pd.date_range uses
+        # no randomness and the loop seeds a per-ticker RNG below.
         dates = pd.date_range(end=datetime.date.today(), periods=60, freq="B")
 
         for _, row in df.iterrows():
@@ -693,10 +781,10 @@ def _render_position_details(df: pd.DataFrame) -> None:
                 f"{ticker}  —  {_fmt_pct(row['P&L %'])}  |  {_fmt_dollar_abs(row['Market Value'])}",
                 expanded=False
             ):
-                # Mini price chart (simulated)
-                seed_offset = hash(ticker) % 999
-                np.random.seed(seed_offset)
-                daily_ret  = np.random.normal(0.0005, 0.022, 60)
+                # Mini price chart (simulated) — instance-scoped RNG so we
+                # don't perturb numpy's global state mid-render.
+                rng = np.random.default_rng(stable_hash(ticker) % 999)
+                daily_ret  = rng.normal(0.0005, 0.022, 60)
                 price_path = row["Price"] / np.cumprod(1 + daily_ret)[-1] * np.cumprod(1 + daily_ret)
 
                 mini_fig = go.Figure()
@@ -706,7 +794,7 @@ def _render_position_details(df: pd.DataFrame) -> None:
                     mode="lines",
                     line=dict(color=line_color, width=2),
                     fill="tozeroy",
-                    fillcolor=f"{line_color}18",
+                    fillcolor=_hex_to_rgba(line_color, 0.09),
                     hovertemplate=f"<b>{ticker}</b><br>%{{x|%b %d}}<br>${{y:.2f}}<extra></extra>",
                     showlegend=False,
                 ))
@@ -719,64 +807,33 @@ def _render_position_details(df: pd.DataFrame) -> None:
                     annotation_font=dict(color=C_MOD, size=10),
                 )
 
-                mini_layout = dark_layout(title=f"{ticker} — 60-Day Price", height=220, showlegend=False)
-                mini_layout["margin"] = {"l": 10, "r": 10, "t": 36, "b": 20}
-                mini_fig.update_layout(**mini_layout)
+                apply_dark_layout(mini_fig, title=f"{ticker} — 60-Day Price", height=220, showlegend=False)
+                mini_fig.update_layout(margin={"l": 10, "r": 10, "t": 36, "b": 20})
                 st.plotly_chart(mini_fig, use_container_width=True, key=f"detail_{ticker}")
 
-                # Key stats grid
                 cost_basis = row["Shares"] * row["Avg Cost"]
                 day_pnl_row = row["Day P&L $"]
 
-                st.markdown(f"""
-                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;
-                            margin-top:8px;padding-top:4px;">
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Shares</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_TEXT};">{int(row['Shares']):,}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Cost Basis</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_TEXT};">{_fmt_dollar_abs(cost_basis)}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Total P&amp;L</div>
-                    <div style="font-size:15px;font-weight:700;color:{pnl_color};">{_fmt_dollar(row["P&L $"])}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Day P&amp;L</div>
-                    <div style="font-size:15px;font-weight:700;color:{_color(day_pnl_row)};">
-                      {_fmt_dollar(day_pnl_row)}
-                    </div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Beta</div>
-                    <div style="font-size:15px;font-weight:700;color:{C_ACCENT};">{row['Beta']:.2f}</div>
-                  </div>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px;">
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Sector</div>
-                    <div style="font-size:14px;font-weight:700;color:{sector_col};">{row['Sector']}</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Portfolio Weight</div>
-                    <div style="font-size:14px;font-weight:700;color:{C_TEXT};">{row['Weight %']:.1f}%</div>
-                  </div>
-                  <div style="background:{C_SURFACE};border-radius:8px;padding:12px 14px;">
-                    <div style="font-size:10px;color:{C_TEXT3};text-transform:uppercase;
-                                letter-spacing:0.06em;margin-bottom:4px;">Return %</div>
-                    <div style="font-size:14px;font-weight:700;color:{pnl_color};">{_fmt_pct(row['P&L %'])}</div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+                metric_card_row([
+                    {"label": "Shares",     "value": f"{int(row['Shares']):,}",
+                     "accent": C_TEXT,    "sublabel": ""},
+                    {"label": "Cost Basis", "value": _fmt_dollar_abs(cost_basis),
+                     "accent": C_TEXT,    "sublabel": f"avg ${row['Avg Cost']:.2f}"},
+                    {"label": "Total P&L",  "value": _fmt_dollar(row['P&L $']),
+                     "accent": pnl_color, "sublabel": _fmt_pct(row['P&L %'])},
+                    {"label": "Day P&L",    "value": _fmt_dollar(day_pnl_row),
+                     "accent": _color(day_pnl_row), "sublabel": _fmt_pct(row['Day Chg %'])},
+                    {"label": "Beta",       "value": f"{row['Beta']:.2f}",
+                     "accent": C_ACCENT,  "sublabel": "vs SPY"},
+                ], columns=5)
+                metric_card_row([
+                    {"label": "Sector",            "value": row['Sector'],
+                     "accent": sector_col, "sublabel": "shipping sub-sector"},
+                    {"label": "Portfolio Weight",  "value": f"{row['Weight %']:.1f}%",
+                     "accent": C_TEXT,    "sublabel": "of total AUM"},
+                    {"label": "Return %",          "value": _fmt_pct(row['P&L %']),
+                     "accent": pnl_color, "sublabel": "since entry"},
+                ], columns=3)
     except Exception as e:
         logger.warning(f"position detail error: {e}")
 
@@ -877,6 +934,240 @@ def _t_color(tval: float) -> str:
     return C_TEXT3
 
 
+def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
+    """Synthetic daily-returns panel keyed on the supplied tickers.
+
+    The portfolio tab doesn't yet ingest a persisted per-ticker daily-return
+    history (``stock_data`` is a per-ticker snapshot). This synth gives the
+    optimizer a 504-day (~2y) panel with per-ticker mean/vol drawn from
+    stable seeds + a uniform pairwise correlation of 0.30.
+
+    Determinism: every per-ticker mean / vol seed flows through
+    ``utils.helpers.stable_hash`` so the same ticker → same return profile
+    across processes (Python's built-in hash is salted; see the existing
+    audit in commit 789518f).
+    """
+    from utils.helpers import stable_hash
+
+    if not tickers:
+        return pd.DataFrame()
+    k = len(tickers)
+    means = np.array([
+        # Per-ticker daily mean drawn deterministically from a small range.
+        0.0002 + (stable_hash(t + "mu") % 10) / 10_000.0
+        for t in tickers
+    ])
+    vols = np.array([
+        # Per-ticker daily vol — shipping stocks are 1.5–3% daily σ.
+        0.014 + (stable_hash(t + "vol") % 100) / 5_000.0
+        for t in tickers
+    ])
+    corr = np.full((k, k), 0.30)
+    np.fill_diagonal(corr, 1.0)
+    cov = np.outer(vols, vols) * corr
+    rng = np.random.default_rng(stable_hash("_panel" + "".join(tickers)) % (2**31))
+    samples = rng.multivariate_normal(mean=means, cov=cov, size=n)
+    dates = pd.date_range(end=datetime.date.today(), periods=n, freq="B")
+    return pd.DataFrame(samples, index=dates, columns=tickers)
+
+
+def _render_optimization_lab(df: pd.DataFrame) -> None:
+    """Run portfolio_optimizer's four methods on the current holdings and
+    surface the comparison.
+
+    Sections:
+      1. Per-method comparison table: expected return / vol / Sharpe and the
+         top-2 weighted positions.
+      2. Side-by-side weight table: each ticker × each method.
+      3. Walk-forward backtest equity curve for max_sharpe vs min_variance.
+
+    The pure-function engine lives in ``engine.portfolio_optimizer``; this
+    function only handles UI rendering + synthetic data plumbing.
+    """
+    try:
+        from engine.portfolio_optimizer import (
+            VALID_METHODS,
+            optimize_portfolio,
+            walk_forward_backtest,
+        )
+
+        if df is None or df.empty:
+            st.info("Add positions above to run the optimization lab.")
+            return
+
+        tickers = [str(t) for t in df["Ticker"].tolist() if t]
+        if len(tickers) < 2:
+            st.info("Need at least 2 tickers in the portfolio to optimize.")
+            return
+
+        returns_df = _synth_returns_panel(tickers)
+        if returns_df.empty or returns_df.shape[1] < 2:
+            st.info("Could not assemble a returns panel.")
+            return
+
+        section_header(
+            "Portfolio Optimization Lab",
+            "Compare four canonical methods against the current weighting — "
+            "max-Sharpe, min-variance, mean-variance, and risk-parity. "
+            "Walk-forward backtest sits below.",
+        )
+
+        # ── 1. Run all four methods ────────────────────────────────────────
+        results = {}
+        for method in VALID_METHODS:
+            try:
+                results[method] = optimize_portfolio(
+                    returns_df, method=method, weight_cap=0.40, rf=0.045,
+                )
+            except Exception as exc:
+                logger.debug(f"optimization_lab: {method} failed: {exc}")
+
+        if not results:
+            st.warning("All optimization methods failed on this panel.")
+            return
+
+        # ── 2. Per-method comparison table ────────────────────────────────
+        method_labels = {
+            "max_sharpe":    "Max Sharpe",
+            "min_variance":  "Min Variance",
+            "mean_variance": "Mean-Variance (λ=2)",
+            "risk_parity":   "Risk Parity",
+        }
+        headers = ["Method", "Exp. Return", "Exp. Vol", "Sharpe", "Top Holdings"]
+        rows: list[list[str]] = []
+        for method in VALID_METHODS:
+            if method not in results:
+                continue
+            opt = results[method]
+            top2 = sorted(opt.weights.items(), key=lambda kv: kv[1], reverse=True)[:2]
+            top_str = ", ".join(f"{t} {w*100:.0f}%" for t, w in top2)
+            ret_color = C_HIGH if opt.expected_return > 0.15 else (
+                C_MOD if opt.expected_return > 0.05 else C_TEXT2
+            )
+            sharpe_color = (
+                C_HIGH if opt.sharpe > 1.0 else
+                (C_MOD if opt.sharpe > 0.4 else C_LOW)
+            )
+            rows.append([
+                _sans(method_labels[method], color=C_TEXT),
+                _mono(f"{opt.expected_return*100:+6.1f}%", color=ret_color),
+                _mono(f"{opt.expected_vol*100:6.1f}%", color=C_TEXT2),
+                _mono(f"{opt.sharpe:5.2f}", color=sharpe_color),
+                _sans(top_str, color=C_TEXT2),
+            ])
+        wsj_market_table(headers, rows)
+
+        # ── 3. Side-by-side weight table ──────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        weight_headers = ["Ticker"] + [method_labels[m] for m in VALID_METHODS if m in results]
+        weight_rows: list[list[str]] = []
+        for ticker in tickers:
+            row = [_mono(ticker, color=C_TEXT)]
+            for method in VALID_METHODS:
+                if method not in results:
+                    continue
+                w = results[method].weights.get(ticker, 0.0)
+                if w >= 0.40 - 0.005:
+                    color = C_LOW  # at cap
+                elif w >= 0.20:
+                    color = C_HIGH
+                elif w >= 0.05:
+                    color = C_TEXT
+                else:
+                    color = C_TEXT3
+                row.append(_mono(f"{w*100:5.1f}%", color=color))
+            weight_rows.append(row)
+        wsj_market_table(weight_headers, weight_rows)
+        st.markdown(
+            f'<div style="font-size:0.72rem;color:{C_TEXT3};margin-top:4px">'
+            f'Cells highlighted in red are at the per-position cap (40%).</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 4. Walk-forward backtest equity curves ─────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header(
+            "Walk-Forward Backtest",
+            "Train 252 days, rebalance every 21 days. Comparison of "
+            "max-Sharpe vs min-variance equity curves on the synthetic panel.",
+        )
+
+        bt_results: dict[str, "BacktestResult"] = {}  # type: ignore[name-defined]
+        for method in ("max_sharpe", "min_variance"):
+            try:
+                bt_results[method] = walk_forward_backtest(
+                    returns_df, method=method,
+                    train_window=252, rebal_freq=21,
+                    weight_cap=0.40, rf=0.045,
+                )
+            except Exception as exc:
+                logger.debug(f"optimization_lab: backtest {method} failed: {exc}")
+
+        if any(bt.n_rebalances > 0 for bt in bt_results.values()):
+            fig = go.Figure()
+            method_color = {"max_sharpe": C_ACCENT, "min_variance": C_HIGH}
+            for method, bt in bt_results.items():
+                if bt.n_rebalances == 0 or bt.equity_curve.empty:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=bt.equity_curve.index, y=bt.equity_curve.values,
+                    mode="lines", name=method_labels[method],
+                    line=dict(color=method_color[method], width=2),
+                    hovertemplate=(
+                        f"<b>{method_labels[method]}</b><br>%{{x|%b %Y}}<br>"
+                        f"Equity: %{{y:.3f}}<extra></extra>"
+                    ),
+                ))
+            apply_dark_layout(
+                fig,
+                title="Backtest Equity Curve — $1 invested",
+                height=320,
+                margin=dict(l=12, r=12, t=46, b=30),
+                yaxis=dict(title=dict(text="Cumulative growth of $1", font=dict(color=C_TEXT2, size=11))),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+            # Backtest metrics summary
+            metric_cards = []
+            for method in ("max_sharpe", "min_variance"):
+                if method not in bt_results or bt_results[method].n_rebalances == 0:
+                    continue
+                bt = bt_results[method]
+                metric_cards.append({
+                    "label": f"{method_labels[method]} — Ann. Return",
+                    "value": f"{bt.annualized_return*100:+5.1f}%",
+                    "accent": C_HIGH if bt.annualized_return > 0 else C_LOW,
+                    "sublabel": f"Final equity: {bt.final_equity:.2f}×",
+                })
+                metric_cards.append({
+                    "label": f"{method_labels[method]} — Sharpe / MaxDD",
+                    "value": f"{bt.sharpe:.2f} / {bt.max_drawdown*100:.1f}%",
+                    "accent": (
+                        C_HIGH if bt.sharpe > 1.0 else (
+                            C_MOD if bt.sharpe > 0.3 else C_LOW
+                        )
+                    ),
+                    "sublabel": f"{bt.n_rebalances} rebalances",
+                })
+            if metric_cards:
+                metric_card_row(metric_cards, columns=2)
+
+        # ── 5. Provenance footer ──────────────────────────────────────────
+        st.markdown(
+            source_footer([
+                DataSource.demo(
+                    "Synthetic 2-year returns panel — per-ticker mean/vol "
+                    "drawn deterministically via utils.helpers.stable_hash. "
+                    "Wire to a real return history when the platform persists it."
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+
+    except Exception:
+        logger.exception("Portfolio — optimization lab render failed")
+
+
 def _render_carrier_factor_lens(stock_data, macro_data) -> None:
     """Quant artifact: OLS betas + residual mean-reversion backtest."""
     try:
@@ -905,7 +1196,7 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
         if not fits:
             return
 
-        st.markdown(section_header("Carrier Factor Lens", icon="🧮"), unsafe_allow_html=True)
+        section_header("Carrier Factor Lens", "Ridge-fit factor exposures and residual signal back-test")
         st.markdown(
             live_data_badge(
                 source=source_name,
@@ -1032,48 +1323,61 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
 
 def render(stock_data, macro_data, insights) -> None:
     """Render the Portfolio Tracker tab."""
-    try:
-        _init_positions()
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('portfolio'):
+        try:
+            _init_positions()
 
-        _render_hero()
+            _render_hero()
 
-        positions = st.session_state.get("portfolio_positions", [])
-        df = _build_snapshot(positions, stock_data)
+            positions = st.session_state.get("portfolio_positions", [])
+            df = _build_snapshot(positions, stock_data)
 
-        _render_summary_metrics(df)
+            _render_summary_metrics(df)
 
-        _render_add_position_form()
+            _render_add_position_form()
 
-        st.markdown(_HR, unsafe_allow_html=True)
+            # Editorial commentary (per-tab LLM + template fallback)
+            _render_editorial_commentary(df)
 
-        _render_holdings_table(df)
+            section_divider("Holdings")
 
-        # Charts row: donut + performance
-        if not df.empty:
-            col_left, col_right = st.columns([1, 1.6])
-            with col_left:
-                st.markdown(section_header("Sector Allocation", icon="🥧"), unsafe_allow_html=True)
-                _render_composition_chart(df)
-            with col_right:
-                st.markdown(section_header("Performance", icon="📊"), unsafe_allow_html=True)
-                _render_performance_chart(df)
+            _render_holdings_table(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+            # Charts row: donut + performance
+            if not df.empty:
+                col_left, col_right = st.columns([1, 1.6])
+                with col_left:
+                    section_header("Sector Allocation", "Donut: market-value share by shipping sub-sector")
+                    _render_composition_chart(df)
+                with col_right:
+                    section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
+                    _render_performance_chart(df)
 
-        _render_risk_metrics(df)
+            section_divider("Risk")
 
-        st.markdown(_HR, unsafe_allow_html=True)
+            _render_risk_metrics(df)
 
-        _render_carrier_factor_lens(stock_data, macro_data)
+            # Per-position risk-return scatter — complements the aggregate
+            # risk cards with a "where is risk concentrated?" cross-section.
+            _render_risk_return_scatter(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+            section_divider("Optimization Lab")
 
-        _render_top_movers(df)
+            _render_optimization_lab(df)
 
-        st.markdown(_HR, unsafe_allow_html=True)
+            section_divider("Factor Attribution")
 
-        _render_position_details(df)
+            _render_carrier_factor_lens(stock_data, macro_data)
 
-    except Exception as e:
-        logger.exception(f"Portfolio tab crash: {e}")
-        st.error(f"Portfolio tracker encountered an error: {e}")
+            section_divider("Position Detail")
+
+            _render_top_movers(df)
+
+            _render_position_details(df)
+
+        except Exception as e:
+            logger.exception(f"Portfolio tab crash: {e}")
+            st.error(f"Portfolio tracker encountered an error: {e}")

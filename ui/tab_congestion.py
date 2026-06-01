@@ -19,6 +19,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from utils.helpers import stable_hash
+
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BG,
@@ -30,12 +33,15 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -82,10 +88,10 @@ _EFFICIENCY: list[dict] = [
 ]
 
 _STATUS_BADGE: dict[str, str] = {
-    "CRITICAL": "red",
-    "ELEVATED": "yellow",
-    "NORMAL":   "green",
-    "LOW":      "gray",
+    "CRITICAL": C_LOW,
+    "ELEVATED": C_MOD,
+    "NORMAL":   C_HIGH,
+    "LOW":      C_TEXT3,
 }
 
 
@@ -115,13 +121,13 @@ def _weekly_cell(wk: int) -> str:
 def _berth_cell(pct: int) -> str:
     bar_color = C_LOW if pct >= 85 else (C_MOD if pct >= 65 else C_HIGH)
     bar_w = max(4, pct)
+    # Inline SVG bar (no block-level div) preserves the mini-bar visual.
     return (
-        f'<div style="display:flex;align-items:center;gap:8px;">'
-        f'<div style="width:60px;height:6px;background:{C_BORDER};border-radius:3px;">'
-        f'<div style="width:{bar_w}%;height:6px;background:{bar_color};border-radius:3px;"></div>'
-        f'</div>'
+        f'<svg width="60" height="6" style="vertical-align:middle;margin-right:8px;">'
+        f'<rect width="60" height="6" rx="3" fill="{C_BORDER}"/>'
+        f'<rect width="{bar_w * 0.6:.1f}" height="6" rx="3" fill="{bar_color}"/>'
+        f'</svg>'
         f'<span style="color:{bar_color};font-size:0.75rem;font-family:var(--mono);">{pct}%</span>'
-        f'</div>'
     )
 
 
@@ -161,8 +167,8 @@ def _render_hero(stats: dict) -> None:
             {"label": "AVG WAIT TIME",      "value": f"{stats['avg_wait']}d", "accent": C_MOD,
              "sublabel": "Global fleet average"},
         ], columns=4)
-    except Exception as exc:
-        logger.error("_render_hero error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — hero render failed")
 
 
 # ── Section 2: World Port Map ─────────────────────────────────────────────────
@@ -220,8 +226,10 @@ def _render_map(ports: list[dict]) -> None:
             ),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    except Exception as exc:
-        logger.error("_render_map error: {}", exc)
+        _demo_src = DataSource.demo("AIS / Port Authority (synthetic)")
+        st.markdown(source_footer([_demo_src]), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Congestion — world map render failed")
 
 
 # ── Section 3: Congestion Table ───────────────────────────────────────────────
@@ -239,12 +247,16 @@ def _render_table(ports: list[dict]) -> None:
                 _mono(f"{p['wait']}d", color=wait_col),
                 _berth_cell(p["berth"]),
                 _weekly_cell(p["weekly"]),
-                badge(p["status"], _STATUS_BADGE.get(p["status"], "gray")),
+                badge(p["status"], _STATUS_BADGE.get(p["status"], C_TEXT3)),
                 _sans(p["rate_impact"], color=(C_MOD if "+" in p["rate_impact"] else C_TEXT3)),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.error("_render_table error: {}", exc)
+        st.markdown(
+            source_footer([DataSource.demo("AIS / Berth Utilization (synthetic)")]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Congestion — port table render failed")
 
 
 # ── Section 4: Congestion Timeline ───────────────────────────────────────────
@@ -259,7 +271,7 @@ def _render_timeline(ports: list[dict]) -> None:
         palette = [C_LOW, C_MOD, C_ACCENT, C_HIGH, "#7c6eaf"]
         fig = go.Figure()
         for idx, p in enumerate(top5):
-            rng = random.Random(hash(p["port"]) & 0xFFFF)
+            rng = random.Random(stable_hash(p["port"]) & 0xFFFF)
             series = []
             val = max(20, p["score"] - 15)
             for _ in range(90):
@@ -285,8 +297,12 @@ def _render_timeline(ports: list[dict]) -> None:
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    except Exception as exc:
-        logger.error("_render_timeline error: {}", exc)
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic 90-day trend series")]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Congestion — timeline render failed")
 
 
 # ── Section 5: Wait Time Distribution ────────────────────────────────────────
@@ -336,8 +352,12 @@ def _render_wait_dist(ports: list[dict]) -> None:
             {"label": "MEDIAN",         "value": f"{med_w}d", "accent": C_HIGH},
             {"label": "90TH PERCENTILE","value": f"{p90_w}d", "accent": C_LOW},
         ], columns=3)
-    except Exception as exc:
-        logger.error("_render_wait_dist error: {}", exc)
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic per-vessel wait draws")]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Congestion — wait distribution render failed")
 
 
 # ── Section 6: Congestion-to-Rate Correlation ─────────────────────────────────
@@ -394,21 +414,213 @@ def _render_correlation(ports: list[dict]) -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        st.html(
-            f'<div style="background:{C_CARD};border:1px solid rgba(53,114,176,0.25);'
-            f'border-radius:6px;padding:14px 20px;margin-top:8px;font-size:0.82rem;color:{C_TEXT2};'
-            f'font-family:var(--sans);">'
-            f'<span style="color:{C_ACCENT};font-weight:600;">Insight:</span> '
-            f'Each 10-point rise in the congestion index correlates with approximately '
-            f'<span style="color:{C_MOD};font-weight:600;font-family:var(--mono);">+{round(m*10,1)}%</span> freight rate uplift. '
-            f'Critical ports are driving the bulk of current rate pressure on Asia-Europe and Trans-Pacific lanes.'
-            f'</div>'
+        st.markdown(
+            insight_card_html(
+                title=(
+                    f"Each 10-point rise in the congestion index correlates with "
+                    f"approximately +{round(m * 10, 1)}% freight rate uplift. "
+                    f"Critical ports are driving rate pressure on Asia-Europe and Trans-Pacific lanes."
+                ),
+                score=min(1.0, max(0.0, abs(m) / 0.3)),
+                action="Monitor",
+                category="ROUTE",
+            ),
+            unsafe_allow_html=True,
         )
-    except Exception as exc:
-        logger.error("_render_correlation error: {}", exc)
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic rate-correlation scatter")]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Congestion — rate correlation render failed")
 
 
-# ── Section 7: Port Efficiency Benchmarks ─────────────────────────────────────
+# ── Section 7: Congestion → Rate Lag Discovery ────────────────────────────────
+def _synth_congestion_history(port: dict, n: int = 180) -> "pd.DataFrame":
+    """Build a 180-day synthetic congestion history anchored on the port's
+    *current* score. Used here because the platform doesn't yet ingest a
+    persisted per-port congestion history — only current snapshots. Deterministic
+    via :func:`utils.helpers.stable_hash` (NOT Python's salted ``hash()``).
+    """
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(stable_hash(port["code"]) % (2**31))
+    dates = [date.today() - timedelta(days=(n - 1 - i)) for i in range(n)]
+    current = float(port.get("score", 50)) / 100.0  # land in [0, 1]
+    # Random walk centered to land *on* the current score at t = n-1
+    raw_walk = rng.normal(0.0, 0.012, size=n).cumsum()
+    raw_walk -= raw_walk[-1]                        # zero out endpoint
+    path = np.clip(current + raw_walk, 0.05, 0.99)
+    return pd.DataFrame({"date": dates, "congestion_score": path})
+
+
+def _synth_rate_history(route_id: str, n: int = 180) -> "pd.DataFrame":
+    """Light synthetic rate history for routes when no freight_data was passed.
+    Same deterministic seeding rules."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(stable_hash(route_id + "rate") % (2**31))
+    dates = [date.today() - timedelta(days=(n - 1 - i)) for i in range(n)]
+    base = 2000.0
+    rates = base * np.exp(rng.normal(0.0, 0.012, size=n).cumsum())
+    return pd.DataFrame({"date": dates, "rate_usd_per_feu": rates})
+
+
+def _render_lag_discovery(ports: list[dict], freight_data=None) -> None:
+    """Run the port-congestion → freight-rate lag model on the displayed ports
+    and surface the strongest leading relationships.
+
+    Pure-function model lives in ``processing.congestion_rate_lag``; this
+    function only handles the UI mapping and the synthetic-input plumbing.
+    """
+    try:
+        import numpy as np
+
+        from processing.congestion_rate_lag import (
+            analyze_port_route_lags,
+            walk_forward_backtest,
+        )
+
+        section_header(
+            "Congestion → Rate Lag Discovery",
+            "Best-fit lag in days between Δport-congestion and subsequent Δfreight-rate, "
+            "per port × route. Positive lag means congestion leads rate.",
+        )
+
+        # ── 1. Assemble model inputs ───────────────────────────────────────
+        cong_history = {p["code"]: _synth_congestion_history(p) for p in ports}
+
+        # Lazy import — the registry is small but optional under tests.
+        try:
+            from routes.route_registry import ROUTES
+            route_ids = [r.id for r in ROUTES]
+        except Exception:
+            route_ids = []
+
+        if isinstance(freight_data, dict) and freight_data:
+            rate_history = freight_data
+        else:
+            rate_history = {rid: _synth_rate_history(rid) for rid in route_ids}
+
+        # ── 2. Fit ──────────────────────────────────────────────────────────
+        results = analyze_port_route_lags(
+            cong_history,
+            rate_history,
+            min_abs_r=0.10,
+            max_p=0.10,
+        )
+
+        if not results:
+            st.info(
+                "No port × route lag relationships cleared significance gates "
+                "(|r| ≥ 0.10, p ≤ 0.10) on this data window."
+            )
+            return
+
+        # ── 3. Top-5 insight cards ─────────────────────────────────────────
+        top = results[:5]
+        for r in top:
+            st.markdown(
+                insight_card_html(
+                    title=r.interpretation,
+                    score=min(1.0, abs(r.pearson_r)),
+                    action="Watch",
+                    category=(
+                        "CONGESTION→RATE" if r.direction == "positive"
+                        else "CONGESTION→RATE (inverse)"
+                    ),
+                ),
+                unsafe_allow_html=True,
+            )
+
+        # ── 4. Bar chart of |r| per pair (top 12) ──────────────────────────
+        bar = results[:12]
+        labels = [f"{r.port_locode} → {r.route_id}" for r in bar]
+        values = [abs(r.pearson_r) for r in bar]
+        colors = [
+            C_HIGH if r.direction == "positive" else C_LOW
+            for r in bar
+        ]
+        fig = go.Figure(go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color=colors,
+            text=[f"r={r.pearson_r:+.2f} · lag={r.best_lag_days}d" for r in bar],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>|r|=%{x:.2f}<extra></extra>",
+        ))
+        apply_dark_layout(
+            fig,
+            title="Lead-Lag Strength (|r|) by Port × Route",
+            height=max(260, 24 * len(bar) + 80),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(title=dict(text="|r|", font=dict(color=C_TEXT2, size=11))),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── 5. Walk-forward backtest on the top pair ───────────────────────
+        top_pair = results[0]
+        try:
+            cong_series = (
+                cong_history[top_pair.port_locode]
+                .set_index("date")["congestion_score"]
+                .astype(float)
+            )
+            rate_df = rate_history.get(top_pair.route_id)
+            if rate_df is not None and "rate_usd_per_feu" in rate_df.columns:
+                rate_series = (
+                    rate_df.set_index("date")["rate_usd_per_feu"].astype(float)
+                )
+                bt = walk_forward_backtest(
+                    cong_series,
+                    rate_series,
+                    train_window=60,
+                    test_window=10,
+                    step=10,
+                    min_abs_r=0.10,
+                    max_p=0.10,
+                    port_locode=top_pair.port_locode,
+                    route_id=top_pair.route_id,
+                )
+                metric_card_row(
+                    [
+                        {"label": "Top Pair", "value": f"{top_pair.port_locode} → {top_pair.route_id}",
+                         "accent": C_ACCENT,
+                         "sublabel": f"Best lag: {top_pair.best_lag_days} days"},
+                        {"label": "Walk-Fwd Windows", "value": f"{bt.n_windows}",
+                         "accent": C_TEXT2,
+                         "sublabel": "Train 60d / test 10d / step 10d"},
+                        {"label": "Direction Hit Rate", "value": f"{bt.hit_rate*100:.0f}%",
+                         "accent": (C_HIGH if bt.hit_rate >= 0.55 else (C_MOD if bt.hit_rate >= 0.45 else C_LOW)),
+                         "sublabel": "Sign of next-window Δrate"},
+                        {"label": "Out-of-Sample r̄", "value": f"{bt.avg_r_out_of_sample:+.2f}",
+                         "accent": (C_HIGH if bt.avg_r_out_of_sample > 0.1 else C_TEXT2),
+                         "sublabel": f"In-sample r̄={bt.avg_r_in_sample:+.2f}"},
+                    ],
+                    columns=4,
+                )
+        except Exception as exc:
+            logger.debug(f"tab_congestion: backtest panel skipped: {exc}")
+
+        st.markdown(
+            source_footer([
+                DataSource.demo(
+                    "Synthetic per-port congestion history (180d); "
+                    "rate history from freight_data when provided else synth."
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+
+    except Exception:
+        logger.exception("Congestion — lag discovery render failed")
+
+
+# ── Section 8: Port Efficiency Benchmarks ─────────────────────────────────────
 def _render_efficiency() -> None:
     try:
         section_header("Port Efficiency Benchmarks", "Per-port productivity metrics — color denotes tier.")
@@ -423,10 +635,15 @@ def _render_efficiency() -> None:
                 return C_MOD
             return C_LOW
 
-        st.html(
-            f'<div style="display:flex;gap:16px;margin:0 0 10px 0;font-size:0.76rem;font-family:var(--sans);">'
-            f'{badge("Good", "green")}&nbsp;{badge("Average", "yellow")}&nbsp;{badge("Poor", "red")}'
-            f'</div>'
+        st.markdown(
+            '<div class="sub-section-header">Tier key: '
+            + badge("Good", C_HIGH)
+            + "&nbsp;"
+            + badge("Average", C_MOD)
+            + "&nbsp;"
+            + badge("Poor", C_LOW)
+            + "</div>",
+            unsafe_allow_html=True,
         )
 
         headers = ["Port", "Crane Moves/hr", "Ship Turns/day", "Gate Moves/hr", "Rail Lift %", "Truck Queue"]
@@ -441,71 +658,76 @@ def _render_efficiency() -> None:
                 _mono(f"{e['truck_min']} min", color=score_color(e["truck_min"], 15, 90, invert=True), weight=700),
             ])
         wsj_market_table(headers, rows)
-    except Exception as exc:
-        logger.error("_render_efficiency error: {}", exc)
+    except Exception:
+        logger.exception("Congestion — efficiency benchmarks render failed")
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
-def render(port_results=None, freight_data=None, insights=None) -> None:
+def render(port_results=None, freight_data=None, insights=None, *args, **kwargs) -> None:
     """Render the Port Congestion Intelligence tab."""
-    try:
-        ports: list[dict] = _PORTS
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('congestion'):
+        try:
+            ports: list[dict] = _PORTS
 
-        if port_results is not None:
-            try:
-                import pandas as pd
-                if isinstance(port_results, pd.DataFrame):
-                    ingested = port_results.to_dict(orient="records")
-                elif isinstance(port_results, dict):
-                    ingested = list(port_results.values()) if port_results else []
-                elif isinstance(port_results, list):
-                    ingested = port_results
-                else:
-                    ingested = []
-                if ingested and all(k in ingested[0] for k in ("port", "score", "vessels", "wait")):
-                    ports = ingested
-                    logger.info("tab_congestion: using live port_results ({} ports)", len(ports))
-            except Exception as exc:
-                logger.warning("tab_congestion: could not parse port_results, using mock data: {}", exc)
+            if port_results is not None:
+                try:
+                    import pandas as pd
+                    if isinstance(port_results, pd.DataFrame):
+                        ingested = port_results.to_dict(orient="records")
+                    elif isinstance(port_results, dict):
+                        ingested = list(port_results.values()) if port_results else []
+                    elif isinstance(port_results, list):
+                        ingested = port_results
+                    else:
+                        ingested = []
+                    if (ingested and isinstance(ingested[0], dict)
+                            and all(k in ingested[0] for k in ("port", "score", "vessels", "wait"))):
+                        ports = ingested
+                        logger.info("tab_congestion: using live port_results ({} ports)", len(ports))
+                except Exception as exc:
+                    logger.warning("tab_congestion: could not parse port_results, using mock data: {}", exc)
 
-        stats = _global_stats(ports)
+            stats = _global_stats(ports)
 
-        page_header(
-            title="Port Congestion Intelligence",
-            subtitle="Critical-port alerts, global congestion index, rate-impact attribution, and efficiency benchmarks.",
-            icon="⚓",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+            page_header(
+                title="Port Congestion Intelligence",
+                subtitle="Critical-port alerts, global congestion index, rate-impact attribution, and efficiency benchmarks.",
+                icon="⚓",
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
 
-        _render_hero(stats)
-        section_divider()
-        _render_map(ports)
-        section_divider()
-        _render_table(ports)
-        section_divider()
-        _render_timeline(ports)
-        section_divider()
+            _render_hero(stats)
+            section_divider("World Map")
+            _render_map(ports)
+            section_divider("Port Detail")
+            _render_table(ports)
+            section_divider("Timeline")
+            _render_timeline(ports)
+            section_divider("Distribution & Rate Impact")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            _render_wait_dist(ports)
-        with col2:
-            _render_correlation(ports)
+            col1, col2 = st.columns(2, gap="large")
+            with col1:
+                _render_wait_dist(ports)
+            with col2:
+                _render_correlation(ports)
 
-        section_divider()
-        _render_efficiency()
+            section_divider("Lag Discovery")
+            _render_lag_discovery(ports, freight_data=freight_data)
 
-        st.html(
-            f'<div style="margin-top:32px;padding:16px 20px;background:{C_CARD};'
-            f'border-radius:6px;border:1px solid {C_BORDER};'
-            f'font-size:0.78rem;color:{C_TEXT3};font-family:var(--sans);">'
-            f'<span style="color:{C_ACCENT};">&#9432;</span> '
-            f'Congestion data refreshed every 6 hours. Index scores are composite metrics derived from vessel AIS data, '
-            f'berth utilization signals, and port authority reports. Rate impact estimates reflect 5-day rolling correlation.'
-            f'</div>'
-        )
+            section_divider("Efficiency Benchmarks")
+            _render_efficiency()
 
-    except Exception as exc:
-        logger.error("tab_congestion render error: {}", exc)
-        st.error(f"Congestion dashboard encountered an error: {exc}")
+            alert_banner(
+                "Congestion data refreshed every 6 hours. Index scores are composite metrics derived from "
+                "vessel AIS data, berth utilization signals, and port authority reports. "
+                "Rate impact estimates reflect 5-day rolling correlation.",
+                level="info",
+            )
+
+        except Exception:
+            logger.exception("tab_congestion render failed")
+            st.error("Congestion dashboard encountered an error.")

@@ -9,10 +9,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
     C_CARD,
+    C_CONV,
     C_HIGH,
     C_LOW,
     C_MOD,
@@ -25,6 +27,7 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
 
@@ -75,16 +78,16 @@ _ROUTES = [
 ]
 
 _CONVICTION_COLOR: dict[str, str] = {
-    "HIGH":     "green",
-    "MODERATE": "yellow",
-    "LOW":      "gray",
+    "HIGH":     C_HIGH,
+    "MODERATE": C_MOD,
+    "LOW":      C_TEXT3,
 }
 
 _TYPE_COLOR: dict[str, str] = {
     "MOMENTUM":       C_ACCENT,
     "MEAN REVERSION": C_HIGH,
     "BDI DIVERGENCE": C_MOD,
-    "MACRO OVERLAY":  "#7a6e9b",
+    "MACRO OVERLAY":  C_CONV,
 }
 
 
@@ -152,6 +155,10 @@ def _render_signal_hero(signals: list) -> None:
             {"label": "MODERATE CONVICTION", "value": f"{mod_n}",  "accent": C_MOD},
             {"label": "LOW CONVICTION",      "value": f"{low_n}",  "accent": C_TEXT3},
         ], columns=5)
+        st.markdown(
+            source_footer([DataSource.demo("Signal Posture KPIs")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"signal hero error: {exc}")
         st.warning("Signal hero unavailable.")
@@ -168,13 +175,17 @@ def _render_signal_table(signals: list) -> None:
             rows.append([
                 _mono(instrument, weight=700),
                 _sans(signal_type, color=C_ACCENT, weight=600),
-                badge(conviction, _CONVICTION_COLOR.get(conviction, "gray")),
+                badge(conviction, _CONVICTION_COLOR.get(conviction, C_TEXT3)),
                 _direction_cell(direction),
                 _change_cell(change),
                 _sans(time_ago, color=C_TEXT3),
                 _sans(basis, color=C_TEXT3),
             ])
         wsj_market_table(headers, rows)
+        st.markdown(
+            source_footer([DataSource.demo("Mock Signal Intelligence")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"signal table error: {exc}")
         st.warning("Signal table unavailable.")
@@ -197,7 +208,7 @@ def _render_multi_index_chart() -> None:
             "BDI":  (_gen_index(0.018), C_ACCENT),
             "WCI":  (_gen_index(0.014), C_HIGH),
             "SCFI": (_gen_index(0.012), C_MOD),
-            "CCFI": (_gen_index(0.010), "#7a6e9b"),
+            "CCFI": (_gen_index(0.010), C_CONV),
         }
 
         fig = go.Figure()
@@ -226,6 +237,10 @@ def _render_multi_index_chart() -> None:
             hovermode="x unified",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Index Series · 90-day")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"multi-index chart error: {exc}")
         st.warning("Multi-index chart unavailable.")
@@ -272,6 +287,10 @@ def _render_freight_heatmap(freight_data) -> None:
             yaxis=dict(showgrid=False, autorange="reversed"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Freight Rate Heatmap")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"freight heatmap error: {exc}")
         st.warning("Freight heatmap unavailable.")
@@ -324,6 +343,10 @@ def _render_correlation_matrix() -> None:
             yaxis=dict(showgrid=False, autorange="reversed"),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Synthetic Correlation Matrix")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"correlation matrix error: {exc}")
         st.warning("Correlation matrix unavailable.")
@@ -362,6 +385,10 @@ def _render_conviction_chart(signals: list) -> None:
             barmode="group",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            source_footer([DataSource.demo("Signal Conviction Counts")]),
+            unsafe_allow_html=True,
+        )
     except Exception as exc:
         logger.warning(f"conviction chart error: {exc}")
         st.warning("Conviction chart unavailable.")
@@ -377,25 +404,24 @@ def _render_type_breakdown(signals: list) -> None:
             type_counts[t] = type_counts.get(t, 0) + 1
 
         total_sigs = max(len(signals), 1)
-        rows_html = ""
+        rows = []
         for stype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
             pct   = count / total_sigs * 100
             bar_c = _TYPE_COLOR.get(stype, C_TEXT3)
-            rows_html += (
-                f"<div style='margin-bottom:14px'>"
-                f"<div style='display:flex;justify-content:space-between;margin-bottom:5px'>"
-                f"<span style='font-size:0.78rem;color:{C_TEXT2};font-weight:600;"
-                f"font-family:var(--sans);'>{stype}</span>"
-                f"<span style='font-size:0.78rem;color:{C_TEXT3};font-family:var(--mono);'>"
-                f"{count} ({pct:.0f}%)</span>"
-                f"</div>"
-                f"<div style='height:4px;background:{C_BORDER};overflow:hidden;'>"
-                f"<div style='height:100%;width:{pct:.1f}%;background:{bar_c};transition:width 0.4s ease'></div>"
-                f"</div></div>"
+            bar = (
+                f'<div class="progress-bar-custom">'
+                f'<div class="progress-bar-fill" style="width:{pct:.1f}%;background:{bar_c};"></div>'
+                f'</div>'
             )
-        st.html(
-            f"<div style='background:{C_CARD};border:1px solid {C_BORDER};padding:20px 24px;'>"
-            f"{rows_html}</div>"
+            rows.append([
+                _sans(stype, color=C_TEXT2, weight=600),
+                _mono(f"{count} ({pct:.0f}%)", color=C_TEXT3),
+                bar,
+            ])
+        wsj_market_table(["Signal Type", "Count", "Share"], rows)
+        st.markdown(
+            source_footer([DataSource.demo("Mock Signal Distribution")]),
+            unsafe_allow_html=True,
         )
     except Exception as exc:
         logger.warning(f"signal type breakdown error: {exc}")
@@ -405,97 +431,101 @@ def _render_type_breakdown(signals: list) -> None:
 
 def render(stock_data, macro_data, insights, freight_data=None) -> None:
     """Institutional markets & signals dashboard — WSJ editorial style."""
-    # resolve signals: prefer live insights, fallback to mock
-    signals: list = _MOCK_SIGNALS
-    try:
-        if insights and hasattr(insights, "__iter__"):
-            live = []
-            for item in insights:
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('markets'):
+        # resolve signals: prefer live insights, fallback to mock
+        signals: list = _MOCK_SIGNALS
+        try:
+            if insights and hasattr(insights, "__iter__"):
+                live = []
+                for item in insights:
+                    try:
+                        sig = (
+                            str(getattr(item, "ticker",    item.get("ticker",    "UNK"))),
+                            str(getattr(item, "signal",    item.get("signal",    "MOMENTUM"))),
+                            str(getattr(item, "conviction",item.get("conviction","MODERATE"))).upper(),
+                            str(getattr(item, "direction", item.get("direction", "LONG"))).upper(),
+                            str(getattr(item, "change",    item.get("change",    "—"))),
+                            str(getattr(item, "time_ago",  item.get("time_ago",  "—"))),
+                            str(getattr(item, "basis",     item.get("basis",     "—"))),
+                        )
+                        live.append(sig)
+                    except Exception:
+                        pass
+                if len(live) >= 5:
+                    signals = live
+        except Exception as exc:
+            logger.debug(f"insights parse skipped: {exc}")
+
+        page_header(
+            title="Markets & Signals Dashboard",
+            subtitle="Live signal monitoring across shipping indices, routes, and equities.",
+            icon="📊",
+            badge_text="Signal Intelligence",
+            badge_color=C_ACCENT,
+        )
+
+        try:
+            _render_signal_hero(signals)
+        except Exception as exc:
+            logger.error(f"signal hero section failed: {exc}")
+
+        section_divider("Signal Intelligence")
+        try:
+            section_header(
+                "Signal Intelligence Table",
+                f"{len(signals)} active signals · sortable by conviction",
+            )
+            _render_signal_table(signals)
+        except Exception as exc:
+            logger.error(f"signal table section failed: {exc}")
+
+        section_divider("Index Performance")
+        try:
+            section_header(
+                "Multi-Index Performance",
+                "BDI · WCI · SCFI · CCFI · indexed to 100 · trailing 90 trading days",
+            )
+            _render_multi_index_chart()
+        except Exception as exc:
+            logger.error(f"multi-index section failed: {exc}")
+
+        section_divider("Cross-Market Structure")
+        try:
+            col_heat, col_corr = st.columns([3, 2], gap="medium")
+            with col_heat:
                 try:
-                    sig = (
-                        str(getattr(item, "ticker",    item.get("ticker",    "UNK"))),
-                        str(getattr(item, "signal",    item.get("signal",    "MOMENTUM"))),
-                        str(getattr(item, "conviction",item.get("conviction","MODERATE"))).upper(),
-                        str(getattr(item, "direction", item.get("direction", "LONG"))).upper(),
-                        str(getattr(item, "change",    item.get("change",    "—"))),
-                        str(getattr(item, "time_ago",  item.get("time_ago",  "—"))),
-                        str(getattr(item, "basis",     item.get("basis",     "—"))),
+                    section_header(
+                        "Freight Rate Heatmap",
+                        "12 trade routes · weekly rate change · green = up, red = down",
                     )
-                    live.append(sig)
-                except Exception:
-                    pass
-            if len(live) >= 5:
-                signals = live
-    except Exception as exc:
-        logger.debug(f"insights parse skipped: {exc}")
+                    _render_freight_heatmap(freight_data)
+                except Exception as exc:
+                    logger.error(f"freight heatmap column failed: {exc}")
+            with col_corr:
+                try:
+                    section_header(
+                        "Correlation Matrix",
+                        "Shipping indices vs macro assets · 90-day rolling",
+                    )
+                    _render_correlation_matrix()
+                except Exception as exc:
+                    logger.error(f"correlation matrix column failed: {exc}")
+        except Exception as exc:
+            logger.error(f"layout columns failed: {exc}")
 
-    page_header(
-        title="Markets & Signals Dashboard",
-        subtitle="Live signal monitoring across shipping indices, routes, and equities.",
-        icon="📊",
-        badge_text="Signal Intelligence",
-        badge_color=C_ACCENT,
-    )
+        section_divider("Signal Composition")
+        try:
+            col_conv, col_meta = st.columns([2, 3], gap="medium")
+            with col_conv:
+                section_header("Conviction Distribution", "Signal count by confidence tier.")
+                _render_conviction_chart(signals)
+            with col_meta:
+                section_header("Signal Type Breakdown", "Distribution by signal methodology.")
+                _render_type_breakdown(signals)
+        except Exception as exc:
+            logger.error(f"conviction section failed: {exc}")
 
-    try:
-        _render_signal_hero(signals)
-    except Exception as exc:
-        logger.error(f"signal hero section failed: {exc}")
-
-    section_divider()
-    try:
-        section_header(
-            "Signal Intelligence Table",
-            f"{len(signals)} active signals · sortable by conviction",
-        )
-        _render_signal_table(signals)
-    except Exception as exc:
-        logger.error(f"signal table section failed: {exc}")
-
-    section_divider()
-    try:
-        section_header(
-            "Multi-Index Performance",
-            "BDI · WCI · SCFI · CCFI · indexed to 100 · trailing 90 trading days",
-        )
-        _render_multi_index_chart()
-    except Exception as exc:
-        logger.error(f"multi-index section failed: {exc}")
-
-    section_divider()
-    try:
-        col_heat, col_corr = st.columns([3, 2], gap="medium")
-        with col_heat:
-            try:
-                section_header(
-                    "Freight Rate Heatmap",
-                    "12 trade routes · weekly rate change · green = up, red = down",
-                )
-                _render_freight_heatmap(freight_data)
-            except Exception as exc:
-                logger.error(f"freight heatmap column failed: {exc}")
-        with col_corr:
-            try:
-                section_header(
-                    "Correlation Matrix",
-                    "Shipping indices vs macro assets · 90-day rolling",
-                )
-                _render_correlation_matrix()
-            except Exception as exc:
-                logger.error(f"correlation matrix column failed: {exc}")
-    except Exception as exc:
-        logger.error(f"layout columns failed: {exc}")
-
-    section_divider()
-    try:
-        col_conv, col_meta = st.columns([2, 3], gap="medium")
-        with col_conv:
-            section_header("Conviction Distribution", "Signal count by confidence tier.")
-            _render_conviction_chart(signals)
-        with col_meta:
-            section_header("Signal Type Breakdown", "Distribution by signal methodology.")
-            _render_type_breakdown(signals)
-    except Exception as exc:
-        logger.error(f"conviction section failed: {exc}")
-
-    section_divider(label=datetime.datetime.now().strftime("Markets & Signals · Last updated %Y-%m-%d %H:%M"))
+        section_divider(label=datetime.datetime.now().strftime("Markets & Signals · Last updated %Y-%m-%d %H:%M"))

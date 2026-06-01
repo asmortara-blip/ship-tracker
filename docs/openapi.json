@@ -1,0 +1,6229 @@
+{
+  "components": {
+    "schemas": {
+      "Alert": {
+        "description": "One alert row. Mirrors ``engine.alert_engine_v2.ShippingAlert``.",
+        "properties": {
+          "acknowledged": {
+            "type": "boolean"
+          },
+          "alert_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "alert_type": {
+            "description": "BDI_MOVE | SIGNAL_FIRE | CONGESTION | RATE_SURGE | STOCK_MOVE | MACRO | FLAP | …",
+            "type": "string"
+          },
+          "body": {
+            "description": "2-3 sentence human description.",
+            "type": "string"
+          },
+          "change_pct": {
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "port_locode": {
+            "description": "Empty when the alert is not port-related.",
+            "type": "string"
+          },
+          "route_id": {
+            "description": "Empty when the alert is not freight-related.",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ],
+            "type": "string"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "ticker": {
+            "description": "Empty when the alert is not stock-related.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "alert_id",
+          "created_at",
+          "alert_type",
+          "severity",
+          "title",
+          "body",
+          "ticker",
+          "route_id",
+          "port_locode",
+          "value",
+          "threshold",
+          "change_pct",
+          "acknowledged"
+        ],
+        "type": "object"
+      },
+      "AlertAnnotation": {
+        "description": "One annotation. Mirrors ``engine.alert_annotations.AlertAnnotation``.",
+        "properties": {
+          "alert_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "annotation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "author_user_id": {
+            "description": "Who wrote this comment.",
+            "type": "string"
+          },
+          "body": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "edited_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "user_id": {
+            "description": "Owner of the parent alert.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "annotation_id",
+          "alert_id",
+          "user_id",
+          "author_user_id",
+          "body",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AlertRule": {
+        "description": "One alert rule. Mirrors ``engine.alert_engine_v2.AlertRule``.",
+        "properties": {
+          "alert_type": {
+            "type": "string"
+          },
+          "cooldown_minutes": {
+            "default": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "flap_detection_enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "flap_threshold_crossings": {
+            "default": 5,
+            "type": "integer"
+          },
+          "flap_window_minutes": {
+            "default": 30,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ],
+            "type": "string"
+          },
+          "target_channels": {
+            "description": "Channel NAMES (not ids) for fan-out routing. Empty = match every eligible channel.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threshold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "rule_id",
+          "name",
+          "alert_type",
+          "enabled",
+          "threshold",
+          "severity"
+        ],
+        "type": "object"
+      },
+      "AlertSilence": {
+        "description": "One silence row. Mirrors ``engine.alert_silences.AlertSilence``. NULL match-keys mean 'matches any value'.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by_user_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "rule_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "severity": {
+            "nullable": true,
+            "type": "string"
+          },
+          "silence_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "ticker": {
+            "nullable": true,
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "silence_id",
+          "user_id",
+          "starts_at",
+          "expires_at",
+          "created_at",
+          "created_by_user_id"
+        ],
+        "type": "object"
+      },
+      "AuditEvent": {
+        "description": "One audit-log row. Mirrors ``auth.audit.AuditEvent``.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "detail_json": {
+            "additionalProperties": true,
+            "description": "Free-form structured detail. Channel ``target`` is suppressed at recording time so secrets cannot leak via the audit log.",
+            "type": "object"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "created_at",
+          "user_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "BacktestValidator": {
+        "description": "One backtest validator's snapshot, normalised across all 9 modules.",
+        "properties": {
+          "headline_label": {
+            "type": "string"
+          },
+          "headline_value": {
+            "type": "string"
+          },
+          "healthy": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "raw": {
+            "additionalProperties": true,
+            "description": "Validator-specific structured fields (e.g. best_component, n_observations, MAE, spread_*) — shape varies per validator.",
+            "type": "object"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "healthy",
+          "headline_label",
+          "headline_value",
+          "summary",
+          "raw"
+        ],
+        "type": "object"
+      },
+      "BacktestsHealthResponse": {
+        "description": "Public consolidated backtest-layer health report from ``tools.backtests``.",
+        "properties": {
+          "healthy_count": {
+            "type": "integer"
+          },
+          "now_utc": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "Top-level rollup: ok=all healthy, degraded=any unhealthy, down=run failed.",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "validators": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestValidator"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "validators",
+          "healthy_count",
+          "total",
+          "now_utc"
+        ],
+        "type": "object"
+      },
+      "DeliveryChannel": {
+        "description": "One delivery channel. Mirrors ``engine.alert_delivery.DeliveryChannel`` minus the ``target`` field — the API deliberately withholds ``target`` from list responses to avoid leaking the secret webhook URL / email.",
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest_mode": {
+            "default": "immediate",
+            "enum": [
+              "immediate",
+              "daily"
+            ],
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "slack",
+              "email",
+              "sms",
+              "webhook",
+              "discord",
+              "pagerduty"
+            ],
+            "type": "string"
+          },
+          "monthly_budget": {
+            "default": 0,
+            "description": "0 = unlimited. Positive = suppress further deliveries once the per-calendar-month counter hits this cap.",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quiet_end": {
+            "description": "HH:MM UTC, empty = disabled.",
+            "type": "string"
+          },
+          "quiet_override_critical": {
+            "default": true,
+            "type": "boolean"
+          },
+          "quiet_start": {
+            "description": "HH:MM UTC, empty = disabled.",
+            "type": "string"
+          },
+          "severity_threshold": {
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "REQUIRED in POST request bodies (the webhook URL / email / phone). NEVER returned in GET responses.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "name",
+          "kind",
+          "severity_threshold"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "description": "Standard error envelope. ``error`` is a short machine code; longer human-readable detail is in the operation summary.",
+        "properties": {
+          "error": {
+            "example": "unauthorized",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "EscalationStep": {
+        "description": "One step of an escalation chain. Mirrors ``engine.alert_escalation.EscalationStep``.",
+        "properties": {
+          "after_minutes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "chain_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "step_number": {
+            "description": "1-indexed.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "rule_id",
+          "user_id",
+          "step_number",
+          "after_minutes",
+          "channel_id",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "HealthResponse": {
+        "description": "Public health-probe payload. Same shape as ``worker.webhook_listener``'s ``/health`` so one LB template fits both.",
+        "properties": {
+          "current_outages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "now_utc": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "recent_render_success_rate": {
+            "nullable": true,
+            "type": "number"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "type": "string"
+          },
+          "unacked_critical_count": {
+            "type": "integer"
+          },
+          "up_seconds": {
+            "type": "number"
+          },
+          "users": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "schema_version",
+          "users",
+          "now_utc",
+          "up_seconds",
+          "unacked_critical_count",
+          "current_outages"
+        ],
+        "type": "object"
+      },
+      "ItemListResponse": {
+        "description": "Standard ``{items: [...], count: N}`` envelope used by audit/incidents/source-health.",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "items": {
+            "items": {},
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "count"
+        ],
+        "type": "object"
+      },
+      "NotificationPrefs": {
+        "description": "Per-user prefs. Mirrors ``auth.notification_prefs.NotificationPrefs``.",
+        "properties": {
+          "alert_type_filter": {
+            "description": "Global allow-list. Empty = no filter.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "min_severity": {
+            "default": "LOW",
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ],
+            "type": "string"
+          },
+          "quiet_during_hours": {
+            "description": "``[start_hour, end_hour]`` UTC or ``null`` to disable.",
+            "items": {
+              "maximum": 23,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "nullable": true,
+            "type": "array"
+          },
+          "severity_channel_map": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Per-severity channel allow-list keyed by severity name.",
+            "type": "object"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "enabled",
+          "min_severity"
+        ],
+        "type": "object"
+      },
+      "PortCompanyExposure": {
+        "properties": {
+          "exposure_weight": {
+            "type": "number"
+          },
+          "ticker": {
+            "type": "string"
+          },
+          "via_commodities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "via_routes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ticker",
+          "exposure_weight",
+          "via_commodities",
+          "via_routes"
+        ],
+        "type": "object"
+      },
+      "PortSupplyChain": {
+        "properties": {
+          "exposed_companies": {
+            "items": {
+              "$ref": "#/components/schemas/PortCompanyExposure"
+            },
+            "type": "array"
+          },
+          "port": {
+            "$ref": "#/components/schemas/PortSupplyState"
+          },
+          "routes_touching": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "top_commodities": {
+            "items": {
+              "properties": {
+                "hs_category": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "hs_category",
+                "weight"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "port",
+          "exposed_companies",
+          "routes_touching",
+          "top_commodities",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "PortSupplyLinesResponse": {
+        "description": "Per-port container-supply state + exposed-company chains. Mirrors the data the Port Supply Lines tab consumes.",
+        "properties": {
+          "chains": {
+            "items": {
+              "$ref": "#/components/schemas/PortSupplyChain"
+            },
+            "type": "array"
+          },
+          "container_type": {
+            "type": "string"
+          },
+          "now_utc": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "container_type",
+          "total",
+          "now_utc",
+          "chains"
+        ],
+        "type": "object"
+      },
+      "PortSupplyState": {
+        "properties": {
+          "container_type": {
+            "type": "string"
+          },
+          "country_iso3": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "locode": {
+            "type": "string"
+          },
+          "lon": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "severity_label": {
+            "enum": [
+              "Critical Deficit",
+              "Deficit",
+              "Balanced",
+              "Surplus",
+              "Heavy Surplus"
+            ],
+            "type": "string"
+          },
+          "supply_deficit_days": {
+            "type": "number"
+          },
+          "utilization_pct": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "locode",
+          "name",
+          "region",
+          "country_iso3",
+          "lat",
+          "lon",
+          "supply_deficit_days",
+          "utilization_pct",
+          "severity_label",
+          "container_type"
+        ],
+        "type": "object"
+      },
+      "RateLimitedResponse": {
+        "description": "429 body envelope. Same shape as ``ErrorResponse`` plus the wait-time hint.",
+        "properties": {
+          "error": {
+            "example": "rate_limited",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "retry_after_seconds"
+        ],
+        "type": "object"
+      },
+      "ReportMeta": {
+        "description": "Saved-report metadata. Mirrors ``utils.report_history.ReportMeta``.",
+        "properties": {
+          "data_quality": {
+            "enum": [
+              "FULL",
+              "PARTIAL",
+              "DEGRADED"
+            ],
+            "type": "string"
+          },
+          "file_size_kb": {
+            "type": "number"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "public_expires_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "public_slug": {
+            "default": "",
+            "type": "string"
+          },
+          "report_date": {
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "risk_level": {
+            "enum": [
+              "LOW",
+              "MODERATE",
+              "HIGH",
+              "CRITICAL"
+            ],
+            "type": "string"
+          },
+          "sentiment_label": {
+            "enum": [
+              "BULLISH",
+              "BEARISH",
+              "NEUTRAL",
+              "MIXED"
+            ],
+            "type": "string"
+          },
+          "sentiment_score": {
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "type": "number"
+          },
+          "signal_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "report_id",
+          "generated_at",
+          "report_date",
+          "sentiment_label",
+          "sentiment_score",
+          "risk_level",
+          "signal_count",
+          "data_quality",
+          "file_size_kb"
+        ],
+        "type": "object"
+      },
+      "ReportSchedule": {
+        "description": "One schedule row. Mirrors ``engine.report_scheduler.ReportSchedule``.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cron_expr": {
+            "description": "5-field cron string.",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "last_run_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "last_run_message": {
+            "nullable": true,
+            "type": "string"
+          },
+          "last_run_status": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_run_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "user_id",
+          "name",
+          "cron_expr",
+          "enabled"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "bearerFormat": "API token (raw secret from ``tools.ops_cli tokens create``)",
+        "description": "RFC 6750 bearer scheme. Generate a per-user token via ``python -m tools.ops_cli tokens create <user_id> <label>`` and send the raw secret in the ``Authorization`` header. The scheme name match is case-insensitive.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "name": "Ship Tracker maintainers",
+      "url": "https://github.com/anthropics/ship-tracker"
+    },
+    "description": "Read + scoped-write surface for Ship Tracker. Bearer-token authenticated (one per user via ``tools.ops_cli tokens create``). Every authenticated endpoint is per-user scoped — Alice cannot read or mutate Bob's data even by guessing ids. Cross-user reads collapse to 404; cross-user writes silently no-op (engine SQL scope filter excludes the row).",
+    "license": {
+      "name": "MIT"
+    },
+    "title": "Ship Tracker API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v1/alerts": {
+      "get": {
+        "description": "Returns up to 500 alerts created in the last ``window_days`` (default 30), optionally filtered by severity. Filtering is applied AFTER the engine load so asking for ``severity=CRITICAL`` with a 365-day window doesn't silently drop criticals at the cap.",
+        "operationId": "listAlerts",
+        "parameters": [
+          {
+            "description": "Look-back window in days.",
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter to one severity (case-insensitive).",
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Alert"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of alerts (newest first)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's recent alerts.",
+        "tags": [
+          "Alerts"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}": {
+      "get": {
+        "description": "Returns 404 when the id is not in the caller's scope — cross-user reads collapse to 404 (no info leak).",
+        "operationId": "getAlert",
+        "parameters": [
+          {
+            "description": "Alert UUID.",
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Alert"
+                }
+              }
+            },
+            "description": "One alert."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Fetch one alert by id, scoped to the caller.",
+        "tags": [
+          "Alerts"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}/ack": {
+      "post": {
+        "description": "Idempotent. Cross-user attempts silently no-op (zero rows updated). Response is always ``{acknowledged: true, alert_id}`` so a caller cannot probe for the existence of other users' alerts by status code.",
+        "operationId": "ackAlert",
+        "parameters": [
+          {
+            "description": "Alert UUID.",
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "acknowledged": {
+                      "type": "boolean"
+                    },
+                    "alert_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "acknowledged",
+                    "alert_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Ack accepted (may have been a no-op cross-user)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Acknowledge one alert.",
+        "tags": [
+          "Alerts"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}/annotations": {
+      "get": {
+        "description": "Created-ascending. Per-user scoped — cross-user alert ids return an empty list.",
+        "operationId": "listAnnotations",
+        "parameters": [
+          {
+            "description": "Alert UUID.",
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlertAnnotation"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of annotations (empty when none)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the annotation thread for one alert.",
+        "tags": [
+          "Annotations"
+        ]
+      },
+      "post": {
+        "description": "``body`` is the only required field. Silently truncated at 4000 chars; whitespace-only bodies → 400.",
+        "operationId": "createAnnotation",
+        "parameters": [
+          {
+            "description": "Alert UUID.",
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "body"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "annotation": {
+                      "$ref": "#/components/schemas/AlertAnnotation"
+                    },
+                    "annotation_id": {
+                      "type": "string"
+                    },
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "annotation_id",
+                    "annotation"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Annotation saved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Add one annotation to an alert.",
+        "tags": [
+          "Annotations"
+        ]
+      }
+    },
+    "/api/v1/annotations/{annotation_id}": {
+      "delete": {
+        "description": "Author-only. Cross-author / cross-user attempts → 404.",
+        "operationId": "deleteAnnotation",
+        "parameters": [
+          {
+            "description": "Annotation UUID.",
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "annotation_id": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "annotation_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Annotation removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete one annotation.",
+        "tags": [
+          "Annotations"
+        ]
+      },
+      "patch": {
+        "description": "Author-only. Cross-author / cross-user attempts → 404. The body itself is never logged.",
+        "operationId": "editAnnotation",
+        "parameters": [
+          {
+            "description": "Annotation UUID.",
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "body"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "annotation_id": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "updated",
+                    "annotation_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Annotation updated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Replace the body of one annotation.",
+        "tags": [
+          "Annotations"
+        ]
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "description": "Per-user scoped. ``limit`` is clamped to [1, 1000]; ``action`` is forwarded into the SQL filter so the LIMIT applies post-filter.",
+        "operationId": "listAudit",
+        "parameters": [
+          {
+            "description": "Cap on rows returned (max 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter on the action verb (e.g. ``login_success``).",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/AuditEvent"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "count"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Envelope with items array + total count."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's audit-log rows.",
+        "tags": [
+          "Audit"
+        ]
+      }
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "description": "Same query knobs as ``/audit`` plus ``since`` / ``until`` ISO-8601 filters and a ``format`` switch — ``jsonl`` (default; ``application/x-ndjson``) for Splunk / Vector / Loki ingestion, ``json`` for the regular envelope. Large bodies (>100KB) stream via chunked Transfer-Encoding.",
+        "operationId": "exportAudit",
+        "parameters": [
+          {
+            "description": "Cap on rows returned (max 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter on the action verb.",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive lower-bound ISO-8601 timestamp.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive upper-bound ISO-8601 timestamp.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Output format: jsonl (default) or json.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "jsonl",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemListResponse"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Export payload. Content-type is ``application/x-ndjson`` for jsonl (one JSON object per line) or ``application/json`` for the envelope."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "SIEM-friendly export of the caller's audit-log rows.",
+        "tags": [
+          "Audit"
+        ]
+      }
+    },
+    "/api/v1/backtests/health": {
+      "get": {
+        "description": "Unauthenticated. Runs every validator in ``tools.backtests`` and returns the consolidated JSON report. Status code follows the rollup: ``200`` when all 9 validators report healthy, ``503`` when any reports unhealthy. External monitoring (Datadog HTTP check, k8s liveness probe, Pingdom, status page) can alarm on the status code alone without parsing the body.",
+        "operationId": "getBacktestsHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestsHealthResponse"
+                }
+              }
+            },
+            "description": "All 9 validators healthy. status=ok."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "healthy_count": 7,
+                  "now_utc": "2026-05-25T22:00:00+00:00",
+                  "status": "degraded",
+                  "total": 9,
+                  "validators": []
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestsHealthResponse"
+                }
+              }
+            },
+            "description": "Either at least one validator reports unhealthy (status=degraded), or the underlying tools.backtests run itself failed (status=down + error field)."
+          }
+        },
+        "security": [],
+        "summary": "Public consolidated backtest-layer health probe.",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/api/v1/channels": {
+      "get": {
+        "description": "``target`` field is NEVER returned (it's the secret webhook URL / email).",
+        "operationId": "listChannels",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryChannel"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of channels."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's delivery channels.",
+        "tags": [
+          "Channels"
+        ]
+      },
+      "post": {
+        "description": "``channel_id`` and ``target`` are required; everything else falls back to ``DeliveryChannel`` defaults.",
+        "operationId": "saveChannel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryChannel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "channel_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Channel saved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Insert / upsert a delivery channel.",
+        "tags": [
+          "Channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}": {
+      "delete": {
+        "description": "Cross-user deletes silently no-op (engine scope filter excludes the row). Status 200 either way.",
+        "operationId": "deleteChannel",
+        "parameters": [
+          {
+            "description": "Channel id.",
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "channel_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Delete request accepted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete one channel by id.",
+        "tags": [
+          "Channels"
+        ]
+      },
+      "patch": {
+        "description": "Currently exposes ``monthly_budget`` only. Unknown fields silently ignored.",
+        "operationId": "patchChannel",
+        "parameters": [
+          {
+            "description": "Channel id.",
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "monthly_budget": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "channel_id",
+                    "updated"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Channel updated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Partial update on one channel.",
+        "tags": [
+          "Channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/reset-usage": {
+      "post": {
+        "description": "404 on cross-user / unknown id.",
+        "operationId": "resetChannelUsage",
+        "parameters": [
+          {
+            "description": "Channel id.",
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "reset": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "channel_id",
+                    "reset"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Counter reset."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Zero the current month's counter for one channel.",
+        "tags": [
+          "Channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/usage": {
+      "get": {
+        "description": "Returns ``{channel_id, name, kind, budget, usage, pct, over_budget}``. 404 on cross-user / unknown id.",
+        "operationId": "getChannelUsage",
+        "parameters": [
+          {
+            "description": "Channel id.",
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "budget": {
+                      "type": "integer"
+                    },
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "over_budget": {
+                      "type": "boolean"
+                    },
+                    "pct": {
+                      "nullable": true,
+                      "type": "number"
+                    },
+                    "usage": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "channel_id",
+                    "name",
+                    "kind",
+                    "budget",
+                    "usage",
+                    "over_budget"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Usage object."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Per-channel monthly delivery counter.",
+        "tags": [
+          "Channels"
+        ]
+      }
+    },
+    "/api/v1/escalations/{chain_id}": {
+      "delete": {
+        "description": "Per-user scoped — cross-user attempts → 404.",
+        "operationId": "deleteEscalationStep",
+        "parameters": [
+          {
+            "description": "Chain step UUID.",
+            "in": "path",
+            "name": "chain_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "chain_id": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "chain_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Step removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete one step from a chain by chain_id.",
+        "tags": [
+          "Escalations"
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "description": "Unauthenticated. Returns ``{status, schema_version, users, now_utc, up_seconds, unacked_critical_count, recent_render_success_rate, current_outages}``. ``status`` is ``ok``, ``degraded`` (system up but indicators flag a problem — unacked criticals, render errors, source outages), or ``down`` (DB unreachable).",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "System is up; status is ok or degraded."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "OperationalError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "DB unreachable / count_users failed."
+          }
+        },
+        "security": [],
+        "summary": "Public liveness + system-health probe.",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/api/v1/incidents": {
+      "get": {
+        "description": "Per-user scoped. ``window`` is in days (default 7).",
+        "operationId": "listIncidents",
+        "parameters": [
+          {
+            "description": "Look-back window in days.",
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemListResponse"
+                }
+              }
+            },
+            "description": "Envelope with incidents array + count."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Return correlated alert-incidents for the caller's window.",
+        "tags": [
+          "Incidents"
+        ]
+      }
+    },
+    "/api/v1/notification-prefs": {
+      "get": {
+        "description": "A user with no saved prefs gets the defaults — the response is identical to 'saved-as-defaults', no leak.",
+        "operationId": "getNotificationPrefs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPrefs"
+                }
+              }
+            },
+            "description": "Notification prefs object."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Return the caller's notification prefs.",
+        "tags": [
+          "NotificationPrefs"
+        ]
+      },
+      "patch": {
+        "description": "Body is a JSON object whose keys are any subset of the NotificationPrefs field names. Unknown keys are silently ignored. ``quiet_during_hours`` accepts ``null`` or a two-element ``[start_hour, end_hour]`` list.",
+        "operationId": "patchNotificationPrefs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPrefs"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPrefs"
+                }
+              }
+            },
+            "description": "Full updated prefs object (post-patch)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Partial-update the caller's notification prefs.",
+        "tags": [
+          "NotificationPrefs"
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "description": "Public — no auth required. Returns the full OpenAPI 3.0 spec as JSON, suitable for feeding into Swagger UI, Redoc, or ``openapi-generator-cli``. The spec is built lazily on first request and cached in-process.",
+        "operationId": "getOpenApiSpec",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Full OpenAPI 3.0 spec as JSON."
+          }
+        },
+        "security": [],
+        "summary": "Return this OpenAPI specification.",
+        "tags": [
+          "Meta"
+        ]
+      }
+    },
+    "/api/v1/ports/spillover-graph": {
+      "get": {
+        "description": "Walks the recent daily port-supply snapshots and tallies lead-lag co-occurrence: when port A enters container deficit, which ports B follow within the lookahead window? Returns the directed spillover edges (support = P(B follows | A) in [0, 1]; lift = support / B's unconditional base rate, > 1 = more than chance), sorted by lift descending. Authenticated (per-user bearer token); reads shared snapshot history (not per-user).",
+        "operationId": "getPortSpilloverGraph",
+        "parameters": [
+          {
+            "description": "Container-type slice. One of 40FT_DRY | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK. Default 40FT_DRY.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Trailing window of snapshot days to walk. Range [2, 365]. Default 60.",
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Lookahead: B must enter deficit within this many days after A. Range [1, 14]. Default 3.",
+            "in": "query",
+            "name": "lag_within_days",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Minimum co-occurrence count for an edge to survive (filters single coincidences). Range [1, 100]. Default 2.",
+            "in": "query",
+            "name": "min_co",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Minimum lift for an edge to survive. Must be a finite number >= 0 (NaN / inf are rejected with 400). Default 1.0.",
+            "in": "query",
+            "name": "min_lift",
+            "required": false,
+            "schema": {
+              "default": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "container_type": {
+                      "type": "string"
+                    },
+                    "edges": {
+                      "items": {
+                        "properties": {
+                          "co_occurrence_count": {
+                            "type": "integer"
+                          },
+                          "lag_within_days": {
+                            "type": "integer"
+                          },
+                          "lift": {
+                            "type": "number"
+                          },
+                          "source_event_count": {
+                            "type": "integer"
+                          },
+                          "source_locode": {
+                            "type": "string"
+                          },
+                          "support": {
+                            "type": "number"
+                          },
+                          "target_base_rate": {
+                            "type": "number"
+                          },
+                          "target_locode": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "lag_within_days": {
+                      "type": "integer"
+                    },
+                    "min_co": {
+                      "type": "integer"
+                    },
+                    "min_lift": {
+                      "type": "number"
+                    },
+                    "n_days_examined": {
+                      "type": "integer"
+                    },
+                    "n_unique_sources": {
+                      "type": "integer"
+                    },
+                    "n_unique_targets": {
+                      "type": "integer"
+                    },
+                    "total_edges": {
+                      "type": "integer"
+                    },
+                    "window_days": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Spillover-graph envelope: the echoed query params plus summary counts and the directed edge list."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Snapshot-history walk raised an unexpected error (defensive — the builder tolerates empty inputs)."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Port-to-port deficit-contagion (spillover) graph.",
+        "tags": [
+          "Ports"
+        ]
+      }
+    },
+    "/api/v1/ports/supply-lines": {
+      "get": {
+        "description": "Returns the same per-port chain data the **Port Supply Lines** tab consumes. Each chain ties a port's container-supply state to the publicly-traded shipping companies exposed to the supply lines flowing through it (port → routes → cargo mix → company commodity weights). Sorted most-stressed (largest deficit) first. Authenticated (per-user bearer token).",
+        "operationId": "getPortSupplyLines",
+        "parameters": [
+          {
+            "description": "Container-type slice of regional supply data. One of 40FT_DRY | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK. Default 40FT_DRY.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Cap on exposed_companies + top_commodities per port. Range [1, 50]. Default 8.",
+            "in": "query",
+            "name": "top_n",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortSupplyLinesResponse"
+                }
+              }
+            },
+            "description": "Per-port supply + exposure chains envelope."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Underlying port_supply_lines build raised an unexpected error (extremely defensive — the joiner tolerates empty inputs internally)."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Per-port supply state + exposed-company chains.",
+        "tags": [
+          "Ports"
+        ]
+      }
+    },
+    "/api/v1/ports/supply-lines.xlsx": {
+      "get": {
+        "description": "Same data the JSON endpoint serves, bundled as a single ``.xlsx`` workbook with six sheets: ``overview`` (snapshot metadata + per-sheet row counts) plus five data sheets that mirror the five CSV views (``summary``, ``exposure``, ``footprint``, ``regional``, ``watchlist``). Headers bold + frozen, numeric cells coerced from strings so ``SUM`` / sort / pivot work without conversion. Authenticated (per-user bearer).",
+        "operationId": "getPortSupplyLinesXlsx",
+        "parameters": [
+          {
+            "description": "Container-type slice. One of 40FT_DRY (default) | 20FT_DRY | 40FT_HC | 40FT_REEFER | 20FT_TANK.",
+            "in": "query",
+            "name": "container_type",
+            "required": false,
+            "schema": {
+              "default": "40FT_DRY",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deficit-watchlist firing threshold (numeric string; default -3.0). Only affects the watchlist sheet.",
+            "in": "query",
+            "name": "threshold_days",
+            "required": false,
+            "schema": {
+              "default": "-3.0",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The .xlsx workbook bytes.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "``attachment; filename=...`` with the canonical CLI stamp pattern: ``port_supply_lines_workbook_<container>_<YYYYMMDD>.xlsx``",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ImportError: ...",
+                  "status": "down"
+                },
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Underlying port_supply_lines or openpyxl build raised — extremely defensive, the joiner tolerates empty inputs internally."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Port supply state + exposures as an Excel workbook.",
+        "tags": [
+          "Ports"
+        ]
+      }
+    },
+    "/api/v1/reports": {
+      "get": {
+        "description": "Sorted newest-first. ``limit`` truncates after sorting.",
+        "operationId": "listReports",
+        "parameters": [
+          {
+            "description": "Cap on rows returned.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReportMeta"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of report metadata."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's saved-report metadata.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
+    "/api/v1/reports/diff": {
+      "get": {
+        "description": "Returns the per-entry diff between two report payloads in the caller's scope. Categories: ``signal`` / ``route`` / ``sentiment`` / ``risk`` / ``metadata``. Change types: ``added`` / ``removed`` / ``changed``. Signal direction flips and risk-level changes always surface; signal confidence deltas surface above 0.10; route value deltas surface above 5%; sentiment-score deltas surface above 0.05. 400 when ``from`` or ``to`` is missing; 404 when either id is unknown in the caller's scope (no info leak vs another user's id).",
+        "operationId": "diffReports",
+        "parameters": [
+          {
+            "description": "report_id of the older / baseline report.",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "report_id of the newer / current report.",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "entries": {
+                      "items": {
+                        "properties": {
+                          "after": {},
+                          "before": {},
+                          "category": {
+                            "enum": [
+                              "signal",
+                              "route",
+                              "sentiment",
+                              "risk",
+                              "metadata"
+                            ],
+                            "type": "string"
+                          },
+                          "change_type": {
+                            "enum": [
+                              "added",
+                              "removed",
+                              "changed"
+                            ],
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "category",
+                          "change_type",
+                          "key",
+                          "description"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "report_a_id": {
+                      "type": "string"
+                    },
+                    "report_b_id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "properties": {
+                        "added": {
+                          "type": "integer"
+                        },
+                        "changed": {
+                          "type": "integer"
+                        },
+                        "removed": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "report_a_id",
+                    "report_b_id",
+                    "summary",
+                    "entries"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Structured diff payload."
+          },
+          "400": {
+            "description": "Missing ``from`` or ``to`` query parameter."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "description": "One or both report_ids unknown in the caller's scope."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Compare two reports and return a structured diff.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}/html": {
+      "get": {
+        "description": "Returns ``text/html``. When the report is password-protected (``public_password_hash`` is set), the caller must additionally supply the password via ``X-Report-Password`` header or ``?password=`` query string — missing → 401, wrong → 401.",
+        "operationId": "getReportHtml",
+        "parameters": [
+          {
+            "description": "Report UUID.",
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required only when the report is password-protected.",
+            "in": "query",
+            "name": "password",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Alternate location for the report password (preferred over query string).",
+            "in": "header",
+            "name": "X-Report-Password",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The report's rendered HTML body."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Fetch the rendered HTML for one saved report.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}/markdown": {
+      "get": {
+        "description": "Returns ``text/markdown``. Built at request time from the structured ReportMeta fields (sentiment, risk, data-quality) — the on-disk HTML body is NOT embedded (it would render as an unreadable code block). Same password contract as the HTML endpoint.",
+        "operationId": "getReportMarkdown",
+        "parameters": [
+          {
+            "description": "Report UUID.",
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required only when the report is password-protected.",
+            "in": "query",
+            "name": "password",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Markdown source."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Fetch a Markdown rendering of one saved report.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}/public": {
+      "delete": {
+        "description": "404 when the report is not in the caller's scope.",
+        "operationId": "revokeReportPublic",
+        "parameters": [
+          {
+            "description": "Report UUID.",
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "revoked"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Slug revoked."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Revoke a report's public-share slug.",
+        "tags": [
+          "Reports"
+        ]
+      },
+      "post": {
+        "description": "Body is optional — when omitted, defaults to 30 days and no password. ``expires_in_days`` is an integer; ``password`` is an optional string (when non-empty the share link will require it to view).",
+        "operationId": "makeReportPublic",
+        "parameters": [
+          {
+            "description": "Report UUID.",
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expires_in_days": {
+                    "default": 30,
+                    "type": "integer"
+                  },
+                  "password": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "slug": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "slug"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Slug minted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Generate a public-share slug for one of the caller's reports.",
+        "tags": [
+          "Reports"
+        ]
+      }
+    },
+    "/api/v1/rules": {
+      "delete": {
+        "description": "Per-user — does NOT touch other users' rules.",
+        "operationId": "resetRules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "reset": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "reset"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rules wiped."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Wipe the caller's rule set.",
+        "tags": [
+          "Rules"
+        ]
+      },
+      "get": {
+        "description": "Empty list when the user has no rules.",
+        "operationId": "listRules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlertRule"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of rules."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's alert rules.",
+        "tags": [
+          "Rules"
+        ]
+      },
+      "post": {
+        "description": "Body must be a JSON array of rule dicts. 415 on non-JSON Content-Type; 400 on malformed JSON.",
+        "operationId": "saveRules",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/AlertRule"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "count"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rule set saved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Replace the caller's rule set with the posted array.",
+        "tags": [
+          "Rules"
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}/escalations": {
+      "delete": {
+        "description": "Idempotent — returns ``{deleted_steps: N}`` (N may be 0).",
+        "operationId": "deleteChain",
+        "parameters": [
+          {
+            "description": "Rule id.",
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "deleted_steps": {
+                      "type": "integer"
+                    },
+                    "rule_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "deleted_steps",
+                    "rule_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Chain wiped; count of removed steps."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Bulk-clear every step in a rule's chain.",
+        "tags": [
+          "Escalations"
+        ]
+      },
+      "get": {
+        "description": "Ordered step_number ASC. Empty / unknown chain returns ``[]`` (200), not 404.",
+        "operationId": "listEscalations",
+        "parameters": [
+          {
+            "description": "Rule id.",
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EscalationStep"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of escalation steps."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the escalation chain for one rule.",
+        "tags": [
+          "Escalations"
+        ]
+      },
+      "post": {
+        "description": "``(rule_id, user_id, step_number)`` is UNIQUE — posting a step_number that already exists REPLACES the row. ``channel_id`` must exist in the caller's channel set or → 400.",
+        "operationId": "createEscalationStep",
+        "parameters": [
+          {
+            "description": "Rule id.",
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "after_minutes": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "channel_id": {
+                    "type": "string"
+                  },
+                  "step_number": {
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "step_number",
+                  "after_minutes",
+                  "channel_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "chain_id": {
+                      "type": "string"
+                    },
+                    "saved": {
+                      "type": "boolean"
+                    },
+                    "step": {
+                      "$ref": "#/components/schemas/EscalationStep"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "chain_id",
+                    "step"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Step saved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Add (or replace) one step in a rule's chain.",
+        "tags": [
+          "Escalations"
+        ]
+      }
+    },
+    "/api/v1/schedules": {
+      "get": {
+        "description": "Empty list when the user has no schedules.",
+        "operationId": "listSchedules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReportSchedule"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of schedules."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's recurring report schedules.",
+        "tags": [
+          "Schedules"
+        ]
+      },
+      "post": {
+        "description": "``name`` and ``cron_expr`` are required. ``enabled`` defaults to ``true``. Invalid cron → 400.",
+        "operationId": "createSchedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "cron_expr": {
+                    "description": "5-field cron string.",
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "cron_expr"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "saved": {
+                      "type": "boolean"
+                    },
+                    "schedule": {
+                      "$ref": "#/components/schemas/ReportSchedule"
+                    },
+                    "schedule_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "schedule_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Schedule created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create one recurring report schedule.",
+        "tags": [
+          "Schedules"
+        ]
+      }
+    },
+    "/api/v1/schedules/{schedule_id}": {
+      "delete": {
+        "description": "404 on cross-user / unknown id.",
+        "operationId": "deleteSchedule",
+        "parameters": [
+          {
+            "description": "Schedule UUID.",
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "schedule_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "schedule_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Schedule removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete one schedule.",
+        "tags": [
+          "Schedules"
+        ]
+      },
+      "patch": {
+        "description": "Only the supplied fields move. Invalid cron → 400. Unknown / cross-user id → 404.",
+        "operationId": "patchSchedule",
+        "parameters": [
+          {
+            "description": "Schedule UUID.",
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "cron_expr": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "schedule": {
+                      "$ref": "#/components/schemas/ReportSchedule"
+                    },
+                    "schedule_id": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "updated",
+                    "schedule_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Schedule updated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update one schedule (partial).",
+        "tags": [
+          "Schedules"
+        ]
+      }
+    },
+    "/api/v1/silences": {
+      "get": {
+        "description": "Active-only by default. Pass ``include_expired=true`` to surface the audit-retention tail.",
+        "operationId": "listSilences",
+        "parameters": [
+          {
+            "description": "Include expired silences awaiting cleanup.",
+            "in": "query",
+            "name": "include_expired",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlertSilence"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Array of silences."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List the caller's silences.",
+        "tags": [
+          "Silences"
+        ]
+      },
+      "post": {
+        "description": "``duration_minutes`` is required. ``rule_id`` / ``ticker`` / ``severity`` are optional match keys — omit to match any value. ``reason`` is an operator note.",
+        "operationId": "createSilence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "duration_minutes": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "rule_id": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "severity": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "ticker": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "duration_minutes"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "saved": {
+                      "type": "boolean"
+                    },
+                    "silence": {
+                      "$ref": "#/components/schemas/AlertSilence"
+                    },
+                    "silence_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "saved",
+                    "silence_id",
+                    "silence"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Silence created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "bad request"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body or query string was malformed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "content-type must be application/json"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request had a non-empty body without ``Content-Type: application/json``."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create one silence.",
+        "tags": [
+          "Silences"
+        ]
+      }
+    },
+    "/api/v1/silences/{silence_id}": {
+      "delete": {
+        "description": "Per-user scoped. Cross-user attempts → 404.",
+        "operationId": "deleteSilence",
+        "parameters": [
+          {
+            "description": "Silence UUID.",
+            "in": "path",
+            "name": "silence_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "silence_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "silence_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Silence removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "not found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not in caller's scope, or unknown id. Per the no-info-leak contract, cross-user reads collapse to 404 rather than 403 so callers cannot enumerate other users' ids."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel one silence early.",
+        "tags": [
+          "Silences"
+        ]
+      }
+    },
+    "/api/v1/source-health": {
+      "get": {
+        "description": "NOT user-scoped — global platform telemetry. Still gated by bearer auth. ``window_hours`` is the look-back.",
+        "operationId": "getSourceHealth",
+        "parameters": [
+          {
+            "description": "Look-back window in hours.",
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "current_outages": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "items": {
+                      "items": {
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "total_pings": {
+                      "type": "integer"
+                    },
+                    "window_hours": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "count",
+                    "window_hours",
+                    "total_pings",
+                    "current_outages"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Envelope: items + count + window_hours + total_pings + current_outages."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Per-source feed liveness telemetry.",
+        "tags": [
+          "Telemetry"
+        ]
+      }
+    },
+    "/api/v1/telemetry/llm": {
+      "get": {
+        "description": "Counters + cost summary scoped to the caller's user_id.",
+        "operationId": "getLlmTelemetry",
+        "parameters": [
+          {
+            "description": "Look-back window in days.",
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Usage summary object."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Return LLM-call usage summary for the caller's window.",
+        "tags": [
+          "Telemetry"
+        ]
+      }
+    },
+    "/api/v1/telemetry/perf": {
+      "get": {
+        "description": "NOT user-scoped — process-wide render counters. Still gated by bearer auth.",
+        "operationId": "getPerfTelemetry",
+        "parameters": [
+          {
+            "description": "Look-back window in hours.",
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Performance summary object."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "unauthorized"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bearer token missing, malformed, or revoked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "rate_limited",
+                  "retry_after_seconds": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedResponse"
+                }
+              }
+            },
+            "description": "Per-user token-bucket rate limit exceeded. The ``Retry-After`` header carries the wait in seconds; the body repeats the value as ``retry_after_seconds``.",
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds before the next request will be admitted.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "internal server error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server-side failure. Body shape is always ``{\"error\": \"internal server error\"}``."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Render-performance telemetry summary.",
+        "tags": [
+          "Telemetry"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Default server URL (override at deploy).",
+      "url": "http://localhost:8503"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Public liveness probe.",
+      "name": "Health"
+    },
+    {
+      "description": "Spec discovery (this OpenAPI document).",
+      "name": "Meta"
+    },
+    {
+      "description": "Alert reads + ack.",
+      "name": "Alerts"
+    },
+    {
+      "description": "Per-alert annotation threads.",
+      "name": "Annotations"
+    },
+    {
+      "description": "Saved report metadata + content.",
+      "name": "Reports"
+    },
+    {
+      "description": "User alert rule set CRUD.",
+      "name": "Rules"
+    },
+    {
+      "description": "Delivery channels + per-channel budget.",
+      "name": "Channels"
+    },
+    {
+      "description": "Recurring report schedules.",
+      "name": "Schedules"
+    },
+    {
+      "description": "Planned-downtime alert suppression.",
+      "name": "Silences"
+    },
+    {
+      "description": "Per-rule escalation chains.",
+      "name": "Escalations"
+    },
+    {
+      "description": "LLM-usage, render-perf, source-health.",
+      "name": "Telemetry"
+    },
+    {
+      "description": "Correlated alert incidents.",
+      "name": "Incidents"
+    },
+    {
+      "description": "Audit log read + SIEM export.",
+      "name": "Audit"
+    },
+    {
+      "description": "Per-user delivery preferences.",
+      "name": "NotificationPrefs"
+    }
+  ]
+}

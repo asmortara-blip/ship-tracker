@@ -41,10 +41,14 @@ except ImportError:
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
-_CACHE_DIR = Path("cache/canal")
+# Anchor to the project root so the cache lives in the same place regardless
+# of the current working directory (CLI tools, non-standard deployments).
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "canal"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-_REQUEST_TIMEOUT = 12   # seconds
+_REQUEST_TIMEOUT = 12   # seconds — HTML scrape timeout
+_FEED_TIMEOUT = 8       # seconds — per-feed RSS network timeout
+_FEED_BUDGET_SECONDS = 20  # overall wall-clock cap for the RSS disruption check
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -269,6 +273,25 @@ def _scrape_suez() -> Optional[CanalStats]:
     return None
 
 
+def _parse_feed(feed_url: str):
+    """Fetch a feed URL with a HARD network timeout, then parse it.
+
+    ``feedparser.parse(url)`` does its own fetch with NO timeout — a slow or
+    dead feed blocks the calling thread (and the whole Streamlit app) forever.
+    Always fetch via ``requests`` with a timeout first, then hand the bytes to
+    feedparser. Returns the parsed feed, or ``None`` on any failure.
+    """
+    if not _FEEDPARSER_OK:
+        return None
+    try:
+        resp = requests.get(feed_url, timeout=_FEED_TIMEOUT, headers=_HEADERS)
+        resp.raise_for_status()
+        return feedparser.parse(resp.content)
+    except Exception as exc:
+        logger.debug(f"canal_feed: feed fetch failed ({feed_url}): {exc}")
+        return None
+
+
 def _rss_suez_disruption_check() -> Optional[str]:
     """Check RSS feeds for recent Houthi / Red Sea / Suez disruption headlines."""
     if not _FEEDPARSER_OK:
@@ -282,10 +305,21 @@ def _rss_suez_disruption_check() -> Optional[str]:
 
     keywords = ["suez", "red sea", "houthi", "bab el-mandeb", "disruption", "divert"]
     hits: list[str] = []
+    _start = time.monotonic()
 
     for feed_url in feeds:
+        # Once the overall budget is spent, stop fetching so a slow or dead
+        # feed cluster can never stall the calling tab.
+        if time.monotonic() - _start > _FEED_BUDGET_SECONDS:
+            logger.warning(
+                "canal_feed: RSS fetch budget exhausted — skipping "
+                f"{feed_url} and any remaining feeds"
+            )
+            break
+        d = _parse_feed(feed_url)
+        if d is None:
+            continue
         try:
-            d = feedparser.parse(feed_url)
             for entry in d.entries[:10]:
                 title = (entry.get("title") or "").lower()
                 if any(kw in title for kw in keywords):

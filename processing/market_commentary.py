@@ -22,8 +22,16 @@ def _safe_last(df: pd.DataFrame | pd.Series | None) -> float | None:
         if isinstance(df, pd.DataFrame):
             if df.empty:
                 return None
-            return float(df.iloc[:, 0].dropna().iloc[-1])
-        return float(df.dropna().iloc[-1])
+            # Freight frames have `rate_usd_per_feu`; FRED macro frames have `value`.
+            if "rate_usd_per_feu" in df.columns:
+                col = df["rate_usd_per_feu"]
+            elif "value" in df.columns:
+                col = df["value"]
+            else:
+                col = df.iloc[:, -1]
+            vals = pd.to_numeric(col, errors="coerce").dropna()
+            return float(vals.iloc[-1]) if len(vals) > 0 else None
+        return float(pd.to_numeric(df, errors="coerce").dropna().iloc[-1])
     except Exception:
         return None
 
@@ -33,9 +41,17 @@ def _safe_pct_change(df: pd.DataFrame | pd.Series | None, periods: int = 1) -> f
         return None
     try:
         if isinstance(df, pd.DataFrame):
-            vals = df.iloc[:, 0].dropna()
+            if df.empty:
+                return None
+            if "rate_usd_per_feu" in df.columns:
+                col = df["rate_usd_per_feu"]
+            elif "value" in df.columns:
+                col = df["value"]
+            else:
+                col = df.iloc[:, -1]
+            vals = pd.to_numeric(col, errors="coerce").dropna()
         else:
-            vals = df.dropna()
+            vals = pd.to_numeric(df, errors="coerce").dropna()
         if len(vals) < periods + 1:
             return None
         curr = float(vals.iloc[-1])

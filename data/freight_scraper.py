@@ -15,6 +15,7 @@ from data.cache_manager import CacheManager
 from data.normalizer import normalize_freight_df
 from data.quality import DataSeries, DataSource
 from routes.route_registry import ROUTES, get_all_fbx_indices
+from utils.helpers import stable_hash
 
 
 # FBX index metadata (used for scraping and labeling)
@@ -294,31 +295,109 @@ def _extract_fbx_rows(item: dict, cutoff: datetime) -> list[dict]:
     return rows
 
 
+# Rough long-term average rate per FBX index (USD/FEU). These anchor the
+# synthetic baseline; everything else is modeled noise around them.
+_DEFAULT_RATES: dict[str, float] = {
+    "FBX01":  2500.0,  # Trans-Pacific Eastbound
+    "FBX02":  800.0,   # Trans-Pacific Westbound
+    "FBX03":  1800.0,  # Asia-Europe
+    "FBX04":  1600.0,  # Europe-Asia
+    "FBX11":  1200.0,  # Transatlantic EB
+    "FBX12":  1100.0,  # Transatlantic WB
+    "FBX21":  2200.0,  # Asia-S. America West Coast
+    "FBX22":  900.0,   # S. America West Coast-Asia
+    "FBX31":  2400.0,  # Europe-S. America East Coast
+    "FBX32":  1000.0,  # S. America East Coast-Europe
+    "FBXGLO": 1700.0,  # Global Container Index
+}
+_DEFAULT_RATE_FALLBACK = 1500.0
+
+# Synthetic-series length and shape parameters. The fallback is a
+# mean-reverting random walk (Ornstein-Uhlenbeck-style) so forecasters have
+# real history to fit, with a seasonal sinusoid layered on top.
+_SYNTH_HISTORY_DAYS = 120     # rows of daily history per route
+_SYNTH_REVERSION = 0.06       # pull-back strength toward the baseline / day
+_SYNTH_VOL_FRAC = 0.018       # daily shock size as a fraction of the baseline
+_SYNTH_SEASONAL_AMP = 0.12    # peak/off-peak swing as a fraction of baseline
+
+
 def _synthetic_fallback() -> dict[str, pd.DataFrame]:
-    """Generate neutral fallback data when all real fetches fail."""
-    results = {}
+    """Generate synthetic fallback data when all real fetches fail.
+
+    Each route gets a full ``_SYNTH_HISTORY_DAYS``-row daily time series — a
+    mean-reverting random walk around the route's long-term baseline with a
+    seasonal peak/off-peak modulation — so downstream forecasters
+    (``forecaster.py`` / ``rate_forecaster.py`` / ``monte_carlo.py``) have
+    genuine history to fit instead of a single point-in-time rate.
+
+    The returned dict keys, DataFrame columns and row ordering match the real
+    scrape path: every frame is run through ``normalize_freight_df`` and so
+    carries the canonical ``FREIGHT_COLS`` schema.
+    """
+    results: dict[str, pd.DataFrame] = {}
     for route in ROUTES:
-        results[route.id] = _single_fallback(route.id, route.fbx_index)
+        results[route.id] = _synthetic_series(route.id, route.fbx_index)
     return results
 
 
-def _single_fallback(route_id: str, fbx_index: str) -> pd.DataFrame:
-    """Single-point fallback DataFrame with a neutral rate."""
-    _DEFAULT_RATES = {
-        "FBX01": 2500.0,  # Trans-Pacific EB (USD/FEU) — rough long-term avg
-        "FBX02": 800.0,   # Trans-Pacific WB
-        "FBX03": 1800.0,  # Asia-Europe
-        "FBX11": 1200.0,  # Transatlantic
-    }
-    rate = _DEFAULT_RATES.get(fbx_index, 1500.0)
-    df = pd.DataFrame([{
-        "date": datetime.now(),
+def _synthetic_series(route_id: str, fbx_index: str) -> pd.DataFrame:
+    """Build a ~120-day mean-reverting synthetic rate series for one route.
+
+    The walk is seeded deterministically from ``route_id`` so the same route
+    yields the same history across processes (the platform relies on this
+    stability for caching and UI consistency). Schema matches the real scrape
+    path.
+    """
+    import numpy as np
+
+    baseline = _DEFAULT_RATES.get(fbx_index, _DEFAULT_RATE_FALLBACK)
+
+    # Deterministic per-route RNG — stable across processes.
+    rng = np.random.default_rng(stable_hash(route_id))
+
+    n = _SYNTH_HISTORY_DAYS
+    end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = [end - timedelta(days=n - 1 - i) for i in range(n)]
+
+    # Seasonal modulation: a full-year sinusoid keyed off day-of-year, so
+    # peak season reads high and off-peak reads low regardless of where the
+    # 120-day window lands. ``day_of_year / 365`` -> phase in [0, 1].
+    day_of_year = np.array([d.timetuple().tm_yday for d in dates], dtype=float)
+    seasonal = _SYNTH_SEASONAL_AMP * np.sin(2.0 * np.pi * day_of_year / 365.0)
+
+    # Mean-reverting random walk (discrete Ornstein-Uhlenbeck) expressed as a
+    # multiplicative deviation around the seasonally-modulated baseline.
+    shock_sd = _SYNTH_VOL_FRAC
+    deviation = 0.0
+    rates = np.empty(n, dtype=float)
+    for i in range(n):
+        # Pull the deviation back toward zero, then apply a Gaussian shock.
+        deviation += -_SYNTH_REVERSION * deviation + rng.normal(0.0, shock_sd)
+        target = baseline * (1.0 + seasonal[i])
+        rate = target * (1.0 + deviation)
+        # Floor at a small positive value so normalize_freight_df keeps the row.
+        rates[i] = max(50.0, rate)
+
+    df = pd.DataFrame({
+        "date": dates,
         "route_id": route_id,
-        "rate_usd_per_feu": rate,
+        "rate_usd_per_feu": np.round(rates, 2),
         "index_name": fbx_index,
-        "source": "fallback",
-    }])
+        "source": "synthetic",
+    })
     return normalize_freight_df(df, route_id=route_id, index_name=fbx_index)
+
+
+def _single_fallback(route_id: str, fbx_index: str) -> pd.DataFrame:
+    """Single-route fallback used to fill a gap when the real scrape returns
+    no rows for a specific route.
+
+    Delegates to :func:`_synthetic_series` so a gap-filled route still gets a
+    full time series rather than a lone point-in-time rate — forecasters need
+    history. The ``source`` column stays ``"synthetic"`` so provenance
+    detection (``_looks_synthetic``) and DEMO labelling behave correctly.
+    """
+    return _synthetic_series(route_id, fbx_index)
 
 
 def get_current_rate(route_id: str, freight_data: dict[str, pd.DataFrame]) -> float:

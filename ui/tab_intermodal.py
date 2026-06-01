@@ -18,8 +18,8 @@ from loguru import logger
 
 from data.quality import DataSource
 from ui.styles import (
+    _hex_to_rgba,
     C_ACCENT,
-    C_BORDER,
     C_CARD,
     C_CONV,
     C_HIGH,
@@ -30,11 +30,13 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
     source_footer,
     wsj_market_table,
@@ -146,9 +148,9 @@ _RATES      = [100, 103, 107, 112, 121, 130, 136, 139, 134, 128, 122, 119,
 # Domain-specific color maps (kept local to this tab)
 # ---------------------------------------------------------------------------
 _BOTTLENECK_BADGE: dict[str, str] = {
-    "HIGH":     "red",
-    "MODERATE": "yellow",
-    "LOW":      "green",
+    "HIGH":     C_LOW,
+    "MODERATE": C_MOD,
+    "LOW":      C_HIGH,
 }
 _MODE_COLOR: dict[str, str] = {
     "Ocean":      C_ACCENT,
@@ -158,7 +160,7 @@ _MODE_COLOR: dict[str, str] = {
 
 
 def _bottleneck_badge(level: str) -> str:
-    return badge(level, _BOTTLENECK_BADGE.get(level, "blue"))
+    return badge(level, _BOTTLENECK_BADGE.get(level, C_ACCENT))
 
 
 def _dwell_status_color(current: float) -> str:
@@ -219,7 +221,8 @@ def _mono(value: str, color: str = C_TEXT, weight: int = 600) -> str:
 
 
 def _sub_section(label: str) -> None:
-    st.html(f'<div class="sub-section-header">{label}</div>')
+    st.markdown(f'<div class="sub-section-header">{label}</div>',
+                unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +234,7 @@ def _render_kpi_strip() -> None:
             "Intermodal Network Dashboard",
             "Global port-to-inland connectivity metrics",
         )
-        st.html(live_data_badge(_SRC_IANA))
+        st.markdown(live_data_badge(_SRC_IANA), unsafe_allow_html=True)
         metric_card_row([
             {"label": "Active Intermodal Connections", "value": "247",
              "accent": C_HIGH, "sublabel": "\u25b2 12 MoM"},
@@ -260,7 +263,7 @@ def _render_port_inland_table() -> None:
             ["All", "US West", "US East", "US Gulf", "Europe", "Asia"],
             key="intermodal_region_filter",
         )
-        st.html(live_data_badge(_SRC_DRAYAGE))
+        st.markdown(live_data_badge(_SRC_DRAYAGE), unsafe_allow_html=True)
 
         rows_src = (
             _PORT_INLAND if region_filter == "All"
@@ -296,7 +299,7 @@ def _render_network_map() -> None:
             "Intermodal Network Map",
             "Rail corridors colored by capacity utilization - green: available, amber: tight, red: constrained",
         )
-        st.html(live_data_badge(_SRC_RAILROADS))
+        st.markdown(live_data_badge(_SRC_RAILROADS), unsafe_allow_html=True)
 
         nodes = [
             ("Los Angeles / Long Beach", 33.74, -118.27, "port"),
@@ -411,7 +414,7 @@ def _render_dwell_tracker() -> None:
             "Rail Dwell Time Tracker",
             "Days containers sit at port awaiting rail pickup - >7 days flagged CRITICAL",
         )
-        st.html(live_data_badge(_SRC_RAILROADS))
+        st.markdown(live_data_badge(_SRC_RAILROADS), unsafe_allow_html=True)
 
         headers = [
             "Port", "Current", "30-Day Avg", "90-Day Avg",
@@ -433,14 +436,14 @@ def _render_dwell_tracker() -> None:
                 badge(status_label, _BOTTLENECK_BADGE.get(
                     "HIGH" if status_label == "CRITICAL"
                     else "MODERATE" if status_label == "ELEVATED"
-                    else "LOW", "blue")),
+                    else "LOW", C_ACCENT)),
             ])
         wsj_market_table(headers, rows)
-        st.html(
-            f'<div style="margin-top:8px;font-size:0.78rem;color:{C_TEXT3};'
-            f'font-family:var(--sans);">'
-            f'LA/LB currently at 8.2 days - 2.2 days above critical threshold. '
-            f'Primary cause: BNSF slot allocation lag and chassis queue at ICTF.</div>'
+        alert_banner(
+            "LA/LB currently at <b>8.2 days</b> — 2.2 days above the critical "
+            "threshold. Primary cause: BNSF slot allocation lag and chassis "
+            "queue at ICTF.",
+            level="warning",
         )
     except Exception:
         logger.exception("Dwell tracker failed")
@@ -453,7 +456,7 @@ def _render_equipment_availability() -> None:
             "Equipment Availability - Chassis by Port",
             "Chassis shortages are the hidden bottleneck in US intermodal logistics",
         )
-        st.html(live_data_badge(_SRC_CHASSIS))
+        st.markdown(live_data_badge(_SRC_CHASSIS), unsafe_allow_html=True)
 
         headers = [
             "Port", "Available Chassis", "Demand", "Utilization",
@@ -462,8 +465,8 @@ def _render_equipment_availability() -> None:
         rows = []
         for r in sorted(_CHASSIS, key=lambda x: -x["util"]):
             shortage_cell = (
-                badge("YES", "red") if r["shortage"]
-                else badge("NO", "green")
+                badge("YES", C_LOW) if r["shortage"]
+                else badge("NO", C_HIGH)
             )
             rows.append([
                 _sans(r["port"], color=C_TEXT, weight=700),
@@ -485,7 +488,7 @@ def _render_inland_destination() -> None:
             "Inland Destination Analysis",
             "Where do containers go after LA/LB? Asia \u2192 US West Coast trade flow breakdown",
         )
-        st.html(live_data_badge(_SRC_IANA))
+        st.markdown(live_data_badge(_SRC_IANA), unsafe_allow_html=True)
 
         c1, c2 = st.columns([1, 1])
 
@@ -525,28 +528,20 @@ def _render_inland_destination() -> None:
                 ("Other Midwest", 45, 55, 21,   950),
             ]
             _sub_section("Rail vs Truck Split by Destination")
-            for dest, rail_pct, truck_pct, days, cost in dest_rows:
-                st.html(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                    f'border-radius:6px;padding:10px 14px;margin-bottom:6px;">'
-                    f'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-                    f'<span style="color:{C_TEXT};font-weight:600;font-size:0.85rem;'
-                    f'font-family:var(--sans);">{dest}</span>'
-                    f'<span style="color:{C_TEXT3};font-size:0.78rem;'
-                    f'font-family:var(--mono);">{days}d transit \u00b7 ${cost}/TEU avg</span>'
-                    f'</div>'
-                    f'<div style="display:flex;gap:6px;align-items:center;">'
-                    f'<span style="color:{C_ACCENT};font-size:0.75rem;width:48px;'
-                    f'font-family:var(--sans);">Rail {rail_pct}%</span>'
-                    f'<div style="flex:1;height:8px;background:{C_SURFACE};'
-                    f'border-radius:4px;overflow:hidden;display:flex;">'
-                    f'<div style="width:{rail_pct}%;height:100%;background:{C_ACCENT};"></div>'
-                    f'<div style="width:{truck_pct}%;height:100%;background:{C_MOD};"></div>'
-                    f'</div>'
-                    f'<span style="color:{C_MOD};font-size:0.75rem;width:58px;'
-                    f'text-align:right;font-family:var(--sans);">Truck {truck_pct}%</span>'
-                    f'</div></div>'
-                )
+            tbl_rows = [
+                [
+                    _sans(dest, color=C_TEXT, weight=700),
+                    _mono(f"{rail_pct}%", color=C_ACCENT, weight=700),
+                    _mono(f"{truck_pct}%", color=C_MOD, weight=700),
+                    _mono(f"{days}d", color=C_TEXT2),
+                    _mono(f"${cost:,}", color=C_TEXT2),
+                ]
+                for dest, rail_pct, truck_pct, days, cost in dest_rows
+            ]
+            wsj_market_table(
+                ["Destination", "Rail %", "Truck %", "Transit", "Cost/TEU"],
+                tbl_rows,
+            )
     except Exception:
         logger.exception("Inland destination analysis failed")
         st.error("Inland destination analysis unavailable")
@@ -558,30 +553,25 @@ def _render_cost_comparison() -> None:
             "Cost Comparison: Routing Options by Trade Lane",
             "All-water vs transshipment vs intermodal - cost and transit time per TEU",
         )
-        st.html(live_data_badge(_SRC_FREIGHTOS))
+        st.markdown(live_data_badge(_SRC_FREIGHTOS), unsafe_allow_html=True)
 
         for pair in _COST_COMPARE:
             _sub_section(f'{pair["origin"]} \u2192 {pair["dest"]}')
-            cols = st.columns(len(pair["options"]))
-            for col, opt in zip(cols, pair["options"]):
-                mc = _MODE_COLOR.get(opt["mode"], C_TEXT2)
-                with col:
-                    st.html(
-                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                        f'border-top:2px solid {mc};border-radius:6px;'
-                        f'padding:14px 16px;height:100%;">'
-                        f'<div style="color:{C_TEXT3};font-size:0.72rem;'
-                        f'margin-bottom:6px;font-family:var(--sans);">{opt["label"]}</div>'
-                        f'<div style="color:{mc};font-size:1.3rem;font-weight:700;'
-                        f'font-family:var(--mono);">${opt["cost_teu"]:,}'
-                        f'<span style="font-size:0.75rem;color:{C_TEXT3};'
-                        f'font-family:var(--sans);">/TEU</span></div>'
-                        f'<div style="color:{C_TEXT2};font-size:0.82rem;margin-top:4px;'
-                        f'font-family:var(--sans);">{opt["days"]} days transit</div>'
-                        f'<div style="margin-top:8px;">{badge(opt["mode"].upper(), "blue")}</div>'
-                        f'</div>'
-                    )
-            st.html('<div style="height:4px;"></div>')
+            metric_card_row(
+                [
+                    {
+                        "label":       opt["label"],
+                        "value":       f'${opt["cost_teu"]:,}/TEU',
+                        "accent":      _MODE_COLOR.get(opt["mode"], C_TEXT2),
+                        "delta":       badge(opt["mode"].upper(),
+                                            _MODE_COLOR.get(opt["mode"], C_ACCENT)),
+                        "delta_color": _MODE_COLOR.get(opt["mode"], C_TEXT2),
+                        "sublabel":    f'{opt["days"]} days transit',
+                    }
+                    for opt in pair["options"]
+                ],
+                columns=len(pair["options"]),
+            )
 
         # Bar chart: cost vs days for all options
         all_labels, all_costs, all_days, all_colors = [], [], [], []
@@ -627,7 +617,7 @@ def _render_market_signals() -> None:
             "Intermodal Market Signals",
             "Correlation between intermodal congestion index and freight rate index (24-week rolling)",
         )
-        st.html(live_data_badge(_SRC_MODEL))
+        st.markdown(live_data_badge(_SRC_MODEL), unsafe_allow_html=True)
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -637,7 +627,7 @@ def _render_market_signals() -> None:
             line={"color": C_LOW, "width": 2},
             marker={"size": 5},
             fill="tozeroy",
-            fillcolor=f"{C_LOW}18",
+            fillcolor=_hex_to_rgba(C_LOW, 0.09),
             hovertemplate="Week %{x}<br>Congestion: %{y}<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -699,37 +689,48 @@ def _render_market_signals() -> None:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
-def render(port_results=None, route_results=None, insights=None) -> None:
+def render(port_results=None, route_results=None, insights=None, *args, **kwargs) -> None:
     """Render the Intermodal & Supply Chain Connectivity tab."""
-    try:
-        page_header(
-            title="Intermodal & Supply Chain Connectivity",
-            subtitle=("Port-to-inland rail corridors \u00b7 Chassis availability \u00b7 "
-                      "Dwell times \u00b7 Multi-modal cost analysis \u00b7 Market signals"),
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
-    except Exception:
-        logger.exception("Header render failed")
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('intermodal'):
+        try:
+            page_header(
+                title="Intermodal & Supply Chain Connectivity",
+                subtitle=("Port-to-inland rail corridors \u00b7 Chassis availability \u00b7 "
+                          "Dwell times \u00b7 Multi-modal cost analysis \u00b7 Market signals"),
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
+        except Exception:
+            logger.exception("Header render failed")
 
-    _render_kpi_strip()
-    _render_port_inland_table()
-    _render_network_map()
+        _render_kpi_strip()
+        _render_port_inland_table()
+        _render_network_map()
 
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_dwell_tracker()
-    with c2:
-        _render_equipment_availability()
+        section_divider("Capacity & Equipment")
 
-    _render_inland_destination()
-    _render_cost_comparison()
-    _render_market_signals()
+        c1, c2 = st.columns(2, gap="large")
+        with c1:
+            _render_dwell_tracker()
+        with c2:
+            _render_equipment_availability()
 
-    try:
-        st.html(source_footer([
-            _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
-            _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
-        ], align="left"))
-    except Exception:
-        logger.exception("Footer failed")
+        section_divider("Inland Flows")
+        _render_inland_destination()
+
+        section_divider("Routing Economics")
+        _render_cost_comparison()
+
+        section_divider("Market Signals")
+        _render_market_signals()
+
+        try:
+            st.markdown(source_footer([
+                _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
+                _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
+            ], align="left"), unsafe_allow_html=True)
+        except Exception:
+            logger.exception("Footer failed")

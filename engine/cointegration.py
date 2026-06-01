@@ -293,8 +293,12 @@ def half_life(spread: pd.Series) -> float:
         return math.inf
     lag = s.shift(1).dropna()
     y = s.loc[lag.index]
-    phi = float(np.dot(lag, y) / np.dot(lag, lag))
-    if phi <= 0 or phi >= 1:
+    denom = float(np.dot(lag, lag))
+    if denom == 0:
+        return math.inf
+    phi = float(np.dot(lag, y) / denom)
+    # NaN comparisons are False — guard explicitly so math.log(NaN) never runs.
+    if np.isnan(phi) or phi <= 0 or phi >= 1:
         return math.inf
     return -math.log(2.0) / math.log(phi)
 

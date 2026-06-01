@@ -32,13 +32,13 @@ def _safe_last(df: pd.DataFrame | pd.Series | None) -> float | None:
         if isinstance(df, pd.DataFrame):
             if df.empty:
                 return None
-            col = df.columns[0] if len(df.columns) > 0 else None
-            if col is None:
-                return None
-            vals = df[col].dropna()
+            # FRED frames are [date, value]; select by name so column 0 (date)
+            # is never grabbed by accident.
+            col = "value" if "value" in df.columns else df.columns[-1]
+            vals = pd.to_numeric(df[col], errors="coerce").dropna()
             return float(vals.iloc[-1]) if len(vals) > 0 else None
         if isinstance(df, pd.Series):
-            vals = df.dropna()
+            vals = pd.to_numeric(df, errors="coerce").dropna()
             return float(vals.iloc[-1]) if len(vals) > 0 else None
     except Exception:
         return None
@@ -53,10 +53,10 @@ def _safe_pct_change(df: pd.DataFrame | pd.Series | None, periods: int = 1) -> f
         if isinstance(df, pd.DataFrame):
             if df.empty:
                 return None
-            col = df.columns[0]
-            vals = df[col].dropna()
+            col = "value" if "value" in df.columns else df.columns[-1]
+            vals = pd.to_numeric(df[col], errors="coerce").dropna()
         else:
-            vals = df.dropna()
+            vals = pd.to_numeric(df, errors="coerce").dropna()
 
         if len(vals) < periods + 1:
             return None

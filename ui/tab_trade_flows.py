@@ -38,8 +38,10 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    gradient_card,
     live_data_badge,
     page_header,
+    section_divider,
     section_header,
     wsj_market_table,
 )
@@ -455,14 +457,14 @@ def _render_commodity_cards() -> None:
             insight = _key_insight(cat_key, yoy, signal)
             color = COMMODITY_COLORS.get(cat_key, C_ACCENT)
             label = cat_meta["label"]
-            st.html(
-                f'<div style="border-left:2px solid {color};padding:6px 12px;'
-                f'margin-bottom:6px;font-family:var(--sans);font-size:0.82rem;'
+            content_html = (
+                f'<span style="font-family:var(--sans);font-size:0.82rem;'
                 f'color:{C_TEXT2};line-height:1.5;">'
                 f'<span style="color:{C_TEXT};font-weight:600;">{label}.</span> '
                 f'{insight}'
-                f'</div>'
+                f'</span>'
             )
+            st.html(gradient_card(content_html, border_color=color))
 
     except Exception as exc:
         logger.warning(f"Commodity cards render failed: {exc}")
@@ -481,48 +483,54 @@ def render(
     macro_data=None,
 ) -> None:
     """Global Trade Flows dashboard."""
-    try:
-        # 1. Page header
-        page_header(
-            title="Global Trade Flows",
-            subtitle=(
-                "Mapping what the world ships — commodity flows by route, "
-                "region, and vessel type"
-            ),
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('trade_flows'):
+        try:
+            # 1. Page header
+            page_header(
+                title="Global Trade Flows",
+                subtitle=(
+                    "Mapping what the world ships — commodity flows by route, "
+                    "region, and vessel type"
+                ),
+                badge_text="Demo Data",
+                badge_color=C_MOD,
+            )
 
-        # 2. Flow map
-        section_header(
-            "Bilateral Trade Arcs",
-            subtitle=(
-                "Route arcs coloured by dominant commodity; arc width scaled to "
-                "illustrative annual trade value ($B)"
-            ),
-        )
-        _render_flow_map()
+            # 2. Flow map
+            section_header(
+                "Bilateral Trade Arcs",
+                subtitle=(
+                    "Route arcs coloured by dominant commodity; arc width scaled to "
+                    "illustrative annual trade value ($B)"
+                ),
+            )
+            _render_flow_map()
 
-        # 3. Sankey + Route breakdown side by side
-        section_header(
-            "Origin → Commodity → Destination",
-            subtitle="How bulk flows resolve through commodity categories",
-        )
-        left, right = st.columns([3, 2])
-        with left:
-            st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
-            _render_sankey()
-        with right:
-            st.html('<div class="sub-section-header">Route Cargo Breakdown</div>')
-            _render_route_breakdown()
+            # 3. Sankey + Route breakdown side by side
+            section_divider("Flow Decomposition")
+            section_header(
+                "Origin → Commodity → Destination",
+                subtitle="How bulk flows resolve through commodity categories",
+            )
+            left, right = st.columns([3, 2], gap="large")
+            with left:
+                st.html('<div class="sub-section-header">Commodity Flow Sankey</div>')
+                _render_sankey()
+            with right:
+                st.html('<div class="sub-section-header">Route Cargo Breakdown</div>')
+                _render_route_breakdown()
 
-        # 4. Commodity deep dive
-        section_header(
-            "Commodity Intelligence",
-            subtitle="Demand signals, seasonal patterns, and key routes by cargo type",
-        )
-        _render_commodity_cards()
+            # 4. Commodity deep dive
+            section_divider("Cargo Intelligence")
+            section_header(
+                "Commodity Intelligence",
+                subtitle="Demand signals, seasonal patterns, and key routes by cargo type",
+            )
+            _render_commodity_cards()
 
-    except Exception as exc:
-        logger.error(f"tab_trade_flows.render fatal: {exc}")
-        st.error(f"Trade Flows error: {exc}")
+        except Exception as exc:
+            logger.error(f"tab_trade_flows.render fatal: {exc}")
+            st.error(f"Trade Flows error: {exc}")

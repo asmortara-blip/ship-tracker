@@ -25,6 +25,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
+from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
     C_BORDER,
@@ -38,12 +40,18 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     badge,
+    insight_card_html,
     metric_card_row,
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+
+
+# ── Provenance: this tab renders demo data; surface that on every figure ──────
+_DEMO_SOURCES = [DataSource.demo("Synthetic route + commodity reference set")]
 
 
 # ── Static reference data ──────────────────────────────────────────────────────
@@ -466,8 +474,22 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     )
 
 
+def _share_bar_svg(pct: float, *, width: int = 110, height: int = 6,
+                    color: str = C_ACCENT, track: str = C_BORDER) -> str:
+    """Inline SVG capacity-share bar for use inside `wsj_market_table` cells."""
+    fill = max(0.0, min(100.0, pct * 2.5))
+    fill_w = width * fill / 100.0
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'style="vertical-align:middle;margin-right:8px;">'
+        f'<rect x="0" y="0" width="{width}" height="{height}" rx="2" ry="2" fill="{track}"/>'
+        f'<rect x="0" y="0" width="{fill_w:.1f}" height="{height}" rx="2" ry="2" fill="{color}"/>'
+        f'</svg>'
+    )
+
+
 def _pressure_level(route_name: str, commodity: str) -> dict[str, str]:
-    seed_val = hash(route_name + commodity) % 1000
+    seed_val = stable_hash(route_name + commodity) % 1000
     rng2 = random.Random(seed_val)
     levels = ["LOW", "MOD", "HIGH"]
     weights = [0.35, 0.40, 0.25]
@@ -481,7 +503,7 @@ def _pressure_level(route_name: str, commodity: str) -> dict[str, str]:
 
 
 def _seeded_rate_history(base_rate: float, route_name: str) -> pd.DataFrame:
-    rng = random.Random(hash(route_name) % 99999)
+    rng = random.Random(stable_hash(route_name) % 99999)
     today = datetime.date.today()
     dates = pd.date_range(end=today, periods=52, freq="W")
     rates = [base_rate]
@@ -492,7 +514,7 @@ def _seeded_rate_history(base_rate: float, route_name: str) -> pd.DataFrame:
 
 
 def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
-    rng = random.Random(hash(route_name + commodity) % 77777)
+    rng = random.Random(stable_hash(route_name + commodity) % 77777)
     pool = BCO_NAMES[:]
     rng.shuffle(pool)
     out = []
@@ -521,12 +543,18 @@ def _seeded_bcos(route_name: str, commodity: str, n: int = 10) -> list[dict]:
 # ── Section renderers ──────────────────────────────────────────────────────────
 
 def _render_selector() -> tuple[str, str]:
-    section_header("Deep Dive Selector", subtitle="Choose a trade lane and commodity")
-    c1, c2 = st.columns(2)
+    section_header("Deep Dive Selector", subtitle="Choose a trade lane and commodity to brief")
+    c1, c2 = st.columns(2, gap="large")
     with c1:
-        route = st.selectbox("Route", list(ROUTES.keys()), key="dd_route")
+        route = st.selectbox(
+            "Route", list(ROUTES.keys()), key="dd_route",
+            help="Trade lane analysed in the route section below.",
+        )
     with c2:
-        commodity = st.selectbox("Commodity", list(COMMODITIES.keys()), key="dd_commodity")
+        commodity = st.selectbox(
+            "Commodity", list(COMMODITIES.keys()), key="dd_commodity",
+            help="Commodity analysed in the flow section below.",
+        )
     return route, commodity
 
 
@@ -554,27 +582,26 @@ def _render_route_card(route_name: str) -> None:
             columns=4,
         )
 
-        section_header("Top 5 Carriers by Capacity Share")
-        carrier_rows = []
-        for carrier, share in rd["carriers"]:
-            bar_w = int(share * 2.5)
-            bar_html = (
-                f'<div style="display:inline-block;width:110px;background:{C_BORDER};'
-                f'border-radius:3px;height:6px;vertical-align:middle;margin-right:8px">'
-                f'<div style="background:{C_ACCENT};width:{bar_w}%;height:100%;border-radius:3px"></div>'
-                f'</div>'
-            )
-            carrier_rows.append([
-                _sans(carrier, color=C_TEXT, weight=700),
-                bar_html + _mono(f"{share}%", color=C_ACCENT),
-            ])
-        wsj_market_table(headers=["Carrier", "Share"], rows=carrier_rows)
-
-        section_header("Upcoming Capacity Changes")
-        cap_rows = [[_sans(c, color=C_TEXT2)] for c in rd["capacity_changes"]]
-        wsj_market_table(headers=["Note"], rows=cap_rows)
+        col_car, col_cap = st.columns(2, gap="large")
+        with col_car:
+            section_header("Carriers by Capacity Share",
+                           subtitle="Top 5 operators on the lane")
+            carrier_rows = []
+            for carrier, share in rd["carriers"]:
+                carrier_rows.append([
+                    _sans(carrier, color=C_TEXT, weight=700),
+                    _share_bar_svg(float(share)) + _mono(f"{share}%", color=C_ACCENT),
+                ])
+            wsj_market_table(headers=["Carrier", "Share"], rows=carrier_rows)
+        with col_cap:
+            section_header("Upcoming Capacity Changes",
+                           subtitle="Scheduled deployments and service notes")
+            cap_rows = [[_sans(c, color=C_TEXT2)] for c in rd["capacity_changes"]]
+            wsj_market_table(headers=["Note"], rows=cap_rows)
 
         # Rate history chart
+        section_header("Rate History",
+                       subtitle="Trailing 52 weeks of spot freight, $/TEU")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df["date"], y=df["rate"],
@@ -588,9 +615,10 @@ def _render_route_card(route_name: str) -> None:
             line_color=_hex_rgba(C_MOD, 0.6), line_width=1,
             annotation_text="12-mo avg", annotation_font_color=C_MOD,
         )
-        apply_dark_layout(fig, height=240, title="Rate History — 52 Weeks")
+        apply_dark_layout(fig, height=240)
         fig.update_yaxes(tickprefix="$")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
 
     except Exception:
         logger.exception("_render_route_card failed")
@@ -607,6 +635,10 @@ def _render_commodity_flow(commodity: str) -> None:
         volumes = [e[2] for e in exporters]
         yoy = [e[3] for e in exporters]
 
+        section_header(
+            f"{commodity} — Global Production",
+            subtitle="Top exporting nations sized by volume, colored by YoY trend",
+        )
         fig_map = go.Figure(go.Scattergeo(
             locationmode="country names",
             locations=country_names,
@@ -622,7 +654,7 @@ def _render_commodity_flow(commodity: str) -> None:
             hovertemplate="<b>%{location}</b><br>Volume: %{customdata[0]:,.0f} MT<br>YoY: %{customdata[1]:+.1f}%<extra></extra>",
             customdata=list(zip(volumes, yoy)),
         ))
-        apply_dark_layout(fig_map, height=320, title=f"{commodity} — Global Production (Top Exporters)")
+        apply_dark_layout(fig_map, height=320)
         fig_map.update_layout(
             geo=dict(
                 bgcolor=C_CARD,
@@ -635,7 +667,7 @@ def _render_commodity_flow(commodity: str) -> None:
         )
         st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False})
 
-        c1, c2 = st.columns([3, 2])
+        c1, c2 = st.columns([3, 2], gap="large")
         with c1:
             section_header("Top 5 Trade Flows")
             flow_rows = [
@@ -660,8 +692,11 @@ def _render_commodity_flow(commodity: str) -> None:
                 ],
                 columns=1,
             )
-
         # Seasonality bar chart
+        section_header(
+            "Seasonal Volume Index",
+            subtitle="Monthly shipping demand, indexed to the annual peak (= 100)",
+        )
         sea = cd["seasonality"]
         fig_sea = go.Figure(go.Bar(
             x=MONTHS, y=sea,
@@ -670,9 +705,10 @@ def _render_commodity_flow(commodity: str) -> None:
             textfont=dict(color=C_ACCENT, size=10),
             hovertemplate="%{x}: %{y}<extra></extra>",
         ))
-        apply_dark_layout(fig_sea, height=240, title="Seasonal Volume Index")
+        apply_dark_layout(fig_sea, height=240)
         fig_sea.update_yaxes(range=[0, max(sea) * 1.15])
         st.plotly_chart(fig_sea, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
 
     except Exception:
         logger.exception("_render_commodity_flow failed")
@@ -682,6 +718,10 @@ def _render_commodity_flow(commodity: str) -> None:
 def _render_pressure_points(route_name: str, commodity: str) -> None:
     try:
         section_divider("Supply Chain Pressure Points")
+        section_header(
+            "Pressure Point Read",
+            subtitle="Stage-by-stage stress across the door-to-door supply chain",
+        )
         levels = _pressure_level(route_name, commodity)
 
         metrics = []
@@ -696,6 +736,7 @@ def _render_pressure_points(route_name: str, commodity: str) -> None:
                 "delta_color": C_TEXT3,
             })
         metric_card_row(metrics, columns=5)
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_pressure_points failed")
         st.warning("Pressure points unavailable.")
@@ -727,6 +768,7 @@ def _render_shipper_intel(route_name: str, commodity: str) -> None:
             headers=["#", "BCO", "Vol (TEU/yr)", "Spot %", "Contract", "Strategy"],
             rows=rows,
         )
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_shipper_intel failed")
         st.warning("Shipper intelligence unavailable.")
@@ -735,6 +777,10 @@ def _render_shipper_intel(route_name: str, commodity: str) -> None:
 def _render_analyst_commentary(route_name: str, commodity: str) -> None:
     try:
         section_divider("Analyst Commentary")
+        section_header(
+            "Bull / Base / Bear",
+            subtitle="Scenario framing and the watchpoints that move between them",
+        )
         rd = ROUTES[route_name]
         pct = rd["rate_pct"]
         rate = rd["base_rate"]
@@ -784,35 +830,42 @@ def _render_analyst_commentary(route_name: str, commodity: str) -> None:
             f"Blank sailing announcements from {rd['carriers'][0][0]} and {rd['carriers'][1][0]}",
         ]
 
-        def _case_block(title: str, color: str, items: list[str] | str) -> str:
-            bg = _hex_rgba(color, 0.10)
-            if isinstance(items, list):
-                content = "".join(
-                    f'<div style="display:flex;gap:8px;margin-bottom:6px">'
-                    f'<div style="color:{color};font-weight:900;margin-top:1px">▸</div>'
-                    f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.5">{it}</div>'
-                    f'</div>'
-                    for it in items
-                )
-            else:
-                content = f'<div style="font-family:var(--sans);font-size:0.82rem;color:{C_TEXT2};line-height:1.6">{items}</div>'
-            return (
-                f'<div style="background:{bg};border-left:3px solid {color};'
-                f'border-radius:0 3px 3px 0;padding:14px 16px;margin-bottom:12px">'
-                f'<div style="font-family:var(--sans);font-size:0.7rem;color:{color};font-weight:700;'
-                f'letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px">{title}</div>'
-                f'{content}</div>'
-            )
+        def _bulletize(items: list[str]) -> str:
+            return " &nbsp;·&nbsp; ".join(items)
 
-        html = (
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:3px;padding:16px 20px">'
-            f'{_case_block("Bull Case", C_HIGH, bull_items)}'
-            f'{_case_block("Bear Case", C_LOW, bear_items)}'
-            f'{_case_block("Base Case", C_ACCENT, base_case)}'
-            f'{_case_block("Key Watchpoints", C_MOD, watchpoints)}'
-            f'</div>'
-        )
-        st.html(html)
+        c1, c2 = st.columns(2, gap="large")
+        with c1:
+            st.markdown(insight_card_html(
+                title="Bull Case",
+                score=0.85,
+                action="Prioritize",
+                rationale=_bulletize(bull_items),
+                category="ROUTE",
+            ), unsafe_allow_html=True)
+            st.markdown(insight_card_html(
+                title="Base Case",
+                score=0.55,
+                action="Monitor",
+                rationale=base_case,
+                category="ROUTE",
+            ), unsafe_allow_html=True)
+        with c2:
+            st.markdown(insight_card_html(
+                title="Bear Case",
+                score=0.25,
+                action="Avoid",
+                rationale=_bulletize(bear_items),
+                category="ROUTE",
+            ), unsafe_allow_html=True)
+            st.markdown(insight_card_html(
+                title="Key Watchpoints",
+                score=0.50,
+                action="Watch",
+                rationale=_bulletize(watchpoints),
+                category="MACRO",
+            ), unsafe_allow_html=True)
+
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
 
     except Exception:
         logger.exception("_render_analyst_commentary failed")
@@ -851,6 +904,7 @@ def _render_similar_routes(route_name: str) -> None:
             headers=["Route", "Rate ($/TEU)", "Distance (nm)", "vs Selected"],
             rows=rows,
         )
+        st.markdown(source_footer(_DEMO_SOURCES), unsafe_allow_html=True)
     except Exception:
         logger.exception("_render_similar_routes failed")
         st.warning("Similar routes comparison unavailable.")
@@ -863,25 +917,30 @@ def render(
     freight_data: Any = None,
     port_results: Any = None,
     insights: Any = None,
+    *args,
+    **kwargs,
 ) -> None:
     """Render the Deep Dive research analyst tab."""
-    try:
-        page_header(
-            title="Deep Dive — Research Analyst View",
-            subtitle="Select a route and commodity to generate comprehensive trade lane intelligence.",
-            icon="🔍",
-            badge_text="Demo Data",
-            badge_color=C_MOD,
-        )
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('deep_dive'):
+        try:
+            page_header(
+                title="Deep Dive — Research Analyst View",
+                subtitle="Select a route and commodity to generate comprehensive trade lane intelligence.",
+                badge_text="DEEP DIVE",
+                badge_color=C_ACCENT,
+            )
 
-        route, commodity = _render_selector()
-        _render_route_card(route)
-        _render_commodity_flow(commodity)
-        _render_pressure_points(route, commodity)
-        _render_shipper_intel(route, commodity)
-        _render_analyst_commentary(route, commodity)
-        _render_similar_routes(route)
+            route, commodity = _render_selector()
+            _render_route_card(route)
+            _render_commodity_flow(commodity)
+            _render_pressure_points(route, commodity)
+            _render_shipper_intel(route, commodity)
+            _render_analyst_commentary(route, commodity)
+            _render_similar_routes(route)
 
-    except Exception:
-        logger.exception("tab_deep_dive render failed")
-        st.error("Deep Dive tab encountered an unexpected error. Check logs.")
+        except Exception:
+            logger.exception("tab_deep_dive render failed")
+            st.error("Deep Dive tab encountered an unexpected error. Check logs.")

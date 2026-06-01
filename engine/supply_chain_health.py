@@ -48,7 +48,8 @@ _WEIGHTS: dict[str, float] = {
     "seasonal_factors":      0.10,
 }
 
-assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Dimension weights must sum to 1.0"
+if abs(sum(_WEIGHTS.values()) - 1.0) >= 1e-9:
+    raise ValueError("Dimension weights must sum to 1.0")
 
 
 # ---------------------------------------------------------------------------

@@ -21,14 +21,19 @@ import streamlit as st
 
 from ui.styles import (
     C_ACCENT, C_BG, C_BORDER, C_CARD, C_CONV, C_HIGH, C_LOW, C_MACRO, C_MOD,
-    C_SURFACE, C_TEXT, C_TEXT2, C_TEXT3,
+    C_TEXT, C_TEXT2, C_TEXT3,
     apply_dark_layout,
+    badge,
+    insight_card_html,
     live_data_badge,
     metric_card_row,
     page_header,
+    section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
 )
+from data.quality import DataSource
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
 TOPICS = [
@@ -57,6 +62,13 @@ _SOURCE_COLOR = {
     "Splash247":     C_CONV,
     "Hellenic Shipping News": "#c65102",
     "The Loadstar":  "#0e8a7a",
+}
+
+# Sentiment → action label used by insight_card_html
+_SENTIMENT_ACTION = {
+    "BULLISH": "Monitor",
+    "NEUTRAL": "Watch",
+    "BEARISH": "Caution",
 }
 
 # ── Mock data ──────────────────────────────────────────────────────────────────
@@ -141,7 +153,7 @@ _MOCK_ARTICLES: list[dict] = [
     {"headline": "EU shipping ETS costs hit $420M in Q1 2026 — operators pass costs to shippers",
      "source": "Reuters", "sentiment_score": -0.33, "topic": "Sustainability",
      "published_at": _now() - timedelta(hours=20), "urgency": 0.63,
-     "summary": "European shipping companies faced a combined \u20ac390 million in EU Emissions Trading System charges in Q1 2026, with most passing the costs directly to shippers via BAF surcharges.",
+     "summary": "European shipping companies faced a combined €390 million in EU Emissions Trading System charges in Q1 2026, with most passing the costs directly to shippers via BAF surcharges.",
      "url": "#", "entities": ["EU ETS", "Maersk", "MSC", "BAF surcharge"]},
 
     {"headline": "Evergreen orders 20 methanol-powered 24,000 TEU vessels in $6B newbuild spree",
@@ -168,7 +180,7 @@ _MOCK_ARTICLES: list[dict] = [
      "summary": "With FuelEU Maritime regulation now in force, container lines are racing to sign long-term green methanol supply agreements with producers in Chile, Iceland and Morocco.",
      "url": "#", "entities": ["FuelEU", "Methanol", "Chile", "Iceland", "Morocco"]},
 
-    {"headline": "Cosco Shipping acquires 30% stake in Port of Hamburg for \u20ac1.8B",
+    {"headline": "Cosco Shipping acquires 30% stake in Port of Hamburg for €1.8B",
      "source": "Reuters", "sentiment_score": 0.15, "topic": "M&A",
      "published_at": _now() - timedelta(hours=33), "urgency": 0.67,
      "summary": "COSCO Shipping Ports secured a 30% stake in the Port of Hamburg's HHLA terminal operator after the EU approved the deal with conditions, ending a two-year regulatory review.",
@@ -267,7 +279,7 @@ def _time_ago(dt: datetime) -> str:
             return f"{s // 3600}h ago"
         return f"{s // 86400}d ago"
     except Exception:
-        return "\u2014"
+        return "—"
 
 
 def _sentiment_label(score: float) -> tuple[str, str]:
@@ -298,13 +310,10 @@ def _score_chip(score: float) -> str:
     return _mono(f"{sign}{score:.2f}", color=color, weight=700)
 
 
-def _topic_chip(topic: str) -> str:
+def _topic_badge(topic: str) -> str:
+    """Return a design-system badge for a topic using the domain color map."""
     color = _TOPIC_COLOR.get(topic, C_ACCENT)
-    return (
-        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
-        f'border-radius:3px;padding:1px 7px;font-size:10px;font-weight:600;'
-        f'font-family:var(--sans);letter-spacing:0.5px;white-space:nowrap;">{topic}</span>'
-    )
+    return badge(topic, color=color)
 
 
 # ── Section 1: Sentiment Pulse ─────────────────────────────────────────────────
@@ -368,16 +377,13 @@ def _render_topic_heatmap(articles: list[dict]) -> None:
                     col  = C_HIGH if avg >= 0.2 else (C_LOW if avg <= -0.2 else C_MOD)
                     sign = "+" if avg > 0 else ""
                     cell = (
-                        f'<div style="text-align:center;">'
-                        f'{_mono(f"{sign}{avg:.1f}", color=col, weight=700)}'
-                        f'<div style="font-size:9px;color:{C_TEXT3};font-family:var(--sans);">'
-                        f'{cnt}art</div></div>'
+                        _mono(f"{sign}{avg:.1f}", color=col, weight=700)
+                        + f'<span style="font-size:9px;color:{C_TEXT3};'
+                        f'font-family:var(--sans);margin-left:4px;">'
+                        f'{cnt}art</span>'
                     )
                 else:
-                    cell = (
-                        f'<div style="text-align:center;color:{C_TEXT3};'
-                        f'font-size:11px;">\u2014</div>'
-                    )
+                    cell = _sans("—", color=C_TEXT3, weight=400)
                 row_cells.append(cell)
             rows.append(row_cells)
         wsj_market_table(headers, rows)
@@ -390,48 +396,26 @@ def _render_breaking_news(articles: list[dict]) -> None:
     try:
         top5 = sorted(articles, key=lambda a: a["urgency"], reverse=True)[:5]
         if not top5:
-            st.info("No breaking news available.")
+            st.info("No breaking news in the current feed.")
             return
 
         for a in top5:
-            label, lcolor = _sentiment_label(a["sentiment_score"])
-            urgency_pct   = int(a["urgency"] * 100)
-            urg_color     = C_LOW if urgency_pct >= 80 else (C_MOD if urgency_pct >= 55 else C_ACCENT)
-            tc            = _TOPIC_COLOR.get(a["topic"], C_ACCENT)
-            sc            = _SOURCE_COLOR.get(a["source"], C_TEXT2)
-            ago           = _time_ago(a["published_at"])
-            sign          = "+" if a["sentiment_score"] > 0 else ""
-            score_str     = f"{sign}{a['sentiment_score']:.2f}"
-
-            st.html(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-left:4px solid {urg_color};border-radius:6px;'
-                f'padding:18px 22px;margin-bottom:12px;">'
-                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
-                f'<span style="color:{sc};font-size:10px;font-weight:700;font-family:var(--sans);'
-                f'letter-spacing:1px;">{a["source"].upper()}</span>'
-                f'<span style="background:{lcolor}22;color:{lcolor};border:1px solid {lcolor}44;'
-                f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:700;'
-                f'font-family:var(--sans);">{label}</span>'
-                f'<span style="background:{tc}22;color:{tc};border:1px solid {tc}44;'
-                f'border-radius:3px;padding:1px 8px;font-size:10px;font-weight:600;'
-                f'font-family:var(--sans);">{a["topic"]}</span>'
-                f'<span style="margin-left:auto;color:{urg_color};font-size:10px;font-weight:700;'
-                f'font-family:var(--sans);">URGENCY {urgency_pct}</span>'
-                f'</div>'
-                f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;line-height:1.4;'
-                f'font-family:var(--sans);margin-bottom:8px;">{a["headline"]}</div>'
-                f'<div style="color:{C_TEXT2};font-size:13px;font-family:var(--sans);'
-                f'line-height:1.7;margin-bottom:10px;">{a["summary"][:200]}\u2026</div>'
-                f'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
-                f'<span style="color:{C_TEXT3};font-size:11px;font-family:var(--sans);">{ago}</span>'
-                f'<code style="background:{lcolor}22;color:{lcolor};border-radius:3px;'
-                f'padding:1px 6px;font-size:11px;font-family:var(--mono);">{score_str}</code>'
-                f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:11px;'
-                f'font-family:var(--sans);text-decoration:none;margin-left:auto;">'
-                f'Read full story \u2197</a>'
-                f'</div>'
-                f'</div>'
+            label, _lcolor = _sentiment_label(a["sentiment_score"])
+            ago            = _time_ago(a["published_at"])
+            action         = _SENTIMENT_ACTION.get(label, "Watch")
+            rationale      = (
+                f"{a['summary'][:200]}…  "
+                f"[{a['source']} · {ago}]"
+            )
+            st.markdown(
+                insight_card_html(
+                    title=a["headline"],
+                    score=a["urgency"],
+                    action=action,
+                    rationale=rationale,
+                    category=a["topic"],
+                ),
+                unsafe_allow_html=True,
             )
     except Exception as exc:
         st.warning(f"Breaking news error: {exc}")
@@ -442,44 +426,64 @@ def _render_news_feed(articles: list[dict]) -> None:
     try:
         all_topics = sorted({a["topic"] for a in articles})
         topic_opts = ["All Topics"] + all_topics
-        sel_topic  = st.selectbox("Filter by topic", topic_opts, key="news_feed_topic_filter")
+        sel_topic  = st.selectbox(
+            "Filter by topic", topic_opts, key="news_feed_topic_filter",
+            help="Narrow the feed to a single coverage topic.",
+        )
 
         filtered = articles if sel_topic == "All Topics" else [a for a in articles if a["topic"] == sel_topic]
         filtered = sorted(filtered, key=lambda a: a["published_at"], reverse=True)
 
         if not filtered:
-            st.info("No articles match the filter.")
+            st.info(f"No articles tagged “{sel_topic}” in the current feed.")
             return
+
+        st.caption(f"{len(filtered)} articles · newest first")
 
         headers = ["Source", "Headline", "Score", "Topic", "Time"]
         rows: list[list[str]] = []
         for a in filtered:
             sc   = _SOURCE_COLOR.get(a["source"], C_TEXT2)
             ago  = _time_ago(a["published_at"])
-            hl_short = a["headline"][:90] + ("\u2026" if len(a["headline"]) > 90 else "")
+            hl_short = a["headline"][:90] + ("…" if len(a["headline"]) > 90 else "")
             rows.append([
                 _sans(a["source"], color=sc, weight=700),
                 _sans(hl_short, color=C_TEXT, weight=500),
                 _score_chip(a["sentiment_score"]),
-                _topic_chip(a["topic"]),
+                _topic_badge(a["topic"]),
                 _sans(ago, color=C_TEXT3, weight=400),
             ])
         wsj_market_table(headers, rows)
 
         # Expandable article summaries
         for a in filtered:
-            with st.expander(f"{a['headline'][:70]}\u2026", expanded=False):
-                ent_str = ", ".join(a["entities"]) if a["entities"] else "None identified"
-                st.html(
-                    f'<div style="background:{C_SURFACE};border-radius:6px;padding:14px 18px;">'
-                    f'<p style="color:{C_TEXT};font-size:13px;font-family:var(--sans);'
-                    f'line-height:1.7;margin:0 0 12px 0;">{a["summary"]}</p>'
-                    f'<div style="color:{C_TEXT3};font-size:11px;font-family:var(--sans);">'
-                    f'<strong style="color:{C_TEXT2};">Entities mentioned:</strong> {ent_str}</div>'
-                    f'<div style="margin-top:10px;">'
-                    f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:12px;'
-                    f'font-family:var(--sans);">Read full article \u2197</a>'
-                    f'</div></div>'
+            headline_short = a["headline"][:70] + ("…" if len(a["headline"]) > 70 else "")
+            with st.expander(headline_short, expanded=False):
+                label, lcolor = _sentiment_label(a["sentiment_score"])
+                ent_str = (
+                    " · ".join(a["entities"]) if a["entities"]
+                    else "None identified"
+                )
+                st.markdown(
+                    f'<div class="wsj-card">'
+                    f'<div style="display:flex;gap:8px;align-items:center;'
+                    f'margin-bottom:8px;">'
+                    f'{_topic_badge(a["topic"])}{badge(label, color=lcolor)}'
+                    f'<span style="font-family:var(--mono);font-size:0.72rem;'
+                    f'color:{C_TEXT3};">{a["source"]} · {_time_ago(a["published_at"])}'
+                    f'</span></div>'
+                    f'<p class="wsj-news-text" style="margin:0 0 12px;">'
+                    f'{a["summary"]}</p>'
+                    f'<div style="font-family:var(--sans);font-size:0.7rem;'
+                    f'text-transform:uppercase;letter-spacing:0.06em;'
+                    f'color:{C_TEXT3};margin-bottom:2px;">Entities mentioned</div>'
+                    f'<div style="font-family:var(--sans);font-size:0.78rem;'
+                    f'color:{C_TEXT2};margin-bottom:12px;">{ent_str}</div>'
+                    f'<a href="{a["url"]}" style="color:{C_ACCENT};font-size:0.78rem;'
+                    f'font-weight:600;font-family:var(--sans);">'
+                    f'Read full article ↗</a>'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
     except Exception as exc:
         st.warning(f"News feed error: {exc}")
@@ -508,7 +512,7 @@ def _render_entity_tracker(articles: list[dict], entities: list[dict]) -> None:
             if name not in seen:
                 scores   = entity_sentiments[name]
                 avg_sent = sum(scores) / len(scores) if scores else 0.0
-                rows_data.append((name, "\u2014", cnt, avg_sent, "flat"))
+                rows_data.append((name, "—", cnt, avg_sent, "flat"))
 
         rows_data.sort(key=lambda r: r[2], reverse=True)
 
@@ -614,74 +618,84 @@ def _render_geo_map(articles: list[dict]) -> None:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def render(news_items: list[dict] | None = None, insights: Any = None) -> None:
+def render(news_items: list[dict] | None = None, insights: Any = None, *args, **kwargs) -> None:
     """Render the Shipping News Intelligence tab."""
+    # Lazy import keeps perf_telemetry off the tab-load critical path.
+    from engine.perf_telemetry import track_render
+    
+    with track_render('news'):
 
-    try:
-        raw = news_items if news_items else []
-        articles = _normalise(raw)
-        if not articles:
-            articles = _normalise(_MOCK_ARTICLES)
+        try:
+            raw = news_items if news_items else []
+            articles = _normalise(raw)
+            if not articles:
+                articles = _normalise(_MOCK_ARTICLES)
+                using_mock = True
+            else:
+                using_mock = False
+        except Exception:
+            articles   = _normalise(_MOCK_ARTICLES)
             using_mock = True
-        else:
-            using_mock = False
-    except Exception:
-        articles   = _normalise(_MOCK_ARTICLES)
-        using_mock = True
 
-    try:
-        updated = max((a["published_at"] for a in articles), default=_now())
-        page_header(
-            title="Shipping News Intelligence",
-            subtitle="Sentiment, topics, and entity flow across 20+ shipping articles",
-            icon="📰",
-            badge_text="Demo Data" if using_mock else "Live Feed",
-            badge_color=C_MOD if using_mock else C_HIGH,
+        try:
+            updated = max((a["published_at"] for a in articles), default=_now())
+            page_header(
+                title="Shipping News Intelligence",
+                subtitle="Sentiment, topics, and entity flow across 20+ shipping articles",
+                icon="📰",
+                badge_text="Demo Data" if using_mock else "Live Feed",
+                badge_color=C_MOD if using_mock else C_HIGH,
+            )
+            news_source = (
+                DataSource.demo("NewsAPI + Reuters RSS (stub)")
+                if using_mock
+                else DataSource.scraped(
+                    "NewsAPI + Reuters RSS",
+                    notes="Entity feed is a Track B stub — replace with engine.news_sentiment when live",
+                )
+            )
+            st.markdown(
+                live_data_badge(news_source, as_of=updated),
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            st.subheader("Shipping News Intelligence")
+
+        section_header("Sentiment Pulse",
+                       "Tone across the last 24 hours of coverage")
+        _render_sentiment_pulse(articles)
+
+        section_header("Topic Heatmap",
+                       "Nine coverage topics across five days — sentiment and volume")
+        _render_topic_heatmap(articles)
+
+        section_divider("Coverage")
+
+        section_header("Breaking News",
+                       "Five most urgent stories, ranked by importance")
+        _render_breaking_news(articles)
+
+        section_header("Full News Feed",
+                       "Every tracked article — filterable by topic")
+        _render_news_feed(articles)
+
+        section_divider("Entities & Geography")
+
+        section_header("Named Entity Tracker",
+                       "Most-mentioned carriers, ports, regions and commodities")
+        _render_entity_tracker(articles, _MOCK_ENTITIES)
+
+        section_header("Geographic Sentiment Map",
+                       "Regional tone and volume on an ocean-basin view")
+        _render_geo_map(articles)
+
+        # Footer provenance pill
+        footer_source = (
+            DataSource.demo("NewsAPI + Reuters RSS (stub)")
+            if using_mock
+            else DataSource.scraped("NewsAPI + Reuters RSS")
         )
         st.markdown(
-            live_data_badge(
-                source="NewsAPI + Reuters RSS (stub)",
-                as_of=updated,
-                quality="demo" if using_mock else "good",
-                kind="demo" if using_mock else "scraped",
-                notes="Entity feed is a Track B stub — replace with engine.news_sentiment when live",
-            ),
+            source_footer([footer_source]),
             unsafe_allow_html=True,
         )
-    except Exception:
-        st.subheader("Shipping News Intelligence")
-
-    section_header("01 · Sentiment Pulse",
-                   "Tone across the last 24 hours of coverage")
-    _render_sentiment_pulse(articles)
-
-    section_header("02 · Topic Heatmap",
-                   "9 topics × 5 days — sentiment and volume")
-    _render_topic_heatmap(articles)
-
-    section_header("03 · Breaking News",
-                   "Top 5 urgent stories sorted by importance")
-    _render_breaking_news(articles)
-
-    section_header("04 · Full News Feed", "Filterable by topic")
-    _render_news_feed(articles)
-
-    section_header("05 · Named Entity Tracker",
-                   "Most-mentioned carriers, ports, regions, commodities")
-    _render_entity_tracker(articles, _MOCK_ENTITIES)
-
-    section_header("06 · Geographic Sentiment Map",
-                   "Regional tone and volume, ocean-basin view")
-    _render_geo_map(articles)
-
-    try:
-        st.html(
-            f'<div style="text-align:center;color:{C_TEXT3};font-size:11px;'
-            f'font-family:var(--sans);margin-top:32px;padding-top:16px;'
-            f'border-top:1px solid {C_BORDER};">'
-            f'Shipping News Intelligence · {len(articles)} articles indexed · '
-            f'Sentiment scored by NLP pipeline'
-            f'</div>'
-        )
-    except Exception:
-        pass

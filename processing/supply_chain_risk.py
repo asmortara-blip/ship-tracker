@@ -171,9 +171,14 @@ def compute_supply_chain_risk_score(
             continue
         try:
             if isinstance(data, pd.DataFrame):
-                series = data.iloc[:, 0].dropna()
+                # Select the rate column by name; column 0 is `date` and would
+                # make pct_change() raise on a Timedelta (silently caught here,
+                # leaving rate_vol stuck at the default).
+                if "rate_usd_per_feu" not in data.columns:
+                    continue
+                series = pd.to_numeric(data["rate_usd_per_feu"], errors="coerce").dropna()
             else:
-                series = data.dropna()
+                series = pd.to_numeric(data, errors="coerce").dropna()
             if len(series) > 10:
                 daily_vol = float(series.pct_change().dropna().std())
                 # Normalize: daily vol of 5% = score 1.0
