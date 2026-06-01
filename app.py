@@ -865,6 +865,7 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Emerging Routes",  "ui.tab_emerging_routes"),
         ("Vessel Map",       "ui.tab_vessel_map"),
         ("World Graph",      "ui.tab_world_graph"),
+        ("TEU Map",          "ui.tab_teu_map"),
     ],
     "carriers": [
         ("Carriers",         "ui.tab_carriers"),
@@ -1416,11 +1417,11 @@ elif active_section == "disruption_alpha":
 
 # ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
         "Port Demand", "Port Monitor", "Port Supply Lines",
         "Routes", "Rate Analytics",
         "ETA Predictor", "Congestion", "Emerging Routes",
-        "Vessel Map", "World Graph",
+        "Vessel Map", "World Graph", "TEU Map",
     ])
     with t0:
         try:
@@ -1482,6 +1483,12 @@ elif active_section == "ports_routes":
             _r()
         except Exception as e:
             st.error(f"World Graph error: {e}")
+    with t10:
+        try:
+            from ui.tab_teu_map import render as _r
+            _r(wb_data=wb_data)
+        except Exception as e:
+            st.error(f"TEU Map error: {e}")
 
 # ── 5. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":

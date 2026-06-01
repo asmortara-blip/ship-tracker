@@ -92,6 +92,7 @@ _TAB_MODULES = [
     "ui.tab_supply_chain",
     "ui.tab_supply_linkage",
     "ui.tab_sustainability",
+    "ui.tab_teu_map",
     "ui.tab_trade_flows",
     "ui.tab_trade_war",
     "ui.tab_valuation",
