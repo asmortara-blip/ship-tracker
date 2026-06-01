@@ -933,7 +933,16 @@ def _lookup_pinned_meta(module_name: str) -> tuple[str, str, str] | None:
     return None
 
 if "nav_section" not in st.session_state:
-    st.session_state["nav_section"] = "dashboard"
+    # Seed the active section from the URL (?section=) so a shared/bookmarked
+    # link or a browser refresh lands on the right section. Falls back to
+    # dashboard. See ui/url_state.py.
+    try:
+        from ui.url_state import resolve_active_section
+        st.session_state["nav_section"] = resolve_active_section(
+            dict(st.query_params), [s[0] for s in SECTIONS],
+        )
+    except Exception:
+        st.session_state["nav_section"] = "dashboard"
 
 # Inject WSJ section nav CSS
 st.markdown("""<style>
@@ -1105,6 +1114,14 @@ with st.sidebar:
         st.markdown("</div>", unsafe_allow_html=True)
 
 active_section = st.session_state.get("nav_section", "dashboard")
+
+# Keep the URL in sync with the active section so the current view is shareable
+# + survives a refresh / back-button (setting query_params does not rerun).
+try:
+    if st.query_params.get("section") != active_section:
+        st.query_params["section"] = active_section
+except Exception:
+    pass
 
 # WSJ Section breadcrumb
 sec_info = next((s for s in SECTIONS if s[0] == active_section), SECTIONS[0])
