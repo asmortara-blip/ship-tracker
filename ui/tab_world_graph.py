@@ -209,11 +209,14 @@ def _build_network_figure(
                 "opacity": marker_opacity,
             },
             text=labels,
-            customdata=ids,
+            # customdata[0] = node_id (the selection event maps a click back to
+            # its node via this); customdata[1] = true criticality in [0,1] for
+            # the hover (NOT the marker pixel size).
+            customdata=[[nid, c] for nid, c in zip(ids, crit)],
             hovertemplate=(
                 "<b>%{text}</b><br>"
                 f"Type: {ntype}<br>"
-                "Criticality: %{marker.size:.0f}px<br>"
+                "Criticality: %{customdata[1]:.2f}<br>"
                 "<extra></extra>"
             ),
             showlegend=True,

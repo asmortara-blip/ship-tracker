@@ -105,7 +105,13 @@ def _close_series_from_frame(frame) -> pd.Series | None:
     if col is None:
         return None
 
-    values = pd.to_numeric(frame[col], errors="coerce")
+    selected = frame[col]
+    if isinstance(selected, pd.DataFrame):
+        # Duplicate column labels or a MultiIndex level-0 match yield a
+        # DataFrame, not a Series — take the first column so to_numeric is safe
+        # (honours this function's "return None, never raise" contract).
+        selected = selected.iloc[:, 0]
+    values = pd.to_numeric(selected, errors="coerce")
 
     # Prefer the frame's own index for dates; if it is not datetime-like, look
     # for an explicit 'date' column before giving up.
@@ -140,7 +146,11 @@ def _prices_by_ticker(stock_data) -> dict[str, pd.Series]:
         return {}
     out: dict[str, pd.Series] = {}
     for ticker, frame in stock_data.items():
-        series = _close_series_from_frame(frame)
+        try:
+            series = _close_series_from_frame(frame)
+        except Exception:
+            # One malformed frame must never take down the whole tab.
+            series = None
         if series is not None and len(series) >= 2:
             out[str(ticker)] = series
     return out
@@ -181,8 +191,9 @@ def _build_abnormal_bar(aggregate: dict[str, dict]) -> go.Figure:
     if not pairs:
         return _annotated_empty("Mean abnormal return per ticker")
 
-    # Sort descending so the most negative (worst) sits at the BOTTOM of a
-    # horizontal bar chart, which draws the first item lowest.
+    # Sort descending so the most negative (worst) abnormal move sits at the
+    # TOP of the horizontal bar — Plotly draws the first/highest-value item at
+    # the bottom, so the last/worst entry lands at the top (most prominent).
     pairs.sort(key=lambda kv: kv[1], reverse=True)
     tickers = [t for t, _ in pairs]
     vals = [v for _, v in pairs]

@@ -11,7 +11,7 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
-from engine.alpha_engine import generate_all_signals
+from engine.alpha_engine import DISCLAIMER, generate_all_signals
 from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
@@ -423,6 +423,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                 try:
                     df = stock_data.get(ticker) if isinstance(stock_data, dict) else None
                     if df is not None and not df.empty and "close" in df.columns:
+                        price_is_synthetic = False
                         df = df.copy()
                         if "date" in df.columns:
                             df = df.sort_values("date")
@@ -431,6 +432,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                             x_vals = list(range(len(df)))
                         y_vals = df["close"].tolist()
                     else:
+                        price_is_synthetic = True
                         # Generate synthetic price series (legitimate fallback)
                         rng = np.random.default_rng(42 + stable_hash(ticker) % 100)
                         n = 120
@@ -460,11 +462,19 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
 
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(
-                        x=x_vals, y=y_vals, name="Price",
+                        x=x_vals, y=y_vals,
+                        name="Price (synthetic)" if price_is_synthetic else "Price",
                         line=dict(color=C_ACCENT, width=1.8),
                         fill="tozeroy",
                         fillcolor="rgba(53,114,176,0.05)",
                     ))
+                    if price_is_synthetic:
+                        # Never let a synthetic series read as real on the chart.
+                        fig.add_annotation(
+                            text="⚠ Synthetic price series — no live data for this ticker (illustrative)",
+                            xref="paper", yref="paper", x=0.5, y=1.0,
+                            showarrow=False, font=dict(color="#f59e0b", size=10),
+                        )
                     if long_x:
                         fig.add_trace(go.Scatter(
                             x=long_x, y=long_y, name="LONG Signal",
@@ -616,7 +626,11 @@ def render(
                                 "conviction": getattr(s, "conviction", "LOW"),
                                 "strength":  float(getattr(s, "strength", 0.5)),
                                 "sig_type":  getattr(s, "signal_type", "Momentum").replace("_", " ").title(),
-                                "basis":     getattr(s, "rationale", "—")[:60],
+                                # Strip the appended not-advice DISCLAIMER before
+                                # truncating, else the 60-char clip just shows a
+                                # half-cut disclaimer (the page banner carries the
+                                # caveat). Show the actual reasoning here.
+                                "basis":     ((getattr(s, "rationale", "—") or "—").replace(DISCLAIMER, "").strip() or "—")[:60],
                                 "entry":     float(getattr(s, "entry_price", 0.0)),
                                 "stop":      float(getattr(s, "stop_loss", 0.0)),
                                 "target":    float(getattr(s, "target_price", 0.0)),

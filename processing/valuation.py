@@ -277,19 +277,20 @@ def dcf_valuation(inputs: ValuationInputs, *, horizon: int = 5) -> ValuationResu
     terminal_growth_clamped = False
     g_eff = g_term
     spread = r - g_term
-    if spread <= 0.0:
-        # r <= g_term: the perpetuity diverges / inverts. Clamp g_term to sit a
-        # fixed margin below r so the closed form is finite and positive, and
-        # flag it loudly rather than silently emitting a garbage (negative or
-        # exploding) terminal value.
+    if spread < _MIN_DISCOUNT_TERMINAL_SPREAD:
+        # r - g_term sits below the floor (or r <= g_term outright): the Gordon
+        # perpetuity either diverges/inverts OR blows up to a near-singular but
+        # FINITE value — which slips past the isfinite guard and wrecks the
+        # documented monotonicity (a discount rate landing just above terminal
+        # growth produced per-share ~1e18). Clamp g_term to exactly the floor
+        # below r so the closed form stays finite AND bounded, and flag it.
         g_eff = r - _MIN_DISCOUNT_TERMINAL_SPREAD
         terminal_growth_clamped = True
         notes.append(
-            "Terminal growth (" + format(g_term, ".4f") + ") >= discount rate ("
-            + format(r, ".4f") + "); clamped terminal growth to "
-            + format(g_eff, ".4f") + " (discount rate − "
-            + format(_MIN_DISCOUNT_TERMINAL_SPREAD, ".4f") + ") to keep the "
-            "Gordon terminal value finite and positive."
+            "Discount rate − terminal growth (" + format(spread, ".4f")
+            + ") below the " + format(_MIN_DISCOUNT_TERMINAL_SPREAD, ".4f")
+            + " floor; clamped terminal growth to " + format(g_eff, ".4f")
+            + " to keep the Gordon terminal value finite and bounded."
         )
 
     spread_eff = r - g_eff
@@ -383,6 +384,7 @@ def scenario_valuation(
     base_inputs: ValuationInputs,
     *,
     scenarios: dict,
+    horizon: int = 5,
 ) -> dict:
     """Run a DCF per named scenario → ``{name: ValuationResult}``.
 
@@ -411,20 +413,12 @@ def scenario_valuation(
     out: dict[str, ValuationResult] = {}
     for name, overrides in scenarios.items():
         scen_inputs = _apply_overrides(base_inputs, overrides if isinstance(overrides, dict) else {})
-        result = dcf_valuation(scen_inputs, horizon=_horizon_from_overrides(overrides))
+        # Uniform horizon across scenarios: horizon is a modeling choice, not a
+        # per-scenario economic, so varying it would break worst<=base<=best.
+        result = dcf_valuation(scen_inputs, horizon=horizon)
         result.notes = list(result.notes) + [f"Scenario: {name}."]
         out[str(name)] = result
     return out
-
-
-def _horizon_from_overrides(overrides) -> int:
-    """Extract an explicit ``horizon`` from a scenario override dict (default 5)."""
-    if isinstance(overrides, dict) and "horizon" in overrides:
-        try:
-            return max(1, int(overrides["horizon"]))
-        except (TypeError, ValueError):
-            return 5
-    return 5
 
 
 # ---------------------------------------------------------------------------
@@ -551,12 +545,14 @@ def monte_carlo_valuation(
         for name, col in sampled.items():
             overrides[name] = float(col[i])
 
-        # Degenerate-draw guard: a sampled discount_rate at/below the terminal
-        # growth is non-economic. Skip it rather than letting the DCF clamp pull
-        # it back into the distribution and bias the percentiles.
+        # Degenerate-draw guard: a sampled discount_rate within the terminal-
+        # spread floor of (or below) the terminal growth is non-economic — the
+        # Gordon term gets clamped to the floor, pulling a giant (bounded) value
+        # into the distribution and biasing mean/max. Skip it (and count it),
+        # mirroring the DCF clamp threshold, rather than letting it through.
         draw_r = overrides.get("discount_rate", _finite(base_inputs.discount_rate, 0.0))
         draw_g = overrides.get("terminal_growth", base_term_growth)
-        if draw_r <= draw_g:
+        if draw_r - draw_g < _MIN_DISCOUNT_TERMINAL_SPREAD:
             skipped += 1
             continue
 

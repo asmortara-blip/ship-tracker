@@ -436,3 +436,75 @@ def test_illustrative_inputs_are_all_assumed() -> None:
     inp = illustrative_inputs(fcf_0=900.0)
     assert inp.fcf_0 == 900.0
     assert all(v == "assumed" for v in inp.input_provenance.values())
+
+
+# ─── Regression: terminal-spread clamp + MC guard + uniform scenario horizon ──
+# Bug-hunt 2026-06-01: the Gordon clamp fired only on spread <= 0, so a discount
+# rate just above terminal growth (0 < r-g < floor) produced a near-singular but
+# FINITE per-share (~1e18) that broke monotonicity; the MC degenerate-draw guard
+# had the same threshold gap; and a per-scenario `horizon` override silently
+# broke the worst<=base<=best ordering.
+
+def test_dcf_spread_just_below_floor_is_clamped_not_singular() -> None:
+    """0 < r - g_term < floor must be clamped to a bounded value (was a
+    near-singular finite explosion that slipped past the isfinite guard)."""
+    near = ValuationInputs(fcf_0=600.0, fcf_growth=0.03, discount_rate=0.0245,
+                           terminal_growth=0.02, shares_outstanding=120.0, net_debt=0.0)
+    res = dcf_valuation(near)              # spread = 0.0045 < 0.005 floor
+    assert math.isfinite(res.per_share_value)
+    assert res.per_share_value < 1e5, "clamp must keep the value bounded"
+    at_floor = ValuationInputs(fcf_0=600.0, fcf_growth=0.03, discount_rate=0.025,
+                               terminal_growth=0.02, shares_outstanding=120.0, net_debt=0.0)
+    # The just-below-floor case clamps to ~the exact-floor case, not millions.
+    assert res.per_share_value == pytest.approx(dcf_valuation(at_floor).per_share_value, rel=0.5)
+    assert any("floor" in n.lower() for n in res.notes)
+
+
+def test_disruption_adjusted_dcf_monotone_non_increasing_in_severity() -> None:
+    """Higher severity must never raise per-share value (fuzzed across bases)."""
+    rng = np.random.default_rng(7)
+    for _ in range(400):
+        base = ValuationInputs(
+            fcf_0=float(rng.uniform(50, 2000)),
+            fcf_growth=float(rng.uniform(-0.05, 0.10)),
+            discount_rate=float(rng.uniform(0.04, 0.15)),
+            terminal_growth=float(rng.uniform(0.0, 0.10)),
+            shares_outstanding=float(rng.uniform(20, 300)),
+            net_debt=float(rng.uniform(-500, 2000)),
+        )
+        prev = None
+        for sev in np.linspace(0.0, 1.0, 21):
+            ps = dcf_valuation(disruption_adjusted_inputs(base, float(sev))).per_share_value
+            assert math.isfinite(ps) and abs(ps) < 1e7
+            if prev is not None:
+                assert ps <= prev + 1e-6, f"non-monotone at severity {sev}"
+            prev = ps
+
+
+def test_monte_carlo_skips_near_singular_draws_and_bounds_tail() -> None:
+    """Draws within the spread floor of g_term are skipped (counted), so the
+    tail is bounded rather than inflated by clamped giants."""
+    base = ValuationInputs(fcf_0=600.0, fcf_growth=0.03, discount_rate=0.07,
+                           terminal_growth=0.04, shares_outstanding=120.0, net_debt=0.0)
+    mc = monte_carlo_valuation(
+        base, distributions={"discount_rate": ("uniform", (0.0405, 0.10))},
+        n=20000, seed=0,
+    )
+    assert mc["skipped"] > 0, "near-singular draws should be skipped + counted"
+    assert mc["max"] <= 15.0 * max(mc["median"], 1e-9), "tail must be bounded"
+    assert math.isfinite(mc["mean"]) and math.isfinite(mc["max"])
+
+
+def test_scenario_per_scenario_horizon_does_not_break_ordering() -> None:
+    """A stray per-scenario 'horizon' override must be ignored (uniform horizon),
+    preserving worst <= base <= best."""
+    base = _base()
+    scen = scenario_valuation(base, scenarios={
+        "worst": {"fcf_growth": 0.01, "horizon": 1},
+        "base": {"fcf_growth": 0.06},
+        "best": {"fcf_growth": 0.12, "horizon": 1},
+    })
+    worst = scen["worst"].per_share_value
+    mid = scen["base"].per_share_value
+    best = scen["best"].per_share_value
+    assert worst <= mid <= best, f"ordering broke: {worst} / {mid} / {best}"

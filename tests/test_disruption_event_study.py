@@ -359,3 +359,18 @@ def test_real_event_dates_feed_into_event_study():
     # Flat series → zero abnormal return, but the ticker is processed (not skipped).
     assert "ZIM" in res
     assert res["ZIM"].abnormal_return == pytest.approx(0.0, abs=1e-12)
+
+
+def test_abnormal_return_uses_geometric_baseline_no_phantom_on_volatile_flat() -> None:
+    """Bug-hunt 2026-06-01: a volatile-but-net-flat pre-window followed by a flat
+    post-window must yield ~0 abnormal return — an arithmetic-mean baseline
+    carried a Jensen's-gap that manufactured a phantom negative (~-9.5%)."""
+    pre = [100.0]
+    for k in range(20):                       # alternating +10% / -10% → net ~flat
+        pre.append(pre[-1] * (1.10 if k % 2 == 0 else 1.0 / 1.10))
+    prices = pre + [pre[-1]] * 20             # dead-flat post-window
+    dates = pd.bdate_range("2021-01-01", periods=len(prices))
+    ser = pd.Series(prices, index=dates)
+    event_ts = dates[len(pre) - 1]            # anchor at the end of the pre-window
+    res = event_study({"X": ser}, event_ts, pre=20, post=20)["X"]
+    assert abs(res.abnormal_return) < 0.01, f"phantom abnormal return: {res.abnormal_return}"

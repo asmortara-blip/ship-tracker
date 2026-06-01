@@ -334,12 +334,21 @@ def event_study(
         end_close = float(values[-1])
         cum_return_window = end_close / event_close - 1.0
 
-        # --- pre-event baseline mean daily return --------------------------
+        # --- pre-event baseline GEOMETRIC mean daily return ----------------
+        # Geometric (log) mean, NOT arithmetic: `abnormal_return` below
+        # compounds this over the post window and subtracts it from the
+        # GEOMETRIC `cum_return_window`, so both must be on the same footing.
+        # An arithmetic mean carries a positive Jensen gap on a volatile-but-
+        # net-flat pre-window, which would manufacture a phantom (negative)
+        # abnormal return where nothing abnormal actually happened.
         pre_prices = values[: anchor_in_window + 1]  # include the anchor close
         if pre_prices.size >= 2:
             pre_rets = pre_prices[1:] / pre_prices[:-1] - 1.0
-            pre_rets = pre_rets[np.isfinite(pre_rets)]
-            baseline_mean = float(np.mean(pre_rets)) if pre_rets.size else float("nan")
+            pre_rets = pre_rets[np.isfinite(pre_rets) & (pre_rets > -1.0)]
+            baseline_mean = (
+                float(np.expm1(np.mean(np.log1p(pre_rets))))
+                if pre_rets.size else float("nan")
+            )
         else:
             baseline_mean = float("nan")
 
