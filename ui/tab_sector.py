@@ -332,6 +332,7 @@ def _render_trade_flows(trade_data: dict, port_results: list,
     active.sort(key=lambda x: x[1].get("total_trade", 0), reverse=True)
 
     if not active:
+        st.caption("No regional trade-flow data available for the tracked ports.")
         return
 
     rows = []
@@ -404,6 +405,25 @@ def render(stock_data=None, freight_data=None, trade_data=None,
         except Exception:
             logger.exception("compute_sector_performance failed")
             st.error("Sector performance computation failed.")
+            return
+
+        # Empty-state guard: with no sectors there is nothing to rank, profile
+        # or chart — render the header alone with a graceful notice rather than
+        # an empty KPI strip and a blank table.
+        if not sectors:
+            page_header(
+                title="Shipping Sector Dashboard",
+                subtitle=(
+                    "Comparative performance across container, dry bulk, "
+                    "tanker, and LNG segments."
+                ),
+                badge_text="SECTOR",
+                badge_color=C_ACCENT,
+            )
+            st.info(
+                "No sector performance data available — the sector composite "
+                "could not be built from the current equity and freight inputs."
+            )
             return
 
         # Provenance: equity prices are live/scraped via yfinance; freight indices

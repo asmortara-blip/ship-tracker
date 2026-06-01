@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from data.quality import DataSource
 # Single source of truth for palette, typography, and component helpers.
 # Never redeclare color constants in a tab module — always import them.
 from ui.styles import (
@@ -27,7 +28,20 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_header,
+    source_footer,
     wsj_market_table,
+)
+
+
+# Provenance for the footer. Rate regime / percentile / spread signals are a
+# MODELED derivation computed on top of the freight-rate series (themselves
+# scraped-or-synthetic), so the analytics layer is itself MODELED.
+_RATE_SOURCE = DataSource.modeled(
+    "Freight Rate Analytics",
+    notes=(
+        "Rate-regime, percentile and spread signals derived from freight-rate "
+        "series via processing.rate_analytics."
+    ),
 )
 
 
@@ -148,6 +162,8 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
         page_header(
             title="Freight Rate Analytics",
             subtitle="Rate regime detection, percentile ranking, and market spread analysis",
+            badge_text="MODELED",
+            badge_color=C_ACCENT,
         )
 
         # ── 2. Market regime KPI strip ──────────────────────────────────────────
@@ -214,6 +230,12 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
                 ],
                 rows=rows,
             )
+        else:
+            section_header("Route-Level Rate Regimes")
+            st.info(
+                "Not enough route history to compute per-route regimes yet — "
+                "regime detection needs a rolling window of rate observations."
+            )
 
         # ── 4. Rate spreads ─────────────────────────────────────────────────────
         spreads = compute_rate_spreads(freight_data) or []
@@ -242,3 +264,15 @@ def render(freight_data=None, route_results=None, **kwargs) -> None:
                 headers=["Route Pair", "Spread", "Mean", "Z-Score", "Correlation", "Signal"],
                 rows=rows,
             )
+        else:
+            section_header(
+                "Rate Spread Analysis",
+                subtitle="Most dislocated route pairs by z-score",
+            )
+            st.info(
+                "Need at least two routes with overlapping history to compute "
+                "spread dislocations."
+            )
+
+        # ── 5. Source footer ────────────────────────────────────────────────────
+        st.markdown(source_footer([_RATE_SOURCE]), unsafe_allow_html=True)
