@@ -197,6 +197,34 @@ PagerDuty integration keys). The vault key is read from env;
 bulk encrypt/decrypt + 2-secret rotation window are exposed via
 the in-app *Vault* panel and `tools.ops vault` CLI.
 
+### Security hardening
+
+Hardened via a 2026-05 security review (all stdlib, no new deps):
+
+- **Login brute-force throttle** — `auth.users.login` checks a per-username
+  in-process token bucket (burst 10, ~1 attempt / 5s sustained) and returns
+  the same `None` shape as a bad password (no enumeration signal). A
+  successful login resets the bucket, so only *consecutive* failures count.
+- **API-token throttle + expiry** — `worker.api_server` checks a per-IP
+  bucket BEFORE verifying the token (a flood is rejected without paying the
+  KDF), and tokens carry an `expires_at` (TTL via `--expires-in-days` / env /
+  90d default; `<= 0` = non-expiring; schema v27).
+- **TOTP replay protection** — a verified code's step is recorded
+  (`users.mfa_last_used_step`, schema v28) via an atomic conditional UPDATE,
+  so the same code can't be replayed within its validity window.
+- **MFA completeness** — recovery codes are accepted at login (single-use);
+  enabling MFA requires proof-of-possession of a current code.
+- **Enumeration resistance** — an unknown username runs a dummy KDF so its
+  response time matches a real bad-password attempt; all failure paths return
+  an identical `None`.
+- **Failed-login auditing** — a failed credential attempt records a
+  `login_failed` audit event (`auth.audit.record_login_failure`) carrying a
+  *hashed* attempted username (no raw value / no PII), so brute-force shows up
+  in the audit log without revealing which usernames exist.
+- **Case-collision-resistant signup** — a new username is rejected if it
+  collides case-insensitively with an existing one (`COLLATE NOCASE`), so
+  "Admin" cannot shadow "admin". (Login lookup itself remains case-sensitive.)
+
 ---
 
 ## Files

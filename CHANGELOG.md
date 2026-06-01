@@ -1,13 +1,281 @@
 # Changelog
 
-_Generated 2026-05-25 from the git log — covers 323 commits. Conventional-commit prefixes (`feat:`, `fix:`, `ui:`, `engine:`, …) bucket entries into categories._
+_Generated 2026-06-01 from the git log — covers 456 commits. Conventional-commit prefixes (`feat:`, `fix:`, `ui:`, `engine:`, …) bucket entries into categories._
 
 **DO NOT EDIT MANUALLY** — regenerate with `python -m tools.changelog_cli`.
 
-## 2026-05-25
+## 2026-05-31
+
+### ✨ Features
+
+- **feat** audit failed login attempts (auth #9) (`6cd7207`)
+  - Successful logins/signups were already audited; failed credential attempts were not, so a security review couldn't see brute-force / credential-stuffing. Adds auth.audit.record_login_failure, called from the login form's invalid-credenti...
+
+### 🐛 Fixes
+
+- **fix** investor CSV concentration_hhi matches the alert's full-footprint HHI (`3287184`)
+  - port_supply_csv recomputed the per-ticker concentration_hhi column locally over the top-N-CAPPED port_exposures, so after the #8 fix (which computes HHI over the FULL footprint and stores it on CompanyPortFootprint) the CSV column disagr...
+- **fix** bind tab_alpha's stock_data by keyword so the engine path actually runs (`73f5d07`)
+  - An adversarial self-review of this session's diff caught that the earlier Alpha-tab fix (b4da425) was a no-op. The only production caller — app.py — dispatched tab_alpha.render POSITIONALLY: _r(route_results, port_results, freight_data,...
+- **fix** reject case-insensitively-colliding usernames at signup (auth #13, safe half) (`0dd469b`)
+  - signup's duplicate pre-check was case-sensitive, so "Admin" could be registered alongside an existing "admin" — a forward impersonation/confusion vector. The pre-check is now `WHERE username = ? COLLATE NOCASE` (the username charset is A...
+- **fix** capacity-demand persistence_rate divides by the window, not nonzero days (#4) (`8df3b33`)
+  - persistence_rate divided the same-sign day count by the number of NONZERO days, but the module/function docstrings + the field comment (and a "7 of 10 days" example) all describe it as a fraction of the WINDOW. For a window with balanced...
+- **fix** CARGO_FLOW_ANOMALY now alerts on the per-category-jump signal (#5) (`ce531d0`)
+  - check_cargo_flow_anomaly_alerts gated solely on report.jsd < jsd_alert_threshold, so a route flagged anomalous purely via a single-category jump (surge/collapse past jump_threshold_pp) with calm overall JSD fired NO alert — half of what...
+- **fix** SSI component breakdown now reconciles to the headline SSI (#8) (`bbfdc15`)
+  - component_scores was a SIMPLE per-route average while overall_ssi prominence- weights stress_score, so the per-component breakdown (and ssi_attribution's pct_share) didn't decompose the displayed SSI. component_totals now accumulates eac...
+- **fix** perf budgets reported/compared the median while calling it the "mean" (`0f2f88c`)
+  - get_perf_summary emitted only count/median_ms/p95_ms/error_count — no mean — but perf_budgets.check_budgets read median_ms into observed_mean_s. So every PERF_BUDGET alert body rendered "mean Xs" that was actually the median, and the max...
+- **fix** investor report signal-type breakdown used a phantom MACRO_OVERLAY key (`fbaaf09`)
+  - signal_count_by_type was seeded (and the always-present loop + the 3 mock signals used) the key "MACRO_OVERLAY", but the alpha engine emits signal_type="MACRO" (its canonical _SIGNAL_TYPES). So a real macro signal incremented a NEW "MACR...
+- **fix** 2 news-sentiment bugs — region substring false-positives + dedup keep-policy (`711aa4c`)
+  - - _extract_regions matched region keywords by bare substring, so the two-letter tokens "us"/"eu" hit inside Russia, August, customs, surplus, status, Europe, neutral, Reuters, … — mistagging nearly every article's region and corrupting r...
+- **fix** SSI congestion dict-path honored a real 0.0 reading as "unknown" (`b7df49e`)
+  - _route_congestion_stress's dict branch coalesced the congestion reading with an `or`-chain, so a destination port legitimately reporting 0.0 (the calmest, genuinely-uncongested case) was treated as missing and fell through to the neutral...
+- **fix** Alpha tab's engine-signal path was permanently dead (generate_all_signals arity) (`b4da425`)
+  - ui/tab_alpha.py called generate_all_signals(stock_data) with a SINGLE arg, but the function required 5 positional args (stock/freight/macro/port/route) with no defaults — so every call raised TypeError, which the tab's debug-level try/ex...
+- **fix** GC the cargo-mix + company-risk snapshot trees (were unbounded) (`78e7cae`)
+  - Two daily snapshot trees added in the analytics series — cache/cargo_mix_history and cache/company_risk_history — had a save job wired into the scheduler but NO garbage-collection job, unlike the sibling port_supply_snapshots tree (which...
+- **fix** harden /spillover-graph min_lift + backtests baseline IO (`0cea346`)
+  - - api_server /spillover-graph: min_lift=nan/inf parsed as floats and slid past the `< 0` guard, then serialized to the invalid-JSON tokens NaN/Infinity AND defeated the lift filter (lift < nan always False → every edge survives; lift < i...
+- **fix** 2 analytics metrics now reconcile to their contract (spillover support, concentration HHI) (`62c53c6`)
+  - The analytics-feature bug-hunt (the 8 new modules + wire-ups) surfaced two metrics that violated their own documented contract:
+
+### ✅ Tests
+
+- **test** cover the COMPANY_CONCENTRATION alert wiring (was zero-coverage) (`c912e88`)
+  - check_company_concentration_alerts had no test (the analytics hunt flagged this gap — the analytic underneath is well-tested, but the alert-engine wiring was not). Adds two: a high full-footprint HHI fires a CRITICAL COMPANY_CONCENTRATIO...
+
+### 📦 Other
+
+- **cleanup** drop the degenerate forecast sign_agreement metric (#9) (`5bcd45b`)
+  - forecast_accuracy_tracker.summarize_accuracy computed sign_agreement as (predicted > 0) == (actual > 0), but the forecasts it scores are stress LEVELS in [0, 1] (always non-negative), so it trivially "agreed" ~100% of the time — a mislea...
+
+## 2026-05-30
+
+### 🐛 Fixes
+
+- **fix** dead BDI MACRO_SHIFT alert + unbounded flap-crossing list (`cd9faca`)
+  - - alert_engine: the macro-shift rule looked up the Baltic Dry Index under BDIY/BDI/bdi, but the cache stores it under the FRED series id BSXRLM — the key chain never hit, so the BDI macro-shift alert could never fire. Try BSXRLM first; k...
+- **fix** 3 UI bugs from the ui-hunt — dead Contagion section, report history, stray None (`46e11f4`)
+  - - tab_port_supply_lines: _render_spillover_graph used alert_banner without importing it (NameError) and called wsj_market_table with a positional DataFrame instead of (headers, rows) (TypeError) — every branch raised, so the Contagion /...
+- **fix** HTML-escape caller-controlled text at 3 unsafe_allow_html sinks (`7f56126`)
+  - The ui/+utils bug-hunt surfaced three XSS sinks where caller-controlled text reached st.markdown(..., unsafe_allow_html=True) raw:
+- **fix** thread-local DB connections (#2, CRITICAL) + atomic fire_count (#6 remainder) (`b4c68c4`)
+  - #2 — state/db.py shared ONE sqlite3.Connection across every caller (check_same_thread=False), but sqlite3.threadsafety==1 forbids sharing a Connection across threads, and Streamlit runs each session in its own ScriptRunner thread — undef...
+- **fix** per-job cadence gates so the worker is safe to run frequently (#4) (`4fea40d`)
+  - main() ran the full job list on every invocation, so the documented daily cron left the SLA-critical jobs late: an unacked CRITICAL escalated, and a transient delivery failure retried, up to ~24h after the fact (their docstrings promise...
+- **fix** retry-queue atomic claim (#7) + atomic kv_state counters (#6) (`010a878`)
+  - Two concurrency fixes from the subsystem bug-hunt, both via patterns already proven elsewhere in the codebase:
+- **fix** 5 confirmed bug-hunt findings (telemetry, webhook DoS, observability, path leak, doc) (`8176139`)
+  - From the same adversarial subsystem bug-hunt as the prior commit:
+- **fix** scope save_alerts trim per-user + spare unacknowledged rows (CRITICAL data-loss) (`46f9890`)
+  - save_alerts ended every call with a GLOBAL, unscoped trim to _MAX_STORED (500) rows with no acknowledged guard — so in a multi-user deployment one user's burst of >500 alerts silently evicted ANOTHER user's oldest rows, including unackno...
+
+### 📚 Docs
+
+- **docs** correct the SSI-attribution "sums to ssi_total" claim (#8, partial) (`5236514`)
+  - processing/ssi_attribution.py's module + attribute_ssi docstrings claimed the component contributions "Sum to ssi_total" / "reconcile to the fleet-wide score". They don't: pct_share is normalized against the component-weighted blend (Σ w...
+
+### ✅ Tests
+
+- **test** update scheduler source-introspection tests for the #4 cadence-gate refactor (`70c34e1`)
+  - The #4 commit (4fea40d) routed main()'s per-job try/except blocks through the shared _run_gated / _run_always helpers, so the literal call sites ("run_X_job()") and inline log strings ("X step failed") no longer appear in inspect.getsour...
+
+### 📦 Other
+
+- **security** scope webhook /ack + /ack-all + pagerduty acks to the resolved user (#9) (`733b7a9`)
+  - The webhook ack surfaces called acknowledge_alert(id) / acknowledge_all() with NO user_id. Out-of-process the engine resolves user_id via the (absent) Streamlit session → '' → scope_filter_sql('') applies NO restriction. So a single hold...
+- **security** enable-MFA proof-of-possession (#7) (`2256366`)
+  - enable_mfa flipped mfa_enabled without verifying the user could actually produce a code, so a mis-scanned secret would lock the account out on the next (now-mandatory) login.
+
+## 2026-05-29
+
+### 🐛 Fixes
+
+- **fix** auth — verify_totp fail-closed on empty secret, recovery-code single-use rowcount (`e102778`)
+  - Two confirmed security bugs from the auth/ bug-hunt (the clean ones; the rest are surfaced for prioritization).
+- **fix** make the auto-disable breaker channel-level (fixes UI counter-scope mismatch) (`b9f73aa`)
+  - The consecutive-failure counter + auto-disabled flag were keyed by (alert-owner user_id, channel_id): the delivery path writes under the ALERT owner (often '' for scheduler alerts) while the UI reads/resets under the logged-in operator —...
+- **fix** alert_delivery correctness — no-retry-on-4xx, atomic counters, threshold normalize (`f0cbd82`)
+  - Three correctness fixes from the bug-hunt (the clean ones; digest gating + UI counter-scope deferred as they need behavior/design decisions).
+- **fix** reject SSRF channel targets at the POST /channels API (save-time guard) (`bb35690`)
+  - The authed POST /api/v1/channels endpoint persisted any target with no validation (the bug-hunt's flagged save-time gap). It now runs validate_target_url(target, resolve=False) for webhook/slack/discord kinds and returns 400 (not 500) on...
+- **fix** SSRF guard on webhook/slack delivery targets (block + allowlist) (`40fa072`)
+  - Operator-supplied webhook/slack channel.target is a URL the server POSTs to with no host validation — an authed user could point it at cloud metadata (169.254.169.254), localhost, or RFC1918 and read the internal response via the capture...
+- **fix** alert_delivery security — redact secret URLs, scoped auto-disable, escape email HTML (`106aa50`)
+  - Three confirmed security fixes from the alert_delivery bug-hunt (clear low-risk ones; SSRF deferred pending an allowlist design).
+- **fix** investor-report Generate button (pre-existing TypeError) (`26deb55`)
+  - ui/tab_report.py's 'Generate Investor Report' button passed scope/tone/sections kwargs that build_investor_report has never accepted, so every click raised TypeError against the real engine and surfaced as 'Generation Failed' — the manua...
+- **fix** register 'company' rule-template category (pre-existing test failure) (`ac06ecc`)
+  - Commit c07055c added a 'company-port-concentration' rule template (category='company', metric port_footprint_hhi) for the COMPANY_CONCENTRATION feature but never added 'company' to ALLOWED_CATEGORIES. Two test_rule_templates tests assert...
+- **fix** ops_cli flake — CLI-arg IDs could start with '-' (argparse exit 2) (`b764cb5`)
+  - Root cause: secrets.token_urlsafe draws from [A-Za-z0-9_-], so ~1 in 64 ids start with '-'. user_id and token_id are passed to the operator CLI as arguments (ops_cli ... --user-id <id>, ops_cli tokens revoke <token_id>); argparse reads a...
+
+### 🛠 Tools
+
+- **tools** briefing_tldr_cli — print the day's TLDR to stdout (`f2c2378`)
+  - The design's noted follow-on, now unblocked: the scheduler primes the day-cached narration, so a CLI can read it headlessly and distill the TLDR (a cache hit — no extra Claude call) for ad-hoc piping to SMS/Slack/email. Follows the forec...
+
+### ✅ Tests
+
+- **test** make test_rate_limit_allows_after_refill_interval latency-independent (`1ad5d09`)
+  - The drain phase used a 5 tokens/sec refill against real HTTP requests; under a loaded test runner the per-request latency (~170-350ms of server-side work on /alerts) refilled ~1 token per call, so the bucket never emptied and the test fa...
+
+### 📦 Other
+
+- **security** TOTP replay protection (#5) — login codes are single-use (`edd0d25`)
+  - A TOTP code was valid for its whole ±window (~90s at window=1), so a captured login code could be replayed until it aged out. Track the highest TOTP step an account has authenticated with and reject any reuse:
+- **security** accept recovery codes at login (#6) — close the lost-authenticator lockout (`bffbe58`)
+  - auth.mfa had a complete, tested recovery-code system (generate / verify-and- consume, single-use, constant-time) but auth.users.login only ever tried verify_totp — so recovery codes were mintable yet UNREACHABLE from the actual login flo...
+- **security** API-token expiry/TTL (#12) — leaked PATs no longer valid forever (`ba51c1e`)
+  - verify_token checked no expiry, so a leaked Personal Access Token stayed valid until explicitly revoked. Add an optional expiry across the stack:
+- **security** claim signup invite atomically BEFORE creating the user (#10) (`d2f5ee4`)
+  - auth.users.signup consumed the invite AFTER inserting the user row, with a consume failure merely logged. Two concurrent signups on the same single- use token (different usernames) BOTH pass the read-only validation, BOTH INSERT, and onl...
+- **security** brute-force throttles — login (per-username) + API-token (per-IP, pre-verify) (`59dc2ce`)
+  - Resolves the brute-force theme from the auth/ bug-hunt (findings #1, #2; #3 already handled). "Lenient" posture — generous bursts, fail-open.
+- **harden** auth — enumeration-resistant login, constant-time calendar token, bounded HMAC buckets (`5643a46`)
+  - The 3 low-risk, no-policy-decision findings from the auth/ bug-hunt.
+- **harden** report-lede telemetry source + a11y (lede-review follow-ups) (`f079f52`)
+  - Adversarial review of the investor-report lede surfaced three real items:
+- **wire-up** TLDR lede in the delivered investor report (HTML + markdown) (`b2670d0`)
+  - Extends the TLDR to the daily investor report the scheduler actually delivers. AIAnalysis gains a 'tldr' field, set post-build by _build_report_tldr: an adapter maps the report's AIAnalysis (executive_summary -> body, top_recommendations...
+- **wire-up** dispatch daily-briefing TLDR to opt-in channels (`0bec260`)
+  - Completes the delivery loop. delivery.briefing_tldr.send_briefing_tldr dispatches the day's TLDR to one DeliveryChannel, mirroring engine.operator_digest.send_operator_digest — it reuses the engine.alert_delivery transports (so timeout /...
+- **wire-up** daily-briefing TLDR delivery via the scheduler (`1acd5a4`)
+  - Realizes the TLDR module's stated delivery purpose (SMS/email/Slack) on the surface a design pass found cleanest: the once-per-day scheduler tick. It has a native DailyNarration type-fit (no adapter, unlike the investor-report path), is...
+- **harden** TLDR + opaque_id robustness (adversarial-review follow-ups) (`f97b7a0`)
+  - Four latent issues found by an adversarial review of the prior two commits (none live in production today; all now fixed + tested):
+- **wire-up** daily-briefing TLDR lede + telemetry fix (`448e8b7`)
+  - New engine/daily_briefing_tldr.py distills a DailyNarration into a 2-3 sentence plain-prose lede (Claude Haiku, template fallback). Wired into the Daily Briefing tab above the headline via a new ui.styles.tldr_lede helper (role=note, wit...
+
+## 2026-05-26
+
+### ✨ Features
+
+- **feat+port-supply** daily snapshot persistence + worker job (`95989c7`)
+  - Closes the 'snapshots happen automatically' gap. The diff CLI shipped in 5f0dc4e lets an operator compare two on-disk snapshots; this layer captures + stores them on a daily cron so the operator wakes up to 'here's what changed overnight...
+- **feat+port-supply** Excel .xlsx workbook export (6 sheets in one file) (`dc462fd`)
+  - Where the 5 CSVs are great for scripting, analysts often prefer a single workbook they can pivot across — this ships exactly that.
 
 ### 🎨 UI
 
+- **ui+port-supply** per-port + regional deficit trend charts (`d2fc7d3`)
+  - processing/port_supply_trend.py walks the snapshot history and returns per-port + per-region trend series. ui/plots/port_supply_trends.py builds the plotly figures with severity-band shading. tab wires both into a new historical-trends s...
+
+### 🔌 API
+
+- **api** GET /api/v1/ports/supply-lines.xlsx — Excel workbook over HTTP (`26c5390`)
+  - Completes the three-reach-path surface for the port supply lines exports:
+
+### 🔧 Ops
+
+- **worker+telemetry** query wrapper + contract tests for the run-log (`d80c54f`)
+  - processing/worker_run_query.py exposes a clean read API (query_runs, aggregate_job_stats) for consumers of the @_track_run output. Spec tests in test_worker_run_log_contract document the contract so silent breaks are caught.
+- **scheduler** wire run_port_supply_snapshot_job into main() (`7905cf2`)
+  - Daily worker tick now persists today's port-supply snapshot under cache/port_supply_snapshots/<date>/ and logs the diff vs the prior snapshot inline (severity_shifts / entered_deficit / exited_deficit / deficit_moves) — operators see ove...
+
+### 🛠 Tools
+
+- **tools+docs** cli_index — auto-generated CLI registry + markdown index (`7e8d5ae`)
+  - Walks tools/ + cli/ + processing/ for callable __main__ entries; introspects argparse via _build_parser conventions, module attrs, and AST fallback for parsers built inside main(). Emits: - docs/CLI_INDEX.md (human reference) - docs/cli_...
+- **tools+port-supply** bulk-diff CLI — aggregate snapshot deltas over a window (`6783080`)
+  - Walks N consecutive days of snapshots + ranks ports by: - n_days_in_deficit - cumulative_deficit_day_delta - n_severity_shifts - n_entered_deficit / n_exited_deficit - worst_single_day_delta
+- **tools+port-supply** snapshot diff — track trends between two summary CSVs (`5f0dc4e`)
+  - Closes the original 'track trends between the ports' ask from the user's initial spec. Without a full historical-persistence layer in the database, a diff CLI that compares two on-disk snapshots delivers the operationally-important patte...
+- **tools+port-supply** CLI bulk-exporter for the five CSV views (`3b9f7a4`)
+  - \`python -m tools.port_supply_export\` dumps any/all of the five utils.port_supply_csv views to a directory in one command. Useful for:
+
+### ✅ Tests
+
+- **tests** end-to-end test for worker.scheduler.main() — full daily tick (`a39c71b`)
+  - Calls main([]) once with all external resources stubbed and asserts: - completes without raising - invokes every known run_*_job (filtered to jobs actually present in the live scheduler — robust to in-flight additions) - continues after...
+- **test+api** bump backtests/health validator count from 9 → 11 (`9cb531d`)
+  - The 11th validator (Company Supply Risk Stability) and the prior 10th (Port Supply Lines) landed since this assertion was last touched.
+
+### 📦 Other
+
+- **wire-up** cargo mix history + CARGO_FLOW_ANOMALY alerts, company risk history, spillover UI (`2fceb15`)
+  - Closes the loop on three of the five analytics modules: each now has either a persisted history stream feeding live alerts or a UI surface operators can read.
+- **wire-up** COMPANY_CONCENTRATION alerts + SSI attribution narration + 3 backtest validators + /spillover-graph API (`c07055c`)
+  - engine/alert_engine_v2.py: * check_company_concentration_alerts — fires HIGH at HHI>=0.45, CRITICAL at >=0.85 over the live company port footprints. Wired into generate_alerts so the daily tick picks it up. * Adapter in processing.compan...
+- **analytics** 5 new pure-function modules — SSI attribution, concentration, cargo-flow, capacity-vs-demand, port spillover (`9998d31`)
+  - processing/ssi_attribution.py Live decomposition of any ShippingStressReport into per-component + per-route weighted contributions. Reconciles to the fleet-wide score so a UI can render "component X drives N% of today's stress". top_comp...
+- **follow-up** snapshot integrity scheduler hook, 2 new API endpoints, 14th validator, forecast CLI (`20cebcd`)
+  - worker/scheduler.py: * run_snapshot_integrity_check_job — wraps check_all_snapshots over the last 14 days. Called from main() between multi-container fan- out and GC. Logs unhealthy counts inline so operators see drift the same tick it a...
+- **follow-up** 13th validator, snapshot integrity CLI, anomaly-aware shock digest (`9762d4a`)
+  - tools/backtests.py: * _run_historical_event_replay registered as the 13th validator (replays 8 registered historical events through the alert engine, headline = pass rate, healthy if >= 70%). * docs/backtest-baseline.json regenerated; co...
+- **follow-up** wire GC + multi-container into scheduler, register 12th validator, backfill tests (`d030d4d`)
+  - worker/scheduler.py: * run_port_supply_snapshot_gc_job — wraps gc_old_snapshots with the canonical contract (never raises, returns count dict, @_track_run). * run_multi_container_snapshot_job — wraps the per-container fan-out. * Both cal...
+- **processing** forecast accuracy tracker + snapshot integrity checker (`08b8ed8`)
+  - forecast_accuracy_tracker — pure-function pairing of logged forecasts to actuals by horizon, with MAE / sign-agreement aggregation. Persistence to jsonl.
+- **port-supply+multi-container** coordinator for per-container daily snapshots (`2eefd8c`)
+  - New per-container coordinator fans the daily snapshot job out to every modeled container type. Failures isolated per-container (one bad container doesn't kill the others). CLI included for ad-hoc operator runs.
+- **replay** historical-event replay validator (alert-engine ↔ event-registry loop) (`4a7cb56`)
+  - For each registered historical event, replays the conditions into the alert engine + checks the right alert kinds fire at the right severity. Surfaces missing/unexpected/wrong-severity mismatches as the headline metric.
+- **ssi-correlation** lag-correlation analysis — does SSI lead port deficits? (`6965ae8`)
+  - Pure-function analyzer measures Pearson/Spearman r between an SSI history and a deficit history shifted by lag=0..N days. analyze_leading_indicator_relationship picks the best-fit lag.
+- **port-supply** regional snapshot save/load + retention policy + GC helper (`a361677`)
+  - processing.port_supply_history now persists port_supply_regional_rollup_<container>.csv alongside the per-port summary in the same date dir + offers gc_old_snapshots(policy=RetentionPolicy(keep_days=90, keep_first_of_month=True, keep_fir...
+- **delivery+port-supply** HTML/text shock digest from snapshot diffs (`c387eea`)
+  - Daily snapshot job now emits a ready-to-send overnight digest (HTML + plain-text + subject line) into the snapshot date dir when the diff carries material content. Downstream channels pick up the artifacts. Quiet days skip persistence en...
+- **company-supply-risk** per-ticker risk score + 11th backtest validator (`2c7d022`)
+  - CompanySupplyRiskScore aggregates per-company exposure to port-side supply problems into a 0-100 scalar (weighted_deficit_days + critical_port_count + port_concentration_penalty). Risk band (Low / Moderate / Elevated / High / Critical) p...
+- **anomaly** snapshot-diff magnitude detector — flag shock days vs trailing median (`c297ecd`)
+  - Reduces a diff to a single composite, then MAD-z-scores against a trailing 30-day window. Bands: normal / elevated / shock. Pure function — wiring into delivery channels lands next.
+- **supply-shock** scenario engine + CLI — quantify what-if port shocks (`9a9a6be`)
+  - Pre-canned scenarios (Suez closure, Shanghai 50%, Panama drought) re-derive port-supply chains under the shock + rank affected companies by total deficit-day delta vs baseline.
+- **csv+port-supply** derived analytics + Excel-friendly + 2 new views (`6eadaa6`)
+  - Five exporters now, each producing a CSV that's genuinely useful in a spreadsheet without a downstream JOIN. Schema bumped to v2.
+
+## 2026-05-25
+
+### ✨ Features
+
+- **feat+port-supply** CSV exporters + 3 download buttons in the tab (`54400c8`)
+  - Three CSV views since the supply-lines data answers three operator questions:
+- **feat+port-supply** voyage-arc overlay on the map + company→port reverse drilldown (`887b6ee`)
+  - Extends the Port Supply Lines tab with two natural follow-ups:
+- **feat** Port Supply Lines — map + per-port exposure chain to companies (`0cf2232`)
+  - New analytical surface answering "which ports have surplus / deficit container supply, and which publicly-traded shipping companies are exposed to the supply lines flowing through them?"
+
+### 🎨 UI
+
+- **ui** a11y + UX — badge aria-label + tab_booking 'unavailable' semantics (`a80dd9a`)
+  - Two small but broad-impact fixes from the UX-quick-wins audit:
+- **ui+data-health** unified Backtest Coverage panel — one row, four validators (`8cc350d`)
+  - Ties together the four backtest modules shipped today into a single operator-facing summary row at the top of the validation section. Each card surfaces the headline KPI from one validator + a sublabel naming the tab/section where the fu...
+- **ui+data-health** LLM cost-by-source bars (replaces by-source table) (`44cf439`)
+  - The LLM Usage panel showed by_source and by_model as side-by-side tables. The by_source breakdown is more useful as a chart — operators want to spot which caller dominates spend at a glance, not parse a 4-row table.
+- **ui+idea-engine** top-ideas conviction bars + lock-in tests (`d4282c0`)
+  - The Idea Engine had a Hero card (top idea) and a Ranked Table but nothing in between to let the operator scan all surfaced ideas' conviction in one glance. Adds a horizontal bar chart between Hero and Ranked Table that plots the top 12 i...
+- **ui+data-health** per-tab latency median × p95 scatter + lock-in tests (`1cb7ee2`)
+  - The platform's operator dashboard (~3,400 LOC across 22 panels) carried only two charts pre-existing. The Tab Performance panel showed a slow-tabs table with median + p95 columns but the operator couldn't see WHICH tabs had heavy-tail la...
+- **ui+alerts** alert-effectiveness volume × hit-rate bubble + lock-in tests (`939b89c`)
+  - The Alert Center is the platform's largest tab (~4,900 LOC, 21 panels) but carries only one chart across all of it. The Alert Effectiveness panel breaks alerts down by-type and by-severity as tables, but the operator can't see the two qu...
+- **ui+report** sentiment-trend chart in Report History + lock-in tests (`7b105a9`)
+  - The Report History section listed past reports as a wsj_market_table with per-row sentiment chips but had no temporal view — the reader couldn't spot regime shifts (bullish-to-bearish runs) without scanning each row. Adds a line chart ab...
+- **ui+voyage-tracker** fleet delay-distribution histogram + lock-in tests (`4165eaf`)
+  - Closes the disruption-alpha pipeline trio in this session — stage 1 (Voyage Tracker), stage 3 (Macro Projection), stage 5 (Equity Signals) now all carry purpose-built visuals + lock-in tests.
+- **ui+overview** signal-conviction heatmap + lock-in tests (`72728fe`)
+  - The Overview tab's "Signal Conviction" section rendered a 4×4 corridor × commodity grid as a wsj_market_table. The table reads well for precision but the eye can't spot patterns across the grid at a glance. Adds a plotly heatmap above th...
+- **ui+assistant** session topic distribution + question classifier + lock-in tests (`9b2c889`)
+  - The Q&A Assistant tab carried zero plotly charts — purely text/tables/ buttons. Adds a small "Session Focus" visual to the right sidebar that shows how the user's questions break down by topic (Freight Rates, BDI, Red Sea, Panama, Equity...
+- **ui+briefing** forecast quadrant scatter + lock-in tests (`cd3709b`)
+  - The Daily Briefing tab carried zero plotly charts — purely text/tables. Adds the first visual: a today × 30-day-forecast stress scatter for every tracked route, colour-grouped by trend (Worsening / Stable / Improving), marker size propor...
+- **ui+portfolio** per-position risk × return scatter + lock-in tests (`f3dac2b`)
+  - Adds the canonical "where is risk concentrated?" cross-section that the Portfolio tab was missing — each holding plotted at (Beta, total P&L %) with marker size scaling to portfolio weight and colour following P&L direction. Reference li...
+- **ui+macro-projection** SSI component-decomposition bar chart + lock-in tests (`9316984`)
+  - Surfaces the SSI's per-component breakdown visually for the first time in the Macro Projection tab. The existing driver→dimension table tells you which SSI components are pushing which SCHI dimensions; the new chart shows *which componen...
+- **ui+equity-signals** conviction × 30-day-move scatter + lock-in tests (`96aadea`)
+  - Adds the alpha question to the cascade consensus strip — a plotly scatter of every priced idea at (conviction, 30-day move), colour-coded by direction (Bullish / Neutral / Bearish), marker size proportional to cascade depth, with referen...
+- **ui+equipment** top-of-tab health bullet + alert-severity lollipop (`3aa1c06`)
+  - Two purpose-built visuals close the remaining gaps in tab_equipment:
+- **ui** tab_equipment design-system migration + lock-in tests (`6e62a6a`)
+  - Route the last hand-rolled inline markup in tab_equipment through ui.styles (status_badge for the regional legend + risk chips, section_divider for sub-section headers, live_data_badge for tab-level provenance). Pin the contract with a 6...
+- **ui** wire disruption explainer into Disruption Radar + Voyage Tracker tabs (`5a51a47`)
+  - engine/disruption_explainer.py (commit 9aeca39) ships pure-function templates that explain WHY a route is stressed or a voyage delayed. This commit surfaces those explanations to operators inside the two relevant tabs.
 - **ui+tools** full-text alert search panel + rules CSV import/export (`a2f1c70`)
   - Two operator surfaces landing together (both touch ui/tab_alerts + docs/DEPLOYMENT.md). Different file zones everywhere else.
 - **ui+docs** retry queue panel in Data Health + DEPLOYMENT section (`e5137ef`)
@@ -15,23 +283,95 @@ _Generated 2026-05-25 from the git log — covers 323 commits. Conventional-comm
 
 ### ⚙️ Engine
 
+- **engine+ui** channel auto-disable — circuit breaker after 10 consecutive failures (`e97e7bc`)
+  - Stale webhook URLs today fail forever, wasting deliveries + adding log noise. New circuit breaker tracks consecutive failures per channel; at threshold (default 10) auto-flips enabled=False AND fires a CHANNEL_AUTO_DISABLED alert through...
 - **engine+api** schema v26 delivery retry queue — persist failed dispatches with exponential backoff (`ba6777c`)
   - When a webhook/slack/email dispatch fails with a retriable error (HTTP 5xx, connection timeout, SMTP temporary failure), the alert was previously logged and lost. Now it persists in a retry queue; worker walks every 5min with exponential...
 
 ### 🔌 API
 
+- **api** GET /api/v1/ports/supply-lines — port supply state + exposures as JSON (`57f82ed`)
+  - Exposes the same per-port chain data that the Port Supply Lines tab consumes, so external tools (portfolio monitors, alert dashboards, custom scripts) can pull port supply state + exposed-company chains without scraping the UI.
+- **api+docs** document GET /api/v1/backtests/health in the OpenAPI spec (`8fc9d05`)
+  - The endpoint shipped in 8d70e4c but the OpenAPI spec didn't know about it — external SDK generators (openapi-generator-cli, Redoc, etc.) would have produced a client missing the new probe.
+- **api** GET /api/v1/backtests/health — public analytical-layer probe (`8d70e4c`)
+  - Surfaces the consolidated backtest report as a public HTTP endpoint so external monitoring (Datadog HTTP check, k8s liveness probe, Pingdom, status page) can alarm on the platform's analytical-layer health without managing per-user tokens.
 - **ingress+ui** ICS calendar feed for incidents — subscribe in Google Calendar / Outlook / etc. (`7c049c8`)
   - Operators today have to dashboard-check incidents. Now they subscribe to a per-user iCalendar URL once + their calendar app shows shipping incidents alongside their meetings. RFC 5545 compliant; stdlib only.
 
 ### 🛠 Tools
 
+- **tools** consolidated backtest CLI — one command runs all 8 validators (`2cc7b60`)
+  - tools/backtests.py ties together the 8 per-module validators shipped today into a single operator + CI-facing CLI. Each adapter normalises its validator's heterogeneous output into a uniform BacktestResult (name + headline label/value +...
+- **tools** test flakiness tracker — JUnit XML ingest + flake/slow analytics (`f74d120`)
+  - Suite is at 5300+ tests + still growing. Flaky tests hide regressions (test_mfa_enable_persists_flag, test_rate_limit_allows_after_refill_ interval have both surfaced repeatedly this session). Tool ingests pytest JUnit XML, persists resu...
 - **tools** bash + zsh tab-completion auto-generator for all CLI tools (`4c06b9f`)
   - CLI surface has accumulated 30+ subcommands across ops_cli + 7 other tool CLIs. Auto-generated tab-completion makes them discoverable. Pure-stdlib introspection of the live argparse tree — no hand- maintained scripts to drift.
+
+### 📚 Docs
+
+- **docs** BACKTESTS.md — operator-facing reference for the 9-validator layer (`c31e45d`)
+  - Checked-in markdown reference page covering the platform's analytical backtest layer. Three sections:
+- **docs** DEPLOYMENT.md — operator digest + flap detector + escalation end-of-chain (`80fccfe`)
+  - Three additions:
+- **docs** DISRUPTION_ALPHA.md — 6th SSI component + backtest layer + lock-in suite (`c240995`)
+  - Three corrections + two new sections:
+- **docs** MODELS.md — SSI 6th component + 3 new backtest module sections (`6949eff`)
+  - Two corrections + an expansion:
+- **docs** AUTH.md — reflect shipped multi-user + MFA + invitations + tokens (`f7ab8fa`)
+  - AUTH.md was the most stale doc in the tree — opened with "This is not a multi-user system" and stated "no per-user accounts, no per-user data, no users table in the DB" while the platform actually shipped multi-user auth months ago (sche...
+- **docs** regen audit-baseline.csv after today's 13-tab refactor + 2 backtest push (`cedba67`)
+  - LOC grew 100-200 per touched tab from the new visuals + helpers; inline_divs counts unchanged everywhere — the per-tab lock-in budget caps held.
+- **docs** regen auto-generated artifacts (CHANGELOG / SCHEMA / openapi / completion) (`55b29b7`)
+  - CHANGELOG.md — 323 commits via tools.changelog_cli --since 90d docs/SCHEMA.md — live DB schema at v26 docs/SCHEMA_HISTORY.md — 25 migrations from state/migrations.py docs/openapi.json — 169KB spec via tools.openapi_cli json docs/openapi....
 
 ### ✅ Tests
 
 - **test** harden rate-limit refill timing test against scheduler preemption (`4e90ec6`)
   - test_rate_limit_allows_after_refill_interval was flaking on full- suite runs (passed in isolation, occasionally failed under load). Root cause: 0.3s sleep at 5 tokens/sec yielded 1.5 tokens — under suite load the test runner can lose eno...
+
+### 📦 Other
+
+- **narration** wire port-deficit context into the daily briefing (`1102136`)
+  - The morning LLM-narrated briefing now incorporates today's worst port container deficits + their exposed tickers, surfacing a port-supply paragraph alongside the existing SSI / cascade-idea / route-forecast sections. Operators reading th...
+- **rule-templates** add 'Port container deficit >3 days' template (`2f27f65`)
+  - Wires PORT_DEFICIT alerts into the UI rule-editor template catalogue. Without this template, the new alert type exists in the engine + fires from generate_alerts() but isn't discoverable from the rule picker — operators would have to han...
+- **backtest** Port Supply Lines stability — completes the 10-validator set (`cf2f14f`)
+  - Closes the only gap remaining in the analytical-layer backtest coverage: every other surface has a validator + Coverage card + CLI adapter, but the port supply-lines model (today's new feature) didn't yet. Adds it.
+- **alerts** PORT_DEFICIT — wire port supply-state into the live alert engine (`bcca2fd`)
+  - When a port crosses into deficit, the existing alert delivery substrate (Slack/email/SMS/Discord/webhook/PagerDuty + escalation chains + quiet hours + dedup + cooldown) now picks it up automatically.
+- tools.backtests: --verbose / -v renders per-class scorecard rows inline (`14d710b`)
+  - When a validator goes red, an operator currently has to drop into the Python REPL + import the validator module + dump its scorecards to see the per-class breakdown. --verbose folds that triage path into the CLI:
+- **ci+docs** commit backtest baseline + add drift gate (`88d9cf6`)
+  - Adds docs/backtest-baseline.json — the reference snapshot of all 9 validators in their current healthy state — and wires `python -m tools.backtests --compare-baseline` into CI as a second gate after --strict.
+- tools.backtests: baseline save/compare for drift detection (`d7b0804`)
+  - --strict is a one-sided gate: a refactor can move chokepoint sign-agreement from 80.5% → 65% (still above the 0.55 healthy threshold) and --strict accepts it. The baseline workflow catches that drift.
+- **eta-predictor** per-label + scalar accuracy backtest — completes the 9-validator set (`db73271`)
+  - Last major analytical module without a backtest. processing.eta_predictor emits two outputs nobody was scoring: a scalar predicted_delay_days and a categorical congestion_risk label (LOW / MODERATE / HIGH / SEVERE).
+- **ci** gate the analytical layer on tools.backtests --strict (`0212524`)
+  - Adds a CI step right after pytest that runs the consolidated backtest CLI in strict mode. All 8 validators must report healthy on the bundled synthetic-history generators; --strict exits 1 on any calibration / monotonicity flag flip.
+- **backtests** news-sentiment + vulnerability-scorer predictiveness + coverage (`ec5a3c2`)
+  - Seventh and eighth backtest modules. Brings the validator layer from six to eight; the unified Backtest Coverage panel in tab_data_health now flows in two rows of four.
+- **leading-indicators** per-signal-class predictiveness backtest + coverage card (`67954f7`)
+  - Sixth backtest module. processing.leading_indicators carries 12+ FRED series each tagged with a BULLISH/BEARISH/NEUTRAL signal + a stated lead_time_weeks for shipping demand. Nothing was asking whether each signal actually leads to the d...
+- **freight-volatility** regime + mean-reversion predictiveness backtest (`b91aa0d`)
+  - Fifth backtest module of the day. processing.freight_volatility classifies each route per snapshot into a regime (TRENDING_UP / TRENDING_DOWN / BREAKOUT / RANGING) and a mean-reversion signal (OVERSOLD / NEUTRAL / OVERBOUGHT) — nothing w...
+- **schi** per-dimension predictiveness backtest — symmetric to the SSI validator (`05f0b44`)
+  - The SSI got a 3-axis validator triad (predictiveness + horizon-decay + collinearity) in 7394f1d/00bc008/750308e. SCHI — the other major composite sitting next to SSI in tab_macro_projection — had none. This mirrors the SSI work, dimensio...
+- **momentum-ranker** per-signal-class backtest + UI panel + property tests (`f5a997b`)
+  - engine.momentum_ranker classifies assets into a STRONG_SELL → STRONG_BUY ladder via a composite of 7d/30d/90d momentum. Nothing in the platform asked the question this module answers: across a history of past signals, did STRONG_BUY obse...
+- **disruption-forecast** accuracy backtest + UI panel + property tests (`756a7a9`)
+  - The processing.disruption_forecast module emits 7d and 30d stress projections per route, but nothing in the platform scores those forecasts against what actually happens. Closes the gap.
+- **ssi** collinearity analyzer — third leg of the component-validation triad (`750308e`)
+  - Per-component sign-agreement (7394f1d) answered "which components are predictive?". Horizon-decay (00bc008) answered "...and at what horizon?". This adds the missing third leg: are any two components secretly double-counting the same sig...
+- **ssi** horizon-decay scan + heatmap — extend the component backtest (`00bc008`)
+  - Builds on the per-component sign-agreement backtest from 7394f1d. The natural follow-up: at WHAT horizon does each component carry its edge? Adds validate_ssi_horizons(history, horizons=...) which runs the same sign-agreement check acros...
+- **ssi** per-component predictiveness backtest + UI panel + property tests (`7394f1d`)
+  - Adds processing/ssi_component_validation.py — a deterministic backtest that answers a question the static COMPONENT_WEIGHTS in processing.shipping_stress_index cannot: of the six SSI components (chokepoint, congestion, weather, rate, vul...
+- **disruption-alpha** SSI backtester + per-route explainer — validates + narrates the signal (`9aeca39`)
+  - Closes the disruption-alpha gap identified in the session plan: the SSI / cascade / equity-signal pipeline was complete-looking but had zero empirical validation and no operator-facing rationale. This commit ships both.
+- **ssi** 6th component (anomaly drift detector) + historical-events registry (`61d4d81`)
+  - Two pieces of disruption-alpha audit work that landed together:
 
 ## 2026-05-24
 

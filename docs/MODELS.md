@@ -351,7 +351,9 @@ each carrying a label and hex colour the UI surfaces in the gauge:
 
 **Output.** `ShippingStressReport` carries `overall_ssi`, the banded
 `ssi_label` / `ssi_color`, the per-route `route_stress` list (sorted
-worst-first), per-component fleet averages (`component_scores`), a
+worst-first), per-component fleet averages (`component_scores` —
+prominence-weighted with the same route weights as `overall_ssi`, so
+`Σ_k weightₖ · component_scoresₖ` decomposes the headline SSI exactly), a
 `top_disruptions` list drawn from `engine.alert_engine.generate_alerts`
 (CRITICAL + WARNING first, supplemented by the worst-stressed lanes), and an
 ISO `data_timestamp`. When `voyage_fleet` is supplied each `RouteStress` also
