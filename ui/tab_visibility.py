@@ -208,6 +208,10 @@ def _render_pipeline() -> None:
     try:
         section_header("Shipment Pipeline", "Active shipments by stage — click through to carrier portal")
 
+        if not _PIPELINE_DATA:
+            st.info("No shipments in the pipeline.")
+            return
+
         col_colors = {
             "ORIGIN LOADED": C_MOD,
             "IN TRANSIT":    C_ACCENT,
@@ -251,6 +255,10 @@ def _render_visibility_scores() -> None:
     try:
         section_header("Visibility Score by Trade Lane", "AIS coverage × milestone reporting × predictive ETA quality")
 
+        if not _VISIBILITY_LANES:
+            st.info("No trade-lane visibility scores available.")
+            return
+
         headers = ["Trade Lane", "AIS Coverage %", "Milestone Tracking %", "Predictive ETA %", "Overall Score"]
         rows = []
         for lane, ais, milestone, pred_eta, color in _VISIBILITY_LANES:
@@ -272,6 +280,10 @@ def _render_visibility_scores() -> None:
 def _render_exception_management() -> None:
     try:
         section_header("Exception Management", "Active issues requiring attention — investigate and resolve")
+
+        if not _EXCEPTIONS:
+            st.info("No active exceptions — all tracked shipments nominal.")
+            return
 
         headers = ["Booking Ref", "Vessel", "Issue Type", "Duration", "Location", "Detail"]
         rows = []
@@ -298,6 +310,11 @@ def _render_milestone_tracking() -> None:
             "Milestone Tracking",
             "Sample shipment MAEU-2847561 — Shanghai → Rotterdam (MV Maersk Edmonton, Voy. 026W)",
         )
+
+        # Empty-state guard before the progress division (avoids div-by-zero).
+        if not _MILESTONE_STEPS:
+            st.info("No milestone data available for this shipment.")
+            return
 
         completed_count = sum(1 for _, _, done, _, _ in _MILESTONE_STEPS if done)
         total = len(_MILESTONE_STEPS)
@@ -345,6 +362,10 @@ def _render_carrier_rankings() -> None:
             "Scored 0-100 across AIS, milestone, and predictive ETA capabilities",
         )
 
+        if not _CARRIER_RANKINGS:
+            st.info("No carrier ranking data available.")
+            return
+
         headers = ["#", "Carrier", "Visibility Score", "Grade", "Capabilities"]
         rows = []
         for i, (carrier, score, grade, caps, color) in enumerate(_CARRIER_RANKINGS):
@@ -365,6 +386,11 @@ def _render_carrier_rankings() -> None:
 
 def _render_visibility_chart() -> None:
     try:
+        # Empty-state guard: a grouped bar with no lanes renders blank.
+        if not _VISIBILITY_LANES:
+            st.info("No lane-visibility data available to chart.")
+            return
+
         lanes = [r[0].split(" (")[0] for r in _VISIBILITY_LANES]
         ais_vals = [r[1] for r in _VISIBILITY_LANES]
         ms_vals = [r[2] for r in _VISIBILITY_LANES]

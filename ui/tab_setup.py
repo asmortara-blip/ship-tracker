@@ -35,6 +35,7 @@ from typing import Any
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -45,6 +46,19 @@ from ui.styles import (
     C_TEXT3,
     page_header,
     section_divider,
+    source_footer,
+)
+
+
+# Provenance for the footer. The setup wizard ships no market data — it
+# configures the instance. The footer is an honest, platform-wide note that
+# most surfaces are MODELED, with only a few genuinely live feeds.
+_SETUP_SOURCE = DataSource.modeled(
+    "Ship Tracker platform",
+    notes=(
+        "Most dashboards are MODELED derivations; genuinely live feeds are "
+        "equity prices / FX (Yahoo, ECB), World Bank, and RSS news."
+    ),
 )
 
 
@@ -396,6 +410,15 @@ def render(*args: Any, **kwargs: Any) -> None:
             _render_step_one()
             _render_step_two()
             _render_step_three()
+
+            # ── Source footer ─────────────────────────────────────────────
+            try:
+                st.markdown(
+                    source_footer([_SETUP_SOURCE]),
+                    unsafe_allow_html=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"tab_setup: source footer failed: {exc}")
         except Exception as exc:  # noqa: BLE001 — UI fallback
             logger.exception(f"tab_setup: render failed: {exc}")
             try:

@@ -843,6 +843,8 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Portfolio",        "ui.tab_portfolio"),
         ("Options & Flow",   "ui.tab_options"),
         ("Convergence",      "ui.tab_convergence"),
+        ("Event Study",      "ui.tab_event_study"),
+        ("Valuation",        "ui.tab_valuation"),
     ],
     "disruption_alpha": [
         ("Voyage Tracker",   "ui.tab_voyage_tracker"),
@@ -862,6 +864,8 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Congestion",       "ui.tab_congestion"),
         ("Emerging Routes",  "ui.tab_emerging_routes"),
         ("Vessel Map",       "ui.tab_vessel_map"),
+        ("World Graph",      "ui.tab_world_graph"),
+        ("TEU Map",          "ui.tab_teu_map"),
     ],
     "carriers": [
         ("Carriers",         "ui.tab_carriers"),
@@ -930,7 +934,16 @@ def _lookup_pinned_meta(module_name: str) -> tuple[str, str, str] | None:
     return None
 
 if "nav_section" not in st.session_state:
-    st.session_state["nav_section"] = "dashboard"
+    # Seed the active section from the URL (?section=) so a shared/bookmarked
+    # link or a browser refresh lands on the right section. Falls back to
+    # dashboard. See ui/url_state.py.
+    try:
+        from ui.url_state import resolve_active_section
+        st.session_state["nav_section"] = resolve_active_section(
+            dict(st.query_params), [s[0] for s in SECTIONS],
+        )
+    except Exception:
+        st.session_state["nav_section"] = "dashboard"
 
 # Inject WSJ section nav CSS
 st.markdown("""<style>
@@ -998,6 +1011,15 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # ── Command palette / global search — jump to any tab/company/port/route ─
+    # Lazy + defensive so a search-index hiccup never takes down the sidebar.
+    try:
+        from ui.command_palette import default_entities, render_command_palette
+        render_command_palette(SECTIONS, SECTION_TABS, entities=default_entities())
+    except Exception as _cp_exc:
+        logger.debug(f"Command palette unavailable: {_cp_exc}")
+
     # ── Pinned tabs cluster (per-user favourites) ─────────────────────────
     # Lazy import so a broken state.tab_favorites NEVER takes down the
     # sidebar. Clicking a pinned entry routes to the parent section —
@@ -1102,6 +1124,14 @@ with st.sidebar:
         st.markdown("</div>", unsafe_allow_html=True)
 
 active_section = st.session_state.get("nav_section", "dashboard")
+
+# Keep the URL in sync with the active section so the current view is shareable
+# + survives a refresh / back-button (setting query_params does not rerun).
+try:
+    if st.query_params.get("section") != active_section:
+        st.query_params["section"] = active_section
+except Exception:
+    pass
 
 # WSJ Section breadcrumb
 sec_info = next((s for s in SECTIONS if s[0] == active_section), SECTIONS[0])
@@ -1232,10 +1262,11 @@ if active_section == "dashboard":
 
 # ── 2. Markets & Signals ──────────────────────────────────────────────────
 elif active_section == "markets":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13 = st.tabs([
         "Markets", "Sector Dashboard", "Alpha Signals", "Results",
         "Indices", "Derivatives", "Scenarios", "Monte Carlo",
         "Backtesting", "Portfolio", "Options & Flow", "Convergence",
+        "Event Study", "Valuation",
     ])
     with t0:
         try:
@@ -1321,6 +1352,18 @@ elif active_section == "markets":
             )
         except Exception as e:
             st.error(f"Convergence error: {e}")
+    with t12:
+        try:
+            from ui.tab_event_study import render as _r
+            _r(stock_data=stock_data)
+        except Exception as e:
+            st.error(f"Event Study error: {e}")
+    with t13:
+        try:
+            from ui.tab_valuation import render as _r
+            _r(stock_data=stock_data)
+        except Exception as e:
+            st.error(f"Valuation error: {e}")
 
 # ── 3. Disruption Alpha ───────────────────────────────────────────────────
 elif active_section == "disruption_alpha":
@@ -1374,11 +1417,11 @@ elif active_section == "disruption_alpha":
 
 # ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
-    t0, t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
         "Port Demand", "Port Monitor", "Port Supply Lines",
         "Routes", "Rate Analytics",
         "ETA Predictor", "Congestion", "Emerging Routes",
-        "Vessel Map",
+        "Vessel Map", "World Graph", "TEU Map",
     ])
     with t0:
         try:
@@ -1434,6 +1477,18 @@ elif active_section == "ports_routes":
             _r(port_results, route_results, freight_data)
         except Exception as e:
             st.error(f"Vessel Map error: {e}")
+    with t9:
+        try:
+            from ui.tab_world_graph import render as _r
+            _r(wb_data=wb_data)
+        except Exception as e:
+            st.error(f"World Graph error: {e}")
+    with t10:
+        try:
+            from ui.tab_teu_map import render as _r
+            _r(wb_data=wb_data)
+        except Exception as e:
+            st.error(f"TEU Map error: {e}")
 
 # ── 5. Carriers & Ops ────────────────────────────────────────────────────
 elif active_section == "carriers":

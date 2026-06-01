@@ -44,6 +44,7 @@ from ui.styles import (
     C_TEXT2,
     C_TEXT3,
     alert_banner,
+    apply_dark_layout,
     badge,
     gauge_ring,
     insight_card_html,
@@ -293,6 +294,15 @@ def _render_ssi_overview(report) -> None:
     # ─ Headline gauge ─
     with col_gauge:
         fig = gauge_ring(ssi, f"SSI · {label}", color=color, size=220)
+        # Route the gauge through the house dark layout for chart consistency
+        # (transparent canvas + WSJ theme), preserving its tight margins and
+        # the centered SSI annotation by keeping the legend off.
+        apply_dark_layout(
+            fig,
+            height=220,
+            margin={"l": 10, "r": 10, "t": 10, "b": 10},
+            showlegend=False,
+        )
         st.plotly_chart(
             fig,
             use_container_width=True,

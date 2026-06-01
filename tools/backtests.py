@@ -445,6 +445,38 @@ def _run_spillover_graph_recall() -> BacktestResult:
     )
 
 
+def _run_graph_centrality_dominance() -> BacktestResult:
+    from processing.analytics_backtests import validate_graph_centrality_dominance
+    r = validate_graph_centrality_dominance()
+    scorecard_rows = [
+        {"label": f"run{pr['run_index']}",
+         "metric_name": "hub @ strict-max betweenness + fragments",
+         "value": (
+             f"{'OK' if pr['passed'] else 'X'} "
+             f"(hub={pr['hub']}, btw={pr['hub_betweenness']}, "
+             f"comps={pr['n_components_after_hub_removal']})"
+         )}
+        for pr in r["per_run"]
+    ]
+    return BacktestResult(
+        name="Graph Centrality Dominance",
+        headline_label="Hub dominance pass rate",
+        headline_value=(
+            f"{r['pass_rate'] * 100:.1f}% ({r['passes']}/{r['n_runs']})"
+        ),
+        healthy=bool(r["passed"]),
+        summary=r["summary"],
+        raw_fields={
+            "n_runs":         r["n_runs"],
+            "passes":         r["passes"],
+            "pass_rate":      r["pass_rate"],
+            "pass_threshold": r["pass_threshold"],
+            "passed":         bool(r["passed"]),
+        },
+        scorecard_rows=scorecard_rows,
+    )
+
+
 def _run_snapshot_diff_anomaly() -> BacktestResult:
     from processing.snapshot_diff_anomaly_backtest import (
         validate_anomaly_recovery,
@@ -614,6 +646,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_cargo_flow_jsd_stability,
     _run_capacity_demand_persistence,
     _run_spillover_graph_recall,
+    _run_graph_centrality_dominance,
 ]
 
 

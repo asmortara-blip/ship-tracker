@@ -30,6 +30,8 @@ __all__ = [
     "validate_cargo_flow_jsd_stability",
     "validate_capacity_demand_persistence",
     "validate_spillover_graph_recall",
+    "synthesize_star_graph",
+    "validate_graph_centrality_dominance",
 ]
 
 
@@ -298,3 +300,62 @@ def validate_spillover_graph_recall(
             f"pass rate {pass_rate * 100:.0f}% (threshold {pass_threshold * 100:.0f}%)"
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# World-graph centrality dominance
+# ---------------------------------------------------------------------------
+
+
+def synthesize_star_graph(
+    *,
+    n_leaves: int = 6,
+    hubness: float = 1.0,
+    seed: int = 20260601,
+) -> tuple[list[str], list[tuple[str, str, float]]]:
+    """Deterministic graph between a STAR (hubness=1: centre 'C' wired to every
+    leaf) and a hubless symmetric ring (hubness=0: no dominant node)."""
+    import random
+    q = max(0.0, min(1.0, float(hubness)))
+    _ = random.Random(seed)                       # determinism hook
+    nodes = ["C"] + [f"L{i}" for i in range(n_leaves)]
+    edges: list[tuple[str, str, float]] = []
+    n_spokes = round(q * n_leaves)
+    for i in range(n_spokes):
+        edges.append(("C", f"L{i}", 1.0))
+    if q < 1.0:
+        for i in range(n_leaves):
+            edges.append((f"L{i}", f"L{(i + 1) % n_leaves}", 1.0))
+    return nodes, edges
+
+
+def validate_graph_centrality_dominance(
+    *,
+    n_runs: int = 5,
+    seed: int = 20260601,
+    pass_threshold: float = 0.95,
+) -> dict[str, Any]:
+    """Betweenness identifies the STAR hub as the strict-dominant node, and
+    removing it fragments the graph. Property holds at hubness=1.0."""
+    from processing.world_graph_metrics import betweenness_centrality, resilience_after_removal
+    n_runs = max(1, int(n_runs)); per_run = []; passes = 0
+    for i in range(n_runs):
+        nodes, edges = synthesize_star_graph(n_leaves=6 + i, hubness=1.0, seed=seed + i)
+        btw = betweenness_centrality(nodes, edges)
+        hub = max(btw, key=btw.get)
+        leaves_max = max(v for k, v in btw.items() if k != "C")
+        dominant = btw["C"] > leaves_max + 1e-9
+        res = resilience_after_removal(nodes, edges, "C")
+        fragments = res["n_components"] == (len(nodes) - 1)
+        ok = (hub == "C") and dominant and fragments
+        passes += 1 if ok else 0
+        per_run.append({"run_index": i, "hub": hub, "hub_betweenness": round(btw["C"], 4),
+                        "leaf_betweenness_max": round(leaves_max, 4),
+                        "n_components_after_hub_removal": res["n_components"], "passed": ok})
+    pass_rate = passes / n_runs if n_runs else 0.0
+    passed = pass_rate >= pass_threshold
+    return {"n_runs": n_runs, "passes": passes, "pass_rate": round(pass_rate, 4),
+            "pass_threshold": float(pass_threshold), "passed": bool(passed), "per_run": per_run,
+            "summary": (f"Graph centrality dominance: {passes}/{n_runs} runs put the STAR hub at "
+                        f"strict-max betweenness + fragmentation on removal; pass rate "
+                        f"{pass_rate*100:.0f}% (threshold {pass_threshold*100:.0f}%)")}

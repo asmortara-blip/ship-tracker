@@ -55,6 +55,7 @@ _TAB_MODULES = [
     "ui.tab_equipment",
     "ui.tab_equity_signals",
     "ui.tab_eta",
+    "ui.tab_event_study",
     "ui.tab_finance",
     "ui.tab_fleet",
     "ui.tab_fundamentals",
@@ -91,13 +92,16 @@ _TAB_MODULES = [
     "ui.tab_supply_chain",
     "ui.tab_supply_linkage",
     "ui.tab_sustainability",
+    "ui.tab_teu_map",
     "ui.tab_trade_flows",
     "ui.tab_trade_war",
+    "ui.tab_valuation",
     "ui.tab_vessel_map",
     "ui.tab_visibility",
     "ui.tab_voyage_tracker",
     "ui.tab_weather",
     "ui.tab_worker_health",
+    "ui.tab_world_graph",
 ]
 
 

@@ -577,6 +577,64 @@ def check_cargo_flow_anomaly_alerts(
     return alerts
 
 
+def check_world_graph_criticality_alerts(
+    *,
+    betweenness_threshold: float = 0.05,
+    stress_threshold: float = 0.30,
+    critical_stress_threshold: float = 0.60,
+) -> list[ShippingAlert]:
+    """Fire when the most systemically-central node is also stressed.
+
+    Wraps ``processing.world_graph_criticality.find_critical_stressed_node``,
+    which builds the world graph, ranks the stressable geo nodes (ports +
+    chokepoints) by normalized betweenness centrality, and returns the
+    most-central one IFF it also clears a stress gate. A node that is both a
+    structural chokepoint AND already strained is the one whose disruption
+    cascades furthest — this surfaces exactly that node.
+
+    Severity comes straight from the compute module (CRITICAL when the node's
+    stress is at/above ``critical_stress_threshold``, else HIGH). The node's id
+    is carried in ``port_locode`` (it is a namespaced graph id like
+    ``"chokepoint:suez"``, reusing the field the standard dedup key already
+    keys on so a node that stays critical fires once, not repeatedly). All math
+    lives in the compute module; this wrapper only formats the ShippingAlert.
+    """
+    try:
+        from processing.world_graph_criticality import find_critical_stressed_node
+    except Exception as exc:
+        logger.debug(f"check_world_graph_criticality_alerts: import failed: {exc}")
+        return []
+
+    try:
+        alert = find_critical_stressed_node(
+            betweenness_threshold=betweenness_threshold,
+            stress_threshold=stress_threshold,
+            critical_stress_threshold=critical_stress_threshold,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"check_world_graph_criticality_alerts: compute failed: {exc}"
+        )
+        return []
+
+    if alert is None:
+        return []
+
+    return [_make(
+        alert_type="WORLD_GRAPH_CRITICALITY",
+        severity=alert.severity,
+        title=(
+            f"Systemic node stressed: {alert.label} "
+            f"(betweenness {alert.betweenness:.2f})"
+        ),
+        body=alert.summary(),
+        port_locode=alert.node_id,
+        value=alert.stress,
+        threshold=stress_threshold,
+        change_pct=(alert.stress - stress_threshold) * 100.0,
+    )]
+
+
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
     """Fire if any port congestion score exceeds threshold."""
     alerts: list[ShippingAlert] = []
@@ -806,6 +864,15 @@ def run_all_checks(
         all_alerts.extend(check_cargo_flow_anomaly_alerts())
     except Exception as exc:
         logger.warning(f"Cargo flow anomaly alert check failed: {exc}")
+
+    # World-graph criticality — the most systemically-central node (by
+    # betweenness over the unified graph) that is ALSO stressed. Reads from
+    # processing.world_graph + world_graph_metrics; silent unless a central
+    # port/chokepoint clears both the centrality and stress gates.
+    try:
+        all_alerts.extend(check_world_graph_criticality_alerts())
+    except Exception as exc:
+        logger.warning(f"World graph criticality alert check failed: {exc}")
 
     all_alerts.sort(key=lambda a: (
         _SEVERITY_ORDER.get(a.severity, 99),

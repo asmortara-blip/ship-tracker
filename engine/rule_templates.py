@@ -234,6 +234,26 @@ TEMPLATES: list[RuleTemplate] = [
         cooldown_minutes=720,
     ),
     RuleTemplate(
+        slug="world-graph-critical-node-stressed",
+        name="Critical world-graph node stressed (betweenness)",
+        description=(
+            "The most systemically-central node in the unified world graph "
+            "(ranked by betweenness centrality over ports, lanes, canals, "
+            "companies and commodities) is ALSO under stress — a port carrying "
+            "a container-supply deficit or a chokepoint with an elevated risk "
+            "score. A disruption at a node that is both a structural chokepoint "
+            "AND already strained cascades furthest across the network. Reads "
+            "from processing.world_graph + world_graph_metrics; computes via "
+            "processing.world_graph_criticality. CRITICAL ladder when the "
+            "node's stress reaches 0.60."
+        ),
+        category="port",
+        metric="world_graph_node_stress",
+        threshold_pct=30.0,
+        severity="HIGH",
+        cooldown_minutes=720,
+    ),
+    RuleTemplate(
         slug="company-port-concentration-45hhi",
         name="Company port-footprint HHI >=0.45",
         description=(

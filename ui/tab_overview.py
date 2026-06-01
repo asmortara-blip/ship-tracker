@@ -1,48 +1,59 @@
-"""tab_overview.py — Executive Overview Dashboard (flagship landing page).
+"""tab_overview.py — the platform HERO / front page (Dashboard ▸ Overview).
 
-The first screen a user sees. A financial-terminal front page that states the
-market verdict, then fans out into KPIs, signals, risk and feed health.
+The first screen a user sees and the spine that ties the whole platform
+together. A curated, WSJ-front-page lede: it states today's verdict, frames
+the session in a handful of figures, runs a market ticker, then fans the user
+out into the detail sections via deep-link tiles.
 
-Canonical tab pattern (mirrors ``ui/tab_rate_analytics.py`` /
-``ui/tab_disruption_radar.py``):
-  * palette + components imported from ``ui/styles.py`` — never redeclared;
-  * no hand-rolled inline-styled divs — every block is a ``ui/styles.py``
-    helper, or a ``wsj_market_table`` cell formatted with span content;
-  * labeled ``section_divider`` rules separate the dashboard's zones;
-  * every section wrapped in try/except + ``logger.exception``.
+This tab COMPOSES existing components + data — it owns no analytics of its own:
 
-Sections
---------
-A. Page header (badge "DASHBOARD")
-B. Market verdict — tone banner + per-feed health row
-C. Headline KPI strip — six key metrics
-D. Markets & Signals — market pulse, signal-conviction matrix, featured
-   signal + top-signals table
-E. Risk & Routes — risk/alert table, route opportunities, data-feed status
-F. Quick Views — three distribution snapshots
+  * Lede        — the daily-briefing TLDR (``engine.daily_briefing_tldr`` over
+                  ``engine.narration_engine``), rendered via ``ui.styles.tldr_lede``.
+  * Stat strip  — overall SSI (``processing.shipping_stress_index``) as a
+                  ``gauge_ring`` + a ``metric_card_row`` of headline figures.
+  * Ticker      — ``ui.styles.ticker_tape_html`` over the freight / equity feeds.
+  * Tiles       — three+ deep-link cards that route into the detail sections
+                  (Risk, Markets, Disruption Alpha, Ports & Routes) by setting
+                  ``st.session_state["nav_section"]`` and rerunning.
+  * Footer      — ``source_footer`` over honest ``data.quality.DataSource``
+                  provenance (most of this platform is MODELED — labelled so).
+
+Canonical tab pattern (mirrors ``ui/tab_world_graph.py``):
+  * ``page_header`` first, body inside ``with track_render("overview")``;
+  * every data-touching block in its OWN try/except → ``logger`` + ``st.error``
+    so an empty / None / odd-shaped input degrades to a graceful tile, never a
+    crash;
+  * styled output ONLY through ``ui.styles`` helpers — no hand-rolled,
+    inline-styled div/span markup (the inline-style budget for this tab's own
+    ``st.markdown`` is 0; the lock-in / smoke test enforces it);
+  * ``source_footer`` last; steel-blue WSJ identity throughout (``C_*`` only).
+
+The ``render(...)`` signature is the platform-standard dashboard contract and
+is dispatched from ``app.py`` (``if active_section == "dashboard":``) BY KEYWORD
+for the optional feeds and positionally for the three required model outputs —
+the order and names MUST NOT change. ``**_kwargs`` absorbs any future feed.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
-import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+import plotly.graph_objects as go
+
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
-    C_CONV,
     C_HIGH,
     C_LOW,
-    C_MACRO,
     C_MOD,
-    C_TEXT,
     C_TEXT2,
     C_TEXT3,
     alert_banner,
     apply_dark_layout,
     badge,
+    gauge_ring,
     insight_card_html,
     metric_card_row,
     page_header,
@@ -50,66 +61,67 @@ from ui.styles import (
     section_header,
     source_footer,
     status_badge,
+    ticker_tape_html,
+    tldr_lede,
     wsj_market_table,
 )
 
-try:
-    from ports.port_registry import PORTS, PORTS_BY_LOCODE
-    from ports.demand_analyzer import PortDemandResult
-    from routes.optimizer import RouteOpportunity
-    from engine.insight import Insight
-except Exception:
-    PORTS = []
-    PORTS_BY_LOCODE = {}
-    PortDemandResult = Any
-    RouteOpportunity = Any
-    Insight = Any
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEEP-LINK ROUTING CONTRACT
+# ══════════════════════════════════════════════════════════════════════════════
+# Each hero tile carries a "View →" button that focuses the relevant detail
+# section. The orchestrator (app.py) reads ``st.session_state["nav_section"]``
+# at the top of every run, so setting it + rerunning is the whole contract.
+# These keys MUST match the sidebar section keys app.py dispatches on.
+
+_VALID_SECTIONS: frozenset[str] = frozenset({
+    "dashboard", "markets", "disruption_alpha", "ports_routes", "carriers",
+    "trade_macro", "supply_chain", "risk", "intelligence", "reports",
+})
+
+
+def _route_to(section: str) -> None:
+    """Focus ``section`` in the sidebar and rerun. No-op on an unknown key so
+    a typo can never blank the app."""
+    if section not in _VALID_SECTIONS:
+        logger.warning(f"Overview deep-link to unknown section: {section!r}")
+        return
+    st.session_state["nav_section"] = section
+    st.rerun()
+
+
+def _nav_button(label: str, section: str, key: str) -> None:
+    """Render a 'View →' button that deep-links into ``section``.
+
+    Uses ``st.button`` (a native widget, not styled HTML) so it stays inside
+    the inline-style budget. In the smoke harness ``st.button`` returns False,
+    so the rerun branch is inert there — render completes cleanly.
+    """
+    if st.button(label, key=key, use_container_width=True):
+        _route_to(section)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPERS — cell formatters + domain colors
+# SAFE VALUE HELPERS — every feed may be empty / None / odd-shaped
 # ══════════════════════════════════════════════════════════════════════════════
-# wsj_market_table renders cell strings as raw HTML inside <td>. These helpers
-# only style content (font + conditional color); table CSS handles alignment
-# and rule lines. Mirrors the pattern in ui/tab_results.py and tab_rate_analytics.py.
+# freight_data / macro_data can be keyed by route → DataFrame (the smoke
+# bundle) OR carry plain scalar headline keys (the live snapshot). These
+# getters only format genuine scalars and degrade to a default otherwise, so
+# a DataFrame value never explodes ``"{:,.0f}".format(df)``.
 
 
-def _mono(value: str, color: str = C_TEXT) -> str:
-    """Monospace numeric cell content."""
-    return (
-        f'<span style="font-family:var(--mono);color:{color};'
-        f'font-variant-numeric:tabular-nums;">{value}</span>'
-    )
+def _is_scalar_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
-    """Sans-serif cell content."""
-    return (
-        f'<span style="font-family:var(--sans);color:{color};'
-        f'font-weight:{weight};">{value}</span>'
-    )
-
-
-def _score_color(score: float) -> str:
-    if score >= 0.70:
-        return C_HIGH
-    if score >= 0.45:
-        return C_MOD
-    return C_LOW
-
-
-def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _safe_avg(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
-
-
-def _fv(d: dict, *keys, fmt="{}", default="--"):
+def _scalar(d: Any, *keys: str, fmt: str = "{}", default: str = "--") -> str:
+    """First scalar value among ``keys`` in dict ``d``, formatted; else default."""
+    if not isinstance(d, dict):
+        return default
     for k in keys:
         v = d.get(k)
-        if v is not None:
+        if _is_scalar_number(v):
             try:
                 return fmt.format(v)
             except Exception:
@@ -117,338 +129,80 @@ def _fv(d: dict, *keys, fmt="{}", default="--"):
     return default
 
 
-# Local domain colors used by the signal-conviction matrix (kept local because
-# they're semantic only for this tab).
-_CONVICTION_PALETTE: dict[str, str] = {
-    "Strong":   C_HIGH,
-    "Bullish":  C_HIGH,
-    "Neutral":  C_TEXT2,
-    "Caution":  C_MOD,
-    "Avoid":    C_LOW,
-}
+def _safe_avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
 
 
-def _conviction_label(score: float) -> str:
-    if score >= 0.80:
-        return "Strong"
-    if score >= 0.65:
-        return "Bullish"
-    if score >= 0.50:
-        return "Neutral"
-    if score >= 0.35:
-        return "Caution"
-    return "Avoid"
-
-
-# Plain-English framing for the market tone — surfaced in the verdict banner so
-# the front page reads as an editorial call before the eye reaches the KPIs.
-_TONE_GLOSS: dict[str, str] = {
-    "Bullish": "demand is running hot across the tracked port network — "
-               "conditions favour leaning into capacity",
-    "Neutral": "demand is balanced across the network — no decisive tilt "
-               "either way",
-    "Bearish": "demand is soft across the tracked port network — conditions "
-               "argue for caution on new capacity",
-    "Awaiting Data": "live feeds have not populated yet — figures below are "
-                     "illustrative until a refresh completes",
-}
-
-_TONE_LEVEL: dict[str, str] = {
-    "Bullish": "success",
-    "Neutral": "warning",
-    "Bearish": "critical",
-    "Awaiting Data": "info",
-}
-
-
-# Sources used by the dashboard's composite sections.
-_DASHBOARD_SOURCES = [
-    {"name": "Port demand engine",   "kind": "modeled",  "quality": "modeled"},
-    {"name": "Route optimizer",      "kind": "modeled",  "quality": "modeled"},
-    {"name": "Insight engine",       "kind": "modeled",  "quality": "modeled"},
-    {"name": "Freight indices",      "kind": "scraped",  "quality": "good"},
-    {"name": "Macro / FX",           "kind": "live",     "quality": "good"},
-]
-
-
-def _market_tone(port_results: list) -> tuple[str, str]:
-    """Resolve the dashboard's headline tone from average port demand.
-
-    Returns ``(tone, status)`` where ``status`` is a ``status_badge`` key.
-    """
-    has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
-    avg = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
-    if avg >= 0.65:
-        return "Bullish", "success"
-    if avg >= 0.45:
-        return "Neutral", "warning"
-    if avg > 0:
-        return "Bearish", "danger"
-    return "Awaiting Data", "neutral"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION B — Market Verdict (tone banner + feed health)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_market_verdict(
-    port_results: list, route_results: list, insights: list,
-    freight_data: dict, macro_data: dict, stock_data: dict,
-) -> None:
-    """Render the headline market-tone banner plus the per-feed health row.
-
-    The banner states the editorial call; the ``source_footer`` strip beneath
-    it shows which of the six platform feeds are live versus running on demo
-    defaults — the same idiom every other tab uses for provenance.
-    """
+def _last_close(df: Any) -> float | None:
+    """Last 'close' (or 'value'/'price') from a price-like DataFrame, defensively."""
     try:
-        tone, _ = _market_tone(port_results)
-        has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
-        avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
-
-        level = _TONE_LEVEL.get(tone, "info")
-        gloss = _TONE_GLOSS.get(tone, "fleet conditions are mixed")
-        demand_clause = (
-            f" Average port demand reads <b>{avg_demand:.0%}</b> across "
-            f"<b>{len(has_data)}</b> tracked ports."
-            if has_data else ""
-        )
-        alert_banner(
-            f"Market tone reads <b>{tone}</b> — {gloss}.{demand_clause}",
-            level=level,
-        )
-
-        feeds = [
-            ("Ports",    bool(has_data),       "modeled"),
-            ("Routes",   bool(route_results),  "modeled"),
-            ("Signals",  bool(insights),       "modeled"),
-            ("Freight",  bool(freight_data),   "scraped"),
-            ("Macro",    bool(macro_data),     "live"),
-            ("Equities", bool(stock_data),     "live"),
-        ]
-        feed_sources = [
-            {
-                "name":    name,
-                "kind":    kind if ok else "demo",
-                "quality": "good" if ok else "demo",
-            }
-            for name, ok, kind in feeds
-        ]
-
-        sb_left, sb_right = st.columns([6, 2])
-        with sb_left:
-            st.markdown(source_footer(feed_sources, align="left"), unsafe_allow_html=True)
-        with sb_right:
-            st.markdown(
-                _mono(f"As of {_now_utc()}", color=C_TEXT3),
-                unsafe_allow_html=True,
-            )
+        if df is None or getattr(df, "empty", True):
+            return None
+        cols = list(getattr(df, "columns", []))
+        for col in ("close", "value", "price", "rate_usd_per_feu"):
+            if col in cols:
+                series = df[col].dropna()
+                if len(series):
+                    return float(series.iloc[-1])
     except Exception:
-        logger.exception("Overview — market verdict render failed")
+        return None
+    return None
+
+
+def _pct_change(df: Any) -> float:
+    """First→last % change of a price-like DataFrame; 0.0 if not derivable."""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return 0.0
+        cols = list(getattr(df, "columns", []))
+        for col in ("close", "value", "price", "rate_usd_per_feu"):
+            if col in cols:
+                series = df[col].dropna()
+                if len(series) >= 2 and float(series.iloc[0]) != 0.0:
+                    first, last = float(series.iloc[0]), float(series.iloc[-1])
+                    return (last - first) / abs(first) * 100.0
+    except Exception:
+        return 0.0
+    return 0.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION B2 — Editorial Commentary (per-tab LLM, cached + template fallback)
+# PROVENANCE — honest about modeled vs real (most of this is MODELED)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_editorial_commentary(
-    port_results: list, route_results: list, insights: list,
-    freight_data: dict, macro_data: dict,
-) -> None:
-    """Render a 1-2 paragraph editorial commentary from ``engine.tab_commentary``.
+def _overview_sources() -> list[DataSource]:
+    """Build the footer's source list from ``data.quality`` primitives.
 
-    Wraps the engine call in try/except — the entire section is defensive
-    so a network blip or a missing API key never breaks the front page.
-    The commentary itself is template-fallback safe; the only failure mode
-    we have to guard against here is import errors / DB errors.
+    Honest provenance: the stress index, route optimizer and insight engine
+    are MODELED derivations; freight indices are SCRAPED; macro/FX is LIVE.
     """
     try:
-        from engine.tab_commentary import build_commentary
-
-        has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
-        avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
-        top_insight = max(
-            (i for i in insights if getattr(i, "score", None) is not None),
-            key=lambda i: getattr(i, "score", 0.0),
-            default=None,
-        )
-        top_route = max(
-            (r for r in route_results
-             if getattr(r, "opportunity_score", None) is not None),
-            key=lambda r: getattr(r, "opportunity_score", 0.0),
-            default=None,
-        )
-        bdi_val = _fv(freight_data or {}, "bdi", "BDI", fmt="{:.0f}", default="")
-
-        context: dict[str, object] = {
-            "tone": _market_tone(port_results)[0],
-            "avg_port_demand": round(avg_demand, 3),
-            "tracked_ports": len(has_data),
-            "high_conviction_signals": sum(
-                1 for i in insights if getattr(i, "score", 0) >= 0.70
+        return [
+            DataSource.modeled(
+                "Shipping Stress Index",
+                notes="Fleet-wide SSI composite over the modeled route book.",
             ),
-            "strong_routes": sum(
-                1 for r in route_results
-                if getattr(r, "opportunity_label", "") == "Strong"
+            DataSource.modeled(
+                "Decision engine",
+                notes="Insights, route opportunities and alerts — modeled.",
             ),
-        }
-        if top_insight is not None:
-            context["top_signal"] = (
-                f"{getattr(top_insight, 'title', '') or ''}"
-                f" (score {getattr(top_insight, 'score', 0.0):.2f})"
-            ).strip()
-        if top_route is not None:
-            context["top_route"] = (
-                f"{getattr(top_route, 'route_name', '') or getattr(top_route, 'route_id', '')}"
-                f" (opportunity {getattr(top_route, 'opportunity_score', 0.0):.2f})"
-            ).strip()
-        if bdi_val:
-            context["bdi"] = bdi_val
-
-        commentary = build_commentary("overview", context)
-
-        section_header(
-            "Editorial",
-            subtitle="LLM-narrated read on the current overview snapshot. "
-            "Falls back to a deterministic template when no API key is configured.",
-        )
-
-        source_label, source_color = (
-            ("LLM", C_HIGH) if commentary.source == "llm"
-            else ("Template", C_MOD)
-        )
-        meta_bits = [f"<span style='color:{source_color}'>{source_label}</span>"]
-        if commentary.source == "llm" and commentary.model:
-            meta_bits.append(
-                f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{commentary.model}</code>"
-            )
-        if commentary.tokens_in or commentary.tokens_out:
-            meta_bits.append(
-                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
-                f"{commentary.tokens_in}→{commentary.tokens_out} tok</span>"
-            )
-
-        body_html = "".join(
-            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
-            f'color:{C_TEXT2}">{para.strip()}</p>'
-            for para in commentary.body.split("\n\n") if para.strip()
-        )
-        st.markdown(
-            f'<div style="background:rgba(53,114,176,0.06);'
-            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
-            f'margin-bottom:14px">'
-            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
-            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
-            f'Source: {" · ".join(meta_bits)}'
-            f'</div>'
-            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.05rem;'
-            f'line-height:1.4;color:{C_TEXT};font-weight:600;margin-bottom:10px">'
-            f'{commentary.headline}</div>'
-            f'{body_html}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        logger.exception("Overview — editorial commentary render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION C — Headline KPI Strip
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_kpi_strip(
-    port_results: list, route_results: list, insights: list,
-    freight_data: dict, macro_data: dict, stock_data: dict,
-    alerts: list,
-) -> None:
-    try:
-        fd = freight_data or {}
-        has_data = [r for r in port_results if getattr(r, "has_real_data", False)]
-        avg_demand = _safe_avg([r.demand_score for r in has_data]) if has_data else 0.0
-        hi_conv = sum(1 for i in insights if getattr(i, "score", 0) >= 0.70)
-        n_alerts = len(alerts) if alerts else sum(1 for i in insights if getattr(i, "score", 0) >= 0.80)
-        strong_rts = sum(1 for r in route_results if getattr(r, "opportunity_label", "") == "Strong")
-
-        demand_str = f"{avg_demand:.0%}" if avg_demand else "--"
-        alert_color = C_LOW if n_alerts > 3 else C_MOD if n_alerts > 0 else C_HIGH
-        alert_sub = (
-            "elevated risk load" if n_alerts > 3
-            else "monitoring" if n_alerts > 0
-            else "all clear"
-        )
-
-        section_header(
-            "Headline KPIs",
-            "Six figures that frame the session — freight indices, port demand, "
-            "risk load and conviction",
-        )
-        metric_card_row(
-            [
-                {"label": "Baltic Dry Index", "value": _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"),
-                 "accent": C_ACCENT, "sublabel": "dry-bulk benchmark"},
-                {"label": "Container Index", "value": _fv(fd, "wci", "WCI", "SCFI", fmt="{:,.0f}", default="2,204"),
-                 "accent": C_ACCENT, "sublabel": "boxship spot rates"},
-                {"label": "Avg Port Demand", "value": demand_str,
-                 "accent": C_HIGH if avg_demand >= 0.6 else C_TEXT3,
-                 "sublabel": f"{len(has_data)} ports tracked"},
-                {"label": "Active Alerts", "value": str(n_alerts),
-                 "accent": alert_color, "sublabel": alert_sub},
-                {"label": "High Conviction", "value": str(hi_conv),
-                 "accent": C_HIGH if hi_conv > 2 else C_TEXT3,
-                 "sublabel": f"of {len(insights)} signals"},
-                {"label": "Strong Routes", "value": str(strong_rts),
-                 "accent": C_HIGH if strong_rts > 2 else C_TEXT3,
-                 "sublabel": f"of {len(route_results)} lanes"},
-            ],
-            columns=6,
-        )
-    except Exception:
-        logger.exception("Overview — KPI strip render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION D — Market Pulse
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_market_pulse(freight_data: dict, macro_data: dict, stock_data: dict) -> None:
-    try:
-        fd = freight_data or {}
-        md = macro_data or {}
-
-        rates = [
-            ("BDI",       _fv(fd, "bdi", "BDI", fmt="{:,.0f}", default="1,847"),  "+1.3%",  C_HIGH),
-            ("SCFI",      _fv(fd, "scfi", "SCFI", fmt="{:,.0f}", default="2,856"), "+2.4%",  C_HIGH),
-            ("WCI",       _fv(fd, "wci", "WCI", fmt="{:,.0f}", default="3,210"),  "-1.4%",  C_LOW),
-            ("VLCC Spot", _fv(fd, "vlcc_rate", "vlcc", fmt="${:,.0f}/d", default="$32,500/d"), "+0.6%", C_HIGH),
-            ("Crude",     _fv(md, "crude", "CRUDE", fmt="${:.2f}", default="$81.34"),  "+0.6%", C_HIGH),
-            ("USD/CNY",   _fv(md, "usdcny", "USD/CNY", fmt="{:.3f}", default="7.243"), "+0.2%", C_MOD),
+            DataSource.scraped("Freight indices", notes="BDI / SCFI / WCI spot."),
+            DataSource.live("Macro / FX"),
         ]
-
-        section_header("Market Pulse", "Key freight indices, rates and macro markers")
-
-        rows = []
-        for name, value, delta, delta_color in rates:
-            rows.append([
-                _sans(name, color=C_TEXT, weight=600),
-                _mono(value, color=C_TEXT),
-                _mono(delta, color=delta_color),
-            ])
-        wsj_market_table(["Indicator", "Value", "Δ 24h"], rows)
-
-        st.markdown(
-            source_footer([
-                {"name": "Baltic Exchange",  "kind": "scraped", "quality": "good"},
-                {"name": "FRED / macro",     "kind": "live",    "quality": "good"},
-            ]),
-            unsafe_allow_html=True,
-        )
     except Exception:
-        logger.exception("Overview — market pulse render failed")
+        logger.exception("Overview — source list build failed")
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION D — Signal Conviction Matrix
+# PURE BUILDER — signal-conviction heatmap (retained, unit-tested directly)
 # ══════════════════════════════════════════════════════════════════════════════
+# A self-contained, ``st``-free figure builder kept on the module surface so the
+# lock-in tests can exercise the corridor × commodity conviction heatmap in
+# isolation. The hero front page itself stays lean (it leads with the lede +
+# stat strip + tiles), but this builder is available for any deeper view that
+# wants the matrix, and pins the colour-scale / annotation contract.
+
 
 def _build_signal_conviction_heatmap(
     corridors: list[str],
@@ -457,13 +211,10 @@ def _build_signal_conviction_heatmap(
 ) -> go.Figure:
     """Heatmap of corridor × commodity conviction scores (0–1).
 
-    Colour scale runs red → gray → green so the bullish cells light up
-    and the avoid cells fade out. Each cell is annotated with its
-    percentage so the heatmap can stand alone if the table below it is
-    out of view.
-
-    Pure builder — no ``st.*`` calls — exercised directly by the lock-in
-    tests. An empty / mis-shaped grid returns an annotated-empty figure.
+    Colour scale runs red → gray → green so the bullish cells light up and the
+    avoid cells fade out. Each cell is annotated with its percentage so the
+    heatmap can stand alone. Pure builder — no ``st.*`` calls. An empty /
+    mis-shaped grid returns an annotated-empty figure.
     """
     fig = go.Figure()
     if (not corridors or not commodities
@@ -529,525 +280,461 @@ def _build_signal_conviction_heatmap(
     return fig
 
 
-def _render_signal_matrix(route_results: list, insights: list) -> None:
-    try:
-        CORRIDORS = ["Trans-Pacific", "Asia-Europe", "Trans-Atlantic", "Intra-Asia"]
-        COMMODITIES = ["Dry Bulk", "Container", "Tanker", "LNG/LPG"]
-
-        def _cell_score(corridor: str, commodity: str) -> float:
-            c_lower = corridor.lower().replace("-", " ")
-            m_lower = commodity.lower()
-            scores = []
-            for ins in insights:
-                title = (getattr(ins, "title", "") or "").lower()
-                cat = (getattr(ins, "category", "") or "").lower()
-                route_match = any(w in title for w in c_lower.split())
-                comm_match = (
-                    (m_lower == "dry bulk" and ("bulk" in title or "bdi" in title or cat == "route"))
-                    or (m_lower == "container" and ("container" in title or "feu" in title))
-                    or (m_lower == "tanker" and ("tanker" in title or "vlcc" in title or "crude" in title))
-                    or (m_lower == "lng/lpg" and ("lng" in title or "lpg" in title or "gas" in title))
-                )
-                if route_match or comm_match:
-                    scores.append(getattr(ins, "score", 0.5))
-            if scores:
-                return min(1.0, _safe_avg(scores))
-            for r in route_results:
-                name = (getattr(r, "route_name", "") or "").lower()
-                if any(w in name for w in c_lower.split()):
-                    return getattr(r, "opportunity_score", 0.45)
-            return 0.35
-
-        section_header(
-            "Signal Conviction",
-            "Composite conviction by trade corridor and commodity class",
-        )
-
-        # Compute the grid once — used both by the heatmap and the table.
-        score_grid: list[list[float]] = [
-            [_cell_score(corridor, commodity) for commodity in COMMODITIES]
-            for corridor in CORRIDORS
-        ]
-
-        # Heatmap above the table: pattern first, precision second.
-        st.plotly_chart(
-            _build_signal_conviction_heatmap(CORRIDORS, COMMODITIES, score_grid),
-            use_container_width=True,
-            key="overview_signal_conviction_heatmap",
-        )
-
-        rows = []
-        for i, corridor in enumerate(CORRIDORS):
-            row = [_sans(corridor, color=C_TEXT, weight=700)]
-            for j, commodity in enumerate(COMMODITIES):
-                score = score_grid[i][j]
-                label = _conviction_label(score)
-                color = _CONVICTION_PALETTE.get(label, C_TEXT2)
-                pct = int(score * 100)
-                row.append(
-                    f'{_mono(f"{pct}%", color=color)}'
-                    f'<br>{badge(label, color=color)}'
-                )
-            rows.append(row)
-
-        wsj_market_table(["Corridor", *COMMODITIES], rows)
-        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Overview — signal matrix render failed")
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION D — Top Signals (featured card + table)
+# 2. LEDE — daily-briefing TLDR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_top_signals(insights: list) -> None:
-    try:
-        section_header(
-            "Top Signals",
-            f"{len(insights)} active — highest-conviction calls first",
-        )
-
-        if not insights:
-            alert_banner(
-                "No signals generated yet — refresh live feeds to populate the "
-                "decision engine.",
-                level="info",
-            )
-            return
-
-        ACTION_COLOR = {"Prioritize": C_HIGH, "Monitor": C_ACCENT, "Watch": C_TEXT2, "Caution": C_MOD, "Avoid": C_LOW}
-        ranked = sorted(insights, key=lambda i: getattr(i, "score", 0), reverse=True)
-
-        # ─ Featured signal — the single highest-conviction call, promoted to an
-        #   editorial insight card so the front page leads with a verdict, not a
-        #   table row. Mirrors the forecast callout in tab_disruption_radar.
-        lead = ranked[0]
-        lead_score = float(getattr(lead, "score", 0.5) or 0.5)
-        lead_title = (getattr(lead, "title", "--") or "--")[:90]
-        lead_action = getattr(lead, "action", "Monitor") or "Monitor"
-        lead_detail = (getattr(lead, "detail", "") or "").strip()
-        lead_category = (getattr(lead, "category", "") or "").upper()
-        st.markdown(
-            insight_card_html(
-                title=lead_title,
-                score=max(0.0, min(1.0, lead_score)),
-                action=lead_action,
-                rationale=lead_detail[:220],
-                category=lead_category,
-            ),
-            unsafe_allow_html=True,
-        )
-
-        # ─ Remaining high-conviction signals as a compact table ─
-        rest = ranked[1:6]
-        if rest:
-            rows = []
-            for ins in rest:
-                score = getattr(ins, "score", 0.5)
-                title = (getattr(ins, "title", "--") or "--")[:80]
-                action = getattr(ins, "action", "Monitor") or "Monitor"
-                pct = int(score * 100)
-                sc = _score_color(score)
-                ac = ACTION_COLOR.get(action, C_ACCENT)
-                rows.append([
-                    _mono(f"{pct}%", color=sc),
-                    _sans(title, color=C_TEXT, weight=500),
-                    badge(action, color=ac),
-                ])
-            wsj_market_table(["Score", "Signal", "Action"], rows)
-
-        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Overview — top signals render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION E — Risk & Alerts
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_risk_alerts(insights: list, alerts: list) -> None:
-    try:
-        alert_items = []
-        if alerts:
-            for a in alerts[:6]:
-                sev = getattr(a, "severity", "MODERATE") or "MODERATE"
-                title = getattr(a, "title", "") or getattr(a, "message", "") or "--"
-                alert_items.append((sev, title[:70]))
-        else:
-            risky = [i for i in insights if getattr(i, "score", 0) >= 0.75]
-            risky.sort(key=lambda i: getattr(i, "score", 0), reverse=True)
-            for ins in risky[:6]:
-                score = getattr(ins, "score", 0.5)
-                title = getattr(ins, "title", "--") or "--"
-                sev = "HIGH" if score >= 0.85 else "MODERATE"
-                alert_items.append((sev, title[:70]))
-
-        SEV_STATUS = {"CRITICAL": "danger", "HIGH": "danger", "MODERATE": "warning", "LOW": "success"}
-
-        section_header("Risk & Alerts", f"{len(alert_items)} flagged for attention")
-
-        if not alert_items:
-            alert_banner("No active alerts — the network is reading clean.", level="success")
-            return
-
-        rows = []
-        for sev, title in alert_items:
-            rows.append([
-                status_badge(sev, SEV_STATUS.get(sev, "warning")),
-                _sans(title, color=C_TEXT2, weight=500),
-            ])
-        wsj_market_table(["Severity", "Detail"], rows)
-        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Overview — risk alerts render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION E — Route Opportunities
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_route_opps(route_results: list) -> None:
-    try:
-        strong = sorted(
-            [r for r in route_results if getattr(r, "opportunity_score", 0) >= 0.55],
-            key=lambda r: getattr(r, "opportunity_score", 0), reverse=True,
-        )[:5]
-
-        section_header("Route Opportunities", f"{len(strong)} lanes scoring strong")
-
-        if not strong:
-            alert_banner(
-                "No lanes are scoring strong right now — the route optimizer "
-                "found no standout opportunities.",
-                level="info",
-            )
-            return
-
-        rows = []
-        for r in strong:
-            name = getattr(r, "route_name", "") or getattr(r, "route_id", "") or "--"
-            score = getattr(r, "opportunity_score", 0)
-            pct = int(score * 100)
-            sc = _score_color(score)
-            rate = getattr(r, "current_rate_usd_feu", None)
-            rate_str = f"${rate:,.0f}/FEU" if rate else "--"
-
-            rows.append([
-                _sans(str(name)[:25], color=C_TEXT, weight=600),
-                _mono(rate_str, color=C_TEXT2),
-                _mono(f"{pct}%", color=sc),
-            ])
-        wsj_market_table(["Route", "Rate", "Score"], rows)
-        st.markdown(
-            source_footer([{"name": "Route optimizer", "kind": "modeled", "quality": "modeled"}]),
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        logger.exception("Overview — route opps render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION E — Data-Feed Status
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_data_status(
-    port_results: list, route_results: list, insights: list,
-    freight_data: dict, macro_data: dict, stock_data: dict,
+def _render_lede(
+    port_results: list, route_results: list,
+    freight_data: dict, macro_data: dict,
 ) -> None:
-    try:
-        has_data_ports = [r for r in port_results if getattr(r, "has_real_data", False)]
+    """Render the one-paragraph TLDR lede via ``ui.styles.tldr_lede``.
 
-        sources = [
-            ("Port Demand",  bool(has_data_ports)),
-            ("Routes",       bool(route_results)),
-            ("Signals",      bool(insights)),
-            ("Freight",      bool(freight_data)),
-            ("Macro / FX",   bool(macro_data)),
-            ("Equities",     bool(stock_data)),
-        ]
-
-        ok_count = sum(1 for _, ok in sources if ok)
-        section_header("Data Feeds", f"{ok_count} of {len(sources)} feeds live")
-
-        rows = []
-        for name, ok in sources:
-            rows.append([
-                _sans(name, color=C_TEXT2, weight=500),
-                status_badge("Live" if ok else "Offline", "success" if ok else "danger"),
-            ])
-        wsj_market_table(["Feed", "Status"], rows)
-    except Exception:
-        logger.exception("Overview — data status render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION F — Quick Views (distribution snapshots)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_sparklines(port_results: list, insights: list, freight_data: dict) -> None:
-    try:
-        section_header(
-            "Quick Views",
-            "Distribution snapshots across the signal book and port network",
-        )
-        cols = st.columns(3)
-        drew_any = False
-
-        with cols[0]:
-            if port_results:
-                scores = [getattr(r, "demand_score", 0) for r in port_results
-                          if getattr(r, "has_real_data", False)]
-                if scores:
-                    fig = go.Figure(go.Histogram(
-                        x=scores, nbinsx=12,
-                        marker_color=C_ACCENT,
-                        marker_line_width=0,
-                    ))
-                    apply_dark_layout(
-                        fig,
-                        title="Port Demand Distribution",
-                        height=200,
-                        showlegend=False,
-                        margin={"l": 16, "r": 16, "t": 36, "b": 24},
-                    )
-                    fig.update_xaxes(title_text="Score", title_font_size=10)
-                    fig.update_yaxes(title_text="Ports", title_font_size=10)
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-                    drew_any = True
-
-        with cols[1]:
-            if insights:
-                scores = [getattr(i, "score", 0) for i in insights]
-                cats = [getattr(i, "category", "OTHER") or "OTHER" for i in insights]
-                cat_colors = {
-                    "CONVERGENCE": C_CONV, "ROUTE": C_ACCENT,
-                    "PORT_DEMAND": C_HIGH, "MACRO": C_MACRO,
-                }
-                colors = [cat_colors.get(c, C_TEXT3) for c in cats]
-
-                fig = go.Figure(go.Bar(
-                    x=list(range(len(scores))),
-                    y=scores,
-                    marker_color=colors,
-                    marker_line_width=0,
-                ))
-                apply_dark_layout(
-                    fig,
-                    title="Signal Scores",
-                    height=200,
-                    showlegend=False,
-                    margin={"l": 16, "r": 16, "t": 36, "b": 24},
-                )
-                fig.update_xaxes(showticklabels=False, title_text="Signals", title_font_size=10)
-                fig.update_yaxes(title_text="Score", title_font_size=10, range=[0, 1])
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-                drew_any = True
-
-        with cols[2]:
-            if port_results:
-                demand = [getattr(r, "demand_score", 0) for r in port_results
-                          if getattr(r, "has_real_data", False)]
-                congestion = [getattr(r, "congestion_index", 0) for r in port_results
-                              if getattr(r, "has_real_data", False)]
-                names = [getattr(r, "port_name", "") for r in port_results
-                         if getattr(r, "has_real_data", False)]
-                if demand and congestion:
-                    fig = go.Figure(go.Scatter(
-                        x=demand, y=congestion,
-                        mode="markers",
-                        marker=dict(
-                            size=8, color=demand,
-                            colorscale=[[0, C_LOW], [0.5, C_MOD], [1, C_HIGH]],
-                            line=dict(width=0),
-                        ),
-                        text=names,
-                        hovertemplate="<b>%{text}</b><br>Demand: %{x:.0%}<br>Congestion: %{y:.0%}<extra></extra>",
-                    ))
-                    apply_dark_layout(
-                        fig,
-                        title="Demand vs Congestion",
-                        height=200,
-                        showlegend=False,
-                        margin={"l": 16, "r": 16, "t": 36, "b": 24},
-                    )
-                    fig.update_xaxes(title_text="Demand", title_font_size=10, range=[0, 1])
-                    fig.update_yaxes(title_text="Congestion", title_font_size=10, range=[0, 1])
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-                    drew_any = True
-
-        if not drew_any:
-            alert_banner(
-                "Quick Views populate once port and signal data are available.",
-                level="info",
-            )
-            return
-
-        st.markdown(source_footer(_DASHBOARD_SOURCES), unsafe_allow_html=True)
-    except Exception:
-        logger.exception("Overview — quick views render failed")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# COLD-START SPLASH
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_cold_start() -> None:
-    try:
-        alert_banner(
-            "<b>No data loaded yet.</b> The dashboard is waiting on its first "
-            "live refresh — follow the three steps below to populate every tab.",
-            level="info",
-        )
-        section_header(
-            "Getting Started",
-            "Three steps from a cold start to a fully live dashboard",
-        )
-        metric_card_row(
-            [
-                {"label": "Step 1", "value": "Add API keys",
-                 "accent": C_ACCENT, "sublabel": "Update .env with credentials"},
-                {"label": "Step 2", "value": "Refresh Data",
-                 "accent": C_HIGH,   "sublabel": "Click the sidebar refresh button"},
-                {"label": "Step 3", "value": "Wait 30-60s",
-                 "accent": C_MOD,    "sublabel": "Live feeds populate the tabs"},
-            ],
-            columns=3,
-        )
-    except Exception:
-        logger.exception("Overview — cold start splash failed")
-        st.info("Dashboard loading -- configure API credentials to enable live data.")
-
-
-# ── Daily Briefing (LLM-narrated; template fallback) ────────────────────────
-def _render_daily_briefing(port_results, route_results, freight_data, macro_data) -> None:
-    """Pulls SSI + route forecasts, hands them to engine.narration_engine's
-    LLM-narrated daily-briefing path, and renders the output as a clean
-    panel. Falls back to a template-based briefing when no API key is
-    configured — the UI always shows something.
+    Best-effort: assemble a ``NarrationContext`` from the existing platform
+    signals (SSI + top forecasts), distill it with
+    ``engine.daily_briefing_tldr.generate_tldr`` (Haiku, with a deterministic
+    template + day-cache fallback when no API key is set), and render the
+    resulting paragraph. Any failure synthesizes a sensible line from the
+    SSI label so the front page always opens with a verdict.
     """
+    text, source = "", "template"
     try:
         from engine.narration_engine import (
             NarrationContext,
             generate_daily_narration,
         )
+        from engine.daily_briefing_tldr import generate_tldr
 
-        # ── Assemble the NarrationContext from existing platform signals ──
         stress_report = None
-        forecasts: list = []
         try:
             from processing.shipping_stress_index import compute_shipping_stress
             stress_report = compute_shipping_stress(
                 freight_data, macro_data, port_results, route_results,
             )
         except Exception as exc:
-            logger.debug(f"daily_briefing: SSI compute failed: {exc}")
+            logger.debug(f"Overview lede: SSI compute failed: {exc}")
 
+        forecasts: list = []
         try:
             from processing.disruption_forecast import forecast_all_stress
-            all_forecasts = forecast_all_stress(
-                freight_data, macro_data, route_results, stress_report=stress_report,
-            )
-            # Sort by absolute 30d stress descending; take the top 5.
             forecasts = sorted(
-                all_forecasts, key=lambda f: getattr(f, "stress_30d", 0.0),
+                forecast_all_stress(
+                    freight_data, macro_data, route_results,
+                    stress_report=stress_report,
+                ),
+                key=lambda f: getattr(f, "stress_30d", 0.0),
                 reverse=True,
             )[:5]
         except Exception as exc:
-            logger.debug(f"daily_briefing: forecast compute failed: {exc}")
-
-        # Notable headline indicators from macro / freight feeds, if present.
-        notable: dict[str, float] = {}
-        try:
-            if isinstance(macro_data, dict):
-                for k in ("BDIY", "BDI", "WCI", "FBX", "SCFI"):
-                    df = macro_data.get(k)
-                    if df is not None and not getattr(df, "empty", True):
-                        if "value" in getattr(df, "columns", []):
-                            notable[k] = float(df["value"].dropna().iloc[-1])
-        except Exception:
-            pass
+            logger.debug(f"Overview lede: forecast compute failed: {exc}")
 
         ctx = NarrationContext(
             stress_report=stress_report,
             top_forecasts=forecasts,
-            notable_indicators=notable,
+            notable_indicators={},
         )
         narration = generate_daily_narration(ctx)
+        summary = generate_tldr(narration)
+        text, source = (summary.text or "").strip(), summary.source
+    except Exception:
+        logger.exception("Overview — lede TLDR generation failed")
 
-        # ── Render ────────────────────────────────────────────────────────
-        section_header(
-            "Daily Briefing",
-            subtitle="LLM-narrated synthesis of today's shipping signals. "
-            "Falls back to a deterministic template when no API key is configured.",
-        )
-
-        # Source badge: claude (green) or template (amber)
-        source_label = {
-            "claude":   ("LLM", C_HIGH),
-            "template": ("Template", C_MOD),
-        }.get(narration.source, ("Unknown", C_TEXT3))
-        meta_bits = [f"{source_label[0]}"]
-        if narration.source == "claude" and narration.model:
-            meta_bits.append(f"<code style='font-size:0.66rem;color:{C_TEXT3}'>{narration.model}</code>")
-        if narration.tokens_in or narration.tokens_out:
-            meta_bits.append(
-                f"<span style='font-size:0.66rem;color:{C_TEXT3}'>"
-                f"{narration.tokens_in}→{narration.tokens_out} tok</span>"
+    # Synthesized fallback — derive a verdict line from the SSI directly so the
+    # hero never opens blank, even with no narration / no key / empty feeds.
+    if not text:
+        try:
+            from processing.shipping_stress_index import compute_shipping_stress
+            rep = compute_shipping_stress(
+                freight_data, macro_data, port_results, route_results,
+            )
+            label = getattr(rep, "ssi_label", "Calm")
+            ssi = getattr(rep, "overall_ssi", 0.0)
+            top = list(getattr(rep, "top_disruptions", []) or [])[:1]
+            lead = f" Leading driver: {top[0]}." if top else ""
+            text = (
+                f"Shipping stress reads {label.lower()} at {ssi:.0%} across the "
+                f"tracked route book.{lead} Scan the strip below for the session's "
+                f"headline figures, then drill into any section from the tiles."
+            )
+        except Exception:
+            logger.exception("Overview — synthesized lede fallback failed")
+            text = (
+                "Live feeds have not populated yet — the figures below are "
+                "illustrative until a refresh completes."
             )
 
-        # Headline card
-        st.markdown(
-            f'<div style="background:rgba(53,114,176,0.08);'
-            f'border-left:3px solid {C_ACCENT};padding:14px 18px;border-radius:3px;'
-            f'margin-bottom:14px">'
-            f'<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.14em;'
-            f'color:{C_TEXT3};font-weight:600;margin-bottom:6px">'
-            f'Source: <span style="color:{source_label[1]}">{source_label[0]}</span>'
-            f' · {narration.date}'
-            f'{" · " + meta_bits[1] if len(meta_bits) > 1 else ""}'
-            f'{" · " + meta_bits[2] if len(meta_bits) > 2 else ""}'
-            f'</div>'
-            f'<div style="font-family:Libre Baskerville,Georgia,serif;font-size:1.1rem;'
-            f'line-height:1.4;color:{C_TEXT};font-weight:600">{narration.headline}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Body — render the multi-paragraph text with proper paragraph breaks
-        body_html = "".join(
-            f'<p style="margin:0 0 10px 0;font-size:0.86rem;line-height:1.55;'
-            f'color:{C_TEXT2}">{para.strip()}</p>'
-            for para in narration.body.split("\n\n") if para.strip()
-        )
-        st.markdown(
-            f'<div style="margin:0 0 14px 0">{body_html}</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Sections — 2-column grid for compactness
-        if narration.sections:
-            n_sec = len(narration.sections)
-            cols = st.columns(min(n_sec, 2), gap="medium")
-            for i, sec in enumerate(narration.sections):
-                with cols[i % len(cols)]:
-                    bullets_html = "".join(
-                        f'<li style="font-size:0.78rem;line-height:1.45;color:{C_TEXT2};'
-                        f'margin-bottom:4px">{b}</li>'
-                        for b in sec.bullets
-                    )
-                    st.markdown(
-                        f'<div style="background:rgba(255,255,255,0.02);'
-                        f'border:1px solid rgba(232,230,225,0.06);'
-                        f'border-radius:3px;padding:10px 14px;margin-bottom:10px">'
-                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
-                        f'letter-spacing:0.10em;color:{C_TEXT};font-weight:700;'
-                        f'margin-bottom:6px">{sec.title}</div>'
-                        f'<ul style="margin:0;padding-left:18px">{bullets_html}</ul>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+    try:
+        tldr_lede(text, source=source)
     except Exception:
-        logger.exception("Overview — daily briefing render failed")
+        logger.exception("Overview — tldr_lede render failed")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. STAT STRIP — SSI gauge + headline KPI cards
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _compute_ssi(port_results, route_results, freight_data, macro_data):
+    """Best-effort SSI report; None if the engine is unavailable."""
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        return compute_shipping_stress(
+            freight_data, macro_data, port_results, route_results,
+        )
+    except Exception:
+        logger.exception("Overview — SSI compute failed")
+        return None
+
+
+def _biggest_mover(stock_data: dict) -> tuple[str, float]:
+    """Ticker + abs-largest % move across the equity feed; ('--', 0.0) if none."""
+    best_sym, best_pct = "--", 0.0
+    if isinstance(stock_data, dict):
+        for sym, df in stock_data.items():
+            pct = _pct_change(df)
+            if abs(pct) > abs(best_pct):
+                best_sym, best_pct = str(sym), pct
+    return best_sym, best_pct
+
+
+def _top_chokepoint(ssi_report) -> str:
+    """The headline disruption driver from the SSI report, if any."""
+    try:
+        top = list(getattr(ssi_report, "top_disruptions", []) or [])
+        if top:
+            return str(top[0])[:34]
+    except Exception:
+        pass
+    return "None flagged"
+
+
+def _render_stat_strip(
+    ssi_report, alerts: list, stock_data: dict,
+) -> None:
+    """SSI gauge alongside a headline ``metric_card_row``.
+
+    Cards: overall SSI label, active alert load, biggest equity mover, and the
+    highest-risk chokepoint. Each carries a semantic accent. The gauge is a
+    ``gauge_ring`` (a ``ui.styles`` figure helper) so the lede reads as a
+    dashboard, not a wall of numbers.
+    """
+    try:
+        section_header(
+            "The session in figures",
+            subtitle="Stress index, alert load, the biggest equity mover and the "
+            "leading chokepoint — the whole platform's pulse in one strip.",
+        )
+        ssi = float(getattr(ssi_report, "overall_ssi", 0.0) or 0.0)
+        ssi_label = str(getattr(ssi_report, "ssi_label", "--") or "--")
+        ssi_color = str(getattr(ssi_report, "ssi_color", "") or "") or C_ACCENT
+
+        n_alerts = len(alerts) if alerts else 0
+        crit = sum(
+            1 for a in (alerts or [])
+            if str(getattr(a, "severity", "")).upper() in ("CRITICAL", "HIGH")
+        )
+        alert_color = C_LOW if crit else (C_MOD if n_alerts else C_HIGH)
+        alert_sub = (
+            f"{crit} critical" if crit
+            else ("monitoring" if n_alerts else "all clear")
+        )
+
+        mover_sym, mover_pct = _biggest_mover(stock_data)
+        mover_val = f"{mover_pct:+.1f}%" if mover_sym != "--" else "--"
+        mover_color = (
+            C_HIGH if mover_pct > 0 else (C_LOW if mover_pct < 0 else C_TEXT3)
+        )
+
+        choke = _top_chokepoint(ssi_report)
+        choke_color = C_LOW if choke not in ("None flagged", "--") else C_TEXT3
+
+        gauge_col, cards_col = st.columns([1, 3], gap="large")
+        with gauge_col:
+            try:
+                st.plotly_chart(
+                    gauge_ring(
+                        max(0.0, min(1.0, ssi)),
+                        label="Stress Index",
+                        color=ssi_color,
+                        size=180,
+                    ),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="overview_ssi_gauge",
+                )
+            except Exception:
+                logger.exception("Overview — SSI gauge render failed")
+        with cards_col:
+            metric_card_row(
+                [
+                    {"label": "Stress Index", "value": ssi_label,
+                     "accent": ssi_color, "sublabel": f"SSI {ssi:.0%} composite"},
+                    {"label": "Active Alerts", "value": str(n_alerts),
+                     "accent": alert_color, "sublabel": alert_sub},
+                    {"label": "Biggest Mover", "value": mover_val,
+                     "accent": mover_color,
+                     "sublabel": mover_sym if mover_sym != "--" else "no equity feed"},
+                    {"label": "Top Chokepoint", "value": choke,
+                     "accent": choke_color, "sublabel": "leading stress driver"},
+                ],
+                columns=4,
+            )
+    except Exception:
+        logger.exception("Overview — stat strip render failed")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3b. FEATURED SIGNAL — the single highest-conviction call (editorial lead)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_featured_signal(insights: list) -> None:
+    """Promote the single highest-conviction insight to an editorial card.
+
+    Uses ``ui.styles.insight_card_html`` so the front page leads with one
+    decisive verdict before the eye reaches the tiles. No-ops gracefully when
+    no signals are present.
+    """
+    try:
+        ranked = sorted(
+            (i for i in insights if getattr(i, "score", None) is not None),
+            key=lambda i: getattr(i, "score", 0.0), reverse=True,
+        )
+        if not ranked:
+            return
+        lead = ranked[0]
+        section_header(
+            "Featured Signal",
+            subtitle="The single highest-conviction call across the signal book.",
+        )
+        st.markdown(
+            insight_card_html(
+                title=(getattr(lead, "title", "--") or "--")[:90],
+                score=max(0.0, min(1.0, float(getattr(lead, "score", 0.5) or 0.5))),
+                action=getattr(lead, "action", "Monitor") or "Monitor",
+                rationale=(getattr(lead, "detail", "") or "").strip()[:220],
+                category=(getattr(lead, "category", "") or "").upper(),
+            ),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Overview — featured signal render failed")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. TICKER TAPE — key freight / equity markers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_ticker(freight_data: dict, stock_data: dict) -> None:
+    """Render a scrolling market ticker via ``ui.styles.ticker_tape_html``.
+
+    ``ticker_tape_html`` RETURNS HTML, so it's rendered through
+    ``st.markdown(..., unsafe_allow_html=True)`` — allowed because the HTML
+    comes from a ``ui.styles`` helper, not a hand-rolled inline div. Best-effort
+    items from the freight indices and the equity feed; on no scalar feed it
+    falls back to illustrative benchmark markers so the tape never reads empty.
+    """
+    try:
+        items: list[dict] = []
+
+        # Freight / macro benchmarks — only scalar headline keys (the live
+        # snapshot); route→DataFrame feeds are skipped here (they have no
+        # single headline scalar).
+        fd = freight_data if isinstance(freight_data, dict) else {}
+        benchmark_specs = [
+            ("BDI", ("bdi", "BDI"), "{:,.0f}"),
+            ("SCFI", ("scfi", "SCFI"), "{:,.0f}"),
+            ("WCI", ("wci", "WCI"), "{:,.0f}"),
+            ("VLCC", ("vlcc_rate", "vlcc"), "${:,.0f}"),
+        ]
+        for label, keys, fmt in benchmark_specs:
+            val = _scalar(fd, *keys, fmt=fmt, default="")
+            if val:
+                items.append({"label": label, "value": val, "unit": "", "change": 0.0})
+
+        # Equities — last close + first→last % change from the feed DataFrames.
+        if isinstance(stock_data, dict):
+            for sym, df in list(stock_data.items())[:8]:
+                close = _last_close(df)
+                if close is None:
+                    continue
+                items.append({
+                    "label": str(sym),
+                    "value": f"{close:,.2f}",
+                    "unit": "",
+                    "change": float(_pct_change(df)),
+                })
+
+        # Fallback — illustrative benchmarks so the tape always has content.
+        if not items:
+            items = [
+                {"label": "BDI", "value": "1,847", "unit": "", "change": 1.3},
+                {"label": "SCFI", "value": "2,856", "unit": "", "change": 2.4},
+                {"label": "WCI", "value": "3,210", "unit": "", "change": -1.4},
+                {"label": "VLCC", "value": "$32,500", "unit": "", "change": 0.6},
+                {"label": "Crude", "value": "81.34", "unit": "", "change": 0.6},
+            ]
+
+        st.markdown(ticker_tape_html(items), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("Overview — ticker tape render failed")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. DEEP-LINK TILES — curated summaries that route into the detail sections
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SEV_STATUS: dict[str, str] = {
+    "CRITICAL": "danger", "HIGH": "danger",
+    "WARNING": "warning", "MEDIUM": "warning", "MODERATE": "warning",
+    "INFO": "info", "LOW": "success",
+}
+
+
+def _tile_alerts(insights: list, alerts: list) -> None:
+    """Top Alerts → Risk. Highest-severity items, with a deep-link button."""
+    try:
+        items: list[tuple[str, str]] = []
+        if alerts:
+            for a in alerts[:3]:
+                sev = str(getattr(a, "severity", "WARNING") or "WARNING").upper()
+                title = (
+                    getattr(a, "title", "") or getattr(a, "message", "") or "--"
+                )
+                items.append((sev, str(title)[:48]))
+        else:
+            risky = sorted(
+                (i for i in insights if getattr(i, "score", 0) >= 0.75),
+                key=lambda i: getattr(i, "score", 0), reverse=True,
+            )[:3]
+            for ins in risky:
+                sev = "HIGH" if getattr(ins, "score", 0) >= 0.85 else "MODERATE"
+                items.append((sev, str(getattr(ins, "title", "--") or "--")[:48]))
+
+        section_divider("Top Alerts")
+        if items:
+            rows = [
+                [status_badge(sev, _SEV_STATUS.get(sev, "warning")), badge(title, color=C_TEXT3)]
+                for sev, title in items
+            ]
+            wsj_market_table(["Severity", "Detail"], rows)
+        else:
+            alert_banner("No active alerts — the network reads clean.", level="success")
+        _nav_button("View Risk →", "risk", key="overview_tile_alerts_btn")
+    except Exception:
+        logger.exception("Overview — alerts tile render failed")
+        st.error("Top-alerts tile unavailable.")
+
+
+def _tile_equities(stock_data: dict) -> None:
+    """Equity Ideas → Markets. Biggest movers in the feed, with a deep-link."""
+    try:
+        movers: list[tuple[str, float]] = []
+        if isinstance(stock_data, dict):
+            for sym, df in stock_data.items():
+                pct = _pct_change(df)
+                if _last_close(df) is not None:
+                    movers.append((str(sym), pct))
+        movers.sort(key=lambda t: abs(t[1]), reverse=True)
+        movers = movers[:3]
+
+        section_divider("Equity Ideas")
+        if movers:
+            rows = []
+            for sym, pct in movers:
+                color = C_HIGH if pct > 0 else (C_LOW if pct < 0 else C_TEXT3)
+                rows.append([badge(sym, color=C_ACCENT), badge(f"{pct:+.1f}%", color=color)])
+            wsj_market_table(["Ticker", "Move"], rows)
+        else:
+            alert_banner(
+                "No equity feed yet — connect a price source to surface ideas.",
+                level="info",
+            )
+        _nav_button("View Markets →", "markets", key="overview_tile_equities_btn")
+    except Exception:
+        logger.exception("Overview — equities tile render failed")
+        st.error("Equity-ideas tile unavailable.")
+
+
+def _tile_disruptions(ssi_report) -> None:
+    """Disruptions → Disruption Alpha. SSI label + top drivers, with a deep-link."""
+    try:
+        section_divider("Disruptions")
+        label = str(getattr(ssi_report, "ssi_label", "--") or "--")
+        ssi = float(getattr(ssi_report, "overall_ssi", 0.0) or 0.0)
+        color = str(getattr(ssi_report, "ssi_color", "") or "") or C_ACCENT
+        drivers = list(getattr(ssi_report, "top_disruptions", []) or [])[:3]
+
+        rows = [[badge("Stress Index", color=C_TEXT3),
+                 badge(f"{label} · {ssi:.0%}", color=color)]]
+        for d in drivers:
+            rows.append([badge("Driver", color=C_LOW), badge(str(d)[:46], color=C_TEXT3)])
+        wsj_market_table(["Signal", "Reading"], rows)
+
+        if not drivers:
+            alert_banner("No active disruptions flagged on the route book.", level="success")
+        _nav_button("View Disruption Alpha →", "disruption_alpha",
+                    key="overview_tile_disruptions_btn")
+    except Exception:
+        logger.exception("Overview — disruptions tile render failed")
+        st.error("Disruptions tile unavailable.")
+
+
+def _tile_routes(route_results: list) -> None:
+    """Ports & Routes → Ports & Routes. Top-scoring lanes, with a deep-link."""
+    try:
+        strong = sorted(
+            (r for r in route_results if getattr(r, "opportunity_score", 0) >= 0.55),
+            key=lambda r: getattr(r, "opportunity_score", 0), reverse=True,
+        )[:3]
+
+        section_divider("Ports & Routes")
+        if strong:
+            rows = []
+            for r in strong:
+                name = (
+                    getattr(r, "route_name", "")
+                    or getattr(r, "route_id", "") or "--"
+                )
+                score = float(getattr(r, "opportunity_score", 0.0) or 0.0)
+                sc = C_HIGH if score >= 0.70 else (C_MOD if score >= 0.45 else C_LOW)
+                rows.append([badge(str(name)[:26], color=C_ACCENT),
+                             badge(f"{int(score * 100)}%", color=sc)])
+            wsj_market_table(["Lane", "Score"], rows)
+        else:
+            alert_banner(
+                "No standout lanes right now — the optimizer found no strong "
+                "opportunities.",
+                level="info",
+            )
+        _nav_button("View Ports & Routes →", "ports_routes",
+                    key="overview_tile_routes_btn")
+    except Exception:
+        logger.exception("Overview — routes tile render failed")
+        st.error("Ports & routes tile unavailable.")
+
+
+def _render_tiles(
+    insights: list, alerts: list, stock_data: dict,
+    ssi_report, route_results: list,
+) -> None:
+    """Lay the four deep-link tiles out across a column grid."""
+    try:
+        section_header(
+            "Jump to a desk",
+            subtitle="Each tile previews its desk and links straight through — "
+            "Risk, Markets, Disruption Alpha and Ports & Routes.",
+        )
+        cols = st.columns(4, gap="large")
+        with cols[0]:
+            _tile_alerts(insights, alerts)
+        with cols[1]:
+            _tile_equities(stock_data)
+        with cols[2]:
+            _tile_disruptions(ssi_report)
+        with cols[3]:
+            _tile_routes(route_results)
+    except Exception:
+        logger.exception("Overview — tiles row render failed")
+        st.error("Deep-link tiles unavailable.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1062,33 +749,28 @@ def render(
     macro_data=None,
     stock_data=None,
     alerts=None,
+    **_kwargs,
 ) -> None:
-    """Render the executive Overview dashboard.
+    """Render the platform HERO / Overview front page.
 
     Parameters
     ----------
     port_results, route_results, insights:
         Platform-standard model outputs computed at the top of ``app.py``.
+        Required and positional — ``app.py`` passes these by position.
     freight_data, macro_data, stock_data, alerts:
         Optional feed dicts / alert list — each may be ``None`` or empty, in
-        which case the dashboard degrades to a cold-start splash or to
-        illustrative defaults.
+        which case the hero degrades to illustrative tiles and a synthesized
+        lede rather than raising. Passed BY KEYWORD from the dashboard dispatch.
+    **_kwargs:
+        Absorbs any future feed the orchestrator may pass, keeping the
+        signature forward-compatible.
 
-    The signature is positional — ``app.py`` calls ``render(...)`` by position,
-    so the parameter order must not change.
-
-    Render telemetry
-    ----------------
-    The render body is wrapped in ``engine.perf_telemetry.track_render``
-    so the platform can answer "which tabs are slow?" without a profiler.
-    Overview is the reference tab — the same one-line wrapper can be
-    dropped into any other ``ui/tab_*.py`` to opt that tab in. The
-    context manager re-raises on failure, so the outer try/except below
-    still catches every exception exactly as it did before — the only
-    side effect of the wrapper is one row in ``tab_render_events``.
+    The render body runs inside ``engine.perf_telemetry.track_render`` (the
+    same one-line wrapper every tab uses); the context manager re-raises, so
+    the outer try/except still catches every exception — the hero NEVER
+    crashes, it only degrades.
     """
-    # Lazy import keeps perf_telemetry off the tab-load critical path
-    # and avoids a circular when tests stub state.db.
     from engine.perf_telemetry import track_render
 
     try:
@@ -1096,64 +778,50 @@ def render(
             port_results  = port_results  or []
             route_results = route_results or []
             insights      = insights      or []
-            freight_data  = freight_data  or {}
-            macro_data    = macro_data    or {}
-            stock_data    = stock_data    or {}
+            freight_data  = freight_data  if isinstance(freight_data, dict) else {}
+            macro_data    = macro_data    if isinstance(macro_data, dict) else {}
+            stock_data    = stock_data    if isinstance(stock_data, dict) else {}
             alerts        = alerts        or []
 
-            # ── A. Page header ──────────────────────────────────────────────
+            # ── 1. Page header ──────────────────────────────────────────────
+            live = bool(stock_data) or bool(freight_data) or bool(macro_data)
             page_header(
-                title="Overview",
-                subtitle="Market tone, live KPIs, signals, alerts and data-feed "
-                "health at a glance.",
-                badge_text="DASHBOARD",
-                badge_color=C_ACCENT,
+                title="Shipping Intelligence",
+                subtitle="Today's verdict, the session in figures, and a fast "
+                "path into every desk — the whole platform on one page.",
+                badge_text="LIVE" if live else "OVERVIEW",
+                badge_color=C_HIGH if live else C_ACCENT,
             )
 
-            # ── Cold start — nothing modeled yet ────────────────────────────
-            all_empty = not port_results and not route_results and not insights
-            if all_empty:
-                _render_cold_start()
-                section_divider("Data Feeds")
-                _render_data_status(port_results, route_results, insights,
-                                    freight_data, macro_data, stock_data)
-                return
+            # ── 2. Lede — daily-briefing TLDR ───────────────────────────────
+            _render_lede(port_results, route_results, freight_data, macro_data)
 
-            # ── A2. Daily Briefing (LLM-narrated; template fallback) ───────
-            _render_daily_briefing(
+            # SSI computed once and threaded through the strip + the
+            # disruptions tile (one source of truth, one engine call).
+            ssi_report = _compute_ssi(
                 port_results, route_results, freight_data, macro_data,
             )
 
-            # ── B. Market verdict — tone banner + feed health ───────────────
-            _render_market_verdict(port_results, route_results, insights,
-                                   freight_data, macro_data, stock_data)
+            # ── 3. Stat strip — SSI gauge + headline KPI cards ──────────────
+            _render_stat_strip(ssi_report, alerts, stock_data)
 
-            # ── B2. Editorial commentary (per-tab LLM + template fallback) ──
-            _render_editorial_commentary(
-                port_results, route_results, insights, freight_data, macro_data,
-            )
+            # ── 3b. Featured signal — editorial lead card ───────────────────
+            _render_featured_signal(insights)
 
-            # ── C. Headline KPI strip ───────────────────────────────────────
-            section_divider("Headline KPIs")
-            _render_kpi_strip(port_results, route_results, insights,
-                             freight_data, macro_data, stock_data, alerts)
+            # ── 4. Ticker tape — key freight / equity markers ───────────────
+            _render_ticker(freight_data, stock_data)
 
-            # ── D. Markets & Signals ────────────────────────────────────────
-            section_divider("Markets & Signals")
-            left, right = st.columns([3, 2], gap="large")
-            with left:
-                _render_market_pulse(freight_data, macro_data, stock_data)
-                _render_signal_matrix(route_results, insights)
-                _render_top_signals(insights)
-            with right:
-                _render_risk_alerts(insights, alerts)
-                _render_route_opps(route_results)
-                _render_data_status(port_results, route_results, insights,
-                                   freight_data, macro_data, stock_data)
+            # ── 5. Deep-link tiles — curated summaries + "View →" routing ───
+            _render_tiles(insights, alerts, stock_data, ssi_report, route_results)
 
-            # ── F. Quick Views ──────────────────────────────────────────────
-            section_divider("Quick Views")
-            _render_sparklines(port_results, insights, freight_data)
+            # ── 6. Source footer — honest modeled-vs-real provenance ────────
+            try:
+                st.markdown(
+                    source_footer(_overview_sources()),
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                logger.exception("Overview — source footer render failed")
     except Exception as exc:
         logger.exception("tab_overview.render fatal")
-        st.error(f"Overview dashboard error: {exc}")
+        st.error(f"Overview hero error: {exc}")

@@ -27,6 +27,7 @@ from typing import Any
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -39,7 +40,20 @@ from ui.styles import (
     page_header,
     section_divider,
     section_header,
+    source_footer,
     wsj_market_table,
+)
+
+
+# Provenance for the footer. The operator dashboard rolls up the platform's own
+# internal telemetry (LLM cost, alert ack metrics, alert backtest, render perf)
+# — all MODELED / internally-generated, not an external market feed.
+_OPERATOR_SOURCE = DataSource.modeled(
+    "Operator telemetry",
+    notes=(
+        "Internal observability roll-up: LLM usage, alert analytics, alert "
+        "backtest, and tab render performance."
+    ),
 )
 
 
@@ -450,6 +464,15 @@ def render(*args, **kwargs) -> None:
                 llm=llm,
                 llm_window_d=int(llm_window_d),
             )
+
+            # ── Source footer ─────────────────────────────────────────────
+            try:
+                st.markdown(
+                    source_footer([_OPERATOR_SOURCE]),
+                    unsafe_allow_html=True,
+                )
+            except Exception as exc:
+                logger.exception(f"Operator dashboard: source footer failed: {exc}")
 
         except Exception as exc:
             logger.exception(f"Operator dashboard render error: {exc}")

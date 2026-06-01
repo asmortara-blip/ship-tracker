@@ -476,6 +476,12 @@ def _render_risk_map() -> None:
         iso_codes = list(_COUNTRY_RISK.keys())
         scores = list(_COUNTRY_RISK.values())
 
+        # Empty-state guard: a choropleth with no locations renders as a blank
+        # globe — surface a notice instead.
+        if not iso_codes:
+            st.info("No country-risk data available to map.")
+            return
+
         hover_text = []
         for iso, score in _COUNTRY_RISK.items():
             level = "CRITICAL" if score >= 80 else "HIGH" if score >= 60 else "MODERATE" if score >= 40 else "LOW"
@@ -616,6 +622,10 @@ def _render_hotspot_monitor() -> None:
             "Live risk cards for active maritime security hotspots",
         )
 
+        if not _HOTSPOTS:
+            st.info("No active hotspots to monitor.")
+            return
+
         for hs in _HOTSPOTS:
             level = hs["level"]
             lvl_color = _LEVEL_COLOR.get(level, C_TEXT2)
@@ -669,6 +679,10 @@ def _render_sanctions_tracker() -> None:
             "Active shipping-relevant sanctions by country/entity — compliance critical",
         )
 
+        if not _SANCTIONS:
+            st.info("No active sanctions to display.")
+            return
+
         rows = [
             [
                 _sans(row["entity"], color=C_TEXT, weight=600),
@@ -700,6 +714,10 @@ def _render_trade_war_monitor() -> None:
             "Trade War Monitor",
             "Tariff escalation by major trade pair and shipping volume impact",
         )
+
+        if not _TARIFFS:
+            st.info("No trade-war / tariff data available.")
+            return
 
         rows = []
         for row in _TARIFFS:
@@ -749,6 +767,11 @@ def _render_rerouting_impact() -> None:
             "Rerouting Impact",
             "Trade lanes affected by Red Sea / Panama disruptions — cost and time penalties",
         )
+
+        # Empty-state guard: no rerouting rows means no table and no chart.
+        if not _REROUTING:
+            st.info("No rerouting-impact data available.")
+            return
 
         rows = []
         for row in _REROUTING:
@@ -815,6 +838,10 @@ def _render_war_risk_premiums() -> None:
             "Insurance & War Risk Premiums",
             "War risk insurance by region — Joint War Committee listed areas highlighted",
         )
+
+        if not _WAR_RISK:
+            st.info("No war-risk premium data available.")
+            return
 
         rows = []
         for row in _WAR_RISK:

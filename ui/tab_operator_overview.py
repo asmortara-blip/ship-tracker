@@ -44,6 +44,7 @@ import pandas as pd
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
 from ui.styles import (
     C_ACCENT,
     C_HIGH,
@@ -53,6 +54,20 @@ from ui.styles import (
     metric_card_row,
     page_header,
     section_divider,
+    source_footer,
+)
+
+
+# Provenance for the footer. This tab is a read-only roll-up of the platform's
+# own internal telemetry (alerts, channels, LLM cost, render perf, source-health
+# pings, incidents, audit) — all MODELED / internally-generated, not an external
+# market feed.
+_OVERVIEW_SOURCE = DataSource.modeled(
+    "Operator telemetry",
+    notes=(
+        "Internal observability roll-up: alert engine, delivery channels, LLM "
+        "usage, render perf, source-health pings, incident correlator, audit log."
+    ),
 )
 
 
@@ -819,3 +834,12 @@ def render(*args, **kwargs) -> None:
             "For deeper drill-downs see the **Alerts**, **Data Health**, "
             "and **Operator** tabs."
         )
+
+        # ── Source footer ─────────────────────────────────────────────────
+        try:
+            st.markdown(
+                source_footer([_OVERVIEW_SOURCE]),
+                unsafe_allow_html=True,
+            )
+        except Exception as exc:
+            logger.exception(f"operator_overview: source footer failed: {exc}")

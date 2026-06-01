@@ -1,5 +1,5 @@
 {
-  "total": 17,
+  "total": 18,
   "validators": [
     {
       "headline_label": "Best component",
@@ -242,6 +242,20 @@
         "passes": 5
       },
       "summary": "Spillover graph recall: 5/5 runs correctly recovered planted A\u2192B edge with support=1.0 + lift>1.0; pass rate 100% (threshold 95%)"
+    },
+    {
+      "headline_label": "Hub dominance pass rate",
+      "headline_value": "100.0% (5/5)",
+      "healthy": true,
+      "name": "Graph Centrality Dominance",
+      "raw": {
+        "n_runs": 5,
+        "pass_rate": 1.0,
+        "pass_threshold": 0.95,
+        "passed": true,
+        "passes": 5
+      },
+      "summary": "Graph centrality dominance: 5/5 runs put the STAR hub at strict-max betweenness + fragmentation on removal; pass rate 100% (threshold 95%)"
     }
   ]
 }
