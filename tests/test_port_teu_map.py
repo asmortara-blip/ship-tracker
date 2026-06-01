@@ -15,9 +15,12 @@ import pytest
 from processing.port_teu_map import (
     CATEGORIES,
     PortTEU,
+    PortTEUTrend,
     aggregate_by_region,
     build_port_teu_map,
+    build_port_teu_trends,
     export_share_for_country,
+    rank_by_growth,
     rank_ports,
     summarize,
 )
@@ -125,3 +128,44 @@ def test_default_ports_uses_registry_without_raising() -> None:
     out = build_port_teu_map({})
     assert isinstance(out, list)
     assert all(isinstance(pt, PortTEU) for pt in out)
+
+
+# ── Trends over time ──────────────────────────────────────────────────────
+
+def _wb_multiyear() -> dict:
+    return {"IS.SHP.GOOD.TU": pd.DataFrame([
+        {"country_iso3": "XXA", "year": 2020, "value": 8_000_000},
+        {"country_iso3": "XXA", "year": 2021, "value": 9_000_000},
+        {"country_iso3": "XXA", "year": 2022, "value": 10_000_000},   # rising
+        {"country_iso3": "XXB", "year": 2020, "value": 5_000_000},
+        {"country_iso3": "XXB", "year": 2022, "value": 4_000_000},    # declining
+    ])}
+
+
+def test_trends_compute_per_year_teu_and_cagr() -> None:
+    by = {t.locode: t for t in build_port_teu_trends(_wb_multiyear(), ports=_ports())}
+    a, b = by["XXAPT"], by["XXBPT"]
+    assert a.years == [2020, 2021, 2022]
+    assert a.teu_by_year == [pytest.approx(8.0), pytest.approx(9.0), pytest.approx(10.0)]
+    assert a.cagr_pct == pytest.approx(11.8, abs=0.1)        # (10/8)^(1/2)-1
+    assert a.yoy_latest_pct == pytest.approx(11.11, abs=0.1)  # 10/9-1
+    assert b.cagr_pct == pytest.approx(-20.0, abs=0.1)        # (4/5)^(1/1)-1
+    assert b.yoy_latest_pct == pytest.approx(-20.0, abs=0.1)
+
+
+def test_trends_single_or_no_year_is_flat() -> None:
+    wb = {"IS.SHP.GOOD.TU": pd.DataFrame([
+        {"country_iso3": "XXA", "year": 2022, "value": 8_000_000}])}
+    t = build_port_teu_trends(wb, ports=_ports()[:1])[0]
+    assert t.n_years == 1 and t.cagr_pct == 0.0 and t.yoy_latest_pct == 0.0
+    empty = build_port_teu_trends({}, ports=_ports()[:1])[0]
+    assert empty.n_years == 0 and empty.teu_by_year == [] and empty.cagr_pct == 0.0
+
+
+def test_rank_by_growth_orders_by_cagr() -> None:
+    trends = build_port_teu_trends(_wb_multiyear(), ports=_ports())
+    ranked = rank_by_growth(trends)
+    assert [t.locode for t in ranked] == ["XXAPT", "XXBPT"]   # +11.8% > -20%
+    assert isinstance(ranked[0], PortTEUTrend)
+    # a single-year port is excluded from growth ranking (needs >=2 years)
+    assert all(t.n_years >= 2 for t in ranked)

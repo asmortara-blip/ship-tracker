@@ -55,6 +55,8 @@ from processing.port_teu_map import (
     PortTEU,
     aggregate_by_region,
     build_port_teu_map,
+    build_port_teu_trends,
+    rank_by_growth,
     rank_ports,
     summarize,
 )
@@ -268,6 +270,34 @@ def _category_value_color(pt: PortTEU, category: str) -> str:
     return C_ACCENT
 
 
+def _build_trend_lines(trends, *, top_n: int = 8, height: int = 420) -> go.Figure:
+    """Multi-year container-throughput lines for the top ports by latest TEU.
+
+    Pure builder — empty / no-multi-year input returns an annotated-empty figure.
+    """
+    have = [t for t in trends if t.n_years >= 2 and t.teu_by_year]
+    have.sort(key=lambda t: t.teu_by_year[-1], reverse=True)
+    have = have[:max(1, int(top_n))]
+    if not have:
+        return _annotated_empty("Throughput trends", height=height)
+    palette = [C_ACCENT, C_MACRO, C_HIGH, C_MOD, C_LOW, C_TEXT2, C_TEXT3]
+    fig = go.Figure()
+    for i, t in enumerate(have):
+        fig.add_trace(go.Scatter(
+            x=t.years, y=t.teu_by_year, mode="lines+markers", name=t.name,
+            line={"width": 1.8, "color": palette[i % len(palette)]},
+            marker={"size": 5},
+            hovertemplate="<b>" + t.name + "</b><br>%{x}: %{y:.1f}M TEU<extra></extra>",
+        ))
+    apply_dark_layout(fig, title="Container throughput by port (M TEU/yr)", height=height)
+    fig.update_layout(
+        margin={"l": 8, "r": 8, "t": 44, "b": 8},
+        legend={"orientation": "h", "y": -0.14, "font": {"color": C_TEXT3, "size": 9}},
+        hovermode="x unified",
+    )
+    return fig
+
+
 def render(wb_data=None, **_kwargs) -> None:
     """Render the Global TEU Throughput map tab.
 
@@ -426,6 +456,44 @@ def render(wb_data=None, **_kwargs) -> None:
         except Exception:
             logger.exception("teu_map: region rollup failed")
             st.error("Region rollup unavailable.")
+
+        section_divider("Throughput trends")
+
+        # ── C2. Multi-year throughput trends (real WB annual container traffic) ─
+        try:
+            trends = build_port_teu_trends(wb_data)
+            st.plotly_chart(
+                _build_trend_lines(trends, top_n=8),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="teu_trends",
+            )
+            growth = rank_by_growth(trends, top_n=12)
+            if growth:
+                rows = []
+                for t in growth:
+                    g_color = C_HIGH if t.cagr_pct >= 0 else C_LOW
+                    latest = t.teu_by_year[-1] if t.teu_by_year else 0.0
+                    rows.append([
+                        badge(t.name, color=C_TEXT2),
+                        badge(t.region or "—", color=C_TEXT3),
+                        badge(f"{latest:.1f}M", color=C_ACCENT),
+                        badge(f"{t.cagr_pct:+.1f}%", color=g_color),
+                        badge(f"{t.yoy_latest_pct:+.1f}%", color=g_color),
+                    ])
+                wsj_market_table(
+                    ["Port", "Region", "Latest TEU", "CAGR", "YoY"],
+                    rows,
+                    title="Throughput growth — real World Bank multi-year (per-port split modeled)",
+                )
+            st.caption(
+                "Compound annual growth of container throughput from real World "
+                "Bank annual data; the per-port allocation is modeled. Descriptive "
+                "history, not a forecast."
+            )
+        except Exception:
+            logger.exception("teu_map: trends section failed")
+            st.error("Throughput trends unavailable.")
 
         # ── D. Source footer ───────────────────────────────────────────────
         try:

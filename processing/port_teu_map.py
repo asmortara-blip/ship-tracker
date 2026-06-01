@@ -33,9 +33,12 @@ __all__ = [
     "CATEGORIES",
     "CATEGORY_LABELS",
     "PortTEU",
+    "PortTEUTrend",
     "export_share_for_country",
     "build_port_teu_map",
+    "build_port_teu_trends",
     "rank_ports",
+    "rank_by_growth",
     "aggregate_by_region",
     "summarize",
 ]
@@ -210,3 +213,118 @@ def summarize(port_teus: list[PortTEU]) -> dict:
         "teu_import": round(sum(pt.teu_import for pt in port_teus), 2),
         "teu_net": round(sum(pt.teu_net for pt in port_teus), 2),
     }
+
+
+# ---------------------------------------------------------------------------
+# Throughput trends over time (REAL World Bank multi-year container traffic)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PortTEUTrend:
+    """A port's container-throughput trajectory over the WB data window.
+
+    ``teu_by_year`` is per-port (real country TEU per year × the modeled port
+    weight), aligned to ``years``. ``cagr_pct`` is the compound annual growth
+    rate across the window; ``yoy_latest_pct`` the most-recent year-over-year
+    change. From REAL World Bank annual data (the per-port split is modeled).
+    """
+
+    locode: str
+    name: str
+    region: str
+    years: list[int]
+    teu_by_year: list[float]
+    cagr_pct: float
+    yoy_latest_pct: float
+    n_years: int
+
+
+def _port_weight(country_iso3: str, locode: str) -> float:
+    """The modeled per-port allocation weight (1.0 when the country has a single
+    tracked port / no entry). Mirrors ``get_teu_for_country``'s weighting."""
+    try:
+        from ports.port_registry import PORT_TRAFFIC_WEIGHTS
+    except Exception:  # pragma: no cover - registry should import
+        return 1.0
+    if locode and country_iso3 in PORT_TRAFFIC_WEIGHTS:
+        try:
+            return float(PORT_TRAFFIC_WEIGHTS[country_iso3].get(locode, 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+    return 1.0
+
+
+def _country_teu_by_year(df, country_iso3: str) -> tuple[list[int], list[float]]:
+    """``(years, raw_TEU_values)`` for a country from the IS.SHP.GOOD.TU frame,
+    ascending by year, finite + positive only. ``([], [])`` if none."""
+    if df is None or getattr(df, "empty", True):
+        return [], []
+    try:
+        sub = df[df["country_iso3"] == country_iso3].sort_values("year")
+    except (KeyError, TypeError):
+        return [], []
+    years: list[int] = []
+    vals: list[float] = []
+    for _, row in sub.iterrows():
+        try:
+            y = int(row["year"]); v = float(row["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if v == v and v > 0:  # finite + positive
+            years.append(y)
+            vals.append(v)
+    return years, vals
+
+
+def build_port_teu_trends(
+    wb_data: Optional[dict], *, ports=None,
+) -> list[PortTEUTrend]:
+    """Per-port TEU trajectory + CAGR / latest-YoY over the WB window.
+
+    Pure over ``wb_data``. Per-port TEU each year = real country TEU that year ×
+    the modeled port weight (in millions). Never raises; a port with < 2 data
+    years gets its available points with 0% growth.
+    """
+    if ports is None:
+        try:
+            from ports.port_registry import PORTS
+            ports = list(PORTS)
+        except Exception:  # pragma: no cover
+            return []
+    df = (wb_data or {}).get(_TEU_INDICATOR)
+    out: list[PortTEUTrend] = []
+    for p in ports:
+        iso3 = getattr(p, "country_iso3", "") or ""
+        locode = getattr(p, "locode", "") or ""
+        years, cvals = _country_teu_by_year(df, iso3)
+        w = _port_weight(iso3, locode)
+        teu_year = [round((v / 1_000_000) * w, 4) for v in cvals]  # millions
+        cagr = 0.0
+        yoy = 0.0
+        if len(teu_year) >= 2 and teu_year[0] > 0:
+            n = len(teu_year) - 1
+            cagr = round(((teu_year[-1] / teu_year[0]) ** (1.0 / n) - 1.0) * 100.0, 2)
+            if teu_year[-2] > 0:
+                yoy = round((teu_year[-1] / teu_year[-2] - 1.0) * 100.0, 2)
+        out.append(PortTEUTrend(
+            locode=locode,
+            name=getattr(p, "name", locode) or locode,
+            region=getattr(p, "region", "") or "",
+            years=years,
+            teu_by_year=teu_year,
+            cagr_pct=cagr,
+            yoy_latest_pct=yoy,
+            n_years=len(teu_year),
+        ))
+    return out
+
+
+def rank_by_growth(
+    trends: list[PortTEUTrend], *, top_n: Optional[int] = None,
+    descending: bool = True,
+) -> list[PortTEUTrend]:
+    """Ports ranked by CAGR (only those with >= 2 data years; id tie-break)."""
+    have = [t for t in trends if t.n_years >= 2]
+    ranked = sorted(have, key=lambda t: (t.cagr_pct, t.locode), reverse=descending)
+    return ranked[:top_n] if top_n is not None else ranked
