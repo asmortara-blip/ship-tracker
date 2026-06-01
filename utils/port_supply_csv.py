@@ -338,7 +338,12 @@ def footprints_to_csv(
             if float(pe.supply_deficit_days) < 0
         )
         deficit_share = (deficit_total / total) if total > 0 else 0.0
-        hhi = _hhi(exposure_weights)
+        # Prefer the builder's full-footprint HHI so this CSV column matches the
+        # COMPANY_CONCENTRATION alert's HHI. The local _hhi() runs over the
+        # top-N-CAPPED exposure_weights and would overstate concentration (the
+        # #8 fix computes it over every port the ticker touches). Fall back to
+        # the local calc for stub footprints lacking the precomputed value.
+        hhi = float(getattr(fp, "concentration_hhi", 0.0) or 0.0) or _hhi(exposure_weights)
         top_region = exposures[0].region if exposures else ""
 
         # Aggregate columns shared across every row of this ticker

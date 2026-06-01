@@ -458,3 +458,26 @@ def test_watchlist_ordered_worst_first() -> None:
     assert deficits == sorted(deficits)
     ranks = [int(r["deficit_rank"]) for r in rows]
     assert ranks == list(range(1, len(ranks) + 1))
+
+
+def test_footprints_csv_concentration_hhi_matches_full_footprint_value() -> None:
+    """Regression: the CSV's concentration_hhi column reports the builder's
+    FULL-footprint HHI (fp.concentration_hhi), matching the
+    COMPANY_CONCENTRATION alert — not a value recomputed over the top-N-capped
+    exposures (which would overstate it; the #8 fix). Formatted .4f, so compare
+    within that precision."""
+    footprints = build_company_port_footprints()
+    out = footprints_to_csv(footprints)
+    _, data = _split_metadata_and_data(out)
+    rows = list(csv.DictReader(io.StringIO(data)))
+    by_ticker = {fp.ticker: fp for fp in footprints}
+    seen = 0
+    for row in rows:
+        fp = by_ticker.get(row["ticker"])
+        if fp is None:
+            continue
+        seen += 1
+        assert float(row["concentration_hhi"]) == pytest.approx(
+            float(fp.concentration_hhi), abs=1e-4
+        )
+    assert seen > 0, "expected at least one footprint row"
