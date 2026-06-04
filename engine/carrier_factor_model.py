@@ -123,6 +123,7 @@ class FactorBacktest:
     sharpe: float
     information_ratio: float
     equity_curve: pd.Series = field(repr=False)
+    psr: float = 0.5  # probabilistic Sharpe: P(true Sharpe > 0), Bailey/Lopez de Prado
 
 
 # ── Guards + cleaning ───────────────────────────────────────────────────────
@@ -493,6 +494,19 @@ def residual_signal_backtest(
     ir = sharpe - bh_sharpe
     _ = last_z  # kept for parity with the cointegration backtest
 
+    # Probabilistic Sharpe (honest haircut): P(true per-period Sharpe > 0)
+    # given the sample length and higher moments. No trial-count assumption —
+    # the selection-bias (deflated) haircut belongs at the suite level.
+    from processing.stat_significance import probabilistic_sharpe_ratio
+    per_period_sr = 0.0 if std == 0 else float(pnl_series.mean() / std)
+    sk = float(pnl_series.skew())
+    ku = float(pnl_series.kurt())
+    if not (math.isfinite(sk) and math.isfinite(ku)):
+        sk, ku = 0.0, 3.0
+    else:
+        ku = ku + 3.0  # pandas .kurt() is excess (Fisher); PSR wants full kurtosis
+    psr = probabilistic_sharpe_ratio(per_period_sr, len(pnl_series), skew=sk, kurt=ku)
+
     return FactorBacktest(
         name=name,
         n_trades=trades,
@@ -502,6 +516,7 @@ def residual_signal_backtest(
         sharpe=sharpe,
         information_ratio=ir,
         equity_curve=equity,
+        psr=psr,
     )
 
 

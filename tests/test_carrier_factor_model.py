@@ -142,6 +142,7 @@ def test_backtest_returns_finite_metrics() -> None:
     assert 0.0 <= bt.hit_rate <= 1.0
     assert math.isfinite(bt.sharpe)
     assert math.isfinite(bt.information_ratio)
+    assert 0.0 <= bt.psr <= 1.0  # probabilistic Sharpe haircut (R101)
     assert len(bt.equity_curve) == len(returns_df)
 
 
