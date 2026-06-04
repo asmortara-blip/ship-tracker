@@ -1447,6 +1447,32 @@ def _render_audit_log() -> None:
         st.error("Audit log panel unavailable.")
 
 
+def _resolve_audit_scope(
+    *,
+    viewer_is_admin: bool,
+    self_uid: Optional[str],
+    typed_id: str,
+    admin_scope: bool,
+) -> Optional[str]:
+    """Resolve the effective ``user_id`` filter for the audit-log search.
+
+    SECURITY: only an admin may broaden scope beyond their own account. A
+    non-admin is hard-scoped to ``self_uid`` regardless of the (UI-disabled but
+    still POST-able) ``admin_scope`` checkbox or any value typed into the user-id
+    box — closing the self-asserted-admin read of the org-wide audit log. A
+    returned ``None`` means "all users" and is reachable ONLY by an admin (or by
+    a session-less CLI/test caller, which does not go through this panel).
+    """
+    if not viewer_is_admin:
+        return self_uid or None
+    typed = (typed_id or "").strip()
+    if typed:
+        return typed
+    if admin_scope:
+        return None
+    return self_uid or None
+
+
 def _render_audit_search_panel() -> None:
     """Audit log search panel — multi-filter search over ``audit_events``.
 
@@ -1501,6 +1527,12 @@ def _render_audit_search_panel() -> None:
         action_options = ["(any)"] + actions_db
         entity_type_options = ["(any)"] + entity_types_db
 
+        # ── Server-side RBAC: only admins may scope the audit log beyond
+        # their own account. Non-admins are hard-scoped to self regardless of
+        # the controls below (which are also disabled for them).
+        from auth.authz import is_admin
+        viewer_is_admin = is_admin()
+
         # ── Row 1: user_id | action | action_prefix ──────────────────────
         # ``user_id_input`` defaults to empty so the "All users" checkbox
         # below can fill in the current user's id when toggled OFF.
@@ -1510,8 +1542,10 @@ def _render_audit_search_panel() -> None:
                 "User ID",
                 value="",
                 key="audit_search_user_id",
+                disabled=not viewer_is_admin,
                 help="Exact match. Leave blank to filter to your own "
-                     "user (unless 'All users' is enabled).",
+                     "user (unless 'All users' is enabled). Admin role "
+                     "required to query another user's events.",
             )
         with r1c2:
             action_pick = st.selectbox(
@@ -1590,8 +1624,9 @@ def _render_audit_search_panel() -> None:
                 "All users (admin)",
                 value=False,
                 key="audit_search_admin_scope",
-                help="Show events across every user. Default is your "
-                     "own user only.",
+                disabled=not viewer_is_admin,
+                help="Show events across every user. Admin role required; "
+                     "non-admins are always scoped to their own user.",
             )
 
         # ── Resolve the per-user scope. The current user's id is always
@@ -1599,18 +1634,23 @@ def _render_audit_search_panel() -> None:
         # user_id box) so the "scoped to" caption can tell them what is
         # actually being applied.
         self_uid = current_user_id()
-        # If the operator typed a user_id, honour it verbatim. Otherwise
-        # default to their own unless "All users" is checked.
-        if user_id_input.strip():
-            effective_user_id: Optional[str] = user_id_input.strip()
-        elif admin_scope:
-            effective_user_id = None
-        else:
-            # No typed value and not admin → scope to self. An empty
-            # self_uid (no session) falls through to "no scope" which
-            # is intentional — the local CLI / test path should not
-            # be silently filtered to a non-existent user.
-            effective_user_id = self_uid or None
+        # Effective scope is resolved server-side via _resolve_audit_scope:
+        # admins may type a user_id or broaden to all users; non-admins are
+        # hard-scoped to their own account regardless of the (disabled but
+        # still POST-able) admin controls. An empty self_uid (no session)
+        # falls through to "no scope" only on the CLI/test path, which never
+        # renders this panel.
+        effective_user_id: Optional[str] = _resolve_audit_scope(
+            viewer_is_admin=viewer_is_admin,
+            self_uid=self_uid,
+            typed_id=user_id_input,
+            admin_scope=admin_scope,
+        )
+        if not viewer_is_admin:
+            st.caption(
+                "Scoped to your account — admin role required to view "
+                "other users' audit events."
+            )
 
         # ── Search button drives the query so the panel does not refetch
         # on every keystroke. The result lives in a ``st.session_state``
