@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 29
+SCHEMA_VERSION: int = 30
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1515,6 +1515,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     except Exception as exc:
         logger.warning(f"state.db: v29 table add skipped: {exc}")
 
+    # v30 column add — idempotent ALTER-in-try/except (same as v27/v28). Adds
+    # ``users.is_active`` for the account disable/suspend kill-switch; default
+    # 1 grandfathers every existing account as active. Runs unconditionally.
+    try:
+        from state.migrations import _migrate_to_v30
+        _migrate_to_v30(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v30 column add skipped: {exc}")
+
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
     row = cur.fetchone()
@@ -1887,6 +1896,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v29(conn)
         except Exception as exc:
             logger.warning(f"state.db: v29 migration skipped: {exc}")
+
+    # Migration 29 → 30: add ``users.is_active`` (account kill-switch).
+    # Idempotent ALTER-in-try/except (same as v27/v28) — the helper is already
+    # invoked unconditionally above; this keeps the version-step ladder explicit.
+    if current < 30:
+        try:
+            from state.migrations import _migrate_to_v30
+            _migrate_to_v30(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v30 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

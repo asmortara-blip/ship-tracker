@@ -1242,3 +1242,30 @@ def _migrate_to_v29(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v29 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v29 → v30 ─────────────────────────────────────────────────────
+
+def _migrate_to_v30(conn: sqlite3.Connection) -> None:
+    """Add ``users.is_active`` for the account disable/suspend kill-switch.
+
+    An admin (or ops) can disable an account; ``auth.users.login`` and
+    ``auth.tokens.verify_token`` then reject it, cutting off both interactive
+    logins and API tokens without deleting the row (so the audit trail and any
+    owned data stay intact). The column is ``INTEGER NOT NULL DEFAULT 1`` —
+    ``1`` = active, so every pre-v30 account is grandfathered active. Same
+    idempotent ALTER pattern as ``_migrate_to_v27`` / ``_migrate_to_v28``:
+    SQLite has no ``IF NOT EXISTS`` on ALTER TABLE, so we swallow the
+    duplicate-column error to stay safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v30 ALTER TABLE failed: {exc}"
+        )

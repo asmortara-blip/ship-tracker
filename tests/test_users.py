@@ -262,6 +262,7 @@ def test_user_dataclass_has_no_password_material() -> None:
     assert "password_salt" not in fields
     assert fields == {
         "user_id", "username", "role", "created_at", "last_login_at",
+        "is_active",
     }
 
 

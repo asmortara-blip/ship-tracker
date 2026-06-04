@@ -99,9 +99,20 @@ class User:
     role: str
     created_at: str
     last_login_at: str
+    is_active: bool = True
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
+
+def _row_active(row: sqlite3.Row) -> bool:
+    """Read ``is_active`` defensively — a row from a SELECT that predates v30
+    (or omits the column) is treated as active (the grandfathered default)."""
+    try:
+        v = row["is_active"]
+    except (IndexError, KeyError):
+        return True
+    return True if v is None else bool(int(v))
+
 
 def _row_to_user(row: sqlite3.Row) -> User:
     return User(
@@ -110,6 +121,7 @@ def _row_to_user(row: sqlite3.Row) -> User:
         role=row["role"],
         created_at=row["created_at"],
         last_login_at=row["last_login_at"],
+        is_active=_row_active(row),
     )
 
 
@@ -408,7 +420,7 @@ def login(
             """
             SELECT user_id, username, password_hash, password_salt,
                    role, created_at, last_login_at,
-                   mfa_secret, mfa_enabled
+                   mfa_secret, mfa_enabled, is_active
               FROM users
              WHERE username = ?
             """,
@@ -435,6 +447,17 @@ def login(
             return None
 
         if not _verify_password(password, stored_hash, salt):
+            return None
+
+        # Account kill-switch (R104): a disabled account cannot log in even
+        # with correct credentials. Checked AFTER the password verify so the
+        # timing matches a normal login, and returns None — the same shape as a
+        # bad password, leaking nothing about why the login failed.
+        if not _row_active(row):
+            logger.warning(
+                f"auth.users.login: login attempt on disabled account "
+                f"username={username!r}"
+            )
             return None
 
         # MFA gate. The columns are nullable-with-default-0 from the v16
@@ -658,7 +681,7 @@ def get_user(user_id: str) -> Optional[User]:
         conn = get_connection()
         row = conn.execute(
             """
-            SELECT user_id, username, role, created_at, last_login_at
+            SELECT user_id, username, role, created_at, last_login_at, is_active
               FROM users
              WHERE user_id = ?
             """,
@@ -670,6 +693,54 @@ def get_user(user_id: str) -> Optional[User]:
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"auth.users.get_user: lookup failed for {user_id!r}: {exc}")
         return None
+
+
+def set_user_active(user_id: str, active: bool) -> bool:
+    """Enable/disable an account (the kill-switch; R104).
+
+    A disabled account cannot log in or use API tokens, but its row, audit
+    trail, and owned data are preserved. Returns True iff a row was updated.
+    """
+    try:
+        if not isinstance(user_id, str) or not user_id:
+            return False
+        from state.db import get_connection
+        conn = get_connection()
+        with conn:
+            cur = conn.execute(
+                "UPDATE users SET is_active = ? WHERE user_id = ?",
+                (1 if active else 0, user_id),
+            )
+        return (getattr(cur, "rowcount", 0) or 0) > 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"auth.users.set_user_active: failed for {user_id!r}: {exc}")
+        return False
+
+
+def deactivate_user(user_id: str) -> bool:
+    """Disable an account (kill-switch). Returns True iff a row changed."""
+    return set_user_active(user_id, False)
+
+
+def reactivate_user(user_id: str) -> bool:
+    """Re-enable a previously disabled account."""
+    return set_user_active(user_id, True)
+
+
+def is_user_active(user_id: str) -> bool:
+    """Whether an account is active. Unknown user / DB error -> True
+    (fail-open) so an infra blip never silently locks everyone out; an
+    explicitly-disabled row returns False."""
+    try:
+        from state.db import get_connection
+        row = get_connection().execute(
+            "SELECT is_active FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            return True
+        return _row_active(row)
+    except Exception:
+        return True
 
 
 def count_users() -> int:
