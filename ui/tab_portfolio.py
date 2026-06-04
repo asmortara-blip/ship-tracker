@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime
-import random
 
 import numpy as np
 import pandas as pd
@@ -64,30 +63,8 @@ _DEFAULT_POSITIONS = [
     {"ticker": "HAFNI", "sector": "Tanker",        "shares": 1000,  "avg_cost": 7.85,   "beta": 1.55},
 ]
 
-# Mock current prices (realistic for 2026 shipping names)
-_MOCK_PRICES = {
-    "ZIM":   19.82,
-    "MATX":  128.45,
-    "DAC":   81.60,
-    "SBLK":  14.35,
-    "GOGL":  12.80,
-    "STNG":  55.90,
-    "GSL":   24.75,
-    "HAFNI": 8.42,
-}
-
-# Mock day change pcts
-_MOCK_DAY_CHANGE = {
-    "ZIM":   +2.14,
-    "MATX":  +0.78,
-    "DAC":   +1.35,
-    "SBLK":  -1.82,
-    "GOGL":  +3.21,
-    "STNG":  +0.45,
-    "GSL":   -0.62,
-    "HAFNI": +2.88,
-}
-
+# Prices and day-changes come from REAL stock_feed closes (processing.book_pnl);
+# unpriced tickers render NaN / 0.0 rather than a fabricated quote.
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────
@@ -137,25 +114,29 @@ def _color(v: float) -> str:
 
 
 def _get_price(ticker: str, stock_data) -> float:
-    """Return current price from stock_data or fall back to mock."""
+    """Latest REAL close from stock_data, or NaN when unavailable (no mock)."""
     try:
-        if stock_data is not None:
-            if isinstance(stock_data, dict) and ticker in stock_data:
-                row = stock_data[ticker]
-                if hasattr(row, "get"):
-                    price = row.get("price") or row.get("close") or row.get("last")
-                    if price:
-                        return float(price)
-            if isinstance(stock_data, pd.DataFrame) and ticker in stock_data.columns:
-                val = stock_data[ticker].dropna().iloc[-1]
-                return float(val)
+        from processing.book_pnl import _latest_close
+        last = _latest_close(stock_data, ticker)
+        if last is not None:
+            return float(last)
+        # Wide-frame shape (some callers pass a columns-are-tickers DataFrame).
+        if isinstance(stock_data, pd.DataFrame) and ticker in stock_data.columns:
+            val = stock_data[ticker].dropna().iloc[-1]
+            return float(val)
     except Exception:
         pass
-    return _MOCK_PRICES.get(ticker, 20.0 + random.uniform(-2, 2))
+    return float("nan")
 
 
-def _get_day_change_pct(ticker: str) -> float:
-    return _MOCK_DAY_CHANGE.get(ticker, random.uniform(-3.5, 3.5))
+def _get_day_change_pct(ticker: str, stock_data) -> float:
+    """Real 1-day % change from the last two closes; 0.0 when unavailable."""
+    try:
+        from processing.book_pnl import day_change_pct
+        d = day_change_pct(ticker, stock_data)
+        return float(d) if d is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 def _init_positions() -> None:
@@ -221,13 +202,13 @@ def _build_snapshot(positions: list[dict], stock_data) -> pd.DataFrame:
         sector  = pos.get("sector", "Unknown")
         shares  = float(pos.get("shares", 0))
         avg_cost = float(pos.get("avg_cost", 0))
-        beta    = float(pos.get("beta", 1.0))
+        beta    = float(pos.get("beta") or 1.0)
         price   = _get_price(ticker, stock_data)
         mkt_val = shares * price
         cost_basis = shares * avg_cost
         pnl_dollar = mkt_val - cost_basis
         pnl_pct    = (pnl_dollar / cost_basis * 100) if cost_basis > 0 else 0.0
-        day_chg    = _get_day_change_pct(ticker)
+        day_chg    = _get_day_change_pct(ticker, stock_data)
         day_pnl    = mkt_val * day_chg / 100
         rows.append({
             "Ticker":       ticker,
@@ -361,9 +342,10 @@ def _render_editorial_commentary(df: pd.DataFrame) -> None:
             (df["Beta"] * df["Weight %"] / 100.0).sum()
         ) if "Weight %" in df.columns else 1.0
 
-        # Top holding by market value + best/worst single-day mover.
-        top_idx = df["Market Value"].idxmax()
-        top = df.loc[top_idx]
+        # Top holding by market value + best/worst single-day mover. Guard the
+        # all-unpriced case (every Market Value NaN) — idxmax would raise.
+        _mv = df["Market Value"]
+        top = df.loc[_mv.idxmax()] if _mv.notna().any() else df.iloc[0]
         sorted_day = df.sort_values("Day Chg %", ascending=False)
         best = sorted_day.iloc[0]
         worst = sorted_day.iloc[-1]
@@ -537,49 +519,47 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
         logger.warning(f"composition chart error: {e}")
 
 
-def _render_performance_chart(df: pd.DataFrame) -> None:
-    """90-day simulated portfolio NAV vs shipping index."""
+def _render_performance_chart(positions: list[dict], stock_data) -> None:
+    """Portfolio NAV from REAL closes — current holdings marked to history.
+
+    Values today's book at each past real close (base=100). This is a
+    mark-to-history curve, NOT a replayed trading path (entries/exits are not
+    reconstructed). Empty-states honestly when no priced holdings exist.
+    """
     try:
-        rng = np.random.default_rng(42)
-        days = 90
-        dates = pd.date_range(end=datetime.date.today(), periods=days, freq="B")
-
-        # Simulate correlated returns — instance-scoped RNG, not global
-        port_ret   = rng.normal(0.0008, 0.018, days)
-        index_ret  = rng.normal(0.0003, 0.020, days)
-
-        # Add some correlation + trending
-        port_ret   = port_ret + 0.0005
-        index_ret  = index_ret - 0.0002
-
-        nav_port   = 100 * np.cumprod(1 + port_ret)
-        nav_index  = 100 * np.cumprod(1 + index_ret)
+        from processing.book_pnl import nav_series
+        nav = nav_series(positions, stock_data, days=90, base=100.0)
+        if nav is None or nav.empty:
+            st.info(
+                "Portfolio NAV needs live price history for the held tickers — "
+                "unavailable right now."
+            )
+            return
 
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(
-            x=dates, y=nav_port,
-            name="Portfolio",
+            x=nav.index, y=nav.values,
+            name="Portfolio (mark-to-history)",
             line=dict(color=C_ACCENT, width=2.5),
             fill="tozeroy",
             fillcolor="rgba(53,114,176,0.06)",
             hovertemplate="<b>Portfolio</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
         ))
-
-        fig.add_trace(go.Scatter(
-            x=dates, y=nav_index,
-            name="Shipping Index (BDI proxy)",
-            line=dict(color=C_MOD, width=1.8, dash="dot"),
-            hovertemplate="<b>Index</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
-        ))
-
-        apply_dark_layout(fig, title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
+        apply_dark_layout(
+            fig,
+            title="Portfolio NAV — current holdings marked to historical closes",
+            height=360,
+        )
         fig.update_layout(yaxis={"title": dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))})
 
         st.plotly_chart(fig, use_container_width=True, key="portfolio_nav")
         st.markdown(source_footer([
-            {"name": "Simulated 90-day NAV path", "kind": "modeled", "quality": "demo"},
+            {"name": "Holdings marked to real historical closes (yfinance)", "kind": "real", "quality": "live"},
         ]), unsafe_allow_html=True)
+        st.caption(
+            "Mark-to-history: today's holdings valued at each past close — "
+            "not a realized trading path."
+        )
     except Exception as e:
         logger.warning(f"performance chart error: {e}")
 
@@ -1393,7 +1373,7 @@ def render(stock_data, macro_data, insights) -> None:
                     _render_composition_chart(df)
                 with col_right:
                     section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
-                    _render_performance_chart(df)
+                    _render_performance_chart(positions, stock_data)
 
             section_divider("Risk")
 
