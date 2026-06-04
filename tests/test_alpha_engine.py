@@ -274,7 +274,8 @@ def test_compute_portfolio_alpha_empty_input() -> None:
     assert out["weights"] == {}
     assert out["expected_return"] == 0.0
     assert out["portfolio_vol"] == 0.0
-    assert out["sharpe"] == 0.0
+    assert out["implied_sharpe"] == 0.0
+    assert out["basis"] == "model-implied"
 
 
 def test_compute_portfolio_alpha_weights_normalized() -> None:
@@ -300,9 +301,23 @@ def test_compute_portfolio_alpha_metrics_finite() -> None:
     out = compute_portfolio_alpha(sigs, stock)
     assert math.isfinite(out["expected_return"])
     assert math.isfinite(out["portfolio_vol"])
-    assert math.isfinite(out["sharpe"])
-    assert math.isfinite(out["max_dd_estimate"])
+    assert math.isfinite(out["implied_sharpe"])
+    assert math.isfinite(out["implied_stop_downside_pct"])
     assert out["portfolio_vol"] > 0
+
+
+def test_compute_portfolio_alpha_does_not_present_realized_perf_stats() -> None:
+    """Honesty (R054): the portfolio dict must not expose a self-graded 'sharpe'
+    or 'max_dd' presented as realized performance. The forward projections are
+    explicitly named *implied* and tagged basis='model-implied'."""
+    sigs = [
+        _make_signal("ZIM", "n", "MOMENTUM", "LONG", 0.7, "HIGH",
+                    20.0, 24.0, 18.0, "1M", "r"),
+    ]
+    out = compute_portfolio_alpha(sigs, {})
+    assert "sharpe" not in out and "max_dd_estimate" not in out
+    assert "implied_sharpe" in out and "implied_stop_downside_pct" in out
+    assert out["basis"] == "model-implied"
 
 
 def test_compute_portfolio_alpha_falls_back_to_default_vol() -> None:

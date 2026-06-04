@@ -643,7 +643,7 @@ def _generate_executive_summary(
     n_short = sum(1 for s in alpha.signals if getattr(s, "direction", "") == "SHORT")
     n_high = sum(1 for s in alpha.signals if getattr(s, "conviction", "") == "HIGH")
     exp_ret = _safe_float(alpha.portfolio.get("expected_return", 0.0))
-    sharpe = _safe_float(alpha.portfolio.get("sharpe", 0.0))
+    implied_sharpe = _safe_float(alpha.portfolio.get("implied_sharpe", 0.0))
 
     top_long_str = "none identified"
     if alpha.top_long:
@@ -663,8 +663,9 @@ def _generate_executive_summary(
     p2 = (
         f"The alpha signal engine has generated {n_signals} active signals across the coverage universe, "
         f"comprising {n_long} LONG and {n_short} SHORT signals, with {n_high} rated HIGH conviction. "
-        f"The portfolio is positioned with an expected return of {exp_ret:+.1f}% and an estimated Sharpe ratio of {sharpe:.2f}, "
-        f"reflecting {'strong risk-adjusted upside' if sharpe > 1.0 else ('acceptable risk-adjusted positioning' if sharpe > 0 else 'defensive positioning given headwinds')}. "
+        f"The portfolio carries a model-implied expected return of {exp_ret:+.1f}% and a model-implied "
+        f"return/volatility ratio of {implied_sharpe:.2f} (derived from the signals' own price targets and "
+        f"realized volatility — a forward projection, not a realized Sharpe or backtested result). "
         f"The highest-priority long idea is {top_long_str}. "
         f"Among individual equities, {top_pick_str} is the top-rated pick "
         f"{top_pick_price_clause}, "
@@ -1509,8 +1510,9 @@ def _build_investor_report_inner(
         except Exception as exc:
             logger.error("compute_portfolio_alpha failed: {}", exc)
             portfolio = {
-                "weights": {}, "expected_return": 0.0,
-                "portfolio_vol": 0.0, "sharpe": 0.0, "max_dd_estimate": 0.0,
+                "weights": {}, "expected_return": 0.0, "portfolio_vol": 0.0,
+                "implied_sharpe": 0.0, "implied_stop_downside_pct": 0.0,
+                "basis": "model-implied",
             }
 
     # ------------------------------------------------------------------

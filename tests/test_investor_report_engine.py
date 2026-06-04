@@ -709,7 +709,7 @@ def _basic_alpha(signals=None) -> AlphaSignalSummary:
     ]
     return AlphaSignalSummary(
         signals=sigs,
-        portfolio={"expected_return": 12.0, "sharpe": 1.2},
+        portfolio={"expected_return": 12.0, "implied_sharpe": 1.2},
         top_long=sigs[:1],
         top_short=[],
         scorecard_df=pd.DataFrame(),

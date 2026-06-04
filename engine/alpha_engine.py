@@ -678,15 +678,23 @@ def compute_portfolio_alpha(
         stock_data: dict[ticker -> DataFrame]
 
     Returns:
-        dict with keys: weights, expected_return, portfolio_vol, sharpe, max_dd_estimate
+        dict with keys: weights, expected_return, portfolio_vol, implied_sharpe,
+        implied_stop_downside_pct, basis.
+
+    Honesty note: ``implied_sharpe`` and ``implied_stop_downside_pct`` are
+    MODEL-IMPLIED projections derived from the signals' own price targets / stop
+    placements and realized volatility — they are NOT realized or backtested
+    performance statistics. ``basis="model-implied"`` marks this explicitly. A
+    realized Sharpe/drawdown requires the point-in-time signal ledger (R004).
     """
     if not signals:
         return {
             "weights": {},
             "expected_return": 0.0,
             "portfolio_vol": 0.0,
-            "sharpe": 0.0,
-            "max_dd_estimate": 0.0,
+            "implied_sharpe": 0.0,
+            "implied_stop_downside_pct": 0.0,
+            "basis": "model-implied",
         }
 
     conviction_w = {"HIGH": 1.0, "MEDIUM": 0.65, "LOW": 0.35}
@@ -740,28 +748,33 @@ def compute_portfolio_alpha(
         portfolio_vol += (w ** 2) * (vols.get(ticker, 40.0) ** 2)
     portfolio_vol = round(float(np.sqrt(portfolio_vol)), 2)
 
-    # Sharpe (assume risk-free = 5%)
-    sharpe = round((expected_return - 5.0) / portfolio_vol, 3) if portfolio_vol > 0 else 0.0
+    # MODEL-IMPLIED return/risk ratio: the model's OWN expected return (from its
+    # price targets) over realized volatility, less a 5% risk-free assumption.
+    # This is a forward projection of the signal set, NOT a realized Sharpe.
+    implied_sharpe = round((expected_return - 5.0) / portfolio_vol, 3) if portfolio_vol > 0 else 0.0
 
-    # Max drawdown estimate: 1.5x the weighted average stop distance
-    max_dd_parts = []
+    # MODEL-IMPLIED downside: the weighted-average stop-loss distance — i.e. the
+    # loss if every position's stop triggers. A risk proxy from the signals' own
+    # stop placements, NOT a realized or simulated max drawdown.
+    downside_parts = []
     for sig in signals:
         w = abs(weights.get(sig.ticker, 0.0))
         stop_dist = abs(sig.entry_price - sig.stop_loss) / sig.entry_price * 100 if sig.entry_price else 0
-        max_dd_parts.append(w * stop_dist)
-    max_dd_estimate = round(sum(max_dd_parts) * 1.5, 2)
+        downside_parts.append(w * stop_dist)
+    implied_stop_downside_pct = round(sum(downside_parts), 2)
 
     logger.info(
-        "Portfolio alpha computed: return=" + str(expected_return) + "%, "
-        + "vol=" + str(portfolio_vol) + "%, sharpe=" + str(sharpe)
+        "Portfolio alpha computed (model-implied): return=" + str(expected_return) + "%, "
+        + "vol=" + str(portfolio_vol) + "%, implied_sharpe=" + str(implied_sharpe)
     )
 
     return {
         "weights": weights,
         "expected_return": expected_return,
         "portfolio_vol": portfolio_vol,
-        "sharpe": sharpe,
-        "max_dd_estimate": max_dd_estimate,
+        "implied_sharpe": implied_sharpe,
+        "implied_stop_downside_pct": implied_stop_downside_pct,
+        "basis": "model-implied",
     }
 
 
