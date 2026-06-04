@@ -1216,3 +1216,29 @@ def _migrate_to_v28(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v28 ALTER TABLE failed: {exc}"
         )
+
+
+# ─── Schema v28 → v29 ─────────────────────────────────────────────────────
+
+def _migrate_to_v29(conn: sqlite3.Connection) -> None:
+    """Add the ``positions`` table — a durable, per-user position ledger.
+
+    The portfolio book previously lived only in ``st.session_state`` seeded
+    from a hardcoded default list, so it evaporated on refresh and was
+    identical for every user. v29 persists positions per ``user_id`` with a
+    point-in-time history: an edit closes the prior open rows (stamps
+    ``closed_at``) and inserts the new set at ``version + 1`` rather than
+    overwriting, so the book is reconstructable as-of any past write.
+
+    The CREATE TABLE script is idempotent on its own (CREATE TABLE IF NOT
+    EXISTS + CREATE INDEX IF NOT EXISTS) so re-running on a fully-migrated DB
+    is a no-op — matches the v2 / v8 / v26 add-only pattern.
+    """
+    try:
+        from state.db import _SCHEMA_V29
+
+        conn.executescript(_SCHEMA_V29)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v29 CREATE TABLE failed: {exc}"
+        )

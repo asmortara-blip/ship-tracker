@@ -159,8 +159,45 @@ def _get_day_change_pct(ticker: str) -> float:
 
 
 def _init_positions() -> None:
-    if "portfolio_positions" not in st.session_state:
-        st.session_state["portfolio_positions"] = [dict(p) for p in _DEFAULT_POSITIONS]
+    """Seed the session book from the durable per-user ledger (schema v29).
+
+    A logged-in user's saved positions load from the DB; a brand-new user (or
+    the session-less CLI/demo path) falls back to the illustrative default
+    book, which is NOT persisted until they actually edit it.
+    """
+    if "portfolio_positions" in st.session_state:
+        return
+    loaded: list[dict] = []
+    try:
+        from state.user_scope import current_user_id
+        from state import positions as pos_store
+        uid = current_user_id()
+        if uid:
+            loaded = pos_store.load_positions(uid)
+    except Exception:
+        loaded = []
+    st.session_state["portfolio_positions"] = (
+        loaded if loaded else [dict(p) for p in _DEFAULT_POSITIONS]
+    )
+
+
+def _persist_positions() -> None:
+    """Persist the current session book to the durable per-user ledger.
+
+    No-op without a logged-in user (the session-less CLI/demo path keeps the
+    legacy in-memory behaviour). Failures are swallowed so a storage blip
+    never breaks the tab.
+    """
+    try:
+        from state.user_scope import current_user_id
+        from state import positions as pos_store
+        uid = current_user_id()
+        if not uid:
+            return
+        pos_store.replace_positions(uid, st.session_state.get("portfolio_positions", []))
+    except Exception:
+        from loguru import logger
+        logger.exception("tab_portfolio: persist_positions failed")
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +318,7 @@ def _render_add_position_form() -> None:
                         })
                         st.success(f"Added {ticker_in} — {shares_in} shares @ ${cost_in:.2f}")
                     st.session_state["portfolio_positions"] = positions
+                    _persist_positions()
                     st.rerun()
             except Exception as e:
                 st.error(f"Error adding position: {e}")
@@ -294,6 +332,7 @@ def _render_add_position_form() -> None:
                 st.session_state["portfolio_positions"] = [
                     p for p in positions if p["ticker"] != rem_ticker
                 ]
+                _persist_positions()
                 st.success(f"Removed {rem_ticker}")
                 st.rerun()
 

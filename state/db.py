@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 28
+SCHEMA_VERSION: int = 29
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1247,6 +1247,36 @@ _SCHEMA_V26_NOTE: str = (
 )
 
 
+_SCHEMA_V29 = """
+CREATE TABLE IF NOT EXISTS positions (
+    position_id  TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL DEFAULT '',
+    ticker       TEXT NOT NULL,
+    sector       TEXT,
+    shares       REAL NOT NULL DEFAULT 0,
+    avg_cost     REAL NOT NULL DEFAULT 0,
+    beta         REAL,
+    opened_at    TEXT NOT NULL,
+    closed_at    TEXT,
+    version      INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_positions_user_open
+    ON positions(user_id, closed_at);
+CREATE INDEX IF NOT EXISTS idx_positions_user_ticker
+    ON positions(user_id, ticker);
+"""
+
+_SCHEMA_V29_NOTE: str = (
+    "v29: positions table (position_id PK, user_id, ticker, sector, shares, "
+    "avg_cost, beta, opened_at, closed_at, version, updated_at) — a durable, "
+    "per-user, point-in-time position ledger (closed rows retained for history) "
+    "+ idx_positions_user_open (user_id, closed_at) + "
+    "idx_positions_user_ticker (user_id, ticker) "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v29)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1474,6 +1504,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v28(conn)
     except Exception as exc:
         logger.warning(f"state.db: v28 column add skipped: {exc}")
+
+    # v29 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26). Adds the ``positions`` ledger so the portfolio book is
+    # durable + per-user instead of session-state-only. Runs unconditionally on
+    # every open (fresh DB: creates it; existing DB: no-op).
+    try:
+        from state.migrations import _migrate_to_v29
+        _migrate_to_v29(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v29 table add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1836,6 +1876,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v28(conn)
         except Exception as exc:
             logger.warning(f"state.db: v28 migration skipped: {exc}")
+
+    # Migration 28 → 29: add the ``positions`` ledger table. Idempotent
+    # CREATE TABLE IF NOT EXISTS (add-only, same as v26) — the helper is
+    # already invoked unconditionally above; this branch keeps the
+    # version-step ladder explicit.
+    if current < 29:
+        try:
+            from state.migrations import _migrate_to_v29
+            _migrate_to_v29(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v29 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
