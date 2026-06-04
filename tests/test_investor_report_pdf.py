@@ -683,17 +683,52 @@ def test_render_full_report_returns_pdf_bytes() -> None:
 
 
 def test_render_minimal_vs_full_both_substantial() -> None:
-    """Both shapes produce substantial PDFs. Note: minimal can actually be
-    LARGER than full, because section builders pad with verbose mock data
-    when fields are empty — a populated report *replaces* that mock content
-    with its (typically shorter) real content. We only assert each shape
-    produces a real multi-page PDF."""
+    """Both shapes produce substantial PDFs. The minimal report renders
+    honest empty-states (not fabricated padding) for its data tables but
+    still carries the full narrative/structure scaffold, so it remains a
+    real multi-page PDF. We only assert each shape produces a valid PDF."""
     minimal_bytes = render_investor_report_pdf(MinimalReport())
     full_bytes = render_investor_report_pdf(_full_report())
     assert minimal_bytes is not None and full_bytes is not None
-    # Both produce real 14+-page PDFs.
+    assert minimal_bytes.startswith(b"%PDF-") and full_bytes.startswith(b"%PDF-")
+    # Both produce real multi-page PDFs.
     assert len(minimal_bytes) > 30_000
     assert len(full_bytes) > 30_000
+
+
+def test_pdf_renderer_has_no_fabrication_constants() -> None:
+    """Honesty regression guard: the PDF builder must not carry the mock
+    risk/scenario/signal/ticker/freight fabrication catalogs it once rendered
+    unconditionally, and must expose the honest macro-derived helpers instead."""
+    import utils.investor_report_pdf as irp
+    for gone in ("_MOCK_RISK_FACTORS", "_MOCK_SCENARIOS", "_MOCK_TICKERS",
+                 "_MOCK_FREIGHT_ROUTES"):
+        assert not hasattr(irp, gone), f"{gone} fabrication must stay removed"
+    assert hasattr(irp, "_real_risk_factors") and hasattr(irp, "_illustrative_scenarios")
+
+
+def test_illustrative_scenarios_carry_no_fabricated_numbers() -> None:
+    """Scenario outlooks must be qualitative — no invented probabilities or
+    equity/freight impact percentages presented as forecasts."""
+    import re
+    from utils.investor_report_pdf import _illustrative_scenarios
+    scen = _illustrative_scenarios()
+    assert [t for t, _ in scen] == ["Bull Case", "Base Case", "Bear Case"]
+    for _title, outlook in scen:
+        # no "65%", "+8.3%", "-31.8%"-style fabricated probabilities/impacts
+        assert not re.search(r"[+-]?\d+(\.\d+)?\s*%", outlook), outlook
+
+
+def test_real_risk_factors_track_the_macro_snapshot() -> None:
+    """Risk factors must be derived from the live macro snapshot, not hardcoded."""
+    from utils.investor_report_pdf import _real_risk_factors
+    rf = _real_risk_factors(_full_report())
+    names = {n for n, _l, _d in rf}
+    # macro-derived rows appear because the full report carries BDI/WTI/10Y
+    assert "Baltic Dry Index Level" in names
+    assert "Supply Chain Stress" in names
+    # every row has a non-empty assessment string
+    assert all(isinstance(d, str) and d for _n, _l, d in rf)
 
 
 def test_render_with_unicode_in_fields_does_not_crash() -> None:

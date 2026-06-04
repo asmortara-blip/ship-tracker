@@ -245,42 +245,63 @@ def _rr(entry, stop, target) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  MOCK FALLBACK DATA  (used when report fields are empty/None)
+#  HONEST DERIVED CONTENT (real macro-derived risk + illustrative scenarios)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_MOCK_FREIGHT_ROUTES = [
-    {"route_id": "FBX01", "label": "China/East Asia - N. America West Coast", "rate": 2180, "change_30d": -312, "change_pct": -12.5, "trend": "DOWN"},
-    {"route_id": "FBX02", "label": "China/East Asia - N. America East Coast", "rate": 3450, "change_30d": -205, "change_pct": -5.6, "trend": "DOWN"},
-    {"route_id": "FBX03", "label": "China/East Asia - N. Europe",             "rate": 2890, "change_30d": +415, "change_pct": +16.8, "trend": "UP"},
-    {"route_id": "FBX04", "label": "China/East Asia - Mediterranean",          "rate": 3120, "change_30d": +298, "change_pct": +10.5, "trend": "UP"},
-    {"route_id": "FBX05", "label": "N. Europe - N. America East Coast",        "rate": 1650, "change_30d": -88,  "change_pct": -5.1, "trend": "FLAT"},
-    {"route_id": "FBX06", "label": "N. Europe - South America East Coast",     "rate": 1870, "change_30d": +122, "change_pct": +7.0, "trend": "UP"},
-    {"route_id": "FBX07", "label": "N. America - S. America West Coast",       "rate": 1340, "change_30d": -45,  "change_pct": -3.2, "trend": "FLAT"},
-    {"route_id": "FBX08", "label": "India Subcontinent - N. America East Coast","rate": 2760, "change_30d": +175, "change_pct": +6.8, "trend": "UP"},
-    {"route_id": "FBX09", "label": "China/East Asia - Oceania",                "rate": 1420, "change_30d": -62,  "change_pct": -4.2, "trend": "DOWN"},
-    {"route_id": "FBX10", "label": "Middle East - N. America East Coast",      "rate": 3890, "change_30d": +540, "change_pct": +16.1, "trend": "UP"},
-    {"route_id": "FBX11", "label": "Intra-Asia",                               "rate": 980,  "change_30d": -35,  "change_pct": -3.4, "trend": "FLAT"},
-    {"route_id": "FBX12", "label": "China/East Asia - South America W. Coast", "rate": 4210, "change_30d": +380, "change_pct": +9.9, "trend": "UP"},
-]
+def _real_risk_factors(report) -> list:
+    """Risk-factor rows derived from the live macro snapshot (BDI, WTI, 10Y
+    Treasury, supply-chain stress). Mirrors investor_report_html._section_risk so
+    the PDF and HTML reports stay honest and consistent. Returns
+    list[(name, level, assessment)] -- never fabricated probabilities."""
+    macro = getattr(report, "macro", None)
+    bdi   = float(getattr(macro, "bdi", 0.0) or 0.0) if macro else 0.0
+    wti   = float(getattr(macro, "wti", 0.0) or 0.0) if macro else 0.0
+    tsy10 = float(getattr(macro, "treasury_10y", 0.0) or 0.0) if macro else 0.0
+    sc_stress = _safe(getattr(macro, "supply_chain_stress", "MODERATE")) if macro else "MODERATE"
 
-_MOCK_TICKERS = ["ZIM", "MATX", "SBLK", "GOGL", "STNG", "INSW", "DAC", "GSL", "EGLE", "NMM"]
+    factors = []
+    if bdi > 0:
+        lvl = "LOW" if bdi > 1500 else ("MODERATE" if bdi > 900 else "HIGH")
+        note = "Demand solid." if bdi > 1500 else ("Demand soft - overcapacity risk." if bdi < 900 else "Demand moderate.")
+        factors.append(("Baltic Dry Index Level", lvl, f"BDI at {bdi:,.0f}. {note}"))
+    if wti > 0:
+        lvl = "HIGH" if wti > 90 else ("MODERATE" if wti > 70 else "LOW")
+        note = "Significant cost pressure on operating margins." if wti > 90 else ("Elevated but manageable fuel cost." if wti > 70 else "Supportive fuel cost environment.")
+        factors.append(("Bunker Fuel / Oil Price", lvl, f"WTI at ${wti:,.2f}. {note}"))
+    if tsy10 > 0:
+        lvl = "HIGH" if tsy10 > 4.5 else ("MODERATE" if tsy10 > 3.5 else "LOW")
+        note = "High rates compress shipping equity multiples." if tsy10 > 4.5 else ("Elevated rates; monitor refinancing risk." if tsy10 > 3.5 else "Supportive rate environment for capital-intensive shipping.")
+        factors.append(("Interest Rate Environment", lvl, f"10Y Treasury at {tsy10:.2f}%. {note}"))
 
-_MOCK_RISK_FACTORS = [
-    ("Freight Rate Volatility",  "HIGH",     "ADVERSE",   "75%",  "MATERIAL",   "Diversify route exposure; use freight derivatives as hedge"),
-    ("Port Congestion",          "MODERATE", "ADVERSE",   "55%",  "MODERATE",   "Monitor AIS dwell times; favor operators with port priority agreements"),
-    ("Geopolitical Disruption",  "HIGH",     "ADVERSE",   "60%",  "SIGNIFICANT","Track Red Sea/Strait of Hormuz developments; maintain contingency routing"),
-    ("USD Strength",             "MODERATE", "ADVERSE",   "45%",  "MODERATE",   "Monitor DXY; USD-denominated rates benefit USD-revenue operators"),
-    ("Fuel Price Spike",         "MODERATE", "ADVERSE",   "50%",  "MODERATE",   "Focus on scrubber-equipped tonnage; monitor WTI/Brent spread"),
-    ("IMO Regulatory Tightening","LOW",      "ADVERSE",   "35%",  "LOW",        "Favor CII-compliant operators; avoid non-compliant older tonnage"),
-    ("Global PMI Deterioration", "MODERATE", "ADVERSE",   "40%",  "MATERIAL",   "Reduce dry bulk exposure; rotate toward tankers in demand downcycle"),
-    ("Fleet Overcapacity",       "LOW",      "ADVERSE",   "30%",  "LOW",        "Monitor orderbook-to-fleet ratio; favor scrapping-driven tight supply"),
-]
+    sc_up = sc_stress.upper()
+    factors.append(("Supply Chain Stress", sc_up, {
+        "LOW":      "Supply chains operating smoothly. Low disruption probability.",
+        "MODERATE": "Some friction and delays reported. Monitor key chokepoints.",
+        "HIGH":     "Elevated disruption risk. Active bottlenecks in at least one corridor.",
+        "CRITICAL": "Critical disruptions active. Immediate portfolio impact likely.",
+    }.get(sc_up, "Supply-chain stress assessment unavailable.")))
+    factors.append(("Geopolitical Risk", "MODERATE",
+                    "Ongoing monitoring of key maritime corridors. Rerouting risk in select chokepoints."))
+    factors.append(("Vessel Oversupply", "LOW" if bdi > 1200 else "MODERATE",
+                    "Orderbook levels within historical norms. No immediate capacity glut expected."))
+    return factors
 
-_MOCK_SCENARIOS = [
-    ("Base Case (65%)",  "65%", "+2.8%",  "+4.1%",  "+8.3%",  "PMI stabilizes above 50; Red Sea partial re-opening"),
-    ("Bull Case (20%)",  "20%", "+12.5%", "+18.7%", "+24.2%", "Global trade surge; port congestion persists; supply shock"),
-    ("Bear Case (15%)",  "15%", "-15.3%", "-22.1%", "-31.8%", "Recession signals; demand collapse; fleet oversupply"),
-]
+
+def _illustrative_scenarios() -> list:
+    """Qualitative Bull/Base/Bear outlook framework. Deliberately carries NO
+    probabilities or numeric equity/freight impacts -- those would be fabricated.
+    Returns list[(title, outlook)]."""
+    return [
+        ("Bull Case", "BDI sustains above ~1,800; oil corrects toward the low $70s; supply chains "
+                      "normalize and freight rates hold at elevated levels. Shipping equities re-rate "
+                      "higher on earnings strength."),
+        ("Base Case", "BDI oscillates in a mid-cycle 1,000-1,600 range; rates stable with seasonal "
+                      "variation; no major supply-chain disruptions. Equities trade near book value "
+                      "with modest dividend support."),
+        ("Bear Case", "BDI breaks below ~900; oil spikes above ~$95 on a supply shock; new vessel "
+                      "deliveries outpace demand; rates compress across corridors and equity "
+                      "multiples de-rate."),
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1371,25 +1392,7 @@ def _signal_intelligence_pages(pdf: InstitutionalReportPDF, report) -> None:
     headers    = ["#", "INSTRUMENT", "TYPE", "DIR", "CONV", "STR", "ENTRY", "STOP", "TARGET", "R:R", "RATIONALE"]
     col_widths = [7.0, 22.0, 22.0, 12.0, 12.0, 12.0, 16.0, 16.0, 16.0, 12.0, 38.9]
 
-    # Build rows from signals, pad to 15 if needed
-    _mock_signals_data = [
-        ["ZIM",  "MOMENTUM",       "LONG",  "HIGH",   "0.87", "$14.20", "$12.80", "$18.50", _rr(14.20,12.80,18.50), "Strong container rate recovery; Red Sea premium"],
-        ["STNG", "MEAN_REVERSION", "LONG",  "HIGH",   "0.82", "$31.50", "$28.90", "$38.20", _rr(31.50,28.90,38.20), "Product tanker rate spike; refinery disruption"],
-        ["GOGL", "MOMENTUM",       "LONG",  "MEDIUM", "0.71", "$12.80", "$11.50", "$15.60", _rr(12.80,11.50,15.60), "BDI recovery; Capesize charter rate improvement"],
-        ["INSW", "FUNDAMENTAL",    "LONG",  "HIGH",   "0.91", "$38.40", "$35.00", "$46.80", _rr(38.40,35.00,46.80), "VLCC ton-mile demand; Atlantic basin trade flows"],
-        ["SBLK", "MOMENTUM",       "SHORT", "MEDIUM", "0.63", "$15.20", "$16.80", "$12.40", _rr(15.20,16.80,12.40), "Chinese import weakness; Supramax oversupply"],
-        ["DAC",  "FUNDAMENTAL",    "LONG",  "MEDIUM", "0.68", "$62.30", "$57.00", "$74.50", _rr(62.30,57.00,74.50), "Long-term charter coverage; low churn risk"],
-        ["GSL",  "MEAN_REVERSION", "LONG",  "LOW",    "0.55", "$18.90", "$17.20", "$22.10", _rr(18.90,17.20,22.10), "Sector mean reversion; undervalued vs. peers"],
-        ["NMM",  "FUNDAMENTAL",    "LONG",  "MEDIUM", "0.73", "$22.40", "$20.50", "$27.80", _rr(22.40,20.50,27.80), "Diversified fleet; NAV discount opportunity"],
-        ["MATX", "MOMENTUM",       "SHORT", "LOW",    "0.48", "$95.50", "$102.0", "$82.00", _rr(95.50,102.0,82.00), "Hawaii trade lane softening; vol at highs"],
-        ["EGLE", "MEAN_REVERSION", "LONG",  "LOW",    "0.52", "$48.20", "$44.00", "$56.30", _rr(48.20,44.00,56.30), "Eagle Bulk: technical support; cash generation"],
-        ["ZIM",  "TECHNICAL",      "LONG",  "HIGH",   "0.88", "$14.20", "$12.80", "$19.00", _rr(14.20,12.80,19.00), "Breakout above 200-DMA; volume surge"],
-        ["STNG", "MACRO",          "LONG",  "HIGH",   "0.84", "$31.50", "$28.90", "$39.00", _rr(31.50,28.90,39.00), "Macro: WTI backwardation supports tanker"],
-        ["INSW", "MOMENTUM",       "LONG",  "HIGH",   "0.89", "$38.40", "$35.00", "$47.50", _rr(38.40,35.00,47.50), "Crude tanker momentum; earnings upgrade cycle"],
-        ["GOGL", "TECHNICAL",      "SHORT", "LOW",    "0.45", "$12.80", "$14.00", "$10.90", _rr(12.80,14.00,10.90), "Overbought RSI; resistance at 50-DMA"],
-        ["DAC",  "FUNDAMENTAL",    "LONG",  "MEDIUM", "0.69", "$62.30", "$57.00", "$75.00", _rr(62.30,57.00,75.00), "Container lessor: rate lock-in through 2025"],
-    ]
-
+    # Build rows from the REAL signals only -- no fabricated padding.
     rows = []
     for idx, sig in enumerate(signals):
         ticker    = _safe(getattr(sig, "ticker", "N/A"))
@@ -1408,17 +1411,10 @@ def _signal_intelligence_pages(pdf: InstitutionalReportPDF, report) -> None:
         rows.append([str(idx + 1), ticker, _trunc(stype, 16), dir_str, conv, strength,
                      entry, stop, target, rr, rationale])
 
-    # Pad with mock data if needed
-    while len(rows) < 15:
-        mi = len(rows)
-        if mi < len(_mock_signals_data):
-            md = _mock_signals_data[mi]
-            dir_disp = (md[2] + " \u2191") if md[2] == "LONG" else (md[2] + " \u2193")
-            rows.append([str(len(rows) + 1), md[0], _trunc(md[1], 16), dir_disp,
-                         md[3], md[4], md[5], md[6], md[7], md[8], md[9]])
-        else:
-            rows.append([str(len(rows) + 1), "N/A", "N/A", "N/A", "N/A", "N/A",
-                         "N/A", "N/A", "N/A", "N/A", "Insufficient signal data"])
+    # No fabricated padding: if no real signals qualified, say so explicitly.
+    if not rows:
+        rows.append(["-", "No qualifying signals this period", "-", "-", "-", "-",
+                     "-", "-", "-", "-", "No alpha signals met threshold this period"])
 
     pdf._data_table(headers, rows, col_widths,
                     source="Signals generated by proprietary multi-factor alpha engine. "
@@ -1465,21 +1461,13 @@ def _signal_intelligence_pages(pdf: InstitutionalReportPDF, report) -> None:
                 getattr(sig, "target_price", None)),
             _trunc(_safe(getattr(sig, "rationale", "N/A")), 44),
         ])
-    _mock_long = [
-        ["ZIM",  "MOMENTUM",       "HIGH",   "0.87", "$14.20", "$12.80", "$18.50", "3.1x", "Container rate recovery; Red Sea premium"],
-        ["INSW", "FUNDAMENTAL",    "HIGH",   "0.91", "$38.40", "$35.00", "$46.80", "2.5x", "VLCC ton-mile; Atlantic basin flows"],
-        ["STNG", "MEAN_REVERSION", "HIGH",   "0.82", "$31.50", "$28.90", "$38.20", "2.5x", "Product tanker rate spike"],
-        ["DAC",  "FUNDAMENTAL",    "MEDIUM", "0.68", "$62.30", "$57.00", "$74.50", "2.3x", "Long-term charter lock-in"],
-        ["NMM",  "FUNDAMENTAL",    "MEDIUM", "0.73", "$22.40", "$20.50", "$27.80", "2.8x", "NAV discount; diversified fleet"],
-    ]
-    while len(long_rows) < 5:
-        mi = len(long_rows)
-        if mi < len(_mock_long):
-            long_rows.append(_mock_long[mi])
-        else:
-            break
     if long_rows:
         pdf._data_table(long_headers, long_rows, long_widths, color_cols=[3, 4, 5, 6, 7])
+    else:
+        pdf._data_table(long_headers,
+                        [["-", "No active long signals", "-", "-", "-", "-", "-", "-",
+                          "No long-side signals met threshold this period"]],
+                        long_widths)
 
     pdf.ln(4)
 
@@ -1501,26 +1489,19 @@ def _signal_intelligence_pages(pdf: InstitutionalReportPDF, report) -> None:
                 getattr(sig, "target_price", None)),
             _trunc(_safe(getattr(sig, "rationale", "N/A")), 44),
         ])
-    _mock_short = [
-        ["SBLK", "MOMENTUM",    "MEDIUM", "0.63", "$15.20", "$16.80", "$12.40", "1.8x", "Chinese import weakness; Supramax oversupply"],
-        ["MATX", "MOMENTUM",    "LOW",    "0.48", "$95.50", "$102.0", "$82.00", "2.1x", "Hawaii trade softening; vol elevated"],
-        ["GOGL", "TECHNICAL",   "LOW",    "0.45", "$12.80", "$14.00", "$10.90", "0.9x", "Overbought RSI; 50-DMA resistance"],
-    ]
-    while len(short_rows) < 3:
-        mi = len(short_rows)
-        if mi < len(_mock_short):
-            short_rows.append(_mock_short[mi])
-        else:
-            break
     if short_rows:
         pdf._data_table(long_headers, short_rows, long_widths, color_cols=[3, 4, 5, 6, 7])
+    else:
+        pdf._data_table(long_headers,
+                        [["-", "No active short signals", "-", "-", "-", "-", "-", "-",
+                          "No short-side signals met threshold this period"]],
+                        long_widths)
 
     pdf.ln(3)
-    pdf._footnote("2 Signals generated by proprietary multi-factor alpha engine incorporating momentum, mean-reversion, "
-                  "fundamental, technical, and macro sub-models. R:R = risk/reward ratio calculated as (target-entry)/(entry-stop). "
-                  "All prices in USD. HIGH conviction requires strength >= 0.80 and signal corroboration across >= 2 sub-models. "
-                  "Not investment advice. For institutional research purposes only.")
-
+    pdf._footnote("2 Signals are produced by the modeled multi-factor alpha engine (momentum, "
+                  "mean-reversion, fundamental, technical, macro). Only signals that qualified this period "
+                  "are shown; empty sections are labeled, never padded with sample data. "
+                  "R:R = (target-entry)/(entry-stop). Modeled output, not investment advice.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGES 6-7 — FREIGHT RATE ANALYSIS
@@ -1561,25 +1542,20 @@ def _freight_rate_pages(pdf: InstitutionalReportPDF, report) -> None:
     pdf.ln(2)
     pdf._sub_header("Comprehensive Freight Rate Table — All Routes")
 
-    # Build route rows
-    if not routes:
-        route_data = _MOCK_FREIGHT_ROUTES
-    else:
-        route_data = []
-        for r in routes:
-            if isinstance(r, dict):
-                route_data.append(r)
-            else:
-                route_data.append({
-                    "route_id":  _safe(getattr(r, "route_id", "N/A")),
-                    "label":     _safe(getattr(r, "label", _safe(getattr(r, "route_id", "N/A")))),
-                    "rate":      getattr(r, "rate", None),
-                    "change_30d": getattr(r, "change_30d", None),
-                    "change_pct": getattr(r, "change_pct", None),
-                    "trend":     _safe(getattr(r, "trend", "N/A")),
-                })
-        if not route_data:
-            route_data = _MOCK_FREIGHT_ROUTES
+    # Build route rows from REAL freight routes only -- no fabricated fallback.
+    route_data = []
+    for r in routes:
+        if isinstance(r, dict):
+            route_data.append(r)
+        else:
+            route_data.append({
+                "route_id":  _safe(getattr(r, "route_id", "N/A")),
+                "label":     _safe(getattr(r, "label", _safe(getattr(r, "route_id", "N/A")))),
+                "rate":      getattr(r, "rate", None),
+                "change_30d": getattr(r, "change_30d", None),
+                "change_pct": getattr(r, "change_pct", None),
+                "trend":     _safe(getattr(r, "trend", "N/A")),
+            })
 
     # Identify biggest mover index
     bm_id = _safe(bm_dict.get("route_id", "")) if bm_dict else ""
@@ -1605,6 +1581,8 @@ def _freight_rate_pages(pdf: InstitutionalReportPDF, report) -> None:
         if rid == bm_id:
             bold_rows.append(ri)
 
+    if not fr_rows:
+        fr_rows = [["-", "No freight route data available this period", "-", "-", "-", "-", "-", "-"]]
     pdf._data_table(fr_headers, fr_rows, fr_widths, bold_rows=bold_rows,
                     source="Source: Freightos Baltic Index (FBX), Baltic Exchange. "
                            "Rates in USD/TEU (container) or USD/day (dry bulk/tanker). "
@@ -1880,28 +1858,23 @@ def _macro_page(pdf: InstitutionalReportPDF, report) -> None:
     pdf.set_section_name("SECTION 4 — MACROECONOMIC SNAPSHOT (CONT.)")
     pdf._section_title("Macro Risk Factors", 4)
 
-    risk_headers = ["RISK FACTOR", "LEVEL", "IMPACT", "MITIGATION STRATEGY"]
-    risk_widths  = [40.0, 20.0, 20.0, 105.9]
-
-    risk_rows = []
-    for rf in _MOCK_RISK_FACTORS:
-        risk_rows.append([rf[0], rf[1], rf[4], _trunc(rf[5], 80)])
-
+    risk_headers = ["RISK FACTOR", "LEVEL", "ASSESSMENT"]
+    risk_widths  = [40.0, 22.0, 123.9]
+    risk_rows = [[name, lvl, _trunc(desc, 96)] for name, lvl, desc in _real_risk_factors(report)]
     pdf._data_table(risk_headers, risk_rows, risk_widths, color_cols=[])
 
     pdf.ln(4)
-    pdf._sub_header("Macroeconomic Scenario Matrix")
-    scen_headers = ["SCENARIO", "PROB", "BDI IMPACT", "FREIGHT IMPACT", "EQUITY IMPACT", "KEY TRIGGER"]
-    scen_widths  = [30.0, 14.0, 22.0, 22.0, 22.0, 75.9]
-    scen_rows    = [list(s) for s in _MOCK_SCENARIOS]
-    pdf._data_table(scen_headers, scen_rows, scen_widths, color_cols=[2, 3, 4])
+    pdf._sub_header("Macroeconomic Scenario Framework (Illustrative)")
+    scen_headers = ["SCENARIO", "QUALITATIVE OUTLOOK - ILLUSTRATIVE, NOT A FORECAST"]
+    scen_widths  = [30.0, 155.9]
+    scen_rows    = [[title, _trunc(outlook, 150)] for title, outlook in _illustrative_scenarios()]
+    pdf._data_table(scen_headers, scen_rows, scen_widths, color_cols=[])
 
     pdf.ln(3)
-    pdf._footnote("4 Risk factor assessments are based on proprietary scoring models incorporating quantitative "
-                  "indicators and qualitative analyst judgment. Scenario probabilities are subjective estimates "
-                  "and should not be interpreted as actuarial forecasts. BDI, freight, and equity impacts are "
-                  "approximate 3-month directional estimates under each scenario.")
-
+    pdf._footnote("4 Risk factors are derived from the live macroeconomic snapshot (BDI, WTI, 10Y "
+                  "Treasury, supply-chain stress) where available. The scenario outlooks are an "
+                  "illustrative qualitative framework - not probability-weighted forecasts, model "
+                  "output, or actuarial estimates.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGES 10-11 — SHIPPING EQUITY ANALYSIS
@@ -1935,19 +1908,9 @@ def _equity_page(pdf: InstitutionalReportPDF, report) -> None:
             sig_by_ticker[t].append(sig)
 
     if not tickers:
-        tickers = _MOCK_TICKERS
+        tickers = []  # no fabricated fallback universe
 
-    # Mock price data as fallback
-    _mock_prices = {
-        "ZIM": 14.20, "MATX": 95.50, "SBLK": 15.20, "GOGL": 12.80,
-        "STNG": 31.50, "INSW": 38.40, "DAC": 62.30, "GSL": 18.90,
-        "EGLE": 48.20, "NMM": 22.40,
-    }
-    _mock_changes = {
-        "ZIM": +12.4, "MATX": -3.2, "SBLK": -8.1, "GOGL": +5.3,
-        "STNG": +18.7, "INSW": +21.3, "DAC": +4.6, "GSL": +2.1,
-        "EGLE": -1.9, "NMM": +7.8,
-    }
+    # Price/change fallbacks removed -- only real prices are shown (N/A when missing).
     _subsectors = {
         "ZIM": "Container", "MATX": "Container", "DAC": "Container Lessor", "GSL": "Container Lessor",
         "SBLK": "Dry Bulk", "GOGL": "Dry Bulk", "EGLE": "Dry Bulk", "NMM": "Diversified",
@@ -1959,8 +1922,8 @@ def _equity_page(pdf: InstitutionalReportPDF, report) -> None:
 
     eq_rows  = []
     for tk in tickers:
-        price   = prices.get(tk, _mock_prices.get(tk, None))
-        chg_pct = changes_30d.get(tk, _mock_changes.get(tk, None))
+        price   = prices.get(tk, None)
+        chg_pct = changes_30d.get(tk, None)
         subsec  = _subsectors.get(tk, "Shipping")
         sigs    = sig_by_ticker.get(tk, [])
 
@@ -2072,8 +2035,8 @@ def _equity_page(pdf: InstitutionalReportPDF, report) -> None:
         ss_widths  = [16.0, 18.0, 16.0, 14.0, 24.0, 18.0, 79.9]
         ss_rows = []
         for tk in ss_tickers:
-            price   = prices.get(tk, _mock_prices.get(tk, None))
-            chg_pct = changes_30d.get(tk, _mock_changes.get(tk, None))
+            price   = prices.get(tk, None)
+            chg_pct = changes_30d.get(tk, None)
             sigs    = sig_by_ticker.get(tk, [])
             if sigs:
                 best = max(sigs, key=lambda s: float(getattr(s, "strength", 0) or 0))
@@ -2400,21 +2363,19 @@ def _risk_page(pdf: InstitutionalReportPDF, report) -> None:
 
     # ── Risk Factors Deep-Dive
     pdf._sub_header("Risk Factor Analysis — Detailed Assessment")
-    rf_headers = ["RISK FACTOR", "SEVERITY", "DIRECTION", "PROBABILITY", "PORT. IMPACT", "MITIGATION STRATEGY"]
-    rf_widths  = [36.0, 18.0, 16.0, 18.0, 18.0, 79.9]
-    rf_rows = []
-    for rf in _MOCK_RISK_FACTORS:
-        rf_rows.append([rf[0], rf[1], rf[2], rf[3], rf[4], _trunc(rf[5], 60)])
+    rf_headers = ["RISK FACTOR", "LEVEL", "ASSESSMENT"]
+    rf_widths  = [40.0, 22.0, 123.9]
+    rf_rows = [[name, lvl, _trunc(desc, 96)] for name, lvl, desc in _real_risk_factors(report)]
     pdf._data_table(rf_headers, rf_rows, rf_widths, color_cols=[])
 
     pdf.ln(4)
 
-    # ── Scenario Analysis
-    pdf._sub_header("Scenario Analysis — 3-Month Horizon")
-    sc_headers = ["SCENARIO", "PROB.", "BDI IMPACT", "FREIGHT IMPACT", "EQUITY IMPACT", "KEY TRIGGER / CONDITION"]
-    sc_widths  = [28.0, 14.0, 22.0, 22.0, 22.0, 77.9]
-    sc_rows    = [list(s) for s in _MOCK_SCENARIOS]
-    pdf._data_table(sc_headers, sc_rows, sc_widths, bold_rows=[0], color_cols=[2, 3, 4])
+    # -- Scenario Analysis (illustrative qualitative framework)
+    pdf._sub_header("Scenario Analysis - Illustrative Qualitative Framework")
+    sc_headers = ["SCENARIO", "QUALITATIVE OUTLOOK - ILLUSTRATIVE, NOT A FORECAST"]
+    sc_widths  = [28.0, 157.9]
+    sc_rows    = [[title, _trunc(outlook, 150)] for title, outlook in _illustrative_scenarios()]
+    pdf._data_table(sc_headers, sc_rows, sc_widths, color_cols=[])
 
     pdf.ln(4)
     # ── Correlation matrix (text-based)
@@ -2434,10 +2395,10 @@ def _risk_page(pdf: InstitutionalReportPDF, report) -> None:
     pdf.multi_cell(IW, 4.8, corr_text, align="J")
 
     pdf.ln(3)
-    pdf._footnote("7 Risk factor severity ratings reflect current assessment as of report date. "
-                  "Scenario probabilities are subjective analyst estimates. Portfolio impact assessments assume "
-                  "a benchmark-weight shipping equity allocation. Actual outcomes may differ materially from scenarios presented.")
-
+    pdf._footnote("7 Risk factors are derived from the live macroeconomic snapshot (BDI, WTI, 10Y "
+                  "Treasury, supply-chain stress) where available. The scenario outlooks are an "
+                  "illustrative qualitative framework - not probability-weighted forecasts or model "
+                  "output. Modeled content; not investment advice.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE 15 — TOP RECOMMENDATIONS
@@ -2455,84 +2416,7 @@ def _recommendations_page(pdf: InstitutionalReportPDF, report) -> None:
     recs    = list(getattr(ai_obj, "top_recommendations", [])) if ai_obj else []
     risk_narr = _safe(getattr(ai_obj, "risk_narrative", "")) if ai_obj else ""
 
-    _mock_recs = [
-        {
-            "rank": 1, "title": "Initiate Long — INSW (International Seaways)",
-            "action": "BUY", "ticker": "INSW", "conviction": "HIGH",
-            "rationale": "International Seaways offers the most compelling risk/reward in the tanker universe. "
-                         "VLCC and Suezmax spot rate leverage is at a cyclical high, ton-mile demand is "
-                         "structurally elevated by Atlantic basin routing changes, and the company trades at "
-                         "a 22% discount to NAV versus historical average of 8%. Q1 earnings guidance was "
-                         "revised 18% above consensus. Management has committed to 60% of earnings as dividends.",
-            "entry": "$38.40", "stop": "$35.00", "target": "$46.80", "rr": "2.5x",
-            "time_horizon": "60-90 days",
-            "thesis": ["VLCC spot rates elevated at ~$48K/day vs $32K 5Y average",
-                       "Ton-mile demand +12% YoY from Atlantic basin crude flows",
-                       "22% NAV discount vs. 8% historical average; re-rating catalyst",
-                       "60% dividend payout ratio; yield >4% at current price"],
-        },
-        {
-            "rank": 2, "title": "Initiate Long — ZIM (ZIM Integrated Shipping)",
-            "action": "BUY", "ticker": "ZIM", "conviction": "HIGH",
-            "rationale": "ZIM's spot-rate-heavy book provides maximum leverage to the ongoing Asia-Europe "
-                         "container rate recovery driven by Red Sea disruptions. The stock trades at 4.2x "
-                         "forward P/E versus 12x for liner peers, reflecting excessive pessimism on rate "
-                         "sustainability. Our base case assumes Red Sea disruptions persist through H1 2026, "
-                         "supporting rates materially above consensus freight assumptions.",
-            "entry": "$14.20", "stop": "$12.80", "target": "$18.50", "rr": "3.1x",
-            "time_horizon": "30-60 days",
-            "thesis": ["95% spot rate book = maximum leverage to rate recovery",
-                       "4.2x forward P/E vs. 12x liner peer median; deep value",
-                       "Red Sea disruption consensus underestimates duration",
-                       "Potential special dividend on FCF recovery"],
-        },
-        {
-            "rank": 3, "title": "Initiate Long — STNG (Scorpio Tankers)",
-            "action": "BUY", "ticker": "STNG", "conviction": "HIGH",
-            "rationale": "Scorpio Tankers is the premier product tanker pure-play. Ongoing European "
-                         "refinery disruptions and structural shifts in refined product trade flows "
-                         "(Russian product export bans, US Gulf refinery exports) are driving above-normal "
-                         "Aframax and LR2 demand. The company's fleet renewal program is 90% complete, "
-                         "providing CII compliance advantage and premium charter rates.",
-            "entry": "$31.50", "stop": "$28.90", "target": "$38.20", "rr": "2.5x",
-            "time_horizon": "45-75 days",
-            "thesis": ["Product tanker rates +18% 30D; refinery disruption premium",
-                       "Fleet 90% post-2018 build; CII compliance advantage",
-                       "European refined product trade flow restructuring structural",
-                       "18% earnings upgrade cycle underway; consensus still stale"],
-        },
-        {
-            "rank": 4, "title": "Avoid / Short — SBLK (Star Bulk Carriers)",
-            "action": "SELL", "ticker": "SBLK", "conviction": "MEDIUM",
-            "rationale": "Star Bulk faces a challenging near-term outlook driven by Supramax and Ultramax "
-                         "oversupply, weak Chinese import demand for iron ore and coal, and a fleet age "
-                         "profile that creates CII headwinds. Management's FFA hedging book has been "
-                         "poorly positioned relative to spot rates, amplifying downside earnings risk.",
-            "entry": "$15.20", "stop": "$16.80", "target": "$12.40", "rr": "1.8x",
-            "time_horizon": "30-45 days",
-            "thesis": ["Chinese iron ore imports -8% YoY; demand headwind",
-                       "Supramax orderbook represents 11% of existing fleet",
-                       "FFA hedge book poorly positioned for current rate environment",
-                       "CII compliance costs rising; older fleet at disadvantage"],
-        },
-        {
-            "rank": 5, "title": "Monitor — DAC (Danaos Corporation)",
-            "action": "HOLD", "ticker": "DAC", "conviction": "MEDIUM",
-            "rationale": "Danaos offers defensive characteristics within container shipping via its "
-                         "long-term charter book (85% of fleet revenue locked through 2025). While this "
-                         "limits upside to spot rate recovery, it provides earnings visibility and "
-                         "supports the dividend. We maintain a Hold rating pending clarity on renewal "
-                         "charter rates, which will determine 2026-2027 earnings trajectory.",
-            "entry": "$62.30", "stop": "$57.00", "target": "$74.50", "rr": "2.3x",
-            "time_horizon": "90+ days",
-            "thesis": ["85% fleet on long-term charter; earnings visibility high",
-                       "Charter renewal rates in 2025-2026 key valuation catalyst",
-                       "Trades at 8% discount to NAV; modest upside limited",
-                       "Dividend yield 3.2%; defensive income in volatile market"],
-        },
-    ]
-
-    # Use real recs if available, pad with mock
+    # Build recommendation rows from REAL analysis only.
     all_recs = []
     for r in recs:
         if isinstance(r, dict):
@@ -2552,12 +2436,15 @@ def _recommendations_page(pdf: InstitutionalReportPDF, report) -> None:
                 "time_horizon": _safe(getattr(r, "time_horizon", "N/A")),
                 "thesis":     list(getattr(r, "thesis", [])),
             })
-    while len(all_recs) < 5:
-        mi = len(all_recs)
-        if mi < len(_mock_recs):
-            all_recs.append(_mock_recs[mi])
-        else:
-            break
+    # No fabricated padding: render only the real recommendations that exist.
+    if not all_recs:
+        all_recs = [{
+            "rank": 1, "title": "No qualifying recommendations this period",
+            "action": "HOLD", "ticker": "-", "conviction": "-",
+            "rationale": "No recommendations met the engine threshold from live data this period.",
+            "entry": "", "stop": "", "target": "", "rr": "-",
+            "time_horizon": "-", "thesis": [],
+        }]
 
     for rec in all_recs[:5]:
         if pdf.get_y() > pdf.PAGE_H - 50:

@@ -398,311 +398,6 @@ def _safe_float(val, default: float = 0.0) -> float:
 # Mock fallback data for enriching sparse real-data outputs
 # ---------------------------------------------------------------------------
 
-# Mock AlphaSignal-compatible dicts used to pad top_long / top_short to >= 5
-_MOCK_LONG_SIGNALS = [
-    {
-        "ticker": "ZIM", "direction": "LONG", "conviction": "HIGH",
-        "signal_type": "MOMENTUM", "signal_name": "Price Momentum Breakout",
-        "strength": 0.82, "expected_return_pct": 18.5, "time_horizon": "1M",
-        "entry_price": 17.40, "target_price": 20.63, "stop_loss": 16.18, "risk_reward": 2.68,
-        "rationale": (
-            "ZIM has broken above its 50-day moving average on elevated volume, "
-            "consistent with a sustained momentum regime. Trans-Pacific spot rates have "
-            "risen 12% over the past 30 days, directly supporting ZIM's spot-heavy revenue model."
-        ),
-    },
-    {
-        "ticker": "MATX", "direction": "LONG", "conviction": "HIGH",
-        "signal_type": "MEAN_REVERSION", "signal_name": "Oversold Mean Reversion",
-        "strength": 0.76, "expected_return_pct": 14.2, "time_horizon": "1M",
-        "entry_price": 102.50, "target_price": 117.10, "stop_loss": 95.33, "risk_reward": 2.04,
-        "rationale": (
-            "MATX has pulled back 18% from recent highs despite no fundamental deterioration "
-            "in its Hawaii/Guam trade lane franchise. RSI at 31 signals oversold conditions "
-            "and a high-probability mean reversion setup within 4-6 weeks."
-        ),
-    },
-    {
-        "ticker": "SBLK", "direction": "LONG", "conviction": "HIGH",
-        "signal_type": "MACRO", "signal_name": "BDI Divergence Long",
-        "strength": 0.71, "expected_return_pct": 16.8, "time_horizon": "2M",
-        "entry_price": 14.80, "target_price": 17.30, "stop_loss": 13.76, "risk_reward": 2.40,
-        "rationale": (
-            "Star Bulk is trading at a significant discount to NAV while the BDI has risen "
-            "over 8% in the past 30 days, signaling a divergence between equity price and "
-            "underlying dry bulk fundamentals. Chinese steel production data supports continued demand."
-        ),
-    },
-    {
-        "ticker": "GSL", "direction": "LONG", "conviction": "MEDIUM",
-        "signal_type": "MOMENTUM", "signal_name": "Rate Breakout — Charter Extension",
-        "strength": 0.67, "expected_return_pct": 12.5, "time_horizon": "1M",
-        "entry_price": 21.10, "target_price": 23.74, "stop_loss": 19.62, "risk_reward": 1.78,
-        "rationale": (
-            "Global Ship Lease recently extended multiple charters at rates 15% above "
-            "expiring levels, providing strong earnings visibility. The stock lags the "
-            "broader container rally and offers a re-rating catalyst."
-        ),
-    },
-    {
-        "ticker": "DAC", "direction": "LONG", "conviction": "MEDIUM",
-        "signal_type": "FUNDAMENTAL", "signal_name": "Dividend Yield + NAV Discount",
-        "strength": 0.63, "expected_return_pct": 11.0, "time_horizon": "2M",
-        "entry_price": 71.20, "target_price": 79.03, "stop_loss": 66.22, "risk_reward": 1.57,
-        "rationale": (
-            "Danaos trades at a 25% discount to fleet NAV with a 6.2% dividend yield, "
-            "providing a margin of safety. Long-term charter backlog of $2.1B reduces "
-            "near-term earnings risk while the yield supports the stock during consolidation phases."
-        ),
-    },
-    {
-        "ticker": "GOGL", "direction": "LONG", "conviction": "MEDIUM",
-        "signal_type": "MOMENTUM", "signal_name": "Capesize Rate Momentum",
-        "strength": 0.60, "expected_return_pct": 10.5, "time_horizon": "1M",
-        "entry_price": 9.85, "target_price": 10.88, "stop_loss": 9.16, "risk_reward": 1.48,
-        "rationale": (
-            "Golden Ocean Group benefits directly from rising Capesize rates, which have "
-            "climbed steadily on Brazilian iron ore export volumes. Fleet-wide TCE earnings "
-            "are tracking above consensus Q2 estimates."
-        ),
-    },
-]
-
-_MOCK_SHORT_SIGNALS = [
-    {
-        "ticker": "STNG", "direction": "SHORT", "conviction": "HIGH",
-        "signal_type": "MACRO", "signal_name": "Product Tanker Macro Short",
-        "strength": 0.74, "expected_return_pct": -13.5, "time_horizon": "1M",
-        "entry_price": 38.20, "target_price": 35.33, "stop_loss": 41.15, "risk_reward": 2.08,
-        "rationale": (
-            "Scorpio Tankers faces headwinds from narrowing clean product spreads and "
-            "softening refinery throughput globally. The stock has outperformed YTD and "
-            "a mean reversion to fair value implies 12-15% downside over 4-6 weeks."
-        ),
-    },
-    {
-        "ticker": "FRO", "direction": "SHORT", "conviction": "MEDIUM",
-        "signal_type": "MEAN_REVERSION", "signal_name": "Tanker Rate Cycle Short",
-        "strength": 0.65, "expected_return_pct": -11.0, "time_horizon": "1M",
-        "entry_price": 14.90, "target_price": 13.86, "stop_loss": 15.97, "risk_reward": 1.45,
-        "rationale": (
-            "Frontline has benefited from elevated VLCC rates but these appear to be "
-            "peaking as OPEC+ production cuts weigh on crude volumes. RSI at 68 "
-            "indicates overbought conditions ahead of a likely rate correction."
-        ),
-    },
-    {
-        "ticker": "DHT", "direction": "SHORT", "conviction": "MEDIUM",
-        "signal_type": "MOMENTUM", "signal_name": "VLCC Demand Deterioration",
-        "strength": 0.58, "expected_return_pct": -9.5, "time_horizon": "1M",
-        "entry_price": 10.40, "target_price": 9.67, "stop_loss": 11.13, "risk_reward": 1.30,
-        "rationale": (
-            "DHT Holdings is exposed to softening VLCC spot rates driven by reduced "
-            "Middle East crude exports. Near-term earnings consensus appears too optimistic "
-            "relative to current TCE indications."
-        ),
-    },
-    {
-        "ticker": "HAFNI", "direction": "SHORT", "conviction": "LOW",
-        "signal_type": "MACRO", "signal_name": "Product Tanker Supply Overhang",
-        "strength": 0.50, "expected_return_pct": -8.0, "time_horizon": "2M",
-        "entry_price": 7.20, "target_price": 6.70, "stop_loss": 7.70, "risk_reward": 1.10,
-        "rationale": (
-            "Hafnia faces a growing orderbook of MR tankers scheduled for delivery in "
-            "the next 12 months. If product tanker demand does not keep pace, rate "
-            "dilution may compress fleet-wide earnings."
-        ),
-    },
-    {
-        "ticker": "CMRE", "direction": "SHORT", "conviction": "LOW",
-        "signal_type": "FUNDAMENTAL", "signal_name": "Leverage Headwind",
-        "strength": 0.45, "expected_return_pct": -7.5, "time_horizon": "2M",
-        "entry_price": 12.85, "target_price": 11.96, "stop_loss": 13.75, "risk_reward": 1.04,
-        "rationale": (
-            "Costamare's high leverage ratio is a headwind in a rising rate environment. "
-            "Refinancing risk on near-term debt maturities and slowing charter renewal "
-            "momentum are headwinds to consensus estimates."
-        ),
-    },
-]
-
-# Mock freight routes used to pad FreightRateSummary.routes to >= 12
-_MOCK_FREIGHT_ROUTES = [
-    {"route_id": "Asia-Europe (FBX01)", "rate": 2890.0, "change_30d": 185.0, "change_pct": 6.84, "trend": "UP", "label": "Rising"},
-    {"route_id": "Transpacific EB (FBX03)", "rate": 2180.0, "change_30d": 120.0, "change_pct": 5.82, "trend": "UP", "label": "Rising"},
-    {"route_id": "Europe-Asia (FBX02)", "rate": 890.0, "change_30d": -30.0, "change_pct": -3.26, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "Transpacific WB (FBX04)", "rate": 620.0, "change_30d": -15.0, "change_pct": -2.36, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "Asia-US East Coast (FBX11)", "rate": 3240.0, "change_30d": 210.0, "change_pct": 6.92, "trend": "UP", "label": "Rising"},
-    {"route_id": "Europe-US East Coast (FBX07)", "rate": 1850.0, "change_30d": 75.0, "change_pct": 4.23, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "US West Coast-Asia (FBX12)", "rate": 580.0, "change_30d": -25.0, "change_pct": -4.13, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "Capesize Atlantic Round Voyage", "rate": 18500.0, "change_30d": 2200.0, "change_pct": 13.49, "trend": "UP", "label": "Rising"},
-    {"route_id": "Supramax Pacific RV", "rate": 11200.0, "change_30d": 850.0, "change_pct": 8.21, "trend": "UP", "label": "Rising"},
-    {"route_id": "VLCC Middle East-China", "rate": 28400.0, "change_30d": -1800.0, "change_pct": -5.96, "trend": "DOWN", "label": "Falling"},
-    {"route_id": "MR Tanker — AG Clean", "rate": 16200.0, "change_30d": -400.0, "change_pct": -2.41, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "LNG Pacific Basin", "rate": 52000.0, "change_30d": 3100.0, "change_pct": 6.34, "trend": "UP", "label": "Rising"},
-    {"route_id": "Handysize Atlantic", "rate": 9800.0, "change_30d": 450.0, "change_pct": 4.82, "trend": "FLAT", "label": "Stable"},
-    {"route_id": "Panamax Transoceanic", "rate": 13600.0, "change_30d": -620.0, "change_pct": -4.36, "trend": "FLAT", "label": "Stable"},
-]
-
-# Mock stock fallback data: price, 30d_change
-_MOCK_STOCK_DATA = {
-    "ZIM":   {"price": 17.40,  "change_30d": 8.2},
-    "MATX":  {"price": 102.50, "change_30d": -4.1},
-    "DAC":   {"price": 71.20,  "change_30d": 2.8},
-    "SBLK":  {"price": 14.80,  "change_30d": 6.5},
-    "GOGL":  {"price": 9.85,   "change_30d": 5.1},
-    "STNG":  {"price": 38.20,  "change_30d": -2.3},
-    "GSL":   {"price": 21.10,  "change_30d": 3.4},
-    "HAFNI": {"price": 7.20,   "change_30d": -1.8},
-    "DHT":   {"price": 10.40,  "change_30d": -3.2},
-    "FRO":   {"price": 14.90,  "change_30d": 1.9},
-}
-
-# Mock market insights for padding top_insights to >= 8
-_MOCK_INSIGHTS = []  # Populated lazily as plain dicts below; renderer uses getattr with fallback
-
-
-class _MockInsight:
-    """Lightweight stand-in for Insight dataclass when real data is sparse."""
-    __slots__ = (
-        "title", "detail", "score", "action",
-        "routes_involved", "stocks_potentially_affected",
-    )
-
-    def __init__(self, title, detail, score, action, routes=None, stocks=None):
-        self.title = title
-        self.detail = detail
-        self.score = score
-        self.action = action
-        self.routes_involved = routes or []
-        self.stocks_potentially_affected = stocks or []
-
-
-_MOCK_INSIGHT_OBJECTS = [
-    _MockInsight(
-        "Trans-Pacific Rate Surge", score=0.88, action="Prioritize",
-        routes=["Transpacific EB (FBX03)", "Asia-US East Coast (FBX11)"],
-        stocks=["ZIM", "MATX"],
-        detail=(
-            "Trans-Pacific eastbound spot rates have risen over 12% in the past 30 days, "
-            "driven by front-loading ahead of anticipated tariff changes and seasonal peak "
-            "demand. ZIM and MATX are the most directly exposed equities with near-term "
-            "earnings upside risk."
-        ),
-    ),
-    _MockInsight(
-        "Red Sea Rerouting Premium", score=0.83, action="Prioritize",
-        routes=["Asia-Europe (FBX01)", "Europe-Asia (FBX02)"],
-        stocks=["ZIM", "GSL", "DAC"],
-        detail=(
-            "Ongoing Red Sea security concerns continue to force vessels to divert via the "
-            "Cape of Good Hope, adding 10-14 transit days and tightening effective vessel "
-            "supply on the Asia-Europe corridor. This structural tightness continues to "
-            "support elevated FBX01 rates above $2,800/TEU."
-        ),
-    ),
-    _MockInsight(
-        "Dry Bulk BDI Breakout", score=0.77, action="Prioritize",
-        routes=["Capesize Atlantic Round Voyage", "Supramax Pacific RV"],
-        stocks=["SBLK", "GOGL"],
-        detail=(
-            "The Baltic Dry Index has broken above its 90-day moving average for the first "
-            "time this year, led by Capesize strength on elevated Brazilian iron ore exports "
-            "and recovering Chinese steel mill demand. Dry bulk equities typically lag the "
-            "BDI breakout by 4-6 weeks."
-        ),
-    ),
-    _MockInsight(
-        "Container Orderbook Delivery Watch", score=0.71, action="Monitor",
-        routes=["Asia-Europe (FBX01)", "Transpacific EB (FBX03)"],
-        stocks=["ZIM", "DAC", "GSL"],
-        detail=(
-            "Approximately 2.1M TEU of new container capacity is scheduled for delivery "
-            "over the next 12 months. If demand growth fails to absorb this supply, "
-            "freight rates could face downward pressure in H2, particularly on the "
-            "Asia-Europe and trans-Pacific lanes where most newbuilds will deploy."
-        ),
-    ),
-    _MockInsight(
-        "VLCC Rate Softening Risk", score=0.68, action="Monitor",
-        routes=["VLCC Middle East-China"],
-        stocks=["FRO", "DHT"],
-        detail=(
-            "VLCC spot rates on the Middle East-China route have declined nearly 6% "
-            "in the past 30 days as OPEC+ production discipline reduces crude export "
-            "volumes. Tanker equity valuations look stretched relative to current "
-            "TCE indications."
-        ),
-    ),
-    _MockInsight(
-        "Chinese Stimulus Dry Bulk Tailwind", score=0.65, action="Monitor",
-        routes=["Capesize Atlantic Round Voyage", "Supramax Pacific RV"],
-        stocks=["SBLK", "GOGL"],
-        detail=(
-            "Recent Chinese infrastructure stimulus announcements targeting steel "
-            "and cement-intensive construction imply incremental demand for iron ore "
-            "and coal shipping. Historical patterns suggest 6-8 week lead time before "
-            "BDI reflects this demand."
-        ),
-    ),
-    _MockInsight(
-        "LNG Fleet Tightness", score=0.62, action="Monitor",
-        routes=["LNG Pacific Basin"],
-        stocks=["FLNG", "GMLP"],
-        detail=(
-            "LNG shipping rates on the Pacific Basin route have firmed 6% in 30 days "
-            "amid increased US LNG export volumes and tight spot vessel availability. "
-            "Long-term charter rates are also firming, benefiting asset values."
-        ),
-    ),
-    _MockInsight(
-        "Product Tanker Supply Overhang", score=0.58, action="Watch",
-        routes=["MR Tanker — AG Clean"],
-        stocks=["STNG", "HAFNI"],
-        detail=(
-            "A growing MR tanker orderbook — representing 8% of the current fleet — "
-            "is scheduled for delivery over the next 18 months. If refinery throughput "
-            "growth does not accelerate, supply overhang could weigh on MR spot rates "
-            "and compress tanker equity valuations into 2026."
-        ),
-    ),
-    _MockInsight(
-        "Port Congestion Bottleneck — US West Coast", score=0.55, action="Watch",
-        routes=["Transpacific EB (FBX03)", "US West Coast-Asia (FBX12)"],
-        stocks=["MATX", "ZIM"],
-        detail=(
-            "Vessel dwell times at major US West Coast ports have increased, potentially "
-            "reflecting renewed congestion risk. Historically, port congestion absorbs "
-            "effective vessel supply and provides a secondary support mechanism for "
-            "trans-Pacific rates."
-        ),
-    ),
-    _MockInsight(
-        "Panamax Coal Demand — India", score=0.52, action="Watch",
-        routes=["Panamax Transoceanic"],
-        stocks=["GOGL", "SBLK"],
-        detail=(
-            "Indian power sector coal imports have risen 11% YoY, providing incremental "
-            "Panamax demand on Pacific and Atlantic routes. This partially offsets "
-            "seasonal demand softness and provides a floor for smaller dry bulk sub-segments."
-        ),
-    ),
-]
-
-# Mock trending topics for sentiment.trending_topics
-_MOCK_TRENDING_TOPICS = [
-    {"topic": "Trans-Pacific Rates",      "count": 28, "sentiment": "BULLISH", "color": "#2e9e6e"},
-    {"topic": "Red Sea Disruption",       "count": 24, "sentiment": "BEARISH", "color": "#c0392b"},
-    {"topic": "Baltic Dry Index",         "count": 21, "sentiment": "BULLISH", "color": "#2e9e6e"},
-    {"topic": "Container Orderbook",      "count": 18, "sentiment": "BEARISH", "color": "#c0392b"},
-    {"topic": "VLCC Rates",               "count": 16, "sentiment": "NEUTRAL", "color": "#6b6760"},
-    {"topic": "Chinese Stimulus",         "count": 14, "sentiment": "BULLISH", "color": "#2e9e6e"},
-    {"topic": "Bunker Fuel Costs",        "count": 12, "sentiment": "BEARISH", "color": "#c0392b"},
-    {"topic": "LNG Shipping Tightness",   "count": 11, "sentiment": "BULLISH", "color": "#2e9e6e"},
-    {"topic": "Port Congestion",          "count": 9,  "sentiment": "NEUTRAL", "color": "#6b6760"},
-    {"topic": "Tariff Front-Loading",     "count": 8,  "sentiment": "BULLISH", "color": "#2e9e6e"},
-]
-
 
 def _signal_conviction_avg(signals: list) -> float:
     """Compute direction-weighted average conviction for a list of AlphaSignals.
@@ -1425,38 +1120,6 @@ def _generate_top_recommendations(
         })
         rank += 1
 
-    # Final fallback: pad from mock long signals with full structured recs
-    _used_tickers = {r["ticker"] for r in recommendations}
-    for mock in _MOCK_LONG_SIGNALS:
-        if len(recommendations) >= 5:
-            break
-        if mock["ticker"] in _used_tickers:
-            continue
-        entry = mock["entry_price"]
-        target = mock["target_price"]
-        stop = mock["stop_loss"]
-        exp_ret = mock["expected_return_pct"]
-        recommendations.append({
-            "rank":            rank,
-            "title":           f"Long {mock['ticker']} — {mock['signal_name']}",
-            "action":          "BUY",
-            "ticker":          mock["ticker"],
-            "conviction":      mock["conviction"],
-            "time_horizon":    mock["time_horizon"],
-            "rationale":       mock["rationale"][:300],
-            "expected_return": round(exp_ret, 2),
-            "risk_rating":     "HIGH" if abs(exp_ret) > 20 else ("MODERATE" if abs(exp_ret) > 10 else "LOW"),
-            "entry":           round(entry, 2),
-            "target":          round(target, 2),
-            "stop":            round(stop, 2),
-            "key_thesis": [
-                f"Signal type: {mock['signal_type']}",
-                f"Expected return: {exp_ret:+.1f}% over {mock['time_horizon']}",
-                f"Risk/reward: {mock['risk_reward']:.2f}x",
-            ],
-        })
-        rank += 1
-        _used_tickers.add(mock["ticker"])
 
     # Ensure key_thesis exists on all recs (back-fill for alpha-signal recs built above)
     for rec in recommendations:
@@ -1936,14 +1599,6 @@ def _build_investor_report_inner(
                 "color": color,
             })
 
-        # Pad trending_topics to at least 8 with realistic shipping topics
-        _existing_topic_names = {t["topic"] for t in trending_topics}
-        for mock_topic in _MOCK_TRENDING_TOPICS:
-            if len(trending_topics) >= 8:
-                break
-            if mock_topic["topic"] not in _existing_topic_names:
-                trending_topics.append(mock_topic)
-                _existing_topic_names.add(mock_topic["topic"])
 
         # Freight score from freight momentum normalised
         freight_score = max(-1.0, min(1.0, freight_momentum_pct / 20.0))
@@ -1988,23 +1643,6 @@ def _build_investor_report_inner(
             key=lambda s: (conviction_rank.get(getattr(s, "conviction", "LOW"), 2), -getattr(s, "strength", 0)),
         )[:5]
 
-        # Pad top_long with mock signals if real data produces fewer than 5
-        _real_long_tickers = {getattr(s, "ticker", "") for s in top_long}
-        for mock in _MOCK_LONG_SIGNALS:
-            if len(top_long) >= 5:
-                break
-            if mock["ticker"] not in _real_long_tickers:
-                top_long.append(type("_MockSig", (), mock)())
-                _real_long_tickers.add(mock["ticker"])
-
-        # Pad top_short with mock signals if real data produces fewer than 5
-        _real_short_tickers = {getattr(s, "ticker", "") for s in top_short}
-        for mock in _MOCK_SHORT_SIGNALS:
-            if len(top_short) >= 5:
-                break
-            if mock["ticker"] not in _real_short_tickers:
-                top_short.append(type("_MockSig", (), mock)())
-                _real_short_tickers.add(mock["ticker"])
 
         signal_count_by_type = {
             "MOMENTUM": 0, "MEAN_REVERSION": 0,
@@ -2050,14 +1688,6 @@ def _build_investor_report_inner(
     try:
         top_insights = sorted(insights, key=lambda i: getattr(i, "score", 0), reverse=True)[:10]
 
-        # Pad top_insights to at least 8 with mock insights
-        _existing_insight_titles = {getattr(i, "title", "") for i in top_insights}
-        for mock_ins in _MOCK_INSIGHT_OBJECTS:
-            if len(top_insights) >= 8:
-                break
-            if mock_ins.title not in _existing_insight_titles:
-                top_insights.append(mock_ins)
-                _existing_insight_titles.add(mock_ins.title)
 
         # Sort port_results — handle both dataclass and dict shapes
         def _port_score(p):
@@ -2132,14 +1762,6 @@ def _build_investor_report_inner(
         freight_routes_list = _build_freight_routes_list(freight_data)
         avg_change_30d_pct, momentum_label_str = _compute_freight_momentum(freight_data)
 
-        # Pad freight routes to at least 12 with realistic mock routes
-        _existing_route_ids = {r["route_id"] for r in freight_routes_list}
-        for mock_route in _MOCK_FREIGHT_ROUTES:
-            if len(freight_routes_list) >= 12:
-                break
-            if mock_route["route_id"] not in _existing_route_ids:
-                freight_routes_list.append(mock_route)
-                _existing_route_ids.add(mock_route["route_id"])
 
         biggest_mover: dict = {}
         if freight_routes_list:
@@ -2150,7 +1772,7 @@ def _build_investor_report_inner(
             )
 
         fbx_comp = _fbx_composite(freight_data)
-        # If no real FBX data, derive composite from mock routes
+        # If no real FBX series, derive a composite from available container routes
         if fbx_comp == 0.0 and freight_routes_list:
             container_routes = [
                 r for r in freight_routes_list
@@ -2245,13 +1867,6 @@ def _build_investor_report_inner(
         prices = {t: _latest_stock_price(stock_data, t) for t in tickers_present}
         changes_30d = {t: _stock_change_30d(stock_data, t) for t in tickers_present}
 
-        # Pad with mock data for any missing tickers to ensure >= 8-10 always shown
-        for t in _TICKERS:
-            if t not in prices and t in _MOCK_STOCK_DATA:
-                prices[t] = _MOCK_STOCK_DATA[t]["price"]
-                changes_30d[t] = _MOCK_STOCK_DATA[t]["change_30d"]
-                if t not in tickers_present:
-                    tickers_present.append(t)
 
         sbt = _signals_by_ticker(signals)
 

@@ -292,6 +292,15 @@ def _long_signals(stock_data) -> list[str]:
     ]
 
 
+_HONEST_FOOTER = (
+    "<br><br><span style='color:#6b6760;font-size:11px'>"
+    "Modeled assistant - answers come from this platform's own freight/macro/signal engines and "
+    "general shipping context, not third-party vendor feeds (Clarksons / Kpler / Bloomberg / "
+    "Sea-Intelligence / Drewry). Any figure without a live value shown is illustrative. "
+    "Not investment advice.</span>"
+)
+
+
 def _build_response(question: str, freight_data, macro_data, stock_data,
                     port_results, route_results, insights) -> tuple[str, list[str]]:
     """Return (answer_html, [followup1, followup2, followup3])."""
@@ -310,7 +319,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Spot rates on the Asia–North Europe lane currently trade at a premium to contract rates as shippers scramble "
             "for space on extended voyages around the Cape of Good Hope. "
             "Transpacific rates remain relatively firm heading into the traditional peak season prep window. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: SCFI, Drewry WCI, internal freight engine</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "Which carriers are benefiting most from elevated rates?",
@@ -322,7 +331,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── BDI / Baltic ────────────────────────────────────────────────────────
     if any(kw in q for kw in ("bdi", "baltic", "dry bulk", "capesize", "panamax")):
         bdi = _extract_bdi(macro_data)
-        bdi_str = f"{bdi:,.0f}" if bdi else "~1,850"
+        bdi_str = f"{bdi:,.0f}" if bdi else "unavailable"
         answer = (
             f"<b>Baltic Dry Index (BDI) Analysis</b> <span style='color:#6b6760;font-size:11px'>as of {now}</span><br><br>"
             f"BDI currently reads <span style='color:#c9962b;font-size:15px;font-weight:700'>{bdi_str}</span>, "
@@ -331,7 +340,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "A BDI above 2,000 historically correlates with positive earnings momentum for dry bulk equities — "
             "names like GOGL, SBLK, and NMM tend to show the highest beta to BDI moves. "
             "Watch Capesize rates specifically: they drive ~40% of the index and are the leading indicator for iron ore trade volumes out of Australia and Brazil. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Baltic Exchange, Clarksons, macro engine</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "Which dry bulk stocks have the highest BDI beta?",
@@ -353,7 +362,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Winners: carriers with Cape-capable fleets (Maersk, MSC, COSCO) and owners of large tankers "
             "that benefit from tonne-mile expansion. "
             "Losers: shippers with Just-In-Time supply chains and European importers facing inventory build costs. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Clarksons Research, Kpler, geopolitical intelligence feed</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "How long is the Red Sea disruption expected to last?",
@@ -374,7 +383,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Water levels have partially recovered but ACP continues conservative management. "
             "Long-term, this event accelerated discussions around an alternate canal route and fleet design changes favoring "
             "Suezmax-capable vessels over ultra-large post-Panamax designs. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Panama Canal Authority, Kpler, Bloomberg shipping desk</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "What is the current daily transit count at Panama Canal?",
@@ -387,7 +396,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     if "zim" in q:
         signals = _extract_signals(stock_data)
         zim_info = next((s for s in signals if s["ticker"] == "ZIM"), None)
-        price_str = f"${zim_info['price']:.2f}" if zim_info and zim_info["price"] else "~$17.50"
+        price_str = f"${zim_info['price']:.2f}" if zim_info and zim_info["price"] else "unavailable"
         sig_str = zim_info["signal"] if zim_info else "NEUTRAL"
         answer = (
             f"<b>ZIM Integrated Shipping — Earnings Leverage Analysis</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
@@ -400,7 +409,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "The company's high dividend payout policy (historically 30–50% of net income) amplifies shareholder returns "
             "in up-cycles but creates risk in troughs. "
             "ZIM's Israel domicile and concentrated trade-lane exposure (Transpacific, intra-Asia) add idiosyncratic risk. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: ZIM filings, internal signal engine, Bloomberg consensus</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "How does ZIM's contract mix compare to Maersk?",
@@ -427,7 +436,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "The signal is generated by our multi-factor model incorporating freight rate momentum, "
             "earnings revision trends, technical structure, and macro shipping indicators. "
             "Always cross-reference with latest earnings release and sector positioning before acting. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal signal engine, Bloomberg, company filings</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             f"What is the earnings calendar for {found_ticker}?",
@@ -439,7 +448,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── LONG signals ────────────────────────────────────────────────────────
     if any(kw in q for kw in ("long signal", "buy signal", "which stock", "shipping stock")):
         longs = _long_signals(stock_data)
-        longs_str = ", ".join(longs) if longs else "ZIM, GOGL, DAC"
+        longs_str = ", ".join(longs) if longs else "none in current data"
         answer = (
             f"<b>Shipping Stocks — Current LONG Signals</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
             f"Tickers with active LONG signals: <span style='color:#2e9e6e;font-weight:700'>{longs_str}</span><br><br>"
@@ -448,7 +457,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Shipping equities tend to lead freight rate moves by 4–6 weeks as the market prices in contract renewals. "
             "Risk management note: shipping stocks carry high beta to global trade volumes and carry outsized "
             "drawdown risk during demand shocks (COVID-2020, GFC-2008). Position sizing accordingly. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal multi-factor signal engine, updated daily</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "What criteria trigger a LONG signal in your model?",
@@ -468,8 +477,9 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
             "Bear risks: (1) potential Red Sea normalization could release 15–18% effective capacity, "
             "(2) new vessel deliveries (the 2021 ordering cohort) peak in 2025–2026, "
             "(3) global trade policy uncertainty weighing on forward booking visibility. "
-            "Drewry consensus puts WCI on Asia–Europe at <span style='color:#c9962b;font-weight:600'>$2,800–3,400/FEU</span> for Q2. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Drewry, Alphaliner, Clarksons Research, internal model</span>"
+            "This platform does not ingest third-party rate consensus (Drewry/Alphaliner); treat any single "
+            "Asia-Europe rate point estimate as illustrative. "
+            + _HONEST_FOOTER
         )
         followups = [
             "What is the new vessel delivery schedule for 2026?",
@@ -481,17 +491,13 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Carrier reliability ──────────────────────────────────────────────────
     if any(kw in q for kw in ("carrier", "reliability", "schedule", "on-time")):
         answer = (
-            f"<b>Carrier Schedule Reliability Rankings</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
-            "Based on Sea-Intelligence Global Liner Performance data:<br><br>"
-            "<span style='color:#2e9e6e'>1. Hapag-Lloyd</span> — 58.2% on-time performance (industry leader)<br>"
-            "<span style='color:#2e9e6e'>2. Maersk</span> — 55.7%<br>"
-            "<span style='color:#c9962b'>3. CMA CGM</span> — 51.3%<br>"
-            "<span style='color:#c9962b'>4. ONE (Ocean Network Express)</span> — 49.8%<br>"
-            "<span style='color:#c0392b'>5. Evergreen</span> — 44.1%<br><br>"
+            f"<b>Carrier Schedule Reliability</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
+            "This platform does not currently ingest carrier on-time / schedule-reliability "
+            "data (e.g. Sea-Intelligence GLP), so it cannot rank carriers by reliability. "
             "Note: Red Sea rerouting has structurally degraded schedule reliability across all carriers "
             "by 8–12 percentage points vs. pre-disruption norms. "
             "Schedule reliability correlates strongly with shipper contract retention and premium pricing power. "
-            "<br><br><span style='color:#6b6760;font-size:11px'>Source: Sea-Intelligence Global Liner Performance, Q1 2026</span>"
+            + _HONEST_FOOTER
         )
         followups = [
             "How does reliability affect contract pricing negotiations?",
@@ -503,9 +509,9 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
     # ── Generic fallback ─────────────────────────────────────────────────────
     freight_summary = _extract_freight_summary(freight_data)
     bdi = _extract_bdi(macro_data)
-    bdi_str = f"{bdi:,.0f}" if bdi else "~1,850"
+    bdi_str = f"{bdi:,.0f}" if bdi else "unavailable"
     longs = _long_signals(stock_data)
-    longs_str = ", ".join(longs[:4]) if longs else "ZIM, GOGL"
+    longs_str = ", ".join(longs[:4]) if longs else "none in current data"
     answer = (
         f"<b>Shipping Market Intelligence — Overview</b> <span style='color:#6b6760;font-size:11px'>{now}</span><br><br>"
         f"<b>Freight Rates:</b> {freight_summary}<br>"
@@ -516,7 +522,7 @@ def _build_response(question: str, freight_data, macro_data, stock_data,
         "Dry bulk markets are tracking iron ore and coal flows closely — watch Brazil–China Capesize routes "
         "as the leading demand indicator. "
         "For specific analysis, ask about freight rates, BDI trends, individual tickers, or geopolitical disruptions. "
-        "<br><br><span style='color:#6b6760;font-size:11px'>Source: Internal shipping intelligence engine — all data as of market close</span>"
+        + _HONEST_FOOTER
     )
     followups = [
         "What are the key risks to shipping rates in 2026?",

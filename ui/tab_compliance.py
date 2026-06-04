@@ -33,6 +33,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     insight_card_html,
@@ -940,12 +941,23 @@ def render(port_results=None, insights=None, *args, **kwargs) -> None:
         try:
             page_header(
                 title="Regulatory Compliance & Sanctions Intelligence",
-                subtitle="Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement",
+                subtitle="Illustrative sanctions / IMO calendar / CII / dark-fleet / PSC reference dashboard — sample data, not a live screen",
                 badge_text="COMPLIANCE",
                 badge_color=C_ACCENT,
             )
         except Exception:
             logger.exception("Header render error")
+
+        try:
+            alert_banner(
+                "<b>ILLUSTRATIVE / SAMPLE</b> — this dashboard renders curated reference and "
+                "modeled example data (vessel counts, SDN/detention tables, CII ratings), not a "
+                "live sanctions or port-state-control screen. Do not use for real compliance "
+                "decisions. A live screening engine is a separate, future capability.",
+                level="warning",
+            )
+        except Exception:
+            logger.exception("Compliance illustrative banner render error")
 
         sections = [
             ("Compliance Dashboard",          _section_1_dashboard),
