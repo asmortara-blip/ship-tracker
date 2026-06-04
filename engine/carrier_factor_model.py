@@ -44,7 +44,9 @@ except ImportError:  # pragma: no cover
 __all__ = [
     "CarrierFactorFit",
     "FactorBacktest",
+    "BookFactorExposure",
     "fit_carrier_factors",
+    "portfolio_factor_exposures",
     "residual_zscore",
     "residual_signal_backtest",
     "DEFAULT_CARRIERS",
@@ -569,3 +571,69 @@ def build_factor_frame(
         return pd.DataFrame()
     df = pd.concat(cols, axis=1).dropna(how="all")
     return df.dropna()
+
+
+# ── Book-level factor exposure (rec R106) ───────────────────────────────────
+
+
+@dataclass(frozen=True)
+class BookFactorExposure:
+    """Portfolio-level factor exposure: the beta-weighted tilt per factor.
+
+    ``exposures[f] = Σ_i w_i · β_{i,f}`` over the names in the book that have a
+    factor fit. This is the Barra-grade aggregation Ship lacked — the portfolio
+    risk view was a single market beta, not a named multi-factor vector.
+    """
+    exposures: dict[str, float]      # Σ w_i β_{i,f} per factor
+    factors: tuple[str, ...]
+    n_names: int                     # names with a fit that contributed
+    coverage: float                  # fraction of |weight| covered by a fit
+
+    def dollar_tilt(self, book_value: float) -> dict[str, float]:
+        """Net dollar exposure per factor for a book worth ``book_value``."""
+        return {f: e * float(book_value) for f, e in self.exposures.items()}
+
+
+def portfolio_factor_exposures(
+    weights: dict[str, float],
+    fits: dict[str, object],
+    *,
+    factors: tuple[str, ...] = DEFAULT_FACTORS,
+) -> BookFactorExposure:
+    """Aggregate per-name factor betas into a book exposure vector.
+
+    Parameters
+    ----------
+    weights : dict[ticker -> weight]
+        Portfolio weights (need not sum to 1; signed for long/short).
+    fits : dict[ticker -> CarrierFactorFit | dict[factor -> beta]]
+        Per-name factor fits (``.betas``) or raw beta dicts. Names absent from
+        ``fits`` are skipped and lower ``coverage`` — never silently treated as
+        zero-beta exposure that the caller might mistake for "no risk".
+    """
+    exposures = {f: 0.0 for f in factors}
+    total_w = 0.0
+    covered_w = 0.0
+    used = 0
+    for ticker, w in (weights or {}).items():
+        wf = abs(float(w))
+        total_w += wf
+        fit = fits.get(ticker) if fits else None
+        if fit is None:
+            continue
+        betas = getattr(fit, "betas", None)
+        if betas is None and isinstance(fit, dict):
+            betas = fit
+        if not betas:
+            continue
+        used += 1
+        covered_w += wf
+        for f in factors:
+            exposures[f] += float(w) * float(betas.get(f, 0.0))
+    coverage = (covered_w / total_w) if total_w > 0 else 0.0
+    return BookFactorExposure(
+        exposures=exposures,
+        factors=tuple(factors),
+        n_names=used,
+        coverage=coverage,
+    )
