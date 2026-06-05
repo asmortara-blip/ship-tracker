@@ -420,6 +420,56 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
+def _render_track_record(stock_data=None) -> None:
+    """Forward, frozen track record from the point-in-time signal ledger (R004).
+
+    Shows how PAST EquityIdeas — frozen AT ISSUE, never refit — have done when
+    marked on real closes (no look-ahead). Empty-states until the daily freeze
+    job has accrued history.
+    """
+    try:
+        from state.signal_ledger import load_ledger, track_record_summary
+
+        n_frozen = len(load_ledger(limit=10_000))
+        if n_frozen == 0:
+            st.caption(
+                "No frozen signals yet — the point-in-time track record accrues "
+                "daily as ideas are issued (schema v32)."
+            )
+            return
+        summ = track_record_summary(stock_data)
+        if summ["n"] == 0:
+            st.caption(
+                f"{n_frozen} signal(s) frozen; awaiting priced marks "
+                "(live prices needed to score them)."
+            )
+            return
+        metric_card_row([
+            {"label": "Marked Signals", "value": str(summ["n"]),
+             "accent": C_ACCENT, "sublabel": f"of {n_frozen} frozen"},
+            {"label": "Hit Rate", "value": f"{summ['hit_rate'] * 100:.0f}%",
+             "accent": (C_HIGH if summ["hit_rate"] > 0.5 else C_LOW),
+             "sublabel": "signed return > 0"},
+            {"label": "Mean Signed Return",
+             "value": f"{summ['mean_signed_return_pct']:+.1f}%",
+             "accent": (C_HIGH if summ["mean_signed_return_pct"] > 0 else C_LOW),
+             "sublabel": "per idea, forward"},
+        ], columns=3)
+        by = summ.get("by_label", {})
+        if by:
+            st.caption("By conviction — " + " · ".join(
+                f"{lab}: {b['hit_rate'] * 100:.0f}% hit, "
+                f"{b['mean_signed_return_pct']:+.1f}%"
+                for lab, b in sorted(by.items())
+            ))
+        st.caption(
+            "Frozen at issue, never refit, marked on real closes — no "
+            "look-ahead. The honest forward track record."
+        )
+    except Exception:
+        logger.exception("Idea Engine — track record panel failed")
+
+
 def _render_optimization_mini(ideas: list, stock_data=None) -> None:
     """Run max-Sharpe over the top bullish ideas and surface the weights +
     expected metrics. A miniature of the tab_portfolio Optimization Lab,
@@ -571,6 +621,10 @@ def render(
             # ── Optimization mini ─────────────────────────────────────────────
             section_divider("Portfolio Construction")
             _render_optimization_mini(ideas, stock_data)
+
+            # ── Track record (point-in-time signal ledger; R004) ──────────────
+            section_divider("Track Record")
+            _render_track_record(stock_data)
 
             # ── Export this view (PDF) ────────────────────────────────────────
             try:
