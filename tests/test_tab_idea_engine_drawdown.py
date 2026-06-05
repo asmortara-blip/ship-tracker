@@ -70,13 +70,11 @@ def test_track_record_panel_flags_stand_down_tier(st_stub) -> None:
     from state.signal_ledger import freeze_ideas
     from ui.tab_idea_engine import _render_track_record
 
-    # 3 winners then 3 big losers in the High tier -> kill-switch trips.
-    freeze_ideas([_Idea(f"W{i}", "Bullish", conviction_label="High") for i in range(3)],
+    # A genuinely cratered High tier: 5 signals each -20% -> 20% underwater,
+    # 0% hit -> kill-switch trips.
+    freeze_ideas([_Idea(f"L{i}", "Bullish", conviction_label="High") for i in range(5)],
                  issue_date="2026-06-01")
-    freeze_ideas([_Idea(f"L{i}", "Bullish", conviction_label="High") for i in range(3)],
-                 issue_date="2026-06-02")
-    stock = _stock({**{f"W{i}": 110.0 for i in range(3)},
-                    **{f"L{i}": 80.0 for i in range(3)}})
+    stock = _stock({f"L{i}": 80.0 for i in range(5)})
 
     _render_track_record(stock)
     text = _emitted_text(st_stub)

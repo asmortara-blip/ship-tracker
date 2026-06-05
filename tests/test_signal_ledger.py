@@ -124,6 +124,9 @@ def test_oos_scorecard_noise_not_significant() -> None:
 
 
 # ── per-tier drawdown kill-switch (B2, on R004) ─────────────────────────────
+# Drawdown is the order-INVARIANT underwater-from-cost of the equal-weight tier
+# book (max(0, -mean signed return)) — NOT a compounded equity path whose
+# running peak depends on the arbitrary mark order.
 
 def test_tier_drawdown_all_winners_active() -> None:
     from state.signal_ledger import freeze_ideas, tier_drawdown
@@ -131,30 +134,32 @@ def test_tier_drawdown_all_winners_active() -> None:
                   for i in range(5)], issue_date="2026-06-01")
     high = tier_drawdown(_stock({f"T{i}": 110.0 for i in range(5)}), min_n=5)["High"]
     assert high["n"] == 5 and high["hit_rate"] == 1.0
-    assert high["max_drawdown_pct"] == pytest.approx(0.0)
-    assert high["current_drawdown_pct"] == pytest.approx(0.0)
+    assert high["mean_signed_return_pct"] == pytest.approx(10.0)
+    assert high["drawdown_from_cost_pct"] == pytest.approx(0.0)  # all up -> no DD
+    assert high["worst_signal_return_pct"] == pytest.approx(10.0)
     assert high["status"] == "ACTIVE"
 
 
-def test_tier_drawdown_winners_then_losers_stand_down() -> None:
-    # Equity peaks after 3 winners (1.331) then craters on 3 x -20% -> the
-    # peak-to-now drawdown blows past the 15% threshold -> kill-switch fires.
+def test_tier_drawdown_deep_losers_stand_down_via_drawdown() -> None:
+    # 2 winners +5%, 3 losers -30% -> mean -16% -> 16% underwater > 15% limit,
+    # but hit 2/5 = 0.40 is NOT below the floor -> isolates the drawdown trigger.
     from state.signal_ledger import freeze_ideas, tier_drawdown
     freeze_ideas([_Idea(f"W{i}", "Bullish", price=100.0, conviction_label="High")
-                  for i in range(3)], issue_date="2026-06-01")
+                  for i in range(2)], issue_date="2026-06-01")
     freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="High")
                   for i in range(3)], issue_date="2026-06-02")
-    stock = _stock({**{f"W{i}": 110.0 for i in range(3)},
-                    **{f"L{i}": 80.0 for i in range(3)}})
-    high = tier_drawdown(stock, min_n=5, dd_threshold_pct=15.0)["High"]
-    assert high["n"] == 6 and high["hit_rate"] == pytest.approx(0.5)
-    assert high["current_drawdown_pct"] > 15.0
-    assert high["status"] == "STAND_DOWN"
+    stock = _stock({**{f"W{i}": 105.0 for i in range(2)},
+                    **{f"L{i}": 70.0 for i in range(3)}})
+    high = tier_drawdown(stock, min_n=5, hit_floor=0.40, dd_threshold_pct=15.0)["High"]
+    assert high["n"] == 5 and high["hit_rate"] == pytest.approx(0.40)
+    assert high["mean_signed_return_pct"] == pytest.approx(-16.0)
+    assert high["drawdown_from_cost_pct"] == pytest.approx(16.0)
+    assert high["status"] == "STAND_DOWN"          # drawdown trigger (not hit)
 
 
 def test_tier_drawdown_low_hit_rate_stand_down() -> None:
-    # 1 small win, 4 small losses -> hit 0.2 < 0.40 floor, but the drawdown is
-    # shallow (<15%) -> proves the hit-rate floor is its own kill trigger.
+    # 1 small win, 4 small losses -> hit 0.2 < 0.40 floor, mean only -0.6% so
+    # the drawdown is shallow (<15%) -> proves the hit-rate floor is its own trigger.
     from state.signal_ledger import freeze_ideas, tier_drawdown
     freeze_ideas([_Idea("WIN", "Bullish", price=100.0, conviction_label="Low")],
                  issue_date="2026-06-01")
@@ -163,8 +168,49 @@ def test_tier_drawdown_low_hit_rate_stand_down() -> None:
     stock = _stock({"WIN": 101.0, **{f"L{i}": 99.0 for i in range(4)}})
     low = tier_drawdown(stock, min_n=5, hit_floor=0.40, dd_threshold_pct=15.0)["Low"]
     assert low["n"] == 5 and low["hit_rate"] == pytest.approx(0.2)
-    assert low["current_drawdown_pct"] < 15.0   # not the drawdown trigger
-    assert low["status"] == "STAND_DOWN"          # the hit-rate floor trigger
+    assert low["drawdown_from_cost_pct"] < 15.0   # not the drawdown trigger
+    assert low["status"] == "STAND_DOWN"           # the hit-rate floor trigger
+
+
+def test_tier_drawdown_modest_loss_stays_active() -> None:
+    # 3 winners +10%, 3 losers -20% -> mean -5% -> only 5% underwater, hit 50%.
+    # The OLD compounded-equity metric called this 48.8% drawdown -> STAND_DOWN;
+    # the honest order-invariant metric leaves it ACTIVE (edge not cratered).
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+    freeze_ideas([_Idea(f"W{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(3)], issue_date="2026-06-01")
+    freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(3)], issue_date="2026-06-02")
+    stock = _stock({**{f"W{i}": 110.0 for i in range(3)},
+                    **{f"L{i}": 80.0 for i in range(3)}})
+    high = tier_drawdown(stock, min_n=5, dd_threshold_pct=15.0)["High"]
+    assert high["mean_signed_return_pct"] == pytest.approx(-5.0)
+    assert high["drawdown_from_cost_pct"] == pytest.approx(5.0)
+    assert high["status"] == "ACTIVE"
+
+
+def test_tier_drawdown_is_order_invariant() -> None:
+    # The kill-switch must not depend on the arbitrary order of the marks (or
+    # the ticker tie-break when ideas are frozen in one batch). Same return
+    # multiset, opposite issue-date assignment -> identical drawdown + status.
+    from state import db as _db
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+
+    def _run(win_date, loss_date):
+        _db.reset_for_tests()
+        freeze_ideas([_Idea(f"W{i}", "Bullish", price=100.0, conviction_label="High")
+                      for i in range(2)], issue_date=win_date)
+        freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="High")
+                      for i in range(3)], issue_date=loss_date)
+        stock = _stock({**{f"W{i}": 105.0 for i in range(2)},
+                        **{f"L{i}": 70.0 for i in range(3)}})
+        return tier_drawdown(stock, min_n=5)["High"]
+
+    a = _run("2026-06-01", "2026-06-02")   # winners first
+    b = _run("2026-06-02", "2026-06-01")   # losers first
+    assert a["drawdown_from_cost_pct"] == pytest.approx(b["drawdown_from_cost_pct"])
+    assert a["mean_signed_return_pct"] == pytest.approx(b["mean_signed_return_pct"])
+    assert a["status"] == b["status"]
 
 
 def test_tier_drawdown_below_min_n_stays_active() -> None:

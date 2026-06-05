@@ -479,7 +479,7 @@ def _render_track_record(stock_data=None) -> None:
         if stand_down:
             parts = "; ".join(
                 f"<b>{html.escape(t)}</b> "
-                f"({tiers[t]['current_drawdown_pct']:.0f}% drawdown, "
+                f"({tiers[t]['drawdown_from_cost_pct']:.0f}% underwater, "
                 f"{tiers[t]['hit_rate'] * 100:.0f}% hit over {tiers[t]['n']})"
                 for t in stand_down
             )

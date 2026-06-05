@@ -224,17 +224,27 @@ def tier_drawdown(
     hit_floor: float = 0.40,
     dd_threshold_pct: float = 15.0,
 ) -> dict:
-    """Per-conviction-tier realized track record + drawdown off the ledger.
+    """Per-conviction-tier realized track record + drawdown-from-cost off the ledger.
 
-    For each ``conviction_label`` tier, orders its marked signals by issue date,
-    compounds the signed returns into an equity curve, and computes max +
-    CURRENT (peak-to-now) drawdown. A tier with >= ``min_n`` marks AND
-    (hit-rate below ``hit_floor`` OR current drawdown beyond
-    ``dd_threshold_pct``) is flagged ``STAND_DOWN`` — the kill-switch signal.
+    Every marked signal is scored from its own issue close to the SAME current
+    close, so the marks are co-terminal (overlapping), NOT a sequential
+    holding-period series. Compounding them into an equity curve would make the
+    running peak — and any peak-to-now drawdown — depend on the arbitrary order
+    the marks happen to be in (and on the ticker tie-break when ideas are frozen
+    in one batch on the same day). That would make the kill-switch
+    non-deterministic, so we do NOT do it.
 
-    Returns ``{tier -> {n, hit_rate, mean_signed_return_pct, max_drawdown_pct,
-    current_drawdown_pct, status}}``. Tiers below ``min_n`` stay ``ACTIVE``
-    (insufficient evidence to demote).
+    Instead the tier is treated as an equal-weight book of its co-terminal
+    signals. Its **drawdown from cost** — how far the average live signal is
+    underwater = ``max(0, -mean_signed_return)`` — is order-invariant and
+    well-defined. A tier with >= ``min_n`` marks AND (hit-rate below
+    ``hit_floor`` OR drawdown-from-cost beyond ``dd_threshold_pct``) is flagged
+    ``STAND_DOWN`` — the kill-switch signal.
+
+    Returns ``{tier -> {n, hit_rate, mean_signed_return_pct,
+    drawdown_from_cost_pct, worst_signal_return_pct, status}}``. Tiers below
+    ``min_n`` stay ``ACTIVE`` (insufficient evidence to demote). The result is
+    invariant to the order of the underlying marks.
     """
     by_tier: dict[str, list] = {}
     for m in mark_ledger(stock_data):
@@ -242,34 +252,25 @@ def tier_drawdown(
 
     out: dict[str, dict] = {}
     for tier, rows in by_tier.items():
-        rows.sort(key=lambda r: (r.get("issue_date") or "", r.get("ticker") or ""))
         rets = [r["signed_return_pct"] / 100.0 for r in rows]
         n = len(rets)
         hit = (sum(1 for r in rets if r > 0) / n) if n else 0.0
-        mean_pct = (sum(r for r in rets) / n * 100.0) if n else 0.0
-
-        equity, e = [], 1.0
-        for r in rets:
-            e *= (1.0 + r)
-            equity.append(e)
-        peak, max_dd = 1.0, 0.0
-        for v in equity:
-            peak = max(peak, v)
-            max_dd = max(max_dd, (peak - v) / peak if peak > 0 else 0.0)
-        # Peak includes the 1.0 starting capital (consistent with max_dd above),
-        # so an all-losing tier reports its true peak-to-now drawdown rather than
-        # measuring from its first (already-underwater) mark.
-        run_peak = max([1.0, *equity]) if equity else 1.0
-        cur = equity[-1] if equity else 1.0
-        current_dd = (run_peak - cur) / run_peak if run_peak > 0 else 0.0
+        mean_pct = (sum(rets) / n * 100.0) if n else 0.0
+        worst_pct = (min(rets) * 100.0) if rets else 0.0
+        # Equal-weight tier book underwater-from-cost; order-invariant (the
+        # terminal aggregate return does not depend on mark order, unlike a
+        # compounded path's running peak).
+        drawdown_from_cost_pct = max(0.0, -mean_pct)
 
         status = "ACTIVE"
-        if n >= min_n and (hit < hit_floor or current_dd * 100.0 > dd_threshold_pct):
+        if n >= min_n and (
+            hit < hit_floor or drawdown_from_cost_pct > dd_threshold_pct
+        ):
             status = "STAND_DOWN"
         out[tier] = {
             "n": n, "hit_rate": hit, "mean_signed_return_pct": mean_pct,
-            "max_drawdown_pct": max_dd * 100.0,
-            "current_drawdown_pct": current_dd * 100.0,
+            "drawdown_from_cost_pct": drawdown_from_cost_pct,
+            "worst_signal_return_pct": worst_pct,
             "status": status,
         }
     return out

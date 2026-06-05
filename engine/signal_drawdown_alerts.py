@@ -149,9 +149,9 @@ def _trigger_reasons(
             f"hit-rate {float(info.get('hit_rate', 0.0)):.0%} below "
             f"{hit_floor:.0%} floor"
         )
-    if float(info.get("current_drawdown_pct", 0.0)) > dd_threshold_pct:
+    if float(info.get("drawdown_from_cost_pct", 0.0)) > dd_threshold_pct:
         reasons.append(
-            f"drawdown {float(info.get('current_drawdown_pct', 0.0)):.1f}% "
+            f"drawdown-from-cost {float(info.get('drawdown_from_cost_pct', 0.0)):.1f}% "
             f"beyond {dd_threshold_pct:.0f}% limit"
         )
     return reasons
@@ -177,8 +177,8 @@ def _build_alert(
     n = int(info.get("n", 0))
     hit = float(info.get("hit_rate", 0.0))
     mean_pct = float(info.get("mean_signed_return_pct", 0.0))
-    cur_dd = float(info.get("current_drawdown_pct", 0.0))
-    max_dd = float(info.get("max_drawdown_pct", 0.0))
+    dd = float(info.get("drawdown_from_cost_pct", 0.0))
+    worst_pct = float(info.get("worst_signal_return_pct", 0.0))
     reasons = _trigger_reasons(
         info, hit_floor=hit_floor, dd_threshold_pct=dd_threshold_pct
     )
@@ -187,11 +187,12 @@ def _build_alert(
     title = f"STAND DOWN: '{tier}'-conviction tier drawdown kill-switch"
     body = (
         f"The '{tier}' conviction tier tripped the drawdown kill-switch — "
-        f"{why}. Over {n} realized (look-ahead-free) signals it now sits at "
-        f"{cur_dd:.1f}% current drawdown (max {max_dd:.1f}%), {hit:.0%} hit-rate, "
-        f"{mean_pct:+.1f}% mean signed return. Demote or pause new ideas at this "
-        f"conviction until the track record recovers. (Forward marks on the "
-        f"frozen signal ledger; nothing refit.)"
+        f"{why}. Over {n} realized (look-ahead-free) signals the tier book is "
+        f"{dd:.1f}% underwater from cost, {hit:.0%} hit-rate, "
+        f"{mean_pct:+.1f}% mean signed return (worst {worst_pct:+.1f}%). Demote "
+        f"or pause new ideas at this conviction until the track record recovers. "
+        f"(Equal-weight co-terminal marks on the frozen signal ledger; nothing "
+        f"refit, order-invariant.)"
     )
     return ShippingAlert(
         alert_id=_new_id(),
@@ -205,7 +206,7 @@ def _build_alert(
         # Tier label piggybacks on port_locode as the dedup entity key —
         # truncated to the column width like perf_budgets/source_health do.
         port_locode=str(tier or "")[:32],
-        value=cur_dd,
+        value=dd,
         threshold=float(dd_threshold_pct),
         change_pct=0.0,
         acknowledged=False,

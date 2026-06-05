@@ -34,15 +34,12 @@ def _stock(last_closes: dict):
 
 
 def _freeze_cratered_tier(label="High"):
-    """Freeze a tier that will trip the drawdown kill-switch: 3 winners then
-    3 big losers -> ~49% current drawdown over 6 marks."""
+    """Freeze a tier whose realized edge has cratered: 5 signals each -20% ->
+    20% underwater from cost, 0% hit-rate -> trips the kill-switch."""
     from state.signal_ledger import freeze_ideas
-    freeze_ideas([_Idea(f"W{i}", "Bullish", conviction_label=label) for i in range(3)],
+    freeze_ideas([_Idea(f"L{i}", "Bullish", conviction_label=label) for i in range(5)],
                  issue_date="2026-06-01")
-    freeze_ideas([_Idea(f"L{i}", "Bullish", conviction_label=label) for i in range(3)],
-                 issue_date="2026-06-02")
-    return _stock({**{f"W{i}": 110.0 for i in range(3)},
-                   **{f"L{i}": 80.0 for i in range(3)}})
+    return _stock({f"L{i}": 80.0 for i in range(5)})
 
 
 def test_no_stand_down_tier_fires_nothing() -> None:
