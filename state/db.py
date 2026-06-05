@@ -288,7 +288,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 31
+SCHEMA_VERSION: int = 32
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1319,6 +1319,34 @@ _SCHEMA_V29_NOTE: str = (
 )
 
 
+_SCHEMA_V32 = """
+CREATE TABLE IF NOT EXISTS signal_ledger (
+    ledger_id          TEXT PRIMARY KEY,
+    ticker             TEXT NOT NULL,
+    direction          TEXT NOT NULL,
+    conviction_score   REAL NOT NULL DEFAULT 0,
+    conviction_label   TEXT,
+    weight_set         TEXT,
+    issue_date         TEXT NOT NULL,
+    issue_close        REAL,
+    frozen_at          TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_ledger_dedup
+    ON signal_ledger(ticker, issue_date, direction);
+CREATE INDEX IF NOT EXISTS idx_signal_ledger_issue
+    ON signal_ledger(issue_date);
+"""
+
+_SCHEMA_V32_NOTE: str = (
+    "v32: signal_ledger table (ledger_id PK, ticker, direction, "
+    "conviction_score, conviction_label, weight_set, issue_date, issue_close, "
+    "frozen_at) — a point-in-time, never-refit record of each EquityIdea AS "
+    "ISSUED, marked forward on real closes for an honest track record + "
+    "unique (ticker, issue_date, direction) dedup index + idx_signal_ledger_issue "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v32)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1575,6 +1603,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v31(conn)
     except Exception as exc:
         logger.warning(f"state.db: v31 column add skipped: {exc}")
+
+    # v32 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26/v29). Adds the ``signal_ledger`` point-in-time track-record
+    # table. Runs unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v32
+        _migrate_to_v32(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v32 table add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1968,6 +2005,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v31(conn)
         except Exception as exc:
             logger.warning(f"state.db: v31 migration skipped: {exc}")
+
+    # Migration 31 → 32: add the signal_ledger table. Idempotent CREATE TABLE
+    # IF NOT EXISTS (add-only, same as v26/v29).
+    if current < 32:
+        try:
+            from state.migrations import _migrate_to_v32
+            _migrate_to_v32(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v32 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

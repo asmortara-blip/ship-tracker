@@ -1298,3 +1298,25 @@ def _migrate_to_v31(conn: sqlite3.Connection) -> None:
             logger.warning(
                 f"state.migrations: _migrate_to_v31 ALTER TABLE ({col}) failed: {exc}"
             )
+
+
+# ─── Schema v31 → v32 ─────────────────────────────────────────────────────
+
+def _migrate_to_v32(conn: sqlite3.Connection) -> None:
+    """Add the ``signal_ledger`` table — a point-in-time track record.
+
+    Each row is one ``EquityIdea`` frozen AS ISSUED (ticker, direction,
+    conviction, weight_set, issue_date, issue_close), never refit. Marked
+    forward on real closes, this gives an honest, look-ahead-free equity-idea
+    track record — the thing the platform admits it has never had. Idempotent
+    CREATE TABLE / CREATE INDEX IF NOT EXISTS (same add-only pattern as
+    v26/v29), safe to re-run on every open.
+    """
+    try:
+        from state.db import _SCHEMA_V32
+
+        conn.executescript(_SCHEMA_V32)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v32 CREATE TABLE failed: {exc}"
+        )
