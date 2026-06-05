@@ -57,9 +57,13 @@ _FALLBACK_DAILY_VOL = 0.032
 class StressVaR:
     """Coherent Stress-VaR / ES of the book under a cascade-grounded shock.
 
-    ``var_pct`` and ``es_pct`` are book returns at/in the lower tail (≤ 0).
-    ``component_es_pct`` sums to ``es_pct`` exactly (Euler decomposition) —
-    each name's share of the tail loss.
+    ``var_pct`` and ``es_pct`` are SIGNED book returns in the lower tail:
+    ``es_pct <= var_pct`` always (the mean of the k worst draws can't exceed the
+    k-th worst). They are usually negative (a loss), but under a strongly
+    net-bullish cascade even the (1-confidence) tail can be a GAIN, so they are
+    NOT clamped to ≤ 0 and the dollars carry the sign — the UI labels loss vs
+    gain rather than fabricating downside. ``component_es_pct`` sums to
+    ``es_pct`` exactly (Euler decomposition) — each name's share of the tail.
     """
 
     scenario_name: str
@@ -68,10 +72,10 @@ class StressVaR:
     n_sims: int
     portfolio_value: float
     mean_pnl_pct: float                 # expected book P&L under the shock
-    var_pct: float                      # ≤ 0 — (1-confidence) percentile
-    es_pct: float                       # ≤ var_pct ≤ 0 — mean of the tail
-    var_dollar: float
-    es_dollar: float
+    var_pct: float                      # signed (1-confidence) tail boundary
+    es_pct: float                       # signed mean of the tail; <= var_pct
+    var_dollar: float                   # signed (var_pct * portfolio_value)
+    es_dollar: float                    # signed (es_pct * portfolio_value)
     n_names: int
     basis: str                          # "real-cov" | "diagonal-vol" | "empty"
     component_es_pct: dict = field(default_factory=dict)
@@ -199,18 +203,25 @@ def monte_carlo_book_es(
     draws = rng.multivariate_normal(mu, cov, size=int(max(1, n_sims)))  # (S, n)
     book = draws @ w                                                    # (S,)
 
-    q = (1.0 - conf) * 100.0
-    var_pct = float(np.percentile(book, q))
-    tail_mask = book <= var_pct
-    if not tail_mask.any():
-        tail_mask = book <= np.percentile(book, max(q, 0.5))
-    tail = draws[tail_mask]                                             # (T, n)
-    es_pct = float(book[tail_mask].mean()) if tail_mask.any() else var_pct
+    # Tail = the k smallest book outcomes, k = round((1-conf)*S) (>= 1). Taking
+    # an explicit k-set (not a percentile + <= mask) guarantees a non-empty tail
+    # so the Euler identity holds EXACTLY by construction — no dead fallback that
+    # could pair a nonzero ES with a zeroed component vector. VaR is the tail
+    # boundary (the k-th smallest); ES is the mean of the k smallest.
+    k = max(1, int(round((1.0 - conf) * draws.shape[0])))
+    order = np.argsort(book)
+    tail_idx = order[:k]
+    var_pct = float(book[order[k - 1]])
+    es_pct = float(book[tail_idx].mean())
 
-    # Euler/marginal component ES: wᵢ · E[rᵢ | book in tail]. Sums to es_pct.
-    comp = (w * tail.mean(axis=0)) if len(tail) else np.zeros(n)
+    # Euler/marginal component ES: wᵢ · mean over the tail draws of rᵢ. Sums to
+    # es_pct EXACTLY (sign-agnostic linearity).
+    comp = w * draws[tail_idx].mean(axis=0)
     component_es_pct = {t: float(c) for t, c in zip(tickers, comp)}
 
+    # Signed dollars: var_pct/es_pct are SIGNED book returns. Under a net-bullish
+    # cascade the tail can be a GAIN (positive) — do NOT abs() it into a phantom
+    # 'loss'. The UI labels the sign (loss vs gain); honesty over convention.
     pv = float(portfolio_value)
     return StressVaR(
         scenario_name=scenario_name, confidence=conf,
@@ -218,7 +229,7 @@ def monte_carlo_book_es(
         portfolio_value=pv,
         mean_pnl_pct=float(book.mean()),
         var_pct=var_pct, es_pct=es_pct,
-        var_dollar=abs(var_pct) * pv, es_dollar=abs(es_pct) * pv,
+        var_dollar=var_pct * pv, es_dollar=es_pct * pv,
         n_names=n, basis=basis,
         component_es_pct=component_es_pct,
         shocks_pct={t: float(shocks.get(t, 0.0)) for t in tickers},

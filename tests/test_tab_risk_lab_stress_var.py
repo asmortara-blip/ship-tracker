@@ -85,6 +85,17 @@ def test_section_renders_driver_attribution_bar(st_stub) -> None:
     assert "by cascade driver" in text or "dominant cascade driver" in text
 
 
+def test_net_bullish_book_labels_gain_not_loss(st_stub) -> None:
+    # A strong bullish single-name book has a positive tail -> the ES sublabel
+    # must say 'gain', never a phantom 'mean tail loss'.
+    from ui.tab_risk_lab import _render_stress_var_es
+    _render_stress_var_es({"ZIM": 1.0}, [_idea("ZIM", "Bullish", 1.0)], {},
+                          1_000_000.0, 0.90)
+    text = _emitted(st_stub)
+    assert "mean tail gain" in text
+    assert "mean tail loss" not in text
+
+
 def test_section_empty_book_is_quiet(st_stub) -> None:
     from ui.tab_risk_lab import _render_stress_var_es
     _render_stress_var_es({}, [], {}, 1_000_000.0, 0.95)

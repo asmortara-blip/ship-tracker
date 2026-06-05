@@ -70,11 +70,25 @@ def test_component_es_sums_to_es_exactly() -> None:
 
 
 def test_es_is_at_least_as_severe_as_var() -> None:
-    # Coherence: ES ≤ VaR ≤ 0 for a no-shock (mean-zero) book.
+    # Coherence: ES <= VaR <= 0 for a no-shock (mean-zero) book.
     from processing.stress_var import monte_carlo_book_es
     r = monte_carlo_book_es({"ZIM": 0.6, "SBLK": 0.4}, [], {},
                             n_sims=30_000, seed=3)
     assert r.es_pct <= r.var_pct <= 1e-9
+
+
+def test_net_bullish_tail_is_a_signed_gain_not_a_phantom_loss() -> None:
+    # A strong bullish, low-diversification book can have a POSITIVE tail (even
+    # the worst-5% is a gain). var/es must stay signed-positive and the dollars
+    # must NOT be abs()'d into a phantom loss. es_pct <= var_pct still holds.
+    from processing.stress_var import monte_carlo_book_es
+    r = monte_carlo_book_es({"ZIM": 1.0}, [_idea("ZIM", "Bullish", 1.0)], {},
+                            confidence=0.90, n_sims=50_000, seed=2, max_shock=0.20,
+                            portfolio_value=1_000_000.0)
+    assert r.var_pct > 0 and r.es_pct > 0            # the tail is a gain
+    assert r.es_pct <= r.var_pct                      # coherence ordering holds
+    assert r.es_dollar == pytest.approx(r.es_pct * 1_000_000.0)   # signed, not abs
+    assert r.es_dollar > 0
 
 
 def test_bearish_idea_tilts_a_long_book_down() -> None:
@@ -88,11 +102,23 @@ def test_bearish_idea_tilts_a_long_book_down() -> None:
 
 
 def test_dollar_figures_track_pct() -> None:
+    # Dollars are SIGNED (pct * pv) — no abs(). For a no-shock book the tail is
+    # negative, so the dollars are negative too.
     from processing.stress_var import monte_carlo_book_es
     r = monte_carlo_book_es({"ZIM": 0.5, "SBLK": 0.5}, [], {},
                             n_sims=10_000, portfolio_value=2_000_000.0, seed=1)
-    assert r.var_dollar == pytest.approx(abs(r.var_pct) * 2_000_000.0)
-    assert r.es_dollar == pytest.approx(abs(r.es_pct) * 2_000_000.0)
+    assert r.var_dollar == pytest.approx(r.var_pct * 2_000_000.0)
+    assert r.es_dollar == pytest.approx(r.es_pct * 2_000_000.0)
+    assert r.var_dollar < 0 and r.es_dollar < 0
+
+
+def test_component_es_sums_exactly_on_degenerate_book() -> None:
+    # Euler identity must hold by construction even on a near-degenerate book
+    # (the old percentile+mask path had a dead fallback that would have zeroed
+    # the components while leaving es_pct nonzero).
+    from processing.stress_var import monte_carlo_book_es
+    r = monte_carlo_book_es({"ZIM": 1.0}, [], {}, n_sims=1, seed=0)
+    assert sum(r.component_es_pct.values()) == pytest.approx(r.es_pct, abs=1e-9)
 
 
 def test_deterministic_under_seed() -> None:

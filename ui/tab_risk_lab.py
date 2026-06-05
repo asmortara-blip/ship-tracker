@@ -393,13 +393,19 @@ def _render_stress_var_es(
         return
 
     n_shocked = sum(1 for v in r.shocks_pct.values() if abs(v) > 1e-9)
+    # var_pct/es_pct are SIGNED — under a net-bullish cascade the tail can be a
+    # gain. Label the sign rather than rendering a phantom 'loss'.
+    var_word = "loss" if r.var_pct < 0 else "gain"
+    es_word = "loss" if r.es_pct < 0 else "gain"
     metric_card_row([
         {"label": f"Stress VaR ({confidence*100:.0f}%)",
-         "value": f"{r.var_pct*100:+.2f}%", "accent": C_LOW,
-         "sublabel": f"${r.var_dollar:,.0f} over {horizon_days}d"},
+         "value": f"{r.var_pct*100:+.2f}%",
+         "accent": (C_LOW if r.var_pct < 0 else C_HIGH),
+         "sublabel": f"${abs(r.var_dollar):,.0f} tail {var_word} over {horizon_days}d"},
         {"label": "Expected Shortfall",
-         "value": f"{r.es_pct*100:+.2f}%", "accent": C_LOW,
-         "sublabel": f"${r.es_dollar:,.0f} — mean tail loss"},
+         "value": f"{r.es_pct*100:+.2f}%",
+         "accent": (C_LOW if r.es_pct < 0 else C_HIGH),
+         "sublabel": f"${abs(r.es_dollar):,.0f} — mean tail {es_word}"},
         {"label": "Mean Stressed P&L",
          "value": f"{r.mean_pnl_pct*100:+.2f}%",
          "accent": (C_HIGH if r.mean_pnl_pct > 0 else C_LOW),
