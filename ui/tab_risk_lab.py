@@ -108,22 +108,8 @@ def _real_returns_panel(stock_data, tickers: list[str], *, min_obs: int = 60) ->
     an EMPTY frame when fewer than 2 tickers have >= ``min_obs`` real returns,
     so the caller falls back to the synthetic panel (labeled demo).
     """
-    if not isinstance(stock_data, dict):
-        return pd.DataFrame()
-    from processing.book_pnl import _close_series
-
-    cols: dict[str, pd.Series] = {}
-    for t in tickers:
-        s = _close_series(stock_data, t)
-        if s is None or not isinstance(s.index, pd.DatetimeIndex):
-            continue
-        s = s.sort_index()
-        rets = np.log(s.where(s > 0)).diff().dropna()
-        if len(rets) >= min_obs:
-            cols[t] = rets
-    if len(cols) < 2:
-        return pd.DataFrame()
-    return pd.concat(cols, axis=1).dropna(how="any")
+    from processing.book_pnl import returns_panel
+    return returns_panel(stock_data, tickers, min_obs=min_obs)
 
 
 # ─── Section 1: Portfolio VaR strip ─────────────────────────────────────────

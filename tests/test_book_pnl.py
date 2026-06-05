@@ -95,3 +95,23 @@ def test_nav_series_handles_unaligned_dates() -> None:
     nav = nav_series(_BOOK, stock, days=90)
     assert not nav.empty
     assert nav.iloc[0] == pytest.approx(100.0)
+
+
+# ── shared real-returns panel (R019/R021) ───────────────────────────────────
+
+def test_returns_panel_built_from_real_closes() -> None:
+    from processing.book_pnl import returns_panel
+    idx = pd.date_range("2024-01-01", periods=200, freq="B")
+    rng = np.random.default_rng(3)
+    stock = {t: pd.DataFrame({"close": 100 + rng.normal(0, 1, 200).cumsum()}, index=idx)
+             for t in ("ZIM", "SBLK", "DAC")}
+    rp = returns_panel(stock, ["ZIM", "SBLK", "DAC", "XXX"])  # XXX has no data
+    assert set(rp.columns) == {"ZIM", "SBLK", "DAC"}
+    assert len(rp) > 100
+    assert isinstance(rp.index, pd.DatetimeIndex)
+
+
+def test_returns_panel_empty_on_insufficient_data() -> None:
+    from processing.book_pnl import returns_panel
+    assert returns_panel(None, ["ZIM"]).empty
+    assert returns_panel({"ZIM": pd.DataFrame({"close": [1, 2, 3]})}, ["ZIM", "SBLK"]).empty

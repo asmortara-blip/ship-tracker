@@ -990,7 +990,7 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
-def _render_optimization_lab(df: pd.DataFrame) -> None:
+def _render_optimization_lab(df: pd.DataFrame, stock_data=None) -> None:
     """Run portfolio_optimizer's four methods on the current holdings and
     surface the comparison.
 
@@ -1019,7 +1019,17 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
             st.info("Need at least 2 tickers in the portfolio to optimize.")
             return
 
-        returns_df = _synth_returns_panel(tickers)
+        # Prefer REAL returns from cached closes (so the optimizer runs on the
+        # book's actual covariance + tails); fall back to the synthetic panel —
+        # labeled demo in the footer — only when prices are dark.
+        from processing.book_pnl import returns_panel
+        real_panel = returns_panel(stock_data, tickers)
+        opt_panel_is_real = not real_panel.empty
+        if opt_panel_is_real:
+            returns_df = real_panel
+            tickers = [t for t in tickers if t in returns_df.columns]
+        else:
+            returns_df = _synth_returns_panel(tickers)
         if returns_df.empty or returns_df.shape[1] < 2:
             st.info("Could not assemble a returns panel.")
             return
@@ -1108,7 +1118,8 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
         section_header(
             "Walk-Forward Backtest",
             "Train 252 days, rebalance every 21 days. Comparison of "
-            "max-Sharpe vs min-variance equity curves on the synthetic panel.",
+            "max-Sharpe vs min-variance equity curves (real returns where "
+            "available; see footer).",
         )
 
         bt_results: dict[str, "BacktestResult"] = {}  # type: ignore[name-defined]
@@ -1174,10 +1185,11 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
         # ── 5. Provenance footer ──────────────────────────────────────────
         st.markdown(
             source_footer([
-                DataSource.demo(
-                    "Synthetic 2-year returns panel — per-ticker mean/vol "
-                    "drawn deterministically via utils.helpers.stable_hash. "
-                    "Wire to a real return history when the platform persists it."
+                DataSource.live(
+                    "Real per-ticker daily returns from cached yfinance closes."
+                ) if opt_panel_is_real else DataSource.demo(
+                    "Synthetic 2-year returns panel — per-ticker mean/vol drawn "
+                    "deterministically via utils.helpers.stable_hash; prices dark."
                 ),
             ]),
             unsafe_allow_html=True,
@@ -1385,7 +1397,7 @@ def render(stock_data, macro_data, insights) -> None:
 
             section_divider("Optimization Lab")
 
-            _render_optimization_lab(df)
+            _render_optimization_lab(df, stock_data)
 
             section_divider("Factor Attribution")
 

@@ -140,3 +140,28 @@ def nav_series(positions, stock_data, *, days: int = 90, base: float = 100.0) ->
     if nav.empty or nav.iloc[0] == 0:
         return pd.Series(dtype=float)
     return nav / nav.iloc[0] * base
+
+
+def returns_panel(stock_data, tickers, *, min_obs: int = 60) -> pd.DataFrame:
+    """Daily log-returns panel from REAL cached closes for ``tickers``.
+
+    The shared real-returns builder behind the Risk-Lab VaR panel and the
+    portfolio / idea-engine optimizers, so they run on the book's ACTUAL
+    covariance and tails rather than a synthetic fixed-correlation panel.
+    Returns an EMPTY frame when fewer than 2 tickers have >= ``min_obs``
+    returns, so callers fall back to a synthetic panel (labeled demo).
+    """
+    if not isinstance(stock_data, dict):
+        return pd.DataFrame()
+    cols: dict[str, pd.Series] = {}
+    for t in tickers or []:
+        s = _close_series(stock_data, str(t))
+        if s is None or not isinstance(s.index, pd.DatetimeIndex):
+            continue
+        s = s.sort_index()
+        rets = np.log(s.where(s > 0)).diff().dropna()
+        if len(rets) >= min_obs:
+            cols[str(t)] = rets
+    if len(cols) < 2:
+        return pd.DataFrame()
+    return pd.concat(cols, axis=1).dropna(how="any")

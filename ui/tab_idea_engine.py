@@ -420,7 +420,7 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
-def _render_optimization_mini(ideas: list) -> None:
+def _render_optimization_mini(ideas: list, stock_data=None) -> None:
     """Run max-Sharpe over the top bullish ideas and surface the weights +
     expected metrics. A miniature of the tab_portfolio Optimization Lab,
     scoped to the ideas the Idea Engine just surfaced."""
@@ -436,16 +436,23 @@ def _render_optimization_mini(ideas: list) -> None:
         "Suggested Portfolio (top bullish ideas)",
         subtitle=(
             "Max-Sharpe weights over the top bullish names from this idea "
-            "list. Demo: synthetic 2-year return panel (per-ticker mean/vol "
-            "stable-hash seeded) — wire to a real return history when "
-            "available."
+            "list, on real cached returns where available (synthetic fallback "
+            "when prices are dark)."
         ),
     )
 
     tickers = [getattr(i, "ticker") for i in bullish[:6]]
     try:
         from engine.portfolio_optimizer import optimize_portfolio
-        returns_df = _synth_returns_panel(tickers)
+        from processing.book_pnl import returns_panel
+        # Prefer REAL returns; synthetic fallback (labeled) when prices dark.
+        real_panel = returns_panel(stock_data, tickers)
+        if not real_panel.empty:
+            returns_df = real_panel
+            st.caption("Returns: real cached daily closes (yfinance).")
+        else:
+            returns_df = _synth_returns_panel(tickers)
+            st.caption("Returns: synthetic panel (demo) — live prices unavailable.")
         opt = optimize_portfolio(returns_df, method="max_sharpe", weight_cap=0.40, rf=0.045)
     except Exception as exc:
         logger.exception(f"idea_engine: optimization mini failed: {exc}")
@@ -563,7 +570,7 @@ def render(
 
             # ── Optimization mini ─────────────────────────────────────────────
             section_divider("Portfolio Construction")
-            _render_optimization_mini(ideas)
+            _render_optimization_mini(ideas, stock_data)
 
             # ── Export this view (PDF) ────────────────────────────────────────
             try:
