@@ -180,9 +180,13 @@ def backtest_var_coverage(
         port, confidence=confidence, window=window, method=method
     )
     if n_obs < min_oos:
+        # Report the honest computed rate so the scorecard is self-consistent
+        # (n_breaches and breach_rate must not disagree), even though no Kupiec
+        # verdict is derived from a sub-min_oos sample.
         return VaRCoverageScorecard(
             confidence=confidence, method=method, window=window,
-            n_observations=n_obs, n_breaches=n_breaches, breach_rate=0.0,
+            n_observations=n_obs, n_breaches=n_breaches,
+            breach_rate=(n_breaches / n_obs if n_obs else 0.0),
             nominal_rate=nominal, kupiec_lr=0.0, kupiec_pvalue=1.0,
             rejected=False, well_calibrated=False, basis="insufficient",
             summary=(f"Only {n_obs} out-of-sample day(s) (need >= {min_oos}) — "

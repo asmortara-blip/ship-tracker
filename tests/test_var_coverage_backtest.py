@@ -67,6 +67,22 @@ def test_insufficient_history_is_not_fabricated() -> None:
     assert sc.basis == "insufficient" and not sc.well_calibrated
 
 
+def test_insufficient_branch_breach_rate_is_self_consistent() -> None:
+    # When OOS days are below min_oos the scorecard still must not disagree
+    # with itself: breach_rate == n_breaches / n_observations (not a hardcoded 0).
+    from processing.var_coverage_backtest import backtest_var_coverage
+    # 40 rows, window 30 -> ~10 OOS days (< min_oos 25) -> insufficient branch.
+    idx = pd.date_range("2024-01-01", periods=40, freq="B")
+    rng = np.random.default_rng(9)
+    rets = rng.normal(0.0, 0.02, 40)
+    rets[-5:] = -0.25                      # force a couple of late breaches
+    panel = pd.DataFrame({"A": rets, "B": rng.normal(0, 0.02, 40)}, index=idx)
+    sc = backtest_var_coverage(panel, window=30, min_oos=25)
+    assert sc.basis == "insufficient"
+    expected = sc.n_breaches / sc.n_observations if sc.n_observations else 0.0
+    assert sc.breach_rate == pytest.approx(expected)
+
+
 def test_weights_subset_to_panel() -> None:
     from processing.var_coverage_backtest import backtest_var_coverage
     panel = _normal_panel(["A", "B", "C"], n=400, seed=2)
