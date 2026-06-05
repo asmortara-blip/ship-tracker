@@ -123,6 +123,60 @@ def test_oos_scorecard_noise_not_significant() -> None:
     assert sc["sufficient"] and not sc["is_significant"]
 
 
+# ── per-tier drawdown kill-switch (B2, on R004) ─────────────────────────────
+
+def test_tier_drawdown_all_winners_active() -> None:
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+    freeze_ideas([_Idea(f"T{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(5)], issue_date="2026-06-01")
+    high = tier_drawdown(_stock({f"T{i}": 110.0 for i in range(5)}), min_n=5)["High"]
+    assert high["n"] == 5 and high["hit_rate"] == 1.0
+    assert high["max_drawdown_pct"] == pytest.approx(0.0)
+    assert high["current_drawdown_pct"] == pytest.approx(0.0)
+    assert high["status"] == "ACTIVE"
+
+
+def test_tier_drawdown_winners_then_losers_stand_down() -> None:
+    # Equity peaks after 3 winners (1.331) then craters on 3 x -20% -> the
+    # peak-to-now drawdown blows past the 15% threshold -> kill-switch fires.
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+    freeze_ideas([_Idea(f"W{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(3)], issue_date="2026-06-01")
+    freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(3)], issue_date="2026-06-02")
+    stock = _stock({**{f"W{i}": 110.0 for i in range(3)},
+                    **{f"L{i}": 80.0 for i in range(3)}})
+    high = tier_drawdown(stock, min_n=5, dd_threshold_pct=15.0)["High"]
+    assert high["n"] == 6 and high["hit_rate"] == pytest.approx(0.5)
+    assert high["current_drawdown_pct"] > 15.0
+    assert high["status"] == "STAND_DOWN"
+
+
+def test_tier_drawdown_low_hit_rate_stand_down() -> None:
+    # 1 small win, 4 small losses -> hit 0.2 < 0.40 floor, but the drawdown is
+    # shallow (<15%) -> proves the hit-rate floor is its own kill trigger.
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+    freeze_ideas([_Idea("WIN", "Bullish", price=100.0, conviction_label="Low")],
+                 issue_date="2026-06-01")
+    freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="Low")
+                  for i in range(4)], issue_date="2026-06-02")
+    stock = _stock({"WIN": 101.0, **{f"L{i}": 99.0 for i in range(4)}})
+    low = tier_drawdown(stock, min_n=5, hit_floor=0.40, dd_threshold_pct=15.0)["Low"]
+    assert low["n"] == 5 and low["hit_rate"] == pytest.approx(0.2)
+    assert low["current_drawdown_pct"] < 15.0   # not the drawdown trigger
+    assert low["status"] == "STAND_DOWN"          # the hit-rate floor trigger
+
+
+def test_tier_drawdown_below_min_n_stays_active() -> None:
+    # 3 straight losers, but below min_n -> insufficient evidence to demote.
+    from state.signal_ledger import freeze_ideas, tier_drawdown
+    freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0, conviction_label="High")
+                  for i in range(3)], issue_date="2026-06-01")
+    high = tier_drawdown(_stock({f"L{i}": 80.0 for i in range(3)}), min_n=5)["High"]
+    assert high["n"] == 3 and high["hit_rate"] == 0.0
+    assert high["status"] == "ACTIVE"
+
+
 def test_freeze_skips_unpriced_ideas() -> None:
     # An idea with no real issue price (price=0, no stock_data) can never be
     # marked forward, so it must NOT enter the ledger (keeps illustrative

@@ -215,3 +215,61 @@ def oos_scorecard(stock_data, *, min_n: int = 5, threshold: float = 0.95) -> dic
                else "not yet significant (treat as noise).")
         ),
     }
+
+
+def tier_drawdown(
+    stock_data,
+    *,
+    min_n: int = 5,
+    hit_floor: float = 0.40,
+    dd_threshold_pct: float = 15.0,
+) -> dict:
+    """Per-conviction-tier realized track record + drawdown off the ledger.
+
+    For each ``conviction_label`` tier, orders its marked signals by issue date,
+    compounds the signed returns into an equity curve, and computes max +
+    CURRENT (peak-to-now) drawdown. A tier with >= ``min_n`` marks AND
+    (hit-rate below ``hit_floor`` OR current drawdown beyond
+    ``dd_threshold_pct``) is flagged ``STAND_DOWN`` — the kill-switch signal.
+
+    Returns ``{tier -> {n, hit_rate, mean_signed_return_pct, max_drawdown_pct,
+    current_drawdown_pct, status}}``. Tiers below ``min_n`` stay ``ACTIVE``
+    (insufficient evidence to demote).
+    """
+    by_tier: dict[str, list] = {}
+    for m in mark_ledger(stock_data):
+        by_tier.setdefault(m.get("conviction_label") or "?", []).append(m)
+
+    out: dict[str, dict] = {}
+    for tier, rows in by_tier.items():
+        rows.sort(key=lambda r: (r.get("issue_date") or "", r.get("ticker") or ""))
+        rets = [r["signed_return_pct"] / 100.0 for r in rows]
+        n = len(rets)
+        hit = (sum(1 for r in rets if r > 0) / n) if n else 0.0
+        mean_pct = (sum(r for r in rets) / n * 100.0) if n else 0.0
+
+        equity, e = [], 1.0
+        for r in rets:
+            e *= (1.0 + r)
+            equity.append(e)
+        peak, max_dd = 1.0, 0.0
+        for v in equity:
+            peak = max(peak, v)
+            max_dd = max(max_dd, (peak - v) / peak if peak > 0 else 0.0)
+        # Peak includes the 1.0 starting capital (consistent with max_dd above),
+        # so an all-losing tier reports its true peak-to-now drawdown rather than
+        # measuring from its first (already-underwater) mark.
+        run_peak = max([1.0, *equity]) if equity else 1.0
+        cur = equity[-1] if equity else 1.0
+        current_dd = (run_peak - cur) / run_peak if run_peak > 0 else 0.0
+
+        status = "ACTIVE"
+        if n >= min_n and (hit < hit_floor or current_dd * 100.0 > dd_threshold_pct):
+            status = "STAND_DOWN"
+        out[tier] = {
+            "n": n, "hit_rate": hit, "mean_signed_return_pct": mean_pct,
+            "max_drawdown_pct": max_dd * 100.0,
+            "current_drawdown_pct": current_dd * 100.0,
+            "status": status,
+        }
+    return out
