@@ -151,3 +151,55 @@ def test_mark_book_prices_date_column_frame() -> None:
                      "shares": 10, "avg_cost": 10.0}], stock)
     zim = next(p for p in bm.positions if p.ticker == "ZIM")
     assert zim.priced and zim.last_close == pytest.approx(14.0)
+
+
+# ── cache-shape robustness: sort, dedup, timezone (review findings) ──────────
+
+def test_close_series_picks_latest_by_date_not_row_order() -> None:
+    # Rows out of chronological order -> _latest_close / day_change_pct must
+    # still use the date-latest close, not the last ROW.
+    from processing.book_pnl import _latest_close
+    dates = pd.to_datetime(["2024-01-03", "2024-01-01", "2024-01-02"])
+    frame = pd.DataFrame({"date": dates, "symbol": "ZIM", "close": [102.0, 100.0, 101.0]})
+    stock = {"ZIM": frame}
+    assert _latest_close(stock, "ZIM") == pytest.approx(102.0)          # the 01-03 close
+    assert day_change_pct("ZIM", stock) == pytest.approx((102.0 - 101.0) / 101.0 * 100)
+
+
+def test_close_series_dedups_duplicate_dates() -> None:
+    # A duplicate trading date (re-fetch/append) must collapse to one row
+    # (keep last) so the panel concat can't fan out.
+    from processing.book_pnl import _close_series
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-02", "2024-01-03"])
+    frame = pd.DataFrame({"date": dates, "symbol": "ZIM", "close": [100.0, 101.0, 101.5, 102.0]})
+    s = _close_series({"ZIM": frame}, "ZIM")
+    assert s.index.is_unique and len(s) == 3
+    assert s.loc[pd.Timestamp("2024-01-02")] == pytest.approx(101.5)   # kept last
+
+
+def test_returns_panel_no_fanout_on_duplicate_dates() -> None:
+    # End-to-end: a duplicate date in one ticker must not inflate the panel.
+    rng = np.random.default_rng(1)
+    base_dates = pd.date_range("2024-01-01", periods=70, freq="B")
+    a_dates = base_dates.insert(40, base_dates[40])   # duplicate one date
+    a = pd.DataFrame({"date": a_dates, "symbol": "ZIM",
+                      "close": 100.0 + rng.normal(0, 1, len(a_dates)).cumsum()})
+    b = _canonical_frame(list(100.0 + rng.normal(0, 1, 70).cumsum()), "SBLK",
+                         start="2024-01-01")
+    panel = returns_panel({"ZIM": a, "SBLK": b}, ["ZIM", "SBLK"])
+    assert not panel.empty
+    assert panel.index.is_unique                      # no cartesian fan-out
+    assert len(panel) <= 70
+
+
+def test_returns_panel_handles_mixed_timezone() -> None:
+    # One tz-aware frame + one tz-naive must NOT raise in the concat (it would
+    # defeat the documented synthetic fallback); tz is stripped on promotion.
+    rng = np.random.default_rng(2)
+    dates = pd.date_range("2024-01-01", periods=70, freq="B")
+    a = pd.DataFrame({"date": dates.tz_localize("US/Eastern"), "symbol": "ZIM",
+                      "close": 100.0 + rng.normal(0, 1, 70).cumsum()})
+    b = _canonical_frame(list(100.0 + rng.normal(0, 1, 70).cumsum()), "SBLK",
+                         start="2024-01-01")
+    panel = returns_panel({"ZIM": a, "SBLK": b}, ["ZIM", "SBLK"])   # must not raise
+    assert not panel.empty and set(panel.columns) == {"ZIM", "SBLK"}

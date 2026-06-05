@@ -41,12 +41,23 @@ def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
     if not isinstance(frame.index, pd.DatetimeIndex):
         date_col = next((c for c in _DATE_COLS if c in frame.columns), None)
         if date_col is not None:
-            s = pd.Series(
-                s.to_numpy(),
-                index=pd.to_datetime(frame[date_col], errors="coerce"),
-            )
+            idx = pd.to_datetime(frame[date_col], errors="coerce")
+            # Strip any tz so a tz-aware cached frame doesn't raise
+            # "Cannot join tz-naive with tz-aware" in the panel concat — that
+            # would defeat the documented synthetic-fallback path, not degrade
+            # to it.
+            if getattr(idx.dt, "tz", None) is not None:
+                idx = idx.dt.tz_localize(None)
+            s = pd.Series(s.to_numpy(), index=idx)
             s = s[~s.index.isna()]
     s = s.dropna()
+    if isinstance(s.index, pd.DatetimeIndex):
+        # Chronological + unique: positional iloc[-1]/iloc[-2] must be the
+        # latest/prior close (not just the last ROW), and a duplicate trading
+        # date (re-fetch/append in a cache) must NOT fan out the panel concat
+        # into broadcast/cartesian rows. Keep the last value per date.
+        s = s.sort_index()
+        s = s[~s.index.duplicated(keep="last")]
     return s if not s.empty else None
 
 
