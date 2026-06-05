@@ -428,11 +428,164 @@ def get_distinct_entity_types(*, limit: int = 50) -> list[str]:
         return []
 
 
+# ─── Tamper-evident hash-chain verification (rec R100) ─────────────────────
+
+
+@dataclass
+class ChainVerification:
+    """Result of walking the audit hash-chain.
+
+    ``ok`` is True when every chained row recomputes to its stored ``row_hash``
+    and links to its predecessor. ``n_unchained`` counts legacy pre-v31 rows
+    (no ``row_hash``) that sit before the chain start. On a break,
+    ``first_break_rowid`` + ``first_break_reason`` locate the earliest anomaly.
+    """
+    ok: bool
+    n_total: int
+    n_chained: int
+    n_unchained: int
+    head: str
+    first_break_rowid: Optional[int] = None
+    first_break_reason: str = ""
+    head_matches_anchor: Optional[bool] = None  # None when no anchor supplied
+
+
+def verify_chain(expected_head: Optional[str] = None) -> ChainVerification:
+    """Verify the audit-event hash-chain end to end.
+
+    Detects in-place edits of an INTERIOR row (its content no longer matches
+    its hash), and deletions / reorders / insertions (a row whose ``prev_hash``
+    no longer links to the previous chained row). Tolerates a sanctioned
+    *prefix* prune: the first chained row's ``prev_hash`` is not checked
+    against a predecessor (it may reference a pruned row).
+
+    LIMITATION — tail tampering: editing-and-recomputing the LAST row, or
+    truncating the newest N rows, leaves a shorter internally-consistent chain
+    and is NOT detectable from the DB alone. Pass ``expected_head`` (a
+    previously **out-of-band-anchored** head row_hash, e.g. from
+    ``auth.audit.chain_head``) to catch it: a mismatch means the tail was
+    edited or truncated. ``head_matches_anchor`` reports the outcome.
+
+    Never raises — a read error returns ``ok=False`` with a reason.
+    """
+    try:
+        from auth.audit import _compute_row_hash
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT rowid AS rid, event_id, created_at, user_id, action, "
+            "entity_type, entity_id, detail_json, prev_hash, row_hash "
+            "FROM audit_events ORDER BY rowid ASC"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.verify_chain: read failed: {exc}")
+        return ChainVerification(False, 0, 0, 0, "", None, f"read failed: {exc}")
+
+    n_total = len(rows)
+    chained = [r for r in rows if (r["row_hash"] or "")]
+    n_unchained = n_total - len(chained)
+    head = (chained[-1]["row_hash"] or "") if chained else ""
+
+    prev = None
+    for i, r in enumerate(chained):
+        recomputed = _compute_row_hash(
+            r["prev_hash"] or "", r["event_id"] or "", r["created_at"] or "",
+            r["user_id"] or "", r["action"] or "", r["entity_type"] or "",
+            r["entity_id"] or "", r["detail_json"] or "{}",
+        )
+        if recomputed != (r["row_hash"] or ""):
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head,
+                int(r["rid"]), "row content does not match its hash (modified)",
+            )
+        if i > 0 and (r["prev_hash"] or "") != (prev["row_hash"] or ""):
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head,
+                int(r["rid"]),
+                "prev_hash does not link to the previous row "
+                "(insert / delete / reorder)",
+            )
+        prev = r
+
+    # The internal chain is consistent. If an out-of-band head was anchored,
+    # a mismatch here is a tail edit / truncation the in-DB walk cannot see.
+    if expected_head is not None:
+        matches = (head == expected_head)
+        if not matches:
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head, None,
+                "head does not match the anchored value (tail edit / truncation)",
+                head_matches_anchor=False,
+            )
+        return ChainVerification(
+            True, n_total, len(chained), n_unchained, head, None, "",
+            head_matches_anchor=True,
+        )
+
+    return ChainVerification(True, n_total, len(chained), n_unchained, head, None, "")
+
+
+def reseal_chain() -> int:
+    """Recompute the whole audit chain in rowid order. Returns rows resealed.
+
+    A MAINTENANCE op for AFTER a sanctioned prune/redact (which breaks the
+    chain by design): it restores a valid chain so future writes extend a clean
+    head. Because it overwrites the hashes, it erases the chain-break evidence
+    of those edits — so it is itself a privileged action and the caller SHOULD
+    ``record_audit`` it. Never raises; returns 0 on error.
+    """
+    try:
+        from auth.audit import _compute_row_hash
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT rowid AS rid, event_id, created_at, user_id, action, "
+            "entity_type, entity_id, detail_json FROM audit_events "
+            "ORDER BY rowid ASC"
+        ).fetchall()
+        prev = ""
+        n = 0
+        # Atomic re-seal: BEGIN IMMEDIATE so a crash mid-loop cannot leave a
+        # half-resealed (broken) chain (connections are autocommit, so a bare
+        # ``with conn`` would commit each UPDATE independently).
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for r in rows:
+                rh = _compute_row_hash(
+                    prev, r["event_id"] or "", r["created_at"] or "",
+                    r["user_id"] or "", r["action"] or "", r["entity_type"] or "",
+                    r["entity_id"] or "", r["detail_json"] or "{}",
+                )
+                conn.execute(
+                    "UPDATE audit_events SET prev_hash = ?, row_hash = ? "
+                    "WHERE rowid = ?",
+                    (prev, rh, r["rid"]),
+                )
+                prev = rh
+                n += 1
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.reseal_chain: failed: {exc}")
+        return 0
+
+
 __all__ = [
     "AuditSearchQuery",
     "AuditSearchResult",
+    "ChainVerification",
     "search_audit",
     "search_audit_count",
     "get_distinct_actions",
     "get_distinct_entity_types",
+    "verify_chain",
+    "reseal_chain",
 ]

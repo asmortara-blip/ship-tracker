@@ -1533,6 +1533,26 @@ def _render_audit_search_panel() -> None:
         from auth.authz import is_admin
         viewer_is_admin = is_admin()
 
+        # ── Admin: on-demand tamper-evident hash-chain integrity check.
+        # Run behind a button so the full-table walk is not paid on every
+        # rerun. Detects in-place edits / mid-chain deletes / reorders; tail
+        # truncation needs an out-of-band anchored head (see verify_chain).
+        if viewer_is_admin:
+            if st.button("Verify audit-chain integrity",
+                         key="audit_verify_chain"):
+                from engine.audit_search import verify_chain
+                _vc = verify_chain()
+                if _vc.ok:
+                    st.success(
+                        f"Audit chain verified — {_vc.n_chained} chained "
+                        f"rows intact."
+                    )
+                else:
+                    st.error(
+                        f"Audit chain integrity FAILED at row "
+                        f"{_vc.first_break_rowid}: {_vc.first_break_reason}"
+                    )
+
         # ── Row 1: user_id | action | action_prefix ──────────────────────
         # ``user_id_input`` defaults to empty so the "All users" checkbox
         # below can fill in the current user's id when toggled OFF.

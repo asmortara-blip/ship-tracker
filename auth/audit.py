@@ -27,11 +27,21 @@ The hooks themselves live in the modules they audit (so the call sits
 right next to the action being recorded). This file only owns the
 schema mapping, the dataclass, and the read/write/prune helpers.
 
+Tamper-evidence (schema v31)
+----------------------------
+Each row is hash-chained to its predecessor:
+``row_hash = SHA-256(prev_hash || canonical(row))``. An in-place edit, delete,
+reorder, or insertion of an audit row breaks the chain and is detectable via
+:func:`engine.audit_search.verify_chain`. This is tamper-EVIDENT, not tamper-
+PROOF: an attacker with full DB write access can rewrite the whole chain
+forward. True tamper-evidence therefore requires periodically exporting the
+chain head (:func:`chain_head`) OUT-OF-BAND, so a wholesale rewrite is caught
+by the mismatch against the last externally-anchored head. Sanctioned
+maintenance that mutates rows (prune/redact) breaks the chain by design;
+:func:`engine.audit_search.reseal_chain` re-seals it as an audited admin op.
+
 What this module does NOT do
 ----------------------------
-* No "tamper-proof" cryptographic chaining of rows — this is operational
-  logging, not a blockchain. If an attacker has DB write access, every
-  guarantee is already lost.
 * No automatic redaction of sensitive payload fields. Callers are
   responsible for not stuffing passwords or other secrets into the
   ``detail`` dict.
@@ -79,6 +89,40 @@ def _now_iso() -> str:
 
 def _new_id() -> str:
     return str(uuid.uuid4())
+
+
+def _compute_row_hash(
+    prev_hash: str,
+    event_id: str,
+    created_at: str,
+    user_id: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    detail_str: str,
+) -> str:
+    """SHA-256 over ``prev_hash`` and the row's immutable fields.
+
+    The single source of truth for the chain hash — both the writer
+    (:func:`record_audit`) and the verifier (``engine.audit_search``) MUST use
+    this exact function so a recomputation matches the stored value.
+
+    Each field is LENGTH-PREFIXED (``<byte-len>:<value>``) before joining, a
+    canonical form in which a caller-controlled field that contains the
+    separator cannot shift field boundaries and collide two distinct rows to
+    the same hash. (Deliberately NOT json.dumps — the hash must stay
+    computable even when a payload that broke ``json.dumps`` was already
+    coerced to ``"{}"`` upstream.)
+    """
+    fields = [
+        prev_hash or "", event_id or "", created_at or "", user_id or "",
+        action or "", entity_type or "", entity_id or "", detail_str or "",
+    ]
+    parts = []
+    for f in fields:
+        b = f.encode("utf-8")
+        parts.append(str(len(b)).encode("ascii") + b":" + b)
+    return hashlib.sha256(b"|".join(parts)).hexdigest()
 
 
 def _row_to_event(row: sqlite3.Row) -> AuditEvent:
@@ -182,24 +226,47 @@ def record_audit(
         from state.db import get_connection
 
         conn = get_connection()
-        with conn:
+        # Hash-chain (v31): read the current head and link the new row to it,
+        # ATOMICALLY. Connections are autocommit (isolation_level=None), so a
+        # bare ``with conn`` would NOT serialize the head-read against the
+        # insert — two writers (app vs scheduler) could read the same head and
+        # fork the chain. BEGIN IMMEDIATE takes the WAL write lock up front so
+        # the read+insert is serialized across threads AND processes. If the
+        # caller already holds a transaction we join it (the audit row then
+        # commits atomically with the action being audited).
+        own_txn = not conn.in_transaction
+        if own_txn:
+            conn.execute("BEGIN IMMEDIATE")
+        try:
+            head = conn.execute(
+                "SELECT row_hash FROM audit_events ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = (head["row_hash"] or "") if head is not None else ""
+            row_hash = _compute_row_hash(
+                prev_hash, event_id, created_at, uid, action,
+                entity_type or "", entity_id or "", detail_str,
+            )
             conn.execute(
                 """
                 INSERT INTO audit_events
                   (event_id, created_at, user_id, action, entity_type,
-                   entity_id, detail_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                   entity_id, detail_json, prev_hash, row_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    event_id,
-                    created_at,
-                    uid,
-                    action,
-                    entity_type or "",
-                    entity_id or "",
-                    detail_str,
+                    event_id, created_at, uid, action, entity_type or "",
+                    entity_id or "", detail_str, prev_hash, row_hash,
                 ),
             )
+            if own_txn:
+                conn.execute("COMMIT")
+        except Exception:
+            if own_txn:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:  # noqa: BLE001
+                    pass
+            raise  # to the outer try/except — record_audit still never raises
     except Exception as exc:  # noqa: BLE001 — generic catch by contract
         # Best-effort: every failure path swallows. We log at DEBUG (not
         # WARNING) so a flaky DB does not flood the operator's log with
@@ -329,6 +396,14 @@ def prune_old_audit_events(retention_days: int = 365) -> int:
 
     Returns:
         The number of rows deleted, or ``0`` on any error.
+
+    Chain note (v31): pruning deletes by ``created_at``, which is normally
+    monotonic with insertion order (``rowid``), so a prune removes a clean
+    rowid-PREFIX and :func:`engine.audit_search.verify_chain` stays ``ok``
+    (it does not check the first surviving row's ``prev_hash``). If clock skew
+    ever made ``created_at`` non-monotonic, a prune could leave a hole that
+    verify_chain reports as a break — re-establish a clean chain with
+    :func:`engine.audit_search.reseal_chain` (an audited admin op).
     """
     try:
         if not isinstance(retention_days, int) or retention_days <= 0:
@@ -357,6 +432,28 @@ def prune_old_audit_events(retention_days: int = 365) -> int:
         return 0
 
 
+def chain_head() -> Optional[dict]:
+    """Current audit-chain head — ``{rowid, row_hash}`` of the last row, or None.
+
+    EXPORT THIS OUT-OF-BAND periodically (e.g. into a signed digest / external
+    store) to make the chain truly tamper-evident: an attacker who rewrites the
+    whole in-DB chain forward produces a different head than the one already
+    anchored elsewhere. Never raises.
+    """
+    try:
+        from state.db import get_connection
+        row = get_connection().execute(
+            "SELECT rowid AS rid, row_hash FROM audit_events "
+            "ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return {"rowid": int(row["rid"]), "row_hash": row["row_hash"] or ""}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"auth.audit.chain_head: read failed: {exc}")
+        return None
+
+
 # Local alias so the import lives next to its single use site — keeps
 # the public surface clean and avoids a top-level import for a one-off.
 from datetime import timedelta as _timedelta  # noqa: E402
@@ -368,4 +465,5 @@ __all__ = [
     "record_login_failure",
     "query_audit",
     "prune_old_audit_events",
+    "chain_head",
 ]

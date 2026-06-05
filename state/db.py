@@ -287,7 +287,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 30
+SCHEMA_VERSION: int = 31
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -329,6 +329,11 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Wait (up to 5s) for the write lock instead of failing instantly, so an
+    # explicit BEGIN IMMEDIATE under contention (e.g. the audit hash-chain
+    # head-read+insert, app vs scheduler) blocks rather than raising
+    # "database is locked".
+    conn.execute("PRAGMA busy_timeout=5000")
     global _schema_ready
     with _conn_lock:
         _all_conns.append(conn)
@@ -1524,6 +1529,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     except Exception as exc:
         logger.warning(f"state.db: v30 column add skipped: {exc}")
 
+    # v31 column add — idempotent ALTER-in-try/except (same as v27/v28/v30).
+    # Adds ``audit_events.prev_hash`` + ``audit_events.row_hash`` for the
+    # tamper-evident hash-chain; defaults '' grandfather pre-v31 rows as
+    # unchained. Runs unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v31
+        _migrate_to_v31(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v31 column add skipped: {exc}")
+
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
     row = cur.fetchone()
@@ -1906,6 +1921,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v30(conn)
         except Exception as exc:
             logger.warning(f"state.db: v30 migration skipped: {exc}")
+
+    # Migration 30 → 31: add audit_events.prev_hash + row_hash (audit
+    # hash-chain). Idempotent ALTER-in-try/except — the helper is already
+    # invoked unconditionally above; this keeps the version ladder explicit.
+    if current < 31:
+        try:
+            from state.migrations import _migrate_to_v31
+            _migrate_to_v31(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v31 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

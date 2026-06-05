@@ -1269,3 +1269,32 @@ def _migrate_to_v30(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v30 ALTER TABLE failed: {exc}"
         )
+
+
+# ─── Schema v30 → v31 ─────────────────────────────────────────────────────
+
+def _migrate_to_v31(conn: sqlite3.Connection) -> None:
+    """Add ``audit_events.prev_hash`` + ``row_hash`` for the audit hash-chain.
+
+    Each new audit row commits to all prior rows via
+    ``row_hash = SHA-256(prev_hash || canonical(row))`` so an in-place edit,
+    deletion, reorder, or insertion of an audit row breaks the chain and is
+    detectable by ``engine.audit_search.verify_chain``. Both columns default
+    to ``''`` so pre-v31 rows are grandfathered as ``unchained`` (the chain
+    starts at the first v31 row). Same idempotent ALTER pattern as
+    ``_migrate_to_v27`` / ``_migrate_to_v28`` / ``_migrate_to_v30``: each ADD
+    is independent and swallows the duplicate-column error so the migration is
+    safe to re-run on every open.
+    """
+    for col in ("prev_hash", "row_hash"):
+        try:
+            conn.execute(
+                f"ALTER TABLE audit_events ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v31 ALTER TABLE ({col}) failed: {exc}"
+            )
