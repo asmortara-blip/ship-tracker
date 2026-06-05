@@ -450,6 +450,42 @@ _BRIEFING_TLDR_DIR: Path = (
 
 
 @_track_run
+def run_signal_ledger_freeze_job(data_bundle: dict) -> dict:
+    """Freeze today's EquityIdeas into the point-in-time signal ledger (R004).
+
+    Rebuilds the idea set from the same daily bundle the briefing uses
+    (compute_shipping_stress -> build_exposure_matrix -> score_equity_ideas) and
+    freezes each idea AS ISSUED via ``state.signal_ledger.freeze_ideas``.
+    Idempotent per (ticker, day, direction) — a re-run inserts nothing. Never
+    raises: a failure here must not touch the briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.exposure_matrix import build_exposure_matrix
+        from processing.disruption_cascade import score_equity_ideas
+        from state.signal_ledger import freeze_ideas
+
+        stock_data = bundle.get("stock_data", {})
+        stress = compute_shipping_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("port_results", []), bundle.get("route_results", []),
+        )
+        exposure = build_exposure_matrix(stock_data)
+        ideas = score_equity_ideas(
+            stress, exposure, stock_data, bundle.get("insights", []),
+        )
+        frozen = freeze_ideas(ideas, stock_data=stock_data)
+        logger.info(
+            f"run_signal_ledger_freeze_job: froze {frozen} new idea(s) "
+            f"of {len(ideas or [])}"
+        )
+        return {"frozen": int(frozen), "ideas": len(ideas or [])}
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"run_signal_ledger_freeze_job failed: {exc}")
+        return {"frozen": 0, "ideas": 0, "error": str(exc)}
+
+
 def run_briefing_tldr_job(data_bundle: dict) -> dict:
     """Generate the day's one-paragraph briefing TLDR once and persist
     ready-to-send artifacts (gated by should_send). Never raises.
@@ -1974,6 +2010,11 @@ def main(argv: Optional[list] = None) -> int:
         # ready-to-send artifacts, reusing the freshly-loaded bundle. A TLDR
         # failure must never touch the report.
         _run_always("briefing TLDR", lambda: run_briefing_tldr_job(bundle))
+        # Freeze today's EquityIdeas into the point-in-time signal ledger
+        # (R004) — reuse the freshly-loaded bundle; idempotent per day so it's
+        # safe to run on every daily-gated briefing pass.
+        _run_always("signal ledger freeze",
+                    lambda: run_signal_ledger_freeze_job(bundle))
     else:
         print(json.dumps(
             {"briefing": "skipped", "reason": "ran within the daily interval"}
