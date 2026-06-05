@@ -627,6 +627,51 @@ def _run_company_supply_risk() -> BacktestResult:
     )
 
 
+def _run_var_coverage() -> BacktestResult:
+    """VaR coverage (Kupiec POF) on REAL cached returns — the first risk number
+    checked against realized P&L. ``healthy`` only goes False on a genuine
+    miscalibration (the model is statistically REJECTED on real data); an empty
+    cache reports 'not evaluated' and stays vacuously healthy."""
+    from processing.var_coverage_backtest import run_var_coverage_backtest
+    r = run_var_coverage_backtest()
+
+    if r.basis != "real":
+        return BacktestResult(
+            name="VaR Coverage (Kupiec POF)",
+            headline_label="status",
+            headline_value="not evaluated (no cached price history)",
+            healthy=True,                       # vacuous — nothing to reject
+            summary=r.summary,
+            raw_fields={"basis": r.basis, "n_observations": r.n_observations},
+        )
+
+    return BacktestResult(
+        name="VaR Coverage (Kupiec POF)",
+        headline_label=f"{r.confidence*100:.0f}% VaR breach rate",
+        headline_value=(
+            f"{r.breach_rate*100:.1f}% vs {r.nominal_rate*100:.1f}% nominal "
+            f"({'calibrated' if r.well_calibrated else 'REJECTED'})"
+        ),
+        healthy=bool(r.well_calibrated),
+        summary=r.summary,
+        raw_fields={
+            "n_observations": r.n_observations,
+            "n_breaches":     r.n_breaches,
+            "breach_rate":    round(r.breach_rate, 4),
+            "nominal_rate":   round(r.nominal_rate, 4),
+            "kupiec_lr":      round(r.kupiec_lr, 4),
+            "kupiec_pvalue":  round(r.kupiec_pvalue, 4),
+            "rejected":       bool(r.rejected),
+            "method":         r.method,
+            "window":         r.window,
+        },
+        scorecard_rows=[
+            {"label": t, "metric_name": "in book", "value": "yes"}
+            for t in r.tickers
+        ],
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -647,6 +692,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_capacity_demand_persistence,
     _run_spillover_graph_recall,
     _run_graph_centrality_dominance,
+    _run_var_coverage,
 ]
 
 

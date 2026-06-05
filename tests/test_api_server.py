@@ -184,13 +184,15 @@ def test_backtests_health_returns_200_with_all_validators(server):
 
 
 def test_backtests_health_returns_200_when_all_healthy(server):
-    """On the bundled synth all 18 validators read healthy → 200."""
+    """All validators read healthy → 200. The 18 synth validators are tuned to
+    pass; the 19th (VaR Coverage) is real-data — healthy on a well-calibrated
+    or absent cache, so the all-healthy/200 contract holds in CI + dev."""
     r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["healthy_count"] == body["total"]
-    assert body["total"] == 18
+    assert body["total"] == 19
 
 
 def test_backtests_health_does_not_require_authorization_header(server):

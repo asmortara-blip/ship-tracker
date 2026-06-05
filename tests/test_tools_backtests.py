@@ -31,7 +31,7 @@ def test_every_adapter_returns_a_backtestresult() -> None:
     a BacktestResult with the required string fields populated."""
     results = run_all_backtests()
     assert len(results) == len(ADAPTERS)
-    assert len(results) == 18
+    assert len(results) == 19
     for r in results:
         assert isinstance(r, BacktestResult)
         assert isinstance(r.name, str) and r.name
@@ -57,7 +57,12 @@ def test_all_validators_healthy_on_default_synth() -> None:
     If a future refactor moves the noise floor without retuning the
     synth, this catches it."""
     results = run_all_backtests()
-    unhealthy = [r.name for r in results if not r.healthy]
+    # "VaR Coverage" is the one REAL-data validator — its health depends on
+    # the live price cache, not the bundled synth, so it's out of scope for
+    # this synth-tuning guard (it has its own tests in
+    # test_var_coverage_backtest.py).
+    unhealthy = [r.name for r in results
+                 if not r.healthy and "VaR Coverage" not in r.name]
     assert not unhealthy, (
         f"{len(unhealthy)} validator(s) unhealthy on default synth: {unhealthy}"
     )
@@ -116,7 +121,7 @@ def test_cli_format_json_emits_valid_json(capsys) -> None:
     assert code == 0
     captured = capsys.readouterr().out
     payload = json.loads(captured)
-    assert payload["total"] == 18
+    assert payload["total"] == 19
 
 
 def test_cli_format_markdown_emits_table_header(capsys) -> None:
