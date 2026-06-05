@@ -116,3 +116,45 @@ def test_never_raises_on_bad_inputs() -> None:
     from processing.stress_var import monte_carlo_book_es
     r = monte_carlo_book_es({"ZIM": 1.0}, None, None, n_sims=500)
     assert r.n_names == 1 and r.basis == "diagonal-vol"
+
+
+# ── per-driver tail attribution (R065) ──────────────────────────────────────
+
+def _idea_d(ticker, direction, driver, conviction=0.8):
+    return SimpleNamespace(ticker=ticker, direction=direction,
+                           conviction_score=conviction,
+                           dominant_driver_key=driver)
+
+
+def test_idea_driver_map_extracts_keys() -> None:
+    from processing.stress_var import idea_driver_map
+    m = idea_driver_map([_idea_d("ZIM", "Bullish", "chokepoint"),
+                         _idea_d("SBLK", "Bearish", "rate"),
+                         SimpleNamespace(ticker="", direction="Bullish")])
+    assert m == {"ZIM": "chokepoint", "SBLK": "rate"}
+
+
+def test_component_es_by_driver_buckets_and_defaults() -> None:
+    from processing.stress_var import component_es_by_driver
+    comp = {"ZIM": -2.0, "MATX": -1.0, "SBLK": -0.5, "DAC": -0.25}
+    td = {"ZIM": "chokepoint", "MATX": "chokepoint", "SBLK": "rate"}  # DAC absent
+    by = component_es_by_driver(comp, td)
+    assert by["chokepoint"] == pytest.approx(-3.0)   # ZIM + MATX
+    assert by["rate"] == pytest.approx(-0.5)
+    assert by["market"] == pytest.approx(-0.25)      # DAC -> default bucket
+
+
+def test_driver_buckets_sum_to_es_exactly() -> None:
+    # The R065 payoff must preserve the R009 invariant: driver buckets are a
+    # partition of the per-name components, so they sum to ES exactly.
+    from processing.stress_var import (
+        component_es_by_driver, idea_driver_map, monte_carlo_book_es,
+    )
+    weights = {"ZIM": 0.4, "MATX": 0.3, "SBLK": 0.2, "DAC": 0.1}
+    ideas = [_idea_d("ZIM", "Bearish", "chokepoint", 0.9),
+             _idea_d("MATX", "Bearish", "chokepoint", 0.6),
+             _idea_d("SBLK", "Bullish", "rate", 0.5)]   # DAC unshocked -> market
+    r = monte_carlo_book_es(weights, ideas, {}, n_sims=20_000, seed=4)
+    by = component_es_by_driver(r.component_es_pct, idea_driver_map(ideas))
+    assert sum(by.values()) == pytest.approx(r.es_pct, abs=1e-9)
+    assert "chokepoint" in by and "market" in by

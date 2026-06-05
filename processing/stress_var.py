@@ -223,3 +223,38 @@ def monte_carlo_book_es(
         component_es_pct=component_es_pct,
         shocks_pct={t: float(shocks.get(t, 0.0)) for t in tickers},
     )
+
+
+# ── Per-driver tail attribution (rec R065) ──────────────────────────────────
+# A single ES number hides that several names share ONE bet (e.g. three liners
+# all long the same Suez chokepoint). Re-bucketing the exact per-name component
+# ES by each name's dominant cascade driver tells the PM which DRIVER actually
+# owns the tail. Because it only re-groups the per-name components (a partition
+# of the book), the driver buckets still sum to ES exactly.
+
+def idea_driver_map(ideas) -> dict:
+    """``{ticker -> dominant_driver_key}`` from scored ideas (blank if absent)."""
+    out: dict[str, str] = {}
+    for idea in ideas or []:
+        ticker = str(getattr(idea, "ticker", "") or "")
+        if not ticker:
+            continue
+        out[ticker] = str(getattr(idea, "dominant_driver_key", "") or "")
+    return out
+
+
+def component_es_by_driver(
+    component_es_pct: dict, ticker_driver: dict, *, default: str = "market"
+) -> dict:
+    """Re-bucket per-name component ES by cascade driver. Sums to ES exactly.
+
+    Names with no driver (held but no active cascade idea — pure market risk)
+    roll into ``default``. The result is a partition of ``component_es_pct``, so
+    ``sum(result.values()) == sum(component_es_pct.values())`` always.
+    """
+    td = ticker_driver or {}
+    out: dict[str, float] = {}
+    for ticker, contrib in (component_es_pct or {}).items():
+        driver = (str(td.get(ticker, "") or "").strip() or default)
+        out[driver] = out.get(driver, 0.0) + float(contrib)
+    return out

@@ -441,6 +441,48 @@ def _render_stress_var_es(
         "Illustrative severity scalar, not a price forecast."
     )
 
+    # Per-driver tail attribution (R065) — re-bucket the per-name component ES
+    # by each name's dominant cascade driver, so the PM sees that several names
+    # may share ONE bet (e.g. a single chokepoint). Sums to ES exactly.
+    try:
+        from processing.stress_var import (
+            component_es_by_driver, idea_driver_map,
+        )
+        by_driver = component_es_by_driver(
+            r.component_es_pct, idea_driver_map(ideas)
+        )
+    except Exception:
+        by_driver = {}
+    if len(by_driver) > 1 or (by_driver and "market" not in by_driver):
+        _DRIVER_LABEL = {
+            "chokepoint": "Chokepoint", "congestion": "Port congestion",
+            "weather": "Weather", "rate": "Freight-rate", "fuel": "Fuel cost",
+            "vulnerability": "Structural", "market": "Market (no idea)",
+        }
+        dsorted = sorted(by_driver.items(), key=lambda kv: kv[1])  # worst first
+        dfig = go.Figure(go.Bar(
+            x=[v * 100 for _, v in dsorted],
+            y=[_DRIVER_LABEL.get(k, k.title()) for k, _ in dsorted],
+            orientation="h",
+            marker_color=[C_LOW if v < 0 else C_HIGH for _, v in dsorted],
+            text=[f"{v*100:+.2f}%" for _, v in dsorted],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Tail share: %{x:+.2f}%<extra></extra>",
+        ))
+        apply_dark_layout(
+            dfig, title="Component ES by cascade driver — which bet owns the tail",
+            height=max(220, 32 * len(dsorted) + 90),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(title=dict(text="ES contribution %",
+                                  font=dict(color=C_TEXT2, size=11))),
+        )
+        st.plotly_chart(dfig, use_container_width=True,
+                        config={"displayModeBar": False})
+        st.caption(
+            "Names rolled up by their dominant cascade driver — a single "
+            "chokepoint bet shared across names shows as one bar."
+        )
+
 
 # ─── Section 3: Regime detection card ───────────────────────────────────────
 

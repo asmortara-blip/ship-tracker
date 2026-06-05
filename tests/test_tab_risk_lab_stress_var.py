@@ -40,9 +40,10 @@ def _emitted(stub) -> str:
     return "\n".join(out)
 
 
-def _idea(ticker, direction, conviction=0.8):
+def _idea(ticker, direction, conviction=0.8, driver="chokepoint"):
     return SimpleNamespace(
-        ticker=ticker, direction=direction, conviction_score=conviction)
+        ticker=ticker, direction=direction, conviction_score=conviction,
+        dominant_driver_key=driver)
 
 
 def _stock(tickers, n=200, seed=2):
@@ -70,6 +71,18 @@ def test_section_renders_es_and_component_bar(st_stub) -> None:
         isinstance(a, go.Figure) for c in st_stub.call_args_list for a in c.args
     )
     assert drew_fig
+
+
+def test_section_renders_driver_attribution_bar(st_stub) -> None:
+    # Two names sharing one chokepoint driver -> the per-driver bar appears.
+    from ui.tab_risk_lab import _render_stress_var_es
+    weights = {"ZIM": 0.4, "MATX": 0.3, "DAC": 0.3}
+    ideas = [_idea("ZIM", "Bearish", 0.9, "chokepoint"),
+             _idea("MATX", "Bearish", 0.7, "chokepoint")]
+    _render_stress_var_es(weights, ideas, _stock(["ZIM", "MATX", "DAC"]),
+                          1_000_000.0, 0.95)
+    text = _emitted(st_stub)
+    assert "by cascade driver" in text or "dominant cascade driver" in text
 
 
 def test_section_empty_book_is_quiet(st_stub) -> None:
