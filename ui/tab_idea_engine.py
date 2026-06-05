@@ -18,6 +18,7 @@ Five sections:
 from __future__ import annotations
 
 import datetime
+import html
 from typing import Any
 
 import numpy as np
@@ -36,6 +37,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     insight_card_html,
@@ -431,6 +433,7 @@ def _render_track_record(stock_data=None) -> None:
         from state.signal_ledger import (
             load_ledger,
             oos_scorecard,
+            tier_drawdown,
             track_record_summary,
         )
 
@@ -466,6 +469,26 @@ def _render_track_record(stock_data=None) -> None:
                 f"{b['mean_signed_return_pct']:+.1f}%"
                 for lab, b in sorted(by.items())
             ))
+        # Drawdown kill-switch — surface any conviction tier whose forward
+        # track record has cratered (mirrors the SIGNAL_DRAWDOWN alert the
+        # scheduler fires; honest read, no look-ahead).
+        tiers = tier_drawdown(stock_data)
+        stand_down = sorted(
+            t for t, info in tiers.items() if info.get("status") == "STAND_DOWN"
+        )
+        if stand_down:
+            parts = "; ".join(
+                f"<b>{html.escape(t)}</b> "
+                f"({tiers[t]['current_drawdown_pct']:.0f}% drawdown, "
+                f"{tiers[t]['hit_rate'] * 100:.0f}% hit over {tiers[t]['n']})"
+                for t in stand_down
+            )
+            alert_banner(
+                "Drawdown kill-switch — STAND DOWN on: " + parts
+                + ". Demote or pause new ideas at this conviction until the "
+                "track record recovers.",
+                level="critical",
+            )
         sc = oos_scorecard(stock_data)
         if sc.get("sufficient"):
             st.caption(f"Significance — {sc['verdict']}")
