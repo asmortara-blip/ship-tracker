@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from auth.ids import opaque_id
-from state.db import get_connection
+from state.db import get_connection, immediate_transaction
 
 # The columns that make up a position as the UI/analytics layer sees it.
 POSITION_FIELDS = ("ticker", "sector", "shares", "avg_cost", "beta")
@@ -79,9 +79,13 @@ def replace_positions(user_id: str, positions: list[dict]) -> int:
     """
     uid = user_id or ""
     now = _now()
-    new_version = current_version(uid) + 1
     conn = get_connection()
-    with conn:  # single transaction: close-then-insert is all-or-nothing
+    with immediate_transaction(conn):
+        # The version read + close + insert must be ONE atomic unit: otherwise
+        # two concurrent callers can both read the same MAX(version), both close
+        # each other's rows, and both insert at the same version+1 — corrupting
+        # the point-in-time ledger.
+        new_version = current_version(uid) + 1
         conn.execute(
             "UPDATE positions SET closed_at = ?, updated_at = ? "
             "WHERE user_id = ? AND closed_at IS NULL",

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -343,6 +344,42 @@ def get_connection() -> sqlite3.Connection:
     _tls._conn = conn
     logger.debug(f"state.db: opened thread-local SQLite at {DB_PATH}")
     return conn
+
+
+@contextmanager
+def immediate_transaction(conn: sqlite3.Connection):
+    """Atomic multi-statement write under autocommit.
+
+    Connections open with ``isolation_level=None`` (autocommit), where Python's
+    plain ``with conn:`` is a NO-OP for transactions — it never issues BEGIN, so
+    a block that runs MORE THAN ONE write (or a read-then-dependent-write like
+    SELECT-MAX-then-INSERT) is NOT atomic and can tear or interleave under
+    concurrency. Use this instead:
+
+        with immediate_transaction(conn):
+            conn.execute(...)   # close old rows
+            conn.execute(...)   # insert new rows
+
+    It runs ``BEGIN IMMEDIATE`` (taking the WAL write lock up front, so the
+    whole block is serialized across threads AND processes), ``COMMIT`` on
+    success, and ``ROLLBACK`` on any exception (then re-raises). If a
+    transaction is already open it joins it (no nested BEGIN), so callers
+    compose safely.
+    """
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        if own:
+            conn.execute("COMMIT")
+    except Exception:
+        if own:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001 — rollback best-effort
+                pass
+        raise
 
 
 def reset_for_tests() -> None:

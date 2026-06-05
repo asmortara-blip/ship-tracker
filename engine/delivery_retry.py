@@ -228,10 +228,10 @@ def enqueue_for_retry(
     error_message = (error_message or "")[:500]
 
     try:
-        from state.db import get_connection
+        from state.db import get_connection, immediate_transaction
 
         conn = get_connection()
-        with conn:
+        with immediate_transaction(conn):
             existing = conn.execute(
                 "SELECT * FROM delivery_retry_queue "
                 "WHERE alert_id = ? AND channel_id = ? "

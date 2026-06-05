@@ -10,6 +10,11 @@ from typing import Optional
 
 from loguru import logger
 
+# Atomic multi-statement writes under autocommit (save_alerts dedup loop,
+# save_rules replace, bulk_ack classify-then-update). A bare ``with conn:`` is
+# a no-op for transactions here — see state.db.immediate_transaction.
+from state.db import immediate_transaction
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dedup window
@@ -1081,7 +1086,7 @@ def save_alerts(
     ).isoformat()
 
     try:
-        with conn:
+        with immediate_transaction(conn):
             # Process alerts one at a time — the dedup lookup needs to
             # see the side-effects of earlier alerts in the same call
             # (so two identical-key alerts in one save_alerts list
@@ -1555,7 +1560,7 @@ def bulk_acknowledge_alerts(
         # whole function is by-contract non-raising.
         from state.db import get_connection
         conn = get_connection()
-        with conn:
+        with immediate_transaction(conn):
             # First classify each input id under the user's scope:
             #   already-acked → goes to skipped_already_acked
             #   unack         → eligible for the UPDATE
@@ -1894,7 +1899,7 @@ def save_rules(rules: list[dict], *, user_id: Optional[str] = None) -> None:
     uid = _resolve_user_id(user_id)
     conn = get_connection()
     try:
-        with conn:
+        with immediate_transaction(conn):
             if uid:
                 # Per-user replace: drop rows the user "owns" (their own
                 # + legacy) and rewrite them under this user. WHERE 1=1
