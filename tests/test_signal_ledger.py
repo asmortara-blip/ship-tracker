@@ -121,3 +121,16 @@ def test_oos_scorecard_noise_not_significant() -> None:
     stock = _stock({f"T{i}": 100.0 * (1.0 + (0.05 if i % 2 else -0.05)) for i in range(8)})
     sc = oos_scorecard(stock, min_n=5)
     assert sc["sufficient"] and not sc["is_significant"]
+
+
+def test_freeze_skips_unpriced_ideas() -> None:
+    # An idea with no real issue price (price=0, no stock_data) can never be
+    # marked forward, so it must NOT enter the ledger (keeps illustrative
+    # cascade-on-sparse-data ideas out of the track record).
+    from state.signal_ledger import freeze_ideas, load_ledger
+    n = freeze_ideas([_Idea("ZIM", "Bullish", price=0.0)], issue_date="2026-06-01")
+    assert n == 0 and load_ledger() == []
+    # but with a stock_data fallback price it IS frozen
+    n2 = freeze_ideas([_Idea("ZIM", "Bullish", price=0.0)],
+                      issue_date="2026-06-02", stock_data=_stock({"ZIM": 14.2}))
+    assert n2 == 1 and load_ledger()[0]["issue_close"] == pytest.approx(14.2)

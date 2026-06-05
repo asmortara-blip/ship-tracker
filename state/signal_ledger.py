@@ -70,6 +70,12 @@ def freeze_ideas(ideas, *, issue_date: Optional[str] = None, stock_data=None) ->
             if close <= 0:
                 alt = _latest_close(stock_data, ticker)
                 close = float(alt) if alt else 0.0
+            if close <= 0:
+                # No real issue price -> the idea can never be marked forward.
+                # Skip rather than record an un-scoreable row, so the ledger
+                # holds only real, scoreable signals (keeps the cascade's
+                # illustrative-on-sparse-data ideas out of the track record).
+                continue
             cur = conn.execute(
                 "INSERT OR IGNORE INTO signal_ledger "
                 "(ledger_id, ticker, direction, conviction_score, "
@@ -81,7 +87,7 @@ def freeze_ideas(ideas, *, issue_date: Optional[str] = None, stock_data=None) ->
                     str(getattr(idea, "conviction_label", "") or ""),
                     str(getattr(idea, "conviction_weight_set", "") or ""),
                     issue_date,
-                    (close if close > 0 else None),
+                    close,
                     now,
                 ),
             )
