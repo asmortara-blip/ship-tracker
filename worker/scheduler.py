@@ -486,6 +486,39 @@ def run_signal_ledger_freeze_job(data_bundle: dict) -> dict:
         return {"frozen": 0, "ideas": 0, "error": str(exc)}
 
 
+def run_signal_drawdown_job(data_bundle: dict) -> dict:
+    """Mark the signal ledger forward and fire the per-tier drawdown
+    kill-switch (B2). Rides on the same daily bundle as the freeze job, so it
+    runs right after the freeze with TODAY's closes already in hand.
+
+    Thin wrapper around
+    ``engine.signal_drawdown_alerts.check_and_alert_drawdown`` that adds
+    logging and shields the caller from any exception. The underlying alerter
+    already cooldown-gates each tier (24h) so a chronically-underwater tier
+    stays quiet until tomorrow regardless of cadence.
+
+    Returns the count dict shaped like the other alerters: ``{"checked": N,
+    "stand_down": N, "alerted": N, "skipped_cooldown": N}`` (all zeros on a
+    top-level exception). NEVER raises — a check failure must never block the
+    briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from engine.signal_drawdown_alerts import check_and_alert_drawdown
+
+        counts = check_and_alert_drawdown(bundle.get("stock_data", {}))
+        logger.info(
+            f"run_signal_drawdown_job: checked={counts.get('checked', 0)} "
+            f"stand_down={counts.get('stand_down', 0)} "
+            f"alerted={counts.get('alerted', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)}"
+        )
+        return counts
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"run_signal_drawdown_job: failed: {exc}")
+        return {"checked": 0, "stand_down": 0, "alerted": 0, "skipped_cooldown": 0}
+
+
 def run_briefing_tldr_job(data_bundle: dict) -> dict:
     """Generate the day's one-paragraph briefing TLDR once and persist
     ready-to-send artifacts (gated by should_send). Never raises.
@@ -2015,6 +2048,12 @@ def main(argv: Optional[list] = None) -> int:
         # safe to run on every daily-gated briefing pass.
         _run_always("signal ledger freeze",
                     lambda: run_signal_ledger_freeze_job(bundle))
+        # Per-tier drawdown kill-switch (B2) — mark the freshly-frozen ledger
+        # forward on TODAY's closes and fire a SIGNAL_DRAWDOWN alert for any
+        # conviction tier whose track record cratered. Runs right after the
+        # freeze; the alerter self-gates each tier with a 24h cooldown.
+        _run_always("signal drawdown kill-switch",
+                    lambda: run_signal_drawdown_job(bundle))
     else:
         print(json.dumps(
             {"briefing": "skipped", "reason": "ran within the daily interval"}
