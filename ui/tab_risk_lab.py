@@ -100,6 +100,32 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
+def _real_returns_panel(stock_data, tickers: list[str], *, min_obs: int = 60) -> pd.DataFrame:
+    """Daily log-returns from REAL cached closes for the requested tickers.
+
+    The VaR/CVaR/regime engine then runs on the book's actual covariance and
+    tails instead of a synthetic panel with a fixed 0.30 correlation. Returns
+    an EMPTY frame when fewer than 2 tickers have >= ``min_obs`` real returns,
+    so the caller falls back to the synthetic panel (labeled demo).
+    """
+    if not isinstance(stock_data, dict):
+        return pd.DataFrame()
+    from processing.book_pnl import _close_series
+
+    cols: dict[str, pd.Series] = {}
+    for t in tickers:
+        s = _close_series(stock_data, t)
+        if s is None or not isinstance(s.index, pd.DatetimeIndex):
+            continue
+        s = s.sort_index()
+        rets = np.log(s.where(s > 0)).diff().dropna()
+        if len(rets) >= min_obs:
+            cols[t] = rets
+    if len(cols) < 2:
+        return pd.DataFrame()
+    return pd.concat(cols, axis=1).dropna(how="any")
+
+
 # ─── Section 1: Portfolio VaR strip ─────────────────────────────────────────
 
 def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
@@ -403,7 +429,8 @@ def render(
                 subtitle=(
                     "Portfolio VaR/CVaR, scenario stress test against the "
                     "canonical catalog, and market-regime classification. "
-                    "Demo: synthetic returns panel."
+                    "Real cached returns where available; synthetic fallback "
+                    "when prices are dark (see footer)."
                 ),
                 badge_text="RISK",
                 badge_color=C_ACCENT,
@@ -427,8 +454,18 @@ def render(
 
             # Build a default equal-weight portfolio over the shipping universe.
             tickers = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
-            weights = {t: 1.0 / len(tickers) for t in tickers}
-            returns_df = _synth_returns_panel(tickers)
+            # Prefer REAL returns from cached closes (so VaR/CVaR/regime use the
+            # book's actual covariance + tails); fall back to the synthetic
+            # panel — labeled demo — only when prices are dark.
+            real_panel = _real_returns_panel(stock_data, tickers)
+            panel_is_real = not real_panel.empty
+            if panel_is_real:
+                returns_df = real_panel
+                avail = list(returns_df.columns)
+                weights = {t: 1.0 / len(avail) for t in avail}
+            else:
+                returns_df = _synth_returns_panel(tickers)
+                weights = {t: 1.0 / len(tickers) for t in tickers}
 
             if returns_df.empty:
                 st.info("Returns panel could not be built. Aborting Risk Lab.")
@@ -519,9 +556,13 @@ def render(
 
             st.markdown(
                 source_footer([
-                    DataSource.demo(
+                    DataSource.live(
+                        "Real per-ticker daily returns from cached yfinance "
+                        "closes. Scenario catalog from state/scenarios.py."
+                    ) if panel_is_real else DataSource.demo(
                         "Synthetic 2-year returns panel (per-ticker mean/vol via "
-                        "stable_hash). Scenario catalog from state/scenarios.py."
+                        "stable_hash) — prices unavailable. Scenario catalog "
+                        "from state/scenarios.py."
                     ),
                 ]),
                 unsafe_allow_html=True,
