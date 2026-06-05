@@ -1239,6 +1239,37 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
             unsafe_allow_html=True,
         )
 
+        # ── Book factor risk: R106 exposure vector + R107 factor-vs-specific
+        # split, computed on the SAME real fits + factor panel as the table
+        # below (so it inherits this lens's provenance badge). Equal-weights
+        # the fitted carriers as a representative book.
+        try:
+            from engine.carrier_factor_model import (
+                factor_covariance,
+                factor_risk_decomposition,
+                portfolio_factor_exposures,
+            )
+            _names = list(fits.keys())
+            _w = {n: 1.0 / len(_names) for n in _names}
+            _decomp = factor_risk_decomposition(_w, fits, factor_covariance(factors_df))
+            _expo = portfolio_factor_exposures(_w, fits)
+            if _decomp.total_vol > 0:
+                metric_card_row([
+                    {"label": "Book Vol (ann)", "value": f"{_decomp.total_vol * 100:.1f}%",
+                     "accent": C_ACCENT, "sublabel": f"equal-wt {_decomp.n_names} carriers"},
+                    {"label": "Factor Risk", "value": f"{_decomp.pct_factor * 100:.0f}%",
+                     "accent": C_MOD, "sublabel": "systematic"},
+                    {"label": "Specific Risk", "value": f"{_decomp.pct_specific * 100:.0f}%",
+                     "accent": C_TEXT2, "sublabel": "idiosyncratic"},
+                ], columns=3)
+                _top = sorted(_expo.exposures.items(), key=lambda kv: -abs(kv[1]))[:3]
+                st.caption(
+                    "Net factor tilt (Σ wᵢβᵢ): "
+                    + " · ".join(f"{f}: {v:+.2f}" for f, v in _top)
+                )
+        except Exception as _exc:  # noqa: BLE001
+            logger.debug(f"carrier factor-risk panel skipped: {_exc}")
+
         factor_cols = list(factors_df.columns)
         headers = ["Carrier", "α (bps)", "R²", "n"] + factor_cols
         rows: list[list[str]] = []

@@ -47,6 +47,9 @@ __all__ = [
     "BookFactorExposure",
     "fit_carrier_factors",
     "portfolio_factor_exposures",
+    "factor_covariance",
+    "factor_risk_decomposition",
+    "FactorRiskDecomposition",
     "residual_zscore",
     "residual_signal_backtest",
     "DEFAULT_CARRIERS",
@@ -636,4 +639,93 @@ def portfolio_factor_exposures(
         factors=tuple(factors),
         n_names=used,
         coverage=coverage,
+    )
+
+
+# ── Factor covariance + factor-vs-specific risk decomposition (rec R107) ─────
+
+
+def factor_covariance(factors_df: pd.DataFrame, *, periods_per_year: int = 52) -> pd.DataFrame:
+    """Annualized sample covariance of the factor regressors.
+
+    Index/columns are the factor names. Empty DataFrame when there is nothing
+    to estimate. ``periods_per_year`` annualizes (52 = weekly factors).
+    """
+    if factors_df is None or factors_df.empty or factors_df.shape[1] < 1:
+        return pd.DataFrame()
+    clean = factors_df.dropna()
+    if len(clean) < 2:
+        return pd.DataFrame()
+    return clean.cov() * float(periods_per_year)
+
+
+@dataclass(frozen=True)
+class FactorRiskDecomposition:
+    """Portfolio risk split into factor (systematic) vs specific (idiosyncratic).
+
+    ``total_var = w'BΣ_fB'w  (factor)  +  Σ w_i² σ_i²  (specific)``. Vols are
+    annualized. ``per_factor_var`` sums to the factor variance; it attributes
+    the systematic variance back to each named factor.
+    """
+    total_vol: float
+    factor_vol: float
+    specific_vol: float
+    pct_factor: float
+    pct_specific: float
+    per_factor_var: dict
+    n_names: int
+
+
+def factor_risk_decomposition(
+    weights: dict[str, float],
+    fits: dict[str, object],
+    factor_cov: pd.DataFrame,
+    *,
+    periods_per_year: int = 52,
+) -> FactorRiskDecomposition:
+    """Decompose book variance into factor vs specific risk (Barra-style).
+
+    ``factor_cov`` must already be annualized (see :func:`factor_covariance`);
+    each fit's per-period ``residual_std`` is annualized here. Names absent from
+    ``fits`` or factors absent from ``factor_cov`` contribute nothing.
+    """
+    empty = FactorRiskDecomposition(0.0, 0.0, 0.0, 0.0, 0.0, {}, 0)
+    if factor_cov is None or factor_cov.empty:
+        return empty
+    factors = [f for f in factor_cov.columns]
+    names = [n for n in (weights or {}) if n in (fits or {})]
+    if not names or not factors:
+        return empty
+
+    w = np.array([float(weights[n]) for n in names])
+    B = np.array([
+        [float(getattr(fits[n], "betas", {}).get(f, 0.0)) for f in factors]
+        for n in names
+    ])
+    sigma_f = factor_cov.loc[factors, factors].to_numpy(dtype=float)
+
+    bw = B.T @ w                              # net factor exposure vector
+    factor_var = float(bw @ sigma_f @ bw)
+
+    spec_var = 0.0
+    for i, n in enumerate(names):
+        sig = float(getattr(fits[n], "residual_std", 0.0) or 0.0)
+        spec_var += (w[i] ** 2) * (sig ** 2) * float(periods_per_year)
+
+    factor_var = max(factor_var, 0.0)
+    spec_var = max(spec_var, 0.0)
+    total_var = factor_var + spec_var
+
+    contrib = sigma_f @ bw
+    per_factor_var = {f: float(bw[j] * contrib[j]) for j, f in enumerate(factors)}
+
+    pct_factor = (factor_var / total_var) if total_var > 0 else 0.0
+    return FactorRiskDecomposition(
+        total_vol=math.sqrt(total_var),
+        factor_vol=math.sqrt(factor_var),
+        specific_vol=math.sqrt(spec_var),
+        pct_factor=pct_factor,
+        pct_specific=1.0 - pct_factor,
+        per_factor_var=per_factor_var,
+        n_names=len(names),
     )
