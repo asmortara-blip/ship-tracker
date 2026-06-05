@@ -772,7 +772,7 @@ def list_users() -> list[User]:
         conn = get_connection()
         rows = conn.execute(
             """
-            SELECT user_id, username, role, created_at, last_login_at
+            SELECT user_id, username, role, created_at, last_login_at, is_active
               FROM users
              ORDER BY created_at DESC
             """,
