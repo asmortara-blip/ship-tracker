@@ -324,6 +324,124 @@ def _render_stress_table(weights: dict, portfolio_value: float) -> None:
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
+def _build_cascade_ideas(
+    port_results, route_results, freight_data, macro_data, stock_data, insights,
+) -> list:
+    """Run the live disruption cascade -> scored EquityIdea list (defensive).
+
+    Same chain the Idea Engine + scheduler use
+    (compute_shipping_stress -> build_exposure_matrix -> score_equity_ideas).
+    Returns [] on any failure, in which case the Stress-VaR runs with NO
+    directional shock — a coherent ES on the book's real market covariance
+    alone (still honest, just no disruption tilt).
+    """
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.exposure_matrix import build_exposure_matrix
+        from processing.disruption_cascade import score_equity_ideas
+
+        stress_report = compute_shipping_stress(
+            freight_data or {}, macro_data or {},
+            port_results or [], route_results or [],
+        )
+        exposure = build_exposure_matrix(stock_data or {})
+        return score_equity_ideas(
+            stress_report, exposure, stock_data or {}, insights or [],
+        )
+    except Exception as exc:
+        logger.exception(f"risk_lab: cascade ideas build failed: {exc}")
+        return []
+
+
+def _render_stress_var_es(
+    weights: dict, ideas: list, stock_data, portfolio_value: float,
+    confidence: float, *, horizon_days: int = 5,
+) -> None:
+    """Coherent, cascade-grounded Stress-VaR / Expected-Shortfall (R009).
+
+    Unlike the parametric VaR strip (market noise only) and the catalog stress
+    table (hardcoded multipliers), this pushes the LIVE cascade's per-name
+    direction x conviction through the book's REAL return covariance via Monte
+    Carlo, and reports a coherent ES with an exact per-name tail decomposition.
+    """
+    from processing.stress_var import monte_carlo_book_es
+
+    section_header(
+        "Coherent Stress-VaR / Expected Shortfall",
+        subtitle=(
+            "The live disruption cascade pushed into the book's loss "
+            "distribution: per-name direction × conviction shocks over a "
+            f"{horizon_days}-day horizon, drawn against the book's real return "
+            "covariance. ES is coherent (sub-additive); the component split is "
+            "exact — it shows which names own the tail."
+        ),
+    )
+
+    try:
+        r = monte_carlo_book_es(
+            weights, ideas, stock_data,
+            confidence=confidence, horizon_days=horizon_days,
+            portfolio_value=portfolio_value, scenario_name="Live cascade",
+        )
+    except Exception as exc:
+        logger.exception(f"risk_lab: stress-VaR/ES failed: {exc}")
+        st.info("Coherent Stress-VaR could not be computed for this book.")
+        return
+
+    if r.n_names == 0:
+        st.info("No positions to stress.")
+        return
+
+    n_shocked = sum(1 for v in r.shocks_pct.values() if abs(v) > 1e-9)
+    metric_card_row([
+        {"label": f"Stress VaR ({confidence*100:.0f}%)",
+         "value": f"{r.var_pct*100:+.2f}%", "accent": C_LOW,
+         "sublabel": f"${r.var_dollar:,.0f} over {horizon_days}d"},
+        {"label": "Expected Shortfall",
+         "value": f"{r.es_pct*100:+.2f}%", "accent": C_LOW,
+         "sublabel": f"${r.es_dollar:,.0f} — mean tail loss"},
+        {"label": "Mean Stressed P&L",
+         "value": f"{r.mean_pnl_pct*100:+.2f}%",
+         "accent": (C_HIGH if r.mean_pnl_pct > 0 else C_LOW),
+         "sublabel": f"{n_shocked} of {r.n_names} names cascade-shocked"},
+        {"label": "Covariance basis",
+         "value": ("Real" if r.basis == "real-cov" else "Fallback"),
+         "accent": (C_HIGH if r.basis == "real-cov" else C_MOD),
+         "sublabel": (
+             "book's cached returns" if r.basis == "real-cov"
+             else "diagonal-vol (prices dark)")},
+    ], columns=4)
+
+    # Component-ES bar — each name's exact share of the tail loss (sums to ES).
+    comp = sorted(r.component_es_pct.items(), key=lambda kv: kv[1])  # worst first
+    fig = go.Figure(go.Bar(
+        x=[c * 100 for _, c in comp],
+        y=[t for t, _ in comp],
+        orientation="h",
+        marker_color=[C_LOW if c < 0 else C_HIGH for _, c in comp],
+        text=[f"{c*100:+.2f}%" for _, c in comp],
+        textposition="outside",
+        customdata=[r.shocks_pct.get(t, 0.0) * 100 for t, _ in comp],
+        hovertemplate=(
+            "<b>%{y}</b><br>Tail contribution: %{x:+.2f}%"
+            "<br>Cascade shock: %{customdata:+.1f}%<extra></extra>"
+        ),
+    ))
+    apply_dark_layout(
+        fig, title="Component ES — which names own the tail (sums to ES)",
+        height=max(260, 30 * len(comp) + 90),
+        margin=dict(l=12, r=80, t=46, b=30),
+        xaxis=dict(title=dict(text="ES contribution %",
+                              font=dict(color=C_TEXT2, size=11))),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.caption(
+        "Shock = direction × conviction × severity (capped); 0 for held names "
+        "with no active idea. Components sum to ES exactly (Euler split). "
+        "Illustrative severity scalar, not a price forecast."
+    )
+
+
 # ─── Section 3: Regime detection card ───────────────────────────────────────
 
 def _render_regime_card(returns_df: pd.DataFrame, weights: dict) -> None:
@@ -467,6 +585,17 @@ def render(
 
             section_divider("Scenario Stress")
             _render_stress_table(weights, portfolio_value)
+
+            # Coherent, cascade-grounded Stress-VaR/ES (R009) — the live
+            # disruption pushed into the book's real loss distribution.
+            section_divider("Coherent Stress-VaR")
+            ideas = _build_cascade_ideas(
+                port_results, route_results, freight_data, macro_data,
+                stock_data, insights,
+            )
+            _render_stress_var_es(
+                weights, ideas, stock_data, portfolio_value, confidence,
+            )
 
             section_divider("Regime")
             _render_regime_card(returns_df, weights)
