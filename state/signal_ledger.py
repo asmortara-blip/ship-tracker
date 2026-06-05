@@ -159,3 +159,53 @@ def track_record_summary(stock_data) -> dict:
         b["mean_signed_return_pct"] = b.pop("_sum") / b["n"] if b["n"] else 0.0
     return {"n": n, "hit_rate": wins / n,
             "mean_signed_return_pct": mean, "by_label": by_label}
+
+
+def oos_scorecard(stock_data, *, min_n: int = 5, threshold: float = 0.95) -> dict:
+    """Out-of-sample significance of the FROZEN track record (R004 x R101).
+
+    Treats the N realized signed returns (one per marked, never-refit idea) as a
+    cross-section, computes a cross-sectional Sharpe-like ratio (mean / dispersion)
+    and the **probabilistic Sharpe** P(true ratio > 0) given N and the higher
+    moments. The honest "is the edge real, not luck" read the platform lacked —
+    on real, look-ahead-free returns. ``sufficient=False`` below ``min_n``.
+    """
+    marks = mark_ledger(stock_data)
+    n = len(marks)
+    rets = [m["signed_return_pct"] / 100.0 for m in marks]
+    hit = (sum(1 for r in rets if r > 0) / n) if n else 0.0
+    mean_pct = (sum(m["signed_return_pct"] for m in marks) / n) if n else 0.0
+    if n < min_n:
+        return {
+            "n": n, "sufficient": False, "hit_rate": hit,
+            "mean_signed_return_pct": mean_pct, "psr": None, "is_significant": False,
+            "verdict": f"Only {n} marked idea(s) — need >= {min_n} to assess significance.",
+        }
+    import math as _math
+
+    import numpy as _np
+    import pandas as _pd
+    from processing.stat_significance import probabilistic_sharpe_ratio
+
+    arr = _np.asarray(rets, dtype=float)
+    sd = float(arr.std(ddof=1))
+    sr = float(arr.mean() / sd) if sd > 0 else 0.0
+    sk = float(_pd.Series(rets).skew())
+    ku = float(_pd.Series(rets).kurt())
+    if not (_math.isfinite(sk) and _math.isfinite(ku)):
+        sk, ku = 0.0, 3.0
+    else:
+        ku += 3.0  # pandas .kurt() is excess; PSR wants full kurtosis
+    psr = probabilistic_sharpe_ratio(sr, n, skew=sk, kurt=ku, sr_benchmark=0.0)
+    significant = psr >= threshold
+    return {
+        "n": n, "sufficient": True, "hit_rate": hit,
+        "mean_signed_return_pct": mean_pct,
+        "cross_sectional_sharpe": sr, "psr": psr, "is_significant": significant,
+        "verdict": (
+            f"Cross-sectional Sharpe {sr:+.2f} over {n} realized ideas; "
+            f"PSR {psr:.0%} — "
+            + ("statistically significant." if significant
+               else "not yet significant (treat as noise).")
+        ),
+    }

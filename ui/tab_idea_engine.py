@@ -428,7 +428,11 @@ def _render_track_record(stock_data=None) -> None:
     job has accrued history.
     """
     try:
-        from state.signal_ledger import load_ledger, track_record_summary
+        from state.signal_ledger import (
+            load_ledger,
+            oos_scorecard,
+            track_record_summary,
+        )
 
         n_frozen = len(load_ledger(limit=10_000))
         if n_frozen == 0:
@@ -462,6 +466,9 @@ def _render_track_record(stock_data=None) -> None:
                 f"{b['mean_signed_return_pct']:+.1f}%"
                 for lab, b in sorted(by.items())
             ))
+        sc = oos_scorecard(stock_data)
+        if sc.get("sufficient"):
+            st.caption(f"Significance — {sc['verdict']}")
         st.caption(
             "Frozen at issue, never refit, marked on real closes — no "
             "look-ahead. The honest forward track record."

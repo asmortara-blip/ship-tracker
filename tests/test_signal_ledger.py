@@ -92,3 +92,32 @@ def test_track_record_summary_by_label() -> None:
     assert summ["hit_rate"] == pytest.approx(0.5)
     assert summ["by_label"]["High"]["hit_rate"] == 1.0
     assert summ["by_label"]["Low"]["hit_rate"] == 0.0
+
+
+# ── OOS significance scorecard (R004 x R101) ────────────────────────────────
+
+def test_oos_scorecard_insufficient_history() -> None:
+    from state.signal_ledger import freeze_ideas, oos_scorecard
+    freeze_ideas([_Idea("ZIM", "Bullish", price=100.0)], issue_date="2026-06-01")
+    sc = oos_scorecard(_stock({"ZIM": 110.0}), min_n=5)
+    assert sc["sufficient"] is False and sc["n"] == 1 and sc["psr"] is None
+
+
+def test_oos_scorecard_flags_consistent_winners_significant() -> None:
+    from state.signal_ledger import freeze_ideas, oos_scorecard
+    freeze_ideas([_Idea(f"T{i}", "Bullish", price=100.0) for i in range(8)],
+                 issue_date="2026-06-01")
+    stock = _stock({f"T{i}": 100.0 * (1.08 + i * 0.01) for i in range(8)})  # +8..+15%
+    sc = oos_scorecard(stock, min_n=5)
+    assert sc["sufficient"] and sc["n"] == 8 and sc["hit_rate"] == 1.0
+    assert sc["psr"] > 0.9 and sc["is_significant"]
+
+
+def test_oos_scorecard_noise_not_significant() -> None:
+    from state.signal_ledger import freeze_ideas, oos_scorecard
+    freeze_ideas([_Idea(f"T{i}", "Bullish", price=100.0) for i in range(8)],
+                 issue_date="2026-06-01")
+    # alternating +5% / -5% -> mean ~0 -> PSR ~0.5 -> not significant
+    stock = _stock({f"T{i}": 100.0 * (1.0 + (0.05 if i % 2 else -0.05)) for i in range(8)})
+    sc = oos_scorecard(stock, min_n=5)
+    assert sc["sufficient"] and not sc["is_significant"]
