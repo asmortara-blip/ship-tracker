@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 _CLOSE_COLS = ("close", "Close", "adj_close", "price")
+_DATE_COLS = ("date", "Date", "timestamp", "Datetime")
 
 
 def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
@@ -31,7 +32,21 @@ def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
     col = next((c for c in _CLOSE_COLS if c in frame.columns), None)
     if col is None:
         return None
-    s = pd.to_numeric(frame[col], errors="coerce").dropna()
+    s = pd.to_numeric(frame[col], errors="coerce")
+    # The canonical normalised stock frame (data.normalizer.STOCK_COLS) carries
+    # the date as a COLUMN with a plain RangeIndex — the exact shape stock_feed
+    # caches and the app passes around. Without a DatetimeIndex the returns
+    # panel rejects every series, so the "real covariance / real returns" path
+    # silently never engages. Promote a date column to the index so it does.
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        date_col = next((c for c in _DATE_COLS if c in frame.columns), None)
+        if date_col is not None:
+            s = pd.Series(
+                s.to_numpy(),
+                index=pd.to_datetime(frame[date_col], errors="coerce"),
+            )
+            s = s[~s.index.isna()]
+    s = s.dropna()
     return s if not s.empty else None
 
 

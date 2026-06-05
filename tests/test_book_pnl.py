@@ -6,12 +6,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from processing.book_pnl import BookMark, day_change_pct, mark_book, nav_series
+from processing.book_pnl import (
+    BookMark, day_change_pct, mark_book, nav_series, returns_panel,
+)
 
 
 def _frame(prices, start="2026-01-01"):
     idx = pd.date_range(start, periods=len(prices), freq="B")
     return pd.DataFrame({"close": prices}, index=idx)
+
+
+def _canonical_frame(prices, symbol, start="2025-01-01"):
+    """The normalised stock frame stock_feed actually caches: date as a COLUMN
+    with a plain RangeIndex (data.normalizer.STOCK_COLS), NOT a DatetimeIndex."""
+    dates = pd.date_range(start, periods=len(prices), freq="B")
+    return pd.DataFrame({"date": dates, "symbol": symbol, "close": prices})
 
 
 _STOCK = {
@@ -115,3 +124,30 @@ def test_returns_panel_empty_on_insufficient_data() -> None:
     from processing.book_pnl import returns_panel
     assert returns_panel(None, ["ZIM"]).empty
     assert returns_panel({"ZIM": pd.DataFrame({"close": [1, 2, 3]})}, ["ZIM", "SBLK"]).empty
+
+
+# ── canonical (date-as-column) frame shape — the real cache shape ────────────
+
+def test_returns_panel_works_on_date_column_frame() -> None:
+    # Regression: stock_feed caches frames with date as a COLUMN + RangeIndex.
+    # returns_panel must build the time-indexed panel from these (it previously
+    # returned empty -> the "real covariance/returns" path silently never
+    # engaged in production, defeating R009/R021).
+    import numpy as np
+    rng = np.random.default_rng(0)
+    px = lambda: list(100.0 * np.exp(np.cumsum(rng.normal(0, 0.02, 90))))
+    stock = {"ZIM": _canonical_frame(px(), "ZIM"),
+             "SBLK": _canonical_frame(px(), "SBLK")}
+    panel = returns_panel(stock, ["ZIM", "SBLK"])
+    assert not panel.empty
+    assert set(panel.columns) == {"ZIM", "SBLK"}
+    assert isinstance(panel.index, pd.DatetimeIndex)
+    assert len(panel) > 60
+
+
+def test_mark_book_prices_date_column_frame() -> None:
+    stock = {"ZIM": _canonical_frame([10.0, 12.0, 14.0], "ZIM")}
+    bm = mark_book([{"ticker": "ZIM", "sector": "Container",
+                     "shares": 10, "avg_cost": 10.0}], stock)
+    zim = next(p for p in bm.positions if p.ticker == "ZIM")
+    assert zim.priced and zim.last_close == pytest.approx(14.0)
