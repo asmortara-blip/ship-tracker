@@ -66,6 +66,25 @@ def _latest_close(stock_data, ticker: str) -> Optional[float]:
     return float(s.iloc[-1]) if s is not None and not s.empty else None
 
 
+def _latest_close_after(stock_data, ticker: str, after_date) -> Optional[float]:
+    """Latest close STRICTLY AFTER ``after_date`` (forward / out-of-sample), else None.
+
+    Enforces the look-ahead-free guarantee the signal ledger advertises: a mark
+    must use a close dated after the idea's issue_date, never the issue-day (or
+    an earlier, stale) close. Returns None when no such later close exists (the
+    caller skips the row rather than scoring a non-causal return).
+    """
+    s = _close_series(stock_data, ticker)
+    if s is None or s.empty or not isinstance(s.index, pd.DatetimeIndex):
+        return None
+    try:
+        cutoff = pd.to_datetime(after_date)
+    except Exception:
+        return None
+    fwd = s[s.index > cutoff]
+    return float(fwd.iloc[-1]) if not fwd.empty else None
+
+
 @dataclass(frozen=True)
 class MarkedPosition:
     ticker: str

@@ -51,7 +51,7 @@ class _Idea:
 
 
 def _stock(last_closes: dict):
-    idx = pd.date_range("2026-01-01", periods=3, freq="B")
+    idx = pd.date_range("2026-07-01", periods=3, freq="B")  # forward of the 2026-06 issue dates (causal)
     return {t: pd.DataFrame({"close": [p * 0.9, p * 0.95, p]}, index=idx)
             for t, p in last_closes.items()}
 

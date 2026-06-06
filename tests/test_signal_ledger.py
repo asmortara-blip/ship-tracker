@@ -26,11 +26,17 @@ class _Idea:
         self.conviction_weight_set = weight_set
 
 
-def _stock(last_closes: dict):
-    """ticker -> DataFrame whose LAST close is the given value."""
-    idx = pd.date_range("2026-01-01", periods=3, freq="B")
+def _stock_at(start: str, last_closes: dict):
+    """ticker -> DataFrame dated from ``start`` whose LAST close is the value."""
+    idx = pd.date_range(start, periods=3, freq="B")
     return {t: pd.DataFrame({"close": [p * 0.9, p * 0.95, p]}, index=idx)
             for t, p in last_closes.items()}
+
+
+def _stock(last_closes: dict):
+    """ticker -> DataFrame whose LAST close is the given value, dated forward of
+    the 2026-06 issue dates so every mark is genuinely causal."""
+    return _stock_at("2026-07-01", last_closes)
 
 
 def test_v32_table_exists() -> None:
@@ -79,6 +85,18 @@ def test_mark_skips_unpriced() -> None:
     from state.signal_ledger import freeze_ideas, mark_ledger
     freeze_ideas([_Idea("ZIM", "Bullish", price=100.0)], issue_date="2026-06-01")
     assert mark_ledger({}) == []  # no current price -> not fabricated, just skipped
+
+
+def test_mark_is_look_ahead_free_skips_close_at_or_before_issue() -> None:
+    # The causal guarantee enforced in code (review HIGH): a close dated at or
+    # BEFORE issue_date is non-causal and must NOT be scored.
+    from state.signal_ledger import freeze_ideas, mark_ledger
+    freeze_ideas([_Idea("ZIM", "Bullish", price=100.0)], issue_date="2026-06-01")
+    stale = _stock_at("2026-01-01", {"ZIM": 110.0})    # 5 months BEFORE issue
+    assert mark_ledger(stale) == []                     # no look-ahead mark
+    # a strictly-later close IS marked
+    fwd = _stock_at("2026-07-01", {"ZIM": 110.0})
+    assert mark_ledger(fwd)[0]["signed_return_pct"] == pytest.approx(10.0)
 
 
 def test_track_record_summary_by_label() -> None:

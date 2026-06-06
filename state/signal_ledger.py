@@ -48,6 +48,15 @@ def _latest_close(stock_data, ticker: str) -> Optional[float]:
         return None
 
 
+def _latest_close_after(stock_data, ticker: str, after_date) -> Optional[float]:
+    """Forward close strictly after ``after_date`` — the causal mark price."""
+    try:
+        from processing.book_pnl import _latest_close_after as _lca
+        return _lca(stock_data, ticker, after_date)
+    except Exception:
+        return None
+
+
 def freeze_ideas(ideas, *, issue_date: Optional[str] = None, stock_data=None) -> int:
     """Freeze each idea as a ledger row, idempotent per (ticker, date, direction).
 
@@ -129,7 +138,10 @@ def mark_ledger(stock_data) -> list[dict]:
         issue_close = r.get("issue_close")
         if not issue_close or issue_close <= 0:
             continue
-        cur = _latest_close(stock_data, r["ticker"])
+        # Causal/look-ahead-free: the mark MUST use a close dated strictly after
+        # the idea's issue_date. A close at/before issue (a stale or same-session
+        # stock_data feed) is non-causal and is skipped, never scored.
+        cur = _latest_close_after(stock_data, r["ticker"], r.get("issue_date"))
         if cur is None or cur <= 0:
             continue
         ret = (cur - issue_close) / issue_close

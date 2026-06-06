@@ -770,15 +770,25 @@ def build_ledger_validation_report(
         )
         return report
 
-    # Equal-weight always-long base rate: the fraction of the marked names that
-    # simply rose over their own holding window. The honest naive benchmark.
+    # Direction-adjusted naive baseline. A book that ALWAYS predicts a name's
+    # direction is right at the market's drift rate FOR THAT DIRECTION: a Bullish
+    # call's naive baseline is the fraction of names that rose; a Bearish call's
+    # is the fraction that fell. Comparing a bearish tier's hit-rate to the
+    # always-LONG (up) rate would be apples-to-oranges and systematically
+    # overstate it — so each signal is scored against its own directional drift.
     raw = [(m["current_close"] - m["issue_close"]) / m["issue_close"] for m in marks]
-    baseline = round(sum(1 for r in raw if r > 0) / len(raw), 4)
+    n_raw = len(raw)
+    up_rate = sum(1 for r in raw if r > 0) / n_raw
+    down_rate = sum(1 for r in raw if r < 0) / n_raw
+
+    def _dir_baseline(direction: str) -> float:
+        return down_rate if _direction_sign(direction) < 0 else up_rate
 
     signals: list[SignalValidation] = []
     for m, raw_ret in zip(marks, raw):
         signed = m["signed_return_pct"] / 100.0
         win = signed > 0
+        b = _dir_baseline(str(m.get("direction") or ""))
         signals.append(SignalValidation(
             signal_id=str(m.get("ticker") or ""),
             signal_kind="frozen ledger idea",
@@ -791,13 +801,15 @@ def build_ledger_validation_report(
             hit_rate=1.0 if win else 0.0,
             avg_forward_return=round(raw_ret, 4),
             directional_return=round(signed, 4),
-            baseline_hit_rate=baseline,
-            edge_vs_baseline=round((1.0 if win else 0.0) - baseline, 4),
+            baseline_hit_rate=round(b, 4),
+            edge_vs_baseline=round((1.0 if win else 0.0) - b, 4),
             low_sample=True,                  # a single realized outcome so far
             note="single realized out-of-sample outcome (point-in-time)",
         ))
 
-    # Tier aggregation — stable cascade order first, then any extras.
+    # Tier aggregation — stable cascade order first, then any extras. The tier
+    # baseline is the mean of its signals' OWN direction-adjusted baselines
+    # (so a mixed-direction tier is still scored fairly).
     by_tier: dict[str, list] = {}
     for s in signals:
         by_tier.setdefault(s.conviction_label, []).append(s)
@@ -808,16 +820,18 @@ def build_ledger_validation_report(
         ss = by_tier[tier]
         n = len(ss)
         hr = round(sum(s.n_hits for s in ss) / n, 4)
+        tier_base = round(sum(s.baseline_hit_rate for s in ss) / n, 4)
         tiers.append(TierScore(
             tier=tier, n_signals=n, n_observations=n, hit_rate=hr,
             avg_forward_return=round(sum(s.avg_forward_return for s in ss) / n, 4),
             directional_return=round(sum(s.directional_return for s in ss) / n, 4),
-            baseline_hit_rate=baseline,
-            edge_vs_baseline=round(hr - baseline, 4),
+            baseline_hit_rate=tier_base,
+            edge_vs_baseline=round(hr - tier_base, 4),
         ))
 
     n_all = len(signals)
     overall_hr = round(sum(s.n_hits for s in signals) / n_all, 4)
+    baseline = round(sum(s.baseline_hit_rate for s in signals) / n_all, 4)
     report.signals = signals
     report.tiers = tiers
     report.overall_hit_rate = overall_hr
