@@ -769,6 +769,36 @@ def test_executive_summary_mentions_top_pick_ticker() -> None:
     assert "ZIM" in text
 
 
+def _empty_alpha() -> AlphaSignalSummary:
+    return AlphaSignalSummary(
+        signals=[], portfolio={}, top_long=[], top_short=[],
+        scorecard_df=pd.DataFrame(),
+        signal_count_by_type={}, signal_count_by_conviction={},
+    )
+
+
+def test_executive_summary_no_signals_does_not_fabricate_portfolio() -> None:
+    # generate_all_signals can now legitimately return [] (dark prices / quiet
+    # markets). The summary must say so plainly, not narrate a phantom 0-signal
+    # portfolio "supported by convergent signals across momentum, macro, …".
+    text = _generate_executive_summary(
+        sentiment=_basic_sentiment(), macro=_basic_macro(), alpha=_empty_alpha(),
+        freight=_basic_freight(), market=_basic_market(), stocks=_basic_stocks(),
+    )
+    assert "produced no active signals" in text
+    assert "convergent signals across momentum" not in text
+    assert "0 active signals" not in text
+
+
+def test_outlook_no_signals_does_not_imply_portfolio_return() -> None:
+    text = _generate_outlook_30d(
+        macro=_basic_macro(), freight=_basic_freight(),
+        sentiment=_basic_sentiment(), alpha=_empty_alpha(),
+    )
+    assert "produced no signals on the current data" in text
+    assert "HIGH-conviction signals pointing net-" not in text
+
+
 # ─── _generate_sentiment_narrative ─────────────────────────────────────────
 
 

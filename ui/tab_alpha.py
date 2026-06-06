@@ -109,9 +109,19 @@ _MATRIX_DATA = {
 # Provenance — sources used across this tab
 # ---------------------------------------------------------------------------
 
+# Signal sections are pure real engine output — no synthetic signal source.
+# (The former DataSource.demo("Synthetic signal log") named _MOCK_SIGNALS, which
+# has been deleted; leaving it would falsely stamp real tables as synthetic.)
 _ALPHA_SOURCES = [
     DataSource.modeled("Internal alpha-signal engine"),
-    DataSource.demo("Synthetic signal log"),
+]
+
+# The price chart alone can fall back to a synthetic price series when a
+# ticker's feed is dark (always labelled on the chart itself), so only that
+# section advertises a demo source.
+_CHART_SOURCES = [
+    DataSource.modeled("Internal alpha-signal engine"),
+    DataSource.demo("Synthetic price series (used only when a price feed is dark)"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -269,7 +279,7 @@ def _render_engine_diagram() -> None:
     try:
         section_header(
             "Signal Generation Engine",
-            "Transparency into how each signal is constructed",
+            "The six rule-based strategies and the inputs they read",
         )
 
         # Only the inputs the strategies actually consume — the former list
@@ -282,19 +292,26 @@ def _render_engine_diagram() -> None:
             ("Macro Data (PMI, IP)",  C_MOD),
             ("Port Congestion Index", C_PURPLE),
         ]
+        # The REAL strategies in engine.alpha_engine.generate_all_signals — six
+        # independent rule-based strategies, each anchored to a real entry price,
+        # each assigning conviction from its own raw-metric thresholds. (The
+        # former diagram fabricated a 5-stage "factor-scoring → regime-detection →
+        # signal-fusion → 0.6-threshold → risk-adjustment" pipeline the engine
+        # never runs.)
         engine_steps = [
-            ("(1) Factor Scoring",    "Score each input 0–1"),
-            ("(2) Regime Detection",  "Bull / Bear / High-Vol"),
-            ("(3) Signal Fusion",     "Weighted ensemble"),
-            ("(4) Conviction Filter", "Threshold: > 0.6 = HIGH"),
-            ("(5) Risk Adjustment",   "Stop / Target placement"),
+            ("FBX Rate Momentum",    "Trans-Pacific / Asia-Europe rate surge → LONG"),
+            ("BDI–SBLK Divergence",  "Baltic up while SBLK lags → catch-up LONG"),
+            ("Congestion Arbitrage", "High port congestion → ZIM rate-spike LONG"),
+            ("Oversold Mean-Revert", "Big drop + positive freight backdrop → LONG"),
+            ("Macro Regime",         "PMI-proxy + BDI → basket LONG / ZIM SHORT"),
+            ("Seasonal Prior",       "Peak-season / post-CNY (LOW, calendar-only)"),
         ]
         outputs = [
             ("HIGH conviction signals", C_HIGH),
-            ("MODERATE signals",        C_MOD),
-            ("LOW / monitor",           C_TEXT3),
-            ("Factor attribution",      C_ACCENT),
+            ("MEDIUM signals",          C_MOD),
+            ("LOW signals",             C_TEXT3),
             ("Entry / Stop / Target",   C_CYAN),
+            ("Risk / Reward per signal", C_ACCENT),
         ]
 
         # Each pipeline column → a single wsj_market_table for crisp alignment.
@@ -308,7 +325,7 @@ def _render_engine_diagram() -> None:
                 [_sans(step, color=C_ACCENT, weight=700), _sans(desc, color=C_TEXT3)]
                 for step, desc in engine_steps
             ]
-            wsj_market_table(["Stage", "Description"], eng_rows)
+            wsj_market_table(["Strategy", "Trigger"], eng_rows)
         with c_out:
             out_rows = [[_sans(label, color=col, weight=600)] for label, col in outputs]
             wsj_market_table(["Output"], out_rows)
@@ -467,7 +484,7 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
 
                     apply_dark_layout(fig, title=f"{ticker} — Price + Signal Markers", height=340)
                     st.plotly_chart(fig, use_container_width=True)
-                    st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
+                    st.markdown(source_footer(_CHART_SOURCES), unsafe_allow_html=True)
 
                 except Exception as inner_exc:
                     logger.warning(f"[tab_alpha] chart {ticker} failed: {inner_exc}")

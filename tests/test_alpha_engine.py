@@ -16,6 +16,7 @@ All RNG seeds are explicit integers — no Python hash() (process-salted).
 """
 from __future__ import annotations
 
+import datetime
 import math
 
 import numpy as np
@@ -262,6 +263,48 @@ def test_generate_all_signals_seasonal_calendar_only_capped_at_low() -> None:
                 or "Seasonal prior" in s.rationale]
     for s in seasonal:
         assert s.conviction == "LOW", f"{s.signal_name} should be LOW, got {s.conviction}"
+
+
+def _seasonal_on_fixed_date(monkeypatch, y: int, m: int, d: int):
+    """Run _strategy_seasonal as if today were a fixed date — so the conviction
+    cap is asserted deterministically instead of only in whatever month the
+    suite happens to run (the property test above is vacuous 7 months a year)."""
+    import engine.alpha_engine as ae
+
+    fixed = datetime.date(y, m, d)  # real date, captured before patching
+
+    class _FixedDate(datetime.date):
+        @classmethod
+        def today(cls):
+            return fixed
+
+    monkeypatch.setattr(ae.datetime, "date", _FixedDate)
+    stock = {t: _stock_df([20.0] * 40) for t in ("ZIM", "MATX", "SBLK")}
+    return ae._strategy_seasonal(stock)
+
+
+def test_seasonal_peak_season_capped_low_in_june(monkeypatch) -> None:
+    out = _seasonal_on_fixed_date(monkeypatch, 2026, 6, 15)
+    peak = [s for s in out if s.signal_name == "Peak Season Pre-Trade"]
+    assert peak, "June must fire the peak-season prior (with a real price)"
+    assert all(s.conviction == "LOW" for s in peak)
+
+
+def test_seasonal_post_cny_capped_low_in_march(monkeypatch) -> None:
+    out = _seasonal_on_fixed_date(monkeypatch, 2026, 3, 15)
+    cny = [s for s in out if s.signal_name == "Post-CNY Dry Bulk Recovery"]
+    assert cny, "March must fire the post-CNY prior (with a real price)"
+    assert all(s.conviction == "LOW" for s in cny)
+
+
+def test_generate_all_signals_all_unpriced_returns_empty() -> None:
+    # A real triggering condition (FBX +40%) but every ticker's price feed is
+    # dark (empty frames) → every signal is suppressed for lack of a real entry
+    # price. The strategy triggers but emits nothing fabricated.
+    freight = {"FBX01_Rate": _macro_df([1000.0] * 30 + [1400.0])}
+    stock = {t: pd.DataFrame() for t in ("ZIM", "MATX", "CMRE", "DAC")}
+    out = generate_all_signals(stock, freight, {}, [], [])
+    assert out == []
 
 
 def _fbx_surge_inputs():

@@ -660,17 +660,29 @@ def _generate_executive_summary(
     else:
         top_pick_price_clause = "based on signal scoring"
 
-    p2 = (
-        f"The alpha signal engine has generated {n_signals} active signals across the coverage universe, "
-        f"comprising {n_long} LONG and {n_short} SHORT signals, with {n_high} rated HIGH conviction. "
-        f"The portfolio carries a model-implied expected return of {exp_ret:+.1f}% and a model-implied "
-        f"return/volatility ratio of {implied_sharpe:.2f} (derived from the signals' own price targets and "
-        f"realized volatility — a forward projection, not a realized Sharpe or backtested result). "
-        f"The highest-priority long idea is {top_long_str}. "
-        f"Among individual equities, {top_pick_str} is the top-rated pick "
-        f"{top_pick_price_clause}, "
-        f"supported by convergent signals across momentum, macro, and fundamental factors."
-    )
+    if n_signals == 0:
+        # The engine fabricates nothing: each signal is anchored to a real
+        # triggering condition on live prices, so it stays silent when none is
+        # present. Narrate that honestly rather than a phantom 0-signal portfolio.
+        p2 = (
+            "The alpha signal engine produced no active signals on the current data. "
+            "Each signal is anchored to a real triggering condition on live prices, so "
+            "the engine stays silent when no such condition is present (quiet markets or "
+            "an unavailable price feed) rather than emitting a speculative position. "
+            "No model portfolio is presented this period."
+        )
+    else:
+        p2 = (
+            f"The alpha signal engine has generated {n_signals} active signals across the coverage universe, "
+            f"comprising {n_long} LONG and {n_short} SHORT signals, with {n_high} rated HIGH conviction. "
+            f"The portfolio carries a model-implied expected return of {exp_ret:+.1f}% and a model-implied "
+            f"return/volatility ratio of {implied_sharpe:.2f} (derived from the signals' own price targets and "
+            f"realized volatility — a forward projection, not a realized Sharpe or backtested result). "
+            f"The highest-priority long idea is {top_long_str}. "
+            f"Among individual equities, {top_pick_str} is the top-rated pick "
+            f"{top_pick_price_clause}, "
+            f"supported by convergent signals across momentum, macro, and fundamental factors."
+        )
 
     # --- Paragraph 3: Risks and outlook ---
     risk_label = market.risk_level
@@ -988,6 +1000,20 @@ def _generate_outlook_30d(
 
     n_high_signals = sum(1 for s in alpha.signals if getattr(s, "conviction", "") == "HIGH")
     exp_ret = _safe_float(alpha.portfolio.get("expected_return", 0.0))
+    if not alpha.signals:
+        # No signals fired on the current data — do not imply a phantom portfolio
+        # return or a net-long/short tilt that does not exist.
+        alpha_clause = (
+            "The alpha engine produced no signals on the current data, so no "
+            "portfolio-level return is implied this period. "
+        )
+    else:
+        alpha_clause = (
+            f"The alpha engine carries {n_high_signals} HIGH-conviction signals "
+            f"pointing net-{'long' if exp_ret > 0 else 'short'}, "
+            f"implying a portfolio-level expected return of {exp_ret:+.1f}% over the "
+            f"next 30 days under base-case conditions. "
+        )
     bdi_trend_str = (
         f"BDI momentum is positive (+{macro.bdi_change_30d_pct:.1f}% over 30 days), typically a 4-6 week leading indicator for shipping equity outperformance"
         if macro.bdi_change_30d_pct > 3
@@ -1011,8 +1037,7 @@ def _generate_outlook_30d(
         f"The FBX container composite at {freight_str} {'remains elevated and supportive of container line profitability' if freight.fbx_composite > 2000 else 'has moderated toward cycle-average levels, implying normalized container shipping margins'}. "
         f"WTI crude at {wti_val_str} and the 10Y Treasury at {tsy_str} are the key macro inputs "
         f"{'creating a headwind through higher funding costs and operating expenses' if macro.treasury_10y > 4.5 and macro.wti_change_30d_pct > 5 else 'broadly supportive of shipping equity valuations at current levels' if macro.treasury_10y < 4.0 else 'creating a mixed macro backdrop requiring selectivity in positioning'}. "
-        f"The alpha engine carries {n_high_signals} HIGH-conviction signals pointing net-{'long' if exp_ret > 0 else 'short'}, "
-        f"implying a portfolio-level expected return of {exp_ret:+.1f}% over the next 30 days under base-case conditions. "
+        f"{alpha_clause}"
         f"Key catalysts to watch: (1) weekly BDI prints for directional confirmation above/below {bdi_val_str}, "
         f"(2) trans-Pacific spot rate updates from Freightos/FBX relative to {freight_str}, "
         f"(3) any FOMC communication shifts that could reprice the Treasury curve from {tsy_str}, "

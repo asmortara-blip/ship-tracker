@@ -8,6 +8,7 @@ of the removed fabrications is reintroduced.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 from pathlib import Path
 
@@ -15,6 +16,17 @@ import ui.tab_alpha as tab_alpha
 
 
 _SRC = Path(tab_alpha.__file__).read_text()
+_TREE = ast.parse(_SRC)
+
+
+def _top_level_imports(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module.split(".")[0])
+    return names
 
 
 def test_mock_signal_scaffolding_is_gone() -> None:
@@ -28,9 +40,14 @@ def test_mock_signal_scaffolding_is_gone() -> None:
 def test_no_random_signal_fabrication() -> None:
     # No random ages, no random chart-marker placement, no mock age jitter.
     # (np.random is fine — it backs the clearly-labelled synthetic price chart.)
+    # AST-based so it catches every re-introduction form (import random, from
+    # random import …, import random as r), not just one substring.
+    assert "random" not in _top_level_imports(_TREE), (
+        "stdlib `random` must not be imported — use np.random for the labelled "
+        "synthetic price chart only"
+    )
     assert "random.randint" not in _SRC
     assert "random.Random" not in _SRC
-    assert "\nimport random" not in _SRC
 
 
 def test_live_monitor_consumes_real_signals() -> None:

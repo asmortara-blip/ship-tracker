@@ -597,7 +597,10 @@ def _strategy_seasonal(
                 time_horizon="3M",
                 rationale=rationale,
             ))
-        logger.info("Seasonal: Peak season pre-trade signal (month=" + str(month) + ")")
+        # Only log when a signal was actually emitted — every ticker is skipped
+        # when its price feed is dark, in which case nothing was added.
+        if signals:
+            logger.info("Seasonal: Peak season pre-trade signal (month=" + str(month) + ")")
 
     # Post-CNY recovery (March-April → LONG SBLK)
     if month in (3, 4):
