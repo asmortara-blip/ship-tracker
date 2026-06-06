@@ -954,6 +954,44 @@ def run_perf_budget_check_job() -> dict:
 
 
 @_track_run
+def run_worker_deadman_job() -> dict:
+    """Self-monitor: fire alerts when a critical scheduler job goes stale or
+    starts failing (R117).
+
+    Thin wrapper around ``engine.worker_deadman.check_worker_health_and_fire``
+    that adds logging and shields the caller from any exception. Reads the
+    per-job run telemetry that ``_track_run`` already records to
+    ``state.worker_runs`` and alerts when a *critical* daily job has not run
+    inside its cadence window (CRITICAL "stale") or is repeatedly erroring
+    (HIGH "failing").
+
+    Designed to run on EVERY pass (like the source-health + escalation
+    self-monitors): the underlying orchestrator self-gates each job with a
+    6h kv_state cooldown, so a chronically-stale job stays quiet between
+    fires regardless of cadence. The orchestrator already swallows
+    per-finding failures internally — this wrapper is belt-and-braces: even
+    if it raises, the worker continues. Returns the count dict
+    ``{"fired": N, "skipped_cooldown": N, "errored": N}`` (or all zeros on a
+    top-level exception).
+
+    Never raises — a deadman that crashes the worker is worse than useless.
+    """
+    try:
+        from engine.worker_deadman import check_worker_health_and_fire
+
+        counts = check_worker_health_and_fire()
+        logger.info(
+            f"run_worker_deadman_job: fired={counts.get('fired', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)} "
+            f"errored={counts.get('errored', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_worker_deadman_job: failed: {exc}")
+        return {"fired": 0, "skipped_cooldown": 0, "errored": 0}
+
+
+@_track_run
 def run_anomaly_detection_job() -> dict:
     """Run anomaly detection across every tracked metric + fire alerts.
 
@@ -2199,6 +2237,12 @@ def main(argv: Optional[list] = None) -> int:
                now=now, force=force, label="perf budget check")
     _run_gated("run_anomaly_detection_job", _SIX_HOURLY_SECONDS, run_anomaly_detection_job,
                now=now, force=force, label="anomaly detection")
+
+    # SLA self-monitor — EVERY pass: alert if a critical scheduler job has
+    # gone stale (missed its cadence window) or is repeatedly failing. The
+    # orchestrator self-gates each job with a 6h kv_state cooldown, so this
+    # is safe to run unconditionally alongside the other every-pass monitors.
+    _run_always("worker deadman", run_worker_deadman_job)
 
     # SLA jobs — EVERY pass: an unacked CRITICAL escalates, and a transient
     # delivery failure retries, within minutes. These are the reason main()
