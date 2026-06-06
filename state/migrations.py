@@ -1320,3 +1320,22 @@ def _migrate_to_v32(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v32 CREATE TABLE failed: {exc}"
         )
+
+
+def _migrate_to_v33(conn: sqlite3.Connection) -> None:
+    """Add the ``data_fetches`` table — a per-fetch provenance ledger.
+
+    Each row stamps one feed fetch with its realness (kind: live/cache/
+    synthetic/empty), quality, row_count, a short content hash and the data's
+    as-of, so an auditor can prove which feeds were real when a signal issued.
+    Idempotent CREATE TABLE / CREATE INDEX IF NOT EXISTS (same add-only pattern
+    as v26/v29/v32), safe to re-run on every open.
+    """
+    try:
+        from state.db import _SCHEMA_V33
+
+        conn.executescript(_SCHEMA_V33)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v33 CREATE TABLE failed: {exc}"
+        )

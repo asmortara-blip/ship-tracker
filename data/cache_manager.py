@@ -53,7 +53,9 @@ class CacheManager:
 
         if self._is_fresh(path, ttl_hours):
             logger.debug(f"Cache hit: {source}/{key}")
-            return pd.read_parquet(path)
+            cached = pd.read_parquet(path)
+            self._stamp_provenance(source, key, "cache", cached)
+            return cached
 
         logger.info(f"Cache miss — fetching: {source}/{key}")
         df = fetch_fn()
@@ -62,10 +64,29 @@ class CacheManager:
             path.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(path, index=True)
             logger.debug(f"Cached {len(df)} rows → {path}")
+            self._stamp_provenance(source, key, "live", df)
         else:
             logger.warning(f"Fetch returned empty DataFrame for {source}/{key}; not caching")
+            self._stamp_provenance(source, key, "empty", df)
 
         return df if df is not None else pd.DataFrame()
+
+    @staticmethod
+    def _stamp_provenance(source: str, key: str, kind: str, df) -> None:
+        """Best-effort per-fetch provenance stamp (rec R003/R097).
+
+        ``cache`` on a hit, ``live``/``empty`` on a miss. NEVER affects the
+        fetch — a provenance write failure (or no DB) is swallowed. Off in tests
+        unless explicitly enabled (see state.fetch_ledger.RECORDING_ENABLED)."""
+        try:
+            from state.fetch_ledger import cheap_content_hash, record_fetch
+            n = len(df) if (df is not None and hasattr(df, "__len__")) else 0
+            quality = ("GOOD" if kind == "live"
+                       else "STALE" if kind == "cache" else "UNKNOWN")
+            record_fetch(source, key, kind, row_count=n, quality=quality,
+                         byte_hash=cheap_content_hash(df))
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def invalidate(self, key: str, source: str = "misc") -> None:
         """Delete a specific cache entry."""

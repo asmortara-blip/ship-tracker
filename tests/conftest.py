@@ -16,6 +16,19 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _no_fetch_provenance_writes(monkeypatch):
+    """Disable the per-fetch provenance ledger (rec R003/R097) for every test so
+    a cache fetch in a non-DB-isolated test never writes to the real DB. Tests
+    that exercise the ledger re-enable it explicitly (with an isolated DB)."""
+    try:
+        import state.fetch_ledger as _fl
+        monkeypatch.setattr(_fl, "RECORDING_ENABLED", False, raising=False)
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def block_network(monkeypatch):
     """Fail every outbound TCP connection instantly.

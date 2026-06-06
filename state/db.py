@@ -288,7 +288,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 32
+SCHEMA_VERSION: int = 33
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1347,6 +1347,34 @@ _SCHEMA_V32_NOTE: str = (
 )
 
 
+_SCHEMA_V33 = """
+CREATE TABLE IF NOT EXISTS data_fetches (
+    fetch_id     TEXT PRIMARY KEY,
+    source       TEXT NOT NULL,
+    cache_key    TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    quality      TEXT,
+    row_count    INTEGER NOT NULL DEFAULT 0,
+    byte_hash    TEXT,
+    as_of        TEXT,
+    fetched_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_data_fetches_source
+    ON data_fetches(source, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_data_fetches_fetched
+    ON data_fetches(fetched_at);
+"""
+
+_SCHEMA_V33_NOTE: str = (
+    "v33: data_fetches table (fetch_id PK, source, cache_key, kind "
+    "[live|cache|synthetic|empty], quality, row_count, byte_hash, as_of, "
+    "fetched_at) — a per-fetch provenance ledger so an auditor can answer 'did "
+    "signal X run on real or synthetic input on date Y' + idx on (source, "
+    "fetched_at) and fetched_at (added via CREATE TABLE IF NOT EXISTS in "
+    "_migrate_to_v33)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1612,6 +1640,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v32(conn)
     except Exception as exc:
         logger.warning(f"state.db: v32 table add skipped: {exc}")
+
+    # v33 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26/v29/v32). Adds the ``data_fetches`` per-fetch provenance
+    # ledger so every feed can stamp its realness (live/cache/synthetic). Runs
+    # unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v33
+        _migrate_to_v33(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v33 table add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
