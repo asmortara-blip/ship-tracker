@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime
-import random
 from typing import Any
 
 import numpy as np
@@ -63,27 +62,11 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Mock / fallback data — kept verbatim (legitimate alpha-signal scaffolding)
+# Static display scaffolding (categories + conviction-matrix framework only).
+# The signal book itself is built ONLY from real engine output — there is no
+# fabricated signal log here (the former _MOCK_SIGNALS was removed: it
+# masqueraded fake tickers/prices/ages as live signals).
 # ---------------------------------------------------------------------------
-
-_MOCK_SIGNALS = [
-    # ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, age_min
-    ("ZIM",  "LONG",  "HIGH",     0.87, "Momentum",      "BDI 12% surge + vol breakout",   19.40, 17.80, 23.50, 2.6, 5),
-    ("MATX", "LONG",  "HIGH",     0.82, "BDI Divergence","CCFI–MATX spread blowout",        24.10, 22.30, 28.40, 2.4, 12),
-    ("SBLK", "LONG",  "MODERATE", 0.71, "Mean Reversion","52W low reversion + BDI uptick",  17.50, 16.10, 20.80, 2.3, 31),
-    ("GOGL", "LONG",  "HIGH",     0.84, "Macro Overlay", "China stimulus + Capesize demand", 13.20, 12.10, 15.90, 2.4, 8),
-    ("DAC",  "LONG",  "MODERATE", 0.68, "Momentum",      "Container rate stabilization",    69.00, 64.50, 79.00, 2.2, 47),
-    ("STNG", "SHORT", "HIGH",     0.79, "Sentiment",     "Tanker oversupply + rate decline", 51.30, 54.80, 43.20, 2.3, 14),
-    ("GSL",  "LONG",  "MODERATE", 0.66, "Mean Reversion","Charter rate uptick + underval",   19.80, 18.20, 23.50, 2.3, 22),
-    ("ZIM",  "SHORT", "LOW",      0.44, "Macro Overlay", "Red Sea normalization risk",       19.40, 21.00, 17.00, 1.5, 90),
-    ("MATX", "LONG",  "MODERATE", 0.73, "BDI Divergence","Hawaii route premium expansion",   24.10, 22.50, 28.00, 2.2, 38),
-    ("SBLK", "SHORT", "LOW",      0.41, "Sentiment",     "Insider selling + iron ore soft",  17.50, 19.20, 15.40, 1.2, 105),
-    ("GOGL", "LONG",  "HIGH",     0.80, "Momentum",      "Capesize hire rates 3-wk high",    13.20, 12.40, 15.60, 2.0, 3),
-    ("DAC",  "LONG",  "HIGH",     0.85, "Fundamental",   "Asset coverage 1.4x + FCF yield",  69.00, 63.00, 81.00, 2.0, 18),
-    ("STNG", "SHORT", "MODERATE", 0.62, "Macro Overlay", "OPEC+ output cut uncertainty",    51.30, 54.00, 45.00, 2.3, 55),
-    ("GSL",  "SHORT", "LOW",      0.38, "Mean Reversion","Box-ship charter softening",       19.80, 21.50, 17.20, 1.5, 130),
-    ("ZIM",  "LONG",  "HIGH",     0.90, "BDI Divergence","WCI–ZIM earnings correlation hit", 19.40, 17.50, 24.20, 2.8, 1),
-]
 
 _CATEGORIES = ["Container Ships", "Dry Bulk", "Tankers", "LNG", "Port Operators", "Mixed"]
 _SIG_TYPES  = ["Momentum", "Mean Reversion", "BDI Divergence", "Macro Overlay", "Sentiment"]
@@ -132,28 +115,6 @@ _ALPHA_SOURCES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Cache helpers
-# ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_signals(stock_data_key: str, now_bucket: str) -> list[dict]:
-    """Return live-monitor signals list (cached 60 s)."""
-    rng = random.Random(stable_hash(now_bucket))
-    results = []
-    for row in _MOCK_SIGNALS:
-        ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, age_min = row
-        age_jitter = rng.randint(-3, 3)
-        mins_ago = max(1, age_min + age_jitter)
-        results.append({
-            "ticker": ticker, "direction": direction, "conviction": conviction,
-            "strength": strength, "sig_type": sig_type, "basis": basis,
-            "entry": entry, "stop": stop, "target": target, "rr": rr,
-            "mins_ago": mins_ago,
-        })
-    results.sort(key=lambda x: x["mins_ago"])
-    return results
-
-# ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
 
@@ -186,20 +147,23 @@ def _render_hero(signals: list[dict]) -> None:
         n_high    = sum(1 for s in signals if s.get("conviction") in ("HIGH",))
         strengths = [s.get("strength", 0.5) for s in signals]
         avg_str   = round(float(np.mean(strengths)), 2) if strengths else 0.0
-        # Estimated annualized alpha: avg strength × RR × 12 (monthly compounding heuristic)
-        avg_rr    = float(np.mean([s.get("rr", 2.0) for s in signals])) if signals else 2.0
-        est_alpha = round(avg_str * avg_rr * 0.18 * 100, 1)  # rough annualized %
+        # Real average risk/reward of the live signals (target ÷ stop distance).
+        # Replaces a former annualized-alpha card whose value was
+        # avg_strength × avg_rr × 0.18 — a heuristic that was mislabelled as a
+        # backtested estimate (the engine runs no such backtest).
+        rrs       = [float(s.get("rr", 0.0)) for s in signals if s.get("rr")]
+        avg_rr    = round(float(np.mean(rrs)), 2) if rrs else 0.0
 
         metric_card_row(
             [
                 {"label": "Active Signals",       "value": str(n_total),
-                 "accent": C_ACCENT, "sublabel": "total generated"},
+                 "accent": C_ACCENT, "sublabel": "fired on live data"},
                 {"label": "High Conviction",      "value": str(n_high),
-                 "accent": C_HIGH,   "sublabel": "strong edge signals"},
+                 "accent": C_HIGH,   "sublabel": "strong-edge signals"},
                 {"label": "Avg Signal Strength",  "value": f"{avg_str:.2f}",
                  "accent": C_MOD,    "sublabel": "scale 0.00 – 1.00"},
-                {"label": "Est. Alpha p.a.",      "value": f"{est_alpha:.1f}%",
-                 "accent": C_PURPLE, "sublabel": "backtest-based estimate"},
+                {"label": "Avg Risk / Reward",    "value": f"{avg_rr:.2f}x",
+                 "accent": C_PURPLE, "sublabel": "modeled target ÷ stop"},
             ],
             columns=4,
         )
@@ -215,7 +179,8 @@ def _render_conviction_matrix() -> None:
     try:
         section_header(
             "Signal Conviction Matrix",
-            "Conviction by category and signal type",
+            "Illustrative framework — which signal types the engine weighs per "
+            "category (not live readings)",
         )
 
         headers = ["Category"] + _SIG_TYPES
@@ -247,8 +212,19 @@ def _render_signals_table(signals: list[dict]) -> None:
             "Actionable long/short signals — ranked by conviction × strength",
         )
 
+        if not signals:
+            st.info(
+                "No live signals — the engine emits a signal only when a real "
+                "triggering condition (rate move, divergence, regime shift, …) is "
+                "met on live prices. Expected when markets are quiet or a price "
+                "feed is unavailable."
+            )
+            return
+
+        # No "Age" column: engine signals are computed as of the latest close,
+        # they carry no genuine wall-clock age (the former value was random).
         headers = ["Instrument", "Direction", "Conviction", "Strength",
-                   "Signal Type", "Basis", "Entry", "Stop", "Target", "R/R", "Age"]
+                   "Signal Type", "Basis", "Entry", "Stop", "Target", "R/R"]
 
         rows = []
         for s in signals:
@@ -262,11 +238,9 @@ def _render_signals_table(signals: list[dict]) -> None:
             stop      = s.get("stop", 0.0)
             target    = s.get("target", 0.0)
             rr        = s.get("rr", 0.0)
-            mins_ago  = s.get("mins_ago", 999)
 
             d_col = _dir_color(direction)
             c_col = _conv_color(conv)
-            age_str = f"{mins_ago}m" if mins_ago < 60 else f"{mins_ago // 60}h {mins_ago % 60}m"
 
             rows.append([
                 _mono(ticker, color=C_TEXT),
@@ -279,7 +253,6 @@ def _render_signals_table(signals: list[dict]) -> None:
                 _mono(f"${stop:.2f}", color=C_SHORT),
                 _mono(f"${target:.2f}", color=C_HIGH),
                 _mono(f"{rr:.1f}x", color=C_MOD),
-                _sans(age_str, color=C_TEXT3),
             ])
 
         wsj_market_table(headers, rows)
@@ -299,14 +272,15 @@ def _render_engine_diagram() -> None:
             "Transparency into how each signal is constructed",
         )
 
+        # Only the inputs the strategies actually consume — the former list
+        # advertised "Options Sentiment" and "Insider Filings", which no engine
+        # strategy reads.
         inputs = [
             ("BDI / Baltic Indices",  C_CYAN),
-            ("WCI / Freightos WCI",   C_CYAN),
+            ("FBX Freight Rates",     C_CYAN),
             ("Stock Price History",   C_ACCENT),
-            ("Macro Data (CPI, PMI)", C_MOD),
+            ("Macro Data (PMI, IP)",  C_MOD),
             ("Port Congestion Index", C_PURPLE),
-            ("Options Sentiment",     C_HIGH),
-            ("Insider Filings",       C_TEXT2),
         ]
         engine_steps = [
             ("(1) Factor Scoring",    "Score each input 0–1"),
@@ -348,56 +322,42 @@ def _render_engine_diagram() -> None:
 # Section 5 — Multi-Factor Signal Breakdown (HIGH conviction only)
 # ---------------------------------------------------------------------------
 
-_FACTOR_SCORES = {
-    "ZIM-HIGH-BDI":  {"Momentum": 0.88, "Fundamental": 0.74, "Sentiment": 0.81, "Technical": 0.79, "Macro": 0.71},
-    "MATX-HIGH-BDI": {"Momentum": 0.76, "Fundamental": 0.82, "Sentiment": 0.70, "Technical": 0.73, "Macro": 0.68},
-    "GOGL-HIGH-MOM": {"Momentum": 0.91, "Fundamental": 0.69, "Sentiment": 0.77, "Technical": 0.83, "Macro": 0.85},
-    "DAC-HIGH-FND":  {"Momentum": 0.65, "Fundamental": 0.90, "Sentiment": 0.62, "Technical": 0.70, "Macro": 0.58},
-}
-
-
 def _factor_score_color(score: float) -> str:
     return C_HIGH if score >= 0.75 else (C_MOD if score >= 0.55 else C_LOW)
 
 
 def _render_factor_breakdown(signals: list[dict]) -> None:
+    """Per-signal strength for HIGH-conviction signals, built from REAL engine
+    output.
+
+    The engine emits single-factor signals (each signal IS one strategy/factor),
+    so it does not produce a true multi-factor decomposition. The former version
+    rendered a hand-coded 5-factor grid mapped to signals by list position —
+    fabricated numbers (and fake tickers) presented as a factor decomposition.
+    This shows only what the engine actually computes: the real strategy,
+    direction, and strength of each HIGH-conviction signal.
+    """
     try:
-        high_signals = [s for s in signals if s.get("conviction") == "HIGH"][:4]
+        high_signals = [s for s in signals if s.get("conviction") == "HIGH"]
         if not high_signals:
             return
 
         section_header(
-            "Multi-Factor Signal Breakdown",
-            "Factor decomposition for HIGH conviction signals",
+            "HIGH-Conviction Signal Strength",
+            "Real strategy, direction and strength for each HIGH-conviction signal",
         )
 
-        factors = ["Momentum", "Fundamental", "Sentiment", "Technical", "Macro"]
-        factor_keys = list(_FACTOR_SCORES.keys())
-
-        # Build one row per factor; columns = ticker/HIGH-conviction signals.
-        ticker_labels: list[str] = []
-        score_lookup: list[dict] = []
-        for idx, s in enumerate(high_signals):
-            ticker = s.get("ticker", "—")
-            sig_key = factor_keys[idx % len(factor_keys)]
-            ticker_labels.append(f"{ticker} {_dir_arrow(s.get('direction', 'FLAT'))}")
-            score_lookup.append(_FACTOR_SCORES[sig_key])
-
-        headers = ["Factor", *ticker_labels]
+        headers = ["Instrument", "Strategy / Factor", "Direction", "Strength"]
         rows: list[list[str]] = []
-        for f in factors:
-            row = [_sans(f, color=C_TEXT2, weight=600)]
-            for scores in score_lookup:
-                v = scores[f]
-                row.append(_mono(f"{v:.2f}", color=_factor_score_color(v)))
-            rows.append(row)
-
-        # Combined avg row
-        combined_row = [_sans("Combined", color=C_TEXT, weight=700)]
-        for scores in score_lookup:
-            avg = round(float(np.mean(list(scores.values()))), 2)
-            combined_row.append(_mono(f"{avg:.2f}", color=C_HIGH))
-        rows.append(combined_row)
+        for s in sorted(high_signals, key=lambda x: -float(x.get("strength", 0.0))):
+            v = float(s.get("strength", 0.0))
+            direction = s.get("direction", "FLAT")
+            rows.append([
+                _mono(s.get("ticker", "—"), color=C_TEXT),
+                _sans(s.get("sig_type", "—"), color=C_ACCENT, weight=600),
+                _sans(_dir_arrow(direction), color=_dir_color(direction), weight=700),
+                _mono(f"{v:.2f}", color=_factor_score_color(v)),
+            ])
 
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
@@ -445,20 +405,22 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
                         ]
                         y_vals = prices.tolist()
 
-                    # Signal markers
+                    # Signal markers. Engine signals are computed as of the
+                    # latest close, so they are marked at the most recent price
+                    # point — NOT a fabricated historical date (the former code
+                    # scattered them at random indices over the last 30 bars).
                     sig_list = [s for s in signals
                                 if isinstance(s, dict) and s.get("ticker") == ticker]
                     long_x, long_y, short_x, short_y = [], [], [], []
-                    rng2 = random.Random(stable_hash(ticker))
-                    for s in sig_list[:3]:
-                        idx = rng2.randint(max(0, len(x_vals) - 30), len(x_vals) - 1)
-                        px  = float(y_vals[idx])
-                        if s.get("direction") == "LONG":
-                            long_x.append(x_vals[idx])
-                            long_y.append(px)
-                        else:
-                            short_x.append(x_vals[idx])
-                            short_y.append(px)
+                    if x_vals and y_vals:
+                        last_x, last_px = x_vals[-1], float(y_vals[-1])
+                        for s in sig_list[:3]:
+                            if s.get("direction") == "LONG":
+                                long_x.append(last_x)
+                                long_y.append(last_px)
+                            elif s.get("direction") == "SHORT":
+                                short_x.append(last_x)
+                                short_y.append(last_px)
 
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(
@@ -521,33 +483,32 @@ def _render_price_signal_chart(stock_data: dict, signals: list[dict]) -> None:
 def _render_live_monitor(signals: list[dict]) -> None:
     try:
         section_header(
-            "Live Signal Monitor",
-            "Signals generated in last 24 h — newest first — auto-refreshes every 60 s",
+            "Current Signal Monitor",
+            "Signals the engine emits on the latest data — refreshes on each load",
         )
 
-        now_bucket = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")[:-1]  # 10-min buckets
-        live = _cached_signals("static", now_bucket)
-        live_24h = [s for s in live if s.get("mins_ago", 9999) <= 1440]
-
-        if not live_24h:
-            st.info("No signals in the last 24 hours.")
+        # Render the REAL signals this tab computed. The former version ignored
+        # them and rebuilt the table from an internal mock cache with random
+        # "X minutes ago" ages, presenting fabricated rows as a live 24-hour feed.
+        if not signals:
+            st.info("No signals on the current data.")
             return
 
+        # Dot reflects conviction (there is no genuine signal age to colour by).
         headers = ["", "Instrument", "Direction", "Conviction", "Signal Type",
-                   "Basis", "Strength", "Age"]
+                   "Basis", "Strength"]
         rows: list[list[str]] = []
-        for s in live_24h:
+        for s in signals:
             ticker    = s.get("ticker", "—")
             direction = s.get("direction", "FLAT")
             conv      = s.get("conviction", "LOW")
             strength  = s.get("strength", 0.0)
             sig_type  = s.get("sig_type", "—")
             basis     = s.get("basis", "—")
-            mins_ago  = s.get("mins_ago", 999)
             d_col     = _dir_color(direction)
             c_col     = _conv_color(conv)
-            age_str   = f"{mins_ago}m ago" if mins_ago < 60 else f"{mins_ago // 60}h {mins_ago % 60}m ago"
-            dot_col   = C_HIGH if mins_ago < 15 else (C_MOD if mins_ago < 60 else C_TEXT3)
+            dot_col   = (C_HIGH if conv == "HIGH"
+                         else (C_MOD if conv in ("MEDIUM", "MODERATE", "MOD") else C_TEXT3))
             dot       = (
                 f'<span style="display:inline-block;width:7px;height:7px;'
                 f'border-radius:50%;background:{dot_col};"></span>'
@@ -561,14 +522,13 @@ def _render_live_monitor(signals: list[dict]) -> None:
                 _sans(sig_type, color=C_ACCENT, weight=600),
                 _sans(basis, color=C_TEXT2),
                 _mono(f"{strength:.2f}"),
-                _sans(age_str, color=C_TEXT3),
             ])
 
         wsj_market_table(headers, rows)
         st.markdown(source_footer(_ALPHA_SOURCES), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"[tab_alpha] live monitor failed: {exc}")
-        st.info("Live signal monitor unavailable.")
+        st.info("Signal monitor unavailable.")
 
 # ---------------------------------------------------------------------------
 # Main render entry point
@@ -635,27 +595,27 @@ def render(
                                 "stop":      float(getattr(s, "stop_loss", 0.0)),
                                 "target":    float(getattr(s, "target_price", 0.0)),
                                 "rr":        float(getattr(s, "risk_reward", 1.5)),
-                                "mins_ago":  random.randint(1, 120),
                             })
                         except Exception:
                             pass
             except Exception as eng_exc:
                 logger.debug(f"[tab_alpha] engine signals skipped: {eng_exc}")
 
-            # Fall back to mock if empty
+            # No mock fallback: when the engine emits nothing (quiet markets or a
+            # dark price feed) the sections below show honest empty-states rather
+            # than fabricated signals. Surface that plainly up top.
             if not signals:
-                for row in _MOCK_SIGNALS:
-                    ticker, direction, conviction, strength, sig_type, basis, entry, stop, target, rr, mins_ago = row
-                    signals.append({
-                        "ticker": ticker, "direction": direction, "conviction": conviction,
-                        "strength": strength, "sig_type": sig_type, "basis": basis,
-                        "entry": entry, "stop": stop, "target": target,
-                        "rr": rr, "mins_ago": mins_ago,
-                    })
+                st.info(
+                    "No alpha signals fire on the current data. The engine emits "
+                    "a signal only when a real triggering condition is met on live "
+                    "prices — expected when markets are quiet or a price feed is "
+                    "unavailable. Methodology sections remain below."
+                )
 
-            # Sort: HIGH first, then by strength desc
+            # Sort: HIGH → MEDIUM/MODERATE → LOW, then by strength desc.
             signals.sort(key=lambda s: (
-                0 if s.get("conviction") == "HIGH" else (1 if s.get("conviction") in ("MODERATE", "MOD") else 2),
+                0 if s.get("conviction") == "HIGH"
+                else (1 if s.get("conviction") in ("MEDIUM", "MODERATE", "MOD") else 2),
                 -s.get("strength", 0.0),
             ))
 
