@@ -15,6 +15,11 @@ the net figures as a stress test, not a realized P&L. See ``DISCLAIMER``.
 A signal in the ledger is one round trip (enter at ``issue_close``, exit at the
 mark), so the full round-trip cost is deducted once per signal — regardless of
 direction, since the spread/commission/impact are paid whether long or short.
+
+SHORTS additionally pay a stock-borrow / financing fee that accrues per day held
+(longs pay none). The borrow rate is ASSUMED per liquidity tier (thin names cost
+more) and applied over the actual days-held; without it the net edge on a short
+book would be overstated and "conservative" would be a false claim for shorts.
 """
 from __future__ import annotations
 
@@ -58,16 +63,39 @@ _TICKER_COST: dict[str, CostAssumption] = {
     "GSL":  CostAssumption(14.0, 2.0, 18.0),  # 68 bp
 }
 
+# Assumed annualized stock-borrow / financing rate for SHORT positions, in
+# bps/year (longs pay none). Thin / hard-to-borrow names cost more. Assumed, not
+# measured. Anything not listed uses _BORROW_BPS_PER_YEAR_DEFAULT.
+_BORROW_BPS_PER_YEAR_DEFAULT = 75.0
+_BORROW_BPS_PER_YEAR: dict[str, float] = {
+    "ZIM": 60.0, "MATX": 50.0, "STNG": 75.0,
+    "SBLK": 75.0, "DAC": 100.0, "GOGL": 100.0,
+    "CMRE": 150.0, "GSL": 200.0,
+}
+
 DISCLAIMER = (
     "Net-of-cost figures apply an ASSUMED round-trip trading cost (bid-ask "
-    "half-spread + commission + market impact), not costs measured from real "
-    "fills. They are a conservative stress test, not realized P&L."
+    "half-spread + commission + market impact); shorts also accrue an assumed "
+    "stock-borrow fee per day held. These are not costs measured from real "
+    "fills — a conservative stress test, not realized P&L."
 )
 
 
 def cost_assumption(ticker: str) -> CostAssumption:
     """The cost assumption used for *ticker* (its tier override, or the default)."""
     return _TICKER_COST.get((ticker or "").upper(), DEFAULT_COST)
+
+
+def short_borrow_bps_per_year(ticker: str) -> float:
+    """Assumed annualized short-borrow rate for *ticker*, in bps/year."""
+    return _BORROW_BPS_PER_YEAR.get((ticker or "").upper(), _BORROW_BPS_PER_YEAR_DEFAULT)
+
+
+def short_borrow_cost_pct(ticker: str, days_held: float) -> float:
+    """Accrued short-borrow cost in PERCENT over *days_held* (0 for non-positive
+    days). Longs never call this — borrow is a short-only friction."""
+    days = max(0.0, float(days_held))
+    return short_borrow_bps_per_year(ticker) / 100.0 * (days / 365.0)
 
 
 def round_trip_cost_bps(ticker: str) -> float:
@@ -80,11 +108,21 @@ def round_trip_cost_pct(ticker: str) -> float:
     return round_trip_cost_bps(ticker) / 100.0
 
 
-def net_of_cost_pct(gross_return_pct: float, ticker: str) -> float:
-    """Deduct one round-trip cost from a gross % return (a single entry+exit).
+def net_of_cost_pct(
+    gross_return_pct: float,
+    ticker: str,
+    *,
+    is_short: bool = False,
+    days_held: float = 0.0,
+) -> float:
+    """Deduct trading cost from a gross % return (a single entry+exit).
 
-    Works for signed returns too: a signal is one round trip and the friction is
-    paid whether the position is long or short, so the full round-trip cost is
-    subtracted from the signed return.
+    Works for signed returns: a signal is one round trip and the spread/
+    commission/impact are paid whether long or short, so the full round-trip
+    cost is always subtracted. SHORTS additionally pay an assumed stock-borrow
+    fee accrued over ``days_held`` (longs pay no borrow).
     """
-    return float(gross_return_pct) - round_trip_cost_pct(ticker)
+    cost = round_trip_cost_pct(ticker)
+    if is_short:
+        cost += short_borrow_cost_pct(ticker, days_held)
+    return float(gross_return_pct) - cost

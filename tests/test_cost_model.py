@@ -11,6 +11,8 @@ from processing.cost_model import (
     net_of_cost_pct,
     round_trip_cost_bps,
     round_trip_cost_pct,
+    short_borrow_bps_per_year,
+    short_borrow_cost_pct,
 )
 
 
@@ -60,3 +62,31 @@ def test_cost_assumption_returns_default_for_unknown() -> None:
 def test_disclaimer_flags_assumed_not_measured() -> None:
     assert "ASSUMED" in DISCLAIMER
     assert "not" in DISCLAIMER.lower()
+    assert "borrow" in DISCLAIMER.lower()  # short-borrow now disclosed
+
+
+# ── short-borrow (shorts pay financing per day held; longs do not) ───────────
+
+def test_short_borrow_accrues_over_days() -> None:
+    # 365 days of borrow == one year's rate, expressed in percent.
+    assert short_borrow_cost_pct("ZIM", 365) == pytest.approx(
+        short_borrow_bps_per_year("ZIM") / 100.0)
+    assert short_borrow_cost_pct("ZIM", 0) == 0.0
+    assert short_borrow_cost_pct("ZIM", -5) == 0.0  # clamped, never negative
+
+
+def test_short_pays_borrow_on_top_of_round_trip() -> None:
+    long_net = net_of_cost_pct(5.0, "SBLK")  # long: round trip only
+    short_net = net_of_cost_pct(5.0, "SBLK", is_short=True, days_held=60)
+    assert long_net == pytest.approx(5.0 - 0.40)  # SBLK 40 bp round trip
+    assert short_net < long_net                   # borrow accrues on top
+
+
+def test_thin_name_borrows_more_than_liquid() -> None:
+    assert short_borrow_bps_per_year("GSL") > short_borrow_bps_per_year("ZIM")
+
+
+def test_long_pays_no_borrow_even_with_days_held() -> None:
+    # is_short defaults False — a long is unaffected by days_held.
+    assert net_of_cost_pct(5.0, "ZIM", days_held=90) == pytest.approx(
+        net_of_cost_pct(5.0, "ZIM"))

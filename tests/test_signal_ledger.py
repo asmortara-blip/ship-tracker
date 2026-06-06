@@ -150,6 +150,37 @@ def test_oos_scorecard_reports_net_significance() -> None:
     assert "Net of assumed costs" in sc["verdict"]
 
 
+def test_net_of_cost_winning_short_pays_borrow_on_top_of_round_trip() -> None:
+    from state.signal_ledger import freeze_ideas, mark_ledger
+    freeze_ideas([_Idea("SBLK", "Bearish", price=100.0)], issue_date="2026-06-01")
+    marks = mark_ledger(_stock({"SBLK": 90.0}))  # short wins as the price falls
+    assert len(marks) == 1
+    m = marks[0]
+    assert m["signed_return_pct"] == pytest.approx(10.0)  # +10% gross winning short
+    assert m["win"] is True and m["net_win"] is True
+    # Net = gross − 0.40% round-trip − short borrow (>0 over the held period), so
+    # a short's net is strictly below the long-equivalent (gross − round-trip).
+    assert m["net_signed_return_pct"] < 10.0 - 0.40
+
+
+def test_oos_scorecard_edge_dies_net_of_costs() -> None:
+    from state.signal_ledger import freeze_ideas, oos_scorecard
+    # 30 LONG ideas, gross returns mean 0.50% / sd 0.75% (a deterministic ramp):
+    # comfortably significant GROSS, but the edge evaporates once you pay the
+    # 0.40% default round-trip cost — the headline verdict flip.
+    n = 30
+    mid = (n - 1) / 2
+    sd_units = (sum((i - mid) ** 2 for i in range(n)) / n) ** 0.5
+    rets = [0.50 + 0.75 * ((i - mid) / sd_units) for i in range(n)]
+    freeze_ideas([_Idea(f"L{i}", "Bullish", price=100.0) for i in range(n)],
+                 issue_date="2026-06-01")
+    stock = _stock({f"L{i}": 100.0 * (1.0 + rets[i] / 100.0) for i in range(n)})
+    sc = oos_scorecard(stock, min_n=5)
+    assert sc["net_psr"] < sc["psr"]
+    assert sc["is_significant"] and not sc["net_is_significant"]
+    assert "does NOT clear net of costs" in sc["verdict"]
+
+
 # ── OOS significance scorecard (R004 x R101) ────────────────────────────────
 
 def test_oos_scorecard_insufficient_history() -> None:

@@ -59,6 +59,37 @@ def _latest_close_after(stock_data, ticker: str, after_date) -> Optional[float]:
         return None
 
 
+def _latest_date_after(stock_data, ticker: str, after_date):
+    """Date of the forward close strictly after ``after_date`` (the mark date).
+
+    Mirrors :func:`_latest_close_after` but returns the index timestamp, so the
+    ledger can compute the holding period for the short-borrow cost.
+    """
+    try:
+        import pandas as pd
+
+        from processing.book_pnl import _close_series
+        s = _close_series(stock_data, ticker)
+        if s is None or s.empty or not isinstance(s.index, pd.DatetimeIndex):
+            return None
+        cutoff = pd.to_datetime(after_date)
+        fwd = s[s.index > cutoff]
+        return fwd.index[-1] if not fwd.empty else None
+    except Exception:
+        return None
+
+
+def _days_held(issue_date, mark_date) -> int:
+    """Calendar days from ``issue_date`` to ``mark_date`` (>= 0), else 0."""
+    if not issue_date or mark_date is None:
+        return 0
+    try:
+        import pandas as pd
+        return max(0, (pd.to_datetime(mark_date) - pd.to_datetime(issue_date)).days)
+    except Exception:
+        return 0
+
+
 def freeze_ideas(ideas, *, issue_date: Optional[str] = None, stock_data=None) -> int:
     """Freeze each idea as a ledger row, idempotent per (ticker, date, direction).
 
@@ -149,10 +180,17 @@ def mark_ledger(stock_data) -> list[dict]:
         ret = (cur - issue_close) / issue_close
         signed = ret * _dir_sign(r["direction"])
         signed_pct = signed * 100.0
-        # Net of an ASSUMED round-trip trading cost (one entry + one exit per
-        # signal; friction paid long or short). Gross is kept untouched; net is
-        # a conservative stress test — see processing.cost_model.DISCLAIMER.
-        net_pct = net_of_cost_pct(signed_pct, r["ticker"])
+        # Net of an ASSUMED trading cost: one round trip (entry+exit, paid long
+        # or short) PLUS, for shorts, a borrow fee accrued over the holding
+        # period. Gross is kept untouched; net is a conservative stress test —
+        # see processing.cost_model.DISCLAIMER.
+        is_short = _dir_sign(r["direction"]) < 0
+        days_held = _days_held(
+            r.get("issue_date"),
+            _latest_date_after(stock_data, r["ticker"], r.get("issue_date")),
+        )
+        net_pct = net_of_cost_pct(
+            signed_pct, r["ticker"], is_short=is_short, days_held=days_held)
         out.append({
             **r,
             "current_close": float(cur),
@@ -173,7 +211,8 @@ def track_record_summary(stock_data) -> dict:
     if n == 0:
         return {"n": 0, "hit_rate": 0.0, "mean_signed_return_pct": 0.0,
                 "net_hit_rate": 0.0, "mean_net_signed_return_pct": 0.0,
-                "cost_drag_pct": 0.0, "by_label": {}}
+                "cost_drag_pct": 0.0, "cost_disclaimer": COST_DISCLAIMER,
+                "by_label": {}}
     wins = sum(1 for m in marked if m["win"])
     net_wins = sum(1 for m in marked if m["net_win"])
     mean = sum(m["signed_return_pct"] for m in marked) / n
