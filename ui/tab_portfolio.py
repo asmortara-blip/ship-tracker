@@ -1547,6 +1547,33 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
                 "sublabel": f"{bt.mean_return_bps:+.1f} bps / wk",
             },
         ])
+
+        # R114 (follow-on): the focus carrier is the BEST-R² of N — its raw PSR
+        # is selection-inflated. Run the backtest across all fitted carriers and
+        # apply a Benjamini-Hochberg FDR haircut so the displayed edge is honest
+        # about the multiple-comparisons surface.
+        try:
+            from processing.stat_significance import TrialsLedger
+            ledger = TrialsLedger("carrier-residual")
+            for tkr in fits:
+                try:
+                    cbt = bt if tkr == focus_ticker else residual_signal_backtest(
+                        returns_df[tkr], factors_df, name=tkr, lookback=52)
+                    ledger.add_sharpe(tkr, cbt.psr)
+                except ValueError:
+                    continue
+            if ledger.n_trials >= 2:
+                verdicts = {v.name: v for v in ledger.corrected(alpha=0.05)}
+                n_surv = sum(1 for v in verdicts.values() if v.survives_fdr)
+                fv = verdicts.get(focus_ticker)
+                focus_ok = "survives" if (fv and fv.survives_fdr) else "does NOT survive"
+                st.caption(
+                    f"Multiple-testing (R114): {n_surv}/{ledger.n_trials} carriers "
+                    f"clear the Benjamini-Hochberg FDR across the selection set; "
+                    f"{focus_ticker} (best-R²) {focus_ok} the haircut — a single "
+                    f"carrier's raw PSR is selection-inflated.")
+        except Exception as exc:
+            logger.debug(f"carrier FDR correction skipped: {exc}")
     except Exception as e:
         logger.warning(f"carrier factor lens error: {e}")
 
