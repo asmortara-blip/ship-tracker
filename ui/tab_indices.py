@@ -675,6 +675,34 @@ def _render_cointegration(
 
     top = reports[0]
     if top.engle_granger.is_cointegrated:
+        # Spread-strategy walk-forward backtest — gross vs NET of an assumed
+        # turnover cost (R103). Trading the spread means trading both legs each
+        # entry/exit; this shows whether the mean-reversion edge survives that.
+        try:
+            from engine.cointegration import walk_forward_backtest  # noqa: PLC0415
+            sa = all_series.get(top.y, pd.Series(dtype=float)).dropna()
+            sb = all_series.get(top.x, pd.Series(dtype=float)).dropna()
+            common = sa.index.intersection(sb.index)
+            if len(common) >= 160:
+                yv = sa.loc[common].astype(float); yv.name = top.y
+                xv = sb.loc[common].astype(float); xv.name = top.x
+                bt = walk_forward_backtest(yv, xv)
+                metric_card_row([
+                    {"label": "Spread Sharpe (gross)",
+                     "value": f"{bt.sharpe:+.2f}",
+                     "accent": C_HIGH if bt.sharpe > 0 else C_LOW,
+                     "sublabel": f"{bt.n_trades} trades · walk-forward"},
+                    {"label": "Spread Sharpe (net of cost)",
+                     "value": f"{bt.net_sharpe:+.2f}",
+                     "accent": C_HIGH if bt.net_sharpe > 0 else C_LOW,
+                     "sublabel": "after assumed turnover cost (both legs)"},
+                    {"label": "Info Ratio vs B&H",
+                     "value": f"{bt.information_ratio:+.2f}",
+                     "accent": C_HIGH if bt.information_ratio > 0 else C_LOW,
+                     "sublabel": f"{top.y} – {top.x}"},
+                ], columns=3)
+        except Exception as exc:
+            logger.debug("coint backtest spotlight skipped: {}", exc)
         try:
             spread = top.spread
             mu = float(spread.mean())
