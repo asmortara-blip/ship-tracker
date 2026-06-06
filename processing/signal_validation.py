@@ -726,10 +726,119 @@ def build_validation_report(
     )
 
 
+def build_ledger_validation_report(
+    stock_data: dict,
+    *,
+    forward_days: int = _DEFAULT_FORWARD_DAYS,
+) -> ValidationReport:
+    """Causal, look-ahead-free validation from the FROZEN signal ledger (rec R016).
+
+    :func:`build_validation_report` re-scores TODAY's cascade ideas over PAST
+    return windows — a look-ahead the platform openly admitted (DATA_PROVENANCE).
+    This reads the point-in-time ledger instead: every idea was frozen AT ISSUE
+    (close + direction + conviction) and is marked ONLY on strictly-later closes,
+    so each row is one genuinely out-of-sample, causal observation. There is no
+    resampling of overlapping windows — one realized outcome per frozen signal,
+    fewer but honest.
+
+    Per conviction tier it reports the realized directional hit-rate against an
+    **equal-weight always-long base rate** over the same names/holding windows
+    (the fraction of those names that simply rose) — a tier only earns its keep
+    by beating naive long-everything. Returns an empty-but-valid report (never
+    raises) until the daily freeze job has accrued marked history.
+    """
+    report = ValidationReport(
+        forward_days=forward_days,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        source=DataSource(
+            name="Frozen point-in-time signal ledger (causal, look-ahead-free)",
+            kind=DataKind.MODELED, quality=DataQuality.GOOD,
+        ),
+    )
+    try:
+        from state.signal_ledger import mark_ledger
+        marks = [m for m in mark_ledger(stock_data)
+                 if m.get("issue_close") and m.get("current_close")]
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("build_ledger_validation_report: ledger read failed")
+        marks = []
+
+    if not marks:
+        report.summary = (
+            "No frozen, marked signals yet — the causal track record accrues as "
+            "ideas are issued and marked forward (look-ahead-free)."
+        )
+        return report
+
+    # Equal-weight always-long base rate: the fraction of the marked names that
+    # simply rose over their own holding window. The honest naive benchmark.
+    raw = [(m["current_close"] - m["issue_close"]) / m["issue_close"] for m in marks]
+    baseline = round(sum(1 for r in raw if r > 0) / len(raw), 4)
+
+    signals: list[SignalValidation] = []
+    for m, raw_ret in zip(marks, raw):
+        signed = m["signed_return_pct"] / 100.0
+        win = signed > 0
+        signals.append(SignalValidation(
+            signal_id=str(m.get("ticker") or ""),
+            signal_kind="frozen ledger idea",
+            direction=str(m.get("direction") or ""),
+            conviction_label=str(m.get("conviction_label") or "?"),
+            conviction_score=round(float(m.get("conviction_score") or 0.0), 4),
+            forward_days=forward_days,
+            n_observations=1,                 # one causal OOS outcome per signal
+            n_hits=1 if win else 0,
+            hit_rate=1.0 if win else 0.0,
+            avg_forward_return=round(raw_ret, 4),
+            directional_return=round(signed, 4),
+            baseline_hit_rate=baseline,
+            edge_vs_baseline=round((1.0 if win else 0.0) - baseline, 4),
+            low_sample=True,                  # a single realized outcome so far
+            note="single realized out-of-sample outcome (point-in-time)",
+        ))
+
+    # Tier aggregation — stable cascade order first, then any extras.
+    by_tier: dict[str, list] = {}
+    for s in signals:
+        by_tier.setdefault(s.conviction_label, []).append(s)
+    ordered = [t for t in _CONVICTION_TIERS if t in by_tier] + \
+              sorted(t for t in by_tier if t not in _CONVICTION_TIERS)
+    tiers: list[TierScore] = []
+    for tier in ordered:
+        ss = by_tier[tier]
+        n = len(ss)
+        hr = round(sum(s.n_hits for s in ss) / n, 4)
+        tiers.append(TierScore(
+            tier=tier, n_signals=n, n_observations=n, hit_rate=hr,
+            avg_forward_return=round(sum(s.avg_forward_return for s in ss) / n, 4),
+            directional_return=round(sum(s.directional_return for s in ss) / n, 4),
+            baseline_hit_rate=baseline,
+            edge_vs_baseline=round(hr - baseline, 4),
+        ))
+
+    n_all = len(signals)
+    overall_hr = round(sum(s.n_hits for s in signals) / n_all, 4)
+    report.signals = signals
+    report.tiers = tiers
+    report.overall_hit_rate = overall_hr
+    report.overall_baseline_hit_rate = baseline
+    report.overall_edge = round(overall_hr - baseline, 4)
+    report.overall_directional_return = round(
+        sum(s.directional_return for s in signals) / n_all, 4)
+    report.n_signals_validated = n_all
+    report.summary = (
+        f"{n_all} frozen signal(s) marked forward (causal, look-ahead-free): "
+        f"{overall_hr * 100:.0f}% directional hit-rate vs {baseline * 100:.0f}% "
+        f"always-long base rate ({(overall_hr - baseline) * 100:+.0f} pts edge)."
+    )
+    return report
+
+
 __all__ = [
     "SignalValidation",
     "TierScore",
     "ValidationReport",
     "validate_signals",
     "build_validation_report",
+    "build_ledger_validation_report",
 ]
