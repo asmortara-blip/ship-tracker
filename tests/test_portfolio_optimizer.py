@@ -284,3 +284,15 @@ def test_walk_forward_reports_net_of_cost_sharpe() -> None:
     assert bt.turnover_per_year > 0.0
     assert bt.net_annualized_return < bt.annualized_return  # guaranteed: cost > 0
     assert bt.net_sharpe <= bt.sharpe
+
+
+def test_single_rebalance_costs_establishment_but_reports_zero_turnover() -> None:
+    # Exactly one rebalance (train 120 + hold 21 = 141 rows). The one-time
+    # from-cash book establishment is CHARGED (net < gross) but is NOT counted
+    # in the steady-state turnover metric — so it can't inflate it to a
+    # misleading "12×/yr" on short windows (R103 review finding).
+    bt = walk_forward_backtest(_synth_returns(n=141, seed=9),
+                               "max_sharpe", train_window=120, rebal_freq=21)
+    assert bt.n_rebalances == 1
+    assert bt.turnover_per_year == 0.0                      # no ongoing churn
+    assert bt.net_annualized_return < bt.annualized_return  # establishment costed
