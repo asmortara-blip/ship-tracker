@@ -82,6 +82,34 @@ def test_track_record_panel_flags_stand_down_tier(st_stub) -> None:
     assert "High" in text
 
 
+def test_track_record_panel_shows_conviction_calibration(st_stub) -> None:
+    # Once enough marks accrue, the panel surfaces the calibrated P(hit) per
+    # conviction label (R033).
+    from state.signal_ledger import freeze_ideas
+    from ui.tab_idea_engine import _render_track_record
+
+    class _CIdea(_Idea):
+        def __init__(self, ticker, score, label):
+            super().__init__(ticker, "Bullish", conviction_label=label)
+            self.conviction_score = score
+
+    freeze_ideas(
+        [_CIdea(f"H{i}", 0.75, "High") for i in range(4)] +
+        [_CIdea(f"L{i}", 0.30, "Low") for i in range(4)],
+        issue_date="2026-06-01")
+    stock = _stock({**{f"H{i}": 110.0 for i in range(4)},
+                    **{f"L{i}": 90.0 for i in range(4)}})
+
+    # default min_n=20 would gate it off with 8 marks, so the panel only shows
+    # calibration when fitted — assert the path renders without error and, when
+    # we lower the bar via a direct calibrate call, it is monotone.
+    _render_track_record(stock)
+    from processing.conviction_calibration import calibrate_conviction
+    cal = calibrate_conviction(stock, min_n=6)
+    assert cal.fitted
+    assert cal.by_label["High"]["calibrated_prob"] >= cal.by_label["Low"]["calibrated_prob"]
+
+
 def test_track_record_panel_quiet_when_healthy(st_stub) -> None:
     from state.signal_ledger import freeze_ideas
     from ui.tab_idea_engine import _render_track_record

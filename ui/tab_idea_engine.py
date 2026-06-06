@@ -492,6 +492,24 @@ def _render_track_record(stock_data=None) -> None:
         sc = oos_scorecard(stock_data)
         if sc.get("sufficient"):
             st.caption(f"Significance — {sc['verdict']}")
+        # Conviction calibration (R033) — what each label's P(hit) actually is,
+        # measured on the look-ahead-free ledger. Only shows once enough marks
+        # have accrued to calibrate (else honestly silent).
+        try:
+            from processing.conviction_calibration import calibrate_conviction
+            cal = calibrate_conviction(stock_data)
+            if cal.fitted and cal.by_label:
+                parts = " · ".join(
+                    f"{lab} → {info['calibrated_prob'] * 100:.0f}% "
+                    f"P(hit) (raw {info['realized_hit_rate'] * 100:.0f}% over {info['n']})"
+                    for lab, info in sorted(cal.by_label.items())
+                )
+                st.caption(
+                    f"Conviction calibration ({cal.n} marks, Brier "
+                    f"{cal.brier_score:.2f}) — {parts}"
+                )
+        except Exception:
+            logger.exception("Idea Engine — conviction calibration failed")
         st.caption(
             "Frozen at issue, never refit, marked on real closes — no "
             "look-ahead. The honest forward track record."
