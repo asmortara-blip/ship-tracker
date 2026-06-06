@@ -729,6 +729,23 @@ def _render_cointegration(
                      "accent": C_HIGH if bt.information_ratio > 0 else C_LOW,
                      "sublabel": f"{top.y} – {top.x}"},
                 ], columns=3)
+                # Regime-conditional: does the spread edge survive high-vol tape?
+                try:
+                    from processing.regime_conditional import survives_in_stress  # noqa: PLC0415
+                    strat_ret = bt.equity_curve.diff().dropna()
+                    if len(strat_ret) >= 60 and float(strat_ret.std()) > 0:
+                        rc = survives_in_stress(strat_ret, periods_per_year=252)
+                        hv = rc["by_regime"].get("high-vol")
+                        lv = rc["by_regime"].get("low-vol")
+                        if hv and lv:
+                            verdict = ("survives high-vol" if rc["survives_in_stress"]
+                                       else "calm-tape only")
+                            st.caption(
+                                f"Regime-conditional — spread Sharpe in high-vol "
+                                f"{hv.sharpe:+.2f} vs low-vol {lv.sharpe:+.2f}: "
+                                f"{verdict}.")
+                except Exception as exc:
+                    logger.debug(f"coint regime split skipped: {exc}")
         except Exception as exc:
             logger.debug("coint backtest spotlight skipped: {}", exc)
         try:

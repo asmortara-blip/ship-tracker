@@ -336,6 +336,35 @@ def _render_ssi_overview(report) -> None:
         })
     metric_card_row(cards, columns=4)
 
+    # ─ Effective fleet supply — how much nominal capacity is immobilised by
+    #   congestion + chokepoint diversion ("supply destruction by friction").
+    try:
+        from processing.effective_capacity import effective_supply
+        cong, chok = components.get("congestion"), components.get("chokepoint")
+        if cong is not None and chok is not None:
+            es = effective_supply(float(cong), float(chok))
+            section_header(
+                "Effective Fleet Supply",
+                "Nominal capacity discounted by congestion + chokepoint diversion")
+            metric_card_row([
+                {"label": "Effective Supply",
+                 "value": f"{es.effective_supply_pct * 100:.0f}%",
+                 "accent": _stress_color(es.drag_pct),
+                 "sublabel": "of nominal fleet capacity"},
+                {"label": "Friction Drag",
+                 "value": f"{es.drag_pct * 100:.0f}%",
+                 "accent": _stress_color(es.drag_pct),
+                 "sublabel": (f"congestion {es.congestion_drag * 100:.0f}% · "
+                              f"diversion {es.diversion_drag * 100:.0f}%")},
+            ], columns=2)
+            st.caption(
+                "Effective supply below nominal means vessel-days + ton-miles are "
+                "absorbed by friction — when freight rises into this, tightness is "
+                "supply-destruction-driven, not demand. Modeled weights "
+                "(congestion/diversion 50/50, drag capped at 60%).")
+    except Exception as exc:
+        logger.debug(f"effective supply readout skipped: {exc}")
+
     # ─ Top disruptions, if the report surfaced any ─
     top: list = getattr(report, "top_disruptions", []) or []
     _render_top_disruptions(top)
