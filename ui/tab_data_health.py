@@ -2879,10 +2879,12 @@ def _render_feed_confidence() -> None:
              "sublabel": f"{ov['label']} · {ov['n']} fetches (24h)"},
         ], columns=1)
         if rep["by_source"]:
+            # Plain-text cells (the label conveys the level) — no inline <span
+            # style>, which the tab's inline-style budget deliberately caps to
+            # keep the migration to ui.styles helpers from regressing.
             rows = [[
                 r.source,
-                (f"<span style='color:{_cc(r.label)};font-weight:600'>"
-                 f"{r.confidence * 100:.0f}% ({r.label})</span>"),
+                f"{r.confidence * 100:.0f}% ({r.label})",
                 f"{r.realness_rate * 100:.0f}%",
                 f"{r.freshness_rate * 100:.0f}%",
                 f"{r.synthetic_rate * 100:.0f}%",
