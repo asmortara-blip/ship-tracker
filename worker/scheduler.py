@@ -519,6 +519,81 @@ def run_signal_drawdown_job(data_bundle: dict) -> dict:
         return {"checked": 0, "stand_down": 0, "alerted": 0, "skipped_cooldown": 0}
 
 
+def run_forecast_logging_job(data_bundle: dict, *, root=None) -> dict:
+    """Append today's route stress forecasts + realized actuals, then pair (R046).
+
+    The predicted-vs-actual tracker only PAIRS + summarizes; the emission side was
+    left as this scheduler wiring step. Each daily pass:
+
+      1. rebuilds the SSI + ``forecast_all_stress`` from the same bundle the
+         briefing uses, and ``log_forecast``s each route's 7d/30d stress
+         projection WITH its R023 interval (``forecast_sigma``) and the
+         forecast-time level as the persistence ``baseline_value`` (so R029's
+         CRPS/PIT/coverage/skill have something to score);
+      2. ``log_actual``s today's realized stress level per route — which is the
+         actual a forecast made N days ago (targeting today) pairs against;
+      3. pairs + summarizes via ``run_forecast_log_job``.
+
+    Idempotent-friendly: the pair layer dedupes on (lane, date, horizon) /
+    (lane, date), so a re-run the same day does not double-count. Never raises —
+    a logging failure must not touch the briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.disruption_forecast import forecast_all_stress
+        from processing.forecast_accuracy_tracker import (
+            ActualRecord, ForecastRecord, log_actual, log_forecast,
+            run_forecast_log_job, should_log_forecast_today,
+        )
+
+        if not should_log_forecast_today():
+            return {"ok": True, "skipped": True, "forecasts": 0, "actuals": 0}
+
+        stress = compute_shipping_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("port_results", []), bundle.get("route_results", []),
+        )
+        forecasts = forecast_all_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("route_results", []), stress_report=stress,
+        )
+        today = datetime.now(timezone.utc).date().isoformat()
+        n_fc = n_act = 0
+        for f in forecasts or []:
+            rid = str(getattr(f, "route_id", "") or "")
+            if not rid:
+                continue
+            cur = float(getattr(f, "current_stress", 0.0) or 0.0)
+            sigma = float(getattr(f, "forecast_sigma", 0.0) or 0.0)
+            for horizon, value, h_sigma in (
+                (30, float(getattr(f, "stress_30d", cur) or 0.0), sigma),
+                (7, float(getattr(f, "stress_7d", cur) or 0.0),
+                 sigma * (7.0 / 30.0) ** 0.5),
+            ):
+                log_forecast(ForecastRecord(
+                    forecast_date_iso=today, horizon_days=horizon,
+                    predicted_value=value, lane_id=rid,
+                    predicted_sigma=h_sigma, baseline_value=cur,
+                ), root=root)
+                n_fc += 1
+            log_actual(ActualRecord(
+                actual_date_iso=today, actual_value=cur, lane_id=rid,
+            ), root=root)
+            n_act += 1
+
+        pair = run_forecast_log_job(root=root)
+        logger.info(
+            f"run_forecast_logging_job: logged {n_fc} forecast(s) + {n_act} "
+            f"actual(s); {pair.get('n_pairs', 0)} pair(s) scored"
+        )
+        return {"ok": True, "forecasts": n_fc, "actuals": n_act,
+                "n_pairs": int(pair.get("n_pairs", 0))}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"run_forecast_logging_job: failed: {exc}")
+        return {"ok": False, "forecasts": 0, "actuals": 0, "error": str(exc)}
+
+
 def run_briefing_tldr_job(data_bundle: dict) -> dict:
     """Generate the day's one-paragraph briefing TLDR once and persist
     ready-to-send artifacts (gated by should_send). Never raises.
@@ -2054,6 +2129,11 @@ def main(argv: Optional[list] = None) -> int:
         # freeze; the alerter self-gates each tier with a 24h cooldown.
         _run_always("signal drawdown kill-switch",
                     lambda: run_signal_drawdown_job(bundle))
+        # Predicted-vs-actual forecast logging (R046) — emit today's route stress
+        # forecasts (with R023 intervals) + realized actuals, then pair, so the
+        # R029 calibration scores accrue real history. Reuses the daily bundle.
+        _run_always("forecast logging",
+                    lambda: run_forecast_logging_job(bundle))
     else:
         print(json.dumps(
             {"briefing": "skipped", "reason": "ran within the daily interval"}
