@@ -31,30 +31,40 @@ def test_route_to_chokepoints_inverts_registry() -> None:
 
 
 def test_chokepoint_shares_is_a_spof_signal() -> None:
-    # 90% of the book on a single chokepoint's route -> high HHI; a
-    # chokepoint-free book -> empty -> HHI 0 (NOT a chokepoint SPOF).
+    # 90% of the book on a single chokepoint's route -> max exposure 0.9; a
+    # chokepoint-free book -> empty -> 0 (NOT a chokepoint SPOF).
+    from processing.company_concentration_alerts import _axis_concentration
     r2c = {"r_suez": ["suez"], "r_open": []}
     cp = chokepoint_shares({"r_suez": 0.9, "r_open": 0.1}, route_to_cp=r2c)
     assert cp == {"suez": pytest.approx(0.9)}
-    assert _hhi_from_shares(list(cp.values())) == pytest.approx(0.81)
+    assert _axis_concentration("chokepoint", cp) == pytest.approx(0.9)
 
     free = chokepoint_shares({"r_open": 1.0}, route_to_cp=r2c)
-    assert free == {} and _hhi_from_shares(list(free.values())) == 0.0
+    assert free == {} and _axis_concentration("chokepoint", free) == 0.0
 
 
-def test_chokepoint_shares_splits_multi_chokepoint_routes() -> None:
-    # A route through two chokepoints splits its weight evenly.
-    r2c = {"r": ["suez", "babelmandeb"]}
-    cp = chokepoint_shares({"r": 1.0}, route_to_cp=r2c)
-    assert cp == {"suez": pytest.approx(0.5), "babelmandeb": pytest.approx(0.5)}
+def test_serial_chokepoints_each_carry_full_route_weight() -> None:
+    # Chokepoints on a lane are SERIAL: closing ANY ONE blocks the route, so
+    # each carries the route's FULL weight (not a 1/K split). A book 100% on a
+    # 5-chokepoint lane is a 100% SPOF on each -> max exposure 1.0 (CRITICAL),
+    # NOT the 0.20 the old split produced.
+    from processing.company_concentration_alerts import _axis_concentration
+    r2c = {"asia_europe": ["suez", "malacca", "bab_el_mandeb", "gibraltar", "dover"]}
+    cp = chokepoint_shares({"asia_europe": 1.0}, route_to_cp=r2c)
+    assert all(v == pytest.approx(1.0) for v in cp.values())
+    assert _axis_concentration("chokepoint", cp) == pytest.approx(1.0)
 
 
 def test_axis_shares_real_ticker_structural() -> None:
-    # commodity axis sums to ~1; chokepoint axis sums to <= 1 (exposed fraction).
+    # commodity axis sums to ~1 (a partition); chokepoint axis OVERLAPS (serial)
+    # so it can sum to > 1, but no single chokepoint exceeds the whole book and
+    # the concentration (max exposure) stays in [0, 1].
+    from processing.company_concentration_alerts import _axis_concentration
     comm = axis_shares("ZIM", "commodity")
     assert abs(sum(comm.values()) - 1.0) < 1e-6
     cp = axis_shares("ZIM", "chokepoint")
-    assert sum(cp.values()) <= 1.0 + 1e-9
+    assert all(0.0 <= v <= 1.0 + 1e-9 for v in cp.values())
+    assert 0.0 <= _axis_concentration("chokepoint", cp) <= 1.0
 
 
 def test_alert_fires_critical_on_single_axis_concentration(monkeypatch) -> None:
@@ -66,7 +76,7 @@ def test_alert_fires_critical_on_single_axis_concentration(monkeypatch) -> None:
     assert len(alerts) == 1
     a = alerts[0]
     assert a.axis == "chokepoint" and a.severity == "CRITICAL"
-    assert a.hhi == pytest.approx(1.0)
+    assert a.concentration == pytest.approx(1.0)
     assert a.top_keys[0][0] == "suez"
 
 
@@ -85,4 +95,4 @@ def test_compute_never_raises_on_bad_input() -> None:
     out = compute_axis_concentration_alerts(["ZIM", "MATX"])
     assert isinstance(out, list)
     for a in out:
-        assert 0.0 <= a.hhi <= 1.0 and a.axis in ("commodity", "route", "chokepoint")
+        assert 0.0 <= a.concentration <= 1.0 and a.axis in ("commodity", "route", "chokepoint")
