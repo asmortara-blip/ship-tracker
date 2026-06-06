@@ -306,51 +306,52 @@ def _optimal_booking_window() -> None:
 
 # ── Section 4: Contract vs Spot Analysis ──────────────────────────────────────
 
-def _contract_vs_spot_analysis() -> None:
-    section_header("Long-Term Contract vs Spot Analysis",
-                   "Route-level recommendation: lock in a contract or ride the spot market?")
+def _contract_vs_spot_analysis(freight_data=None, macro_data=None) -> None:
+    section_header(
+        "Long-Term Contract vs Spot Analysis",
+        "Route-level LOCK / RIDE / SPLIT from the live ML rate forecast — "
+        "lock a contract or ride the spot?",
+    )
     try:
-        rows = []
-        for route in _ROUTES:
-            rng = random.Random(_seed_for(route))
-            ltc   = rng.randint(1800, 3200)
-            spot  = rng.randint(1400, 4000)
-            spread = spot - ltc
-            vol   = rng.uniform(12, 35)
-            brkevn = round(abs(spread) / (ltc * vol / 100), 1)
-            if spread > 300:
-                rec, rec_color = "USE LTC", C_HIGH
-            elif spread < -200:
-                rec, rec_color = "RIDE SPOT", C_ACCENT
-            else:
-                rec, rec_color = "NEUTRAL", C_MOD
-            rows.append({
-                "route": route, "ltc": ltc, "spot": spot,
-                "spread": spread, "vol": vol, "brkevn": brkevn,
-                "rec": rec, "rec_color": rec_color,
-            })
+        from processing.rate_lock_decision import decide_all_rate_locks
 
-        headers = ["Route", "LTC Rate", "Spot Rate", "Spread", "Volatility", "Breakeven", "Signal"]
+        decisions = decide_all_rate_locks(freight_data or {}, macro_data or {})
+        if not decisions:
+            st.info(
+                "No live rate forecast available yet — connect freight-rate "
+                "history and the ML forecaster surfaces real LOCK / RIDE / SPLIT "
+                "recommendations here. No fabricated rates are shown."
+            )
+            st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
+            return
+
+        _VERDICT_COLOR = {"LOCK": C_HIGH, "RIDE": C_ACCENT, "SPLIT": C_MOD}
+        headers = ["Route", "Current", "30d Forecast", "Direction",
+                   "Confidence", "Breakeven", "Savings/FEU", "Verdict"]
         table_rows = []
-        for r in rows:
-            sp_color = C_HIGH if r["spread"] > 0 else C_LOW
-            sp_sign  = "+" if r["spread"] >= 0 else ""
+        for d in decisions:
+            dir_color = (C_LOW if d.direction == "Rising"
+                         else C_HIGH if d.direction == "Falling" else C_MOD)
             table_rows.append([
-                _sans(r["route"], color=C_TEXT, weight=600),
-                _mono(f"${r['ltc']:,}", color=C_TEXT2),
-                _mono(f"${r['spot']:,}", color=C_TEXT2),
-                _mono(f"{sp_sign}${r['spread']:,}", color=sp_color, weight=600),
-                _mono(f"{r['vol']:.1f}%", color=C_TEXT2),
-                _mono(f"{r['brkevn']}x", color=C_TEXT3),
-                badge(r["rec"], color=r["rec_color"]),
+                _sans(d.route_name, color=C_TEXT, weight=600),
+                _mono(f"${d.current_rate:,.0f}", color=C_TEXT2),
+                _mono(f"${d.forecast_30d:,.0f} ({d.expected_move_pct:+.0%})",
+                      color=dir_color),
+                _sans(d.direction, color=dir_color),
+                _mono(f"{d.confidence:.0%}", color=C_TEXT2),
+                _mono(f"${d.breakeven_rate:,.0f}", color=C_TEXT3),
+                _mono(f"${d.expected_savings_per_feu:,.0f}", color=C_HIGH),
+                badge(d.verdict, color=_VERDICT_COLOR.get(d.verdict, C_MOD)),
             ])
         wsj_market_table(headers, table_rows)
         st.markdown(source_footer(_BOOKING_SOURCES), unsafe_allow_html=True)
 
         st.caption(
-            "Spread = Spot minus LTC. Positive spread = spot more expensive = "
-            "LTC advantageous. Breakeven = how many rounds of spot avg needed "
-            "before LTC breaks even."
+            "LOCK = lock a contract before the forecast rate rises; RIDE = ride "
+            "the spot as it falls; SPLIT = hedge when confidence is below floor. "
+            "Savings is the forecast $/FEU advantage of the verdict; breakeven is "
+            "the current rate (lock-vs-ride indifference). From the live ML GBR "
+            "rate forecast — not a simulation."
         )
     except Exception as exc:
         logger.warning(f"Contract vs spot error: {exc}")
@@ -565,7 +566,10 @@ def render(route_results=None, freight_data=None, port_results=None, *args, **kw
             _rate_comparison_tool()
             section_divider("Timing the Market")
             _optimal_booking_window()
-            _contract_vs_spot_analysis()
+            # Real ML LOCK/RIDE/SPLIT off the live forecaster (R002). macro_data
+            # rides in via kwargs from app.py (positional args stay
+            # freight/route/port).
+            _contract_vs_spot_analysis(freight_data, kwargs.get("macro_data"))
             section_divider("Capacity Planning")
             _booking_calendar()
             _spot_rate_alert()

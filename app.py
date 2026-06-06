@@ -1523,7 +1523,10 @@ elif active_section == "carriers":
     with t4:
         try:
             from ui.tab_booking import render as _r
-            _r(port_results, route_results, freight_data, macro_data)
+            # Match render(route_results, freight_data, port_results, **kwargs).
+            # The args were scrambled (freight_data was receiving route_results),
+            # so booking's real-rate sections were fed the wrong data (R002).
+            _r(route_results, freight_data, port_results, macro_data=macro_data)
         except Exception as e:
             st.error(f"Booking error: {e}")
     with t5:
