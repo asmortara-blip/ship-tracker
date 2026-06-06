@@ -58,6 +58,35 @@ def test_empty_input_not_fitted() -> None:
     assert c.fitted is False and c.n == 0
 
 
+def test_degenerate_calibration_is_disclosed_not_overclaimed() -> None:
+    # Win/loss independent of conviction -> flat isotonic -> the summary must NOT
+    # claim a monotone mapping (review MED [7]); Brier labeled in-sample [6].
+    from processing.conviction_calibration import fit_calibration
+    scores = [0.2, 0.4, 0.6, 0.8] * 3
+    wins = [1, 0] * 6                         # no relationship to score
+    c = fit_calibration(scores, wins, min_n=8)
+    assert c.fitted
+    assert "does NOT separate" in c.summary
+    assert "in-sample Brier" in c.summary
+
+
+def test_scores_out_of_range_are_clamped_into_bins() -> None:
+    # A score > 1 (shouldn't happen, but must not silently vanish) lands in the
+    # top bin rather than dropping out of every bin (review LOW [8]).
+    from processing.conviction_calibration import fit_calibration
+    c = fit_calibration([1.5, 1.4, 0.1, 0.05, 0.9, 0.8], [1, 1, 0, 0, 1, 1],
+                        min_n=4, n_bins=5)
+    assert sum(b.n for b in c.bins) == 6        # every score is binned
+    assert all(b.mean_conviction <= 1.0 for b in c.bins)
+
+
+def test_n_bins_zero_does_not_raise() -> None:
+    # max(1, n_bins) must guard the lo/hi division everywhere (review LOW [14]).
+    from processing.conviction_calibration import fit_calibration
+    c = fit_calibration([0.2, 0.8] * 4, [0, 1] * 4, min_n=4, n_bins=0)
+    assert c.fitted and len(c.bins) >= 1
+
+
 # ── calibrate_conviction (via the ledger) ────────────────────────────────────
 
 class _Idea:

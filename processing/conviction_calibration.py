@@ -77,11 +77,14 @@ def fit_calibration(
     ``wins`` entries are truthy/0-1. ``labels`` (optional, same length) drives
     the per-label breakdown. Returns ``fitted=False`` below ``min_n``.
     """
-    scores = [float(s) for s in (scores or [])]
+    # Clamp scores into the documented [0, 1] domain so an out-of-range score
+    # can't silently drop out of every reliability bin (review LOW [8]).
+    scores = [min(1.0, max(0.0, float(s))) for s in (scores or [])]
     wins = [1 if w else 0 for w in (wins or [])]
     n = min(len(scores), len(wins))
     scores, wins = scores[:n], wins[:n]
     labels = (list(labels)[:n] if labels else ["?"] * n)
+    nb = max(1, int(n_bins))   # guards lo/hi division when n_bins <= 0 (review [14])
 
     now = datetime.now(timezone.utc).isoformat()
     if n < min_n:
@@ -96,9 +99,9 @@ def fit_calibration(
     brier = sum((c - w) ** 2 for c, w in zip(cal, wins)) / n
 
     bins: list = []
-    for i in range(max(1, n_bins)):
-        lo, hi = i / n_bins, (i + 1) / n_bins
-        last = i == n_bins - 1
+    for i in range(nb):
+        lo, hi = i / nb, (i + 1) / nb
+        last = i == nb - 1
         idxs = [j for j, s in enumerate(scores)
                 if s >= lo and (s < hi or (last and s <= hi))]
         if not idxs:
@@ -127,15 +130,25 @@ def fit_calibration(
         }
 
     overall_hr = sum(wins) / n
+    # The isotonic fit is monotone non-decreasing, but it can be DEGENERATE
+    # (constant) when conviction carries no realized signal — don't claim a
+    # mapping that isn't there (review MED [7]). And the Brier is IN-SAMPLE
+    # (scored on the isotonic's own training data), so it is optimistic — say so
+    # rather than presenting it as a clean predictive number (review MED [6]).
+    degenerate = (max(iso_y) - min(iso_y)) < 1e-9 if iso_y else True
+    mapping_clause = (
+        "conviction does NOT separate hits (calibration is ~flat — the labels "
+        "carry no realized signal yet)" if degenerate else
+        "conviction maps monotonically to measured P(hit) — labels are quantified"
+    )
     return ConvictionCalibration(
         n=n, fitted=True, bins=bins, by_label=by_label,
         brier_score=round(brier, 4), iso_x=[round(x, 4) for x in iso_x],
         iso_y=[round(y, 4) for y in iso_y], generated_at=now,
         summary=(
             f"Calibrated over {n} look-ahead-free marks: realized hit-rate "
-            f"{overall_hr * 100:.0f}%, Brier {brier:.3f}. Conviction maps "
-            "monotonically to measured P(hit) — labels are quantified, not "
-            "assumed."
+            f"{overall_hr * 100:.0f}%, in-sample Brier {brier:.3f}. "
+            f"{mapping_clause}."
         ),
     )
 
