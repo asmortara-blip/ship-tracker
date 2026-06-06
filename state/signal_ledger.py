@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from auth.ids import opaque_id
+from processing.cost_model import DISCLAIMER as COST_DISCLAIMER
+from processing.cost_model import net_of_cost_pct
 from state.db import get_connection, immediate_transaction
 
 _LONG = {"bullish", "long", "buy"}
@@ -146,12 +148,19 @@ def mark_ledger(stock_data) -> list[dict]:
             continue
         ret = (cur - issue_close) / issue_close
         signed = ret * _dir_sign(r["direction"])
+        signed_pct = signed * 100.0
+        # Net of an ASSUMED round-trip trading cost (one entry + one exit per
+        # signal; friction paid long or short). Gross is kept untouched; net is
+        # a conservative stress test — see processing.cost_model.DISCLAIMER.
+        net_pct = net_of_cost_pct(signed_pct, r["ticker"])
         out.append({
             **r,
             "current_close": float(cur),
             "return_pct": ret * 100.0,
-            "signed_return_pct": signed * 100.0,
+            "signed_return_pct": signed_pct,
+            "net_signed_return_pct": net_pct,
             "win": signed > 0,
+            "net_win": net_pct > 0,
         })
     return out
 
@@ -162,21 +171,36 @@ def track_record_summary(stock_data) -> dict:
     marked = mark_ledger(stock_data)
     n = len(marked)
     if n == 0:
-        return {"n": 0, "hit_rate": 0.0, "mean_signed_return_pct": 0.0, "by_label": {}}
+        return {"n": 0, "hit_rate": 0.0, "mean_signed_return_pct": 0.0,
+                "net_hit_rate": 0.0, "mean_net_signed_return_pct": 0.0,
+                "cost_drag_pct": 0.0, "by_label": {}}
     wins = sum(1 for m in marked if m["win"])
+    net_wins = sum(1 for m in marked if m["net_win"])
     mean = sum(m["signed_return_pct"] for m in marked) / n
+    mean_net = sum(m["net_signed_return_pct"] for m in marked) / n
     by_label: dict[str, dict] = {}
     for m in marked:
         lab = m.get("conviction_label") or "?"
-        b = by_label.setdefault(lab, {"n": 0, "wins": 0, "_sum": 0.0})
+        b = by_label.setdefault(
+            lab, {"n": 0, "wins": 0, "net_wins": 0, "_sum": 0.0, "_net_sum": 0.0})
         b["n"] += 1
         b["wins"] += 1 if m["win"] else 0
+        b["net_wins"] += 1 if m["net_win"] else 0
         b["_sum"] += m["signed_return_pct"]
+        b["_net_sum"] += m["net_signed_return_pct"]
     for b in by_label.values():
         b["hit_rate"] = b["wins"] / b["n"] if b["n"] else 0.0
+        b["net_hit_rate"] = b["net_wins"] / b["n"] if b["n"] else 0.0
         b["mean_signed_return_pct"] = b.pop("_sum") / b["n"] if b["n"] else 0.0
+        b["mean_net_signed_return_pct"] = b.pop("_net_sum") / b["n"] if b["n"] else 0.0
     return {"n": n, "hit_rate": wins / n,
-            "mean_signed_return_pct": mean, "by_label": by_label}
+            "mean_signed_return_pct": mean,
+            "net_hit_rate": net_wins / n,
+            "mean_net_signed_return_pct": mean_net,
+            # Cost drag = gross mean − net mean = the average round-trip cost paid.
+            "cost_drag_pct": mean - mean_net,
+            "cost_disclaimer": COST_DISCLAIMER,
+            "by_label": by_label}
 
 
 def oos_scorecard(stock_data, *, min_n: int = 5, threshold: float = 0.95) -> dict:
@@ -216,15 +240,39 @@ def oos_scorecard(stock_data, *, min_n: int = 5, threshold: float = 0.95) -> dic
         ku += 3.0  # pandas .kurt() is excess; PSR wants full kurtosis
     psr = probabilistic_sharpe_ratio(sr, n, skew=sk, kurt=ku, sr_benchmark=0.0)
     significant = psr >= threshold
+
+    # The same significance read NET of assumed round-trip costs — the honest
+    # question is whether the edge survives friction, not just whether it exists
+    # gross. (Costs are an assumed conservative stress test; see cost_disclaimer.)
+    net_rets = [m["net_signed_return_pct"] / 100.0 for m in marks]
+    mean_net_pct = (sum(m["net_signed_return_pct"] for m in marks) / n) if n else 0.0
+    net_arr = _np.asarray(net_rets, dtype=float)
+    net_sd = float(net_arr.std(ddof=1))
+    net_sr = float(net_arr.mean() / net_sd) if net_sd > 0 else 0.0
+    net_sk = float(_pd.Series(net_rets).skew())
+    net_ku = float(_pd.Series(net_rets).kurt())
+    if not (_math.isfinite(net_sk) and _math.isfinite(net_ku)):
+        net_sk, net_ku = 0.0, 3.0
+    else:
+        net_ku += 3.0
+    net_psr = probabilistic_sharpe_ratio(net_sr, n, skew=net_sk, kurt=net_ku, sr_benchmark=0.0)
+    net_significant = net_psr >= threshold
     return {
         "n": n, "sufficient": True, "hit_rate": hit,
         "mean_signed_return_pct": mean_pct,
         "cross_sectional_sharpe": sr, "psr": psr, "is_significant": significant,
+        "mean_net_signed_return_pct": mean_net_pct,
+        "net_cross_sectional_sharpe": net_sr, "net_psr": net_psr,
+        "net_is_significant": net_significant,
+        "cost_disclaimer": COST_DISCLAIMER,
         "verdict": (
             f"Cross-sectional Sharpe {sr:+.2f} over {n} realized ideas; "
             f"PSR {psr:.0%} — "
-            + ("statistically significant." if significant
-               else "not yet significant (treat as noise).")
+            + ("statistically significant" if significant
+               else "not yet significant (treat as noise)")
+            + f". Net of assumed costs: Sharpe {net_sr:+.2f}, PSR {net_psr:.0%}"
+            + (" — edge survives costs." if net_significant
+               else " — does NOT clear net of costs.")
         ),
     }
 

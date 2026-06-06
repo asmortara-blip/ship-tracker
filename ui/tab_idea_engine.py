@@ -456,19 +456,26 @@ def _render_track_record(stock_data=None) -> None:
              "accent": C_ACCENT, "sublabel": f"of {n_frozen} frozen"},
             {"label": "Hit Rate", "value": f"{summ['hit_rate'] * 100:.0f}%",
              "accent": (C_HIGH if summ["hit_rate"] > 0.5 else C_LOW),
-             "sublabel": "signed return > 0"},
-            {"label": "Mean Signed Return",
+             "sublabel": "gross signed return > 0"},
+            {"label": "Mean (gross)",
              "value": f"{summ['mean_signed_return_pct']:+.1f}%",
              "accent": (C_HIGH if summ["mean_signed_return_pct"] > 0 else C_LOW),
              "sublabel": "per idea, forward"},
-        ], columns=3)
+            {"label": "Mean (net of cost)",
+             "value": f"{summ['mean_net_signed_return_pct']:+.1f}%",
+             "accent": (C_HIGH if summ["mean_net_signed_return_pct"] > 0 else C_LOW),
+             "sublabel": f"after {summ['cost_drag_pct']:.2f}% round-trip"},
+        ], columns=4)
         by = summ.get("by_label", {})
         if by:
-            st.caption("By conviction — " + " · ".join(
+            st.caption("By conviction (gross / net) — " + " · ".join(
                 f"{lab}: {b['hit_rate'] * 100:.0f}% hit, "
-                f"{b['mean_signed_return_pct']:+.1f}%"
+                f"{b['mean_signed_return_pct']:+.1f}% / "
+                f"{b['mean_net_signed_return_pct']:+.1f}%"
                 for lab, b in sorted(by.items())
             ))
+        if summ.get("cost_disclaimer"):
+            st.caption("⚠ " + summ["cost_disclaimer"])
         # Drawdown kill-switch — surface any conviction tier whose forward
         # track record has cratered (mirrors the SIGNAL_DRAWDOWN alert the
         # scheduler fires; honest read, no look-ahead).

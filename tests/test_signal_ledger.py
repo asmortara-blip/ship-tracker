@@ -112,6 +112,44 @@ def test_track_record_summary_by_label() -> None:
     assert summ["by_label"]["Low"]["hit_rate"] == 0.0
 
 
+# ── net-of-cost track record (R103 cost layer on the R004 ledger) ────────────
+
+def test_track_record_net_of_cost_drag() -> None:
+    from state.signal_ledger import freeze_ideas, track_record_summary
+    freeze_ideas([_Idea("ZIM", "Bullish", price=100.0, conviction_label="High")],
+                 issue_date="2026-06-01")
+    summ = track_record_summary(_stock({"ZIM": 110.0}))  # +10% gross
+    assert summ["mean_signed_return_pct"] == pytest.approx(10.0)
+    # ZIM assumed round-trip cost = 32 bps = 0.32% → net 9.68%.
+    assert summ["mean_net_signed_return_pct"] == pytest.approx(9.68)
+    assert summ["cost_drag_pct"] == pytest.approx(0.32)
+    assert summ["by_label"]["High"]["mean_net_signed_return_pct"] == pytest.approx(9.68)
+
+
+def test_track_record_thin_winner_flips_to_loss_net_of_cost() -> None:
+    # A +0.2% gross "win" is a LOSS once you pay the 0.40% default round-trip
+    # cost — the whole point of showing net alongside gross.
+    from state.signal_ledger import freeze_ideas, track_record_summary
+    freeze_ideas([_Idea("WXYZ", "Bullish", price=100.0)], issue_date="2026-06-01")
+    summ = track_record_summary(_stock({"WXYZ": 100.2}))  # +0.2% gross
+    assert summ["hit_rate"] == pytest.approx(1.0)       # gross win
+    assert summ["net_hit_rate"] == pytest.approx(0.0)   # net loss
+    assert summ["mean_net_signed_return_pct"] < 0
+
+
+def test_oos_scorecard_reports_net_significance() -> None:
+    from state.signal_ledger import freeze_ideas, oos_scorecard
+    freeze_ideas([_Idea(f"T{i}", "Bullish", price=100.0) for i in range(8)],
+                 issue_date="2026-06-01")
+    stock = _stock({f"T{i}": 100.0 * (1.08 + i * 0.01) for i in range(8)})  # +8..+15%
+    sc = oos_scorecard(stock, min_n=5)
+    # Net Sharpe is strictly below gross (mean shifted down by the cost), and
+    # these large consistent winners still clear net of the assumed friction.
+    assert sc["net_cross_sectional_sharpe"] < sc["cross_sectional_sharpe"]
+    assert sc["net_is_significant"]
+    assert "Net of assumed costs" in sc["verdict"]
+
+
 # ── OOS significance scorecard (R004 x R101) ────────────────────────────────
 
 def test_oos_scorecard_insufficient_history() -> None:
