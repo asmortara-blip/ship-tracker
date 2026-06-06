@@ -723,12 +723,15 @@ def _render_forecast_table(forecasts: list) -> None:
         trend = str(getattr(f, "trend", "") or "Stable")
         rate_fc = float(getattr(f, "rate_forecast_pct", 0.0) or 0.0)
         p90 = float(getattr(f, "mc_p90_upside", 0.0) or 0.0)
+        band = getattr(f, "stress_30d_band", (0.0, 0.0)) or (0.0, 0.0)
+        b_lo, b_hi = float(band[0]), float(band[1])
 
         rows.append([
             _route_cell(route_name),
             _mono(f"{current * 100:.0f}%", color=_stress_color(current)),
             _mono(f"{s7 * 100:.0f}%", color=_stress_color(s7)),
             _mono(f"{s30 * 100:.0f}%", color=_stress_color(s30)),
+            _sans(f"{b_lo * 100:.0f}–{b_hi * 100:.0f}%", color=C_TEXT3),
             badge(trend, color=_trend_color(trend)),
             _mono(f"{rate_fc * 100:+.1f}%", color=_pct_change_color(rate_fc)),
             _mono(f"{p90 * 100:+.1f}%", color=C_TEXT2),
@@ -736,10 +739,16 @@ def _render_forecast_table(forecasts: list) -> None:
 
     wsj_market_table(
         headers=[
-            "Route", "Current", "7-Day", "30-Day",
+            "Route", "Current", "7-Day", "30-Day", "30d Band",
             "Trend", "30d Rate", "MC P90",
         ],
         rows=rows,
+    )
+    st.caption(
+        "30d Band — an illustrative ±1σ (≈68%) interval around the 30-day "
+        "stress point, dispersion blended from the Monte-Carlo rate-tail "
+        "spread + the route's own rate volatility. Every forward point ships "
+        "an interval; it is not a fitted predictive band."
     )
 
 
