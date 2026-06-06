@@ -127,6 +127,9 @@ class ShippingStressReport:
     top_disruptions: list[str] = field(default_factory=list)
     wow_change: float = 0.0                    # week-over-week SSI change (placeholder)
     data_timestamp: str = ""                   # ISO 8601 UTC generation time
+    # Per-canal real-vs-modeled marker for the live canal→chokepoint overlay
+    # (R007): {canal: {"realness": "live"|"modeled", "risk_level", "status"}}.
+    canal_data_realness: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +549,7 @@ def compute_shipping_stress(
     port_results: list,
     route_results: list,
     voyage_fleet=None,
+    canal_stats=None,
 ) -> ShippingStressReport:
     """Compute the fleet-wide Shipping Stress Index.
 
@@ -580,6 +584,19 @@ def compute_shipping_stress(
         Always a valid report — empty inputs yield neutral defaults, never a
         crash or exception.
     """
+    # R007: overlay REAL canal-transit state onto the chokepoint registry's
+    # Suez/Panama nodes BEFORE the chokepoint component reads it. Real-only — a
+    # synthetic/modeled canal fallback leaves the hardcoded baseline alone.
+    # Default (canal_stats=None) is a no-op, so the callers that don't supply the
+    # feed (and the whole test suite) keep the deterministic baseline.
+    canal_realness: dict = {}
+    if canal_stats:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            canal_realness = apply_live_canal_state(canal_stats)
+        except Exception:
+            logger.exception("compute_shipping_stress: canal overlay failed")
+
     delayed_by_route = _delayed_counts_by_route(voyage_fleet)
 
     route_stress: list[RouteStress] = []
@@ -694,4 +711,5 @@ def compute_shipping_stress(
         top_disruptions=top_disruptions,
         wow_change=0.0,
         data_timestamp=datetime.now(timezone.utc).isoformat(),
+        canal_data_realness=canal_realness,
     )

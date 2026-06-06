@@ -72,6 +72,7 @@ class CanalStats:
     restrictions: str                # e.g. "Draft limited to 44ft"
     source_url: str
     fetched_at: str                  # ISO-8601 UTC
+    is_synthetic: bool = False       # True = modeled fallback, not a live scrape
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -143,6 +144,7 @@ def _panama_synthetic() -> CanalStats:
         restrictions="Neopanamax draft advisory 44ft; booking slots required",
         source_url="https://www.pancanal.com/en/transit-stats/",
         fetched_at=datetime.now(tz=timezone.utc).isoformat(),
+        is_synthetic=True,
     )
 
 
@@ -163,6 +165,7 @@ def _suez_synthetic() -> CanalStats:
         restrictions="War-risk surcharge active; most container carriers re-routing via Cape",
         source_url="https://www.suezcanal.gov.eg/English/Pages/default.aspx",
         fetched_at=datetime.now(tz=timezone.utc).isoformat(),
+        is_synthetic=True,
     )
 
 

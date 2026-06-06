@@ -822,6 +822,38 @@ def run_health_ping_job() -> list:
         return []
 
 
+def run_canal_sync_job() -> dict:
+    """Fetch live canal-transit stats and overlay them onto the chokepoint
+    registry (R007), so SSI computed this worker pass reads live Suez/Panama
+    state instead of the hardcoded baseline (chokepoint is the top SSI weight).
+
+    Real-only: a synthetic / modeled canal fallback leaves the baseline
+    untouched (honesty — a modeled fallback is never presented as observed
+    transit). Never raises — a canal-feed failure must not block the briefing
+    pass. Returns the per-canal realness marker.
+    """
+    try:
+        from data.canal_feed import fetch_panama_stats, fetch_suez_stats
+        from processing.canal_chokepoint_sync import apply_live_canal_state
+
+        stats = []
+        for _fetch in (fetch_suez_stats, fetch_panama_stats):
+            try:
+                stats.append(_fetch())
+            except Exception as exc:
+                logger.warning(f"run_canal_sync_job: canal fetch failed: {exc}")
+        realness = apply_live_canal_state(stats)
+        live = sorted(c for c, m in realness.items() if m.get("realness") == "live")
+        logger.info(
+            f"run_canal_sync_job: {len(live)} canal(s) live "
+            f"({', '.join(live) or 'none — all modeled/dark, baseline kept'})"
+        )
+        return realness
+    except Exception as exc:
+        logger.warning(f"run_canal_sync_job: failed: {exc}")
+        return {}
+
+
 @_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
@@ -2112,6 +2144,10 @@ def main(argv: Optional[list] = None) -> int:
     result = None
     if _job_due("run_daily_briefing_job", _DAILY_SECONDS, now=now, force=force):
         bundle = load_data_bundle()
+        # R007: refresh the live canal→chokepoint overlay BEFORE the jobs below
+        # compute the SSI, so they read live Suez/Panama transit (real-only)
+        # rather than the hardcoded baseline. Shielded — never blocks briefing.
+        _run_always("canal→chokepoint sync", lambda: run_canal_sync_job())
         result = run_daily_briefing_job(bundle, push_to_channels=args.push)
         print(json.dumps(asdict(result), indent=2, default=str))
         # Daily briefing TLDR — primes the day-cache the UI reads + persists
