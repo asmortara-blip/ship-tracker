@@ -673,51 +673,175 @@ def _render_risk_return_scatter(df: pd.DataFrame) -> None:
     )
 
 
-def _render_risk_metrics(df: pd.DataFrame) -> None:
-    """VaR, Sharpe, Max Drawdown, BDI correlation panel."""
+def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> None:
+    """VaR / Sharpe / Max Drawdown / BDI correlation from the REAL weighted book.
+
+    R008 — replaces the former ``rng.normal`` 252-day Monte-Carlo panel (which
+    fabricated the whole risk read, including a ~0.6 BDI correlation). Now built
+    from ``book_pnl.returns_panel`` over the book's tickers, weighted by real
+    marked weights, with a LABELED synthetic fallback only when prices are dark.
+    The BDI correlation is REAL (from macro_data) or honestly ``n/a`` — never
+    fabricated.
+    """
     try:
-        rng = np.random.default_rng(7)
-        n = 252
-        port_ret = rng.normal(0.0008, 0.018, n)
+        if df is None or df.empty or "Ticker" not in df.columns:
+            return
+        from processing import risk_lab
+        from processing.book_exposure import book_weights
+        from processing.book_pnl import returns_panel
 
-        # VaR 95% 1-day
-        var_95 = float(np.percentile(port_ret, 5))
-        total_val = df["Market Value"].sum() if not df.empty else 500_000
-        var_dollar = abs(var_95) * total_val
+        positions = st.session_state.get("portfolio_positions", [])
+        tickers = [str(t) for t in df["Ticker"].tolist()]
+        book_mv = float(df["Market Value"].sum()) or 500_000.0
 
-        # Sharpe (annualised, rf=4.5%)
+        real = returns_panel(stock_data or {}, tickers)
+        panel_is_real = not real.empty
+        if panel_is_real:
+            returns_df = real
+            w = book_weights(positions, stock_data or {})
+            # Restrict to surviving columns (returns_panel drops thin names) and
+            # renormalise so the weights sum to 1 over the panel.
+            w = {t: w[t] for t in returns_df.columns if t in w}
+            s = sum(w.values())
+            w = ({t: v / s for t, v in w.items()} if s > 0
+                 else {t: 1.0 / len(returns_df.columns) for t in returns_df.columns})
+        else:
+            returns_df = _synth_returns_panel(tickers or ["ZIM"])
+            w = {t: 1.0 / len(returns_df.columns) for t in returns_df.columns}
+        if returns_df.empty:
+            return
+
+        hist = risk_lab.portfolio_var(
+            returns_df, w, confidence=0.95,
+            portfolio_value=book_mv, method="historical")
+
+        # Weighted book-return series for Sharpe / MaxDD / BDI correlation.
+        cols = [t for t in returns_df.columns if t in w]
+        w_vec = np.array([w[t] for t in cols])
+        port_ret = pd.Series(
+            returns_df[cols].to_numpy() @ w_vec, index=returns_df.index)
         rf_daily = 0.045 / 252
-        sharpe = (port_ret.mean() - rf_daily) / port_ret.std() * np.sqrt(252)
+        std = float(port_ret.std())
+        sharpe = (((float(port_ret.mean()) - rf_daily) / std) * np.sqrt(252)
+                  if std > 0 else 0.0)
+        nav = (1.0 + port_ret).cumprod()
+        max_dd = (float(((nav - nav.cummax()) / nav.cummax()).min()) * 100
+                  if len(nav) else 0.0)
 
-        # Max drawdown
-        nav = np.cumprod(1 + port_ret)
-        peak = np.maximum.accumulate(nav)
-        drawdown = (nav - peak) / peak
-        max_dd = float(drawdown.min()) * 100
+        # REAL BDI correlation, or an honest "n/a" — never the old 0.6 fabrication.
+        bdi_corr_txt, bdi_sub = "n/a", "BDI unavailable"
+        try:
+            bdi_level = _extract_level((macro_data or {}).get("BDI"))
+            if bdi_level is not None and len(bdi_level) > 5:
+                bdi_ret = bdi_level.pct_change().dropna()
+                aligned = pd.concat([port_ret, bdi_ret], axis=1, join="inner").dropna()
+                if len(aligned) >= 10:
+                    c = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+                    if np.isfinite(c):
+                        bdi_corr_txt, bdi_sub = f"{c:.2f}", "Baltic Dry Index (real)"
+        except Exception:
+            pass
 
-        # BDI correlation (simulated) — same instance RNG continues
-        bdi_ret = 0.6 * port_ret + rng.normal(0, 0.012, n)
-        bdi_corr = float(np.corrcoef(port_ret, bdi_ret)[0, 1])
-
+        var_pct = abs(hist.var_pct) * 100
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
-        dd_color     = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
-
-        section_header("Risk Metrics", "VaR, Sharpe, drawdown, and BDI correlation — trailing 252 days")
+        dd_color = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
+        window = len(returns_df)
+        sub = (f"real weighted book returns, {window}d" if panel_is_real
+               else f"synthetic panel — prices dark, {window}d")
+        section_header("Risk Metrics", f"VaR, Sharpe, drawdown, BDI correlation — {sub}")
         metric_card_row([
-            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(var_dollar),
-             "accent": C_LOW,         "sublabel": f"{abs(var_95)*100:.2f}% of portfolio"},
+            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(hist.var_dollar),
+             "accent": C_LOW,        "sublabel": f"{var_pct:.2f}% of book"},
             {"label": "Sharpe Ratio",    "value": f"{sharpe:.2f}",
-             "accent": sharpe_color,   "sublabel": "Annualised, rf=4.5%"},
+             "accent": sharpe_color,  "sublabel": "Annualised, rf=4.5%"},
             {"label": "Max Drawdown",    "value": f"{max_dd:.1f}%",
-             "accent": dd_color,       "sublabel": "Trailing 252 days"},
-            {"label": "Corr. to BDI",    "value": f"{bdi_corr:.2f}",
-             "accent": C_ACCENT,       "sublabel": "Baltic Dry Index"},
+             "accent": dd_color,      "sublabel": f"over {window}-day window"},
+            {"label": "Corr. to BDI",    "value": bdi_corr_txt,
+             "accent": C_ACCENT,      "sublabel": bdi_sub},
         ], columns=4)
         st.markdown(source_footer([
-            {"name": "Simulated daily P&L (252-day Monte Carlo)", "kind": "modeled", "quality": "demo"},
+            DataSource.live("Real weighted book returns from cached closes; BDI from FRED")
+            if panel_is_real else
+            DataSource.demo("Synthetic returns panel (prices dark — labeled demo)")
         ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"risk metrics error: {e}")
+
+
+def _render_book_cascade(positions, stock_data, macro_data, insights) -> None:
+    """Overlay the book onto the disruption cascade (R008) — the research-to-PM
+    bridge that the Portfolio tab never had.
+
+    NOTE: ``render`` here has no live freight/port/route feeds, so the cascade
+    runs macro-only and most route-stress terms are muted — this is a book TILT
+    against the macro-driven cascade, labeled honestly as such.
+    """
+    try:
+        if not positions:
+            return
+        from processing.book_exposure import (
+            book_cascade_overlay, book_commodity_exposure, book_concentration)
+
+        ideas = []
+        try:
+            from processing.disruption_cascade import score_equity_ideas
+            from processing.exposure_matrix import build_exposure_matrix
+            from processing.shipping_stress_index import compute_shipping_stress
+            stress = compute_shipping_stress({}, macro_data or {}, [], [])
+            exposure = build_exposure_matrix(stock_data or {})
+            ideas = score_equity_ideas(stress, exposure, stock_data or {}, insights)
+        except Exception as exc:
+            logger.debug(f"book cascade ideas unavailable: {exc}")
+
+        overlay = book_cascade_overlay(positions, ideas, stock_data or {})
+        conc = book_concentration(positions, stock_data or {})
+
+        section_header(
+            "Book vs Cascade",
+            "Your book's tilt against the macro-driven disruption cascade, "
+            "plus concentration")
+        tilt_color = (C_HIGH if overlay.net_tilt == "Bullish"
+                      else (C_LOW if overlay.net_tilt == "Bearish" else C_TEXT3))
+        metric_card_row([
+            {"label": "Net Cascade Tilt", "value": overlay.net_tilt,
+             "accent": tilt_color,
+             "sublabel": f"{overlay.coverage*100:.0f}% of book weight covered"},
+            {"label": "Weighted Conviction", "value": f"{overlay.weighted_conviction:.2f}",
+             "accent": C_MOD,
+             "sublabel": f"{overlay.n_covered} covered · {overlay.n_uncovered} uncovered"},
+            {"label": "Concentration (HHI)", "value": f"{conc['hhi']:.2f}",
+             "accent": C_ACCENT,
+             "sublabel": f"~{conc['effective_n']:.1f} effective names · top {conc['top_name_pct']:.0f}%"},
+        ], columns=3)
+
+        if overlay.top_contributors:
+            headers = ["Instrument", "Weight", "Cascade Idea", "Conviction",
+                       "Weighted Cascade"]
+            rows = []
+            for n in overlay.top_contributors:
+                dl = n.direction.lower()
+                d_col = (C_HIGH if dl.startswith("bull")
+                         else (C_LOW if dl.startswith("bear") else C_TEXT3))
+                rows.append([
+                    _mono(n.ticker, color=C_TEXT),
+                    _mono(f"{n.weight*100:.0f}%"),
+                    _sans(n.direction, color=d_col, weight=600),
+                    _mono(f"{n.conviction_score:.2f}"),
+                    _mono(f"{n.weighted_cascade:.3f}", color=C_MOD),
+                ])
+            wsj_market_table(headers, rows)
+
+        ce = book_commodity_exposure(positions, stock_data or {})
+        if ce:
+            top3 = sorted(ce.items(), key=lambda x: -x[1])[:3]
+            st.caption("Book commodity tilt — "
+                       + " · ".join(f"{k}: {v*100:.0f}%" for k, v in top3))
+        st.caption(
+            "⚠ Macro-only cascade (this tab has no live freight/port/route feeds) "
+            "— route-stress terms are muted, so read this as a book tilt, not a "
+            "full cascade. The Risk Lab tab runs the cascade on the full inputs.")
+    except Exception as exc:
+        logger.warning(f"book cascade error: {exc}")
 
 
 def _render_top_movers(df: pd.DataFrame) -> None:
@@ -1426,7 +1550,8 @@ def render(stock_data, macro_data, insights) -> None:
 
             section_divider("Risk")
 
-            _render_risk_metrics(df)
+            _render_risk_metrics(df, stock_data, macro_data)
+            _render_book_cascade(positions, stock_data, macro_data, insights)
 
             # Per-position risk-return scatter — complements the aggregate
             # risk cards with a "where is risk concentrated?" cross-section.
