@@ -67,8 +67,13 @@ def fetch_fbx_rates(
 
     if raw_df is None or raw_df.empty:
         logger.warning("FBX fetch failed; using synthetic fallback rates")
-        return _synthetic_fallback()
+        fb = _synthetic_fallback()
+        # Provenance (R003/R097): the cache choke point saw the real FBX fetch
+        # (empty); the synthetic substitution happens here, so stamp it here.
+        _stamp_synthetic("freight", "fbx_all", len(fb))
+        return fb
 
+    n_synth = 0
     for route in ROUTES:
         route_df = raw_df[raw_df["route_id"] == route.id]
         if not route_df.empty:
@@ -76,8 +81,21 @@ def fetch_fbx_rates(
         else:
             logger.debug(f"No FBX data for {route.id}; using fallback")
             results[route.id] = _single_fallback(route.id, route.fbx_index)
+            n_synth += 1
 
+    if n_synth:
+        _stamp_synthetic("freight", "fbx_per_route", n_synth)
     return results
+
+
+def _stamp_synthetic(source: str, key: str, row_count: int) -> None:
+    """Best-effort 'synthetic' provenance stamp (R003/R097). Never raises."""
+    try:
+        from state.fetch_ledger import record_fetch
+        record_fetch(source, key, "synthetic", row_count=int(row_count),
+                     quality="DEMO")
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 # ── DataSeries variant (Phase 1 rollout) ─────────────────────────────────────

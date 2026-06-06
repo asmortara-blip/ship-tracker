@@ -107,6 +107,52 @@ def test_cache_manager_stamps_live_then_cache(ledger_db, tmp_path) -> None:
     assert "live" in kinds and "cache" in kinds
 
 
+def test_cache_manager_records_failed_on_raising_fetch(ledger_db, tmp_path) -> None:
+    # A fetch_fn that raises is a non-real outcome -> stamped 'failed' + re-raised.
+    from data.cache_manager import CacheManager
+    from state.fetch_ledger import recent_fetches
+    cache = CacheManager(cache_dir=tmp_path / "cache")
+    with pytest.raises(RuntimeError):
+        cache.get_or_fetch("k", lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+                           ttl_hours=1.0, source="stocks")
+    assert recent_fetches(source="stocks")[0]["kind"] == "failed"
+
+
+def test_cache_manager_populates_as_of_from_datetime_index(ledger_db, tmp_path) -> None:
+    from data.cache_manager import CacheManager
+    from state.fetch_ledger import recent_fetches
+    idx = pd.date_range("2026-03-01", periods=3, freq="D")
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)
+    CacheManager(cache_dir=tmp_path / "cache").get_or_fetch(
+        "k", lambda: df, ttl_hours=1.0, source="stocks")
+    row = recent_fetches(source="stocks")[0]
+    assert row["kind"] == "live" and row["as_of"].startswith("2026-03-03")
+
+
+def test_synthetic_substitution_is_stamped(ledger_db) -> None:
+    # The feed-level synthetic fallback must record 'synthetic' (the cache choke
+    # point only ever sees the real fetch).
+    from data.freight_scraper import _stamp_synthetic
+    from state.fetch_ledger import fetch_realness_summary
+    _stamp_synthetic("freight", "fbx_all", 7)
+    s = fetch_realness_summary()
+    assert s["by_source"]["freight"]["by_kind"].get("synthetic") == 1
+    assert s["synthetic_rate"] == 1.0
+
+
+def test_realness_and_synthetic_rates_need_not_sum_to_one(ledger_db) -> None:
+    # empty/failed buckets are neither real nor synthetic.
+    from state.fetch_ledger import fetch_realness_summary, record_fetch
+    record_fetch("a", "1", "live")
+    record_fetch("a", "2", "synthetic")
+    record_fetch("a", "3", "empty")
+    record_fetch("a", "4", "failed")
+    s = fetch_realness_summary()
+    assert s["realness_rate"] == pytest.approx(0.25)    # 1 live /4
+    assert s["synthetic_rate"] == pytest.approx(0.25)
+    assert s["realness_rate"] + s["synthetic_rate"] < 1.0
+
+
 def test_cache_manager_recording_off_by_default_in_tests(tmp_path) -> None:
     # WITHOUT the ledger_db fixture, the conftest autouse keeps recording OFF,
     # so a fetch writes NO provenance row (no real-DB pollution).

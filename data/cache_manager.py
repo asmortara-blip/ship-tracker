@@ -58,7 +58,13 @@ class CacheManager:
             return cached
 
         logger.info(f"Cache miss — fetching: {source}/{key}")
-        df = fetch_fn()
+        try:
+            df = fetch_fn()
+        except Exception:
+            # A raising fetch is a non-real outcome too — record it before
+            # propagating so the ledger doesn't under-count failures (R003/R097).
+            self._stamp_provenance(source, key, "failed", None)
+            raise
 
         if df is not None and not df.empty:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,16 +81,26 @@ class CacheManager:
     def _stamp_provenance(source: str, key: str, kind: str, df) -> None:
         """Best-effort per-fetch provenance stamp (rec R003/R097).
 
-        ``cache`` on a hit, ``live``/``empty`` on a miss. NEVER affects the
-        fetch — a provenance write failure (or no DB) is swallowed. Off in tests
-        unless explicitly enabled (see state.fetch_ledger.RECORDING_ENABLED)."""
+        ``cache`` on a hit, ``live``/``empty`` on a miss, ``failed`` when the
+        fetch raised. NEVER affects the fetch — a provenance write failure (or no
+        DB) is swallowed. Off in tests unless explicitly enabled (see
+        state.fetch_ledger.RECORDING_ENABLED)."""
         try:
             from state.fetch_ledger import cheap_content_hash, record_fetch
             n = len(df) if (df is not None and hasattr(df, "__len__")) else 0
             quality = ("GOOD" if kind == "live"
                        else "STALE" if kind == "cache" else "UNKNOWN")
+            # Surface the data's own as-of (latest row date) for lineage.
+            as_of = None
+            try:
+                import pandas as _pd
+                if (df is not None and not df.empty
+                        and isinstance(df.index, _pd.DatetimeIndex) and len(df.index)):
+                    as_of = df.index.max().isoformat()
+            except Exception:
+                as_of = None
             record_fetch(source, key, kind, row_count=n, quality=quality,
-                         byte_hash=cheap_content_hash(df))
+                         byte_hash=cheap_content_hash(df), as_of=as_of)
         except Exception:  # pragma: no cover - defensive
             pass
 

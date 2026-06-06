@@ -22,7 +22,7 @@ from typing import Optional
 
 from loguru import logger
 
-VALID_KINDS = ("live", "cache", "synthetic", "empty")
+VALID_KINDS = ("live", "cache", "synthetic", "empty", "failed")
 
 # Recording is ON in production (app + scheduler). The test suite disables it
 # globally via a conftest autouse fixture so a fetch in a non-DB-isolated test
@@ -129,7 +129,10 @@ def fetch_realness_summary(*, since: Optional[str] = None) -> dict:
     Returns ``{"n": N, "by_kind": {...}, "realness_rate": x, "freshness_rate": y,
     "synthetic_rate": z, "by_source": {src: {n, by_kind, ...}}}`` where realness
     = (live+cache)/total (real data, fresh or not), freshness = live/total, and
-    synthetic = synthetic/total. Empty ledger returns a zeroed, stable shape.
+    synthetic = synthetic/total. NOTE: these rates do NOT partition to 1 — the
+    ``empty`` (feed returned nothing) and ``failed`` (fetch raised) buckets are
+    neither real nor synthetic, so ``realness_rate + synthetic_rate <= 1``.
+    Empty ledger returns a zeroed, stable shape.
     """
     rows = recent_fetches(since=since, limit=100_000)
     empty = {"n": 0, "by_kind": {}, "realness_rate": 0.0,
