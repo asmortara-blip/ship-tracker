@@ -5,9 +5,9 @@ Covers:
   - Pure helpers: _latest_close, _pct_change_30d, _fred_series_pct_change_30d,
     _latest_macro_value, _bdi_rising, _bdi_pct_change
   - _make_signal factory: target/stop computation, risk_reward, strength clamp
-  - _fallback_price for known tickers
-  - generate_all_signals: graceful on empty inputs, sorts by conviction,
-    deduplicates by (ticker, signal_type, direction)
+  - _entry_price: real-close-or-None (no synthetic fallback)
+  - generate_all_signals: EMPTY on empty/dark inputs (no fabricated levels),
+    sorts by conviction, deduplicates by (ticker, signal_type, direction)
   - compute_portfolio_alpha: empty input, weight normalization,
     expected_return / portfolio_vol / sharpe / max_dd shape
   - build_signal_scorecard: DataFrame shape
@@ -26,7 +26,7 @@ from engine.alpha_engine import (
     AlphaSignal,
     _bdi_pct_change,
     _bdi_rising,
-    _fallback_price,
+    _entry_price,
     _fred_series_pct_change_30d,
     _latest_close,
     _latest_macro_value,
@@ -223,32 +223,60 @@ def test_make_signal_zero_stop_distance_yields_zero_rr() -> None:
     assert sig.risk_reward == 0.0
 
 
-# ─── _fallback_price ───────────────────────────────────────────────────────
+# ─── _entry_price (no synthetic fallback — honesty throughline) ─────────────
 
-def test_fallback_price_known_tickers() -> None:
-    assert _fallback_price("ZIM") == 18.0
-    assert _fallback_price("MATX") == 110.0
-    assert _fallback_price("SBLK") == 12.0
+def test_entry_price_returns_real_close() -> None:
+    stock = {"ZIM": _stock_df([10.0, 11.0, 12.5])}
+    assert _entry_price(stock, "ZIM") == 12.5
 
 
-def test_fallback_price_unknown_ticker_default() -> None:
-    assert _fallback_price("NEWTICKER") == 20.0
+def test_entry_price_dark_feed_returns_none() -> None:
+    # No fabricated fallback when the feed is dark — suppress, don't invent.
+    assert _entry_price({}, "ZIM") is None
+    assert _entry_price({"ZIM": pd.DataFrame()}, "ZIM") is None
+
+
+def test_entry_price_nonpositive_close_returns_none() -> None:
+    assert _entry_price({"ZIM": _stock_df([0.0])}, "ZIM") is None
+    assert _entry_price({"ZIM": _stock_df([-5.0])}, "ZIM") is None
 
 
 # ─── generate_all_signals ──────────────────────────────────────────────────
 
-def test_generate_all_signals_handles_empty_inputs_gracefully() -> None:
+def test_generate_all_signals_empty_on_dark_inputs() -> None:
+    # Honesty throughline: with no real prices the engine fabricates nothing —
+    # every strategy is anchored to a real entry price, so dark input → ZERO
+    # signals. (Previously the seasonal strategy emitted 2 HIGH-conviction
+    # LONGs off hardcoded _fallback_price levels regardless of data.)
     out = generate_all_signals({}, {}, {}, [], [])
-    assert isinstance(out, list)
-    # Empty inputs may still produce strategy-default signals; just check shape.
-    for sig in out:
-        assert isinstance(sig, AlphaSignal)
+    assert out == []
+
+
+def test_generate_all_signals_seasonal_calendar_only_capped_at_low() -> None:
+    # The seasonal strategy fires from the calendar alone; with real prices it
+    # may emit, but a calendar-only prior must never exceed LOW conviction.
+    stock = {t: _stock_df([20.0] * 40) for t in ("ZIM", "MATX", "SBLK")}
+    out = generate_all_signals(stock, {}, {}, [], [])
+    seasonal = [s for s in out
+                if "Season" in s.signal_name or "CNY" in s.signal_name
+                or "Seasonal prior" in s.rationale]
+    for s in seasonal:
+        assert s.conviction == "LOW", f"{s.signal_name} should be LOW, got {s.conviction}"
+
+
+def _fbx_surge_inputs():
+    """Real prices + a +40% Trans-Pacific FBX move → ≥2 momentum signals,
+    independent of the calendar month (so the ordering/dedup tests are stable)."""
+    stock = {t: _stock_df([18.0] * 40) for t in ("ZIM", "MATX", "CMRE", "DAC")}
+    freight = {"FBX01_Rate": _macro_df([1000.0] * 30 + [1400.0])}
+    return stock, freight
 
 
 def test_generate_all_signals_sorted_by_conviction_then_strength() -> None:
     """High conviction comes before Medium / Low. Within a level, sorted
     by strength descending."""
-    out = generate_all_signals({}, {}, {}, [], [])
+    stock, freight = _fbx_surge_inputs()
+    out = generate_all_signals(stock, freight, {}, [], [])
     if len(out) < 2:
         pytest.skip("Need ≥ 2 signals to test ordering")
     rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -262,7 +290,8 @@ def test_generate_all_signals_sorted_by_conviction_then_strength() -> None:
 
 def test_generate_all_signals_deduped_by_ticker_type_direction() -> None:
     """No two output signals share the same (ticker, signal_type, direction)."""
-    out = generate_all_signals({}, {}, {}, [], [])
+    stock, freight = _fbx_surge_inputs()
+    out = generate_all_signals(stock, freight, {}, [], [])
     keys = [(s.ticker, s.signal_type, s.direction) for s in out]
     assert len(keys) == len(set(keys))
 
