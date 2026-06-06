@@ -98,6 +98,31 @@ def short_borrow_cost_pct(ticker: str, days_held: float) -> float:
     return short_borrow_bps_per_year(ticker) / 100.0 * (days / 365.0)
 
 
+def per_side_cost_bps(ticker: str | None = None) -> float:
+    """Assumed one-side execution cost (half-spread + commission + impact), bps."""
+    return cost_assumption(ticker or "").per_side_bps()
+
+
+def turnover_cost_frac(
+    turnover: float,
+    *,
+    per_side_bps: float | None = None,
+    ticker: str | None = None,
+) -> float:
+    """Trading cost as a RETURN FRACTION for trading ``turnover`` units of
+    one-sided notional.
+
+    ``turnover`` is the sum of absolute weight/position changes at a rebalance
+    (Σ|Δw|); each unit is one side of a trade, charged at the per-side cost. This
+    is the backtest-facing form (the walk-forward PnL lives in return-fraction
+    space, unlike the ledger's percent-space :func:`net_of_cost_pct`). When
+    ``per_side_bps`` is omitted it falls back to *ticker*'s tier (or the default).
+    """
+    if per_side_bps is None:
+        per_side_bps = per_side_cost_bps(ticker)
+    return max(0.0, float(turnover)) * float(per_side_bps) / 1e4
+
+
 def round_trip_cost_bps(ticker: str) -> float:
     """Assumed round-trip (entry + exit) trading cost for *ticker*, in bps."""
     return cost_assumption(ticker).round_trip_bps()

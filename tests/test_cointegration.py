@@ -181,3 +181,18 @@ def test_walk_forward_backtest_requires_enough_obs() -> None:
     x = pd.Series(np.arange(50) + 100.0, name="x")
     with pytest.raises(ValueError):
         walk_forward_backtest(y, x, lookback=120)
+
+
+def test_walk_forward_reports_net_of_cost_sharpe() -> None:
+    # R103: each entry/exit pays an assumed turnover cost on both legs (1 unit y
+    # + |β| units x), so the result carries net_sharpe ≤ gross sharpe.
+    x = _random_walk(400, scale=0.3, start=100.0).clip(lower=1.0)
+    eps = np.zeros(400)
+    for i in range(1, 400):
+        eps[i] = 0.8 * eps[i - 1] + RNG.normal(0, 0.5)
+    y = pd.Series(1.2 * x.values + eps, name="y").clip(lower=1.0)
+    x.name = "x"
+    res = walk_forward_backtest(y, x, lookback=120)
+    assert math.isfinite(res.net_sharpe)
+    if res.n_trades > 0:
+        assert res.net_sharpe <= res.sharpe

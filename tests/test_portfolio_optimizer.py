@@ -273,3 +273,14 @@ def test_backtest_handles_empty_and_short_inputs() -> None:
     short = _synth_returns(n=100, seed=63)  # below 252 + 21
     short_bt = walk_forward_backtest(short, train_window=252, rebal_freq=21)
     assert short_bt.n_rebalances == 0
+
+
+def test_walk_forward_reports_net_of_cost_sharpe() -> None:
+    # R103: the result carries net stats deducting an assumed per-rebalance
+    # turnover cost. Cost can only reduce realized return → net ≤ gross.
+    bt = walk_forward_backtest(_synth_returns(n=400, seed=7),
+                               "max_sharpe", train_window=120, rebal_freq=21)
+    assert bt.n_rebalances > 0
+    assert bt.turnover_per_year > 0.0
+    assert bt.net_annualized_return < bt.annualized_return  # guaranteed: cost > 0
+    assert bt.net_sharpe <= bt.sharpe

@@ -1177,7 +1177,12 @@ def _render_optimization_lab(df: pd.DataFrame, stock_data=None) -> None:
                             C_MOD if bt.sharpe > 0.3 else C_LOW
                         )
                     ),
-                    "sublabel": f"{bt.n_rebalances} rebalances",
+                    # R103: net-of-assumed-cost Sharpe + the turnover it pays for.
+                    "sublabel": (
+                        f"net Sharpe {bt.net_sharpe:.2f} after "
+                        f"~{bt.turnover_per_year:.1f}×/yr turnover · "
+                        f"{bt.n_rebalances} rebal"
+                    ),
                 })
             if metric_cards:
                 metric_card_row(metric_cards, columns=2)
@@ -1354,7 +1359,8 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
                 "label":    "Signal Sharpe",
                 "value":    f"{bt.sharpe:+.2f}",
                 "accent":   sharpe_color,
-                "sublabel": f"{focus_ticker} · walk-forward",
+                # R103: net of an assumed per-trade turnover cost.
+                "sublabel": f"net {bt.net_sharpe:+.2f} · {focus_ticker} walk-fwd",
             },
             {
                 "label":    "Info Ratio vs. B&H",

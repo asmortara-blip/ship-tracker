@@ -129,6 +129,7 @@ class FactorBacktest:
     information_ratio: float
     equity_curve: pd.Series = field(repr=False)
     psr: float = 0.5  # probabilistic Sharpe: P(true Sharpe > 0), Bailey/Lopez de Prado
+    net_sharpe: float = 0.0  # net of an ASSUMED per-trade turnover cost (R103)
 
 
 # ── Guards + cleaning ───────────────────────────────────────────────────────
@@ -499,6 +500,18 @@ def residual_signal_backtest(
     ir = sharpe - bh_sharpe
     _ = last_z  # kept for parity with the cointegration backtest
 
+    # Net of an ASSUMED per-trade turnover cost (R103): each position change is a
+    # trade of 1 unit of the carrier, charged at its per-side rate on the trade
+    # step. Net Sharpe answers whether the residual edge survives friction.
+    from processing.cost_model import per_side_cost_bps
+    side_frac = per_side_cost_bps(name) / 1e4
+    dpos = np.abs(np.diff(positions, prepend=0.0))   # |Δposition| per step
+    net_pnl_series = pnl_series - pd.Series(dpos * side_frac, index=y.index)
+    net_std = float(net_pnl_series.std(ddof=0))
+    net_sharpe = 0.0 if net_std == 0 else float(
+        net_pnl_series.mean() / net_std * math.sqrt(periods_per_year)
+    )
+
     # Probabilistic Sharpe (honest haircut): P(true per-period Sharpe > 0)
     # given the sample length and higher moments. No trial-count assumption —
     # the selection-bias (deflated) haircut belongs at the suite level.
@@ -522,6 +535,7 @@ def residual_signal_backtest(
         information_ratio=ir,
         equity_curve=equity,
         psr=psr,
+        net_sharpe=float(round(net_sharpe, 4)),
     )
 
 

@@ -9,10 +9,12 @@ from processing.cost_model import (
     CostAssumption,
     cost_assumption,
     net_of_cost_pct,
+    per_side_cost_bps,
     round_trip_cost_bps,
     round_trip_cost_pct,
     short_borrow_bps_per_year,
     short_borrow_cost_pct,
+    turnover_cost_frac,
 )
 
 
@@ -84,6 +86,22 @@ def test_short_pays_borrow_on_top_of_round_trip() -> None:
 
 def test_thin_name_borrows_more_than_liquid() -> None:
     assert short_borrow_bps_per_year("GSL") > short_borrow_bps_per_year("ZIM")
+
+
+# ── turnover cost (backtest-facing, return-fraction space) ───────────────────
+
+def test_turnover_cost_frac_scales_with_turnover_and_rate() -> None:
+    # 2 units of one-sided turnover at 20 bps/side = 40 bps = 0.004 fraction.
+    assert turnover_cost_frac(2.0, per_side_bps=20.0) == pytest.approx(0.004)
+    assert turnover_cost_frac(0.0, per_side_bps=20.0) == 0.0
+    assert turnover_cost_frac(-1.0, per_side_bps=20.0) == 0.0  # clamped
+
+
+def test_turnover_cost_frac_defaults_to_ticker_tier() -> None:
+    assert turnover_cost_frac(1.0, ticker="ZIM") == pytest.approx(
+        per_side_cost_bps("ZIM") / 1e4)
+    # unknown ticker falls back to the default per-side cost
+    assert per_side_cost_bps("ZZZ") == per_side_cost_bps(None)
 
 
 def test_long_pays_no_borrow_even_with_days_held() -> None:
