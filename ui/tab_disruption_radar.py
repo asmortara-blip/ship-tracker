@@ -273,7 +273,7 @@ def _render_top_disruptions(top: list) -> None:
     wsj_news_list([str(d) for d in top[:5]])
 
 
-def _render_ssi_overview(report) -> None:
+def _render_ssi_overview(report, macro_data=None) -> None:
     """Render the headline SSI banner, gauge, read-out and component cards."""
     ssi = float(getattr(report, "overall_ssi", 0.0) or 0.0)
     label = getattr(report, "ssi_label", "") or "Unknown"
@@ -339,7 +339,9 @@ def _render_ssi_overview(report) -> None:
     # ─ Effective fleet supply — how much nominal capacity is immobilised by
     #   congestion + chokepoint diversion ("supply destruction by friction").
     try:
-        from processing.effective_capacity import effective_supply
+        from processing.effective_capacity import (
+            effective_supply, friction_read,
+        )
         cong, chok = components.get("congestion"), components.get("chokepoint")
         if cong is not None and chok is not None:
             es = effective_supply(float(cong), float(chok))
@@ -362,6 +364,18 @@ def _render_ssi_overview(report) -> None:
                 "absorbed by friction — when freight rises into this, tightness is "
                 "supply-destruction-driven, not demand. Modeled weights "
                 "(congestion/diversion 50/50, drag capped at 60%).")
+
+            # ─ Friction classification: cross the supply drag with the BDI
+            #   (Baltic Dry Index, FRED BSXRLM) 30d freight move to name the
+            #   regime. Reuses the tested alpha-engine helper; absent BDI →
+            #   freight_chg 0.0 → an honest "Balanced" read.
+            from engine.alpha_engine import _bdi_pct_change
+            freight_chg = _bdi_pct_change(macro_data or {})
+            fr = friction_read(es.drag_pct, freight_chg)
+            alert_banner(
+                f"<strong>{fr.label}</strong> — {fr.rationale} "
+                f"(BDI 30d {freight_chg:+.1f}%)",
+                level="success" if fr.bullish_carriers else "info")
     except Exception as exc:
         logger.debug(f"effective supply readout skipped: {exc}")
 
@@ -828,7 +842,7 @@ def render(
 
         # ── B. Fleet-wide SSI overview ──────────────────────────────────────────
         try:
-            _render_ssi_overview(report)
+            _render_ssi_overview(report, macro_data)
         except Exception:
             logger.exception("Disruption Radar — SSI overview failed")
             st.error("Shipping Stress Index overview unavailable.")
