@@ -255,3 +255,153 @@ def compute_concentration_alerts(
 
     out.sort(key=lambda a: a.hhi, reverse=True)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Multi-axis concentration (rec R040) — route / chokepoint / commodity HHI.
+#
+# The port-footprint HHI above misses a real single-point-of-failure: a book
+# can be diversified across PORTS yet 90% dependent on one CHOKEPOINT (Suez) or
+# one COMMODITY. This computes HHI over three additional axes from the exposure
+# matrix + chokepoint registry, so that concentration is caught wherever it
+# actually lives. Same Herfindahl formula (``_hhi_from_shares``); the chokepoint
+# share vector is left as fractions-OF-BOOK (it sums to <= 1, the
+# chokepoint-exposed fraction), so a chokepoint-free book scores ~0 while a
+# single-chokepoint book scores high — exactly the SPOF signal we want.
+# ---------------------------------------------------------------------------
+
+CONCENTRATION_AXES: tuple[str, ...] = ("commodity", "route", "chokepoint")
+
+
+@dataclass
+class AxisConcentrationAlert:
+    """One per (ticker, axis) whose HHI crosses the fire threshold."""
+
+    ticker: str
+    axis: str                               # "commodity" | "route" | "chokepoint"
+    hhi: float                              # in [0, 1]
+    concentration_band: str
+    severity: str                           # "HIGH" or "CRITICAL"
+    n_buckets: int                          # # of distinct keys on this axis
+    top_keys: list = field(default_factory=list)   # (key, share) desc
+    summary: str = ""
+
+
+def _normalize_shares(weights: dict) -> dict:
+    """Rescale non-negative weights so they sum to 1.0 (empty/zero -> {})."""
+    clean = {k: float(v) for k, v in (weights or {}).items() if float(v) > 0.0}
+    total = sum(clean.values())
+    if total <= 0.0:
+        return {}
+    return {k: v / total for k, v in clean.items()}
+
+
+def _route_to_chokepoints() -> dict:
+    """Invert the chokepoint registry: route_id -> [chokepoint keys it passes]."""
+    out: dict[str, list] = {}
+    try:
+        from processing.chokepoint_analyzer import CHOKEPOINTS
+    except Exception:  # pragma: no cover - defensive
+        return out
+    for key, cp in CHOKEPOINTS.items():
+        for rid in getattr(cp, "affected_routes", []) or []:
+            out.setdefault(str(rid), []).append(str(key))
+    return out
+
+
+def _route_shares(commodity_weights: dict) -> dict:
+    """Distribute each commodity weight evenly across the routes that carry it.
+
+    Returns route_id -> share (normalized to 1 over the routes touched).
+    """
+    from processing.exposure_matrix import routes_for_commodity
+    route_share: dict[str, float] = {}
+    for hs, w in (commodity_weights or {}).items():
+        routes = routes_for_commodity(hs)
+        if not routes:
+            continue
+        per = float(w) / len(routes)
+        for rid in routes:
+            route_share[str(rid)] = route_share.get(str(rid), 0.0) + per
+    return _normalize_shares(route_share)
+
+
+def chokepoint_shares(route_share: dict, *, route_to_cp: dict | None = None) -> dict:
+    """Map per-route shares onto the chokepoints those routes pass through.
+
+    A route through K chokepoints splits its share evenly across them; a route
+    through NO chokepoint contributes nothing (so the result sums to the
+    book's chokepoint-EXPOSED fraction, not 1). Left un-normalized on purpose:
+    HHI over this vector is ~0 for a chokepoint-free book and high for a
+    single-chokepoint book — the true single-point-of-failure signal.
+    """
+    r2c = _route_to_chokepoints() if route_to_cp is None else route_to_cp
+    cp_share: dict[str, float] = {}
+    for rid, w in (route_share or {}).items():
+        cps = r2c.get(str(rid), [])
+        if not cps:
+            continue
+        per = float(w) / len(cps)
+        for cp in cps:
+            cp_share[cp] = cp_share.get(cp, 0.0) + per
+    return cp_share
+
+
+def axis_shares(ticker: str, axis: str) -> dict:
+    """The share vector for one concentration axis. Pure-ish (reads registries)."""
+    from processing.exposure_matrix import company_commodity_weights
+    comm = _normalize_shares(company_commodity_weights(ticker))
+    if axis == "commodity":
+        return comm
+    route_share = _route_shares(comm)
+    if axis == "route":
+        return route_share
+    if axis == "chokepoint":
+        return chokepoint_shares(route_share)
+    return {}
+
+
+def compute_axis_concentration_alerts(
+    tickers: list,
+    *,
+    axes: tuple = CONCENTRATION_AXES,
+    fire_threshold_hhi: float = DEFAULT_FIRE_THRESHOLD_HHI,
+    critical_threshold_hhi: float = DEFAULT_CRITICAL_THRESHOLD_HHI,
+    top_in_body: int = 3,
+) -> list:
+    """Per (ticker, axis), emit an alert when the axis HHI crosses fire.
+
+    Catches single-point-of-failure concentration the port-footprint HHI misses
+    (one chokepoint / one commodity). Returns ``AxisConcentrationAlert`` sorted
+    by HHI desc. Never raises — a bad ticker or registry hiccup is skipped.
+    """
+    out: list = []
+    for ticker in tickers or []:
+        t = str(ticker or "")
+        if not t:
+            continue
+        for axis in axes:
+            try:
+                shares = axis_shares(t, axis)
+            except Exception:  # pragma: no cover - defensive
+                continue
+            if not shares:
+                continue
+            hhi = _hhi_from_shares(list(shares.values()))
+            if hhi < fire_threshold_hhi:
+                continue
+            top = sorted(shares.items(), key=lambda kv: kv[1], reverse=True)[:top_in_body]
+            top_str = ", ".join(f"{k} {s * 100:.0f}%" for k, s in top)
+            sev = _severity_for(hhi, critical_threshold_hhi)
+            out.append(AxisConcentrationAlert(
+                ticker=t, axis=axis, hhi=round(hhi, 4),
+                concentration_band=concentration_band(hhi), severity=sev,
+                n_buckets=len(shares), top_keys=top,
+                summary=(
+                    f"{t}: {axis} concentration HHI {hhi:.2f} "
+                    f"({concentration_band(hhi)}) — top: {top_str}. "
+                    "Single-point-of-failure risk on this axis."
+                ),
+            ))
+    out.sort(key=lambda a: a.hhi, reverse=True)
+    return out
