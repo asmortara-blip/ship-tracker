@@ -7,11 +7,17 @@ import math
 import pytest
 
 from processing.stat_significance import (
+    TrialsLedger,
     assess_sharpe,
+    benjamini_hochberg,
+    bh_qvalues,
+    correct_family,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    holm_bonferroni,
     min_track_record_length,
     probabilistic_sharpe_ratio,
+    sharpe_pvalue,
 )
 
 
@@ -103,3 +109,78 @@ def test_assess_sharpe_strong_single_trial_is_significant() -> None:
     res = assess_sharpe(0.5, 2000, n_trials=1, threshold=0.95)
     assert res.is_significant
     assert math.isfinite(res.psr) and math.isfinite(res.deflated_sr)
+
+
+# ── R114 multiple-testing correction (BH-FDR + Holm-FWER) ────────────────────
+
+_PS = [0.001, 0.008, 0.02, 0.04, 0.5, 0.9]  # m=6; first three survive BH at .05
+
+
+def test_benjamini_hochberg_step_up() -> None:
+    assert benjamini_hochberg(_PS, alpha=0.05) == [True, True, True, False, False, False]
+
+
+def test_holm_survivors_are_subset_of_bh() -> None:
+    bh = benjamini_hochberg(_PS, alpha=0.05)
+    holm = holm_bonferroni(_PS, alpha=0.05)
+    # FWER control (Holm) is stricter than FDR (BH): survivors ⊆ BH survivors.
+    assert all((not h) or b for h, b in zip(holm, bh))
+    assert holm == [True, True, False, False, False, False]
+
+
+def test_correction_preserves_input_order() -> None:
+    shuffled = [0.04, 0.001, 0.9, 0.008, 0.5, 0.02]
+    bh = benjamini_hochberg(shuffled, alpha=0.05)
+    assert bh[1] is True and bh[3] is True   # the two smallest, in place
+    assert bh[2] is False                    # p=0.9
+
+
+def test_single_trial_identity() -> None:
+    assert benjamini_hochberg([0.04], alpha=0.05) == [True]
+    assert benjamini_hochberg([0.06], alpha=0.05) == [False]
+    assert holm_bonferroni([0.04], alpha=0.05) == [True]
+    assert holm_bonferroni([0.06], alpha=0.05) == [False]
+
+
+def test_bh_qvalues_bounds_monotone_and_gate() -> None:
+    q = bh_qvalues(_PS)
+    assert all(0.0 <= x <= 1.0 for x in q)
+    assert all(qi >= pi - 1e-12 for qi, pi in zip(q, _PS))   # q >= raw p
+    # "survives FDR at alpha" iff q <= alpha — must agree with the mask.
+    assert [qi <= 0.05 for qi in q] == benjamini_hochberg(_PS, alpha=0.05)
+
+
+def test_empty_and_nan_fail_closed() -> None:
+    assert benjamini_hochberg([]) == []
+    assert holm_bonferroni([]) == []
+    assert bh_qvalues([]) == []
+    # a NaN p-value is treated as 1.0 → never survives.
+    assert benjamini_hochberg([float("nan"), 0.001], alpha=0.05)[0] is False
+
+
+def test_sharpe_pvalue_is_one_minus_psr() -> None:
+    assert sharpe_pvalue(0.97) == pytest.approx(0.03)
+    assert sharpe_pvalue(0.5) == pytest.approx(0.5)
+    assert sharpe_pvalue(1.0) == 0.0
+    assert sharpe_pvalue(float("nan")) == 1.0   # fails closed
+
+
+def test_trials_ledger_reports_fdr_surviving_subset() -> None:
+    ledger = TrialsLedger("cointegration")
+    for name, p in zip("ABCDEF", _PS):
+        ledger.add(name, p)
+    assert ledger.n_trials == 6
+    cv = ledger.corrected(alpha=0.05)
+    assert {c.name for c in cv if c.survives_fdr} == {"A", "B", "C"}
+    assert cv[0].rank == 1 and cv[0].name == "A"     # sorted by ascending p
+    assert all(c.n_trials == 6 for c in cv)
+
+
+def test_ledger_add_sharpe_uses_one_minus_psr() -> None:
+    ledger = TrialsLedger("factors")
+    ledger.add_sharpe("strong", psr=0.99)   # p = 0.01
+    ledger.add_sharpe("weak", psr=0.40)     # p = 0.60
+    cv = {c.name: c for c in ledger.corrected(alpha=0.05)}
+    assert cv["strong"].pvalue == pytest.approx(0.01)
+    assert cv["weak"].pvalue == pytest.approx(0.60)
+    assert cv["strong"].survives_fdr and not cv["weak"].survives_fdr

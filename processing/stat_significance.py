@@ -197,3 +197,215 @@ def assess_sharpe(
         is_significant=significant,
         verdict=verdict,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Multiple-testing correction over a SELECTION surface (rec R114)
+#
+#  The deflated Sharpe (above) haircuts a SINGLE chosen strategy for the number
+#  of trials it was selected from. The complementary control is family-wise:
+#  when you run a whole panel of tests (e.g. 9 cointegration pairs, or N momentum
+#  classes) and report "the best", you must control the false-discovery rate
+#  across the family or you will publish noise. These add Benjamini-Hochberg FDR
+#  and Holm-Bonferroni FWER over a family of p-values.
+#
+#  IMPORTANT — family homogeneity: BH/Holm assume a comparable null across the
+#  family. Correct WITHIN one homogeneous family (all EG p-values together, or
+#  all Sharpe-derived p-values together) — do NOT pool an EG p-value with a
+#  Sharpe-derived one. ``Trial.family`` labels the family; callers correct per
+#  family. For a Sharpe-based test the one-sided p-value is ``1 - PSR`` (PSR is
+#  P(true SR > 0)); use ``sharpe_pvalue``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _clean_pvalues(pvalues: Sequence[float]) -> list[float]:
+    """Coerce to finite floats clamped to [0, 1]; non-numeric / NaN → 1.0 (a
+    p-value of 1.0 never survives, so a malformed trial fails closed)."""
+    out: list[float] = []
+    for p in pvalues:
+        try:
+            v = float(p)
+        except (TypeError, ValueError):
+            v = 1.0
+        if not math.isfinite(v):
+            v = 1.0
+        out.append(min(1.0, max(0.0, v)))
+    return out
+
+
+def sharpe_pvalue(psr: float) -> float:
+    """One-sided p-value for a Sharpe test from its PSR = P(true SR > 0).
+
+    H0: true SR <= 0, so p = P(observe this or better under H0) = 1 - PSR.
+    Clamped to [0, 1]. A degenerate PSR (NaN) → p = 1.0 (fails closed).
+    """
+    try:
+        v = 1.0 - float(psr)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(v):
+        return 1.0
+    return min(1.0, max(0.0, v))
+
+
+def benjamini_hochberg(pvalues: Sequence[float], *, alpha: float = 0.05) -> list[bool]:
+    """Benjamini-Hochberg FDR survivor mask, aligned to the INPUT order.
+
+    Step-up: sort p ascending; find the largest rank k (1-based) with
+    ``p_(k) <= (k/m)·alpha``; reject (survive=True) every test up to that rank.
+    Controls the expected false-discovery rate at ``alpha`` under independence
+    or positive-regression-dependence. Empty input → ``[]``.
+    """
+    p = _clean_pvalues(pvalues)
+    m = len(p)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: p[i])  # ascending p
+    max_k = 0
+    for rank, idx in enumerate(order, start=1):
+        if p[idx] <= (rank / m) * alpha:
+            max_k = rank
+    survive = [False] * m
+    for rank, idx in enumerate(order, start=1):
+        if rank <= max_k:
+            survive[idx] = True
+    return survive
+
+
+def bh_qvalues(pvalues: Sequence[float]) -> list[float]:
+    """Benjamini-Hochberg adjusted p-values (q-values), aligned to input order.
+
+    ``q_(i) = min_{k>=i} (m/k)·p_(k)``, enforced monotone non-decreasing in p and
+    clamped to [0, 1]. Each q-value is >= its raw p-value. Empty input → ``[]``.
+    Useful for display: a pair "survives FDR at alpha" iff its q-value <= alpha.
+    """
+    p = _clean_pvalues(pvalues)
+    m = len(p)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: p[i])  # ascending p
+    q = [0.0] * m
+    prev = 1.0
+    for rank in range(m, 0, -1):          # largest p → smallest, cumulative min
+        idx = order[rank - 1]
+        val = min(prev, (m / rank) * p[idx])
+        val = min(1.0, max(0.0, val))
+        q[idx] = val
+        prev = val
+    return q
+
+
+def holm_bonferroni(pvalues: Sequence[float], *, alpha: float = 0.05) -> list[bool]:
+    """Holm-Bonferroni family-wise survivor mask, aligned to the INPUT order.
+
+    Step-down: sort p ascending; reject ``p_(i) <= alpha/(m - i)`` (0-based i)
+    and STOP at the first failure (all subsequent are non-rejected). Controls the
+    family-wise error rate at ``alpha`` — strictly more conservative than BH, so
+    the Holm survivor set is always a subset of the BH set. Empty input → ``[]``.
+    """
+    p = _clean_pvalues(pvalues)
+    m = len(p)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: p[i])  # ascending p
+    survive = [False] * m
+    for i, idx in enumerate(order):
+        if p[idx] <= alpha / (m - i):
+            survive[idx] = True
+        else:
+            break  # step-down halts at the first non-rejection
+    return survive
+
+
+@dataclass(frozen=True)
+class Trial:
+    """One test in a multiple-comparisons family."""
+
+    name: str
+    pvalue: float
+    sharpe: Optional[float] = None
+    n_obs: int = 0
+    family: str = "default"
+
+
+@dataclass(frozen=True)
+class CorrectedVerdict:
+    """A trial's verdict after family-wise / FDR correction."""
+
+    name: str
+    pvalue: float
+    bh_qvalue: float
+    survives_fdr: bool
+    survives_holm: bool
+    rank: int          # 1-based rank by ascending p within the family
+    n_trials: int
+
+
+def correct_family(trials: Sequence[Trial], *, alpha: float = 0.05) -> list[CorrectedVerdict]:
+    """Apply BH-FDR + Holm-FWER over a homogeneous family of trials.
+
+    Returns one :class:`CorrectedVerdict` per trial, sorted by ascending p-value
+    (rank 1 = smallest p). The reported "alpha set" is the FDR-surviving subset —
+    not best-of-N. Empty family → ``[]``.
+    """
+    trials = list(trials)
+    m = len(trials)
+    if m == 0:
+        return []
+    pvals = [t.pvalue for t in trials]
+    cleaned = _clean_pvalues(pvals)
+    fdr = benjamini_hochberg(pvals, alpha=alpha)
+    holm = holm_bonferroni(pvals, alpha=alpha)
+    q = bh_qvalues(pvals)
+    ranks = {
+        idx: r
+        for r, idx in enumerate(sorted(range(m), key=lambda i: cleaned[i]), start=1)
+    }
+    out = [
+        CorrectedVerdict(
+            name=t.name,
+            pvalue=cleaned[i],
+            bh_qvalue=q[i],
+            survives_fdr=fdr[i],
+            survives_holm=holm[i],
+            rank=ranks[i],
+            n_trials=m,
+        )
+        for i, t in enumerate(trials)
+    ]
+    out.sort(key=lambda v: v.rank)
+    return out
+
+
+class TrialsLedger:
+    """Accumulate (name, p-value) trials within ONE comparable family, then apply
+    BH-FDR / Holm-FWER. Pure + in-memory: every selection surface in Ship is
+    deterministically reconstructible per render (the cointegration panel, the
+    factor-model carriers, …), so no persistence is needed — the trial set has no
+    cross-session identity to durably record (R114).
+    """
+
+    def __init__(self, family: str = "default") -> None:
+        self.family = family
+        self._trials: list[Trial] = []
+
+    def add(self, name: str, pvalue: float, *, sharpe: Optional[float] = None,
+            n_obs: int = 0) -> "TrialsLedger":
+        self._trials.append(Trial(
+            name=str(name), pvalue=float(pvalue),
+            sharpe=sharpe, n_obs=int(n_obs), family=self.family))
+        return self
+
+    def add_sharpe(self, name: str, psr: float, *, n_obs: int = 0,
+                   sharpe: Optional[float] = None) -> "TrialsLedger":
+        """Add a Sharpe-based trial from its PSR (p = 1 - PSR)."""
+        return self.add(name, sharpe_pvalue(psr), sharpe=sharpe, n_obs=n_obs)
+
+    @property
+    def n_trials(self) -> int:
+        """The family size — the single source of truth for the DSR n_trials and
+        the FDR family size, so the two corrections agree on how many were run."""
+        return len(self._trials)
+
+    def corrected(self, *, alpha: float = 0.05) -> list[CorrectedVerdict]:
+        return correct_family(self._trials, alpha=alpha)
