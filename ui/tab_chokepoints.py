@@ -724,6 +724,18 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
     from engine.perf_telemetry import track_render
     
     with track_render('chokepoints'):
+        # R007 per-session UI overlay: mirror worker.run_canal_sync_job so the
+        # UI process's CHOKEPOINTS registry reflects live Suez/Panama transit.
+        # apply_live_canal_state is REAL-only (synthetic stats NO-OP via
+        # CanalStats.is_synthetic) and idempotent, so tests (synthetic fallback)
+        # stay baseline. Runs once per render; the canal feed has a 12h cache.
+        try:
+            from data.canal_feed import fetch_panama_stats, fetch_suez_stats
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            apply_live_canal_state([fetch_suez_stats(), fetch_panama_stats()])
+        except Exception as _exc:
+            logger.debug(f"canal->chokepoint UI overlay skipped: {_exc}")
+
         try:
             page_header(
                 title="Strategic Waterway & Chokepoint Intelligence",
