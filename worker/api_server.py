@@ -684,6 +684,44 @@ def _get_openapi_bytes() -> bytes:
     return _OPENAPI_BYTES_CACHE
 
 
+# Backtests-health result cache (R006). ``run_all_backtests()`` runs ALL of the
+# tools.backtests validators — expensive — and the /backtests/health endpoint is
+# PUBLIC (served above the auth gate so external monitors can probe it without a
+# token). Uncached, an unauthenticated flood would re-run every validator per
+# request and pin the single-threaded HTTPServer worker. Cache the computed
+# payload behind a coarse lock (the _get_openapi_bytes pattern) with a freshness
+# TTL so health still updates, but a probe storm only ever pays one run per TTL.
+_BACKTESTS_HEALTH_CACHE: Optional[tuple] = None  # (monotonic_ts, status_code, body)
+_BACKTESTS_HEALTH_LOCK = _threading.Lock()
+_BACKTESTS_HEALTH_TTL = 300.0
+
+
+def _get_backtests_health(ttl: float = _BACKTESTS_HEALTH_TTL) -> tuple:
+    """Return ``(status_code, body)`` for the backtests-health probe, cached for
+    ~``ttl`` seconds so repeated unauthenticated probes don't re-run every
+    validator. ``now_utc`` in the body reflects when the snapshot was COMPUTED."""
+    import time as _time
+    global _BACKTESTS_HEALTH_CACHE
+    cached = _BACKTESTS_HEALTH_CACHE
+    if cached is not None and (_time.monotonic() - cached[0]) < ttl:
+        return cached[1], cached[2]
+    with _BACKTESTS_HEALTH_LOCK:
+        cached = _BACKTESTS_HEALTH_CACHE
+        if cached is not None and (_time.monotonic() - cached[0]) < ttl:
+            return cached[1], cached[2]
+        from tools.backtests import format_json, run_all_backtests
+        results = run_all_backtests()
+        all_healthy = all(r.healthy for r in results)
+        body = json.loads(format_json(results))
+        body["status"] = "ok" if all_healthy else "degraded"
+        body["now_utc"] = datetime.now(timezone.utc).isoformat()
+        body["cached_ttl_s"] = ttl
+        status_code = int(
+            HTTPStatus.OK if all_healthy else HTTPStatus.SERVICE_UNAVAILABLE)
+        _BACKTESTS_HEALTH_CACHE = (_time.monotonic(), status_code, body)
+        return status_code, body
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dispatching handler — a single BaseHTTPRequestHandler subclass that
 #  routes inside ``do_GET`` / ``do_POST`` by regex match on the path.
@@ -807,8 +845,10 @@ class APIHandler(BaseHTTPRequestHandler):
 
             # Backtests health — public so external monitoring can
             # alarm on platform analytical-layer health without
-            # managing per-user tokens. Returns 200 when all 9
-            # validators are healthy and 503 when any flips unhealthy.
+            # managing per-user tokens. Returns 200 when all validators
+            # are healthy and 503 when any flips unhealthy. The validator
+            # run is cached ~300s (R006) so a public probe storm can't
+            # pin the worker.
             if _RE_BACKTESTS_HEALTH.match(path):
                 self._backtests_health()
                 return
@@ -2171,20 +2211,23 @@ class APIHandler(BaseHTTPRequestHandler):
         """Public backtest-layer health probe.
 
         Runs every validator in ``tools.backtests`` and returns the
-        consolidated JSON report. Status code is **200** when all 9
+        consolidated JSON report. Status code is **200** when all
         validators report healthy and **503** when any reports
         unhealthy — external monitoring can alarm on the status code
         without parsing the body.
 
-        Lazy-imports ``tools.backtests`` so a broken validator module
-        cannot block process startup. A blanket ``except`` falls back
-        to a 503 with ``status=down`` rather than letting the request
-        return a 500 with a raw traceback.
+        The expensive validator run is CACHED for ~300s behind a
+        module-level lock (R006): the endpoint is public (above the
+        auth gate), so without the cache an unauthenticated probe storm
+        would re-run every validator per request and pin the sole
+        single-threaded worker. A blanket ``except`` falls back to a
+        503 with ``status=down`` (uncached) rather than returning a 500
+        with a raw traceback.
         """
         try:
-            from tools.backtests import format_json, run_all_backtests
+            status_code, body = _get_backtests_health()
         except Exception as exc:
-            logger.exception(f"api /backtests/health import failed: {exc}")
+            logger.exception(f"api /backtests/health failed: {exc}")
             _send_json(
                 self,
                 HTTPStatus.SERVICE_UNAVAILABLE,
@@ -2192,26 +2235,6 @@ class APIHandler(BaseHTTPRequestHandler):
                  "error": f"{type(exc).__name__}: {exc}"},
             )
             return
-
-        try:
-            results = run_all_backtests()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception(f"api /backtests/health run failed: {exc}")
-            _send_json(
-                self,
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                {"status": "down",
-                 "error": f"{type(exc).__name__}: {exc}"},
-            )
-            return
-
-        all_healthy = all(r.healthy for r in results)
-        body = json.loads(format_json(results))
-        # Promote the roll-up to a top-level field for monitoring tools
-        # that key off it directly (k8s liveness, Datadog HTTP check, etc.).
-        body["status"] = "ok" if all_healthy else "degraded"
-        body["now_utc"] = datetime.now(timezone.utc).isoformat()
-        status_code = HTTPStatus.OK if all_healthy else HTTPStatus.SERVICE_UNAVAILABLE
         _send_json(self, status_code, body)
 
 

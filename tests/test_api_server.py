@@ -205,6 +205,32 @@ def test_backtests_health_does_not_require_authorization_header(server):
     assert r.status_code in (200, 503)
 
 
+def test_backtests_health_caches_validator_run(monkeypatch):
+    """R006: the expensive validator run must be cached so an unauthenticated
+    probe storm can't re-run every validator per request and pin the worker.
+    Two calls within the TTL → exactly one run; ttl=0 forces a recompute."""
+    import worker.api_server as api
+    from tools.backtests import run_all_backtests as _real_run
+
+    api._BACKTESTS_HEALTH_CACHE = None  # start clean
+    calls = {"n": 0}
+
+    def _counting_run():
+        calls["n"] += 1
+        return _real_run()
+
+    monkeypatch.setattr("tools.backtests.run_all_backtests", _counting_run)
+    try:
+        c1 = api._get_backtests_health()
+        c2 = api._get_backtests_health()
+        assert calls["n"] == 1          # 2nd call served from cache, no re-run
+        assert c1 == c2                 # identical payload
+        api._get_backtests_health(ttl=0.0)   # expired → recompute
+        assert calls["n"] == 2
+    finally:
+        api._BACKTESTS_HEALTH_CACHE = None    # don't leak the mock's result
+
+
 # ── /api/v1/ports/supply-lines — authenticated port supply data ────────
 
 def test_port_supply_lines_requires_auth(server):
