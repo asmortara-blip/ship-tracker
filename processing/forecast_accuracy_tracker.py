@@ -35,6 +35,7 @@ The module has no third-party dependencies beyond the stdlib.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -52,6 +53,13 @@ __all__ = [
     "read_actuals",
     "match_forecasts_to_actuals",
     "summarize_accuracy",
+    "summarize_calibration",
+    "crps_gaussian",
+    "pit_value",
+    "pit_histogram",
+    "coverage_rate",
+    "brier_score",
+    "reliability_curve",
     "should_log_forecast_today",
     "run_forecast_log_job",
 ]
@@ -89,6 +97,9 @@ class ForecastRecord:
     horizon_days: int
     predicted_value: float
     lane_id: str
+    # ── Interval + skill baseline (rec R029) — default 0 so old logs load ────
+    predicted_sigma: float = 0.0   # forecast dispersion (e.g. StressForecast.forecast_sigma)
+    baseline_value: float = 0.0    # the level at forecast time (persistence baseline)
 
 
 @dataclass(frozen=True)
@@ -118,6 +129,8 @@ class AccuracyRow:
     error: float
     abs_error: float
     signed_error: float
+    predicted_sigma: float = 0.0   # carried from the forecast (rec R029)
+    baseline: float = 0.0          # the level at forecast time (skill baseline)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +253,8 @@ def read_forecasts(
                 horizon_days=int(blob["horizon_days"]),
                 predicted_value=float(blob["predicted_value"]),
                 lane_id=str(blob["lane_id"]),
+                predicted_sigma=float(blob.get("predicted_sigma", 0.0) or 0.0),
+                baseline_value=float(blob.get("baseline_value", 0.0) or 0.0),
             ))
         except (KeyError, TypeError, ValueError):
             continue
@@ -381,6 +396,8 @@ def match_forecasts_to_actuals(
                 error=error,
                 abs_error=abs(error),
                 signed_error=error,
+                predicted_sigma=float(getattr(f, "predicted_sigma", 0.0) or 0.0),
+                baseline=float(getattr(f, "baseline_value", 0.0) or 0.0),
             ))
 
     rows.sort(key=lambda r: (r.target_date_iso, r.lane_id, r.horizon_days))
@@ -450,6 +467,188 @@ def summarize_accuracy(rows: list[AccuracyRow]) -> dict[str, Any]:
         "mae_by_horizon":    mae_by_h,
         "mean_signed_error": mean_signed,
     }
+
+
+# ---------------------------------------------------------------------------
+# Calibration scoring (rec R029) — does a quoted interval cover reality?
+#
+# ``summarize_accuracy`` ships only MAE — it cannot tell whether a forecast's
+# stated dispersion (``predicted_sigma``, e.g. ``StressForecast.forecast_sigma``)
+# is honest. These pure functions add the proper probabilistic scores:
+#   * CRPS — a strictly proper score for the FULL predictive distribution,
+#     rewarding sharp AND calibrated forecasts (lower is better; degrades to
+#     |error| for a point forecast, sigma=0).
+#   * PIT — the probability-integral transform; a calibrated forecast yields
+#     PIT ~ Uniform(0,1), so a non-flat PIT histogram exposes mis-calibration.
+#   * Coverage — the fraction of actuals inside +-z*sigma (should track the
+#     nominal, e.g. ~68% at z=1, ~95% at z=1.96).
+#   * Brier + reliability — for a binarised event (threshold exceedance).
+# ---------------------------------------------------------------------------
+
+_INV_SQRT_PI = 1.0 / math.sqrt(math.pi)
+_INV_SQRT_2PI = 1.0 / math.sqrt(2.0 * math.pi)
+
+
+def _std_norm_cdf(x: float) -> float:
+    """Standard-normal CDF via erf — no scipy dependency."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _std_norm_pdf(x: float) -> float:
+    return _INV_SQRT_2PI * math.exp(-0.5 * x * x)
+
+
+def crps_gaussian(mu: float, sigma: float, y: float) -> float:
+    """Closed-form CRPS of a Gaussian predictive ``N(mu, sigma^2)`` vs actual ``y``.
+
+    ``CRPS = sigma * [ z*(2*Phi(z) - 1) + 2*phi(z) - 1/sqrt(pi) ]`` with
+    ``z = (y - mu)/sigma``. Strictly proper, non-negative. As ``sigma -> 0`` the
+    limit is ``|y - mu|`` (a point forecast scored as absolute error), which we
+    return directly to avoid a divide-by-zero.
+    """
+    mu, sigma, y = float(mu), float(sigma), float(y)
+    if sigma <= 0.0:
+        return abs(y - mu)
+    z = (y - mu) / sigma
+    return sigma * (z * (2.0 * _std_norm_cdf(z) - 1.0)
+                    + 2.0 * _std_norm_pdf(z) - _INV_SQRT_PI)
+
+
+def pit_value(mu: float, sigma: float, y: float) -> Optional[float]:
+    """PIT = ``Phi((y - mu)/sigma)`` in [0, 1]; ``None`` for a point forecast."""
+    sigma = float(sigma)
+    if sigma <= 0.0:
+        return None
+    return _std_norm_cdf((float(y) - float(mu)) / sigma)
+
+
+def pit_histogram(rows: list[AccuracyRow], *, n_bins: int = 10) -> list[int]:
+    """Counts of PIT values per equal-width [0,1] bin (point forecasts skipped).
+
+    A calibrated forecast set is ~flat. A U-shape => intervals too narrow
+    (over-confident); a hump => too wide.
+    """
+    nb = max(1, int(n_bins))
+    counts = [0] * nb
+    for r in rows or []:
+        p = pit_value(r.predicted, r.predicted_sigma, r.actual)
+        if p is None:
+            continue
+        idx = min(nb - 1, int(p * nb))
+        counts[idx] += 1
+    return counts
+
+
+def coverage_rate(rows: list[AccuracyRow], *, z: float = 1.0) -> Optional[float]:
+    """Fraction of actuals within ``predicted +- z*sigma`` (interval rows only)."""
+    interval = [r for r in (rows or []) if r.predicted_sigma > 0.0]
+    if not interval:
+        return None
+    hit = sum(1 for r in interval
+              if abs(r.actual - r.predicted) <= z * r.predicted_sigma)
+    return hit / len(interval)
+
+
+def brier_score(probs: list[float], outcomes: list[float]) -> float:
+    """Mean squared error of probabilistic event forecasts: ``mean((p - o)^2)``.
+
+    ``outcomes`` are 0/1. Lower is better; 0.25 is the always-0.5 baseline.
+    """
+    pairs = list(zip(probs or [], outcomes or []))
+    if not pairs:
+        return 0.0
+    return sum((float(p) - (1.0 if o else 0.0)) ** 2 for p, o in pairs) / len(pairs)
+
+
+def reliability_curve(
+    probs: list[float], outcomes: list[float], *, n_bins: int = 10,
+) -> list[dict]:
+    """Binned reliability: per probability bin, mean forecast prob vs observed freq.
+
+    A well-calibrated model sits on the diagonal (mean_prob ~ observed_freq).
+    Returns one dict per non-empty bin: ``{bin_lo, bin_hi, n, mean_prob,
+    observed_freq}``.
+    """
+    nb = max(1, int(n_bins))
+    pairs = list(zip(probs or [], outcomes or []))
+    out: list[dict] = []
+    for i in range(nb):
+        lo, hi = i / nb, (i + 1) / nb
+        last = i == nb - 1
+        bucket = [(float(p), 1.0 if o else 0.0) for p, o in pairs
+                  if p >= lo and (p < hi or (last and p <= hi))]
+        if not bucket:
+            continue
+        bn = len(bucket)
+        out.append({
+            "bin_lo": round(lo, 4), "bin_hi": round(hi, 4), "n": bn,
+            "mean_prob": round(sum(p for p, _ in bucket) / bn, 4),
+            "observed_freq": round(sum(o for _, o in bucket) / bn, 4),
+        })
+    return out
+
+
+def summarize_calibration(
+    rows: list[AccuracyRow], *, threshold: Optional[float] = None,
+) -> dict[str, Any]:
+    """Aggregate calibration of interval forecasts: CRPS, PIT, coverage, skill.
+
+    ``mean_crps`` is over all rows (point forecasts scored as |error|).
+    ``crps_skill`` compares the model CRPS to a persistence baseline (the
+    forecast-time ``baseline`` level scored as a point forecast); ``> 0`` means
+    the model beats persistence. ``coverage_68/95`` track the nominal interval
+    coverage. When ``threshold`` is given, a Brier score + reliability curve are
+    added for the event ``actual > threshold`` using ``P(exceed) = 1 -
+    Phi((threshold - predicted)/sigma)``. Empty input returns a stable schema.
+    """
+    rows = rows or []
+    n = len(rows)
+    if n == 0:
+        return {"n_pairs": 0, "mean_crps": 0.0, "crps_skill": None,
+                "coverage_68": None, "coverage_95": None, "mean_pit": None,
+                "pit_histogram": [], "n_interval": 0}
+
+    crps_vals = [crps_gaussian(r.predicted, r.predicted_sigma, r.actual) for r in rows]
+    mean_crps = sum(crps_vals) / n
+
+    # Persistence baseline: the forecast-time level held flat, scored as a point
+    # forecast. crps_skill is only meaningful when baselines were actually logged.
+    base_rows = [r for r in rows if r.baseline != 0.0]
+    crps_skill: Optional[float] = None
+    if base_rows:
+        base_crps = sum(abs(r.actual - r.baseline) for r in base_rows) / len(base_rows)
+        model_crps_on_base = sum(
+            crps_gaussian(r.predicted, r.predicted_sigma, r.actual) for r in base_rows
+        ) / len(base_rows)
+        if base_crps > 0:
+            crps_skill = round(1.0 - model_crps_on_base / base_crps, 4)
+
+    pits = [pit_value(r.predicted, r.predicted_sigma, r.actual) for r in rows]
+    pits = [p for p in pits if p is not None]
+    out: dict[str, Any] = {
+        "n_pairs": n,
+        "n_interval": len(pits),
+        "mean_crps": round(mean_crps, 6),
+        "crps_skill": crps_skill,
+        "coverage_68": (round(c, 4) if (c := coverage_rate(rows, z=1.0)) is not None else None),
+        "coverage_95": (round(c, 4) if (c := coverage_rate(rows, z=1.96)) is not None else None),
+        "mean_pit": (round(sum(pits) / len(pits), 4) if pits else None),
+        "pit_histogram": pit_histogram(rows, n_bins=10),
+    }
+
+    if threshold is not None:
+        probs, outcomes = [], []
+        for r in rows:
+            if r.predicted_sigma <= 0.0:
+                continue
+            p_exceed = 1.0 - _std_norm_cdf((threshold - r.predicted) / r.predicted_sigma)
+            probs.append(p_exceed)
+            outcomes.append(1.0 if r.actual > threshold else 0.0)
+        out["brier_score"] = round(brier_score(probs, outcomes), 6)
+        out["reliability_curve"] = reliability_curve(probs, outcomes, n_bins=5)
+        out["event_threshold"] = float(threshold)
+
+    return out
 
 
 # ---------------------------------------------------------------------------
