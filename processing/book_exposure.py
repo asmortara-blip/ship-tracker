@@ -72,11 +72,16 @@ def book_weights_detail(positions, stock_data) -> tuple[dict, bool]:
     the book's tickers and ``is_real=False`` — never a fabricated price.
     """
     bm = mark_book(positions, stock_data)
-    priced = [p for p in getattr(bm, "positions", [])
-              if getattr(p, "priced", False) and getattr(p, "market_value", 0.0) > 0]
+    # Aggregate market value BY TICKER — a book may hold several lots of the same
+    # name, and a naive {p.ticker: ...} dict would collapse them (weights would
+    # then sum to < 1.0 and the book would be silently mis-scaled).
+    mv_by_ticker: dict[str, float] = {}
+    for p in getattr(bm, "positions", []):
+        if getattr(p, "priced", False) and getattr(p, "market_value", 0.0) > 0:
+            mv_by_ticker[p.ticker] = mv_by_ticker.get(p.ticker, 0.0) + float(p.market_value)
     mv = float(getattr(bm, "market_value", 0.0) or 0.0)
-    if priced and mv > 0:
-        return ({p.ticker: float(p.market_value) / mv for p in priced}, True)
+    if mv_by_ticker and mv > 0:
+        return ({t: v / mv for t, v in mv_by_ticker.items()}, True)
     tickers = sorted({getattr(p, "ticker", None) for p in getattr(bm, "positions", [])
                       if getattr(p, "ticker", None)})
     if not tickers:

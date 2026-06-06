@@ -41,6 +41,18 @@ def test_priced_weights_sum_to_one_and_are_real() -> None:
     assert w["ZIM"] > w["SBLK"]          # heavier market value
 
 
+def test_duplicate_ticker_lots_aggregate_to_one() -> None:
+    # Two lots of the same name must NOT collapse — weights must still sum to 1.
+    book = [
+        {"ticker": "ZIM", "shares": 100, "avg_cost": 10.0},
+        {"ticker": "ZIM", "shares": 50, "avg_cost": 12.0},
+    ]
+    w, is_real = book_weights_detail(book, _STOCK)
+    assert is_real is True
+    assert set(w) == {"ZIM"}
+    assert w["ZIM"] == pytest.approx(1.0)
+
+
 def test_all_unpriced_falls_back_equal_weight_flagged() -> None:
     w, is_real = book_weights_detail(_BOOK, {})   # no prices → dark
     assert is_real is False

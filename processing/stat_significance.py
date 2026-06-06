@@ -391,8 +391,10 @@ class TrialsLedger:
 
     def add(self, name: str, pvalue: float, *, sharpe: Optional[float] = None,
             n_obs: int = 0) -> "TrialsLedger":
+        # Fail closed: a None / NaN / non-numeric p-value becomes 1.0 (never
+        # significant) instead of raising at add-time.
         self._trials.append(Trial(
-            name=str(name), pvalue=float(pvalue),
+            name=str(name), pvalue=_clean_pvalues([pvalue])[0],
             sharpe=sharpe, n_obs=int(n_obs), family=self.family))
         return self
 

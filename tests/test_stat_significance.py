@@ -176,6 +176,17 @@ def test_trials_ledger_reports_fdr_surviving_subset() -> None:
     assert all(c.n_trials == 6 for c in cv)
 
 
+def test_trials_ledger_add_fails_closed_on_bad_pvalue() -> None:
+    ledger = TrialsLedger("x")
+    ledger.add("none", None)         # must not raise
+    ledger.add("nan", float("nan"))
+    ledger.add("ok", 0.01)
+    cv = {c.name: c for c in ledger.corrected(alpha=0.05)}
+    assert cv["none"].pvalue == 1.0 and not cv["none"].survives_fdr
+    assert cv["nan"].pvalue == 1.0
+    assert cv["ok"].survives_fdr
+
+
 def test_ledger_add_sharpe_uses_one_minus_psr() -> None:
     ledger = TrialsLedger("factors")
     ledger.add_sharpe("strong", psr=0.99)   # p = 0.01

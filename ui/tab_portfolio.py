@@ -729,12 +729,16 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
                   if len(nav) else 0.0)
 
         # REAL BDI correlation, or an honest "n/a" — never the old 0.6 fabrication.
+        # The BDI level is date-indexed and reindexed onto the (daily) return
+        # dates before correlating changes, so a coarser BDI cadence still aligns
+        # instead of silently producing an empty join (-> "n/a forever").
         bdi_corr_txt, bdi_sub = "n/a", "BDI unavailable"
         try:
-            bdi_level = _extract_level((macro_data or {}).get("BDI"))
-            if bdi_level is not None and len(bdi_level) > 5:
-                bdi_ret = bdi_level.pct_change().dropna()
-                aligned = pd.concat([port_ret, bdi_ret], axis=1, join="inner").dropna()
+            bdi_level = _bdi_level_series(macro_data)
+            if (bdi_level is not None and len(bdi_level) > 5
+                    and isinstance(port_ret.index, pd.DatetimeIndex)):
+                bdi_ret = bdi_level.reindex(port_ret.index, method="ffill").pct_change()
+                aligned = pd.concat([port_ret, bdi_ret], axis=1).dropna()
                 if len(aligned) >= 10:
                     c = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
                     if np.isfinite(c):
@@ -1011,6 +1015,44 @@ def _weekly_log_returns(stock_data) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1).dropna(how="all")
+
+
+def _bdi_level_series(macro_data) -> "pd.Series | None":
+    """A DATE-INDEXED Baltic Dry Index level series from ``macro_data``.
+
+    Tries the friendly name and the FRED series id, and promotes a ``date``
+    column (the real-cache shape) to the index — without this the BDI series
+    carries a RangeIndex and never aligns with the DatetimeIndex return panel,
+    so the correlation would be "n/a" forever. Returns None when absent.
+    """
+    if not macro_data:
+        return None
+    for key in ("BDI", "BDIY", "BSXRLM", "bdi"):
+        v = macro_data.get(key)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, pd.Series):
+                s = pd.to_numeric(v, errors="coerce").dropna()
+                if isinstance(s.index, pd.DatetimeIndex) and not s.empty:
+                    return s.sort_index()
+                continue
+            if isinstance(v, pd.DataFrame) and not v.empty:
+                df = v.copy()
+                if "date" in df.columns:
+                    df = df.set_index(pd.to_datetime(df["date"], errors="coerce"))
+                elif not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index, errors="coerce")
+                col = next((c for c in ("value", "close", "Close", "level")
+                            if c in df.columns), None)
+                ser = df[col] if col is not None else df.iloc[:, 0]
+                s = pd.to_numeric(ser, errors="coerce").dropna()
+                s = s[s.index.notna()]
+                if isinstance(s.index, pd.DatetimeIndex) and not s.empty:
+                    return s.sort_index()
+        except Exception:
+            continue
+    return None
 
 
 def _extract_level(series_or_frame) -> pd.Series | None:
