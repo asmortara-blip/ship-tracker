@@ -2840,10 +2840,62 @@ def _render_source_health() -> None:
         )
 
         _render_source_health_alert_config()
+        _render_feed_confidence()
 
     except Exception as exc:
         logger.exception(f"Source health panel render error: {exc}")
         st.error("Source health panel unavailable.")
+
+
+def _render_feed_confidence() -> None:
+    """Per-feed confidence from the per-fetch provenance ledger (R003) — the
+    first UI surfacing of ``fetch_realness_summary``, via a confidence lens so an
+    operator can downweight a low-confidence feed instead of trusting it blindly.
+    """
+    try:
+        from processing.feed_confidence import feed_confidence_report
+        from state.fetch_ledger import fetch_realness_summary
+
+        summary = fetch_realness_summary()
+        if not summary or not summary.get("n"):
+            st.caption(
+                "No provenance records yet — feed confidence accrues as feeds "
+                "stamp each fetch (R003).")
+            return
+        rep = feed_confidence_report(summary)
+        ov = rep["overall"]
+
+        def _cc(label: str) -> str:
+            return C_HIGH if label == "high" else (C_MOD if label == "medium" else C_LOW)
+
+        section_header(
+            "Feed Confidence",
+            "How trustworthy each feed's inputs were — real vs synthetic, fresh "
+            "vs stale (R003 provenance)")
+        metric_card_row([
+            {"label": "Overall Feed Confidence",
+             "value": f"{ov['confidence'] * 100:.0f}%",
+             "accent": _cc(ov["label"]),
+             "sublabel": f"{ov['label']} · {ov['n']} fetches (24h)"},
+        ], columns=1)
+        if rep["by_source"]:
+            rows = [[
+                r.source,
+                (f"<span style='color:{_cc(r.label)};font-weight:600'>"
+                 f"{r.confidence * 100:.0f}% ({r.label})</span>"),
+                f"{r.realness_rate * 100:.0f}%",
+                f"{r.freshness_rate * 100:.0f}%",
+                f"{r.synthetic_rate * 100:.0f}%",
+                str(r.n),
+            ] for r in rep["by_source"]]
+            wsj_market_table(
+                headers=["Source", "Confidence", "Real", "Fresh", "Synthetic", "Fetches"],
+                rows=rows, title="Per-feed confidence (worst first)")
+        st.caption(
+            "Confidence = realness × (0.6 + 0.4×freshness) — a modeled blend; the "
+            "inputs are the real per-fetch provenance stamps.")
+    except Exception as exc:
+        logger.debug(f"feed confidence panel skipped: {exc}")
 
 
 def _render_source_health_alert_config() -> None:
