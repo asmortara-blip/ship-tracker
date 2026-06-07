@@ -873,6 +873,47 @@ def run_canal_sync_job() -> dict:
         return {}
 
 
+def run_gdelt_chokepoint_job(*, http_get=None) -> dict:
+    """Fetch real GDELT geo-events near each chokepoint and ESCALATE the registry
+    risk_level from them (R014), so SSI computed this pass reads live chokepoint
+    risk instead of only the hardcoded baseline (chokepoint is the top SSI weight,
+    ~0.29, and was previously hand-edited constants that could never move).
+
+    Real-only: GDELT signal can only RAISE a node above its modeled baseline; no
+    signal / offline leaves the baseline untouched (honesty — absence is never
+    escalation, a modeled fallback is never presented as observed conflict).
+
+    ``ok`` reflects that the SWEEP ran (fetch attempted + overlay applied), NOT
+    whether GDELT was reachable — an unavailable/rate-limited feed is a data
+    condition, not a job failure (same contract as the snapshot integrity check),
+    so we don't hammer GDELT's host-side rate limit. The feed status is in
+    ``realness`` ("live"/"empty"/"unavailable"). Never raises. ``http_get`` is
+    injectable for offline tests.
+    """
+    try:
+        from data.gdelt_feed import fetch_chokepoint_events
+        from processing.chokepoint_analyzer import (
+            CHOKEPOINTS,
+            apply_live_chokepoint_risk,
+        )
+
+        events, realness = fetch_chokepoint_events(
+            list(CHOKEPOINTS.items()), http_get=http_get
+        )
+        marker = apply_live_chokepoint_risk(gdelt_events=events)
+        live = sorted(k for k, m in marker.items() if m.get("realness") == "live")
+        logger.info(
+            f"run_gdelt_chokepoint_job: feed={realness}, {len(events)} event(s), "
+            f"{len(live)} chokepoint(s) escalated "
+            f"({', '.join(live) or 'none — baseline kept'})"
+        )
+        return {"ok": True, "realness": realness,
+                "n_events": len(events), "live": live}
+    except Exception as exc:
+        logger.warning(f"run_gdelt_chokepoint_job: failed: {exc}")
+        return {"ok": False, "realness": "unavailable", "n_events": 0, "live": []}
+
+
 @_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
@@ -2283,6 +2324,10 @@ def main(argv: Optional[list] = None) -> int:
         # compute the SSI, so they read live Suez/Panama transit (real-only)
         # rather than the hardcoded baseline. Shielded — never blocks briefing.
         _run_always("canal→chokepoint sync", lambda: run_canal_sync_job())
+        # R014: escalate chokepoint risk from real GDELT geo-events too (real-only,
+        # 6h-cached so this is cheap most passes). Applied BEFORE the briefing
+        # computes SSI, alongside the canal overlay. Shielded — never blocks.
+        _run_always("gdelt→chokepoint risk", lambda: run_gdelt_chokepoint_job())
         result = run_daily_briefing_job(bundle, push_to_channels=args.push)
         # R011: advance the daily cadence stamp ONLY when the briefing actually
         # succeeded. A failed build leaves the stamp un-advanced so the next

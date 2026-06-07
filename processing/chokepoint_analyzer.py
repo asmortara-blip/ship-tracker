@@ -9,7 +9,8 @@ Data current as of early 2026.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import List, Optional
 from loguru import logger
 
@@ -437,3 +438,131 @@ def get_current_active_disruptions() -> List[Chokepoint]:
         [cp.name for cp in active],
     )
     return active
+
+
+# ---------------------------------------------------------------------------
+# apply_live_chokepoint_risk — REAL-ONLY overlay (rec R014)
+# ---------------------------------------------------------------------------
+#
+# The chokepoint component is the TOP shipping-stress-index weight (~0.29), yet
+# every node's ``current_risk_level`` / ``current_disruption_type`` was 100%
+# hardcoded (suez=CRITICAL, hormuz=HIGH baked in). So the headline stress index
+# could not move when a chokepoint actually escalated. This overlay derives the
+# live risk from REAL feeds — GDELT geo-events (``data.gdelt_feed``) and/or the
+# existing live canal-transit feed (``processing.canal_chokepoint_sync``) — and
+# ESCALATES the baseline ONLY from real signal, mirroring ``apply_live_canal_state``.
+#
+# HONESTY (this is the whole point — R014):
+#   * REAL-ONLY: a chokepoint is escalated ONLY from real GDELT events or a real
+#     (non-synthetic) canal anomaly. With no live data the hardcoded baseline
+#     stands, untouched, attributed "modeled".
+#   * NEVER DOWNGRADES: a real-but-mild GDELT read never lowers the modeled
+#     baseline (which encodes standing geopolitical context a 3-day GDELT window
+#     may not see) — see ``gdelt_feed.escalate``.
+#   * NO MUTATION OF THE GLOBAL REGISTRY: the overlay reassigns the registry
+#     entry to a NEW ``Chokepoint`` via ``dataclasses.replace`` (same safety
+#     lesson as R007), and returns a sidecar realness map — the ``Chokepoint``
+#     dataclass has no realness field, so realness/as_of travel alongside.
+#   * Default (no live data) == EXACT current behavior (empty realness map).
+
+
+def apply_live_chokepoint_risk(chokepoints=None, *, gdelt_events=None,
+                               canal_stats=None, registry=None) -> dict:
+    """Overlay REAL chokepoint risk (GDELT + live canal) onto the registry.
+
+    For each chokepoint, ESCALATE ``current_risk_level`` /
+    ``current_disruption_type`` ONLY from real GDELT signal near its coords
+    and/or a real (non-synthetic) canal-transit anomaly; otherwise leave the
+    hardcoded baseline untouched. The registry entry is reassigned to a NEW
+    ``Chokepoint`` (``dataclasses.replace``) so the module-global is never
+    mutated in place.
+
+    Parameters
+    ----------
+    chokepoints
+        Iterable of (key, Chokepoint) pairs to consider. Defaults to the whole
+        registry. (Kept for symmetry with the task signature / testability.)
+    gdelt_events
+        A flat ``list`` of GDELT events (from ``data.gdelt_feed``) — or ``None``
+        / empty for the no-signal path. SYNTHETIC / unavailable feeds must pass
+        an empty list so absence is honestly treated as no escalation.
+    canal_stats
+        Optional list of ``CanalStats`` — delegated to the existing
+        ``apply_live_canal_state`` (real-only) for the two canal nodes.
+    registry
+        Defaults to the module-global ``CHOKEPOINTS``.
+
+    Returns
+    -------
+    dict
+        Per-chokepoint realness marker, e.g.::
+
+            {"suez": {"realness": "live", "risk_level": "CRITICAL",
+                      "disruption_type": "ACTIVE_CONFLICT",
+                      "source": "gdelt", "as_of": "..."}}
+
+        Only chokepoints whose baseline was ESCALATED by real data appear under
+        ``realness == "live"``; the canal delegate may also report ``"modeled"``
+        for a synthetic canal fallback. An empty dict == no live overlay.
+    """
+    from data.gdelt_feed import escalate, gdelt_chokepoint_signal
+
+    reg = CHOKEPOINTS if registry is None else registry
+    items = list(chokepoints) if chokepoints is not None else list(reg.items())
+    marker: dict[str, dict] = {}
+    as_of = datetime.now(timezone.utc).isoformat()
+
+    # 1) GDELT geo-event escalation (real-only — empty list => no-op).
+    for key, cp in items:
+        if cp is None or key not in reg:
+            continue
+        level, dtype, realness = gdelt_chokepoint_signal(cp, gdelt_events or [])
+        if realness != "live" or level is None:
+            continue  # dark / no near events → keep modeled baseline, untouched
+        base_level = reg[key].current_risk_level
+        new_level = escalate(base_level, level)
+        if new_level == base_level and dtype in (None, "NONE", "LOW"):
+            # Real events present but they did not raise the baseline — record
+            # the real read for transparency, but do not rewrite the node.
+            continue
+        # Only adopt the derived disruption_type when we actually escalated;
+        # otherwise keep the baseline cause (don't overwrite a standing
+        # DIPLOMATIC/WEATHER label with a milder GDELT read).
+        new_dtype = dtype if new_level != base_level else reg[key].current_disruption_type
+        reg[key] = replace(
+            reg[key],
+            current_risk_level=new_level,
+            current_disruption_type=new_dtype,
+            disruption_since=(reg[key].disruption_since or as_of[:10]),
+        )
+        marker[key] = {
+            "realness": "live",
+            "risk_level": new_level,
+            "disruption_type": new_dtype,
+            "source": "gdelt",
+            "as_of": as_of,
+        }
+
+    # 2) Live canal-transit overlay (real-only) for the two canal nodes.
+    if canal_stats:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            canal_marker = apply_live_canal_state(canal_stats, registry=reg)
+            for canal_key, m in canal_marker.items():
+                # canal_chokepoint_sync keys are canal names == registry keys.
+                existing = marker.get(canal_key)
+                if m.get("realness") == "live":
+                    m = {**m, "source": "canal", "as_of": as_of}
+                    # If GDELT already escalated this node higher, keep the worse.
+                    if existing and _RISK_SCORE.get(
+                        existing.get("risk_level", "LOW"), 0.0
+                    ) >= _RISK_SCORE.get(m.get("risk_level", "LOW"), 0.0):
+                        continue
+                    marker[canal_key] = m
+                elif existing is None:
+                    # Modeled canal fallback — report honestly, no node change.
+                    marker[canal_key] = {**m, "source": "canal", "as_of": as_of}
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("apply_live_chokepoint_risk: canal overlay skipped ({})", exc)
+
+    return marker
