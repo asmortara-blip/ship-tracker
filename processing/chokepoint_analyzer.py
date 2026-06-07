@@ -448,17 +448,19 @@ def get_current_active_disruptions() -> List[Chokepoint]:
 # every node's ``current_risk_level`` / ``current_disruption_type`` was 100%
 # hardcoded (suez=CRITICAL, hormuz=HIGH baked in). So the headline stress index
 # could not move when a chokepoint actually escalated. This overlay derives the
-# live risk from REAL feeds — GDELT geo-events (``data.gdelt_feed``) and/or the
-# existing live canal-transit feed (``processing.canal_chokepoint_sync``) — and
-# ESCALATES the baseline ONLY from real signal, mirroring ``apply_live_canal_state``.
+# live risk from REAL feeds — GDELT country-level disruption-news VOLUME
+# (``data.gdelt_feed``, attributed to the chokepoint at country granularity — NOT
+# precise geolocation, NOT tone) and/or the existing live canal-transit feed
+# (``processing.canal_chokepoint_sync``) — and ESCALATES the baseline ONLY from
+# real signal, mirroring ``apply_live_canal_state``.
 #
 # HONESTY (this is the whole point — R014):
-#   * REAL-ONLY: a chokepoint is escalated ONLY from real GDELT events or a real
-#     (non-synthetic) canal anomaly. With no live data the hardcoded baseline
-#     stands, untouched, attributed "modeled".
-#   * NEVER DOWNGRADES: a real-but-mild GDELT read never lowers the modeled
-#     baseline (which encodes standing geopolitical context a 3-day GDELT window
-#     may not see) — see ``gdelt_feed.escalate``.
+#   * REAL-ONLY: a chokepoint is escalated ONLY from a real GDELT news-volume
+#     surge or a real (non-synthetic) canal anomaly. With no live data the
+#     hardcoded baseline stands, untouched, attributed "modeled".
+#   * NEVER DOWNGRADES: a real-but-calm GDELT read never lowers the modeled
+#     baseline (which encodes standing geopolitical context the news window may
+#     not reflect) — see ``gdelt_feed.escalate``.
 #   * NO MUTATION OF THE GLOBAL REGISTRY: the overlay reassigns the registry
 #     entry to a NEW ``Chokepoint`` via ``dataclasses.replace`` (same safety
 #     lesson as R007), and returns a sidecar realness map — the ``Chokepoint``
@@ -516,7 +518,8 @@ def apply_live_chokepoint_risk(chokepoints=None, *, gdelt_events=None,
     for key, cp in items:
         if cp is None or key not in reg:
             continue
-        level, dtype, realness = gdelt_chokepoint_signal(cp, gdelt_events or [])
+        level, dtype, realness = gdelt_chokepoint_signal(
+            cp, gdelt_events or [], chokepoint_key=key)
         if realness != "live" or level is None:
             continue  # dark / no near events → keep modeled baseline, untouched
         base_level = reg[key].current_risk_level

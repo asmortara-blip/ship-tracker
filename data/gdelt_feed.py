@@ -1,37 +1,48 @@
 """
 data/gdelt_feed.py
 ──────────────────
-Keyless GDELT geo-event feed for maritime chokepoint risk (rec R014).
+Keyless GDELT disruption-NEWS-VOLUME feed for maritime chokepoint risk (R014).
 
-WHAT IT DOES
-    Fetches recent geo-located conflict / disruption news events from GDELT's
-    public, KEYLESS DOC 2.0 API and turns the density + tone of events near a
-    chokepoint's coordinates into a risk signal that the chokepoint overlay
-    (``processing.chokepoint_analyzer.apply_live_chokepoint_risk``) can use to
-    ESCALATE the hardcoded baseline — but ONLY when real events are present.
+WHAT THIS SIGNAL ACTUALLY IS (read this before trusting it)
+    A COUNTRY-LEVEL disruption-news VOLUME signal. For each chokepoint we map it
+    to the ISO country code(s) of the state(s) that physically control it (Suez →
+    EG, Bab-el-Mandeb → YE, Hormuz → IR/OM, …) and ask GDELT DOC 2.0 how many
+    recent articles match a disruption-term query restricted to that
+    ``sourcecountry``. The COUNT of those articles in the window is the signal.
+
+    It is NOT precise geolocation (the articles carry no lat/lon), and it is NOT
+    tone-based (DOC ``artlist`` carries no per-article tone). It is an
+    ILLUSTRATIVE volume heuristic attributed at country granularity, used ONLY to
+    ESCALATE the hardcoded chokepoint baseline when a genuine news surge appears —
+    never to lower it, never to invent risk from silence.
 
 ENDPOINT (keyless — NO api key required)
-    https://api.gdeltproject.org/api/v2/doc/doc
-    GDELT's Document API 2.0 is free and keyless (rate-limited to ~1 req / 5 s).
-    We query it per-chokepoint with the documented ``near:`` proximity operator
-    (``near<radius_km>:<lat>,<lon>``) so the host-side returns only articles
-    geo-tagged within ``radius_km`` of the chokepoint, plus a disruption-term
-    filter. ``mode=artlist&format=json`` returns the matching article list; the
-    record count is the event density and (when present) the per-record/overall
-    tone gives sentiment. The parser ALSO accepts a generic GeoJSON ``features``
-    payload (GDELT GEO 2.0 shape) so a future swap needs no rewrite.
+    https://api.gdeltproject.org/api/v2/doc/doc   (GDELT Document API 2.0)
+    Free, keyless, rate-limited host-side to ~1 req / 5 s. We query it per
+    chokepoint with a VALID country-restricted query::
+
+        ({disruption terms}) sourcecountry:EG        (single country)
+        ({disruption terms}) (sourcecountry:MY OR sourcecountry:SG OR sourcecountry:ID)
+
+    plus ``mode=artlist&format=json&timespan=<…>&maxrecords=250``. The returned
+    ``articles`` list is the volume. (GDELT GEO 2.0 — the old ``near<km>:lat,lon``
+    geo operator — is GONE: it 404s, and DOC's ``near`` is a TEXT-proximity
+    operator, NOT geographic. The previous design's ``near{km}:{lat},{lon}`` query
+    was INVALID and silently returned a plain-text error that masqueraded as an
+    honest empty fetch — R014 was DEAD in production. This file fixes that.)
 
 HONESTY (this is the whole point — R014)
-    * OFFLINE-SAFE: any network error / non-200 / parse failure → return an
-      EMPTY event list and stamp realness ``"unavailable"``. NEVER raises, NEVER
-      fabricates an event.
-    * Absence of events is NOT escalation. ``gdelt_chokepoint_signal`` only ever
-      raises risk ABOVE the baseline when real, sufficiently-dense / negative
-      events are observed; with no events it returns ``realness="dark"`` and the
-      caller keeps the modeled baseline constant.
-    * Provenance-stamped via ``state.fetch_ledger`` (R003/R097): ``live`` when a
-      real fetch returned events, ``empty`` when it returned none, ``synthetic``
-      / ``failed`` on the offline / error paths.
+    * OFFLINE-SAFE: any network error / non-200 → empty list, realness
+      ``"unavailable"``. NEVER raises, NEVER fabricates.
+    * STRUCTURAL FAILURE ≠ EMPTY: a 200 whose body is plain text that does NOT
+      parse as JSON (rate-limit notice, invalid-query notice, anything not
+      starting ``{``/``[``) is a FAILURE → realness ``"unavailable"``, NOT cached.
+      ``"empty"`` is reserved for a REAL JSON response that genuinely held zero
+      articles.
+    * ABSENCE IS NEVER ESCALATION: ``gdelt_chokepoint_signal`` returns
+      ``(None, None, "dark")`` for zero articles; the caller keeps the modeled
+      baseline. A chokepoint with no mapped country is SKIPPED (honest no-signal).
+    * Provenance-stamped via ``state.fetch_ledger`` (R003/R097).
 
 Dependencies: requests, loguru (both already in the project).
 """
@@ -40,10 +51,8 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
 
 import requests
 from loguru import logger
@@ -56,9 +65,9 @@ _GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 _REQUEST_TIMEOUT = 12          # seconds — per-query network timeout
 _FETCH_BUDGET_SECONDS = 25     # overall wall-clock cap across all chokepoint queries
 _INTER_REQUEST_DELAY = 5.2     # seconds between GDELT queries (host asks for >5s)
-_DEFAULT_RADIUS_KM = 250.0     # geo-proximity radius for the near: operator
-_DEFAULT_TIMESPAN = "3d"       # how far back GDELT should look
-_MAX_RECORDS = 75              # cap per query (density saturates well before this)
+_DEFAULT_RADIUS_KM = 250.0     # geo radius used ONLY to attribute events to a node
+_DEFAULT_TIMESPAN = "14d"      # how far back GDELT should look
+_MAX_RECORDS = 250             # cap per query — the denominator for the volume bins
 
 _HEADERS = {
     "User-Agent": (
@@ -69,14 +78,39 @@ _HEADERS = {
     "Accept": "application/json,text/plain,*/*",
 }
 
-# Disruption / conflict terms that make a near-chokepoint article RELEVANT.
-# Kept broad-but-maritime so unrelated local news near a coastal coordinate
-# does not by itself escalate risk; the density + tone thresholds gate further.
+# Disruption / conflict terms that make an article RELEVANT to a chokepoint's
+# country. Kept broad-but-maritime; the volume thresholds gate further so a
+# genuine surge — not background news — is required to escalate.
 _DISRUPTION_TERMS = (
-    "attack OR strike OR missile OR drone OR blockade OR seized OR "
-    "hijack OR closure OR closed OR conflict OR clash OR sanctions OR "
-    "collision OR grounding OR blocked OR disruption OR explosion"
+    "(attack OR strike OR missile OR drone OR blockade OR seized OR "
+    "hijack OR closure OR conflict OR clash OR sanctions OR "
+    "collision OR grounding OR blocked OR disruption OR explosion)"
 )
+
+# Chokepoint key → GDELT ``sourcecountry`` code(s). When >1, they are OR-ed in the
+# query. A chokepoint absent from this map has NO mapped country → SKIPPED (the
+# feed honestly produces no signal for it rather than guessing).
+#
+# IMPORTANT: GDELT DOC 2.0 ``sourcecountry`` uses FIPS 10-4 codes, NOT ISO-3166.
+# Verified live: ``sourcecountry:SN`` returns Singapore (FIPS SN, a major port,
+# n=182) while ISO ``SG`` returns Senegal; ``GB`` is Gabon (FIPS) not the UK. So
+# these are the FIPS codes, several of which differ from ISO:
+#   suez → EG (Egypt)              bab_el_mandeb → YM (Yemen)
+#   hormuz → IR, MU (Iran/Oman)    malacca → MY, SN, ID (Malaysia/Singapore/Indonesia)
+#   panama → PM                    gibraltar → SP, MO (Spain/Morocco)
+#   danish_straits → DA            dover → UK, FR
+#   lombok_sunda → ID
+_CHOKEPOINT_COUNTRY: dict[str, tuple] = {
+    "suez": ("EG",),
+    "bab_el_mandeb": ("YM",),
+    "hormuz": ("IR", "MU"),
+    "malacca": ("MY", "SN", "ID"),
+    "panama": ("PM",),
+    "gibraltar": ("SP", "MO"),
+    "danish_straits": ("DA",),
+    "dover": ("UK", "FR"),
+    "lombok_sunda": ("ID",),
+}
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "gdelt"
 try:
@@ -89,14 +123,21 @@ except Exception:  # pragma: no cover - read-only FS guard
 
 @dataclass
 class GdeltEvent:
-    """One geo-located GDELT news event near a chokepoint."""
+    """One disruption-news article attributed to a chokepoint.
+
+    The article is attributed at COUNTRY granularity (it matched the chokepoint's
+    ``sourcecountry`` query), so ``lat``/``lon`` are the CHOKEPOINT's coords, not
+    the article's — DOC ``artlist`` carries no article geolocation. ``tone`` is
+    likewise unavailable from ``artlist`` and is left 0.0 (kept on the dataclass
+    only for backward compatibility / the optional GeoJSON path).
+    """
 
     lat: float
     lon: float
     title: str
     url: str
     seen_at: str                 # ISO-ish date string from GDELT (best-effort)
-    tone: float                  # GDELT average tone (negative = adverse)
+    tone: float = 0.0            # GDELT tone — NOT available via artlist; left 0
     chokepoint_key: str = ""     # which chokepoint this was fetched for ("" if generic)
 
     def to_dict(self) -> dict:
@@ -123,9 +164,12 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def events_near(lat: float, lon: float, radius_km: float, events) -> list:
     """Pure geo-filter: return the events within ``radius_km`` of (lat, lon).
 
-    Accepts an iterable of :class:`GdeltEvent` (or any object/dict exposing
-    ``lat``/``lon``). Events missing usable coordinates are dropped, never
-    counted. The boundary is inclusive (distance <= radius_km).
+    Used to ATTRIBUTE article-events to a chokepoint by its coords (each event is
+    stamped with the chokepoint's own coords when fetched, so this recovers the
+    events fetched for that node). The genuine filter upstream is
+    ``sourcecountry`` — this is just the coord-side attribution. Accepts an
+    iterable of :class:`GdeltEvent` (or any object/dict exposing ``lat``/``lon``).
+    Events missing usable coordinates are dropped. Boundary inclusive.
     """
     out: list = []
     for ev in events or []:
@@ -143,39 +187,57 @@ def events_near(lat: float, lon: float, radius_km: float, events) -> list:
     return out
 
 
-# ── Event → risk mapping (pure, deterministic, documented) ────────────────────
-#
-# DESIGN (conservative — real events required to ESCALATE; absence ≠ escalation):
-#   1. Filter the supplied events to those within ``radius_km`` of the
-#      chokepoint coords (``events_near``).
-#   2. If there are NONE → realness="dark": return (None, None, "dark"). The
-#      caller MUST keep the hardcoded baseline. We never invent risk from silence.
-#   3. Otherwise compute:
-#         n         = number of near events (density)
-#         avg_tone  = mean GDELT tone (negative is adverse; GDELT tone is
-#                     typically in roughly [-10, +10])
-#      and map to a level using BOTH density and adversity:
-#         CRITICAL : n >= 8  AND avg_tone <= -4      (dense + strongly adverse)
-#         HIGH     : n >= 4  AND avg_tone <= -2      (clustered + adverse)
-#         MODERATE : n >= 2  AND avg_tone <= -0.5    (some adverse coverage)
-#         LOW      : otherwise (events exist but benign / sparse)
-#   4. disruption_type is ACTIVE_CONFLICT when the derived level is HIGH/CRITICAL
-#      (the query is conflict/disruption-termed, so dense adverse clusters are
-#      treated as active conflict), CONGESTION for MODERATE, NONE for LOW.
-#
-# The thresholds are intentionally cautious: it takes a genuine, negative-tone
-# cluster of real articles to push a chokepoint above its baseline.
+def _events_for_chokepoint(chokepoint_key: str, lat, lon, radius_km, events) -> list:
+    """Recover the article-events belonging to one chokepoint.
 
-# (density_min, tone_max, risk_level, disruption_type), evaluated worst-first.
-_SIGNAL_RULES = (
-    (8, -4.0,  "CRITICAL", "ACTIVE_CONFLICT"),
-    (4, -2.0,  "HIGH",     "ACTIVE_CONFLICT"),
-    (2, -0.5,  "MODERATE", "CONGESTION"),
+    Prefers an exact ``chokepoint_key`` match when events carry one (the fetch
+    stamps it), so neighbouring chokepoints whose coords fall inside each other's
+    radius are not cross-counted. Falls back to the coord radius for events with
+    no key (e.g. test fixtures or the GeoJSON path).
+    """
+    keyed = [e for e in (events or [])
+             if str(getattr(e, "chokepoint_key", "") or
+                     (e.get("chokepoint_key", "") if isinstance(e, dict) else "")
+                     ) == chokepoint_key]
+    if chokepoint_key and keyed:
+        return keyed
+    if lat is None or lon is None:
+        return []
+    return events_near(float(lat), float(lon), radius_km, events)
+
+
+# ── Volume → risk mapping (pure, deterministic, documented) ───────────────────
+#
+# DESIGN — country-level disruption-news VOLUME (NO geolocation, NO tone):
+#   1. Recover the articles fetched for this chokepoint (``_events_for_chokepoint``
+#      — exact key match, else coord radius).
+#   2. n = number of those articles (out of maxrecords=250). n == 0 → realness
+#      "dark", (None, None): the caller keeps the modeled baseline. We never
+#      invent risk from silence.
+#   3. Map n to a level with conservative, round, ILLUSTRATIVE cutoffs (a genuine
+#      surge is required to escalate above the baseline):
+#         CRITICAL : n >= 120     (near-saturation of the 250-record window)
+#         HIGH     : n >=  50
+#         MODERATE : n >=  15
+#         LOW      : n >=   1      (real but calm — events exist, no surge)
+#   4. disruption_type is ACTIVE_CONFLICT for HIGH/CRITICAL (heavy disruption-term
+#      coverage of the country), CONGESTION for MODERATE, NONE for LOW.
+#
+# These are an illustrative volume heuristic, NOT a calibrated model. They are
+# intentionally cautious: it takes a sustained, country-wide disruption-news
+# surge to push a chokepoint above its hardcoded baseline.
+
+# (count_min, risk_level, disruption_type), evaluated worst-first.
+_VOLUME_RULES = (
+    (120, "CRITICAL", "ACTIVE_CONFLICT"),
+    (50,  "HIGH",     "ACTIVE_CONFLICT"),
+    (15,  "MODERATE", "CONGESTION"),
 )
 
 
-def gdelt_chokepoint_signal(chokepoint, events, *, radius_km: float = _DEFAULT_RADIUS_KM):
-    """Map GDELT events near a chokepoint → (risk_level, disruption_type, realness).
+def gdelt_chokepoint_signal(chokepoint, events, *, radius_km: float = _DEFAULT_RADIUS_KM,
+                            chokepoint_key: str = ""):
+    """Map disruption-news VOLUME for a chokepoint's country → (level, type, realness).
 
     Parameters
     ----------
@@ -183,49 +245,57 @@ def gdelt_chokepoint_signal(chokepoint, events, *, radius_km: float = _DEFAULT_R
         Anything exposing ``lat`` / ``lon`` (a ``Chokepoint`` or a dict).
     events
         Iterable of :class:`GdeltEvent` (or dicts) — typically the output of
-        ``fetch_chokepoint_events`` / a test fixture.
+        ``fetch_chokepoint_events`` / a test fixture. The COUNT of those
+        attributed to this chokepoint is the signal (no tone, no geolocation).
     radius_km
-        Geo-proximity radius for ``events_near``.
+        Coord radius used to attribute keyless events to the chokepoint.
+    chokepoint_key
+        Optional registry key (e.g. ``"suez"``). When supplied it is used to
+        match events by their stamped ``chokepoint_key`` exactly — avoiding
+        cross-counting neighbouring chokepoints whose coords overlap. Falls back
+        to the chokepoint's ``name`` then the coord radius.
 
     Returns
     -------
     (risk_level, disruption_type, realness)
-        * ``realness == "dark"`` with ``(None, None)`` when NO real near events
-          exist — the caller keeps the modeled baseline. Absence is never
+        * ``(None, None, "dark")`` when the chokepoint has ZERO attributed
+          articles — the caller keeps the modeled baseline. Absence is never
           escalation.
-        * ``realness == "live"`` with a derived ``(risk_level, disruption_type)``
-          when a real cluster is present.
+        * ``(risk_level, disruption_type, "live")`` when ``n >= 1`` — a real read
+          binned by the documented volume cutoffs.
     """
     lat = getattr(chokepoint, "lat", None)
     lon = getattr(chokepoint, "lon", None)
     if lat is None and isinstance(chokepoint, dict):
         lat, lon = chokepoint.get("lat"), chokepoint.get("lon")
-    if lat is None or lon is None:
+
+    key = str(chokepoint_key or "")
+    if not key:
+        cp_name = getattr(chokepoint, "name", None)
+        if cp_name is None and isinstance(chokepoint, dict):
+            cp_name = chokepoint.get("name")
+        if cp_name:
+            key = str(cp_name)
+
+    attributed = _events_for_chokepoint(key, lat, lon, radius_km, events)
+    n = len(attributed)
+    if n == 0:
         return (None, None, "dark")
 
-    near = events_near(float(lat), float(lon), radius_km, events)
-    if not near:
-        return (None, None, "dark")
-
-    n = len(near)
-    tones = [float(getattr(e, "tone", 0.0) if not isinstance(e, dict)
-                   else e.get("tone", 0.0) or 0.0) for e in near]
-    avg_tone = sum(tones) / len(tones) if tones else 0.0
-
-    for density_min, tone_max, level, dtype in _SIGNAL_RULES:
-        if n >= density_min and avg_tone <= tone_max:
+    for count_min, level, dtype in _VOLUME_RULES:
+        if n >= count_min:
             return (level, dtype, "live")
 
-    # Real events exist but they are sparse / benign — a real, low-risk read.
+    # Articles exist but below the MODERATE surge floor — a real, calm read.
     return ("LOW", "NONE", "live")
 
 
 def escalate(baseline_level: str, derived_level: str) -> str:
     """Return the MORE-severe of two risk levels (never downgrades baseline).
 
-    The overlay only ever RAISES risk from real GDELT signal; a real-but-mild
-    reading must not silently lower the modeled baseline (which encodes
-    standing geopolitical context GDELT may not see in a 3-day window).
+    The overlay only ever RAISES risk from a real GDELT volume surge; a
+    real-but-calm reading must not silently lower the modeled baseline (which
+    encodes standing geopolitical context the news window may not reflect).
     """
     if _RISK_ORDER.get(derived_level, -1) > _RISK_ORDER.get(baseline_level, -1):
         return derived_level
@@ -278,13 +348,40 @@ def _write_cache(key: str, events: list) -> None:
 
 # ── Network fetch (offline-safe, injectable) ──────────────────────────────────
 
-def _build_doc_url(lat: float, lon: float, radius_km: float, timespan: str) -> str:
-    """Build the keyless GDELT DOC 2.0 geo-proximity query URL."""
-    # GDELT near:<km>:<lat>,<lon> restricts to articles geo-tagged within the
-    # radius; combined with the disruption terms this returns relevant local
-    # disruption coverage only.
-    query = f"near{int(radius_km)}:{lat},{lon} ({_DISRUPTION_TERMS})"
+def _country_codes_for(key: str, cp) -> tuple:
+    """ISO ``sourcecountry`` code(s) for a chokepoint, or () if unmapped.
+
+    Prefers an explicit ``country`` attribute on the chokepoint if one ever
+    exists (str or sequence); falls back to the ``_CHOKEPOINT_COUNTRY`` map.
+    """
+    attr = getattr(cp, "country", None)
+    if attr is None and isinstance(cp, dict):
+        attr = cp.get("country")
+    if isinstance(attr, str) and attr.strip():
+        return (attr.strip().upper(),)
+    if isinstance(attr, (list, tuple)) and attr:
+        codes = tuple(str(c).strip().upper() for c in attr if str(c).strip())
+        if codes:
+            return codes
+    return _CHOKEPOINT_COUNTRY.get(str(key), ())
+
+
+def _build_doc_url(country_codes, timespan: str) -> str:
+    """Build a VALID keyless GDELT DOC 2.0 country-restricted query URL.
+
+    ``({disruption terms}) sourcecountry:EG`` for one country, or
+    ``({terms}) (sourcecountry:MY OR sourcecountry:SG)`` for several. This is the
+    correct DOC query shape — the previous ``near{km}:{lat},{lon}`` was INVALID
+    (DOC ``near`` is a TEXT-proximity operator, not geographic).
+    """
     from urllib.parse import urlencode
+
+    codes = [str(c).strip().upper() for c in (country_codes or []) if str(c).strip()]
+    if len(codes) == 1:
+        sc = f"sourcecountry:{codes[0]}"
+    else:
+        sc = "(" + " OR ".join(f"sourcecountry:{c}" for c in codes) + ")"
+    query = f"{_DISRUPTION_TERMS} {sc}"
     params = {
         "query": query,
         "mode": "artlist",
@@ -300,41 +397,35 @@ def _parse_gdelt_payload(payload, *, default_lat: float, default_lon: float,
                          chokepoint_key: str) -> list:
     """Parse a GDELT JSON payload → list[GdeltEvent]. Tolerant of two shapes.
 
-    1. DOC 2.0 ``{"articles": [ {url,title,seendate,...}, ... ]}`` — articles
-       are geo-restricted host-side by the ``near:`` operator, so they may not
-       carry their own coords; we stamp the chokepoint's coords so the pure
-       geo-filter still treats them as in-radius. Tone defaults to 0 unless
-       GDELT supplies it (``tone``).
-    2. Generic GeoJSON ``{"features": [ {geometry:{coordinates:[lon,lat]},
-       properties:{...}}, ... ]}`` — GDELT GEO 2.0 shape; coords + count + tone
-       read from the feature.
+    1. DOC 2.0 ``{"articles": [ {url,title,seendate,...}, ... ]}`` — the live
+       shape. Articles carry NO coords and NO tone, so each event is stamped with
+       the CHOKEPOINT's coords (country-level attribution) and tone 0.0. The COUNT
+       is the signal.
+    2. Generic GeoJSON ``{"features": [...]}`` (legacy GDELT GEO 2.0 shape, now
+       404 in production) — kept harmless: parsed if ever present, never
+       fabricated. Coords/tone read from the feature.
     """
     events: list = []
     if not isinstance(payload, dict):
         return events
 
-    # Shape 1 — DOC artlist
+    # Shape 1 — DOC artlist (the live shape).
     arts = payload.get("articles")
     if isinstance(arts, list):
         for a in arts:
             if not isinstance(a, dict):
                 continue
-            tone = a.get("tone")
-            try:
-                tone = float(tone) if tone is not None else 0.0
-            except (TypeError, ValueError):
-                tone = 0.0
             events.append(GdeltEvent(
                 lat=default_lat, lon=default_lon,
                 title=str(a.get("title", ""))[:300],
                 url=str(a.get("url", "")),
                 seen_at=str(a.get("seendate", "")),
-                tone=tone,
+                tone=0.0,                     # NOT available via artlist
                 chokepoint_key=chokepoint_key,
             ))
         return events
 
-    # Shape 2 — GeoJSON features (GDELT GEO 2.0)
+    # Shape 2 — GeoJSON features (legacy; harmless if it ever reappears).
     feats = payload.get("features")
     if isinstance(feats, list):
         for f in feats:
@@ -354,8 +445,6 @@ def _parse_gdelt_payload(payload, *, default_lat: float, default_lon: float,
                 tone = float(tone) if tone is not None else 0.0
             except (TypeError, ValueError):
                 tone = 0.0
-            # GEO points carry a 'count' (articles at that location) — fan it
-            # out so density reflects coverage volume, capped to keep it sane.
             count = props.get("count", 1)
             try:
                 count = max(1, min(20, int(count)))
@@ -383,26 +472,32 @@ def fetch_chokepoint_events(
     cache_ttl_hours: float = 6.0,
     http_get=None,
 ) -> tuple:
-    """Fetch recent GDELT geo-events near each chokepoint. OFFLINE-SAFE.
+    """Fetch recent disruption-news articles for each chokepoint's country.
+
+    OFFLINE-SAFE. Each chokepoint is mapped to its ISO ``sourcecountry`` code(s)
+    (``_CHOKEPOINT_COUNTRY`` / an explicit ``country`` attr); an unmapped
+    chokepoint is SKIPPED (honest no-signal, not a guess). The returned article
+    events are stamped with the chokepoint's own coords + key so the volume signal
+    can attribute them back.
 
     Parameters
     ----------
     chokepoints
-        Iterable of objects exposing ``lat``/``lon`` and (optionally) a name.
-        For the registry, pass ``CHOKEPOINTS.items()``-style — but this accepts
-        any iterable of (key, chokepoint) pairs OR bare chokepoints.
+        Iterable of (key, chokepoint) pairs OR bare chokepoints exposing
+        ``lat``/``lon``/``name``. For the registry pass ``CHOKEPOINTS.items()``.
     http_get
-        Injectable callable ``(url, *, headers, timeout) -> response`` for
-        OFFLINE tests. Defaults to ``requests.get``. A test passes a stub that
-        returns a fixture payload (or raises, to exercise the offline path).
+        Injectable ``(url, *, headers, timeout) -> response`` for OFFLINE tests.
+        Defaults to ``requests.get``.
 
     Returns
     -------
     (events, realness)
         ``events`` is a flat ``list[GdeltEvent]`` across all chokepoints.
-        ``realness`` is one of ``"live"`` (a real fetch returned >=1 event),
-        ``"empty"`` (real fetch, zero events), or ``"unavailable"`` (every fetch
-        failed / offline). Never raises.
+        ``realness`` ∈ ``"live"`` (≥1 article from a real JSON fetch),
+        ``"empty"`` (a real JSON fetch that genuinely returned zero articles), or
+        ``"unavailable"`` (every fetch failed / offline / structurally-bad body).
+        A structurally-bad 200 (non-JSON text) is a FAILURE, never ``"empty"``,
+        and is NEVER cached. Never raises.
     """
     getter = http_get or requests.get
 
@@ -427,15 +522,22 @@ def fetch_chokepoint_events(
         if lat is None or lon is None:
             continue
 
+        country_codes = _country_codes_for(key, cp)
+        if not country_codes:
+            # No mapped country → honestly produce no signal for this node.
+            logger.debug(f"gdelt_feed: {key} has no mapped country — skipped")
+            continue
+
         if time.monotonic() - start > _FETCH_BUDGET_SECONDS:
             logger.warning("gdelt_feed: fetch budget exhausted — stopping early")
             break
 
-        cache_key = f"{key or 'cp'}_{round(float(lat),2)}_{round(float(lon),2)}_{timespan}"
+        cc_tag = "-".join(country_codes)
+        cache_key = f"{key or 'cp'}_{cc_tag}_{timespan}"
         cached = _read_cache(cache_key, cache_ttl_hours)
         if cached is not None:
             all_events.extend(cached)
-            any_success = any_success or bool(cached)
+            any_success = True
             continue
 
         # Courtesy inter-request delay (GDELT asks for >5s). Skipped for the
@@ -444,7 +546,7 @@ def fetch_chokepoint_events(
         if i > 0 and http_get is None:
             time.sleep(_INTER_REQUEST_DELAY)
 
-        url = _build_doc_url(float(lat), float(lon), radius_km, timespan)
+        url = _build_doc_url(country_codes, timespan)
         try:
             resp = getter(url, headers=_HEADERS, timeout=_REQUEST_TIMEOUT)
             status = getattr(resp, "status_code", 200)
@@ -452,16 +554,33 @@ def fetch_chokepoint_events(
                 logger.debug(f"gdelt_feed: {key} non-200 ({status})")
                 any_failure = True
                 continue
-            # GDELT sometimes returns a plain-text rate-limit notice with a 200.
+
             text = getattr(resp, "text", "") or ""
-            if text.strip().lower().startswith("please limit requests"):
-                logger.debug(f"gdelt_feed: {key} rate-limited")
-                any_failure = True
-                continue
+            stripped = text.strip()
+            # GDELT returns plain-text 200s for rate-limits AND invalid queries
+            # ("Please limit requests…", "Your query contained an invalid NEAR
+            # search…"). Any 200 body that is non-empty and does NOT look like
+            # JSON is a STRUCTURAL FAILURE — not an honest empty fetch.
             try:
                 payload = resp.json()
             except Exception:
-                payload = json.loads(text) if text.strip().startswith("{") else {}
+                if stripped.startswith("{") or stripped.startswith("["):
+                    try:
+                        payload = json.loads(stripped)
+                    except Exception:
+                        logger.debug(f"gdelt_feed: {key} unparseable JSON body")
+                        any_failure = True
+                        continue
+                else:
+                    # Non-JSON plain-text body (rate-limit / invalid-query / etc.)
+                    # → failure. Do NOT fall through to empty, do NOT cache.
+                    logger.debug(
+                        f"gdelt_feed: {key} non-JSON 200 body "
+                        f"({stripped[:60]!r}) — treated as failure"
+                    )
+                    any_failure = True
+                    continue
+
             cp_events = _parse_gdelt_payload(
                 payload, default_lat=float(lat), default_lon=float(lon),
                 chokepoint_key=key,
@@ -478,12 +597,12 @@ def fetch_chokepoint_events(
         _stamp("live", "chokepoint_events", len(all_events))
         return (all_events, "live")
     if any_success and not all_events:
-        # Real fetch(es) succeeded but returned zero events — honestly empty.
+        # Real JSON fetch(es) succeeded but genuinely returned zero articles.
         _stamp("empty", "chokepoint_events", 0)
         return ([], "empty")
     if any_failure:
-        # Everything failed / offline — honestly unavailable, NOT synthetic data.
+        # Everything failed / offline / structurally-bad — honestly unavailable.
         _stamp("failed", "chokepoint_events", 0)
         return ([], "unavailable")
-    # No chokepoints had coords / nothing attempted.
+    # No chokepoints had coords / a mapped country / nothing attempted.
     return ([], "unavailable")

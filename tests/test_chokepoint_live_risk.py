@@ -30,11 +30,17 @@ def restore_chokepoints():
         CHOKEPOINTS[k] = v
 
 
-def _cluster_near(cp_key: str, n: int, tone: float) -> list:
-    """A dense event cluster sitting exactly on a chokepoint's coords."""
+def _volume_for(cp_key: str, n: int) -> list:
+    """``n`` disruption-news articles attributed to a chokepoint's country.
+
+    The new signal is VOLUME (article COUNT), not tone — each event is stamped
+    with the chokepoint's coords AND key so the signal attributes them back. With
+    the documented cutoffs: n>=120 → CRITICAL, n>=50 → HIGH, n>=15 → MODERATE,
+    n>=1 → LOW, n==0 → dark.
+    """
     cp = CHOKEPOINTS[cp_key]
-    return [GdeltEvent(lat=cp.lat + 0.01 * i, lon=cp.lon, title="t",
-                       url="u", seen_at="", tone=tone) for i in range(n)]
+    return [GdeltEvent(lat=cp.lat, lon=cp.lon, title="t", url="u",
+                       seen_at="", chokepoint_key=cp_key) for _ in range(n)]
 
 
 # ── default / no-data == EXACT current behavior ──────────────────────────────
@@ -61,9 +67,9 @@ def test_overlay_none_events_is_no_op(restore_chokepoints) -> None:
 # ── real GDELT cluster ESCALATES ─────────────────────────────────────────────
 
 def test_overlay_escalates_a_calm_node_on_real_cluster(restore_chokepoints) -> None:
-    """A dense negative cluster near Malacca (baseline LOW) escalates it."""
+    """A high disruption-news volume for Malacca's country (baseline LOW) escalates it."""
     assert CHOKEPOINTS["malacca"].current_risk_level == "LOW"  # baseline
-    events = _cluster_near("malacca", 10, tone=-6.0)
+    events = _volume_for("malacca", 120)
     marker = apply_live_chokepoint_risk(gdelt_events=events)
     assert marker["malacca"]["realness"] == "live"
     assert marker["malacca"]["source"] == "gdelt"
@@ -73,9 +79,9 @@ def test_overlay_escalates_a_calm_node_on_real_cluster(restore_chokepoints) -> N
 
 
 def test_overlay_escalates_suez_on_real_cluster(restore_chokepoints) -> None:
-    # Suez baseline is already CRITICAL; a dense negative cluster keeps CRITICAL
+    # Suez baseline is already CRITICAL; a high news-volume read keeps CRITICAL
     # and still reports a live realness marker (real signal corroborating).
-    events = _cluster_near("suez", 10, tone=-7.0)
+    events = _volume_for("suez", 120)
     marker = apply_live_chokepoint_risk(gdelt_events=events)
     assert marker.get("suez", {}).get("realness") == "live"
     assert CHOKEPOINTS["suez"].current_risk_level == "CRITICAL"
@@ -86,7 +92,7 @@ def test_overlay_escalates_suez_on_real_cluster(restore_chokepoints) -> None:
 def test_overlay_never_downgrades_baseline(restore_chokepoints) -> None:
     """A real-but-mild GDELT read near Hormuz (baseline HIGH) must not lower it."""
     assert CHOKEPOINTS["hormuz"].current_risk_level == "HIGH"
-    benign = _cluster_near("hormuz", 2, tone=2.0)  # positive tone → derived LOW
+    benign = _volume_for("hormuz", 3)  # few articles → derived LOW
     apply_live_chokepoint_risk(gdelt_events=benign)
     assert CHOKEPOINTS["hormuz"].current_risk_level == "HIGH"  # unchanged
     assert CHOKEPOINTS["hormuz"].current_disruption_type == "DIPLOMATIC"  # cause kept
@@ -108,7 +114,7 @@ def test_overlay_far_events_are_no_op(restore_chokepoints) -> None:
 def test_overlay_does_not_mutate_in_place(restore_chokepoints) -> None:
     """The escalation replaces the entry with a NEW object (R007 safety)."""
     original_obj = CHOKEPOINTS["malacca"]
-    events = _cluster_near("malacca", 10, tone=-6.0)
+    events = _volume_for("malacca", 120)
     apply_live_chokepoint_risk(gdelt_events=events)
     # New object identity; the snapshotted original is unmodified.
     assert CHOKEPOINTS["malacca"] is not original_obj
@@ -116,7 +122,7 @@ def test_overlay_does_not_mutate_in_place(restore_chokepoints) -> None:
 
 
 def test_overlay_idempotent(restore_chokepoints) -> None:
-    events = _cluster_near("malacca", 10, tone=-6.0)
+    events = _volume_for("malacca", 120)
     apply_live_chokepoint_risk(gdelt_events=events)
     first = dataclasses.replace(CHOKEPOINTS["malacca"])
     apply_live_chokepoint_risk(gdelt_events=events)
@@ -173,14 +179,14 @@ def test_gdelt_job_offline_is_ok_and_keeps_baseline(monkeypatch, restore_chokepo
 
 
 def test_gdelt_job_escalates_registry_on_live_cluster(monkeypatch, restore_chokepoints) -> None:
-    """A real negative cluster near Malacca (baseline LOW) → the job escalates the
+    """A real high news-volume read for Malacca (baseline LOW) → the job escalates the
     registry node that the SSI chokepoint component then reads (the whole point of
     R014: the headline stress index can finally move on a real escalation)."""
     import data.gdelt_feed as gf
     from worker.scheduler import run_gdelt_chokepoint_job
 
     assert CHOKEPOINTS["malacca"].current_risk_level == "LOW"  # baseline
-    events = _cluster_near("malacca", 10, tone=-6.0)
+    events = _volume_for("malacca", 120)
     monkeypatch.setattr(gf, "fetch_chokepoint_events",
                         lambda *a, **k: (events, "live"))
     out = run_gdelt_chokepoint_job()
