@@ -396,6 +396,25 @@ def run_daily_briefing_job(
                 error_msg="save_report returned None",
             )
 
+        # Audit-log the scheduled fire. ``save_report`` already emitted a
+        # ``generate_report`` event for the persisted row; this companion
+        # event marks that the briefing was produced by the SCHEDULER (not
+        # an interactive user), so a security review can tell an automated
+        # daily fire from a hand-triggered report. The scheduler runs
+        # outside any Streamlit session, so the user is the empty/system
+        # id (``""``) — recorded honestly rather than spoofing a person.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "scheduled_report_fire",
+                entity_type="report",
+                entity_id=meta.report_id,
+                detail={"pushed_to_channels": bool(push_to_channels)},
+                user_id="",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Optional outbound delivery — best-effort, never flips success
         if push_to_channels:
             try:

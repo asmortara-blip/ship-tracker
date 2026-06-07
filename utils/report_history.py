@@ -253,6 +253,28 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
                  meta.file_size_kb, uid),
             )
 
+        # Audit-log the generation. Placed AFTER the row was successfully
+        # inserted so we only emit an event when the report actually
+        # persisted — the failure path (returns None below) does not fire
+        # this hook. We pass ``user_id=uid`` (the same stamp the row got)
+        # rather than None so a scheduled save outside a Streamlit session
+        # records the resolved id consistently with the row it audits.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "generate_report",
+                entity_type="report",
+                entity_id=meta.report_id,
+                detail={
+                    "sentiment_label": meta.sentiment_label,
+                    "risk_level": meta.risk_level,
+                    "data_quality": meta.data_quality,
+                },
+                user_id=uid,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Prune any rows over MAX_REPORTS, oldest first. Also delete the
         # pruned files from disk.
         _prune_old_reports()
@@ -346,7 +368,23 @@ def load_report_html(report_id: str, *, user_id: str | None = None) -> str | Non
         if not path.exists():
             logger.warning(f"load_report_html: file missing for {report_id}")
             return None
-        return path.read_text(encoding="utf-8")
+        html = path.read_text(encoding="utf-8")
+        # Audit-log the in-scope access. Placed AFTER the read succeeds so
+        # only genuine reads are recorded — the not-found / missing-file
+        # early returns above do not fire this hook. We pass ``user_id``
+        # through verbatim (``None`` resolves to the active session user)
+        # so the audit row attributes the access to whoever opened it.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "read_report",
+                entity_type="report",
+                entity_id=report_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return html
     except Exception as exc:
         logger.error(f"load_report_html failed for {report_id}: {exc}")
         return None
@@ -682,7 +720,26 @@ def load_public_report(slug: str, password: str | None = None) -> str | None:
         if not path.exists():
             logger.debug(f"load_public_report: file missing for slug {slug}")
             return None
-        return path.read_text(encoding="utf-8")
+        html = path.read_text(encoding="utf-8")
+        # Audit-log the public (anonymous) access. Placed AFTER every gate
+        # passes (slug found, not expired, password ok, file present) so a
+        # probe that fails any check does NOT generate an audit row. The
+        # accessing user is recorded honestly as ``""`` — a public-link
+        # viewer has no authenticated identity. The slug is NEVER written
+        # to the audit row (mirrors ``make_public``: a stolen audit row
+        # must not hand an attacker the working URL); ``password_protected``
+        # is the only payload field, which is what a review wants to see.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "read_public_report",
+                entity_type="report",
+                detail={"password_protected": bool(stored_hash and stored_salt)},
+                user_id="",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return html
     except Exception as exc:
         logger.error(f"load_public_report failed for slug {slug!r}: {exc}")
         return None
