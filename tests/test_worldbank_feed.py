@@ -418,11 +418,19 @@ def test_get_teu_returns_latest_year_in_millions():
 
 
 def test_get_teu_applies_port_weight_for_multi_port_country():
-    """USA Shanghai-LA: USLAX has weight 0.22 per ``PORT_TRAFFIC_WEIGHTS``."""
+    """USA: USLAX's *renormalized* share scales the 50 MTEU national total.
+
+    Reads the live weight from ``PORT_TRAFFIC_WEIGHTS`` (the renormalized table,
+    where USA sums to 1.0) rather than a stale magic number — the raw 0.22
+    authored share renormalizes to ~0.319 so the tracked ports fully distribute
+    the national total instead of dropping ~31% of it.
+    """
+    from ports.port_registry import PORT_TRAFFIC_WEIGHTS
+
     wb_data = {"IS.SHP.GOOD.TU": _teu_frame([("USA", 2023, 50_000_000.0)])}
     val = get_teu_for_country("USA", wb_data, port_locode="USLAX")
-    # 50.0 MTEU * 0.22 share = 11.0 MTEU
-    assert val == pytest.approx(11.0, abs=1e-9)
+    expected = 50.0 * PORT_TRAFFIC_WEIGHTS["USA"]["USLAX"]
+    assert val == pytest.approx(expected, abs=1e-9)
 
 
 def test_get_teu_ignores_locode_when_no_weight_table_entry():
