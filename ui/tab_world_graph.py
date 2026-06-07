@@ -76,6 +76,19 @@ WORLD_GRAPH_SOURCE = DataSource.modeled(
     ),
 )
 
+# Provenance for the cascade-ribbon section. The ribbon chains the SSI
+# attribution (component → route) into the disruption-cascade equity ideas
+# (route → ticker); both are MODELED derivations, and the equity legs are
+# illustrative ideas — never investment advice.
+CASCADE_RIBBON_SOURCE = DataSource.modeled(
+    "Disruption Cascade Ribbon",
+    notes=(
+        "Chains SSI component attribution (component → route) into the "
+        "disruption-cascade equity ideas (route → ticker). MODELED exposure + "
+        "illustrative equity ideas, not investment advice."
+    ),
+)
+
 
 # Per-node-type colour, drawn from the WSJ palette so the legend is on-brand
 # and distinct across the six types.
@@ -530,6 +543,100 @@ def _render_supply_path(g, selected_id: str | None) -> None:
         )
 
 
+def _build_cascade_ribbon_inputs(**kwargs):
+    """Compute (attribution, ideas) for the cascade ribbon from tab kwargs.
+
+    Mirrors ``ui.tab_idea_engine._build_ideas`` / ``tab_disruption_radar``:
+    ``compute_shipping_stress`` → ``attribute_ssi`` (component → route) and
+    ``build_exposure_matrix`` → ``score_equity_ideas`` (route → ticker). Every
+    upstream function tolerates empty / missing inputs and degrades to a
+    neutral report, so this returns honest-empty artefacts rather than raising
+    when the tab is rendered without market data (the empty-smoke path).
+
+    Returns ``(attribution, ideas)`` — an ``SSIAttributionReport`` and a list
+    of ``EquityIdea`` (possibly empty).
+    """
+    from processing.disruption_cascade import score_equity_ideas
+    from processing.exposure_matrix import build_exposure_matrix
+    from processing.shipping_stress_index import compute_shipping_stress
+    from processing.ssi_attribution import attribute_ssi
+
+    freight_data = kwargs.get("freight_data") or {}
+    macro_data = kwargs.get("macro_data") or {}
+    port_results = kwargs.get("port_results") or []
+    route_results = kwargs.get("route_results") or []
+    stock_data = kwargs.get("stock_data") or {}
+    insights = kwargs.get("insights") or []
+
+    stress_report = compute_shipping_stress(
+        freight_data, macro_data, port_results, route_results,
+    )
+    attribution = attribute_ssi(stress_report)
+    exposure = build_exposure_matrix(stock_data)
+    ideas = score_equity_ideas(stress_report, exposure, stock_data, insights)
+    return attribution, ideas
+
+
+def _render_cascade_ribbon(**kwargs) -> None:
+    """End-to-end cascade ribbon: chokepoint/component → route → equity idea.
+
+    Builds the SSI attribution + cascade equity ideas from whatever market
+    data the tab received, reshapes them into a Sankey via
+    ``processing.cascade_ribbon.to_cascade_sankey``, and renders the ribbon
+    with the tab's existing ``_build_sankey_figure``. Honest empty-state when
+    no stressed route currently flows into an equity view.
+    """
+    from processing.cascade_ribbon import to_cascade_sankey
+
+    st.caption(
+        "How a disruption flows into an equity view: each SSI **component** "
+        "feeds the **routes** it dominates, and each stressed route feeds the "
+        "**equity ideas** whose cascade runs through it. Ribbon width ∝ the "
+        "modeled contribution. MODELED exposure + illustrative ideas — not "
+        "investment advice."
+    )
+
+    try:
+        attribution, ideas = _build_cascade_ribbon_inputs(**kwargs)
+    except Exception:
+        logger.exception("world_graph: cascade-ribbon inputs failed")
+        st.info(
+            "Cascade ribbon could not be computed from the current inputs."
+        )
+        return
+
+    sankey = to_cascade_sankey(attribution, ideas)
+    if sankey.get("labels") and sankey.get("source"):
+        st.plotly_chart(
+            _build_sankey_figure(
+                sankey,
+                title=(
+                    "Disruption cascade — component → route → equity idea "
+                    "(modeled)"
+                ),
+                height=520,
+            ),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="wg_cascade_ribbon",
+        )
+    else:
+        st.info(
+            "No stressed route currently flows into an equity view — the "
+            "cascade ribbon is empty. It populates when live SSI stress on a "
+            "route both has an attributed driver and feeds a tracked ticker's "
+            "cascade."
+        )
+
+    try:
+        st.markdown(
+            source_footer([CASCADE_RIBBON_SOURCE]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("world_graph: cascade-ribbon footer failed")
+
+
 def render(**_kwargs) -> None:
     """Render the Shipping World Graph tab."""
     from engine.perf_telemetry import track_render
@@ -783,6 +890,15 @@ def render(**_kwargs) -> None:
         except Exception:
             logger.exception("world_graph: supply-path section failed")
             st.error("Supply-path view unavailable.")
+
+        section_divider("Disruption cascade ribbon")
+
+        # ── C3. End-to-end cascade ribbon (chokepoint → route → equity idea) ─
+        try:
+            _render_cascade_ribbon(**_kwargs)
+        except Exception:
+            logger.exception("world_graph: cascade-ribbon section failed")
+            st.error("Cascade-ribbon view unavailable.")
 
         # ── D. Source footer ───────────────────────────────────────────────
         try:
