@@ -435,32 +435,35 @@ def test_main_push_flag_is_forwarded(monkeypatch) -> None:
 # ─── per-job cadence gates (#4) ───────────────────────────────────────────
 
 def test_job_due_first_run_then_within_interval() -> None:
-    """A never-run job is due (and stamps); a second check within the
-    interval is NOT due."""
+    """A never-run job is due; once stamped, a second check within the
+    interval is NOT due. (R011: _job_due is read-only — stamp_run advances.)"""
     from datetime import datetime, timezone
-    from worker.scheduler import _job_due
+    from worker.scheduler import _job_due, stamp_run
 
     now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert _job_due("cadence-x", 3600, now=now) is True   # never run → due
+    stamp_run("cadence-x", now=now)
     assert _job_due("cadence-x", 3600, now=now) is False  # within 1h → not
 
 
 def test_job_due_again_after_interval_elapsed() -> None:
     from datetime import datetime, timedelta, timezone
-    from worker.scheduler import _job_due
+    from worker.scheduler import _job_due, stamp_run
 
     t0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert _job_due("cadence-y", 3600, now=t0) is True
+    stamp_run("cadence-y", now=t0)
     assert _job_due("cadence-y", 3600, now=t0 + timedelta(minutes=30)) is False
     assert _job_due("cadence-y", 3600, now=t0 + timedelta(hours=2)) is True
 
 
 def test_job_due_force_bypasses_the_gate() -> None:
     from datetime import datetime, timezone
-    from worker.scheduler import _job_due
+    from worker.scheduler import _job_due, stamp_run
 
     now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert _job_due("cadence-z", 3600, now=now) is True
+    stamp_run("cadence-z", now=now)
     assert _job_due("cadence-z", 3600, now=now) is False           # gated
     assert _job_due("cadence-z", 3600, now=now, force=True) is True  # forced
 

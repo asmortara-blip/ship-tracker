@@ -2095,12 +2095,59 @@ def _job_due(
     force: bool = False,
 ) -> bool:
     """True iff job ``name`` is due (>= ``interval_seconds`` since its last
-    run, or never run) — and STAMP the run time when returning True.
+    SUCCESSFUL run, or never run). READ-ONLY — it never writes the stamp.
+
+    R011: the cadence stamp is advanced by :func:`stamp_run`, called ONLY
+    after a job actually succeeds (see ``_run_gated`` and ``main``'s briefing
+    block). Splitting the read (here) from the write (``stamp_run``) is the
+    whole fix: a job that was due but then FAILED no longer advances its
+    cadence, so the next pass re-attempts it instead of waiting a full window.
 
     Backed by a kv_state row ``scheduler:lastrun:<name>``. ``force`` bypasses
-    the gate (still stamps). Fail-OPEN: on ANY error this returns True — better
+    the gate (always due). Fail-OPEN: on ANY error this returns True — better
     to run a heavy job an extra time than to silently stop running it because
     the gate's own bookkeeping broke.
+    """
+    if force:
+        return True
+    now_dt = now or datetime.now(timezone.utc)
+    key = _JOB_LASTRUN_KEY.format(name=name)
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?", (key,),
+        ).fetchone()
+        if row is not None:
+            try:
+                last = datetime.fromisoformat(row["value"])
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                last = None
+            if last is not None and (
+                now_dt - last
+            ).total_seconds() < interval_seconds:
+                return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — gate must never stop the worker
+        logger.warning(
+            f"_job_due: gate check failed for {name!r}, running anyway: {exc}"
+        )
+        return True
+
+
+def stamp_run(name: str, *, now: Optional[datetime] = None) -> None:
+    """Advance job ``name``'s cadence stamp to ``now`` in kv_state (R011).
+
+    The INSERT-OR-REPLACE that used to live inside the due-CHECK. Call this
+    ONLY after the job has actually SUCCEEDED, so a failed/skipped job does
+    NOT advance its cadence and gets re-attempted on the next pass.
+
+    Idempotent and NEVER raises — a stamp failure must never take the worker
+    down (the job already ran; the worst case of a missed stamp is that the
+    job re-runs next pass, which is the same fail-open posture as ``_job_due``).
     """
     now_dt = now or datetime.now(timezone.utc)
     key = _JOB_LASTRUN_KEY.format(name=name)
@@ -2108,32 +2155,39 @@ def _job_due(
         from state.db import get_connection
 
         conn = get_connection()
-        if not force:
-            row = conn.execute(
-                "SELECT value FROM kv_state WHERE key = ?", (key,),
-            ).fetchone()
-            if row is not None:
-                try:
-                    last = datetime.fromisoformat(row["value"])
-                    if last.tzinfo is None:
-                        last = last.replace(tzinfo=timezone.utc)
-                except (TypeError, ValueError):
-                    last = None
-                if last is not None and (
-                    now_dt - last
-                ).total_seconds() < interval_seconds:
-                    return False
         conn.execute(
             "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
             "VALUES (?, ?, ?)",
             (key, now_dt.isoformat(), now_dt.isoformat()),
         )
-        return True
-    except Exception as exc:  # noqa: BLE001 — gate must never stop the worker
+    except Exception as exc:  # noqa: BLE001 — stamp must never stop the worker
         logger.warning(
-            f"_job_due: gate check failed for {name!r}, running anyway: {exc}"
+            f"stamp_run: failed to stamp {name!r} cadence: {exc}"
         )
-        return True
+
+
+def _job_succeeded(result: Any) -> bool:
+    """Decide whether a job's return value signals success (R011).
+
+    Honors an explicit flag when the job exposes one, else treats a
+    no-exception return as success:
+
+      * a dataclass result with a ``success`` attribute (e.g.
+        ``ReportJobResult``) → that flag;
+      * a dict carrying an ``ok`` key (e.g. the snapshot jobs) → ``bool(ok)``;
+      * everything else — count dicts without ``ok``
+        (``{"fired": N, ...}``), bare ints (the pruners), lists
+        (``run_health_ping_job``), ``None`` (fire-and-forget) — has no
+        explicit failure signal, so a clean return counts as success.
+
+    A raised exception never reaches here: ``_run_gated`` only calls this on
+    the no-exception path and stamps nothing when the job raised.
+    """
+    if hasattr(result, "success"):
+        return bool(getattr(result, "success"))
+    if isinstance(result, dict) and "ok" in result:
+        return bool(result["ok"])
+    return True
 
 
 def _run_gated(
@@ -2147,15 +2201,31 @@ def _run_gated(
 ) -> None:
     """Run heavy job ``fn`` iff ``_job_due`` says so; swallow + log any error.
 
+    R011: the cadence stamp advances ONLY when ``fn`` actually succeeds — no
+    exception AND (if it returns an explicit ``success``/``ok`` flag) that flag
+    is truthy. A job that was due but then FAILED leaves its stamp untouched,
+    so the next pass re-attempts it instead of waiting a full cadence window.
+    ``force`` still runs the job; it only stamps on success.
+
     Skipping (within-interval) is logged at DEBUG; a job exception is logged
-    at WARNING. The job itself already no-raises — this is belt-and-braces."""
+    at WARNING. The job itself already no-raises — the try/except is
+    belt-and-braces (and, post-R011, the reason a raise leaves the stamp
+    un-advanced for a retry)."""
     if not _job_due(name, interval_seconds, now=now, force=force):
         logger.debug(f"main: {label or name} skipped (within cadence)")
         return
     try:
-        fn()
+        result = fn()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"main: {label or name} step failed: {exc}")
+        return  # do NOT stamp — the job raised, so it stays due for a retry
+    if _job_succeeded(result):
+        stamp_run(name, now=now)
+    else:
+        logger.warning(
+            f"main: {label or name} reported failure — cadence not advanced, "
+            f"will retry next pass"
+        )
 
 
 def _run_always(label: str, fn: Callable) -> None:
@@ -2206,6 +2276,17 @@ def main(argv: Optional[list] = None) -> int:
         # rather than the hardcoded baseline. Shielded — never blocks briefing.
         _run_always("canal→chokepoint sync", lambda: run_canal_sync_job())
         result = run_daily_briefing_job(bundle, push_to_channels=args.push)
+        # R011: advance the daily cadence stamp ONLY when the briefing actually
+        # succeeded. A failed build leaves the stamp un-advanced so the next
+        # fast pass re-attempts it instead of waiting a full day. The sibling
+        # _run_always jobs below ride on this same gate, so they re-run too.
+        if result.success:
+            stamp_run("run_daily_briefing_job", now=now)
+        else:
+            logger.warning(
+                "main: daily briefing failed — cadence not advanced, "
+                "will retry next pass"
+            )
         print(json.dumps(asdict(result), indent=2, default=str))
         # Daily briefing TLDR — primes the day-cache the UI reads + persists
         # ready-to-send artifacts, reusing the freshly-loaded bundle. A TLDR
