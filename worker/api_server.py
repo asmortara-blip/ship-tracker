@@ -408,6 +408,35 @@ def _authenticate_or_reject(handler: BaseHTTPRequestHandler) -> Optional[str]:
     return user_id
 
 
+def _meter_api_usage(user_id: str, path: str) -> None:
+    """Best-effort: meter one authenticated hit into the compute-weighted
+    usage ledger (R112).
+
+    Called AFTER ``_authenticate_or_reject`` resolves a non-None user_id
+    and AFTER the per-user rate limiter passes — so ONLY authed,
+    rate-allowed hits are metered, and the public routes (health,
+    openapi, backtests-health, incidents.ics) that short-circuit ABOVE
+    the auth gate are never counted.
+
+    We bump on dispatch ENTRY (before the handler body runs) rather than
+    on completion: a request that reaches dispatch has already consumed
+    the auth + rate-limit + route-classify compute, so it counts as a
+    hit even if the handler later 404s or 500s on the specific id. The
+    classification keys off the path only, so it's independent of the
+    handler outcome.
+
+    Lazy import keeps ``engine.api_usage`` off the cold-start path of the
+    public probes. Wrapped in a blanket try/except so a metering failure
+    can NEVER affect the response or the auth decision.
+    """
+    try:
+        from engine.api_usage import bump_usage, classify_route
+        route_class, weight = classify_route(path)
+        bump_usage(user_id, route_class, weight=weight)
+    except Exception as exc:  # noqa: BLE001 — metering is best-effort
+        logger.debug(f"api: usage metering failed (ignored): {exc}")
+
+
 def _send_not_found(handler: BaseHTTPRequestHandler) -> None:
     _send_json(handler, HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -873,6 +902,12 @@ class APIHandler(BaseHTTPRequestHandler):
             if not _enforce_rate_limit(self, user_id):
                 return
 
+            # Meter this authed, rate-allowed hit into the compute-
+            # weighted usage ledger (R112). Best-effort; never affects
+            # the response. Public routes above the auth gate are never
+            # metered.
+            _meter_api_usage(user_id, path)
+
             # XLSX variant — match BEFORE the plain endpoint since the
             # plain regex would also accept "/api/v1/ports/supply-lines"
             # without the .xlsx suffix; ordering by specificity here is
@@ -1046,6 +1081,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if not _enforce_rate_limit(self, user_id):
                 return
 
+            # Meter this authed, rate-allowed hit (R112). Best-effort.
+            _meter_api_usage(user_id, path)
+
             m = _RE_ALERT_ACK.match(path)
             if m:
                 self._ack_alert(user_id, m.group(1))
@@ -1119,6 +1157,9 @@ class APIHandler(BaseHTTPRequestHandler):
             # Per-user rate limit. Same bucket as GET / POST.
             if not _enforce_rate_limit(self, user_id):
                 return
+
+            # Meter this authed, rate-allowed hit (R112). Best-effort.
+            _meter_api_usage(user_id, path)
 
             # /api/v1/rules/<rule_id>/escalations DELETE — bulk-clear a
             # whole chain. Check BEFORE the bare /api/v1/rules handler
@@ -1205,6 +1246,9 @@ class APIHandler(BaseHTTPRequestHandler):
             # Per-user rate limit. Same bucket as GET / POST / DELETE.
             if not _enforce_rate_limit(self, user_id):
                 return
+
+            # Meter this authed, rate-allowed hit (R112). Best-effort.
+            _meter_api_usage(user_id, path)
 
             m = _RE_SCHEDULE_ONE.match(path)
             if m:
