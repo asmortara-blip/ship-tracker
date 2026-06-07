@@ -1389,3 +1389,41 @@ def _migrate_to_v34(conn: sqlite3.Connection) -> None:
                 f"state.migrations: _migrate_to_v34 ALTER TABLE "
                 f"({col_name}) failed: {exc}"
             )
+
+
+# ─── Schema v34 → v35 ─────────────────────────────────────────────────────
+
+def _migrate_to_v35(conn: sqlite3.Connection) -> None:
+    """Add ``report_history.content_hash`` for tamper-evident report bytes (R121).
+
+    Each saved report's rendered bytes are SHA-256'd on issue and the hex
+    digest is stored in this column. On read, the on-disk file's hash is
+    recomputed and compared against the stored value, so an auditor can prove
+    a distributed report's bytes match what was issued (a mismatch is logged
+    to the audit trail; a NULL-hash legacy row is honestly reported as
+    "unhashed", not "tampered").
+
+    The column is ``TEXT`` and NULLable (no ``NOT NULL DEFAULT ''``) on
+    purpose: NULL is the unambiguous "this row predates content-hashing, so
+    we cannot verify it" marker, distinguishable at the SQL level from an
+    empty-string hash. Pre-v35 rows pick up NULL and are reported as
+    ``unhashed`` rather than failing verification.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v17`` / ``_migrate_to_v34``: SQLite
+    does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so the statement is
+    wrapped in try/except and "duplicate column name" errors are swallowed,
+    making the helper safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE report_history ADD COLUMN content_hash TEXT"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v35 ALTER TABLE "
+            f"(content_hash) failed: {exc}"
+        )

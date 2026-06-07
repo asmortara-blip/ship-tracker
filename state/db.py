@@ -284,11 +284,22 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       audit retention window (``retention_days``, default 30) so
 #       "what was muted yesterday?" stays answerable.
 #
+#  35 — adds ``report_history.content_hash`` (TEXT, NULLable) for
+#       tamper-evident report bytes (R121). On save, the rendered report
+#       bytes are SHA-256'd and the hex digest stored here; on read,
+#       ``utils.report_history.verify_report_integrity`` recomputes the
+#       on-disk file's hash and compares it against the stored value so an
+#       auditor can prove a distributed report's bytes match what was
+#       issued. A mismatch is best-effort audit-logged. The column is
+#       NULLable so legacy (pre-v35) rows are honestly reported as
+#       ``unhashed`` (cannot verify) rather than ``tampered``. Same
+#       idempotent ALTER-TABLE-in-try/except pattern as v34.
+#
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 34
+SCHEMA_VERSION: int = 35
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1397,6 +1408,28 @@ _SCHEMA_V34_NOTE: str = (
 )
 
 
+# Schema v35 adds one NULLable column to ``report_history`` for tamper-evident
+# report bytes (R121):
+#
+#   * ``content_hash`` TEXT (NULLable) — the SHA-256 hex digest of the report's
+#     rendered bytes, computed AS ISSUED over the exact bytes written to disk.
+#     ``utils.report_history.verify_report_integrity`` recomputes the on-disk
+#     file's hash on read and compares it to this stored value, so an auditor
+#     can prove a distributed report's bytes match what was issued. A mismatch
+#     is best-effort audit-logged. NULL marks a legacy (pre-v35) row whose
+#     bytes were never hashed — honestly reported as ``unhashed`` (cannot
+#     verify), distinguishable at the SQL level from an empty-string hash and
+#     never reported as ``tampered``.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v17 / v34 —
+# SQLite does not support IF NOT EXISTS on ALTER TABLE. Added via
+# ``_migrate_to_v35`` in ``state/migrations.py``.
+_SCHEMA_V35_NOTE: str = (
+    "v35: report_history.content_hash TEXT (nullable) "
+    "(added via ALTER TABLE in _migrate_to_v35)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1683,6 +1716,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v34(conn)
     except Exception as exc:
         logger.warning(f"state.db: v34 column adds skipped: {exc}")
+
+    # v35 column add — idempotent ALTER-in-try/except (same as v4/v5/v17/v34).
+    # Adds report_history.content_hash for tamper-evident report bytes (R121):
+    # the rendered report bytes are SHA-256'd on save and recomputed + compared
+    # on read. NULLable so legacy rows are honestly "unhashed", not "tampered".
+    # Runs unconditionally on every open (fresh DB: adds the column; existing
+    # DB: no-op when present).
+    try:
+        from state.migrations import _migrate_to_v35
+        _migrate_to_v35(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v35 column add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -2106,6 +2151,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v34(conn)
         except Exception as exc:
             logger.warning(f"state.db: v34 migration skipped: {exc}")
+
+    # Migration 34 → 35: add report_history.content_hash for tamper-evident
+    # report bytes (R121). Idempotent ALTER-in-try/except — the helper is
+    # already invoked unconditionally above; this keeps the version-step
+    # ladder explicit.
+    if current < 35:
+        try:
+            from state.migrations import _migrate_to_v35
+            _migrate_to_v35(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v35 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

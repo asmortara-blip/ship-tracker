@@ -68,6 +68,35 @@ class ReportMeta:
     public_password_protected: bool = False  # True iff public link requires a password
     report_version: int = 1      # 1-indexed position in the lineage (v34)
     supersedes_id: str = ""      # report_id of the prior version; "" = original (v34)
+    content_hash: str = ""       # SHA-256 hex of the issued bytes; "" = unhashed legacy (v35)
+
+
+# ---------------------------------------------------------------------------
+# Content-hash helpers for tamper-evident report bytes (R121, v35)
+# ---------------------------------------------------------------------------
+
+
+def _sha256_bytes(b: bytes) -> str:
+    """Return the SHA-256 hex digest of *b*.
+
+    The single canonical hash used by both the writer (:func:`save_report` /
+    :func:`amend_report` via :func:`_insert_report_row`) and the verifier
+    (:func:`verify_report_integrity`), so a recomputation matches the stored
+    value byte-for-byte.
+    """
+    return hashlib.sha256(b).hexdigest()
+
+
+def _sha256_file(path: "Path") -> str:
+    """Return the SHA-256 hex digest of the file at *path*.
+
+    Reads the EXACT on-disk bytes (no text decode / re-encode) and hashes
+    them, so the digest matches what :func:`_sha256_bytes` produced over the
+    same buffer at write time. Raises on a missing / unreadable file — the
+    caller (:func:`verify_report_integrity`) is responsible for catching that
+    and reporting ``missing`` rather than letting it propagate.
+    """
+    return _sha256_bytes(Path(path).read_bytes())
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +217,14 @@ def _row_to_meta(row) -> ReportMeta:
         supersedes_id = row["supersedes_id"] or ""
     except (IndexError, KeyError):
         supersedes_id = ""
+    # v35 tamper-evidence column — tolerate rows from a pre-v35 DB / a row
+    # factory that strips columns. NULL (legacy, never hashed) normalises to
+    # "" on the meta so the dataclass carries a plain string; callers
+    # distinguish "unhashed" via the verify helper, not the meta.
+    try:
+        content_hash = row["content_hash"] or ""
+    except (IndexError, KeyError):
+        content_hash = ""
     return ReportMeta(
         report_id=row["report_id"],
         generated_at=row["generated_at"],
@@ -204,6 +241,7 @@ def _row_to_meta(row) -> ReportMeta:
         public_password_protected=public_password_protected,
         report_version=report_version,
         supersedes_id=supersedes_id,
+        content_hash=content_hash,
     )
 
 
@@ -239,6 +277,10 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
         # Write HTML
         file_path.write_text(html_content, encoding="utf-8")
         file_size_kb = round(file_path.stat().st_size / 1024, 2)
+        # Tamper-evidence (v35): hash the EXACT on-disk bytes — read them back
+        # rather than re-encoding html_content so the stored digest matches
+        # byte-for-byte what verify_report_integrity recomputes from the file.
+        content_hash = _sha256_file(file_path)
 
         meta = ReportMeta(
             report_id=report_id,
@@ -251,6 +293,7 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
             data_quality=_attr(report_obj, "data_quality", "PARTIAL"),
             file_path=str(file_path.resolve()),
             file_size_kb=file_size_kb,
+            content_hash=content_hash,
         )
 
         uid = current_user_id()
@@ -953,6 +996,9 @@ def amend_report(
         file_path = REPORT_DIR / filename
         file_path.write_text(new_html, encoding="utf-8")
         file_size_kb = round(file_path.stat().st_size / 1024, 2)
+        # Tamper-evidence (v35): hash the EXACT on-disk bytes of the new
+        # version so the amendment is verifiable just like a fresh save.
+        content_hash = _sha256_file(file_path)
 
         new_version = int(orig_meta.report_version) + 1
         new_meta = ReportMeta(
@@ -968,6 +1014,7 @@ def amend_report(
             file_size_kb=file_size_kb,
             report_version=new_version,
             supersedes_id=original_report_id,
+            content_hash=content_hash,
         )
 
         # NB: we deliberately DO NOT touch the original row here — it stays
@@ -1139,6 +1186,134 @@ def version_chain(
 
 
 # ---------------------------------------------------------------------------
+# Tamper-evidence: content-hash verification (R121, v35)
+# ---------------------------------------------------------------------------
+
+
+def verify_report_integrity(
+    report_id: str,
+    *,
+    user_id: str | None = None,
+) -> dict:
+    """Verify a report's on-disk bytes match the hash stored at issue time.
+
+    Loads the ``report_history`` row for *report_id* (in the caller's scope),
+    reads its stored ``content_hash``, recomputes the SHA-256 of the on-disk
+    file, and reports whether they match. This lets an auditor prove that a
+    distributed report's bytes are exactly what was issued.
+
+    Returns a dict::
+
+        {
+          "report_id":   <the id>,
+          "status":      "verified" | "tampered" | "missing" | "unhashed",
+          "stored_hash": <hex or "">,
+          "actual_hash": <hex or "">,
+        }
+
+    Status meanings:
+      * ``verified``  — the file exists and its hash equals the stored hash.
+      * ``tampered``  — the file exists but its hash DIFFERS from the stored
+        hash (the on-disk bytes diverged from what was issued). A best-effort
+        ``record_audit`` mismatch event is emitted.
+      * ``missing``   — the report is unknown in scope, OR its on-disk file is
+        gone / unreadable (cannot recompute → cannot verify).
+      * ``unhashed``  — the row exists and the file exists, but the stored
+        ``content_hash`` is NULL/empty (a legacy pre-v35 row whose bytes were
+        never hashed). This is HONEST: we can't verify it, but its absence is
+        not itself a tamper signal, so it is never reported as ``tampered``.
+
+    Honours per-user scoping exactly like :func:`load_report_html`: a report
+    outside the caller's scope is indistinguishable from an unknown id and
+    returns ``missing``. NEVER raises — any unexpected error degrades to
+    ``missing`` so a verify call can never break the caller (e.g. a tab
+    render that badges each row).
+    """
+    result = {
+        "report_id": report_id,
+        "status": "missing",
+        "stored_hash": "",
+        "actual_hash": "",
+    }
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        conn = get_connection()
+        row = conn.execute(
+            f"SELECT file_path, content_hash FROM report_history "
+            f"WHERE report_id = ? {scope_sql}",
+            (report_id, *scope_params),
+        ).fetchone()
+        if row is None:
+            # Unknown in scope — indistinguishable from a deleted report.
+            return result
+
+        try:
+            stored_hash = row["content_hash"] or ""
+        except (IndexError, KeyError):
+            stored_hash = ""
+        result["stored_hash"] = stored_hash
+
+        path = Path(row["file_path"])
+        if not path.exists():
+            # File gone — cannot recompute, so cannot verify. "missing" rather
+            # than "tampered": we have no on-disk bytes to compare at all.
+            result["status"] = "missing"
+            return result
+
+        # Legacy row whose bytes were never hashed. Honest: report "unhashed"
+        # (cannot verify), never "tampered".
+        if not stored_hash:
+            result["status"] = "unhashed"
+            return result
+
+        try:
+            actual_hash = _sha256_file(path)
+        except Exception as exc:  # noqa: BLE001 — unreadable file
+            logger.warning(
+                f"verify_report_integrity: could not read file for "
+                f"{report_id}: {exc}"
+            )
+            result["status"] = "missing"
+            return result
+        result["actual_hash"] = actual_hash
+
+        if hmac.compare_digest(actual_hash, stored_hash):
+            result["status"] = "verified"
+            return result
+
+        # Mismatch — the on-disk bytes diverged from what was issued. Audit
+        # it (best-effort; an audit-write failure must not change the verdict).
+        result["status"] = "tampered"
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "report_integrity_mismatch",
+                entity_type="report",
+                entity_id=report_id,
+                detail={
+                    "stored_hash": stored_hash,
+                    "actual_hash": actual_hash,
+                },
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            f"verify_report_integrity: TAMPERED report {report_id} "
+            f"(stored {stored_hash[:12]}… != actual {actual_hash[:12]}…)"
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — never raise from verify
+        logger.error(f"verify_report_integrity failed for {report_id}: {exc}")
+        return result
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -1161,7 +1336,15 @@ def _insert_report_row(
     ``supersedes_id`` is stored as SQL NULL for an original report (the
     "head of chain" marker) and as the predecessor's ``report_id`` for an
     amendment. The write runs inside ``with conn:`` so it is atomic.
+
+    The v35 ``content_hash`` (SHA-256 of the issued bytes) is taken from the
+    meta — both call sites (:func:`save_report` and :func:`amend_report`)
+    populate it from the EXACT on-disk bytes before inserting — so every row
+    minted here is tamper-evidence-stamped at issue. An empty string is
+    stored as SQL NULL so it joins the legacy "unhashed" bucket rather than
+    masquerading as a real (empty) hash.
     """
+    content_hash = (getattr(meta, "content_hash", "") or "") or None
     with conn:
         conn.execute(
             """
@@ -1169,14 +1352,14 @@ def _insert_report_row(
               (report_id, generated_at, report_date, sentiment_label,
                sentiment_score, risk_level, signal_count, data_quality,
                file_path, file_size_kb, user_id,
-               report_version, supersedes_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               report_version, supersedes_id, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (meta.report_id, meta.generated_at, meta.report_date,
              meta.sentiment_label, meta.sentiment_score, meta.risk_level,
              meta.signal_count, meta.data_quality, meta.file_path,
              meta.file_size_kb, uid,
-             int(report_version), supersedes_id),
+             int(report_version), supersedes_id, content_hash),
         )
 
 
