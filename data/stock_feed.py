@@ -61,7 +61,13 @@ def _fetch_single(symbol: str, lookback_days: int) -> pd.DataFrame:
     logger.debug(f"yfinance fetch: {symbol} ({lookback_days}d)")
     try:
         ticker = yf.Ticker(symbol)
-        raw = ticker.history(period=f"{lookback_days}d", interval="1d", auto_adjust=True)
+        # R127: auto_adjust=False keeps ``Close`` as the RAW as-observed price
+        # (display = real share price; no look-ahead from back-restating history
+        # on future splits/dividends). yfinance includes the Dividends + Stock
+        # Splits action columns by default, which normalize_stock_df folds into
+        # the forward look-ahead-free adj_factor for total-return backtests.
+        raw = ticker.history(period=f"{lookback_days}d", interval="1d",
+                             auto_adjust=False)
     except Exception as e:
         logger.warning(f"yfinance request failed for {symbol}: {e}")
         # Fallback: return empty DataFrame so the caller skips this ticker
@@ -125,11 +131,15 @@ def get_pct_change(symbol: str, stock_data: dict[str, pd.DataFrame], days: int =
     df = stock_data.get(symbol)
     if df is None or len(df) < 2:
         return None
-    recent = df.tail(days + 1)
+    # R127: use the look-ahead-free total-return path so a split in the window
+    # doesn't show a spurious ~-50% "change"; get_latest_price stays raw (the
+    # real share price).
+    from data.normalizer import adjusted_close
+    recent = adjusted_close(df).tail(days + 1)
     if len(recent) < 2:
         return None
-    start = recent["close"].iloc[0]
-    end = recent["close"].iloc[-1]
+    start = recent.iloc[0]
+    end = recent.iloc[-1]
     if start == 0:
         return None
     return (end - start) / start

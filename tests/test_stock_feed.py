@@ -146,8 +146,10 @@ def test_default_tickers_has_no_duplicates() -> None:
 
 
 def test_fetch_single_calls_yfinance_with_correct_kwargs(patched_yf) -> None:
-    """yf.Ticker(symbol).history(period=f'{N}d', interval='1d', auto_adjust=True)
-    is the documented call shape; pin it."""
+    """yf.Ticker(symbol).history(period=f'{N}d', interval='1d', auto_adjust=False)
+    is the documented call shape; pin it. R127: auto_adjust=False keeps Close as
+    the RAW price (no look-ahead back-restatement); the forward look-ahead-free
+    adjustment lives in normalize_stock_df's adj_factor."""
     _fetch_single_raw("ZIM", 90)
     assert len(_FakeTicker.calls) == 1
     call = _FakeTicker.calls[0]
@@ -155,7 +157,7 @@ def test_fetch_single_calls_yfinance_with_correct_kwargs(patched_yf) -> None:
         "symbol":      "ZIM",
         "period":      "90d",
         "interval":    "1d",
-        "auto_adjust": True,
+        "auto_adjust": False,
     }
 
 

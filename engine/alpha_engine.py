@@ -772,7 +772,8 @@ def compute_portfolio_alpha(
     for ticker in weights:
         df = stock_data.get(ticker)
         if df is not None and not df.empty and "close" in df.columns:
-            rets = df["close"].pct_change().dropna()
+            from data.normalizer import adjusted_close
+            rets = adjusted_close(df).pct_change().dropna()   # R127: look-ahead-free
             if len(rets) > 10:
                 vols[ticker] = float(rets.std() * np.sqrt(252) * 100)
             else:

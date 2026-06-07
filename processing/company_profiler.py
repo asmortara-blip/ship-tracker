@@ -148,8 +148,10 @@ def compute_company_profiles(stock_data: dict) -> list[dict]:
                 l = profile["low_52w"]
                 profile["range_position"] = (current - l) / (h - l) * 100 if h != l else 50
 
-                # Volatility
-                returns = close.pct_change().dropna()
+                # Volatility — look-ahead-free total return (R127); display
+                # metrics above stay on the raw price.
+                from data.normalizer import adjusted_close
+                returns = adjusted_close(df).dropna().pct_change().dropna()
                 if len(returns) > 5:
                     profile["volatility_30d"] = float(returns.iloc[-30:].std() * np.sqrt(252) * 100) if len(returns) >= 30 else None
 
