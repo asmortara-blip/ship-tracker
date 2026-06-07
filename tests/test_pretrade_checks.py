@@ -278,3 +278,33 @@ def test_deterministic():
         (r.name, r.status) for r in b.results
     ]
     assert a.blocked == b.blocked and a.warnings == b.warnings
+
+
+# ---------------------------------------------------------------------------
+# R108 review fixes
+# ---------------------------------------------------------------------------
+def test_oversell_sell_keeps_book_total_consistent():
+    """An oversell SELL removes only the name's REAL mv from the book total,
+    not the full notional — otherwise other names project to a >100% weight off
+    an understated denominator (R108 review)."""
+    from processing.pretrade_checks import _project_post_trade
+
+    # ZIM held = $10k; SELL $12k notional (oversell). Book total = $15k.
+    order = Order("ZIM", "SELL", quantity=120, notional=12_000)
+    post, post_total, priced = _project_post_trade(order, _book(), _stock_data())
+    assert post["ZIM"] == 0.0                       # name floors at 0
+    assert abs(post_total - 5_000.0) < 1e-6         # remaining = SBLK's $5k, not $3k
+    assert post["SBLK"] / post_total <= 1.0 + 1e-9  # other-name weight stays sane
+
+
+def test_buy_into_single_name_book_at_cap_blocks():
+    """A BUY into a name that is already 100% of the book stays at 100% (flat in
+    weight) but is NOT risk-reducing → it must BLOCK, not pass as 'flat'
+    (R108 review)."""
+    book = [{"ticker": "ZIM", "shares": 100, "avg_cost": 90}]
+    stock = {"ZIM": _frame(100.0, 1_000.0)}
+    order = Order("ZIM", "BUY", quantity=10, notional=1_000)
+    v = run_pretrade(order, book, stock_data=stock)
+    sn = _result(v, "single_name")
+    assert sn.status == "BLOCK"
+    assert v.blocked is True

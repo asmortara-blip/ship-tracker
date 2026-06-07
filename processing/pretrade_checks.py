@@ -173,9 +173,14 @@ def _project_post_trade(order, book, stock_data):
     # oversells; clamp the projected NAME mv at 0 (you cannot hold a negative
     # market value here — a short would be modeled as a separate lot upstream).
     post = dict(mv_by_ticker)
-    post[ticker] = max(0.0, post.get(ticker, 0.0) + signed)
-    post_total = total_mv + signed
-    # If selling more than the whole book is worth, the projection is degenerate.
+    prev = post.get(ticker, 0.0)
+    post[ticker] = max(0.0, prev + signed)
+    # Keep the book total CONSISTENT with the per-name clamp: an oversell SELL
+    # only removes the name's actual MV, not the full notional — otherwise the
+    # total understates the remaining book and every OTHER sector projects to a
+    # nonsensical >100% weight off the wrong denominator (R108 review).
+    applied = post[ticker] - prev
+    post_total = total_mv + applied
     priced = total_mv > 0 and post_total > 0
     return (post, post_total, priced)
 
@@ -185,19 +190,21 @@ def _grade(
 ) -> CheckResult:
     """Grade a projected weight against a cap: PASS / WARN / BLOCK.
 
-    A trade that does NOT increase the weight (``projected <= current``) is
+    A trade that strictly DECREASES the weight (``projected < current``) is
     risk-REDUCING and is never penalised, even if the name/sector remains over
-    the cap — blocking a de-risking trade would be perverse. Only an increase
-    that lands in the soft band WARNs, or over the cap BLOCKs.
+    the cap — blocking a de-risking trade would be perverse. A flat OR increasing
+    trade into an at/over-cap name is graded, so a BUY into an already-capped book
+    is not waved through (R108 review). Only an increase that lands in the soft
+    band WARNs, or over the cap BLOCKs.
     """
     soft = float(cap) * _SOFT_RATIO
-    # Risk-reducing (or flat) trades pass regardless of the standing level.
-    if projected <= float(current) + 1e-12:
+    # Only a STRICT decrease is risk-reducing; a flat/increasing trade is graded.
+    if projected < float(current) - 1e-12:
         return CheckResult(
             check,
             _PASS,
-            f"{label} does not increase post-trade ({projected:.1%}); "
-            f"risk-reducing or flat, {cap:.0%} cap not engaged.",
+            f"{label} decreases post-trade to {projected:.1%}; "
+            f"risk-reducing, {cap:.0%} cap not engaged.",
         )
     if projected > float(cap):
         return CheckResult(

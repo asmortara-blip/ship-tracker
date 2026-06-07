@@ -1438,15 +1438,23 @@ def run_snapshot_integrity_check_job(
             "n_missing": 0, "n_corrupted": 0, "oldest_problem_date": "",
         }
 
+    all_healthy = (s["n_dates_checked"] == s["n_ok"])
     counts = {
-        "ok":                   (s["n_dates_checked"] == s["n_ok"]),
+        # ``ok`` = the integrity SWEEP completed (the job did its work), so under
+        # the R011 stamp-on-success cadence it advances the DAILY stamp even when
+        # it FINDS corruption — re-running a read-only check can't repair a
+        # corrupt/missing file, so retrying every 5-min pass would just hammer it
+        # (R011 review). The health verdict is ``all_healthy``; the exception
+        # path above returns ok=False (the sweep itself failed → genuinely retry).
+        "ok":                   True,
+        "all_healthy":          all_healthy,
         "n_checked":            int(s["n_dates_checked"]),
         "n_unhealthy":          int(s["n_dates_checked"] - s["n_ok"]),
         "n_missing":            int(s["n_missing"]),
         "n_corrupted":          int(s["n_corrupted"]),
         "oldest_problem_date":  s["oldest_problem_date"] or "",
     }
-    if counts["ok"]:
+    if all_healthy:
         logger.info(
             f"run_snapshot_integrity_check_job: "
             f"{counts['n_checked']}/{counts['n_checked']} healthy"
