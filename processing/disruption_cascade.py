@@ -68,6 +68,8 @@ the codebase convention.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -424,6 +426,101 @@ _CONVICTION_BANDS: list[tuple[float, str]] = [
     (0.22, "Low"),
     (0.0,  "Watch"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Model versioning + config hash — SR 11-7 change management (R120)
+# ---------------------------------------------------------------------------
+# Every edit to the cascade scorer's *scoring* constants must be deliberate and
+# recorded: bump :data:`MODEL_VERSION` (semver) and add a row to
+# ``docs/MODEL_CHANGELOG.md`` carrying the new :func:`model_config_hash`. The
+# governance gate in ``tests/test_model_versioning.py`` fails CI if the live
+# hash drifts from the changelog row for the current version, so a weight set,
+# a direction rule, or a persistence factor can no longer ship silently.
+#
+# This model versions independently of shipping_stress_index.
+MODEL_VERSION: str = "1.0.0"
+
+# The exact constants the config hash covers — every load-bearing input that
+# moves a conviction score, a direction sign, or a band label:
+#   * _CONVICTION_WEIGHT_SETS  — the per-driver four-term conviction weights
+#   * _DIRECTION_RULES         — the (sector, driver) -> (sign, rationale) table
+#   * _DRIVER_WEIGHT_SET       — driver_key -> weight-set name selection
+#   * _DRIVER_PERSISTENCE      — per-driver vulnerability-term persistence
+#   * _DEFAULT_PERSISTENCE     — persistence for an unmapped driver
+#   * _DRY_BULK_DRIVER_DAMPEN  — dry-bulk physical-driver cascade dampen
+#   * _FUEL_OVERLAY_THRESHOLD  — USO move at which the fuel overlay engages
+#   * _FUEL_COST_RULE          — the bearish fuel-cost overlay (sign, rationale)
+#   * _CASCADE_FULL_SCALE      — cascade magnitude mapping to a full term
+#   * _AGREEMENT_FULL_COUNT    — agreeing-signal count mapping to a full term
+#   * _CONVICTION_BANDS        — conviction score -> label cut-points
+# The string rationales in _DIRECTION_RULES / _FUEL_COST_RULE are included: an
+# edit to the published justification is itself a change-management event.
+_MODEL_CONFIG_KEYS: tuple[str, ...] = (
+    "_CONVICTION_WEIGHT_SETS",
+    "_DIRECTION_RULES",
+    "_DRIVER_WEIGHT_SET",
+    "_DRIVER_PERSISTENCE",
+    "_DEFAULT_PERSISTENCE",
+    "_DRY_BULK_DRIVER_DAMPEN",
+    "_FUEL_OVERLAY_THRESHOLD",
+    "_FUEL_COST_RULE",
+    "_CASCADE_FULL_SCALE",
+    "_AGREEMENT_FULL_COUNT",
+    "_CONVICTION_BANDS",
+)
+
+
+def _canonical_model_config() -> dict:
+    """Return the live scoring constants in a canonical, hashable form.
+
+    Floats are rounded to a fixed precision so float-repr noise cannot churn
+    the hash; every container is reduced to plain ``dict``/``list`` (and tuple
+    keys in :data:`_DIRECTION_RULES` to ``"sector|driver"`` strings) so JSON
+    serialisation with sorted keys is fully deterministic regardless of
+    insertion order.
+    """
+    def _round(obj):
+        if isinstance(obj, float):
+            return round(obj, 6)
+        if isinstance(obj, dict):
+            return {k: _round(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_round(v) for v in obj]
+        return obj
+
+    return {
+        "_CONVICTION_WEIGHT_SETS": _round(
+            {name: dict(s) for name, s in _CONVICTION_WEIGHT_SETS.items()}
+        ),
+        # (sector, driver) tuple keys -> "sector|driver" strings so json can
+        # sort them; value is the (sign, rationale) pair as a list.
+        "_DIRECTION_RULES": _round(
+            {f"{sector}|{driver}": list(rule)
+             for (sector, driver), rule in _DIRECTION_RULES.items()}
+        ),
+        "_DRIVER_WEIGHT_SET": _round(dict(_DRIVER_WEIGHT_SET)),
+        "_DRIVER_PERSISTENCE": _round(dict(_DRIVER_PERSISTENCE)),
+        "_DEFAULT_PERSISTENCE": _round(_DEFAULT_PERSISTENCE),
+        "_DRY_BULK_DRIVER_DAMPEN": _round(_DRY_BULK_DRIVER_DAMPEN),
+        "_FUEL_OVERLAY_THRESHOLD": _round(_FUEL_OVERLAY_THRESHOLD),
+        "_FUEL_COST_RULE": _round(list(_FUEL_COST_RULE)),
+        "_CASCADE_FULL_SCALE": _round(_CASCADE_FULL_SCALE),
+        "_AGREEMENT_FULL_COUNT": _round(_AGREEMENT_FULL_COUNT),
+        "_CONVICTION_BANDS": _round([list(b) for b in _CONVICTION_BANDS]),
+    }
+
+
+def model_config_hash() -> str:
+    """Deterministic content hash over the live cascade scoring constants.
+
+    A truncated SHA-256 (16 hex chars / 64 bits) of the canonically-serialised
+    config (sorted keys, fixed float precision). Stable across process runs and
+    invariant to dict-insertion order; changes iff a covered weight / rule /
+    threshold changes. Covers exactly :data:`_MODEL_CONFIG_KEYS`.
+    """
+    payload = json.dumps(_canonical_model_config(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,8 @@ codebase convention.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -91,6 +93,73 @@ _SSI_BANDS: list[tuple[float, str, str]] = [
 
 # Voyage statuses that count as a delay for delayed_voyage_count.
 _DELAYED_STATUSES: frozenset[str] = frozenset({"Minor Delay", "Major Delay"})
+
+
+# ---------------------------------------------------------------------------
+# Model versioning + config hash — SR 11-7 change management (R120)
+# ---------------------------------------------------------------------------
+# Every edit to the SSI's *scoring* constants must be a deliberate, recorded
+# event: bump :data:`MODEL_VERSION` (semver) and add a row to
+# ``docs/MODEL_CHANGELOG.md`` carrying the new :func:`model_config_hash`. The
+# governance gate in ``tests/test_model_versioning.py`` fails CI if the live
+# hash drifts from the changelog row for the current version, so a weight set
+# can no longer ship silently — a desk officer can read off exactly which
+# constants were live on a given date.
+#
+# This model versions independently of disruption_cascade.
+MODEL_VERSION: str = "1.0.0"
+
+# The exact constants the config hash covers — the load-bearing numeric
+# scoring inputs of the SSI. Labels (_DRIVER_LABELS) and the categorical
+# _DELAYED_STATUSES are intentionally excluded: they do not move any score.
+#   * COMPONENT_WEIGHTS    — the five-/six-way per-route blend weights
+#   * _PROMINENT_ROUTES    — the fleet-roll-up prominence multipliers
+#   * _DEFAULT_ROUTE_WEIGHT— the baseline roll-up weight for ordinary lanes
+#   * _SSI_BANDS           — the score→label/colour band cut-points
+_MODEL_CONFIG_KEYS: tuple[str, ...] = (
+    "COMPONENT_WEIGHTS",
+    "_PROMINENT_ROUTES",
+    "_DEFAULT_ROUTE_WEIGHT",
+    "_SSI_BANDS",
+)
+
+
+def _canonical_model_config() -> dict:
+    """Return the live scoring constants in a canonical, hashable form.
+
+    Floats are rounded to a fixed precision so float-repr noise (e.g. a value
+    re-derived through arithmetic) cannot churn the hash, and every container
+    is reduced to plain ``dict``/``list`` so JSON serialisation with sorted
+    keys is fully deterministic regardless of insertion order.
+    """
+    def _round(obj):
+        if isinstance(obj, float):
+            return round(obj, 6)
+        if isinstance(obj, dict):
+            return {k: _round(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_round(v) for v in obj]
+        return obj
+
+    return {
+        "COMPONENT_WEIGHTS": _round(dict(COMPONENT_WEIGHTS)),
+        "_PROMINENT_ROUTES": _round(dict(_PROMINENT_ROUTES)),
+        "_DEFAULT_ROUTE_WEIGHT": _round(_DEFAULT_ROUTE_WEIGHT),
+        # _SSI_BANDS is a list of (bound, label, colour) tuples -> list of lists.
+        "_SSI_BANDS": _round([list(band) for band in _SSI_BANDS]),
+    }
+
+
+def model_config_hash() -> str:
+    """Deterministic content hash over the live SSI scoring constants.
+
+    A truncated SHA-256 (16 hex chars / 64 bits) of the canonically-serialised
+    config (sorted keys, fixed float precision). Stable across process runs and
+    invariant to dict-insertion order; changes iff a covered weight/threshold
+    changes. Covers exactly :data:`_MODEL_CONFIG_KEYS`.
+    """
+    payload = json.dumps(_canonical_model_config(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
