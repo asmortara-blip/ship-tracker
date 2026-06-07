@@ -74,7 +74,15 @@ class ShippingStockCorrelator:
         for symbol, stock_df in stock_data.items():
             if stock_df.empty:
                 continue
-            stock_series = stock_df.set_index("date")["close"]
+            # Correlate on the look-ahead-free TOTAL-RETURN level
+            # (close * adj_factor, R127): a split mid-window would otherwise
+            # inject a ~-50% price discontinuity that corrupts the Pearson r.
+            # adj_factor defaults to 1.0 when absent → unchanged for fixtures.
+            from data.normalizer import adjusted_close
+            stock_series = pd.Series(
+                adjusted_close(stock_df).values,
+                index=pd.to_datetime(stock_df["date"]),
+            )
 
             for signal_col in signal_df.columns:
                 signal_series = signal_df[signal_col]
@@ -200,13 +208,19 @@ class ShippingStockCorrelator:
             if tp_df is not None and not tp_df.empty and tp_df["source"].iloc[-1] != "fallback":
                 series_dict["FBX01_Rate"] = tp_df.set_index("date")["rate_usd_per_feu"]
 
-        # Commodity ETF signals (from stock_data — they ARE price signals)
+        # Commodity ETF signals (from stock_data — they ARE price signals).
+        # These are equity-close levels too, so ride the total-return basis
+        # (close * adj_factor, R127) so a split doesn't fake-correlate.
         commodity_etfs = ["DBA", "DBB", "USO", "XLB"]
         if stock_data:
+            from data.normalizer import adjusted_close
             for etf in commodity_etfs:
                 etf_df = stock_data.get(etf)
                 if etf_df is not None and not etf_df.empty:
-                    series_dict[f"Commodity_{etf}"] = etf_df.set_index("date")["close"]
+                    series_dict[f"Commodity_{etf}"] = pd.Series(
+                        adjusted_close(etf_df).values,
+                        index=pd.to_datetime(etf_df["date"]),
+                    )
 
         if not series_dict:
             return pd.DataFrame()

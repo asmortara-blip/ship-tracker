@@ -23,7 +23,17 @@ _CLOSE_COLS = ("close", "Close", "adj_close", "price")
 _DATE_COLS = ("date", "Date", "timestamp", "Datetime")
 
 
-def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
+def _close_series(stock_data, ticker: str, *, adjusted: bool = False) -> Optional[pd.Series]:
+    """Close-price Series for ``ticker``, DatetimeIndex-promoted + deduped.
+
+    ``adjusted=False`` (default) returns the RAW as-observed close — the real
+    transactable share price, used to mark the book to market. ``adjusted=True``
+    returns the look-ahead-free TOTAL-RETURN level ``close * adj_factor`` (R127)
+    so a split/large-dividend in the window does not inject a spurious
+    ~-50%/+100% return into covariance / VaR / %-change math. ``adj_factor``
+    defaults to 1.0 when absent (fixtures / legacy frames), so those numbers are
+    unchanged.
+    """
     if not isinstance(stock_data, dict):
         return None
     frame = stock_data.get(ticker)
@@ -33,6 +43,11 @@ def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
     if col is None:
         return None
     s = pd.to_numeric(frame[col], errors="coerce")
+    if adjusted and "adj_factor" in frame.columns:
+        # Multiply BEFORE the index-promotion/dedup below so the factor stays
+        # row-aligned to its close. adj_factor missing → raw (handled above).
+        adj = pd.to_numeric(frame["adj_factor"], errors="coerce").fillna(1.0)
+        s = s * adj
     # The canonical normalised stock frame (data.normalizer.STOCK_COLS) carries
     # the date as a COLUMN with a plain RangeIndex — the exact shape stock_feed
     # caches and the app passes around. Without a DatetimeIndex the returns
@@ -61,20 +76,25 @@ def _close_series(stock_data, ticker: str) -> Optional[pd.Series]:
     return s if not s.empty else None
 
 
-def _latest_close(stock_data, ticker: str) -> Optional[float]:
-    s = _close_series(stock_data, ticker)
+def _latest_close(stock_data, ticker: str, *, adjusted: bool = False) -> Optional[float]:
+    """Latest close. RAW by default (the real mark for ``mark_book``); pass
+    ``adjusted=True`` to get the total-return level for split-safe RETURN math."""
+    s = _close_series(stock_data, ticker, adjusted=adjusted)
     return float(s.iloc[-1]) if s is not None and not s.empty else None
 
 
-def _latest_close_after(stock_data, ticker: str, after_date) -> Optional[float]:
+def _latest_close_after(stock_data, ticker: str, after_date, *, adjusted: bool = False) -> Optional[float]:
     """Latest close STRICTLY AFTER ``after_date`` (forward / out-of-sample), else None.
 
     Enforces the look-ahead-free guarantee the signal ledger advertises: a mark
     must use a close dated after the idea's issue_date, never the issue-day (or
     an earlier, stale) close. Returns None when no such later close exists (the
     caller skips the row rather than scoring a non-causal return).
+
+    RAW by default (a transactable level); pass ``adjusted=True`` when the caller
+    computes a forward RETURN from it, so a split is split-safe (R127).
     """
-    s = _close_series(stock_data, ticker)
+    s = _close_series(stock_data, ticker, adjusted=adjusted)
     if s is None or s.empty or not isinstance(s.index, pd.DatetimeIndex):
         return None
     try:
@@ -150,8 +170,11 @@ def mark_book(positions, stock_data) -> BookMark:
 
 
 def day_change_pct(ticker: str, stock_data) -> Optional[float]:
-    """Real 1-day % change from the last two closes. None when unavailable."""
-    s = _close_series(stock_data, ticker)
+    """Real 1-day % change from the last two closes. None when unavailable.
+
+    A %-change over time → total-return (adjusted) basis (R127) so a split on the
+    most recent session doesn't read as a ~-50%/+100% day move."""
+    s = _close_series(stock_data, ticker, adjusted=True)
     if s is None or len(s) < 2:
         return None
     prev = float(s.iloc[-2])
@@ -200,7 +223,10 @@ def returns_panel(stock_data, tickers, *, min_obs: int = 60) -> pd.DataFrame:
         return pd.DataFrame()
     cols: dict[str, pd.Series] = {}
     for t in tickers or []:
-        s = _close_series(stock_data, str(t))
+        # Log-RETURNS for covariance / VaR / ES / the optimizer / Kupiec → the
+        # look-ahead-free total-return path (close*adj_factor, R127) so a split
+        # in the window doesn't corrupt the panel with a fake ~-50% return.
+        s = _close_series(stock_data, str(t), adjusted=True)
         if s is None or not isinstance(s.index, pd.DatetimeIndex):
             continue
         s = s.sort_index()

@@ -990,7 +990,14 @@ _FACTOR_LEVEL_KEYS: tuple[str, ...] = ("BDI", "SCFI", "Brent", "WTI", "DXY", "VI
 
 
 def _weekly_log_returns(stock_data) -> pd.DataFrame:
-    """Build a weekly log-returns DataFrame from the stock_data dict."""
+    """Build a weekly log-returns DataFrame from the stock_data dict.
+
+    Weekly LOG-RETURNS for the carrier factor model → look-ahead-free
+    total-return basis ``close * adj_factor`` (R127) so a split/large dividend
+    in the window doesn't inject a spurious ~-50% weekly return. adj_factor
+    defaults to 1.0 when absent (fixtures / legacy frames), so those are
+    unchanged.
+    """
     if not isinstance(stock_data, dict):
         return pd.DataFrame()
     frames: dict[str, pd.Series] = {}
@@ -1005,7 +1012,13 @@ def _weekly_log_returns(stock_data) -> pd.DataFrame:
                 break
         if col is None:
             continue
-        series = pd.to_numeric(frame[col], errors="coerce").dropna()
+        series = pd.to_numeric(frame[col], errors="coerce")
+        # Apply the forward adj_factor (aligned on the frame's index) before the
+        # dropna so it stays row-aligned to its close. Missing → 1.0 (raw).
+        if "adj_factor" in frame.columns:
+            adj = pd.to_numeric(frame["adj_factor"], errors="coerce").fillna(1.0)
+            series = series * adj
+        series = series.dropna()
         if series.empty or not isinstance(series.index, pd.DatetimeIndex):
             continue
         weekly = series.resample("W-FRI").last().dropna()

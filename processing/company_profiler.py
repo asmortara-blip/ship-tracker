@@ -126,19 +126,29 @@ def compute_company_profiles(stock_data: dict) -> list[dict]:
             close = df["close"].dropna()
             if len(close) >= 2:
                 current = float(close.iloc[-1])
-                prev_1d = float(close.iloc[-2])
-                chg_1d = (current - prev_1d) / abs(prev_1d) * 100 if prev_1d != 0 else 0
+
+                # %-CHANGE displays ride the look-ahead-free TOTAL-RETURN basis
+                # (close * adj_factor, R127) so a split/large dividend in the
+                # window doesn't show a fake ~-50%/+100% move; the price LEVEL,
+                # 52w high/low, range_position + MAs below stay on the RAW close
+                # (the real share price). adj_factor defaults to 1.0 → fixtures
+                # unchanged.
+                from data.normalizer import adjusted_close
+                adj = adjusted_close(df).dropna()
+                cur_adj = float(adj.iloc[-1])
+                prev_1d_adj = float(adj.iloc[-2])
+                chg_1d = (cur_adj - prev_1d_adj) / abs(prev_1d_adj) * 100 if prev_1d_adj != 0 else 0
 
                 profile["price"] = current
                 profile["change_1d"] = chg_1d
 
-                if len(close) >= 6:
-                    prev_5d = float(close.iloc[-6])
-                    profile["change_5d"] = (current - prev_5d) / abs(prev_5d) * 100
+                if len(adj) >= 6:
+                    prev_5d_adj = float(adj.iloc[-6])
+                    profile["change_5d"] = (cur_adj - prev_5d_adj) / abs(prev_5d_adj) * 100 if prev_5d_adj != 0 else 0
 
-                if len(close) >= 31:
-                    prev_30d = float(close.iloc[-31])
-                    profile["change_30d"] = (current - prev_30d) / abs(prev_30d) * 100
+                if len(adj) >= 31:
+                    prev_30d_adj = float(adj.iloc[-31])
+                    profile["change_30d"] = (cur_adj - prev_30d_adj) / abs(prev_30d_adj) * 100 if prev_30d_adj != 0 else 0
 
                 # 52-week range
                 recent = close.iloc[-min(252, len(close)):]

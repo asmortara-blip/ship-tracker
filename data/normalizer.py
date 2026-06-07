@@ -206,7 +206,12 @@ def _forward_adj_factor(close, splits, divs):
         ci = c[i]
         div_term = (d[i] / ci) if (np.isfinite(ci) and ci > 0
                                    and np.isfinite(d[i]) and d[i] > 0) else 0.0
-        f = f * (split_i + div_term)
+        # MULTIPLICATIVE: a dividend is applied on the POST-split price basis, so
+        # a split and dividend sharing an ex-day net correctly. Reduces to
+        # f*split (pure split) and f*(1+div_term) (pure dividend) since the other
+        # factor defaults to 1.0 / 0.0. (Additive split+div_term was wrong when
+        # both occur on the same day — review.)
+        f = f * split_i * (1.0 + div_term)
         if not np.isfinite(f) or f <= 0:
             f = out[i - 1]   # degenerate guard: carry the prior factor
         out[i] = f

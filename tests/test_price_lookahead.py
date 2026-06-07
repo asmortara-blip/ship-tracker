@@ -114,3 +114,18 @@ def test_backtest_adj_prices_defaults_and_applies() -> None:
     assert list(_adj_prices(d)) == [10, 11, 12]
     d2 = pd.DataFrame({"close": [100, 50], "adj_factor": [1.0, 2.0]})
     assert list(_adj_prices(d2)) == [100, 100]           # close * adj_factor
+
+
+def test_same_day_split_and_dividend_net_correctly() -> None:
+    """A split and dividend sharing an ex-day must combine MULTIPLICATIVELY
+    (dividend on the post-split basis), not additively — else the split-day total
+    return is biased and the offset persists through the series (review fix)."""
+    # Prior close 100; ex-day a 2:1 split + $1 dividend per new share, close 49.
+    # 1 old share (100) → 2 new shares @49 + $2 cash = 100 → total return 0%.
+    out = normalize_stock_df(
+        _yf_frame([100, 49], splits=[0, 2.0], divs=[0, 1.0]), symbol="X")
+    adj = (out["close"] * out["adj_factor"]).tolist()
+    assert abs(adj[1] / adj[0] - 1.0) < 1e-9          # split day total return ≈ 0%
+    # pure-split and pure-dividend days are unchanged by the multiplicative form
+    split_only = normalize_stock_df(_yf_frame([100, 50], splits=[0, 2.0]), symbol="X")
+    assert list(split_only["adj_factor"]) == [1.0, 2.0]

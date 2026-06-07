@@ -79,6 +79,55 @@ def _latest_date_after(stock_data, ticker: str, after_date):
         return None
 
 
+def _signed_forward_return(stock_data, ticker: str, issue_date, issue_close, cur) -> Optional[float]:
+    """Split-safe FORWARD return from FROZEN ``issue_close`` to ``cur``, or None.
+
+    The entry leg is the FROZEN ``issue_close`` (the idea's real issued price);
+    the exit leg is the raw forward close ``cur`` (already validated as strictly
+    post-issue by the caller). The naive ``(cur - issue_close)/issue_close`` is
+    corrupted by any split/large dividend BETWEEN issue and the mark — a 2:1
+    split alone reads as ~-50%. R127 captures that corporate action in the
+    look-ahead-free forward ``adj_factor``: the factor accrued over the holding
+    window is ``adj_now / adj_ref`` where ``adj_ref`` is the factor on which
+    ``issue_close`` was observed (the factor as-of ``issue_date``). Scaling the
+    exit close by that ratio puts it back on the entry's basis, so the split nets
+    out. ``adj_factor`` defaults to 1.0 (and the ratio to 1.0) when absent or
+    when no action occurred, so this reduces EXACTLY to the raw forward return
+    for fixtures / legacy / no-split frames. Returns None to signal "no usable
+    adjusted basis" so the caller falls back to the raw return.
+    """
+    try:
+        import pandas as pd
+
+        from processing.book_pnl import _close_series
+        # Raw + adjusted closes from the SAME frame so the per-date ratio
+        # adj = adjusted/raw recovers the look-ahead-free adj_factor at each date.
+        raw = _close_series(stock_data, ticker, adjusted=False)
+        adj = _close_series(stock_data, ticker, adjusted=True)
+        if (raw is None or adj is None or raw.empty
+                or not isinstance(raw.index, pd.DatetimeIndex)):
+            return None
+        factor = (adj / raw.where(raw != 0)).dropna()
+        if factor.empty:
+            return None
+        cutoff = pd.to_datetime(issue_date)
+        # Factor on which issue_close sits: the latest factor at/before issue; if
+        # issue predates the cached history, the earliest available factor (the
+        # best knowable basis — equals 1.0 in the normal fresh-freeze case).
+        at_or_before = factor[factor.index <= cutoff]
+        adj_ref = float(at_or_before.iloc[-1]) if not at_or_before.empty else float(factor.iloc[0])
+        adj_now = float(factor.iloc[-1])
+        if adj_ref <= 0 or not (adj_now > 0):
+            return None
+        issue_close = float(issue_close)
+        if issue_close <= 0:
+            return None
+        exit_on_entry_basis = float(cur) * (adj_now / adj_ref)
+        return (exit_on_entry_basis - issue_close) / issue_close
+    except Exception:
+        return None
+
+
 def _days_held(issue_date, mark_date) -> int:
     """Calendar days from ``issue_date`` to ``mark_date`` (>= 0), else 0."""
     if not issue_date or mark_date is None:
@@ -177,7 +226,16 @@ def mark_ledger(stock_data) -> list[dict]:
         cur = _latest_close_after(stock_data, r["ticker"], r.get("issue_date"))
         if cur is None or cur <= 0:
             continue
-        ret = (cur - issue_close) / issue_close
+        # Return is the SPLIT-SAFE forward return on the total-return basis
+        # (R127): a split between issue and now would make the raw
+        # ``(cur - issue_close)/issue_close`` read as a fake ~-50%. ``cur`` /
+        # ``issue_close`` are kept RAW for display (the real share prices).
+        ret = _signed_forward_return(
+            stock_data, r["ticker"], r.get("issue_date"), issue_close, cur)
+        if ret is None:
+            # Adjusted basis unavailable (e.g. no DatetimeIndex) → fall back to
+            # the raw forward return so the row is still scored.
+            ret = (cur - issue_close) / issue_close
         signed = ret * _dir_sign(r["direction"])
         signed_pct = signed * 100.0
         # Net of an ASSUMED trading cost: one round trip (entry+exit, paid long

@@ -174,7 +174,13 @@ def _clamp01(value: float) -> float:
 
 
 def _safe_close_series(df) -> pd.Series | None:
-    """Extract a clean, chronologically-ordered ``close`` price Series.
+    """Extract a clean, chronologically-ordered TOTAL-RETURN price Series.
+
+    The forward returns sampled off this Series drive the OOS validator, so it
+    rides the look-ahead-free total-return path ``close * adj_factor`` (R127): a
+    split/large dividend in the window would otherwise inject a spurious ~-50%
+    forward return. ``adj_factor`` defaults to 1.0 when absent (fixtures / legacy
+    frames), so those numbers are unchanged.
 
     Returns ``None`` for anything unusable — ``None``/empty frame, no ``close``
     column, or fewer than two finite prices. Never raises.
@@ -188,7 +194,8 @@ def _safe_close_series(df) -> pd.Series | None:
         if "date" in work.columns:
             # Order by date so "forward" genuinely means forward in time.
             work = work.sort_values("date")
-        close = pd.to_numeric(work["close"], errors="coerce").dropna()
+        from data.normalizer import adjusted_close
+        close = adjusted_close(work).dropna()
         if len(close) < 2:
             return None
         return close.reset_index(drop=True)

@@ -641,11 +641,18 @@ def _price_and_change(ticker: str, stock_data: dict) -> tuple[float, float]:
         close = df["close"].dropna()
         if len(close) < 2:
             return 0.0, 0.0
+        # Displayed price level → RAW close (the real share price).
         current = float(close.iloc[-1])
-        prior = float(close.iloc[-31]) if len(close) >= 31 else float(close.iloc[0])
-        if prior == 0:
+        # 30d %-change → look-ahead-free TOTAL-RETURN basis (close * adj_factor,
+        # R127) so a split/large dividend in the window doesn't fake a ~-50%
+        # move. adj_factor defaults to 1.0 when absent (fixtures unchanged).
+        from data.normalizer import adjusted_close
+        adj = adjusted_close(df).dropna()
+        cur_adj = float(adj.iloc[-1])
+        prior_adj = float(adj.iloc[-31]) if len(adj) >= 31 else float(adj.iloc[0])
+        if prior_adj == 0:
             return current, 0.0
-        return current, (current - prior) / abs(prior)
+        return current, (cur_adj - prior_adj) / abs(prior_adj)
     except Exception:  # pragma: no cover - defensive
         return 0.0, 0.0
 

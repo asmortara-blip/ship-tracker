@@ -80,13 +80,18 @@ def _signal(composite: float) -> str:
 
 
 def _pct_change_from_df(df: pd.DataFrame, days: int) -> float:
-    """Return % change of the 'close' column over `days` calendar days.
+    """Return % change of the close over `days` calendar days.
 
-    Returns 0.0 if the DataFrame is too short or data is unavailable.
+    A %-change over time → look-ahead-free TOTAL-RETURN basis (R127): the close
+    is taken as ``close * adj_factor`` so a split/large dividend in the window
+    doesn't read as a spurious ~-50%/+100% move in the momentum ranking.
+    ``adj_factor`` defaults to 1.0 when absent (fixtures / legacy frames), so
+    those numbers are unchanged. Returns 0.0 if too short or unavailable.
     """
     if df is None or df.empty or "close" not in df.columns:
         return 0.0
-    closes = df["close"].dropna()
+    from data.normalizer import adjusted_close
+    closes = adjusted_close(df).dropna()
     if len(closes) < 2:
         return 0.0
 
