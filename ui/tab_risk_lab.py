@@ -490,6 +490,174 @@ def _render_stress_var_es(
         )
 
 
+# ─── Section 2c: Ex-ante risk attribution (R124) ────────────────────────────
+
+def _build_carrier_fits(stock_data, macro_data):
+    """Build (fits, factors_df, weights, is_real) for the ex-ante risk view.
+
+    Reuses tab_portfolio's exact factor-model path: weekly log-returns from the
+    real cached closes, a factor panel from macro_data (FRED/Baltic) with a
+    deterministic synthetic fallback when macro is dark, one OLS fit per carrier,
+    and an equal-weight book over the fitted names — the same representative book
+    the Carrier Factor Lens uses. Returns ``(None, ...)``-shaped emptiness when
+    fewer than two carriers can be fit (caller renders an honest empty-state).
+    """
+    from engine.carrier_factor_model import fit_carrier_factors
+    from ui.tab_portfolio import (
+        _factors_from_macro,
+        _synthetic_factor_frame,
+        _weekly_log_returns,
+    )
+
+    returns_df = _weekly_log_returns(stock_data)
+    if returns_df.empty or returns_df.shape[1] < 2:
+        return {}, pd.DataFrame(), {}, False
+
+    factors_df = _factors_from_macro(macro_data)
+    factors_real = not factors_df.empty and len(factors_df) >= 80
+    if not factors_real:
+        factors_df = _synthetic_factor_frame(returns_df)
+
+    combined_idx = returns_df.index.intersection(factors_df.index)
+    if len(combined_idx) < 60:
+        return {}, pd.DataFrame(), {}, False
+    returns_df = returns_df.loc[combined_idx]
+    factors_df = factors_df.loc[combined_idx]
+
+    fits = fit_carrier_factors(returns_df, factors_df, hac_lags=4)
+    if len(fits) < 1:
+        return {}, pd.DataFrame(), {}, False
+
+    names = list(fits.keys())
+    weights = {n: 1.0 / len(names) for n in names}
+    return fits, factors_df, weights, factors_real
+
+
+def _render_risk_attribution(stock_data, macro_data) -> None:
+    """"What owns the risk" — ex-ante VARIANCE attribution (R124).
+
+    The forward-looking analog of the return attribution: decompose the book's
+    forecast tracking error into per-factor (systematic) and per-name (specific)
+    variance contributions, so the desk sees WHICH factor and WHICH name drive
+    the risk. Stacked bar (factor contributions + a 'specific' bucket) + a small
+    vol / %-factor-vs-specific table.
+    """
+    from engine.carrier_factor_model import factor_covariance, risk_attribution
+
+    section_header(
+        "What owns the risk (ex-ante variance)",
+        subtitle=(
+            "Forecast portfolio variance decomposed into per-factor "
+            "(systematic) and per-name (specific) contributions: σ²ₚ = "
+            "wᵀ(BΩBᵀ + D)w. The forward-looking analog of return attribution — "
+            "which factor and which name drive the book's tracking error. "
+            "Equal-weight over the fitted carriers."
+        ),
+    )
+
+    try:
+        fits, factors_df, weights, factors_real = _build_carrier_fits(
+            stock_data, macro_data,
+        )
+        if not fits:
+            st.info(
+                "Ex-ante risk attribution needs ≥ 2 carriers with enough cached "
+                "return history to fit. Prices appear dark — nothing to decompose."
+            )
+            return
+
+        attr = risk_attribution(weights, fits, factor_covariance(factors_df))
+        if attr.total_variance <= 0.0:
+            st.info("Forecast variance is zero for this book — nothing to attribute.")
+            return
+
+        # ── Headline cards: book vol + factor-vs-specific split ──
+        metric_card_row([
+            {"label": "Forecast Vol (ann)",
+             "value": f"{attr.total_vol * 100:.1f}%",
+             "accent": C_ACCENT,
+             "sublabel": f"equal-wt {attr.n_names} carriers"},
+            {"label": "Factor (systematic)",
+             "value": f"{attr.pct_factor * 100:.0f}%",
+             "accent": C_MOD,
+             "sublabel": f"σ²={attr.factor_variance:.2e}"},
+            {"label": "Specific (name)",
+             "value": f"{attr.pct_specific * 100:.0f}%",
+             "accent": C_TEXT2,
+             "sublabel": f"σ²={attr.specific_variance:.2e}"},
+        ], columns=3)
+
+        # ── Stacked bar: per-factor contributions + one 'Specific' bucket ──
+        # All entries are a share of TOTAL variance (per the .pct field), so the
+        # stacked bar reads as a single book whose segments sum to 100%.
+        factor_items = sorted(
+            attr.per_factor.items(), key=lambda kv: kv[1]["variance"], reverse=True,
+        )
+        labels = [f for f, _ in factor_items] + ["Specific"]
+        pcts = [d["pct"] * 100 for _, d in factor_items] + [attr.pct_specific * 100]
+        colors = [C_ACCENT] * len(factor_items) + [C_TEXT2]
+
+        fig = go.Figure(go.Bar(
+            x=pcts,
+            y=labels,
+            orientation="h",
+            marker_color=colors,
+            text=[f"{p:+.1f}%" for p in pcts],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Share of forecast variance: %{x:+.1f}%<extra></extra>",
+        ))
+        apply_dark_layout(
+            fig,
+            title="Share of forecast variance — by factor + specific (sums to 100%)",
+            height=max(260, 30 * len(labels) + 90),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(title=dict(text="% of total variance",
+                                  font=dict(color=C_TEXT2, size=11))),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Top specific names (which name owns the idiosyncratic risk) ──
+        name_items = sorted(
+            attr.per_name_specific.items(),
+            key=lambda kv: kv[1]["variance"], reverse=True,
+        )[:6]
+        if name_items:
+            headers = ["Name", "Specific σ² (ann)", "% of total var"]
+            rows = [
+                [
+                    _sans(n, color=C_TEXT, weight=600),
+                    _mono(f"{d['variance']:.2e}", color=C_TEXT2),
+                    _mono(f"{d['pct'] * 100:.1f}%", color=C_LOW),
+                ]
+                for n, d in name_items
+            ]
+            wsj_market_table(headers, rows)
+
+        st.caption(
+            "Per-factor contributions are the row split xₖ·(Ωx)ₖ of the factor "
+            "quadratic form (a hedging factor can read negative); per-name shares "
+            "are wᵢ²σ²ᵢ. Factor + specific buckets sum to the total variance "
+            "exactly. Illustrative — modeled factor exposures, not a price forecast."
+        )
+
+        st.markdown(
+            source_footer([
+                DataSource.live(
+                    "Weekly carrier log-returns from cached closes; factor panel "
+                    "from FRED/Baltic macro_data (modeled)."
+                ) if factors_real else DataSource.demo(
+                    "Weekly carrier log-returns from cached closes; SYNTHETIC "
+                    "factor panel (macro dark) — exposures illustrative."
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Risk Lab — ex-ante risk attribution render failed")
+        st.info("Ex-ante risk attribution could not be computed for this book.")
+
+
 # ─── Section 3: Regime detection card ───────────────────────────────────────
 
 def _render_regime_card(returns_df: pd.DataFrame, weights: dict) -> None:
@@ -644,6 +812,12 @@ def render(
             _render_stress_var_es(
                 weights, ideas, stock_data, portfolio_value, confidence,
             )
+
+            # Ex-ante RISK attribution (R124) — decompose forecast variance into
+            # per-factor + per-name shares, the forward-looking analog of the
+            # return attribution. Own section + provenance footer inside.
+            section_divider("Ex-ante Risk Attribution")
+            _render_risk_attribution(stock_data, macro_data)
 
             section_divider("Regime")
             _render_regime_card(returns_df, weights)

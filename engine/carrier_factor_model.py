@@ -50,6 +50,8 @@ __all__ = [
     "factor_covariance",
     "factor_risk_decomposition",
     "FactorRiskDecomposition",
+    "risk_attribution",
+    "RiskAttribution",
     "residual_zscore",
     "residual_signal_backtest",
     "DEFAULT_CARRIERS",
@@ -742,4 +744,215 @@ def factor_risk_decomposition(
         pct_specific=1.0 - pct_factor,
         per_factor_var=per_factor_var,
         n_names=len(names),
+    )
+
+
+# ── Ex-ante RISK attribution: WHICH factor + WHICH name owns the variance (R124) ─
+
+
+@dataclass(frozen=True)
+class RiskAttribution:
+    """Ex-ante decomposition of forecast portfolio VARIANCE.
+
+    The forward-looking RISK analog of :func:`attribute_window_return` (which
+    decomposes a realized RETURN). Where return-attribution answers "why did the
+    book move?", this answers "what will move it?" — which **factor** and which
+    **name** own the forecast tracking error.
+
+    Model
+    -----
+    With per-name factor loadings ``B`` (names × factors), an (annualized)
+    factor covariance ``Ω`` (factors × factors), diagonal specific variances
+    ``D`` (per name, ``D_i = σ_i²``), and signed weights ``w`` (per name):
+
+        σ_p²  =  wᵀ (B Ω Bᵀ + D) w  =  (factor variance) + (specific variance)
+
+    - Net factor exposure  ``x = Bᵀw``  (per factor).
+    - Factor variance       ``xᵀ Ω x``.
+    - Per-factor contribution ``xₖ · (Ω x)ₖ`` — these **sum exactly** to the
+      factor variance (row split of the quadratic form). A factor's marginal
+      contribution can be negative when its exposure hedges another (off-diagonal
+      Ω), which is correct and intended.
+    - Per-name specific contribution ``wᵢ² Dᵢ`` — these **sum exactly** to the
+      specific variance and are always ≥ 0.
+
+    Identities (exact to float roundoff)
+    ------------------------------------
+    - ``factor_variance + specific_variance == total_variance``
+    - ``sum(per_factor.values) == factor_variance``
+    - ``sum(per_name_specific.values) == specific_variance``
+
+    Attributes
+    ----------
+    total_variance, total_vol
+        ``σ_p²`` and ``σ_p`` (annualized if Ω/D are). ``total_vol`` is
+        ``sqrt(max(total_variance, 0))`` — float-noise negatives clamp to 0.
+    factor_variance, specific_variance
+        The two top-level buckets; they sum to ``total_variance``.
+    per_factor
+        ``{factor: {"variance": v, "pct": v/total_variance}}`` — contribution to
+        TOTAL variance. ``pct`` keys are 0.0 when total is 0.
+    per_name_specific
+        ``{name: {"variance": wᵢ²Dᵢ, "pct": .../total_variance}}`` — the
+        idiosyncratic (name-specific) share each holding contributes.
+    pct_factor, pct_specific
+        Factor / specific share of total variance (sum to 1, or 0/0 when empty).
+    n_names
+        Names that carried a usable weight (had a fit OR a specific-only entry).
+    n_names_missing_fit
+        Names in ``weights`` with no fit in ``fits``. See the missing-fit note
+        below — they contribute NOTHING (factor or specific) and lower coverage.
+    """
+    total_variance: float
+    total_vol: float
+    factor_variance: float
+    specific_variance: float
+    per_factor: dict          # {factor: {"variance": float, "pct": float}}
+    per_name_specific: dict    # {name:   {"variance": float, "pct": float}}
+    pct_factor: float
+    pct_specific: float
+    n_names: int
+    n_names_missing_fit: int
+
+
+def _empty_risk_attribution(n_missing: int = 0) -> RiskAttribution:
+    """Zeroed attribution for empty / unusable input (no crash)."""
+    return RiskAttribution(
+        total_variance=0.0,
+        total_vol=0.0,
+        factor_variance=0.0,
+        specific_variance=0.0,
+        per_factor={},
+        per_name_specific={},
+        pct_factor=0.0,
+        pct_specific=0.0,
+        n_names=0,
+        n_names_missing_fit=int(n_missing),
+    )
+
+
+def risk_attribution(
+    weights: dict[str, float],
+    fits: dict[str, object],
+    factor_cov: "pd.DataFrame | None",
+    *,
+    periods_per_year: int = 52,
+) -> RiskAttribution:
+    """Decompose forecast portfolio VARIANCE into per-factor + per-name shares.
+
+    Ex-ante risk analog of :func:`attribute_window_return`. Tells a desk WHICH
+    factor and WHICH name drive forecast tracking error.
+
+    Parameters
+    ----------
+    weights : dict[ticker -> weight]
+        Signed portfolio weights (long/short; need not sum to 1).
+    fits : dict[ticker -> CarrierFactorFit | obj with .betas / .residual_std]
+        Per-name factor fits. ``.betas`` gives the factor loadings; the
+        per-period ``residual_std`` is the specific (idiosyncratic) vol and is
+        **annualized here** by ``periods_per_year`` to match ``factor_cov``.
+    factor_cov : pd.DataFrame | None
+        **Already-annualized** factor covariance Ω (see :func:`factor_covariance`),
+        indexed/columned by factor name. When ``None``/empty, the factor bucket
+        is zero and the result is specific-only (still a valid decomposition).
+    periods_per_year : int
+        Annualization for the per-period specific variance (52 = weekly).
+
+    Missing-fit handling
+    --------------------
+    A name present in ``weights`` but absent from ``fits`` is **skipped
+    entirely** — it contributes neither factor nor specific variance, and is
+    counted in ``n_names_missing_fit``. We do NOT fabricate a specific variance
+    for it (no fit ⇒ no honest σ_i), so the reported variance is a *lower bound*
+    when coverage < 1. This mirrors ``portfolio_factor_exposures``'s coverage
+    discipline: an uncovered name is never silently treated as zero-risk that a
+    caller might mistake for "no exposure".
+
+    Returns
+    -------
+    RiskAttribution
+        Zeroed (no crash) on empty weights/fits. The three additive identities
+        in :class:`RiskAttribution` hold to float roundoff.
+    """
+    weights = weights or {}
+    fits = fits or {}
+
+    # Partition requested names into covered (have a fit) vs missing.
+    names = [n for n in weights if n in fits]
+    n_missing = sum(1 for n in weights if n not in fits)
+    if not names:
+        return _empty_risk_attribution(n_missing)
+
+    w = np.array([float(weights[n]) for n in names], dtype=float)
+
+    # ── Factor bucket ────────────────────────────────────────────────────────
+    factor_var = 0.0
+    per_factor_var: dict[str, float] = {}
+    if factor_cov is not None and not getattr(factor_cov, "empty", True):
+        factors = [f for f in factor_cov.columns]
+        if factors:
+            B = np.array(
+                [
+                    [float(getattr(fits[n], "betas", {}).get(f, 0.0)) for f in factors]
+                    for n in names
+                ],
+                dtype=float,
+            )
+            omega = factor_cov.loc[factors, factors].to_numpy(dtype=float)
+            x = B.T @ w                       # net factor exposure (per factor)
+            omega_x = omega @ x               # Ω x
+            factor_var = float(x @ omega_x)   # xᵀ Ω x
+            # Row split: xₖ·(Ωx)ₖ sums to xᵀΩx exactly.
+            per_factor_var = {
+                f: float(x[k] * omega_x[k]) for k, f in enumerate(factors)
+            }
+
+    # ── Specific bucket ──────────────────────────────────────────────────────
+    per_name_var: dict[str, float] = {}
+    spec_var = 0.0
+    for i, n in enumerate(names):
+        sig = float(getattr(fits[n], "residual_std", 0.0) or 0.0)
+        v = (w[i] ** 2) * (sig ** 2) * float(periods_per_year)
+        per_name_var[n] = v
+        spec_var += v
+
+    # ── Totals + clamps ──────────────────────────────────────────────────────
+    # factor_var can be a tiny negative from float roundoff on a PSD Ω (or a
+    # genuinely non-PSD Ω); the specific bucket is a sum of non-negatives. Clamp
+    # the factor total so sqrt never sees a negative. Individual per-factor
+    # contributions stay UNCLAMPED — a hedging factor's negative share is
+    # meaningful — but if (and only if) the clamp actually moved factor_var off
+    # the raw quadratic form, drop the per-factor split to {} so the documented
+    # identity ``sum(per_factor) == factor_variance`` can't silently break. The
+    # clamp fires only on (near-zero) noise or a non-PSD input, never on a
+    # well-formed PSD Ω with real exposure, so this is a guard, not the path.
+    raw_factor_var = factor_var
+    factor_var = max(factor_var, 0.0)
+    if factor_var != raw_factor_var:
+        per_factor_var = {}
+    spec_var = max(spec_var, 0.0)
+    total_var = factor_var + spec_var
+
+    def _pct(v: float) -> float:
+        return (v / total_var) if total_var > 0 else 0.0
+
+    per_factor = {
+        f: {"variance": v, "pct": _pct(v)} for f, v in per_factor_var.items()
+    }
+    per_name_specific = {
+        n: {"variance": v, "pct": _pct(v)} for n, v in per_name_var.items()
+    }
+    pct_factor = _pct(factor_var)
+
+    return RiskAttribution(
+        total_variance=total_var,
+        total_vol=math.sqrt(max(total_var, 0.0)),
+        factor_variance=factor_var,
+        specific_variance=spec_var,
+        per_factor=per_factor,
+        per_name_specific=per_name_specific,
+        pct_factor=pct_factor,
+        pct_specific=(1.0 - pct_factor) if total_var > 0 else 0.0,
+        n_names=len(names),
+        n_names_missing_fit=int(n_missing),
     )
