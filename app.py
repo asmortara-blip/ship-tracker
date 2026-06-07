@@ -853,6 +853,7 @@ SECTION_TABS: dict[str, list[tuple[str, str]]] = {
         ("Supply Linkage",   "ui.tab_supply_linkage"),
         ("Equity Signals",   "ui.tab_equity_signals"),
         ("Idea Engine",      "ui.tab_idea_engine"),
+        ("Tearsheet",        "ui.tab_tearsheet"),
     ],
     "ports_routes": [
         ("Port Demand",      "ui.tab_port_demand"),
@@ -944,6 +945,20 @@ if "nav_section" not in st.session_state:
         )
     except Exception:
         st.session_state["nav_section"] = "dashboard"
+
+# Seed the active instrument from the URL (?entity=) so a shared/bookmarked
+# tearsheet link lands on the right ticker. Validated against the tracked
+# universe; unknown / absent leaves active_entity "". See ui/url_state.py +
+# ui/tab_tearsheet.py.
+if "active_entity" not in st.session_state:
+    try:
+        from ui.url_state import resolve_active_entity
+        from processing.exposure_matrix import COMPANY_COMMODITY_EXPOSURE
+        st.session_state["active_entity"] = resolve_active_entity(
+            dict(st.query_params), COMPANY_COMMODITY_EXPOSURE.keys(),
+        )
+    except Exception:
+        st.session_state["active_entity"] = ""
 
 # Inject WSJ section nav CSS
 st.markdown("""<style>
@@ -1130,6 +1145,19 @@ active_section = st.session_state.get("nav_section", "dashboard")
 try:
     if st.query_params.get("section") != active_section:
         st.query_params["section"] = active_section
+except Exception:
+    pass
+
+# Keep the URL in sync with the active instrument so a tearsheet is shareable.
+# Only write the param when an entity is actually selected; clear it otherwise
+# so a stale ?entity= doesn't linger on unrelated sections.
+try:
+    _active_entity = str(st.session_state.get("active_entity", "") or "")
+    if _active_entity:
+        if st.query_params.get("entity") != _active_entity:
+            st.query_params["entity"] = _active_entity
+    elif "entity" in st.query_params:
+        del st.query_params["entity"]
 except Exception:
     pass
 
@@ -1367,9 +1395,9 @@ elif active_section == "markets":
 
 # ── 3. Disruption Alpha ───────────────────────────────────────────────────
 elif active_section == "disruption_alpha":
-    t0, t1, t2, t3, t4, t5 = st.tabs([
+    t0, t1, t2, t3, t4, t5, t6 = st.tabs([
         "Voyage Tracker", "Disruption Radar", "Macro Projection",
-        "Supply Linkage", "Equity Signals", "Idea Engine",
+        "Supply Linkage", "Equity Signals", "Idea Engine", "Tearsheet",
     ])
     with t0:
         try:
@@ -1414,6 +1442,12 @@ elif active_section == "disruption_alpha":
             )
         except Exception as e:
             st.error(f"Idea Engine error: {e}")
+    with t6:
+        try:
+            from ui.tab_tearsheet import render as _r
+            _r(stock_data=stock_data, macro_data=macro_data, insights=insights)
+        except Exception as e:
+            st.error(f"Tearsheet error: {e}")
 
 # ── 4. Ports & Routes ─────────────────────────────────────────────────────
 elif active_section == "ports_routes":
