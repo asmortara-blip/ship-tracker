@@ -222,6 +222,94 @@ def _send_ics(
     handler.wfile.write(body)
 
 
+def _send_prometheus(
+    handler: BaseHTTPRequestHandler, status: int, text: str,
+) -> None:
+    """Write a Prometheus text-exposition response (R129).
+
+    The Content-Type ``text/plain; version=0.0.4; charset=utf-8`` is the
+    canonical media type for the Prometheus text exposition format
+    (v0.0.4) — scrapers key off the ``version`` parameter to pick the
+    parser, so it must be present verbatim.
+    """
+    body = text.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header(
+        "Content-Type", "text/plain; version=0.0.4; charset=utf-8",
+    )
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Prometheus exposition helpers (R129)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _prom_escape_label_value(value: Any) -> str:
+    """Escape a label VALUE per the Prometheus text-format spec.
+
+    Within a label value, backslash, double-quote and line-feed must be
+    escaped (``\\\\``, ``\\"``, ``\\n`` respectively). Everything else is
+    emitted verbatim. A carriage return is folded to a space defensively
+    (it is not part of the escape set but a stray ``\\r`` would corrupt the
+    line framing). The input is coerced to ``str`` first so a non-string
+    label (e.g. ``None``) cannot raise.
+    """
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace('"', '\\"')
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", " ")
+    return s
+
+
+def _prom_format_value(value: Any) -> str:
+    """Format a metric VALUE for the exposition line.
+
+    Prometheus values are float64. We emit ints without a decimal point
+    and finite floats via ``repr`` (shortest round-trippable form). A
+    non-finite or non-numeric value falls back to ``0`` rather than
+    emitting ``NaN``/``Inf`` (which, while technically valid Prometheus,
+    would alarm a desk on a telemetry artefact rather than a real
+    condition) — the per-block try/except already shields the scrape, so
+    this is a last-line guard.
+    """
+    try:
+        if isinstance(value, bool):
+            # bool is an int subclass — emit 1/0, not True/False.
+            return "1" if value else "0"
+        if isinstance(value, int):
+            return str(value)
+        f = float(value)
+        import math as _math
+        if not _math.isfinite(f):
+            return "0"
+        # Integral float → drop the ``.0`` for readability.
+        if f.is_integer():
+            return str(int(f))
+        return repr(f)
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _prom_metric_line(name: str, labels: dict[str, Any], value: Any) -> str:
+    """Build one ``name{k="v",...} value`` exposition line.
+
+    ``labels`` keys are assumed to be valid label names (we control all
+    callers, so the keys are literals like ``"surface"`` / ``"source"``);
+    label VALUES are escaped via :func:`_prom_escape_label_value`. With
+    no labels the line is just ``name value``.
+    """
+    if labels:
+        rendered = ",".join(
+            f'{k}="{_prom_escape_label_value(v)}"'
+            for k, v in labels.items()
+        )
+        return f"{name}{{{rendered}}} {_prom_format_value(value)}"
+    return f"{name} {_prom_format_value(value)}"
+
+
 def _extract_bearer_token(handler: BaseHTTPRequestHandler) -> Optional[str]:
     """Extract the raw token from the ``Authorization`` header.
 
@@ -641,6 +729,16 @@ _RE_OPENAPI = re.compile(r"^/api/v1/openapi\.json/?$")
 # etc.) can gate on it via status code without parsing the body.
 _RE_BACKTESTS_HEALTH = re.compile(r"^/api/v1/backtests/health/?$")
 
+# Prometheus metrics (R129) — PUBLIC (no auth), like /health + /openapi.json
+# + /backtests/health. Emits the platform's REAL telemetry SLIs (render
+# latency, feed up/down, job success/failure, delivery-retry depth) in the
+# Prometheus text exposition format (v0.0.4) so an ops/risk desk can point
+# Datadog/Grafana straight at the worker without scraping Streamlit. The
+# convention is a bare ``/metrics`` (NOT under /api/v1) so a standard
+# Prometheus scrape config works with no path override; we also accept the
+# /api/v1/metrics alias for symmetry with the rest of the surface.
+_RE_METRICS = re.compile(r"^/(?:api/v1/)?metrics/?$")
+
 # Port supply lines — authenticated endpoint that returns the per-port
 # supply state + exposed-company chain that the new Port Supply Lines
 # tab is built on. Lets external tools (portfolio monitors, alert
@@ -844,7 +942,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 _RE_ALERT_ANNOTATIONS, _RE_ANNOTATION_ONE,
                 _RE_RULE_ESCALATIONS, _RE_ESCALATION_ONE,
                 _RE_NOTIFICATION_PREFS,
-                _RE_OPENAPI, _RE_BACKTESTS_HEALTH,
+                _RE_OPENAPI, _RE_BACKTESTS_HEALTH, _RE_METRICS,
                 _RE_PORT_SUPPLY_LINES, _RE_PORT_SUPPLY_LINES_XLSX,
                 _RE_PORT_SUPPLY_SNAPSHOTS_LIST, _RE_PORT_SUPPLY_SNAPSHOT_ONE,
                 _RE_PORT_SPILLOVER_GRAPH,
@@ -880,6 +978,16 @@ class APIHandler(BaseHTTPRequestHandler):
             # pin the worker.
             if _RE_BACKTESTS_HEALTH.match(path):
                 self._backtests_health()
+                return
+
+            # Prometheus /metrics — PUBLIC (no auth), checked alongside the
+            # other public probes ABOVE the auth gate. Prometheus scrapers
+            # conventionally cannot send a bearer header, so an internal-
+            # network /metrics is unauthenticated by convention; the handler
+            # emits ONLY aggregate SLIs (no user data, no secrets). See the
+            # owner-decision flag in ``_serve_metrics``'s docstring.
+            if _RE_METRICS.match(path):
+                self._serve_metrics()
                 return
 
             # ICS calendar feed — public on the bearer-header level
@@ -2280,6 +2388,247 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             return
         _send_json(self, status_code, body)
+
+
+    # ── Endpoint: GET /metrics (Prometheus, R129) ─────────────────
+
+    def _serve_metrics(self) -> None:
+        """Public Prometheus ``/metrics`` scrape over the EXISTING telemetry.
+
+        Emits the platform's real operational SLIs in the Prometheus text
+        exposition format (v0.0.4) so an ops/risk desk can wire
+        Datadog/Grafana to alarm on render latency, feed-down, and job
+        failure WITHOUT scraping Streamlit. Every value is pulled from a
+        live telemetry store — nothing is fabricated. Metric families:
+
+          * ``ship_render_latency_p50_seconds{surface}`` (gauge)
+          * ``ship_render_latency_p95_seconds{surface}`` (gauge)
+          * ``ship_render_count{surface}`` (gauge — renders in window)
+          * ``ship_render_error_count{surface}`` (gauge)
+          * ``ship_render_success_rate`` (gauge, 0..1, platform-wide)
+          * ``ship_source_up{source}`` (gauge — 1 if latest ping 'up',
+            else 0; 'degraded' counts as 0 so a desk alarms on it)
+          * ``ship_source_last_duration_ms{source}`` (gauge — avg probe ms)
+          * ``ship_job_success_total{job}`` (gauge — ok runs in 24h window)
+          * ``ship_job_failure_total{job}`` (gauge — error runs in 24h)
+          * ``ship_job_last_ok{job}`` (gauge — 1 if last run ok, else 0;
+            a NEVER-run job emits 0 so a desk sees the missing job)
+          * ``ship_delivery_retry_pending`` (gauge — pending retries across
+            all users; SAMPLED — see the cap note below)
+          * ``ship_up`` (gauge — constant 1 liveness sentinel)
+
+        NB the perf-telemetry summary reports p50/p95 in MILLISECONDS
+        (``median_ms`` / ``p95_ms``); Prometheus convention is base SI
+        units, so we divide by 1000 to emit *_seconds. The success-rate
+        counters are emitted as gauges (success/failure run counts over
+        the 24h window) rather than process-lifetime monotonic counters,
+        because the underlying ``summarize_jobs`` gives a windowed count,
+        not a since-boot cumulative — labelling them ``_total`` matches the
+        Prometheus naming convention for summable counts while the gauge
+        TYPE honestly reflects that they can decrease as the window rolls.
+
+        AUTH — OWNER DECISION (flagged): this endpoint is UNAUTHENTICATED,
+        matching the least-sensitive existing public probes (/health,
+        /openapi.json, /backtests/health) and the Prometheus convention
+        (scrapers cannot ship a bearer header). It exposes ONLY aggregate
+        SLIs keyed by surface/source/job NAME — no user data, no alert
+        bodies, no secrets, no per-user scope. If the worker port is
+        reachable beyond the internal monitoring network, the owner should
+        either firewall it or front it with a reverse proxy that injects
+        auth, exactly as they would for /health.
+
+        Crash-proof: each telemetry block is independently guarded so one
+        failing store (e.g. perf tables absent) emits a ``# (…unavailable)``
+        comment and the scrape still returns 200 with the other families.
+        The handler NEVER raises — a total failure still emits at least the
+        ``ship_up`` sentinel + a 200 so the scrape target stays 'up'.
+        """
+        lines: list[str] = []
+
+        def _emit_family(
+            name: str, mtype: str, help_text: str,
+            samples: list[tuple[dict[str, Any], Any]],
+        ) -> None:
+            """Append one full metric family: HELP + TYPE + sample lines."""
+            lines.append(f"# HELP {name} {help_text}")
+            lines.append(f"# TYPE {name} {mtype}")
+            for labels, value in samples:
+                lines.append(_prom_metric_line(name, labels, value))
+
+        # ── Liveness sentinel — always emitted, never gated on a store.
+        _emit_family(
+            "ship_up", "gauge",
+            "Constant 1 — the metrics endpoint served a scrape.",
+            [({}, 1)],
+        )
+
+        # ── Render-latency / success telemetry (engine.perf_telemetry).
+        try:
+            from engine.perf_telemetry import get_perf_summary
+            perf = get_perf_summary(window_hours=24) or {}
+            by_tab = perf.get("by_tab") or {}
+
+            p50_samples: list[tuple[dict[str, Any], Any]] = []
+            p95_samples: list[tuple[dict[str, Any], Any]] = []
+            count_samples: list[tuple[dict[str, Any], Any]] = []
+            err_samples: list[tuple[dict[str, Any], Any]] = []
+            for surface, row in sorted(by_tab.items()):
+                if not isinstance(row, dict):
+                    continue
+                lbl = {"surface": surface}
+                # median_ms / p95_ms are INTEGER milliseconds → seconds.
+                p50_samples.append((lbl, row.get("median_ms", 0) / 1000.0))
+                p95_samples.append((lbl, row.get("p95_ms", 0) / 1000.0))
+                count_samples.append((lbl, row.get("count", 0)))
+                err_samples.append((lbl, row.get("error_count", 0)))
+
+            _emit_family(
+                "ship_render_latency_p50_seconds", "gauge",
+                "Median Streamlit render duration per surface, last 24h.",
+                p50_samples,
+            )
+            _emit_family(
+                "ship_render_latency_p95_seconds", "gauge",
+                "p95 Streamlit render duration per surface, last 24h.",
+                p95_samples,
+            )
+            _emit_family(
+                "ship_render_count", "gauge",
+                "Render events per surface, last 24h.",
+                count_samples,
+            )
+            _emit_family(
+                "ship_render_error_count", "gauge",
+                "Failed render events per surface, last 24h.",
+                err_samples,
+            )
+            _emit_family(
+                "ship_render_success_rate", "gauge",
+                "Platform-wide render success rate (0..1), last 24h.",
+                [({}, perf.get("success_rate", 0.0))],
+            )
+        except Exception as exc:  # noqa: BLE001 — one store must not break the scrape
+            logger.warning(f"api /metrics: perf telemetry block failed: {exc}")
+            lines.append("# ship_render_* unavailable (perf telemetry read failed)")
+
+        # ── Feed up/down telemetry (engine.source_health).
+        try:
+            from engine.source_health import get_health_summary
+            health = get_health_summary(window_hours=24) or {}
+            by_source = health.get("by_source") or {}
+
+            up_samples: list[tuple[dict[str, Any], Any]] = []
+            dur_samples: list[tuple[dict[str, Any], Any]] = []
+            for source, row in sorted(by_source.items()):
+                if not isinstance(row, dict):
+                    continue
+                lbl = {"source": source}
+                # 1 ONLY when the latest ping was 'up' — 'degraded' and
+                # 'down' both map to 0 so a desk alarms on either.
+                is_up = 1 if str(row.get("last_status", "")) == "up" else 0
+                up_samples.append((lbl, is_up))
+                dur_samples.append((lbl, row.get("avg_duration_ms", 0.0)))
+
+            _emit_family(
+                "ship_source_up", "gauge",
+                "1 if the source's latest health ping was 'up', else 0 "
+                "('degraded'/'down' both 0).",
+                up_samples,
+            )
+            _emit_family(
+                "ship_source_last_duration_ms", "gauge",
+                "Average source health-probe duration (ms), last 24h.",
+                dur_samples,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"api /metrics: source-health block failed: {exc}")
+            lines.append("# ship_source_* unavailable (source-health read failed)")
+
+        # ── Worker job success/failure telemetry (state.worker_runs).
+        try:
+            from state.worker_runs import summarize_jobs
+            jobs = summarize_jobs() or []
+
+            ok_samples: list[tuple[dict[str, Any], Any]] = []
+            fail_samples: list[tuple[dict[str, Any], Any]] = []
+            last_ok_samples: list[tuple[dict[str, Any], Any]] = []
+            for row in jobs:
+                if not isinstance(row, dict):
+                    continue
+                job = row.get("job_name", "")
+                lbl = {"job": job}
+                runs = int(row.get("runs_in_window", 0) or 0)
+                rate = float(row.get("success_rate_24h", 1.0) or 0.0)
+                # success_rate_24h is over runs_in_window; reconstruct the
+                # ok / failure counts so the desk can rate() / alarm on
+                # the failure family directly.
+                ok_n = int(round(rate * runs))
+                fail_n = max(0, runs - ok_n)
+                ok_samples.append((lbl, ok_n))
+                fail_samples.append((lbl, fail_n))
+                last_ok = 1 if str(row.get("last_status", "")) == "ok" else 0
+                last_ok_samples.append((lbl, last_ok))
+
+            _emit_family(
+                "ship_job_success_total", "gauge",
+                "Successful worker-job runs per job, last 24h window.",
+                ok_samples,
+            )
+            _emit_family(
+                "ship_job_failure_total", "gauge",
+                "Failed worker-job runs per job, last 24h window.",
+                fail_samples,
+            )
+            _emit_family(
+                "ship_job_last_ok", "gauge",
+                "1 if the job's most-recent run succeeded, else 0 "
+                "(0 also when the job has NEVER run).",
+                last_ok_samples,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"api /metrics: worker-runs block failed: {exc}")
+            lines.append("# ship_job_* unavailable (worker-runs read failed)")
+
+        # ── Delivery-retry queue depth (engine.delivery_retry).
+        #
+        # ``list_pending(user_id=None)`` is the only operator-wide getter —
+        # it returns pending rows across ALL users, capped at ``limit``. We
+        # ask for a generous cap and emit the observed length; if the queue
+        # is deeper than the cap the gauge SATURATES at the cap rather than
+        # under-reporting silently, so a desk still sees "deep queue". We do
+        # NOT fabricate a precise depth beyond what the getter exposes.
+        try:
+            from engine.delivery_retry import list_pending
+            _RETRY_DEPTH_CAP = 1000
+            pending = list_pending(user_id=None, limit=_RETRY_DEPTH_CAP)
+            depth = len(pending)
+            _emit_family(
+                "ship_delivery_retry_pending", "gauge",
+                f"Pending delivery-retry rows across all users "
+                f"(sampled; saturates at {_RETRY_DEPTH_CAP}).",
+                [({}, depth)],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"api /metrics: delivery-retry block failed: {exc}")
+            lines.append(
+                "# ship_delivery_retry_pending unavailable (retry-queue read failed)"
+            )
+
+        # Prometheus requires a trailing newline after the last sample.
+        body = "\n".join(lines) + "\n"
+        try:
+            _send_prometheus(self, HTTPStatus.OK, body)
+        except Exception as exc:
+            logger.exception(f"api /metrics send failed: {exc}")
+            # Last resort — try a minimal 200 so the scrape target stays up.
+            try:
+                _send_prometheus(
+                    self, HTTPStatus.OK,
+                    "# HELP ship_up Constant 1 sentinel.\n"
+                    "# TYPE ship_up gauge\nship_up 1\n",
+                )
+            except Exception:
+                pass
 
 
     # ── Endpoint: GET /api/v1/ports/supply-lines ───────────────────
