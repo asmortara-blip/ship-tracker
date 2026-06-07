@@ -26,7 +26,9 @@ from auth.gate import (
     IDLE_TIMEOUT_MINUTES,
     _SESSION_AUTHED_AT_KEY,
     _SESSION_LAST_SEEN_KEY,
+    _USER_SCOPED_SESSION_KEYS,
     _enforce_session_lifetime,
+    _expire_multiuser_session,
     _session_expiry_check,
     stamp_session_start,
 )
@@ -255,3 +257,26 @@ def test_enforce_unparseable_expires(mock_streamlit) -> None:
     ok = _enforce_session_lifetime(st)
     assert ok is False
     assert st.session_state.get("current_user") in (None,)
+
+
+def test_expiry_purges_all_user_scoped_session_caches(mock_streamlit) -> None:
+    # R118 review fix: expiry must purge the WHOLE user-scoped surface, not just
+    # current_user — else the next user on the same browser inherits A's data.
+    import streamlit as st
+    st.session_state["current_user"] = {"username": "alice"}
+    st.session_state[_SESSION_AUTHED_AT_KEY] = "2026-06-07T00:00:00+00:00"
+    st.session_state[_SESSION_LAST_SEEN_KEY] = "2026-06-07T00:00:00+00:00"
+    st.session_state["portfolio_positions"] = [{"ticker": "ZIM", "shares": 100}]
+    st.session_state["user_alerts"] = ["A's alert rule"]
+    st.session_state["pending_mfa_secret"] = "A-pending-secret"
+    st.session_state["nav_section"] = "disruption_alpha"  # app-global, must SURVIVE
+
+    _expire_multiuser_session(st)
+
+    assert "current_user" not in st.session_state
+    assert _SESSION_AUTHED_AT_KEY not in st.session_state
+    assert _SESSION_LAST_SEEN_KEY not in st.session_state
+    for key in _USER_SCOPED_SESSION_KEYS:
+        assert key not in st.session_state, f"{key} leaked into the next session"
+    # An app-global key (NOT user-scoped) is left untouched.
+    assert st.session_state.get("nav_section") == "disruption_alpha"

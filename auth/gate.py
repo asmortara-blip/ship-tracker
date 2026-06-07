@@ -373,32 +373,64 @@ def _touch_last_seen(st) -> None:
         pass
 
 
+def _pop_session_key(st, key) -> None:
+    """Best-effort remove one session_state key. Never raises."""
+    try:
+        if key in st.session_state:
+            del st.session_state[key]
+    except Exception:
+        try:
+            st.session_state[key] = None
+        except Exception:
+            pass
+
+
 def _clear_session_lifetime(st) -> None:
     """Drop the two lifetime stamps. Never raises."""
-    for key in (_SESSION_AUTHED_AT_KEY, _SESSION_LAST_SEEN_KEY):
-        try:
-            if key in st.session_state:
-                del st.session_state[key]
-        except Exception:
-            try:
-                st.session_state[key] = None
-            except Exception:
-                pass
+    _pop_session_key(st, _SESSION_AUTHED_AT_KEY)
+    _pop_session_key(st, _SESSION_LAST_SEEN_KEY)
+
+
+# User-scoped values cached in ``st.session_state`` that MUST be purged when a
+# session ENDS (timeout-expiry OR logout) — otherwise the next user to sign in
+# on the SAME browser session inherits the prior user's positions / alert rules /
+# investor reports / pending-MFA secrets, and the init-once-no-rekey tab loaders
+# (e.g. tab_portfolio._init_positions, tab_alerts) adopt them: cross-user data
+# disclosure + ledger write-corruption. Keep in sync with the per-tab session
+# caches. (R118 adversarial-review finding.)
+_USER_SCOPED_SESSION_KEYS: tuple[str, ...] = (
+    "portfolio_positions",
+    "user_alerts",
+    "active_filter_payload",
+    "active_filter_name",
+    "current_investor_report",
+    "previous_investor_report",
+    "mfa_pending_secret",
+    "mfa_pending_codes",
+    "pending_mfa_secret",
+    "mfa_confirm_disable",
+    "mfa_regen_confirm",
+    "setup_generated_hash",
+    "setup_generated_salt",
+)
+
+
+def _clear_user_scoped_session(st) -> None:
+    """Fully tear down a user's session: drop ``current_user``, the lifetime
+    stamps, AND every user-scoped cache, so the next sign-in on the same browser
+    inherits NOTHING. Shared by the timeout-expiry and logout paths so the two
+    re-auth triggers purge identically. Never raises."""
+    _pop_session_key(st, "current_user")
+    _clear_session_lifetime(st)
+    for key in _USER_SCOPED_SESSION_KEYS:
+        _pop_session_key(st, key)
 
 
 def _expire_multiuser_session(st) -> None:
-    """Tear down an expired multi-user session: drop the current user and
-    the lifetime stamps so the gate falls through to the login form. Never
-    raises."""
-    if "current_user" in st.session_state:
-        try:
-            del st.session_state["current_user"]
-        except Exception:
-            try:
-                st.session_state["current_user"] = None
-            except Exception:
-                pass
-    _clear_session_lifetime(st)
+    """Tear down an expired multi-user session — drop the current user, the
+    lifetime stamps, and every user-scoped cache so the gate falls through to the
+    login form with nothing for the next user to inherit. Never raises."""
+    _clear_user_scoped_session(st)
 
 
 def _enforce_session_lifetime(st) -> bool:
@@ -561,16 +593,11 @@ def logout() -> None:
     state.authenticated = False
     state.attempt_count = 0
     state.locked_until = ""
-    # Multi-user session: also clear the per-user session token so the
-    # next page render bounces back to the login form.
-    if "current_user" in st.session_state:
-        try:
-            del st.session_state["current_user"]
-        except Exception:
-            st.session_state["current_user"] = None
-    # R118: drop the session-lifetime stamps too, so a fresh login starts
-    # a clean idle + absolute window rather than inheriting the old one.
-    _clear_session_lifetime(st)
+    # Multi-user session: drop current_user, the lifetime stamps, AND every
+    # user-scoped cache (positions/alerts/reports/pending-MFA secrets), so the
+    # next user on the same browser inherits nothing. Converges the logout +
+    # timeout-expiry teardown (R118 review).
+    _clear_user_scoped_session(st)
     st.rerun()
 
 
